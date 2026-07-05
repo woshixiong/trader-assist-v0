@@ -22,7 +22,7 @@ jobs:
       - name: Dependency lock
         run: python scripts/check_dependency_lock.py && python -m pip check
       - name: Dependency audit
-        run: pip-audit --strict
+        run: pip-audit --strict -r requirements-dev.lock
       - name: Compile
         run: python -m compileall -q src scripts tests
       - name: Schema drift
