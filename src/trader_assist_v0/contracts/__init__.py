@@ -8,7 +8,15 @@ from .approval import (
     PermitActionV0,
     ProposalV0,
 )
-from .common import DataLayerV0, EnvironmentV0, SourceAuthorityV0, canonical_json_bytes, sha256_hex
+from .common import (
+    DataLayerV0,
+    EnvironmentV0,
+    HashDomainV0,
+    SourceAuthorityV0,
+    canonical_json_bytes,
+    contract_hash,
+    sha256_hex,
+)
 from .events import EventTypeV0, NormalizedEventV0, RawEventV0
 from .evidence import CorrelationChainV0, EvidenceBundleManifestV0, EvidenceFileV0
 from .health import DataHealthEventV0, FeedHealthPolicyV0, HealthStateV0, MandatoryFeedStatusV0
@@ -35,6 +43,7 @@ __all__ = [
     "EvidenceFileV0",
     "ExecutionPermitV0",
     "FeedHealthPolicyV0",
+    "HashDomainV0",
     "HealthStateV0",
     "HumanDecisionKindV0",
     "HumanReviewDecisionV0",
@@ -53,5 +62,6 @@ __all__ = [
     "SourceAuthorityV0",
     "StrategyCandidateV0",
     "canonical_json_bytes",
+    "contract_hash",
     "sha256_hex",
 ]

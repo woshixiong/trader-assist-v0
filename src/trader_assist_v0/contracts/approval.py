@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from .common import EnvironmentV0, OpaqueId, Sha256Hex, StrictModel, UTCDateTime, VersionId
+from .common import EnvironmentV0, NonNegativeFiniteDecimal, OpaqueId, PositiveFiniteDecimal, Sha256Hex, StrictModel, UTCDateTime, VersionId
 from .strategy import DirectionV0, PlaybookIdV0
 
 
@@ -52,11 +52,11 @@ class OrderPackageV0(StrictModel):
     symbol: Literal["ETH"] = "ETH"
     direction: DirectionV0
     order_type: OrderTypeV0
-    quantity: float = Field(gt=0)
-    limit_price: float | None = Field(default=None, gt=0)
+    quantity: PositiveFiniteDecimal
+    limit_price: PositiveFiniteDecimal | None = None
     reduce_only: bool
     time_in_force: str = Field(min_length=1, max_length=40)
-    max_slippage_bps: float = Field(ge=0)
+    max_slippage_bps: NonNegativeFiniteDecimal
     valid_until: UTCDateTime
     stop_policy_hash: Sha256Hex
     take_profit_policy_hash: Sha256Hex
@@ -116,14 +116,10 @@ class HumanReviewDecisionV0(StrictModel):
     def validate_decision(self) -> HumanReviewDecisionV0:
         if self.decision is HumanDecisionKindV0.APPROVE:
             if self.approved_order_package_hash is None or self.superseding_proposal_id is not None:
-                raise ValueError(
-                    "APPROVE requires exact approved order-package hash and no superseding proposal"
-                )
+                raise ValueError("APPROVE requires exact approved order-package hash and no superseding proposal")
         elif self.decision is HumanDecisionKindV0.MODIFY:
             if self.superseding_proposal_id is None or self.approved_order_package_hash is not None:
-                raise ValueError(
-                    "MODIFY requires a new proposal and cannot approve the old package"
-                )
+                raise ValueError("MODIFY requires a new proposal and cannot approve the old package")
         elif self.approved_order_package_hash is not None:
             raise ValueError("non-APPROVE decision cannot approve an order package")
         return self
@@ -134,6 +130,12 @@ class ExecutionPermitV0(StrictModel):
     permit_id: OpaqueId
     permit_hash: Sha256Hex
     environment: EnvironmentV0
+    playbook_id: PlaybookIdV0
+    strategy_version: VersionId
+    parameter_version: VersionId
+    risk_policy_version: VersionId
+    operator_id: OpaqueId
+    approved_at: UTCDateTime
     human_decision_id: OpaqueId
     human_decision_hash: Sha256Hex
     proposal_id: OpaqueId
@@ -156,11 +158,11 @@ class ExecutionPermitV0(StrictModel):
             raise ValueError("execution permit is valid only for TESTNET or MAINNET_PILOT")
         if self.expires_at <= self.issued_at:
             raise ValueError("permit expiry must be after issue time")
+        if self.issued_at < self.approved_at:
+            raise ValueError("permit cannot be issued before human approval")
         if not self.permitted_actions:
             raise ValueError("permit must contain at least one action")
         if self.environment is EnvironmentV0.MAINNET_PILOT:
             if self.pre_pilot_review_id is None or self.human_mainnet_authorization_id is None:
-                raise ValueError(
-                    "Mainnet pilot permit requires pre-pilot review and human authorization"
-                )
+                raise ValueError("Mainnet pilot permit requires pre-pilot review and human authorization")
         return self

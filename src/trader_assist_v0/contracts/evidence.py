@@ -4,7 +4,15 @@ from pathlib import Path
 
 from pydantic import Field, field_validator, model_validator
 
-from .common import EnvironmentV0, OpaqueId, Sha256Hex, StrictModel, UTCDateTime, VersionId
+from .common import (
+    EnvironmentV0,
+    GitCommitOid,
+    OpaqueId,
+    Sha256Hex,
+    StrictModel,
+    UTCDateTime,
+    VersionId,
+)
 
 
 class CorrelationChainV0(StrictModel):
@@ -72,7 +80,7 @@ class EvidenceBundleManifestV0(StrictModel):
     risk_policy_version: VersionId
     model_versions: dict[str, VersionId]
     prompt_versions: dict[str, VersionId]
-    code_commit_sha: Sha256Hex
+    code_commit_oid: GitCommitOid
     quality_status: str = Field(min_length=1, max_length=80)
     known_gaps: tuple[str, ...]
     files: tuple[EvidenceFileV0, ...]

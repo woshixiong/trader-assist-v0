@@ -4,7 +4,7 @@ from enum import StrEnum
 
 from pydantic import Field, model_validator
 
-from .common import EnvironmentV0, OpaqueId, Sha256Hex, StrictModel, UTCDateTime, VersionId
+from .common import EnvironmentV0, OpaqueId, PositiveFiniteDecimal, Sha256Hex, StrictModel, UTCDateTime, VersionId
 from .health import MandatoryFeedStatusV0
 
 
@@ -38,6 +38,18 @@ class PromotionStateV0(StrEnum):
     RETIRED = "RETIRED"
 
 
+ALLOWED_PROMOTION_ENVIRONMENTS: dict[PromotionStateV0, frozenset[EnvironmentV0]] = {
+    PromotionStateV0.DRAFT: frozenset({EnvironmentV0.READ_ONLY, EnvironmentV0.SHADOW}),
+    PromotionStateV0.SHADOW: frozenset({EnvironmentV0.SHADOW}),
+    PromotionStateV0.HUMAN_REVIEW: frozenset({EnvironmentV0.HUMAN_REVIEW}),
+    PromotionStateV0.TESTNET_ELIGIBLE: frozenset({EnvironmentV0.TESTNET}),
+    PromotionStateV0.MAINNET_PILOT_ELIGIBLE: frozenset({EnvironmentV0.MAINNET_PILOT}),
+    PromotionStateV0.MAINNET_PILOT_ACTIVE: frozenset({EnvironmentV0.MAINNET_PILOT}),
+    PromotionStateV0.QUARANTINED: frozenset(set(EnvironmentV0)),
+    PromotionStateV0.RETIRED: frozenset(set(EnvironmentV0)),
+}
+
+
 class StrategyCandidateV0(StrictModel):
     schema_version: VersionId
     candidate_id: OpaqueId
@@ -47,14 +59,15 @@ class StrategyCandidateV0(StrictModel):
     parameter_version: VersionId
     feature_version: VersionId
     label_version: VersionId
+    required_feed_contract_version: VersionId
     created_at: UTCDateTime
     expires_at: UTCDateTime
     kind: CandidateKindV0
     direction: DirectionV0 | None = None
-    entry_zone_low: float | None = Field(default=None, gt=0)
-    entry_zone_high: float | None = Field(default=None, gt=0)
-    stop_price: float | None = Field(default=None, gt=0)
-    target_prices: tuple[float, ...] = ()
+    entry_zone_low: PositiveFiniteDecimal | None = None
+    entry_zone_high: PositiveFiniteDecimal | None = None
+    stop_price: PositiveFiniteDecimal | None = None
+    target_prices: tuple[PositiveFiniteDecimal, ...] = ()
     reason_codes: tuple[str, ...] = ()
     invalidation_codes: tuple[str, ...] = ()
     market_snapshot_hash: Sha256Hex
@@ -67,8 +80,8 @@ class StrategyCandidateV0(StrictModel):
         if self.expires_at <= self.created_at:
             raise ValueError("candidate expiry must be after creation")
         if self.kind is CandidateKindV0.TRADE_SETUP:
-            if not self.mandatory_feed_status.all_live:
-                raise ValueError("trade setup requires all mandatory feeds LIVE")
+            if not self.mandatory_feed_status.satisfies(playbook_id=self.playbook_id.value, required_feed_contract_version=self.required_feed_contract_version, at=self.created_at):
+                raise ValueError("mandatory feeds LIVE and match playbook, contract, coverage and time")
             required = (self.direction, self.entry_zone_low, self.entry_zone_high, self.stop_price)
             if any(item is None for item in required) or not self.target_prices:
                 raise ValueError("trade setup requires direction, entry zone, stop, and targets")
@@ -98,15 +111,28 @@ class PromotionRecordV0(StrictModel):
     revoked_at: UTCDateTime | None = None
     rationale: str = Field(min_length=1, max_length=2000)
 
+    @model_validator(mode="after")
+    def validate_promotion(self) -> PromotionRecordV0:
+        if self.environment not in ALLOWED_PROMOTION_ENVIRONMENTS[self.state]:
+            raise ValueError("promotion state is not valid for environment")
+        if self.state not in {PromotionStateV0.DRAFT, PromotionStateV0.RETIRED}:
+            if not self.evidence_dataset_ids:
+                raise ValueError("non-draft promotion requires evidence_dataset_ids")
+            if self.activated_at is None:
+                raise ValueError("non-draft promotion requires activated_at")
+        if self.expires_at is not None and self.activated_at is not None and self.expires_at <= self.activated_at:
+            raise ValueError("promotion expiry must be after activation")
+        if self.revoked_at is not None and self.activated_at is not None and self.revoked_at < self.activated_at:
+            raise ValueError("revocation cannot predate activation")
+        return self
+
     def active_at(self, at: UTCDateTime) -> bool:
+        if self.activated_at is None:
+            return False
         if self.revoked_at is not None and self.revoked_at <= at:
             return False
-        if self.activated_at is not None and at < self.activated_at:
+        if at < self.activated_at:
             return False
         if self.expires_at is not None and at >= self.expires_at:
             return False
-        return self.state not in {
-            PromotionStateV0.DRAFT,
-            PromotionStateV0.QUARANTINED,
-            PromotionStateV0.RETIRED,
-        }
+        return self.state not in {PromotionStateV0.DRAFT, PromotionStateV0.QUARANTINED, PromotionStateV0.RETIRED}

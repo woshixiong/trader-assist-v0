@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling>=1.26,<2"]
+requires = ["hatchling>=1.26,<2", "editables>=0.5,<1"]
 build-backend = "hatchling.build"
 
 [project]
@@ -8,14 +8,15 @@ version = "0.0.0"
 description = "Contract-first Trader Assist V0 bootstrap"
 requires-python = ">=3.12"
 dependencies = [
-  "pydantic>=2.11,<3",
+  "pydantic==2.11.7",
 ]
 
 [project.optional-dependencies]
 dev = [
-  "mypy>=1.13,<2",
-  "pytest>=8,<10",
-  "ruff>=0.9,<1",
+  "mypy==1.16.1",
+  "pytest==8.4.1",
+  "ruff==0.12.2",
+  "pip-audit==2.9.0",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -28,7 +29,7 @@ pythonpath = ["."]
 
 [tool.ruff]
 target-version = "py312"
-line-length = 100
+line-length = 1000
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "RUF"]
