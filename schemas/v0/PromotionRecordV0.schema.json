@@ -117,6 +117,18 @@
       "title": "Rationale",
       "type": "string"
     },
+    "required_feed_contract_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Required Feed Contract Hash",
+      "type": "string"
+    },
+    "required_feed_contract_id": {
+      "maxLength": 160,
+      "minLength": 3,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "title": "Required Feed Contract Id",
+      "type": "string"
+    },
     "required_feed_contract_version": {
       "maxLength": 80,
       "minLength": 1,
@@ -173,7 +185,9 @@
     "parameter_version",
     "feature_version",
     "label_version",
+    "required_feed_contract_id",
     "required_feed_contract_version",
+    "required_feed_contract_hash",
     "state",
     "environment",
     "evidence_dataset_ids",

@@ -5,8 +5,23 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from .common import EnvironmentV0, NonNegativeFiniteDecimal, OpaqueId, PositiveFiniteDecimal, Sha256Hex, StrictModel, UTCDateTime, VersionId
-from .strategy import DirectionV0, PlaybookIdV0
+from .common import (
+    EnvironmentV0,
+    HashBoundModel,
+    HashDomainV0,
+    NonNegativeFiniteDecimal,
+    OpaqueId,
+    PositiveFiniteDecimal,
+    Sha256Hex,
+    UTCDateTime,
+    VersionId,
+)
+from .strategy import (
+    DirectionV0,
+    PlaybookIdV0,
+    PromotionRecordV0,
+    PromotionStateV0,
+)
 
 
 class HumanDecisionKindV0(StrEnum):
@@ -29,7 +44,10 @@ class PermitActionV0(StrEnum):
     EMERGENCY_REDUCE_ONLY = "EMERGENCY_REDUCE_ONLY"
 
 
-class AIRecommendationV0(StrictModel):
+class AIRecommendationV0(HashBoundModel):
+    hash_domain = HashDomainV0.AI_RECOMMENDATION
+    hash_field = "recommendation_hash"
+
     schema_version: VersionId
     recommendation_id: OpaqueId
     recommendation_hash: Sha256Hex
@@ -45,7 +63,10 @@ class AIRecommendationV0(StrictModel):
     can_authorize: Literal[False] = False
 
 
-class OrderPackageV0(StrictModel):
+class OrderPackageV0(HashBoundModel):
+    hash_domain = HashDomainV0.ORDER_PACKAGE
+    hash_field = "order_package_hash"
+
     schema_version: VersionId
     order_package_id: OpaqueId
     order_package_hash: Sha256Hex
@@ -67,10 +88,15 @@ class OrderPackageV0(StrictModel):
     def validate_order_type(self) -> OrderPackageV0:
         if self.order_type is OrderTypeV0.LIMIT and self.limit_price is None:
             raise ValueError("LIMIT order requires limit_price")
+        if self.order_type is not OrderTypeV0.LIMIT and self.limit_price is not None:
+            raise ValueError("non-LIMIT order must not contain limit_price")
         return self
 
 
-class ProposalV0(StrictModel):
+class ProposalV0(HashBoundModel):
+    hash_domain = HashDomainV0.PROPOSAL
+    hash_field = "proposal_hash"
+
     schema_version: VersionId
     proposal_id: OpaqueId
     proposal_hash: Sha256Hex
@@ -99,7 +125,10 @@ class ProposalV0(StrictModel):
         return self
 
 
-class HumanReviewDecisionV0(StrictModel):
+class HumanReviewDecisionV0(HashBoundModel):
+    hash_domain = HashDomainV0.HUMAN_DECISION
+    hash_field = "human_decision_hash"
+
     schema_version: VersionId
     human_decision_id: OpaqueId
     human_decision_hash: Sha256Hex
@@ -116,16 +145,23 @@ class HumanReviewDecisionV0(StrictModel):
     def validate_decision(self) -> HumanReviewDecisionV0:
         if self.decision is HumanDecisionKindV0.APPROVE:
             if self.approved_order_package_hash is None or self.superseding_proposal_id is not None:
-                raise ValueError("APPROVE requires exact approved order-package hash and no superseding proposal")
+                raise ValueError(
+                    "APPROVE requires exact approved order-package hash and no superseding proposal"
+                )
         elif self.decision is HumanDecisionKindV0.MODIFY:
             if self.superseding_proposal_id is None or self.approved_order_package_hash is not None:
-                raise ValueError("MODIFY requires a new proposal and cannot approve the old package")
+                raise ValueError(
+                    "MODIFY requires a new proposal and cannot approve the old package"
+                )
         elif self.approved_order_package_hash is not None:
             raise ValueError("non-APPROVE decision cannot approve an order package")
         return self
 
 
-class ExecutionPermitV0(StrictModel):
+class ExecutionPermitV0(HashBoundModel):
+    hash_domain = HashDomainV0.EXECUTION_PERMIT
+    hash_field = "permit_hash"
+
     schema_version: VersionId
     permit_id: OpaqueId
     permit_hash: Sha256Hex
@@ -164,5 +200,62 @@ class ExecutionPermitV0(StrictModel):
             raise ValueError("permit must contain at least one action")
         if self.environment is EnvironmentV0.MAINNET_PILOT:
             if self.pre_pilot_review_id is None or self.human_mainnet_authorization_id is None:
-                raise ValueError("Mainnet pilot permit requires pre-pilot review and human authorization")
+                raise ValueError(
+                    "Mainnet pilot permit requires pre-pilot review and human authorization"
+                )
         return self
+
+
+def validate_execution_permit_bindings(
+    permit: ExecutionPermitV0,
+    proposal: ProposalV0,
+    decision: HumanReviewDecisionV0,
+    promotion: PromotionRecordV0,
+) -> None:
+    failures: list[str] = []
+    if decision.decision is not HumanDecisionKindV0.APPROVE:
+        failures.append("human decision must be APPROVE")
+    if (permit.proposal_id, permit.proposal_hash) != (proposal.proposal_id, proposal.proposal_hash):
+        failures.append("permit proposal binding mismatch")
+    if (decision.proposal_id, decision.proposal_hash) != (
+        proposal.proposal_id,
+        proposal.proposal_hash,
+    ):
+        failures.append("human decision proposal binding mismatch")
+    if permit.human_decision_id != decision.human_decision_id:
+        failures.append("permit human decision id mismatch")
+    if permit.human_decision_hash != decision.human_decision_hash:
+        failures.append("permit human decision hash mismatch")
+    if permit.operator_id != decision.operator_id or permit.approved_at != decision.decided_at:
+        failures.append("permit human identity or approval time mismatch")
+    if permit.order_package_id != proposal.order_package.order_package_id:
+        failures.append("permit order package id mismatch")
+    if permit.order_package_hash != proposal.order_package.order_package_hash:
+        failures.append("permit order package hash mismatch")
+    if decision.approved_order_package_hash != proposal.order_package.order_package_hash:
+        failures.append("human decision did not approve exact order package")
+    if permit.account_snapshot_hash != proposal.account_snapshot_hash:
+        failures.append("permit account snapshot mismatch")
+    subject = (proposal.playbook_id, proposal.strategy_version, proposal.parameter_version)
+    if (permit.playbook_id, permit.strategy_version, permit.parameter_version) != subject:
+        failures.append("permit strategy subject mismatch")
+    if permit.risk_policy_version != proposal.risk_policy_version:
+        failures.append("permit risk policy mismatch")
+    if (permit.promotion_record_id, permit.promotion_record_hash) != (
+        promotion.promotion_record_id,
+        promotion.promotion_record_hash,
+    ):
+        failures.append("permit promotion record binding mismatch")
+    if (promotion.playbook_id, promotion.strategy_version, promotion.parameter_version) != subject:
+        failures.append("promotion strategy subject mismatch")
+    if promotion.environment is not permit.environment:
+        failures.append("promotion environment mismatch")
+    if not promotion.execution_enabled_at(permit.issued_at):
+        failures.append("promotion is not execution-enabled at permit issue time")
+    if permit.environment is EnvironmentV0.TESTNET:
+        if promotion.state is not PromotionStateV0.TESTNET_ELIGIBLE:
+            failures.append("Testnet permit requires TESTNET_ELIGIBLE promotion")
+    elif promotion.state is not PromotionStateV0.MAINNET_PILOT_ACTIVE:
+        failures.append("Mainnet permit requires MAINNET_PILOT_ACTIVE promotion")
+    if failures:
+        raise ValueError("; ".join(failures))

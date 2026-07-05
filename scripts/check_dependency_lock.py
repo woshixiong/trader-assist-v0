@@ -38,13 +38,18 @@ def main() -> int:
     data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     project = tuple(data["project"]["dependencies"])
     optional_dev = tuple(data["project"]["optional-dependencies"]["dev"])
-    for requirement in (*project, *optional_dev):
+    build = tuple(data["build-system"]["requires"])
+    for requirement in (*project, *optional_dev, *build):
         if not PIN_RE.fullmatch(requirement):
             raise SystemExit(f"pyproject dependency is not exactly pinned: {requirement}")
     runtime_by_name = {_normalized_name(line): line for line in runtime}
     dev_by_name = {_normalized_name(line): line for line in dev}
     missing_runtime = [req for req in project if runtime_by_name.get(_normalized_name(req)) != req]
-    missing_dev = [req for req in optional_dev if dev_by_name.get(_normalized_name(req)) != req]
+    missing_dev = [
+        req
+        for req in (*optional_dev, *build)
+        if dev_by_name.get(_normalized_name(req)) != req
+    ]
     if missing_runtime:
         raise SystemExit("runtime lock mismatch: " + ", ".join(missing_runtime))
     if missing_dev:

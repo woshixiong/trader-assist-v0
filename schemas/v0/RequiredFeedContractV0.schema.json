@@ -1,0 +1,63 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "contract_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Contract Hash",
+      "type": "string"
+    },
+    "contract_id": {
+      "maxLength": 160,
+      "minLength": 3,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "title": "Contract Id",
+      "type": "string"
+    },
+    "contract_version": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "mandatory_feed_ids": {
+      "items": {
+        "maxLength": 160,
+        "minLength": 3,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+        "type": "string"
+      },
+      "title": "Mandatory Feed Ids",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "playbook_id": {
+      "maxLength": 160,
+      "minLength": 3,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "title": "Playbook Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "contract_id",
+    "contract_hash",
+    "playbook_id",
+    "contract_version",
+    "mandatory_feed_ids",
+    "created_at"
+  ],
+  "title": "RequiredFeedContractV0",
+  "type": "object"
+}

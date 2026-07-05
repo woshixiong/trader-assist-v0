@@ -7,10 +7,12 @@ from .approval import (
     OrderTypeV0,
     PermitActionV0,
     ProposalV0,
+    validate_execution_permit_bindings,
 )
 from .common import (
     DataLayerV0,
     EnvironmentV0,
+    HashBoundModel,
     HashDomainV0,
     SourceAuthorityV0,
     canonical_json_bytes,
@@ -19,7 +21,13 @@ from .common import (
 )
 from .events import EventTypeV0, NormalizedEventV0, RawEventV0
 from .evidence import CorrelationChainV0, EvidenceBundleManifestV0, EvidenceFileV0
-from .health import DataHealthEventV0, FeedHealthPolicyV0, HealthStateV0, MandatoryFeedStatusV0
+from .health import (
+    DataHealthEventV0,
+    FeedHealthPolicyV0,
+    HealthStateV0,
+    MandatoryFeedStatusV0,
+    RequiredFeedContractV0,
+)
 from .provenance import SeedDispositionV0, SeedProvenanceEntryV0
 from .strategy import (
     CandidateKindV0,
@@ -43,6 +51,7 @@ __all__ = [
     "EvidenceFileV0",
     "ExecutionPermitV0",
     "FeedHealthPolicyV0",
+    "HashBoundModel",
     "HashDomainV0",
     "HealthStateV0",
     "HumanDecisionKindV0",
@@ -57,6 +66,7 @@ __all__ = [
     "PromotionStateV0",
     "ProposalV0",
     "RawEventV0",
+    "RequiredFeedContractV0",
     "SeedDispositionV0",
     "SeedProvenanceEntryV0",
     "SourceAuthorityV0",
@@ -64,4 +74,5 @@ __all__ = [
     "canonical_json_bytes",
     "contract_hash",
     "sha256_hex",
+    "validate_execution_permit_bindings",
 ]

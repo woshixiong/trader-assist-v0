@@ -17,6 +17,7 @@ from trader_assist_v0.contracts import (
     PromotionRecordV0,
     ProposalV0,
     RawEventV0,
+    RequiredFeedContractV0,
     SeedProvenanceEntryV0,
     StrategyCandidateV0,
 )
@@ -25,6 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "schemas" / "v0"
 MODELS: tuple[type[BaseModel], ...] = (
     RawEventV0,
+    RequiredFeedContractV0,
     NormalizedEventV0,
     DataHealthEventV0,
     StrategyCandidateV0,

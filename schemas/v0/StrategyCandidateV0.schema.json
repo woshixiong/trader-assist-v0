@@ -74,6 +74,18 @@
           "title": "Playbook Id",
           "type": "string"
         },
+        "required_feed_contract_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Required Feed Contract Hash",
+          "type": "string"
+        },
+        "required_feed_contract_id": {
+          "maxLength": 160,
+          "minLength": 3,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "title": "Required Feed Contract Id",
+          "type": "string"
+        },
         "required_feed_contract_version": {
           "maxLength": 80,
           "minLength": 1,
@@ -88,7 +100,9 @@
       },
       "required": [
         "playbook_id",
+        "required_feed_contract_id",
         "required_feed_contract_version",
+        "required_feed_contract_hash",
         "evaluated_at",
         "valid_until",
         "mandatory_feed_ids",
@@ -107,6 +121,69 @@
       ],
       "title": "PlaybookIdV0",
       "type": "string"
+    },
+    "RequiredFeedContractV0": {
+      "additionalProperties": false,
+      "properties": {
+        "contract_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Contract Hash",
+          "type": "string"
+        },
+        "contract_id": {
+          "maxLength": 160,
+          "minLength": 3,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "title": "Contract Id",
+          "type": "string"
+        },
+        "contract_version": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Contract Version",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "mandatory_feed_ids": {
+          "items": {
+            "maxLength": 160,
+            "minLength": 3,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+            "type": "string"
+          },
+          "title": "Mandatory Feed Ids",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "playbook_id": {
+          "maxLength": 160,
+          "minLength": 3,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "title": "Playbook Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "contract_id",
+        "contract_hash",
+        "playbook_id",
+        "contract_version",
+        "mandatory_feed_ids",
+        "created_at"
+      ],
+      "title": "RequiredFeedContractV0",
+      "type": "object"
     }
   },
   "additionalProperties": false,
@@ -236,11 +313,8 @@
       "title": "Reason Codes",
       "type": "array"
     },
-    "required_feed_contract_version": {
-      "maxLength": 80,
-      "minLength": 1,
-      "title": "Required Feed Contract Version",
-      "type": "string"
+    "required_feed_contract": {
+      "$ref": "#/$defs/RequiredFeedContractV0"
     },
     "schema_version": {
       "maxLength": 80,
@@ -298,7 +372,7 @@
     "parameter_version",
     "feature_version",
     "label_version",
-    "required_feed_contract_version",
+    "required_feed_contract",
     "created_at",
     "expires_at",
     "kind",

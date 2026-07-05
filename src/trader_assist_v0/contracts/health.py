@@ -4,7 +4,15 @@ from enum import StrEnum
 
 from pydantic import Field, model_validator
 
-from .common import OpaqueId, StrictModel, UTCDateTime, VersionId
+from .common import (
+    HashBoundModel,
+    HashDomainV0,
+    OpaqueId,
+    Sha256Hex,
+    StrictModel,
+    UTCDateTime,
+    VersionId,
+)
 
 
 class HealthStateV0(StrEnum):
@@ -23,18 +31,113 @@ class HealthStateV0(StrEnum):
 
 
 LEGAL_HEALTH_TRANSITIONS: dict[HealthStateV0, frozenset[HealthStateV0]] = {
-    HealthStateV0.INITIALIZING: frozenset({HealthStateV0.INITIALIZING, HealthStateV0.SNAPSHOT_SYNC, HealthStateV0.DISCONNECTED, HealthStateV0.CONFLICTED, HealthStateV0.UNKNOWN}),
-    HealthStateV0.SNAPSHOT_SYNC: frozenset({HealthStateV0.SNAPSHOT_SYNC, HealthStateV0.LIVE, HealthStateV0.DEGRADED, HealthStateV0.GAPPED, HealthStateV0.DISCONNECTED, HealthStateV0.CONFLICTED}),
-    HealthStateV0.LIVE: frozenset({HealthStateV0.LIVE, HealthStateV0.DEGRADED, HealthStateV0.STALE, HealthStateV0.GAPPED, HealthStateV0.DISCONNECTED, HealthStateV0.CONFLICTED}),
-    HealthStateV0.DEGRADED: frozenset({HealthStateV0.DEGRADED, HealthStateV0.LIVE, HealthStateV0.STALE, HealthStateV0.GAPPED, HealthStateV0.DISCONNECTED, HealthStateV0.RECONNECTING, HealthStateV0.CONFLICTED}),
-    HealthStateV0.STALE: frozenset({HealthStateV0.STALE, HealthStateV0.LIVE, HealthStateV0.DEGRADED, HealthStateV0.GAPPED, HealthStateV0.DISCONNECTED, HealthStateV0.RECONNECTING, HealthStateV0.CONFLICTED}),
-    HealthStateV0.GAPPED: frozenset({HealthStateV0.GAPPED, HealthStateV0.BACKFILLING, HealthStateV0.RECONNECTING, HealthStateV0.DISCONNECTED, HealthStateV0.CONFLICTED}),
-    HealthStateV0.DISCONNECTED: frozenset({HealthStateV0.DISCONNECTED, HealthStateV0.RECONNECTING, HealthStateV0.CONFLICTED}),
-    HealthStateV0.RECONNECTING: frozenset({HealthStateV0.RECONNECTING, HealthStateV0.SNAPSHOT_SYNC, HealthStateV0.DISCONNECTED, HealthStateV0.CONFLICTED}),
-    HealthStateV0.BACKFILLING: frozenset({HealthStateV0.BACKFILLING, HealthStateV0.RECONCILING, HealthStateV0.DISCONNECTED, HealthStateV0.CONFLICTED}),
-    HealthStateV0.RECONCILING: frozenset({HealthStateV0.RECONCILING, HealthStateV0.LIVE, HealthStateV0.DEGRADED, HealthStateV0.DISCONNECTED, HealthStateV0.CONFLICTED}),
-    HealthStateV0.CONFLICTED: frozenset({HealthStateV0.CONFLICTED, HealthStateV0.RECONCILING, HealthStateV0.DISCONNECTED}),
-    HealthStateV0.UNKNOWN: frozenset({HealthStateV0.UNKNOWN, HealthStateV0.INITIALIZING, HealthStateV0.DISCONNECTED, HealthStateV0.CONFLICTED}),
+    HealthStateV0.INITIALIZING: frozenset(
+        {
+            HealthStateV0.INITIALIZING,
+            HealthStateV0.SNAPSHOT_SYNC,
+            HealthStateV0.DISCONNECTED,
+            HealthStateV0.CONFLICTED,
+            HealthStateV0.UNKNOWN,
+        }
+    ),
+    HealthStateV0.SNAPSHOT_SYNC: frozenset(
+        {
+            HealthStateV0.SNAPSHOT_SYNC,
+            HealthStateV0.LIVE,
+            HealthStateV0.DEGRADED,
+            HealthStateV0.GAPPED,
+            HealthStateV0.DISCONNECTED,
+            HealthStateV0.CONFLICTED,
+        }
+    ),
+    HealthStateV0.LIVE: frozenset(
+        {
+            HealthStateV0.LIVE,
+            HealthStateV0.DEGRADED,
+            HealthStateV0.STALE,
+            HealthStateV0.GAPPED,
+            HealthStateV0.DISCONNECTED,
+            HealthStateV0.CONFLICTED,
+        }
+    ),
+    HealthStateV0.DEGRADED: frozenset(
+        {
+            HealthStateV0.DEGRADED,
+            HealthStateV0.LIVE,
+            HealthStateV0.STALE,
+            HealthStateV0.GAPPED,
+            HealthStateV0.DISCONNECTED,
+            HealthStateV0.RECONNECTING,
+            HealthStateV0.CONFLICTED,
+        }
+    ),
+    HealthStateV0.STALE: frozenset(
+        {
+            HealthStateV0.STALE,
+            HealthStateV0.LIVE,
+            HealthStateV0.DEGRADED,
+            HealthStateV0.GAPPED,
+            HealthStateV0.DISCONNECTED,
+            HealthStateV0.RECONNECTING,
+            HealthStateV0.CONFLICTED,
+        }
+    ),
+    HealthStateV0.GAPPED: frozenset(
+        {
+            HealthStateV0.GAPPED,
+            HealthStateV0.BACKFILLING,
+            HealthStateV0.RECONNECTING,
+            HealthStateV0.DISCONNECTED,
+            HealthStateV0.CONFLICTED,
+        }
+    ),
+    HealthStateV0.DISCONNECTED: frozenset(
+        {
+            HealthStateV0.DISCONNECTED,
+            HealthStateV0.RECONNECTING,
+            HealthStateV0.CONFLICTED,
+        }
+    ),
+    HealthStateV0.RECONNECTING: frozenset(
+        {
+            HealthStateV0.RECONNECTING,
+            HealthStateV0.SNAPSHOT_SYNC,
+            HealthStateV0.DISCONNECTED,
+            HealthStateV0.CONFLICTED,
+        }
+    ),
+    HealthStateV0.BACKFILLING: frozenset(
+        {
+            HealthStateV0.BACKFILLING,
+            HealthStateV0.RECONCILING,
+            HealthStateV0.DISCONNECTED,
+            HealthStateV0.CONFLICTED,
+        }
+    ),
+    HealthStateV0.RECONCILING: frozenset(
+        {
+            HealthStateV0.RECONCILING,
+            HealthStateV0.LIVE,
+            HealthStateV0.DEGRADED,
+            HealthStateV0.DISCONNECTED,
+            HealthStateV0.CONFLICTED,
+        }
+    ),
+    HealthStateV0.CONFLICTED: frozenset(
+        {
+            HealthStateV0.CONFLICTED,
+            HealthStateV0.RECONCILING,
+            HealthStateV0.DISCONNECTED,
+        }
+    ),
+    HealthStateV0.UNKNOWN: frozenset(
+        {
+            HealthStateV0.UNKNOWN,
+            HealthStateV0.INITIALIZING,
+            HealthStateV0.DISCONNECTED,
+            HealthStateV0.CONFLICTED,
+        }
+    ),
 }
 
 
@@ -53,6 +156,25 @@ class FeedHealthPolicyV0(StrictModel):
     gap_policy: str = Field(min_length=1, max_length=200)
     backfill_source: str = Field(min_length=1, max_length=200)
     reconciliation_rule: str = Field(min_length=1, max_length=300)
+
+
+class RequiredFeedContractV0(HashBoundModel):
+    hash_domain = HashDomainV0.REQUIRED_FEED_CONTRACT
+    hash_field = "contract_hash"
+
+    schema_version: VersionId
+    contract_id: OpaqueId
+    contract_hash: Sha256Hex
+    playbook_id: OpaqueId
+    contract_version: VersionId
+    mandatory_feed_ids: frozenset[OpaqueId]
+    created_at: UTCDateTime
+
+    @model_validator(mode="after")
+    def validate_contract(self) -> RequiredFeedContractV0:
+        if not self.mandatory_feed_ids:
+            raise ValueError("required feed contract must contain mandatory feeds")
+        return self
 
 
 class DataHealthEventV0(StrictModel):
@@ -78,7 +200,9 @@ class DataHealthEventV0(StrictModel):
 
 class MandatoryFeedStatusV0(StrictModel):
     playbook_id: OpaqueId
+    required_feed_contract_id: OpaqueId
     required_feed_contract_version: VersionId
+    required_feed_contract_hash: Sha256Hex
     evaluated_at: UTCDateTime
     valid_until: UTCDateTime
     mandatory_feed_ids: frozenset[OpaqueId]
@@ -98,5 +222,13 @@ class MandatoryFeedStatusV0(StrictModel):
     def all_live(self) -> bool:
         return all(state is HealthStateV0.LIVE for state in self.feed_states.values())
 
-    def satisfies(self, *, playbook_id: str, required_feed_contract_version: str, at: UTCDateTime) -> bool:
-        return self.playbook_id == playbook_id and self.required_feed_contract_version == required_feed_contract_version and self.evaluated_at <= at <= self.valid_until and self.all_live
+    def satisfies(self, contract: RequiredFeedContractV0, at: UTCDateTime) -> bool:
+        return (
+            self.playbook_id == contract.playbook_id
+            and self.required_feed_contract_id == contract.contract_id
+            and self.required_feed_contract_version == contract.contract_version
+            and self.required_feed_contract_hash == contract.contract_hash
+            and self.mandatory_feed_ids == contract.mandatory_feed_ids
+            and self.evaluated_at <= at <= self.valid_until
+            and self.all_live
+        )
