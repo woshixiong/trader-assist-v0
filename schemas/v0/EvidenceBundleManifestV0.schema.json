@@ -94,9 +94,9 @@
       "title": "Bundle Schema Version",
       "type": "string"
     },
-    "code_commit_sha": {
-      "pattern": "^[0-9a-f]{64}$",
-      "title": "Code Commit Sha",
+    "code_commit_oid": {
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+      "title": "Code Commit Oid",
       "type": "string"
     },
     "collector_versions": {
@@ -232,7 +232,7 @@
     "risk_policy_version",
     "model_versions",
     "prompt_versions",
-    "code_commit_sha",
+    "code_commit_oid",
     "quality_status",
     "known_gaps",
     "files",

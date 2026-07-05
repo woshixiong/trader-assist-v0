@@ -56,17 +56,42 @@
           "title": "Feed States",
           "type": "object"
         },
+        "mandatory_feed_ids": {
+          "items": {
+            "maxLength": 160,
+            "minLength": 3,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+            "type": "string"
+          },
+          "title": "Mandatory Feed Ids",
+          "type": "array",
+          "uniqueItems": true
+        },
         "playbook_id": {
           "maxLength": 160,
           "minLength": 3,
           "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
           "title": "Playbook Id",
           "type": "string"
+        },
+        "required_feed_contract_version": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Required Feed Contract Version",
+          "type": "string"
+        },
+        "valid_until": {
+          "format": "date-time",
+          "title": "Valid Until",
+          "type": "string"
         }
       },
       "required": [
         "playbook_id",
+        "required_feed_contract_version",
         "evaluated_at",
+        "valid_until",
+        "mandatory_feed_ids",
         "feed_states"
       ],
       "title": "MandatoryFeedStatusV0",
@@ -127,8 +152,12 @@
     "entry_zone_high": {
       "anyOf": [
         {
-          "exclusiveMinimum": 0,
+          "exclusiveMinimum": 0.0,
           "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "type": "string"
         },
         {
           "type": "null"
@@ -140,8 +169,12 @@
     "entry_zone_low": {
       "anyOf": [
         {
-          "exclusiveMinimum": 0,
+          "exclusiveMinimum": 0.0,
           "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "type": "string"
         },
         {
           "type": "null"
@@ -203,6 +236,12 @@
       "title": "Reason Codes",
       "type": "array"
     },
+    "required_feed_contract_version": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Required Feed Contract Version",
+      "type": "string"
+    },
     "schema_version": {
       "maxLength": 80,
       "minLength": 1,
@@ -212,8 +251,12 @@
     "stop_price": {
       "anyOf": [
         {
-          "exclusiveMinimum": 0,
+          "exclusiveMinimum": 0.0,
           "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "type": "string"
         },
         {
           "type": "null"
@@ -231,7 +274,16 @@
     "target_prices": {
       "default": [],
       "items": {
-        "type": "number"
+        "anyOf": [
+          {
+            "exclusiveMinimum": 0.0,
+            "type": "number"
+          },
+          {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "type": "string"
+          }
+        ]
       },
       "title": "Target Prices",
       "type": "array"
@@ -246,6 +298,7 @@
     "parameter_version",
     "feature_version",
     "label_version",
+    "required_feed_contract_version",
     "created_at",
     "expires_at",
     "kind",

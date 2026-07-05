@@ -27,8 +27,12 @@
         "limit_price": {
           "anyOf": [
             {
-              "exclusiveMinimum": 0,
+              "exclusiveMinimum": 0.0,
               "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
             },
             {
               "type": "null"
@@ -38,9 +42,17 @@
           "title": "Limit Price"
         },
         "max_slippage_bps": {
-          "minimum": 0,
-          "title": "Max Slippage Bps",
-          "type": "number"
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Max Slippage Bps"
         },
         "order_package_hash": {
           "pattern": "^[0-9a-f]{64}$",
@@ -58,9 +70,17 @@
           "$ref": "#/$defs/OrderTypeV0"
         },
         "quantity": {
-          "exclusiveMinimum": 0,
-          "title": "Quantity",
-          "type": "number"
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Quantity"
         },
         "reduce_only": {
           "title": "Reduce Only",
@@ -226,7 +246,7 @@
       "maxLength": 80,
       "minLength": 1,
       "title": "Risk Policy Version",
-      "type": "string"
+      "type": "strring"
     },
     "schema_version": {
       "maxLength": 80,

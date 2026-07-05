@@ -40,7 +40,9 @@ MODELS: tuple[type[BaseModel], ...] = (
 
 
 def render(model: type[BaseModel]) -> str:
-    return json.dumps(model.model_json_schema(), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    return (
+        json.dumps(model.model_json_schema(), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    )
 
 
 def main() -> int:
@@ -53,14 +55,12 @@ def main() -> int:
         path = OUT / f"{model.__name__}.schema.json"
         expected = render(model)
         if args.check:
-            if not path.exists():
+            if not path.exists() or path.read_text(encoding="utf-8") != expected:
                 failures.append(str(path.relative_to(ROOT)))
-            else:
-                path.write_text(expected, encoding="utf-8")
         else:
             path.write_text(expected, encoding="utf-8")
     if failures:
-        raise SystemExit("missing schemas: " + ", ".join(failures))
+        raise SystemExit("schema drift: " + ", ".join(failures))
     return 0
 
 

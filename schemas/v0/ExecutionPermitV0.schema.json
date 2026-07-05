@@ -20,6 +20,17 @@
       ],
       "title": "PermitActionV0",
       "type": "string"
+    },
+    "PlaybookIdV0": {
+      "enum": [
+        "LQS-FR",
+        "BRK-AR",
+        "TRD-PB",
+        "BAL-RV",
+        "MACRO-RP"
+      ],
+      "title": "PlaybookIdV0",
+      "type": "string"
     }
   },
   "additionalProperties": false,
@@ -27,6 +38,11 @@
     "account_snapshot_hash": {
       "pattern": "^[0-9a-f]{64}$",
       "title": "Account Snapshot Hash",
+      "type": "string"
+    },
+    "approved_at": {
+      "format": "date-time",
+      "title": "Approved At",
       "type": "string"
     },
     "environment": {
@@ -69,6 +85,13 @@
       "title": "Issued At",
       "type": "string"
     },
+    "operator_id": {
+      "maxLength": 160,
+      "minLength": 3,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "title": "Operator Id",
+      "type": "string"
+    },
     "order_package_hash": {
       "pattern": "^[0-9a-f]{64}$",
       "title": "Order Package Hash",
@@ -79,6 +102,12 @@
       "minLength": 3,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
       "title": "Order Package Id",
+      "type": "string"
+    },
+    "parameter_version": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Parameter Version",
       "type": "string"
     },
     "permit_hash": {
@@ -100,6 +129,9 @@
       "title": "Permitted Actions",
       "type": "array",
       "uniqueItems": true
+    },
+    "playbook_id": {
+      "$ref": "#/$defs/PlaybookIdV0"
     },
     "pre_pilot_review_id": {
       "anyOf": [
@@ -140,6 +172,12 @@
       "title": "Proposal Id",
       "type": "string"
     },
+    "risk_policy_version": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Risk Policy Version",
+      "type": "string"
+    },
     "schema_version": {
       "maxLength": 80,
       "minLength": 1,
@@ -151,6 +189,12 @@
       "default": true,
       "title": "Single Use",
       "type": "boolean"
+    },
+    "strategy_version": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Strategy Version",
+      "type": "string"
     }
   },
   "required": [
@@ -158,6 +202,12 @@
     "permit_id",
     "permit_hash",
     "environment",
+    "playbook_id",
+    "strategy_version",
+    "parameter_version",
+    "risk_policy_version",
+    "operator_id",
+    "approved_at",
     "human_decision_id",
     "human_decision_hash",
     "proposal_id",
