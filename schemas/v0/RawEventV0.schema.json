@@ -1,0 +1,129 @@
+{
+  "$defs": {
+    "EnvironmentV0": {
+      "enum": [
+        "READ_ONLY",
+        "SHADOW",
+        "HUMAN_REVIEW",
+        "TESTNET",
+        "MAINNET_PILOT"
+      ],
+      "title": "EnvironmentV0",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "collector_receive_time": {
+      "format": "date-time",
+      "title": "Collector Receive Time",
+      "type": "string"
+    },
+    "collector_version": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Collector Version",
+      "type": "string"
+    },
+    "connection_id": {
+      "maxLength": 160,
+      "minLength": 3,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "title": "Connection Id",
+      "type": "string"
+    },
+    "endpoint": {
+      "maxLength": 300,
+      "minLength": 1,
+      "title": "Endpoint",
+      "type": "string"
+    },
+    "environment": {
+      "$ref": "#/$defs/EnvironmentV0"
+    },
+    "payload_encoding": {
+      "maxLength": 40,
+      "minLength": 1,
+      "title": "Payload Encoding",
+      "type": "string"
+    },
+    "payload_ref": {
+      "maxLength": 500,
+      "minLength": 1,
+      "title": "Payload Ref",
+      "type": "string"
+    },
+    "payload_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Payload Sha256",
+      "type": "string"
+    },
+    "payload_size_bytes": {
+      "minimum": 0,
+      "title": "Payload Size Bytes",
+      "type": "integer"
+    },
+    "receive_sequence": {
+      "minimum": 0,
+      "title": "Receive Sequence",
+      "type": "integer"
+    },
+    "schema_version": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_event_id": {
+      "maxLength": 160,
+      "minLength": 3,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "title": "Source Event Id",
+      "type": "string"
+    },
+    "source_event_time": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Source Event Time"
+    },
+    "source_id": {
+      "maxLength": 160,
+      "minLength": 3,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "title": "Source Id",
+      "type": "string"
+    },
+    "subscription": {
+      "maxLength": 300,
+      "minLength": 1,
+      "title": "Subscription",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "source_event_id",
+    "source_id",
+    "connection_id",
+    "endpoint",
+    "subscription",
+    "environment",
+    "collector_version",
+    "collector_receive_time",
+    "receive_sequence",
+    "payload_sha256",
+    "payload_size_bytes",
+    "payload_encoding",
+    "payload_ref"
+  ],
+  "title": "RawEventV0",
+  "type": "object"
+}

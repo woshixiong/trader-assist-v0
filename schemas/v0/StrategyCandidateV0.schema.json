@@ -1,0 +1,259 @@
+{
+  "$defs": {
+    "CandidateKindV0": {
+      "enum": [
+        "NO_TRADE",
+        "WATCH",
+        "TRADE_SETUP"
+      ],
+      "title": "CandidateKindV0",
+      "type": "string"
+    },
+    "DirectionV0": {
+      "enum": [
+        "LONG",
+        "SHORT"
+      ],
+      "title": "DirectionV0",
+      "type": "string"
+    },
+    "HealthStateV0": {
+      "enum": [
+        "INITIALIZING",
+        "SNAPSHOT_SYNC",
+        "LIVE",
+        "DEGRADED",
+        "STALE",
+        "GAPPED",
+        "DISCONNECTED",
+        "RECONNECTING",
+        "BACKFILLING",
+        "RECONCILING",
+        "CONFLICTED",
+        "UNKNOWN"
+      ],
+      "title": "HealthStateV0",
+      "type": "string"
+    },
+    "MandatoryFeedStatusV0": {
+      "additionalProperties": false,
+      "properties": {
+        "evaluated_at": {
+          "format": "date-time",
+          "title": "Evaluated At",
+          "type": "string"
+        },
+        "feed_states": {
+          "patternProperties": {
+            "^[A-Za-z0-9][A-Za-z0-9._:-]*$": {
+              "$ref": "#/$defs/HealthStateV0"
+            }
+          },
+          "propertyNames": {
+            "maxLength": 160,
+            "minLength": 3
+          },
+          "title": "Feed States",
+          "type": "object"
+        },
+        "playbook_id": {
+          "maxLength": 160,
+          "minLength": 3,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "title": "Playbook Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "playbook_id",
+        "evaluated_at",
+        "feed_states"
+      ],
+      "title": "MandatoryFeedStatusV0",
+      "type": "object"
+    },
+    "PlaybookIdV0": {
+      "enum": [
+        "LQS-FR",
+        "BRK-AR",
+        "TRD-PB",
+        "BAL-RV",
+        "MACRO-RP"
+      ],
+      "title": "PlaybookIdV0",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "account_snapshot_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Account Snapshot Hash",
+      "type": "string"
+    },
+    "candidate_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Candidate Hash",
+      "type": "string"
+    },
+    "candidate_id": {
+      "maxLength": 160,
+      "minLength": 3,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "title": "Candidate Id",
+      "type": "string"
+    },
+    "context_snapshot_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Context Snapshot Hash",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "direction": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DirectionV0"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "entry_zone_high": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Entry Zone High"
+    },
+    "entry_zone_low": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Entry Zone Low"
+    },
+    "expires_at": {
+      "format": "date-time",
+      "title": "Expires At",
+      "type": "string"
+    },
+    "feature_version": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Feature Version",
+      "type": "string"
+    },
+    "invalidation_codes": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Invalidation Codes",
+      "type": "array"
+    },
+    "kind": {
+      "$ref": "#/$defs/CandidateKindV0"
+    },
+    "label_version": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Label Version",
+      "type": "string"
+    },
+    "mandatory_feed_status": {
+      "$ref": "#/$defs/MandatoryFeedStatusV0"
+    },
+    "market_snapshot_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Market Snapshot Hash",
+      "type": "string"
+    },
+    "parameter_version": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Parameter Version",
+      "type": "string"
+    },
+    "playbook_id": {
+      "$ref": "#/$defs/PlaybookIdV0"
+    },
+    "reason_codes": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Reason Codes",
+      "type": "array"
+    },
+    "schema_version": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "stop_price": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Stop Price"
+    },
+    "strategy_version": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Strategy Version",
+      "type": "string"
+    },
+    "target_prices": {
+      "default": [],
+      "items": {
+        "type": "number"
+      },
+      "title": "Target Prices",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "candidate_id",
+    "candidate_hash",
+    "playbook_id",
+    "strategy_version",
+    "parameter_version",
+    "feature_version",
+    "label_version",
+    "created_at",
+    "expires_at",
+    "kind",
+    "market_snapshot_hash",
+    "account_snapshot_hash",
+    "context_snapshot_hash",
+    "mandatory_feed_status"
+  ],
+  "title": "StrategyCandidateV0",
+  "type": "object"
+}

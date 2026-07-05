@@ -1,0 +1,105 @@
+{
+  "$defs": {
+    "HealthStateV0": {
+      "enum": [
+        "INITIALIZING",
+        "SNAPSHOT_SYNC",
+        "LIVE",
+        "DEGRADED",
+        "STALE",
+        "GAPPED",
+        "DISCONNECTED",
+        "RECONNECTING",
+        "BACKFILLING",
+        "RECONCILING",
+        "CONFLICTED",
+        "UNKNOWN"
+      ],
+      "title": "HealthStateV0",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "age_ms": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Age Ms"
+    },
+    "feed_id": {
+      "maxLength": 160,
+      "minLength": 3,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "title": "Feed Id",
+      "type": "string"
+    },
+    "health_event_id": {
+      "maxLength": 160,
+      "minLength": 3,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "title": "Health Event Id",
+      "type": "string"
+    },
+    "observed_at": {
+      "format": "date-time",
+      "title": "Observed At",
+      "type": "string"
+    },
+    "policy_version": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Policy Version",
+      "type": "string"
+    },
+    "previous_state": {
+      "$ref": "#/$defs/HealthStateV0"
+    },
+    "reason_codes": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Reason Codes",
+      "type": "array"
+    },
+    "sequence_gap": {
+      "default": false,
+      "title": "Sequence Gap",
+      "type": "boolean"
+    },
+    "source_event_time": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Source Event Time"
+    },
+    "state": {
+      "$ref": "#/$defs/HealthStateV0"
+    }
+  },
+  "required": [
+    "health_event_id",
+    "feed_id",
+    "policy_version",
+    "previous_state",
+    "state",
+    "observed_at"
+  ],
+  "title": "DataHealthEventV0",
+  "type": "object"
+}

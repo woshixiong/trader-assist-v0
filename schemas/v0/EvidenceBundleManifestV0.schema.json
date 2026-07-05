@@ -1,0 +1,243 @@
+{
+  "$defs": {
+    "EnvironmentV0": {
+      "enum": [
+        "READ_ONLY",
+        "SHADOW",
+        "HUMAN_REVIEW",
+        "TESTNET",
+        "MAINNET_PILOT"
+      ],
+      "title": "EnvironmentV0",
+      "type": "string"
+    },
+    "EvidenceFileV0": {
+      "additionalProperties": false,
+      "properties": {
+        "max_event_time": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Event Time"
+        },
+        "min_event_time": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min Event Time"
+        },
+        "relative_path": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Relative Path",
+          "type": "string"
+        },
+        "row_count": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Row Count"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "relative_path",
+        "sha256",
+        "size_bytes"
+      ],
+      "title": "EvidenceFileV0",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "account_alias": {
+      "maxLength": 160,
+      "minLength": 3,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "title": "Account Alias",
+      "type": "string"
+    },
+    "bundle_schema_version": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Bundle Schema Version",
+      "type": "string"
+    },
+    "code_commit_sha": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Code Commit Sha",
+      "type": "string"
+    },
+    "collector_versions": {
+      "additionalProperties": {
+        "maxLength": 80,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": "Collector Versions",
+      "type": "object"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "dataset_id": {
+      "maxLength": 160,
+      "minLength": 3,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "title": "Dataset Id",
+      "type": "string"
+    },
+    "end_time": {
+      "format": "date-time",
+      "title": "End Time",
+      "type": "string"
+    },
+    "environment": {
+      "$ref": "#/$defs/EnvironmentV0"
+    },
+    "files": {
+      "items": {
+        "$ref": "#/$defs/EvidenceFileV0"
+      },
+      "title": "Files",
+      "type": "array"
+    },
+    "instrument": {
+      "pattern": "^ETH$",
+      "title": "Instrument",
+      "type": "string"
+    },
+    "known_gaps": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Known Gaps",
+      "type": "array"
+    },
+    "model_versions": {
+      "additionalProperties": {
+        "maxLength": 80,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": "Model Versions",
+      "type": "object"
+    },
+    "normalizer_version": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Normalizer Version",
+      "type": "string"
+    },
+    "parameter_versions": {
+      "additionalProperties": {
+        "maxLength": 80,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": "Parameter Versions",
+      "type": "object"
+    },
+    "prompt_versions": {
+      "additionalProperties": {
+        "maxLength": 80,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": "Prompt Versions",
+      "type": "object"
+    },
+    "quality_status": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Quality Status",
+      "type": "string"
+    },
+    "risk_policy_version": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Risk Policy Version",
+      "type": "string"
+    },
+    "source_versions": {
+      "additionalProperties": {
+        "maxLength": 80,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": "Source Versions",
+      "type": "object"
+    },
+    "start_time": {
+      "format": "date-time",
+      "title": "Start Time",
+      "type": "string"
+    },
+    "strategy_versions": {
+      "additionalProperties": {
+        "maxLength": 80,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": "Strategy Versions",
+      "type": "object"
+    }
+  },
+  "required": [
+    "bundle_schema_version",
+    "dataset_id",
+    "environment",
+    "account_alias",
+    "instrument",
+    "start_time",
+    "end_time",
+    "source_versions",
+    "collector_versions",
+    "normalizer_version",
+    "strategy_versions",
+    "parameter_versions",
+    "risk_policy_version",
+    "model_versions",
+    "prompt_versions",
+    "code_commit_sha",
+    "quality_status",
+    "known_gaps",
+    "files",
+    "created_at"
+  ],
+  "title": "EvidenceBundleManifestV0",
+  "type": "object"
+}

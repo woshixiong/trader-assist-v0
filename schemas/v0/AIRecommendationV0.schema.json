@@ -1,0 +1,107 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "can_authorize": {
+      "const": false,
+      "default": false,
+      "title": "Can Authorize",
+      "type": "boolean"
+    },
+    "candidate_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Candidate Hash",
+      "type": "string"
+    },
+    "candidate_id": {
+      "maxLength": 160,
+      "minLength": 3,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "title": "Candidate Id",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "missing_evidence": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Missing Evidence",
+      "type": "array"
+    },
+    "model_id": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Model Id",
+      "type": "string"
+    },
+    "narrative": {
+      "maxLength": 8000,
+      "minLength": 1,
+      "title": "Narrative",
+      "type": "string"
+    },
+    "opposing_evidence_ids": {
+      "items": {
+        "maxLength": 160,
+        "minLength": 3,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+        "type": "string"
+      },
+      "title": "Opposing Evidence Ids",
+      "type": "array"
+    },
+    "prompt_version": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Prompt Version",
+      "type": "string"
+    },
+    "recommendation_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Recommendation Hash",
+      "type": "string"
+    },
+    "recommendation_id": {
+      "maxLength": 160,
+      "minLength": 3,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "title": "Recommendation Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "supporting_evidence_ids": {
+      "items": {
+        "maxLength": 160,
+        "minLength": 3,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+        "type": "string"
+      },
+      "title": "Supporting Evidence Ids",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "recommendation_id",
+    "recommendation_hash",
+    "candidate_id",
+    "candidate_hash",
+    "model_id",
+    "prompt_version",
+    "created_at",
+    "supporting_evidence_ids",
+    "opposing_evidence_ids",
+    "narrative"
+  ],
+  "title": "AIRecommendationV0",
+  "type": "object"
+}

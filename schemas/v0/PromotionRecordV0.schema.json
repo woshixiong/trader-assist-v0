@@ -1,0 +1,186 @@
+{
+  "$defs": {
+    "EnvironmentV0": {
+      "enum": [
+        "READ_ONLY",
+        "SHADOW",
+        "HUMAN_REVIEW",
+        "TESTNET",
+        "MAINNET_PILOT"
+      ],
+      "title": "EnvironmentV0",
+      "type": "string"
+    },
+    "PlaybookIdV0": {
+      "enum": [
+        "LQS-FR",
+        "BRK-AR",
+        "TRD-PB",
+        "BAL-RV",
+        "MACRO-RP"
+      ],
+      "title": "PlaybookIdV0",
+      "type": "string"
+    },
+    "PromotionStateV0": {
+      "enum": [
+        "DRAFT",
+        "SHADOW",
+        "HUMAN_REVIEW",
+        "TESTNET_ELIGIBLE",
+        "MAINNET_PILOT_ELIGIBLE",
+        "MAINNET_PILOT_ACTIVE",
+        "QUARANTINED",
+        "RETIRED"
+      ],
+      "title": "PromotionStateV0",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "activated_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Activated At"
+    },
+    "environment": {
+      "$ref": "#/$defs/EnvironmentV0"
+    },
+    "evidence_dataset_ids": {
+      "items": {
+        "maxLength": 160,
+        "minLength": 3,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+        "type": "string"
+      },
+      "title": "Evidence Dataset Ids",
+      "type": "array"
+    },
+    "expires_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Expires At"
+    },
+    "feature_version": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Feature Version",
+      "type": "string"
+    },
+    "label_version": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Label Version",
+      "type": "string"
+    },
+    "parameter_version": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Parameter Version",
+      "type": "string"
+    },
+    "playbook_id": {
+      "$ref": "#/$defs/PlaybookIdV0"
+    },
+    "promotion_record_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Promotion Record Hash",
+      "type": "string"
+    },
+    "promotion_record_id": {
+      "maxLength": 160,
+      "minLength": 3,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "title": "Promotion Record Id",
+      "type": "string"
+    },
+    "rationale": {
+      "maxLength": 2000,
+      "minLength": 1,
+      "title": "Rationale",
+      "type": "string"
+    },
+    "required_feed_contract_version": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Required Feed Contract Version",
+      "type": "string"
+    },
+    "reviewed_at": {
+      "format": "date-time",
+      "title": "Reviewed At",
+      "type": "string"
+    },
+    "reviewed_by": {
+      "maxLength": 160,
+      "minLength": 3,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "title": "Reviewed By",
+      "type": "string"
+    },
+    "revoked_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Revoked At"
+    },
+    "schema_version": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/$defs/PromotionStateV0"
+    },
+    "strategy_version": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Strategy Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "promotion_record_id",
+    "promotion_record_hash",
+    "playbook_id",
+    "strategy_version",
+    "parameter_version",
+    "feature_version",
+    "label_version",
+    "required_feed_contract_version",
+    "state",
+    "environment",
+    "evidence_dataset_ids",
+    "reviewed_by",
+    "reviewed_at",
+    "rationale"
+  ],
+  "title": "PromotionRecordV0",
+  "type": "object"
+}

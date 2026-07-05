@@ -1,0 +1,95 @@
+{
+  "$defs": {
+    "EventTypeV0": {
+      "enum": [
+        "TradeEventV0",
+        "BboEventV0",
+        "BookSnapshotEventV0",
+        "BookDeltaEventV0",
+        "CandleEventV0",
+        "AssetContextEventV0",
+        "AccountStateEventV0",
+        "PositionEventV0",
+        "OpenOrderEventV0",
+        "OrderUpdateEventV0",
+        "FillEventV0",
+        "FundingEventV0",
+        "LedgerEventV0",
+        "MacroEventV0",
+        "NewsEventV0",
+        "SocialEventV0",
+        "LiquidationContextEventV0",
+        "LargeFlowEventV0",
+        "DataHealthEventV0"
+      ],
+      "title": "EventTypeV0",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "event_type": {
+      "$ref": "#/$defs/EventTypeV0"
+    },
+    "normalized_event_id": {
+      "maxLength": 160,
+      "minLength": 3,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "title": "Normalized Event Id",
+      "type": "string"
+    },
+    "normalized_payload_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Normalized Payload Sha256",
+      "type": "string"
+    },
+    "normalized_time": {
+      "format": "date-time",
+      "title": "Normalized Time",
+      "type": "string"
+    },
+    "payload": {
+      "additionalProperties": true,
+      "title": "Payload",
+      "type": "object"
+    },
+    "precision": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "title": "Precision",
+      "type": "object"
+    },
+    "schema_version": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_event_id": {
+      "maxLength": 160,
+      "minLength": 3,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "title": "Source Event Id",
+      "type": "string"
+    },
+    "units": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Units",
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema_version",
+    "normalized_event_id",
+    "source_event_id",
+    "event_type",
+    "normalized_time",
+    "normalized_payload_sha256",
+    "payload"
+  ],
+  "title": "NormalizedEventV0",
+  "type": "object"
+}

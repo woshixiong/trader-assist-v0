@@ -1,0 +1,81 @@
+{
+  "$defs": {
+    "SeedDispositionV0": {
+      "enum": [
+        "SEED_NOT_IMPORTED",
+        "REFERENCE_ONLY",
+        "REJECTED_FOR_V0_00",
+        "IMPORTED_BEHIND_CONTRACT"
+      ],
+      "title": "SeedDispositionV0",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "disposition": {
+      "$ref": "#/$defs/SeedDispositionV0"
+    },
+    "rationale": {
+      "maxLength": 3000,
+      "minLength": 1,
+      "title": "Rationale",
+      "type": "string"
+    },
+    "rejected_behaviors": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Rejected Behaviors",
+      "type": "array"
+    },
+    "retained_concepts": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Retained Concepts",
+      "type": "array"
+    },
+    "reviewed_at": {
+      "format": "date-time",
+      "title": "Reviewed At",
+      "type": "string"
+    },
+    "source_archive_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Archive Sha256",
+      "type": "string"
+    },
+    "source_file_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source File Sha256",
+      "type": "string"
+    },
+    "source_path": {
+      "maxLength": 600,
+      "minLength": 1,
+      "title": "Source Path",
+      "type": "string"
+    },
+    "target_paths": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Target Paths",
+      "type": "array"
+    }
+  },
+  "required": [
+    "source_archive_sha256",
+    "source_path",
+    "source_file_sha256",
+    "disposition",
+    "retained_concepts",
+    "rejected_behaviors",
+    "reviewed_at",
+    "rationale"
+  ],
+  "title": "SeedProvenanceEntryV0",
+  "type": "object"
+}
