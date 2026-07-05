@@ -126,7 +126,7 @@ def _normalize(value: Any) -> Any:
             str(key): _normalize(item)
             for key, item in sorted(value.items(), key=lambda item: str(item[0]))
         }
-    if isinstance(value, (set, frozenset)):
+    if isinstance(value, set | frozenset):
         normalized_items = [_normalize(item) for item in value]
         return sorted(
             normalized_items,
@@ -137,7 +137,7 @@ def _normalize(value: Any) -> Any:
                 ensure_ascii=False,
             ),
         )
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, list | tuple):
         return [_normalize(item) for item in value]
     if isinstance(value, StrEnum):
         return value.value
