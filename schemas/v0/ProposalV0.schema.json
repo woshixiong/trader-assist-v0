@@ -246,7 +246,7 @@
       "maxLength": 80,
       "minLength": 1,
       "title": "Risk Policy Version",
-      "type": "strring"
+      "type": "string"
     },
     "schema_version": {
       "maxLength": 80,
