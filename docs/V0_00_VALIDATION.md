@@ -1,6 +1,6 @@
-# V0-00 Local Validation Evidence
+# V0-00 Validation Evidence
 
-Validation environment:
+## Local validation
 
 - observed date: 2026-07-06;
 - Python: 3.13 local validation environment;
@@ -19,7 +19,7 @@ mypy src scripts
 pytest -q
 ```
 
-Observed results:
+Observed local results:
 
 ```text
 secret scan: clean
@@ -28,4 +28,6 @@ Success: no issues found in 12 source files
 18 passed
 ```
 
-GitHub Actions CI is not yet observed because the target repository does not exist. The bundled workflow targets Python 3.12 and must pass on the future pull request before merge.
+## Remote validation
+
+The GitHub Actions workflow targets Python 3.12 and runs the same compile, schema-drift, secret, lint, type and test gates. Remote CI must pass on the exact pull-request head before merge. Local results do not substitute for GitHub CI or independent review.

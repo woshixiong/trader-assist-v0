@@ -2,19 +2,26 @@
 
 Target: `woshixiong/trader-assist-v0`
 
-The remote repository must be created as private and empty. Do not initialize it with a README, license, or `.gitignore`, because the bootstrap history already contains the reviewed base commit.
+## Current state
 
-From the local bootstrap repository:
+The private repository was created through GitHub with an initial README commit:
 
-```bash
-gh repo create woshixiong/trader-assist-v0 --private --source . --remote origin
-git push -u origin main
-git push -u origin feature/v0-00-bootstrap-contracts
-gh pr create \
-  --base main \
-  --head feature/v0-00-bootstrap-contracts \
-  --title "feat: freeze V0 bootstrap contracts and governance" \
-  --body-file docs/V0_00_PR_BODY.md
+```text
+REMOTE MAIN:
+0638cecebe7bef973c50914621136fdffd92b401
+
+FEATURE BRANCH:
+feature/v0-00-bootstrap-contracts
 ```
 
-Do not merge the pull request until CI and an independent review pass.
+The reviewed bootstrap content is written only to the feature branch. Do not recreate the repository, overwrite `main`, import the local Git bundle, or force-push either branch.
+
+## Remaining remote workflow
+
+1. Open a pull request from `feature/v0-00-bootstrap-contracts` to `main`.
+2. Wait for `V0 contracts CI` on the exact PR head.
+3. Obtain an independent review of contracts, schemas, provenance and authority boundaries.
+4. Do not merge until CI and independent review pass.
+5. Do not begin V0-01, import historical runtime code, add credentials or enable Testnet/Mainnet as part of this task.
+
+The local bundle and patch remain recovery evidence only; GitHub becomes authoritative after reviewed merge.

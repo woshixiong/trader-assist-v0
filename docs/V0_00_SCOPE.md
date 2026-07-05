@@ -4,10 +4,10 @@
 
 - TraderOS repository: `woshixiong/trade-os`
 - authoritative TraderOS main: `2a400348a0ced56171f889540a9a481ebaa0d191`
-- merged planning PR: `#54`
+- merged planning PR: `trade-os#54`
 - active task: TraderOS Issue `#56`
 - target repository: `woshixiong/trader-assist-v0`
-- local bootstrap base commit: `2c57e9ac7fedac79bc1bfcc11291aa46c42bf472`
+- remote V0 base/main: `0638cecebe7bef973c50914621136fdffd92b401`
 - active branch: `feature/v0-00-bootstrap-contracts`
 
 ## Goal
@@ -40,4 +40,4 @@ Freeze strict V0 envelopes and authority contracts before any historical runtime
 
 ## Rollback
 
-Delete the unmerged feature branch or discard the bootstrap package. No remote repository, credential, venue state, or production authority is changed.
+Close the unmerged pull request and delete the feature branch. `main`, credentials, venue state and TraderOS production authorities remain unchanged.
