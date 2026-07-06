@@ -6,12 +6,17 @@ import runpy
 import subprocess
 import sys
 from decimal import Decimal, DecimalTuple
+from typing import Any
 
 import pytest
 from pydantic import BaseModel, TypeAdapter, ValidationError
 from pydantic_core import PydanticSerializationError
 
-from trader_assist_v0.contracts import OrderPackageV0, ProposalV0
+from trader_assist_v0.contracts import (
+    InstrumentPrecisionContractV0,
+    OrderPackageV0,
+    ProposalV0,
+)
 from trader_assist_v0.contracts.common import (
     FiniteDecimal,
     HashBoundModel,
@@ -318,3 +323,216 @@ os.write(1, b"CONTROLLED_VALIDATION_ERROR\n")
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert "MEMORY_ERROR" not in completed.stdout
     assert "CONTROLLED_VALIDATION_ERROR" in completed.stdout
+
+INVALID_DECIMAL_JSON_VALUES: tuple[Any, ...] = (
+    1,
+    "+1",
+    ".5",
+    "1.",
+    "01",
+    "00.1",
+    "-0",
+    "-0.0",
+    "1e3",
+    "NaN",
+    "Infinity",
+)
+
+
+def _set_json_path(payload: dict[str, Any], path: tuple[str, ...], value: Any) -> None:
+    current = payload
+    for key in path[:-1]:
+        nested = current[key]
+        assert isinstance(nested, dict)
+        current = nested
+    current[path[-1]] = value
+
+
+def _get_json_path(payload: dict[str, Any], path: tuple[str, ...]) -> Any:
+    current: Any = payload
+    for key in path:
+        assert isinstance(current, dict)
+        current = current[key]
+    return current
+
+
+def _different_hash(value: str) -> str:
+    replacement = "0" if value[0] != "0" else "1"
+    return replacement + value[1:]
+
+
+def test_nested_json_handoff_preserves_string_mapping_after_prevalidation() -> None:
+    precision_contract = precision()
+    payload = json.loads(precision_contract.model_dump_json())
+    handed_off = revalidate_nested_hash_bound(
+        payload,
+        InstrumentPrecisionContractV0,
+        json_mode=True,
+    )
+    assert isinstance(handed_off, dict)
+    assert handed_off == payload
+    assert handed_off is not payload
+    assert isinstance(handed_off["price_tick"], str)
+    assert isinstance(handed_off["quantity_step"], str)
+
+
+def test_instrument_precision_json_roundtrip_preserves_exact_decimal_strings() -> None:
+    precision_contract = precision()
+    encoded = precision_contract.model_dump_json()
+    payload = json.loads(encoded)
+    assert isinstance(payload["price_tick"], str)
+    assert isinstance(payload["quantity_step"], str)
+
+    decoded = InstrumentPrecisionContractV0.model_validate_json(encoded)
+    assert decoded == precision_contract
+    assert decoded.contract_hash == precision_contract.contract_hash
+    assert type(decoded.price_tick) is Decimal
+    assert type(decoded.quantity_step) is Decimal
+
+
+def test_order_package_nested_json_roundtrip_preserves_hash_and_exact_decimals() -> None:
+    package = order()
+    encoded = package.model_dump_json()
+    payload = json.loads(encoded)
+    assert isinstance(payload["quantity"], str)
+    assert isinstance(payload["instrument_precision"]["price_tick"], str)
+    assert isinstance(payload["instrument_precision"]["quantity_step"], str)
+
+    decoded = OrderPackageV0.model_validate_json(encoded)
+    assert decoded == package
+    assert decoded.order_package_hash == package.order_package_hash
+    assert type(decoded.quantity) is Decimal
+    assert type(decoded.instrument_precision.price_tick) is Decimal
+    assert type(decoded.instrument_precision.quantity_step) is Decimal
+
+
+def test_proposal_deeply_nested_json_roundtrip_preserves_authority_chain() -> None:
+    proposal_value = proposal()
+    encoded = proposal_value.model_dump_json()
+    payload = json.loads(encoded)
+    precision_payload = payload["order_package"]["instrument_precision"]
+    assert isinstance(payload["order_package"]["quantity"], str)
+    assert isinstance(precision_payload["price_tick"], str)
+    assert isinstance(precision_payload["quantity_step"], str)
+
+    decoded = ProposalV0.model_validate_json(encoded)
+    assert decoded == proposal_value
+    assert decoded.proposal_hash == proposal_value.proposal_hash
+    assert decoded.order_package == proposal_value.order_package
+    assert (
+        decoded.order_package.instrument_precision
+        == proposal_value.order_package.instrument_precision
+    )
+    assert type(decoded.order_package.quantity) is Decimal
+    assert type(decoded.order_package.instrument_precision.price_tick) is Decimal
+
+
+@pytest.mark.parametrize("invalid", INVALID_DECIMAL_JSON_VALUES)
+@pytest.mark.parametrize("case", ("precision", "order", "proposal"))
+def test_json_decimal_lexical_contract_remains_string_only(
+    invalid: Any,
+    case: str,
+) -> None:
+    if case == "precision":
+        model_type = InstrumentPrecisionContractV0
+        payload = json.loads(precision().model_dump_json())
+        path = ("price_tick",)
+    elif case == "order":
+        model_type = OrderPackageV0
+        payload = json.loads(order().model_dump_json())
+        path = ("instrument_precision", "price_tick")
+    else:
+        model_type = ProposalV0
+        payload = json.loads(proposal().model_dump_json())
+        path = ("order_package", "instrument_precision", "price_tick")
+
+    _set_json_path(payload, path, invalid)
+    with pytest.raises(ValidationError):
+        model_type.model_validate_json(
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        )
+
+
+def test_tampered_nested_json_fields_and_hashes_are_rejected() -> None:
+    package_payload = json.loads(order().model_dump_json())
+    proposal_payload = json.loads(proposal().model_dump_json())
+
+    cases: list[tuple[type[HashBoundModel], dict[str, Any], tuple[str, ...], Any]] = [
+        (
+            OrderPackageV0,
+            package_payload,
+            ("instrument_precision", "price_tick"),
+            "0.2",
+        ),
+        (
+            OrderPackageV0,
+            package_payload,
+            ("instrument_precision", "quantity_step"),
+            "0.02",
+        ),
+        (
+            OrderPackageV0,
+            package_payload,
+            ("instrument_precision", "contract_hash"),
+            _different_hash(package_payload["instrument_precision"]["contract_hash"]),
+        ),
+        (
+            ProposalV0,
+            proposal_payload,
+            ("order_package", "quantity"),
+            decimal_to_canonical_string(
+                Decimal(proposal_payload["order_package"]["quantity"]) + Decimal("0.01")
+            ),
+        ),
+        (
+            ProposalV0,
+            proposal_payload,
+            ("order_package", "limit_price"),
+            decimal_to_canonical_string(
+                Decimal(proposal_payload["order_package"]["limit_price"])
+                + Decimal(proposal_payload["order_package"]["instrument_precision"]["price_tick"])
+            ),
+        ),
+        (
+            ProposalV0,
+            proposal_payload,
+            ("order_package", "order_package_hash"),
+            _different_hash(proposal_payload["order_package"]["order_package_hash"]),
+        ),
+        (
+            ProposalV0,
+            proposal_payload,
+            ("order_package", "instrument_precision", "contract_hash"),
+            _different_hash(
+                proposal_payload["order_package"]["instrument_precision"]["contract_hash"]
+            ),
+        ),
+    ]
+
+    for model_type, original, path, replacement in cases:
+        payload = json.loads(json.dumps(original, separators=(",", ":")))
+        assert _get_json_path(payload, path) != replacement
+        _set_json_path(payload, path, replacement)
+        with pytest.raises(ValidationError):
+            model_type.model_validate_json(
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+            )
+
+
+@pytest.mark.parametrize(
+    ("factory", "model_type"),
+    (
+        (precision, InstrumentPrecisionContractV0),
+        (order, OrderPackageV0),
+        (proposal, ProposalV0),
+    ),
+)
+def test_python_dict_roundtrip_remains_distinct_from_json_mode(
+    factory: Any,
+    model_type: type[HashBoundModel],
+) -> None:
+    model = factory()
+    payload = BaseModel.model_dump(model, mode="python", round_trip=True)
+    decoded = model_type.model_validate(payload)
+    assert decoded == model
+    assert decoded is not model
