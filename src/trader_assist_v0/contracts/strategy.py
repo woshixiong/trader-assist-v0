@@ -372,7 +372,10 @@ def validate_execution_promotion_authority(
     at: UTCDateTime,
 ) -> PromotionRecordV0:
     """Derive execution authority only from a complete, validated promotion chain."""
-    validated = validate_promotion_chain(records)
+    try:
+        validated = validate_promotion_chain(records)
+    except ValueError as exc:
+        raise ValueError(f"invalid promotion chain: {exc}") from exc
     terminal = validated[-1]
     if not terminal.active_at(at):
         raise ValueError("terminal promotion is not active at authority time")
