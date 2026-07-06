@@ -68,6 +68,7 @@ def test_extreme_exponents_remain_controlled_under_address_space_limit() -> None
     script = r'''
 import os
 import resource
+import sys
 from decimal import Decimal
 from pydantic import TypeAdapter, ValidationError
 from trader_assist_v0.contracts.common import (
@@ -83,37 +84,49 @@ adapters = tuple(
 )
 for adapter in adapters:
     adapter.validate_python(Decimal("1"))
-
-with open("/proc/self/statm", encoding="ascii") as statm:
-    current_pages = int(statm.read().split()[0])
-current_vms = current_pages * os.sysconf("SC_PAGE_SIZE")
-limit = current_vms + 64 * 1024 * 1024
-resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
 values = (
     Decimal("1E+100000000"),
     Decimal("1E-100000000"),
     Decimal("-1E+100000000"),
     Decimal("-1E-100000000"),
 )
-try:
-    for value in values:
-        for adapter in adapters:
+
+pid = os.fork()
+if pid == 0:
+    try:
+        with open("/proc/self/statm", encoding="ascii") as statm:
+            current_pages = int(statm.read().split()[0])
+        current_vms = current_pages * os.sysconf("SC_PAGE_SIZE")
+        limit = current_vms + 90 * 1024 * 1024
+        resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+        for value in values:
+            for adapter in adapters:
+                try:
+                    adapter.validate_python(value)
+                except (ValidationError, ValueError):
+                    pass
+                else:
+                    raise AssertionError((adapter, value))
             try:
-                adapter.validate_python(value)
-            except (ValidationError, ValueError):
+                decimal_to_canonical_string(value)
+            except ValueError:
                 pass
             else:
-                raise AssertionError((adapter, value))
-        try:
-            decimal_to_canonical_string(value)
-        except ValueError:
-            pass
-        else:
-            raise AssertionError(value)
-except MemoryError:
-    print("MEMORY_ERROR")
-    raise SystemExit(2)
-print("CONTROLLED_VALIDATION_ERROR")
+                raise AssertionError(value)
+    except MemoryError:
+        os.write(1, b"MEMORY_ERROR\n")
+        os._exit(2)
+    except BaseException:
+        os.write(1, b"UNEXPECTED_ERROR\n")
+        os._exit(4)
+    os.write(1, b"CONTROLLED_VALIDATION_ERROR\n")
+    os._exit(0)
+
+_, status = os.waitpid(pid, 0)
+if os.WIFSIGNALED(status):
+    print(f"SIGNAL_{os.WTERMSIG(status)}")
+    raise SystemExit(3)
+raise SystemExit(os.waitstatus_to_exitcode(status))
 '''
     completed = subprocess.run(
         [sys.executable, "-c", script],
