@@ -43,21 +43,61 @@ MODELS: tuple[type[BaseModel], ...] = (
     SeedProvenanceEntryV0,
 )
 
-
 DECIMAL_STRING_PATTERN = r"^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$"
 PORTABLE_DECIMAL_STRING_PATTERN = r"^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)$"
+POSITIVE_DECIMAL_STRING_PATTERN = (
+    r"^\+?(?=[0-9.]*[1-9])(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)$"
+)
+NONNEGATIVE_DECIMAL_STRING_PATTERN = r"^\+?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)$"
+
+
+def _decimal_pattern(number_branch: dict[str, Any]) -> str:
+    if number_branch.get("exclusiveMinimum") == 0.0:
+        return POSITIVE_DECIMAL_STRING_PATTERN
+    if number_branch.get("minimum") == 0.0:
+        return NONNEGATIVE_DECIMAL_STRING_PATTERN
+    return PORTABLE_DECIMAL_STRING_PATTERN
 
 
 def _portable_schema(value: Any) -> Any:
     if isinstance(value, dict):
-        return {
-            key: (
-                PORTABLE_DECIMAL_STRING_PATTERN
-                if key == "pattern" and item == DECIMAL_STRING_PATTERN
-                else _portable_schema(item)
+        converted = {key: _portable_schema(item) for key, item in value.items()}
+        branches = value.get("anyOf")
+        if isinstance(branches, list):
+            number_branch = next(
+                (
+                    branch
+                    for branch in branches
+                    if isinstance(branch, dict) and branch.get("type") == "number"
+                ),
+                None,
             )
-            for key, item in value.items()
-        }
+            decimal_string_branch = next(
+                (
+                    branch
+                    for branch in branches
+                    if isinstance(branch, dict)
+                    and branch.get("type") == "string"
+                    and branch.get("pattern") == DECIMAL_STRING_PATTERN
+                ),
+                None,
+            )
+            if number_branch is not None and decimal_string_branch is not None:
+                string_wire = {
+                    "type": "string",
+                    "pattern": _decimal_pattern(number_branch),
+                }
+                null_branches = [
+                    _portable_schema(branch)
+                    for branch in branches
+                    if isinstance(branch, dict) and branch.get("type") == "null"
+                ]
+                converted.pop("anyOf", None)
+                if null_branches:
+                    converted["anyOf"] = [string_wire, *null_branches]
+                else:
+                    converted.update(string_wire)
+        return converted
     if isinstance(value, list):
         return [_portable_schema(item) for item in value]
     return value
