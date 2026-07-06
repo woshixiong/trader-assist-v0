@@ -11,6 +11,7 @@ from .common import (
     Sha256Hex,
     UTCDateTime,
     VersionId,
+    _validate_decimal_bounds,
 )
 
 
@@ -32,7 +33,8 @@ class InstrumentPrecisionContractV0(HashBoundModel):
 
 
 def _scaled_integer(value: Decimal, scale: int) -> int:
-    sign, digits, exponent = value.as_tuple()
+    exact = _validate_decimal_bounds(value)
+    sign, digits, exponent = Decimal.as_tuple(exact)
     if not isinstance(exponent, int):
         raise ValueError("precision value must be finite")
     coefficient = int("".join(str(digit) for digit in digits) or "0")
@@ -44,12 +46,14 @@ def _scaled_integer(value: Decimal, scale: int) -> int:
 
 
 def require_step_aligned(value: Decimal, step: Decimal, field_name: str) -> None:
-    value_exponent = value.as_tuple().exponent
-    step_exponent = step.as_tuple().exponent
+    exact_value = _validate_decimal_bounds(value)
+    exact_step = _validate_decimal_bounds(step)
+    value_exponent = Decimal.as_tuple(exact_value).exponent
+    step_exponent = Decimal.as_tuple(exact_step).exponent
     if not isinstance(value_exponent, int) or not isinstance(step_exponent, int):
         raise ValueError(f"{field_name} cannot be evaluated against precision step")
     scale = max(0, -value_exponent, -step_exponent)
-    value_integer = _scaled_integer(value, scale)
-    step_integer = _scaled_integer(step, scale)
+    value_integer = _scaled_integer(exact_value, scale)
+    step_integer = _scaled_integer(exact_step, scale)
     if step_integer <= 0 or value_integer % step_integer != 0:
-        raise ValueError(f"{field_name} must align to precision step {step}")
+        raise ValueError(f"{field_name} must align to precision step {exact_step}")
