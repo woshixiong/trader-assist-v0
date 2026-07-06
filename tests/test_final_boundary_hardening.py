@@ -83,4 +83,5 @@ def test_promotion_chain_ignores_instance_model_dump_shadow() -> None:
         raise AssertionError("instance model_dump shadow must not be called")
 
     object.__setattr__(draft, "model_dump", poisoned_model_dump)
-    assert validate_promotion_chain((draft,))[0].promotion_record_hash == draft.promotion_record_hash
+    validated = validate_promotion_chain((draft,))[0]
+    assert validated.promotion_record_hash == draft.promotion_record_hash
