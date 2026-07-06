@@ -279,17 +279,6 @@ class PromotionRecordV0(HashBoundModel):
             PromotionStateV0.MAINNET_PILOT_ACTIVE,
         }
 
-    def execution_enabled_at(self, at: UTCDateTime) -> bool:
-        if not self.active_at(at):
-            return False
-        return (
-            self.environment is EnvironmentV0.TESTNET
-            and self.state is PromotionStateV0.TESTNET_ELIGIBLE
-        ) or (
-            self.environment is EnvironmentV0.MAINNET_PILOT
-            and self.state is PromotionStateV0.MAINNET_PILOT_ACTIVE
-        )
-
 
 _PROMOTION_SUBJECT_FIELDS = (
     "playbook_id",
@@ -303,10 +292,19 @@ _PROMOTION_SUBJECT_FIELDS = (
 )
 
 
+def _revalidate_promotion(record: PromotionRecordV0) -> PromotionRecordV0:
+    if type(record) is not PromotionRecordV0:
+        raise ValueError("expected exact PromotionRecordV0 authority object")
+    return PromotionRecordV0.model_validate(record.model_dump(mode="python", round_trip=True))
+
+
 def validate_promotion_transition(
     previous: PromotionRecordV0 | None,
     current: PromotionRecordV0,
 ) -> None:
+    current = _revalidate_promotion(current)
+    if previous is not None:
+        previous = _revalidate_promotion(previous)
     failures: list[str] = []
     if previous is None:
         if current.state is not PromotionStateV0.DRAFT:
@@ -343,13 +341,16 @@ def validate_promotion_transition(
         raise ValueError("; ".join(failures))
 
 
-def validate_promotion_chain(records: tuple[PromotionRecordV0, ...]) -> None:
+def validate_promotion_chain(
+    records: tuple[PromotionRecordV0, ...],
+) -> tuple[PromotionRecordV0, ...]:
     if not records:
         raise ValueError("promotion chain must not be empty")
+    validated = tuple(_revalidate_promotion(record) for record in records)
     seen_ids: set[str] = set()
     seen_hashes: set[str] = set()
     previous: PromotionRecordV0 | None = None
-    for record in records:
+    for record in validated:
         if record.promotion_record_id in seen_ids:
             raise ValueError("promotion chain contains duplicate record ID")
         if record.promotion_record_hash in seen_hashes:
@@ -358,3 +359,26 @@ def validate_promotion_chain(records: tuple[PromotionRecordV0, ...]) -> None:
         seen_ids.add(record.promotion_record_id)
         seen_hashes.add(record.promotion_record_hash)
         previous = record
+    return validated
+
+
+def validate_execution_promotion_authority(
+    records: tuple[PromotionRecordV0, ...],
+    *,
+    at: UTCDateTime,
+) -> PromotionRecordV0:
+    """Derive execution authority only from a complete, validated promotion chain."""
+    validated = validate_promotion_chain(records)
+    terminal = validated[-1]
+    if not terminal.active_at(at):
+        raise ValueError("terminal promotion is not active at authority time")
+    execution_enabled = (
+        terminal.environment is EnvironmentV0.TESTNET
+        and terminal.state is PromotionStateV0.TESTNET_ELIGIBLE
+    ) or (
+        terminal.environment is EnvironmentV0.MAINNET_PILOT
+        and terminal.state is PromotionStateV0.MAINNET_PILOT_ACTIVE
+    )
+    if not execution_enabled:
+        raise ValueError("terminal promotion is not execution-enabled")
+    return terminal
