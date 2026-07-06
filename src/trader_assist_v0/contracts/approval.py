@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import hmac
 from enum import StrEnum
-from typing import Literal
+from typing import Literal, TypeVar
 
-from pydantic import Field, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from .common import (
     EnvironmentV0,
@@ -15,6 +16,7 @@ from .common import (
     Sha256Hex,
     UTCDateTime,
     VersionId,
+    contract_hash,
 )
 from .precision import InstrumentPrecisionContractV0, require_step_aligned
 from .strategy import (
@@ -22,7 +24,7 @@ from .strategy import (
     PlaybookIdV0,
     PromotionRecordV0,
     PromotionStateV0,
-    validate_promotion_chain,
+    validate_execution_promotion_authority,
 )
 
 
@@ -244,10 +246,29 @@ class ExecutionPermitV0(HashBoundModel):
         return self
 
 
+AuthorityT = TypeVar("AuthorityT", bound=HashBoundModel)
+
+
+def _revalidate_authority(value: AuthorityT, expected_type: type[AuthorityT]) -> AuthorityT:
+    if type(value) is not expected_type:
+        raise ValueError(f"expected exact {expected_type.__name__} authority object")
+    payload = BaseModel.model_dump(value, mode="python", round_trip=True)
+    validated = expected_type.model_validate(payload)
+    actual = getattr(validated, expected_type.hash_field)
+    expected = contract_hash(expected_type.hash_domain, validated)
+    if not hmac.compare_digest(actual, expected):
+        raise ValueError(
+            f"{expected_type.hash_field} does not match canonical authority payload"
+        )
+    return validated
+
+
 def validate_human_decision_binding(
     proposal: ProposalV0,
     decision: HumanReviewDecisionV0,
 ) -> None:
+    proposal = _revalidate_authority(proposal, ProposalV0)
+    decision = _revalidate_authority(decision, HumanReviewDecisionV0)
     failures: list[str] = []
     if (decision.proposal_id, decision.proposal_hash) != (
         proposal.proposal_id,
@@ -274,22 +295,39 @@ def validate_execution_permit_bindings(
     *,
     promotion_history: tuple[PromotionRecordV0, ...],
 ) -> None:
+    permit = _revalidate_authority(permit, ExecutionPermitV0)
+    proposal = _revalidate_authority(proposal, ProposalV0)
+    decision = _revalidate_authority(decision, HumanReviewDecisionV0)
+    promotion = _revalidate_authority(promotion, PromotionRecordV0)
+
     failures: list[str] = []
     try:
-        validate_promotion_chain(promotion_history)
+        authoritative_promotion = validate_execution_promotion_authority(
+            promotion_history,
+            at=permit.issued_at,
+        )
     except ValueError as exc:
-        failures.append(f"invalid promotion chain: {exc}")
-    if not promotion_history or (
-        promotion_history[-1].promotion_record_id,
-        promotion_history[-1].promotion_record_hash,
+        failures.append(f"invalid promotion authority: {exc}")
+        authoritative_promotion = promotion
+
+    if (
+        authoritative_promotion.promotion_record_id,
+        authoritative_promotion.promotion_record_hash,
     ) != (promotion.promotion_record_id, promotion.promotion_record_hash):
         failures.append("promotion must be the exact terminal record of promotion_history")
+
     try:
         validate_human_decision_binding(proposal, decision)
     except ValueError as exc:
         failures.append(str(exc))
     if decision.decision is not HumanDecisionKindV0.APPROVE:
         failures.append("human decision must be APPROVE")
+    if permit.single_use is not True:
+        failures.append("execution permit must remain single-use")
+    if not permit.permitted_actions:
+        failures.append("execution permit must contain allowed actions")
+    if any(type(action) is not PermitActionV0 for action in permit.permitted_actions):
+        failures.append("execution permit contains invalid action semantics")
     if (permit.proposal_id, permit.proposal_hash) != (proposal.proposal_id, proposal.proposal_hash):
         failures.append("permit proposal binding mismatch")
     if permit.human_decision_id != decision.human_decision_id:
@@ -310,39 +348,41 @@ def validate_execution_permit_bindings(
     if permit.risk_policy_version != proposal.risk_policy_version:
         failures.append("permit risk policy mismatch")
     if (permit.promotion_record_id, permit.promotion_record_hash) != (
-        promotion.promotion_record_id,
-        promotion.promotion_record_hash,
+        authoritative_promotion.promotion_record_id,
+        authoritative_promotion.promotion_record_hash,
     ):
         failures.append("permit promotion record binding mismatch")
-    if (promotion.playbook_id, promotion.strategy_version, promotion.parameter_version) != subject:
+    if (
+        authoritative_promotion.playbook_id,
+        authoritative_promotion.strategy_version,
+        authoritative_promotion.parameter_version,
+    ) != subject:
         failures.append("promotion strategy subject mismatch")
-    if promotion.environment is not permit.environment:
+    if authoritative_promotion.environment is not permit.environment:
         failures.append("promotion environment mismatch")
 
     proposal_authority_end = min(proposal.expires_at, proposal.order_package.valid_until)
     if permit.issued_at >= proposal_authority_end:
         failures.append("permit issued at or after proposal/order authority expiry")
     authority_deadlines = [proposal.expires_at, proposal.order_package.valid_until]
-    if promotion.expires_at is not None:
-        authority_deadlines.append(promotion.expires_at)
-    if promotion.revoked_at is not None:
-        authority_deadlines.append(promotion.revoked_at)
+    if authoritative_promotion.expires_at is not None:
+        authority_deadlines.append(authoritative_promotion.expires_at)
+    if authoritative_promotion.revoked_at is not None:
+        authority_deadlines.append(authoritative_promotion.revoked_at)
     earliest_authority_deadline = min(authority_deadlines)
     if permit.expires_at > earliest_authority_deadline:
         failures.append("permit expiry exceeds earliest authority boundary")
-    if not promotion.execution_enabled_at(permit.issued_at):
-        failures.append("promotion is not execution-enabled at permit issue time")
 
     if permit.environment is EnvironmentV0.TESTNET:
-        if promotion.state is not PromotionStateV0.TESTNET_ELIGIBLE:
+        if authoritative_promotion.state is not PromotionStateV0.TESTNET_ELIGIBLE:
             failures.append("Testnet permit requires TESTNET_ELIGIBLE promotion")
     else:
-        if promotion.state is not PromotionStateV0.MAINNET_PILOT_ACTIVE:
+        if authoritative_promotion.state is not PromotionStateV0.MAINNET_PILOT_ACTIVE:
             failures.append("Mainnet permit requires MAINNET_PILOT_ACTIVE promotion")
         if len(promotion_history) < 2:
             failures.append("Mainnet permit requires a complete eligible-to-active history")
         else:
-            eligible = promotion_history[-2]
+            eligible = _revalidate_authority(promotion_history[-2], PromotionRecordV0)
             if eligible.state is not PromotionStateV0.MAINNET_PILOT_ELIGIBLE:
                 failures.append("Mainnet active promotion must follow MAINNET_PILOT_ELIGIBLE")
             eligible_at = eligible.activated_at or eligible.reviewed_at
@@ -353,8 +393,8 @@ def validate_execution_permit_bindings(
                 failures.append("pre-pilot review predates Mainnet eligibility")
             if (
                 permit.human_mainnet_authorized_at is None
-                or promotion.activated_at is None
-                or promotion.activated_at < permit.human_mainnet_authorized_at
+                or authoritative_promotion.activated_at is None
+                or authoritative_promotion.activated_at < permit.human_mainnet_authorized_at
             ):
                 failures.append("Mainnet activation predates explicit human authorization")
     if failures:
