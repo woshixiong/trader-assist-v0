@@ -271,6 +271,21 @@ def test_hash_bound_model_copy_rejects_updates():
     assert package.model_copy() == package
 
 
+def test_hash_bound_legacy_copy_rejects_field_changes():
+    package = order()
+    with pytest.raises(TypeError, match="cannot be copied with field changes"):
+        package.copy(update={"quantity": Decimal("1.26")})
+    assert package.copy() == package
+
+
+def test_hash_bound_model_construct_is_disabled():
+    package = order()
+    data = package.model_dump(mode="python")
+    data["quantity"] = Decimal("1.26")
+    with pytest.raises(TypeError, match="cannot bypass validation"):
+        OrderPackageV0.model_construct(**data)
+
+
 @pytest.mark.parametrize(
     ("factory", "updates"),
     [
