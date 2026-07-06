@@ -63,10 +63,18 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
-def _finite_decimal(value: Decimal) -> Decimal:
-    if not value.is_finite():
+def _coerce_exact_decimal(value: Decimal) -> Decimal:
+    """Return a base Decimal preserving the input's real internal value."""
+    exact = Decimal(value)
+    if type(exact) is not Decimal:
+        raise TypeError("decimal conversion must produce an exact base Decimal")
+    if not Decimal.is_finite(exact):
         raise ValueError("decimal value must be finite")
-    return value
+    return exact
+
+
+def _finite_decimal(value: Decimal) -> Decimal:
+    return _coerce_exact_decimal(value)
 
 
 class _DecimalShape(NamedTuple):
@@ -80,9 +88,8 @@ class _DecimalShape(NamedTuple):
 
 
 def _trim_decimal_coefficient(value: Decimal) -> tuple[int, str, int]:
-    if not value.is_finite():
-        raise ValueError("decimal value must be finite")
-    sign, digits, exponent = value.as_tuple()
+    exact = _coerce_exact_decimal(value)
+    sign, digits, exponent = Decimal.as_tuple(exact)
     if not isinstance(exponent, int):
         raise ValueError("decimal exponent must be finite")
     coefficient = "".join(str(digit) for digit in digits) or "0"
@@ -168,9 +175,10 @@ def decimal_to_canonical_string(value: Decimal) -> str:
 
 
 def _validate_decimal_bounds(value: Decimal) -> Decimal:
-    shape = _analyze_decimal_shape(value)
+    exact = _coerce_exact_decimal(value)
+    shape = _analyze_decimal_shape(exact)
     _raise_for_decimal_bounds(shape)
-    return value
+    return exact
 
 
 def _validate_decimal_wire(
@@ -299,9 +307,11 @@ class StrictModel(BaseModel):
 
 
 def _normalize_decimal(value: Decimal) -> str:
-    if not value.is_finite():
-        raise ValueError("cannot hash non-finite decimal")
-    return decimal_to_canonical_string(value)
+    try:
+        exact = _coerce_exact_decimal(value)
+    except ValueError as exc:
+        raise ValueError("cannot hash non-finite decimal") from exc
+    return decimal_to_canonical_string(exact)
 
 
 def _normalize(value: Any) -> Any:
@@ -361,6 +371,8 @@ _HASH_BIND_TARGET: ContextVar[type[BaseModel] | None] = ContextVar(
 
 
 class HashBoundModel(StrictModel):
+    model_config = ConfigDict(revalidate_instances="always")
+
     hash_domain: ClassVar[HashDomainV0]
     hash_field: ClassVar[str]
 
