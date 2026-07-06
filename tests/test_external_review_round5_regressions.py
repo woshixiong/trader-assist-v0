@@ -34,7 +34,16 @@ _BASE = runpy.run_path("tests/test_round2_review_blockers.py")
 candidate = _BASE["candidate"]
 order = _BASE["order"]
 proposal = _BASE["proposal"]
-precision = _BASE["precision"]
+_base_precision = _BASE["precision"]
+
+
+def precision(**updates: Any) -> InstrumentPrecisionContractV0:
+    baseline = _base_precision()
+    payload = BaseModel.model_dump(baseline, mode="python", round_trip=True)
+    payload.pop("contract_hash")
+    payload.update(updates)
+    return InstrumentPrecisionContractV0.bind(**payload)
+
 
 EXTREME_DECIMALS = (
     Decimal("1E+100000000"),
