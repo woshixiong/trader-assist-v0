@@ -11,8 +11,6 @@ permissions:
 jobs:
   contracts:
     runs-on: ubuntu-latest
-    env:
-      VENV: /tmp/trader-assist-v0-venv
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -26,26 +24,26 @@ jobs:
             requirements-dev.lock
       - name: Hashed locked install
         run: |
-          python -m venv "$VENV"
-          "$VENV/bin/python" -m pip install --require-hashes -r requirements-dev.lock
-          "$VENV/bin/python" -m pip install -e . --no-deps --no-build-isolation
+          python -m venv /tmp/trader-assist-v0-venv
+          /tmp/trader-assist-v0-venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
+          /tmp/trader-assist-v0-venv/bin/python -m pip install -e . --no-deps --no-build-isolation
       - name: Dependency closure and integrity
         run: |
-          "$VENV/bin/python" scripts/check_dependency_lock.py --verify-installed
-          "$VENV/bin/python" -m pip check
+          /tmp/trader-assist-v0-venv/bin/python scripts/check_dependency_lock.py --verify-installed
+          /tmp/trader-assist-v0-venv/bin/python -m pip check
       - name: Runtime dependency audit
-        run: "$VENV/bin/pip-audit" --strict -r requirements-runtime.lock
+        run: /tmp/trader-assist-v0-venv/bin/pip-audit --strict -r requirements-runtime.lock
       - name: Compile
-        run: "$VENV/bin/python" -m compileall -q src scripts tests
+        run: /tmp/trader-assist-v0-venv/bin/python -m compileall -q src scripts tests
       - name: Schema drift
-        run: "$VENV/bin/python" scripts/export_schemas.py --check
+        run: /tmp/trader-assist-v0-venv/bin/python scripts/export_schemas.py --check
       - name: Secret scan
-        run: "$VENV/bin/python" scripts/scan_secrets.py .
+        run: /tmp/trader-assist-v0-venv/bin/python scripts/scan_secrets.py .
       - name: Ruff
-        run: "$VENV/bin/ruff" check .
+        run: /tmp/trader-assist-v0-venv/bin/ruff check .
       - name: Mypy
-        run: "$VENV/bin/mypy" src scripts
+        run: /tmp/trader-assist-v0-venv/bin/mypy src scripts
       - name: Tests
-        run: "$VENV/bin/pytest" -q
+        run: /tmp/trader-assist-v0-venv/bin/pytest -q
       - name: Diff check
         run: git diff --check
