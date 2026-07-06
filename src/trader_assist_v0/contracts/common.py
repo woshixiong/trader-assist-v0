@@ -178,6 +178,8 @@ def _validate_decimal_bounds(value: Decimal) -> Decimal:
     exact = _coerce_exact_decimal(value)
     shape = _analyze_decimal_shape(exact)
     _raise_for_decimal_bounds(shape)
+    if shape.coefficient == "0":
+        return Decimal("0")
     return exact
 
 
