@@ -77,6 +77,13 @@ from trader_assist_v0.contracts.common import (
     decimal_to_canonical_string,
 )
 
+adapters = tuple(
+    TypeAdapter(decimal_type)
+    for decimal_type in (FiniteDecimal, NonNegativeFiniteDecimal, PositiveFiniteDecimal)
+)
+for adapter in adapters:
+    adapter.validate_python(Decimal("1"))
+
 with open("/proc/self/statm", encoding="ascii") as statm:
     current_pages = int(statm.read().split()[0])
 current_vms = current_pages * os.sysconf("SC_PAGE_SIZE")
@@ -90,13 +97,13 @@ values = (
 )
 try:
     for value in values:
-        for decimal_type in (FiniteDecimal, NonNegativeFiniteDecimal, PositiveFiniteDecimal):
+        for adapter in adapters:
             try:
-                TypeAdapter(decimal_type).validate_python(value)
+                adapter.validate_python(value)
             except (ValidationError, ValueError):
                 pass
             else:
-                raise AssertionError((decimal_type, value))
+                raise AssertionError((adapter, value))
         try:
             decimal_to_canonical_string(value)
         except ValueError:
