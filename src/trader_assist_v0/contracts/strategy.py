@@ -279,6 +279,10 @@ class PromotionRecordV0(HashBoundModel):
             PromotionStateV0.MAINNET_PILOT_ACTIVE,
         }
 
+    def execution_enabled_at(self, at: UTCDateTime) -> bool:
+        """A raw record never grants execution authority; validate the full chain instead."""
+        return False
+
 
 _PROMOTION_SUBJECT_FIELDS = (
     "playbook_id",
