@@ -191,7 +191,7 @@ def test_significant_digit_boundary_has_no_off_by_one() -> None:
     accepted = Decimal("1" * MAX_DECIMAL_SIGNIFICANT_DIGITS)
     rejected = Decimal("1" * (MAX_DECIMAL_SIGNIFICANT_DIGITS + 1))
     assert TypeAdapter(PositiveFiniteDecimal).validate_python(accepted) == accepted
-    with pytest.raises(ValidationError, match="significant digits 81 exceed 80"):
+    with pytest.raises(ValidationError, match=r"significant digits exceed 80 \(actual 81\)"):
         TypeAdapter(PositiveFiniteDecimal).validate_python(rejected)
 
 
@@ -203,7 +203,10 @@ def test_integer_digit_positive_exponent_and_wire_boundaries() -> None:
     assert rendered == "1" + "0" * (MAX_DECIMAL_INTEGER_DIGITS - 1)
     with pytest.raises(
         ValueError,
-        match="integer digits 81 exceed 80.*canonical wire length 81 exceeds 80",
+        match=(
+            r"integer digits exceed 80 \(actual 81\).*"
+            r"canonical wire length exceeds 80 \(projected 81\)"
+        ),
     ):
         decimal_to_canonical_string(rejected)
 
@@ -212,7 +215,7 @@ def test_negative_exponent_effective_wire_boundary_has_no_off_by_one() -> None:
     accepted = Decimal(f"1E-{MAX_DECIMAL_WIRE_LENGTH - 2}")
     rejected = Decimal(f"1E-{MAX_DECIMAL_WIRE_LENGTH - 1}")
     assert len(decimal_to_canonical_string(accepted)) == MAX_DECIMAL_WIRE_LENGTH
-    with pytest.raises(ValueError, match="canonical wire length 81 exceeds 80"):
+    with pytest.raises(ValueError, match=r"canonical wire length exceeds 80 \(projected 81\)"):
         decimal_to_canonical_string(rejected)
 
 
@@ -224,10 +227,10 @@ def test_scale_guard_accepts_exact_limit_and_rejects_first_excess() -> None:
 
     with pytest.raises(ValueError) as at_limit_error:
         _raise_for_decimal_bounds(at_limit)
-    assert "scale 80 exceeds 80" not in str(at_limit_error.value)
+    assert "scale exceeds 80 (actual 80)" not in str(at_limit_error.value)
     assert "canonical wire length" in str(at_limit_error.value)
 
-    with pytest.raises(ValueError, match="scale 81 exceeds 80"):
+    with pytest.raises(ValueError, match=r"scale exceeds 80 \(actual 81\)"):
         _raise_for_decimal_bounds(first_excess)
 
 

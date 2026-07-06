@@ -131,19 +131,20 @@ def _raise_for_decimal_bounds(shape: _DecimalShape) -> None:
     failures: list[str] = []
     if shape.significant_digits > MAX_DECIMAL_SIGNIFICANT_DIGITS:
         failures.append(
-            f"significant digits {shape.significant_digits} exceed "
-            f"{MAX_DECIMAL_SIGNIFICANT_DIGITS}"
+            f"significant digits exceed {MAX_DECIMAL_SIGNIFICANT_DIGITS} "
+            f"(actual {shape.significant_digits})"
         )
     if shape.scale > MAX_DECIMAL_SCALE:
-        failures.append(f"scale {shape.scale} exceeds {MAX_DECIMAL_SCALE}")
+        failures.append(f"scale exceeds {MAX_DECIMAL_SCALE} (actual {shape.scale})")
     if shape.integer_digits > MAX_DECIMAL_INTEGER_DIGITS:
         failures.append(
-            f"integer digits {shape.integer_digits} exceed {MAX_DECIMAL_INTEGER_DIGITS}"
+            f"integer digits exceed {MAX_DECIMAL_INTEGER_DIGITS} "
+            f"(actual {shape.integer_digits})"
         )
     if shape.projected_length > MAX_DECIMAL_WIRE_LENGTH:
         failures.append(
-            f"canonical wire length {shape.projected_length} exceeds "
-            f"{MAX_DECIMAL_WIRE_LENGTH}"
+            f"canonical wire length exceeds {MAX_DECIMAL_WIRE_LENGTH} "
+            f"(projected {shape.projected_length})"
         )
     if failures:
         raise ValueError("decimal bounds exceeded: " + "; ".join(failures))
