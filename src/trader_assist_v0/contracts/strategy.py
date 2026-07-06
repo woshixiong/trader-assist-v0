@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import Field, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from .common import (
     EnvironmentV0,
@@ -299,7 +299,8 @@ _PROMOTION_SUBJECT_FIELDS = (
 def _revalidate_promotion(record: PromotionRecordV0) -> PromotionRecordV0:
     if type(record) is not PromotionRecordV0:
         raise ValueError("expected exact PromotionRecordV0 authority object")
-    return PromotionRecordV0.model_validate(record.model_dump(mode="python", round_trip=True))
+    payload = BaseModel.model_dump(record, mode="python", round_trip=True)
+    return PromotionRecordV0.model_validate(payload)
 
 
 def validate_promotion_transition(
