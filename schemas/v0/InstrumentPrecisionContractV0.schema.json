@@ -25,30 +25,14 @@
       "type": "string"
     },
     "price_tick": {
-      "anyOf": [
-        {
-          "exclusiveMinimum": 0.0,
-          "type": "number"
-        },
-        {
-          "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
-          "type": "string"
-        }
-      ],
-      "title": "Price Tick"
+      "pattern": "^\\+?(?=[0-9.]*[1-9])(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+      "title": "Price Tick",
+      "type": "string"
     },
     "quantity_step": {
-      "anyOf": [
-        {
-          "exclusiveMinimum": 0.0,
-          "type": "number"
-        },
-        {
-          "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
-          "type": "string"
-        }
-      ],
-      "title": "Quantity Step"
+      "pattern": "^\\+?(?=[0-9.]*[1-9])(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+      "title": "Quantity Step",
+      "type": "string"
     },
     "schema_version": {
       "maxLength": 80,
