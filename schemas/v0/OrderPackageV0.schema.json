@@ -35,30 +35,14 @@
           "type": "string"
         },
         "price_tick": {
-          "anyOf": [
-            {
-              "exclusiveMinimum": 0.0,
-              "type": "number"
-            },
-            {
-              "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
-              "type": "string"
-            }
-          ],
-          "title": "Price Tick"
+          "pattern": "^\\+?(?=[0-9.]*[1-9])(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+          "title": "Price Tick",
+          "type": "string"
         },
         "quantity_step": {
-          "anyOf": [
-            {
-              "exclusiveMinimum": 0.0,
-              "type": "number"
-            },
-            {
-              "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
-              "type": "string"
-            }
-          ],
-          "title": "Quantity Step"
+          "pattern": "^\\+?(?=[0-9.]*[1-9])(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+          "title": "Quantity Step",
+          "type": "string"
         },
         "schema_version": {
           "maxLength": 80,
@@ -137,11 +121,7 @@
     "limit_price": {
       "anyOf": [
         {
-          "exclusiveMinimum": 0.0,
-          "type": "number"
-        },
-        {
-          "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+          "pattern": "^\\+?(?=[0-9.]*[1-9])(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
           "type": "string"
         },
         {
@@ -152,17 +132,9 @@
       "title": "Limit Price"
     },
     "max_slippage_bps": {
-      "anyOf": [
-        {
-          "minimum": 0.0,
-          "type": "number"
-        },
-        {
-          "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
-          "type": "string"
-        }
-      ],
-      "title": "Max Slippage Bps"
+      "pattern": "^\\+?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+      "title": "Max Slippage Bps",
+      "type": "string"
     },
     "order_package_hash": {
       "pattern": "^[0-9a-f]{64}$",
@@ -180,17 +152,9 @@
       "$ref": "#/$defs/OrderTypeV0"
     },
     "quantity": {
-      "anyOf": [
-        {
-          "exclusiveMinimum": 0.0,
-          "type": "number"
-        },
-        {
-          "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
-          "type": "string"
-        }
-      ],
-      "title": "Quantity"
+      "pattern": "^\\+?(?=[0-9.]*[1-9])(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+      "title": "Quantity",
+      "type": "string"
     },
     "reduce_only": {
       "title": "Reduce Only",
