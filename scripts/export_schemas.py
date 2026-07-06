@@ -23,6 +23,12 @@ from trader_assist_v0.contracts import (
     SeedProvenanceEntryV0,
     StrategyCandidateV0,
 )
+from trader_assist_v0.contracts.common import (
+    FINITE_DECIMAL_STRING_PATTERN,
+    MAX_DECIMAL_WIRE_LENGTH,
+    NONNEGATIVE_DECIMAL_STRING_PATTERN,
+    POSITIVE_DECIMAL_STRING_PATTERN,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "schemas" / "v0"
@@ -44,12 +50,7 @@ MODELS: tuple[type[BaseModel], ...] = (
 )
 COMPACT_MODELS = frozenset({ProposalV0, StrategyCandidateV0})
 
-DECIMAL_STRING_PATTERN = r"^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$"
-PORTABLE_DECIMAL_STRING_PATTERN = r"^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)$"
-POSITIVE_DECIMAL_STRING_PATTERN = (
-    r"^\+?(?=[0-9.]*[1-9])(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)$"
-)
-NONNEGATIVE_DECIMAL_STRING_PATTERN = r"^\+?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)$"
+PYDANTIC_DECIMAL_STRING_PATTERN = r"^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$"
 
 
 def _decimal_pattern(number_branch: dict[str, Any]) -> str:
@@ -57,7 +58,7 @@ def _decimal_pattern(number_branch: dict[str, Any]) -> str:
         return POSITIVE_DECIMAL_STRING_PATTERN
     if number_branch.get("minimum") == 0.0:
         return NONNEGATIVE_DECIMAL_STRING_PATTERN
-    return PORTABLE_DECIMAL_STRING_PATTERN
+    return FINITE_DECIMAL_STRING_PATTERN
 
 
 def _portable_schema(value: Any) -> Any:
@@ -79,7 +80,7 @@ def _portable_schema(value: Any) -> Any:
                     for branch in branches
                     if isinstance(branch, dict)
                     and branch.get("type") == "string"
-                    and branch.get("pattern") == DECIMAL_STRING_PATTERN
+                    and branch.get("pattern") == PYDANTIC_DECIMAL_STRING_PATTERN
                 ),
                 None,
             )
@@ -87,6 +88,7 @@ def _portable_schema(value: Any) -> Any:
                 string_wire = {
                     "type": "string",
                     "pattern": _decimal_pattern(number_branch),
+                    "maxLength": MAX_DECIMAL_WIRE_LENGTH,
                 }
                 null_branches = [
                     _portable_schema(branch)
