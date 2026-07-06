@@ -11,6 +11,8 @@ permissions:
 jobs:
   contracts:
     runs-on: ubuntu-latest
+    env:
+      VENV: ${{ runner.temp }}/trader-assist-v0-venv
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -19,111 +21,31 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - name: Install
+          cache-dependency-path: |
+            requirements-runtime.lock
+            requirements-dev.lock
+      - name: Hashed locked install
         run: |
-          python -m pip install -r requirements-runtime.lock -r requirements-dev.lock
-          python -m pip install -e . --no-deps --no-build-isolation
-      - name: Generate hashed lock evidence
+          python -m venv "$VENV"
+          "$VENV/bin/python" -m pip install --require-hashes -r requirements-dev.lock
+          "$VENV/bin/python" -m pip install -e . --no-deps --no-build-isolation
+      - name: Dependency closure and integrity
         run: |
-          set +e
-          python -m pip install pip==24.3.1 pip-tools==7.4.1 > /tmp/pip-tools-install.log 2>&1
-          install_status=$?
-          cat > /tmp/requirements-ci.in <<'EOF'
-          pydantic==2.13.4
-          editables==0.5
-          hatchling==1.30.1
-          jsonschema==4.26.0
-          mypy==1.16.1
-          pip-audit==2.9.0
-          pytest==8.4.1
-          ruff==0.12.2
-          EOF
-          python -m piptools compile /tmp/requirements-ci.in --generate-hashes \
-            --output-file /tmp/requirements-dev.generated.lock \
-            > /tmp/pip-compile.log 2>&1
-          compile_status=$?
-          rm -rf /tmp/ci-wheels /tmp/runtime-wheels
-          python -m pip download --only-binary=:all: --dest /tmp/ci-wheels \
-            -r /tmp/requirements-ci.in > /tmp/pip-download-ci.log 2>&1
-          ci_download_status=$?
-          python -m pip download --only-binary=:all: --dest /tmp/runtime-wheels \
-            pydantic==2.13.4 > /tmp/pip-download-runtime.log 2>&1
-          runtime_download_status=$?
-          python - <<'PY'
-          from hashlib import sha256
-          from pathlib import Path
-          from packaging.utils import canonicalize_name, parse_wheel_filename
-
-          def render(source: str, output: str) -> None:
-              lines = [
-                  "# Platform lock: CPython 3.12 / Linux x86_64",
-                  "# Generated from exact direct inputs; one selected wheel hash per distribution.",
-              ]
-              seen: set[str] = set()
-              for wheel in sorted(Path(source).glob("*.whl")):
-                  name, version, _build, _tags = parse_wheel_filename(wheel.name)
-                  canonical = canonicalize_name(name)
-                  if canonical in seen:
-                      raise SystemExit(f"duplicate wheel distribution: {canonical}")
-                  seen.add(canonical)
-                  digest = sha256(wheel.read_bytes()).hexdigest()
-                  lines.append(f"{canonical}=={version} --hash=sha256:{digest}")
-              if not seen:
-                  raise SystemExit(f"no wheels downloaded from {source}")
-              Path(output).write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-          render("/tmp/ci-wheels", "/tmp/requirements-dev.platform.lock")
-          render("/tmp/runtime-wheels", "/tmp/requirements-runtime.platform.lock")
-          PY
-          platform_lock_status=$?
-          {
-            echo "pip-tools install status: ${install_status}"
-            echo "pip-compile status: ${compile_status}"
-            echo "CI wheel download status: ${ci_download_status}"
-            echo "runtime wheel download status: ${runtime_download_status}"
-            echo "platform lock render status: ${platform_lock_status}"
-            echo "=== INSTALL LOG ==="
-            cat /tmp/pip-tools-install.log
-            echo "=== COMPILE LOG ==="
-            cat /tmp/pip-compile.log
-            echo "=== CI DOWNLOAD LOG ==="
-            cat /tmp/pip-download-ci.log
-            echo "=== RUNTIME DOWNLOAD LOG ==="
-            cat /tmp/pip-download-runtime.log
-          } > /tmp/lock-generation.log
-          exit 0
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: hashed-lock-evidence
-          path: |
-            /tmp/requirements-ci.in
-            /tmp/requirements-dev.generated.lock
-            /tmp/requirements-dev.platform.lock
-            /tmp/requirements-runtime.platform.lock
-            /tmp/lock-generation.log
-          if-no-files-found: warn
-      - name: Dependency lock
-        run: python scripts/check_dependency_lock.py && python -m pip check
+          "$VENV/bin/python" scripts/check_dependency_lock.py --verify-installed
+          "$VENV/bin/python" -m pip check
       - name: Runtime dependency audit
-        run: pip-audit --strict -r requirements-runtime.lock
+        run: "$VENV/bin/pip-audit" --strict -r requirements-runtime.lock
       - name: Compile
-        run: python -m compileall -q src scripts tests
+        run: "$VENV/bin/python" -m compileall -q src scripts tests
       - name: Schema drift
-        run: python scripts/export_schemas.py --check
+        run: "$VENV/bin/python" scripts/export_schemas.py --check
       - name: Secret scan
-        run: python scripts/scan_secrets.py .
+        run: "$VENV/bin/python" scripts/scan_secrets.py .
       - name: Ruff
-        run: ruff check .
+        run: "$VENV/bin/ruff" check .
       - name: Mypy
-        run: mypy src scripts
-      - name: Tests diagnostic
-        continue-on-error: true
-        run: pytest -q > /tmp/pytest.log 2>&1
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: always()
-        with:
-          name: pytest-evidence
-          path: /tmp/pytest.log
-          if-no-files-found: error
+        run: "$VENV/bin/mypy" src scripts
+      - name: Tests
+        run: "$VENV/bin/pytest" -q
       - name: Diff check
         run: git diff --check
