@@ -9,7 +9,7 @@ from contextvars import ContextVar
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Annotated, Any, ClassVar, Self, TypeVar
+from typing import Annotated, Any, ClassVar, NamedTuple, Self, TypeVar
 
 from pydantic import (
     AfterValidator,
@@ -69,6 +69,16 @@ def _finite_decimal(value: Decimal) -> Decimal:
     return value
 
 
+class _DecimalShape(NamedTuple):
+    sign: int
+    coefficient: str
+    exponent: int
+    significant_digits: int
+    integer_digits: int
+    scale: int
+    projected_length: int
+
+
 def _trim_decimal_coefficient(value: Decimal) -> tuple[int, str, int]:
     if not value.is_finite():
         raise ValueError("decimal value must be finite")
@@ -78,57 +88,87 @@ def _trim_decimal_coefficient(value: Decimal) -> tuple[int, str, int]:
     coefficient = "".join(str(digit) for digit in digits) or "0"
     if not coefficient.strip("0"):
         return 0, "0", 0
-    while exponent < 0 and coefficient.endswith("0"):
-        coefficient = coefficient[:-1]
-        exponent += 1
+    if exponent < 0:
+        trimmed = coefficient.rstrip("0")
+        exponent += len(coefficient) - len(trimmed)
+        coefficient = trimmed
     return sign, coefficient, exponent
+
+
+def _analyze_decimal_shape(value: Decimal) -> _DecimalShape:
+    sign, coefficient, exponent = _trim_decimal_coefficient(value)
+    if coefficient == "0":
+        return _DecimalShape(0, "0", 0, 0, 1, 0, 1)
+
+    coefficient_length = len(coefficient)
+    significant_digits = len(coefficient.lstrip("0"))
+    if exponent >= 0:
+        integer_digits = coefficient_length + exponent
+        scale = 0
+        unsigned_output_length = coefficient_length + exponent
+    else:
+        split = coefficient_length + exponent
+        scale = -exponent
+        if split > 0:
+            integer_digits = split
+            unsigned_output_length = coefficient_length + 1
+        else:
+            integer_digits = 1
+            unsigned_output_length = 2 - exponent
+    projected_length = unsigned_output_length + (1 if sign else 0)
+    return _DecimalShape(
+        sign,
+        coefficient,
+        exponent,
+        significant_digits,
+        integer_digits,
+        scale,
+        projected_length,
+    )
+
+
+def _raise_for_decimal_bounds(shape: _DecimalShape) -> None:
+    failures: list[str] = []
+    if shape.significant_digits > MAX_DECIMAL_SIGNIFICANT_DIGITS:
+        failures.append(
+            f"significant digits {shape.significant_digits} exceed "
+            f"{MAX_DECIMAL_SIGNIFICANT_DIGITS}"
+        )
+    if shape.scale > MAX_DECIMAL_SCALE:
+        failures.append(f"scale {shape.scale} exceeds {MAX_DECIMAL_SCALE}")
+    if shape.integer_digits > MAX_DECIMAL_INTEGER_DIGITS:
+        failures.append(
+            f"integer digits {shape.integer_digits} exceed {MAX_DECIMAL_INTEGER_DIGITS}"
+        )
+    if shape.projected_length > MAX_DECIMAL_WIRE_LENGTH:
+        failures.append(
+            f"canonical wire length {shape.projected_length} exceeds "
+            f"{MAX_DECIMAL_WIRE_LENGTH}"
+        )
+    if failures:
+        raise ValueError("decimal bounds exceeded: " + "; ".join(failures))
 
 
 def decimal_to_canonical_string(value: Decimal) -> str:
     """Render an exact finite Decimal without consulting the ambient Decimal context."""
-    sign, coefficient, exponent = _trim_decimal_coefficient(value)
-    if coefficient == "0":
+    shape = _analyze_decimal_shape(value)
+    _raise_for_decimal_bounds(shape)
+    if shape.coefficient == "0":
         return "0"
-    if exponent >= 0:
-        rendered = coefficient + ("0" * exponent)
+    if shape.exponent >= 0:
+        rendered = shape.coefficient + ("0" * shape.exponent)
     else:
-        split = len(coefficient) + exponent
+        split = len(shape.coefficient) + shape.exponent
         if split > 0:
-            rendered = coefficient[:split] + "." + coefficient[split:]
+            rendered = shape.coefficient[:split] + "." + shape.coefficient[split:]
         else:
-            rendered = "0." + ("0" * (-split)) + coefficient
-    return ("-" if sign else "") + rendered
+            rendered = "0." + ("0" * (-split)) + shape.coefficient
+    return ("-" if shape.sign else "") + rendered
 
 
 def _validate_decimal_bounds(value: Decimal) -> Decimal:
-    sign, coefficient, exponent = _trim_decimal_coefficient(value)
-    del sign
-    if coefficient == "0":
-        return value
-    significant_digits = len(coefficient.lstrip("0"))
-    if exponent >= 0:
-        integer_digits = len(coefficient) + exponent
-        scale = 0
-    else:
-        split = len(coefficient) + exponent
-        integer_digits = max(split, 1)
-        scale = -exponent
-    failures: list[str] = []
-    if significant_digits > MAX_DECIMAL_SIGNIFICANT_DIGITS:
-        failures.append(
-            f"significant digits exceed {MAX_DECIMAL_SIGNIFICANT_DIGITS}"
-        )
-    if scale > MAX_DECIMAL_SCALE:
-        failures.append(f"scale exceeds {MAX_DECIMAL_SCALE}")
-    if integer_digits > MAX_DECIMAL_INTEGER_DIGITS:
-        failures.append(f"integer digits exceed {MAX_DECIMAL_INTEGER_DIGITS}")
-    canonical_length = len(decimal_to_canonical_string(value))
-    if canonical_length > MAX_DECIMAL_WIRE_LENGTH:
-        failures.append(
-            f"canonical wire length exceeds {MAX_DECIMAL_WIRE_LENGTH}"
-        )
-    if failures:
-        raise ValueError("decimal bounds exceeded: " + "; ".join(failures))
+    shape = _analyze_decimal_shape(value)
+    _raise_for_decimal_bounds(shape)
     return value
 
 
@@ -260,7 +300,6 @@ class StrictModel(BaseModel):
 def _normalize_decimal(value: Decimal) -> str:
     if not value.is_finite():
         raise ValueError("cannot hash non-finite decimal")
-    _validate_decimal_bounds(value)
     return decimal_to_canonical_string(value)
 
 
