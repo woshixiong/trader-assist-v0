@@ -475,7 +475,8 @@ def revalidate_nested_hash_bound[T: HashBoundModel](
             validated = expected_type.model_validate_json(
                 json.dumps(value, ensure_ascii=False, separators=(",", ":"))
             )
-        else:
-            validated = expected_type.model_validate(value)
+            revalidate_hash_bound_instance(validated, expected_type)
+            return dict(value)
+        validated = expected_type.model_validate(value)
         return revalidate_hash_bound_instance(validated, expected_type)
     return value
