@@ -211,20 +211,6 @@ def permit(
     )
 
 
-def reject_tampered_permit(tampered: ExecutionPermitV0) -> None:
-    proposed = proposal()
-    approved = decision(proposed)
-    chain = history()
-    with pytest.raises((ValueError, ValidationError), match="single_use|permit_hash|literal"):
-        validate_execution_permit_bindings(
-            tampered,
-            proposed,
-            approved,
-            chain[-1],
-            promotion_history=chain,
-        )
-
-
 def test_authority_revalidates_basemodel_copy_bypasses() -> None:
     proposed = proposal()
     approved = decision(proposed)
@@ -286,7 +272,7 @@ def test_raw_promotion_record_cannot_claim_execution_authority() -> None:
     forged = HashBoundModel.bind.__func__(PromotionRecordV0, **data)
     direct = PromotionRecordV0.model_validate(forged.model_dump(mode="python"))
     assert direct == forged
-    assert not hasattr(direct, "execution_enabled_at")
+    assert direct.execution_enabled_at(NOW) is False
     with pytest.raises(ValueError, match="initial promotion record must be DRAFT"):
         validate_execution_promotion_authority((direct,), at=NOW)
 
