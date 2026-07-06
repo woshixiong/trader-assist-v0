@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Set
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -194,6 +194,31 @@ class HashBoundModel(StrictModel):
                 "hash-bound models cannot be copied with updates; construct a new bound model"
             )
         return super().model_copy(deep=deep)
+
+    def copy(
+        self,
+        *,
+        include: Set[int] | Set[str] | Mapping[int, Any] | Mapping[str, Any] | None = None,
+        exclude: Set[int] | Set[str] | Mapping[int, Any] | Mapping[str, Any] | None = None,
+        update: dict[str, Any] | None = None,
+        deep: bool = False,
+    ) -> Self:
+        if include is not None or exclude is not None or update is not None:
+            raise TypeError(
+                "hash-bound models cannot be copied with field changes; construct a new bound model"
+            )
+        return self.model_copy(deep=deep)
+
+    @classmethod
+    def model_construct(
+        cls,
+        _fields_set: set[str] | None = None,
+        **values: Any,
+    ) -> Self:
+        raise TypeError(
+            "hash-bound models cannot bypass validation with model_construct; "
+            "use bind or model_validate"
+        )
 
     @model_validator(mode="after")
     def verify_contract_hash(self) -> Self:
