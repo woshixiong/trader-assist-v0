@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 from collections.abc import Mapping, Set
 from contextvars import ContextVar
 from datetime import UTC, datetime
@@ -14,11 +15,24 @@ from pydantic import (
     AfterValidator,
     AwareDatetime,
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     StringConstraints,
+    ValidationInfo,
     model_validator,
 )
+
+MAX_DECIMAL_WIRE_LENGTH = 80
+FINITE_DECIMAL_STRING_PATTERN = r"^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)$"
+POSITIVE_DECIMAL_STRING_PATTERN = (
+    r"^\+?(?=[0-9.]*[1-9])(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)$"
+)
+NONNEGATIVE_DECIMAL_STRING_PATTERN = r"^\+?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)$"
+
+_FINITE_DECIMAL_WIRE_RE = re.compile(FINITE_DECIMAL_STRING_PATTERN)
+_POSITIVE_DECIMAL_WIRE_RE = re.compile(POSITIVE_DECIMAL_STRING_PATTERN)
+_NONNEGATIVE_DECIMAL_WIRE_RE = re.compile(NONNEGATIVE_DECIMAL_STRING_PATTERN)
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -29,6 +43,37 @@ def _finite_decimal(value: Decimal) -> Decimal:
     if not value.is_finite():
         raise ValueError("decimal value must be finite")
     return value
+
+
+def _validate_decimal_wire(
+    value: Any,
+    info: ValidationInfo,
+    pattern: re.Pattern[str],
+    semantic_name: str,
+) -> Any:
+    if info.mode != "json":
+        return value
+    if not isinstance(value, str):
+        raise ValueError(f"{semantic_name} decimal JSON value must be a string")
+    if len(value) > MAX_DECIMAL_WIRE_LENGTH:
+        raise ValueError(
+            f"{semantic_name} decimal JSON string exceeds {MAX_DECIMAL_WIRE_LENGTH} characters"
+        )
+    if pattern.fullmatch(value) is None:
+        raise ValueError(f"{semantic_name} decimal JSON string has invalid syntax")
+    return value
+
+
+def _finite_decimal_wire(value: Any, info: ValidationInfo) -> Any:
+    return _validate_decimal_wire(value, info, _FINITE_DECIMAL_WIRE_RE, "finite")
+
+
+def _positive_decimal_wire(value: Any, info: ValidationInfo) -> Any:
+    return _validate_decimal_wire(value, info, _POSITIVE_DECIMAL_WIRE_RE, "positive")
+
+
+def _nonnegative_decimal_wire(value: Any, info: ValidationInfo) -> Any:
+    return _validate_decimal_wire(value, info, _NONNEGATIVE_DECIMAL_WIRE_RE, "nonnegative")
 
 
 UTCDateTime = Annotated[AwareDatetime, AfterValidator(_as_utc)]
@@ -43,14 +88,20 @@ OpaqueId = Annotated[
     ),
 ]
 VersionId = Annotated[str, StringConstraints(min_length=1, max_length=80)]
-FiniteDecimal = Annotated[Decimal, AfterValidator(_finite_decimal)]
+FiniteDecimal = Annotated[
+    Decimal,
+    BeforeValidator(_finite_decimal_wire),
+    AfterValidator(_finite_decimal),
+]
 PositiveFiniteDecimal = Annotated[
     Decimal,
+    BeforeValidator(_positive_decimal_wire),
     Field(gt=Decimal("0")),
     AfterValidator(_finite_decimal),
 ]
 NonNegativeFiniteDecimal = Annotated[
     Decimal,
+    BeforeValidator(_nonnegative_decimal_wire),
     Field(ge=Decimal("0")),
     AfterValidator(_finite_decimal),
 ]
@@ -123,7 +174,7 @@ def _normalize_decimal(value: Decimal) -> str:
 
 def _normalize(value: Any) -> Any:
     if isinstance(value, BaseModel):
-        return _normalize(value.model_dump(mode="python"))
+        return _normalize(BaseModel.model_dump(value, mode="python", round_trip=True))
     if isinstance(value, dict):
         return {
             str(key): _normalize(item)
@@ -165,7 +216,7 @@ def sha256_hex(value: bytes) -> str:
 
 
 def contract_hash(domain: HashDomainV0, model: BaseModel) -> str:
-    payload = model.model_dump(mode="python")
+    payload = BaseModel.model_dump(model, mode="python", round_trip=True)
     payload.pop(HASH_FIELD_BY_DOMAIN[domain], None)
     material = domain.value.encode("utf-8") + b"\0" + canonical_json_bytes(payload)
     return sha256_hex(material)
