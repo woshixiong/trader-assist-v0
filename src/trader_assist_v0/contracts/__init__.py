@@ -38,6 +38,7 @@ from .strategy import (
     PromotionRecordV0,
     PromotionStateV0,
     StrategyCandidateV0,
+    validate_execution_promotion_authority,
     validate_promotion_chain,
     validate_promotion_transition,
 )
@@ -80,6 +81,7 @@ __all__ = [
     "contract_hash",
     "sha256_hex",
     "validate_execution_permit_bindings",
+    "validate_execution_promotion_authority",
     "validate_human_decision_binding",
     "validate_promotion_chain",
     "validate_promotion_transition",
