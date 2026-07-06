@@ -42,6 +42,7 @@ MODELS: tuple[type[BaseModel], ...] = (
     EvidenceBundleManifestV0,
     SeedProvenanceEntryV0,
 )
+COMPACT_MODELS = frozenset({ProposalV0, StrategyCandidateV0})
 
 DECIMAL_STRING_PATTERN = r"^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$"
 PORTABLE_DECIMAL_STRING_PATTERN = r"^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)$"
@@ -105,6 +106,13 @@ def _portable_schema(value: Any) -> Any:
 
 def render(model: type[BaseModel]) -> str:
     schema = _portable_schema(model.model_json_schema())
+    if model in COMPACT_MODELS:
+        return json.dumps(
+            schema,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ) + "\n"
     return json.dumps(schema, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
 
