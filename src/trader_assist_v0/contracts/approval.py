@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import hmac
 from enum import StrEnum
-from typing import Literal, TypeVar
+from typing import Any, Literal, TypeVar
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import Field, ValidationInfo, field_validator, model_validator
 
 from .common import (
     EnvironmentV0,
@@ -16,7 +15,8 @@ from .common import (
     Sha256Hex,
     UTCDateTime,
     VersionId,
-    contract_hash,
+    revalidate_hash_bound_instance,
+    revalidate_nested_hash_bound,
 )
 from .precision import InstrumentPrecisionContractV0, require_step_aligned
 from .strategy import (
@@ -89,13 +89,23 @@ class OrderPackageV0(HashBoundModel):
     cancellation_policy_hash: Sha256Hex
     emergency_reduce_only_policy_hash: Sha256Hex
 
+    @field_validator("instrument_precision", mode="before")
+    @classmethod
+    def revalidate_instrument_precision(
+        cls, value: Any, info: ValidationInfo
+    ) -> Any:
+        return revalidate_nested_hash_bound(
+            value, InstrumentPrecisionContractV0, json_mode=info.mode == "json"
+        )
+
     @model_validator(mode="after")
     def validate_order_type(self) -> OrderPackageV0:
-        if self.instrument_precision.symbol != self.symbol:
+        instrument_precision = self.instrument_precision
+        if instrument_precision.symbol != self.symbol:
             raise ValueError("instrument precision symbol must match order symbol")
         require_step_aligned(
             self.quantity,
-            self.instrument_precision.quantity_step,
+            instrument_precision.quantity_step,
             "quantity",
         )
         if self.order_type is OrderTypeV0.LIMIT and self.limit_price is None:
@@ -105,7 +115,7 @@ class OrderPackageV0(HashBoundModel):
         if self.limit_price is not None:
             require_step_aligned(
                 self.limit_price,
-                self.instrument_precision.price_tick,
+                instrument_precision.price_tick,
                 "limit_price",
             )
         return self
@@ -134,11 +144,21 @@ class ProposalV0(HashBoundModel):
     expires_at: UTCDateTime
     invalidation_codes: tuple[str, ...]
 
+    @field_validator("order_package", mode="before")
+    @classmethod
+    def revalidate_order_package(
+        cls, value: Any, info: ValidationInfo
+    ) -> Any:
+        return revalidate_nested_hash_bound(
+            value, OrderPackageV0, json_mode=info.mode == "json"
+        )
+
     @model_validator(mode="after")
     def validate_expiry(self) -> ProposalV0:
+        order_package = self.order_package
         if self.expires_at <= self.created_at:
             raise ValueError("proposal expiry must be after creation")
-        if self.order_package.valid_until > self.expires_at:
+        if order_package.valid_until > self.expires_at:
             raise ValueError("order package cannot outlive proposal")
         return self
 
@@ -250,17 +270,7 @@ AuthorityT = TypeVar("AuthorityT", bound=HashBoundModel)
 
 
 def _revalidate_authority(value: AuthorityT, expected_type: type[AuthorityT]) -> AuthorityT:
-    if type(value) is not expected_type:
-        raise ValueError(f"expected exact {expected_type.__name__} authority object")
-    payload = BaseModel.model_dump(value, mode="python", round_trip=True)
-    validated = expected_type.model_validate(payload)
-    actual = getattr(validated, expected_type.hash_field)
-    expected = contract_hash(expected_type.hash_domain, validated)
-    if not hmac.compare_digest(actual, expected):
-        raise ValueError(
-            f"{expected_type.hash_field} does not match canonical authority payload"
-        )
-    return validated
+    return revalidate_hash_bound_instance(value, expected_type)
 
 
 def validate_human_decision_binding(

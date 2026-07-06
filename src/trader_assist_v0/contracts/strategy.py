@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import Field, ValidationInfo, field_validator, model_validator
 
 from .common import (
     EnvironmentV0,
@@ -14,6 +14,8 @@ from .common import (
     Sha256Hex,
     UTCDateTime,
     VersionId,
+    revalidate_hash_bound_instance,
+    revalidate_nested_hash_bound,
 )
 from .health import MandatoryFeedStatusV0, RequiredFeedContractV0
 from .precision import InstrumentPrecisionContractV0, require_step_aligned
@@ -94,9 +96,7 @@ LEGAL_PROMOTION_TRANSITIONS: dict[PromotionStateV0, frozenset[PromotionStateV0]]
     PromotionStateV0.MAINNET_PILOT_ACTIVE: frozenset(
         {PromotionStateV0.QUARANTINED, PromotionStateV0.RETIRED}
     ),
-    PromotionStateV0.QUARANTINED: frozenset(
-        {PromotionStateV0.SHADOW, PromotionStateV0.RETIRED}
-    ),
+    PromotionStateV0.QUARANTINED: frozenset({PromotionStateV0.RETIRED}),
     PromotionStateV0.RETIRED: frozenset(),
 }
 
@@ -131,11 +131,31 @@ class StrategyCandidateV0(HashBoundModel):
     context_snapshot_hash: Sha256Hex
     mandatory_feed_status: MandatoryFeedStatusV0
 
+    @field_validator("required_feed_contract", mode="before")
+    @classmethod
+    def revalidate_required_feed_contract(
+        cls, value: Any, info: ValidationInfo
+    ) -> Any:
+        return revalidate_nested_hash_bound(
+            value, RequiredFeedContractV0, json_mode=info.mode == "json"
+        )
+
+    @field_validator("instrument_precision", mode="before")
+    @classmethod
+    def revalidate_instrument_precision(
+        cls, value: Any, info: ValidationInfo
+    ) -> Any:
+        return revalidate_nested_hash_bound(
+            value, InstrumentPrecisionContractV0, json_mode=info.mode == "json"
+        )
+
     @model_validator(mode="after")
     def validate_candidate(self) -> StrategyCandidateV0:
-        if self.required_feed_contract.playbook_id != self.playbook_id.value:
+        required_feed_contract = self.required_feed_contract
+        instrument_precision = self.instrument_precision
+        if required_feed_contract.playbook_id != self.playbook_id.value:
             raise ValueError("required feed contract playbook must match candidate playbook")
-        if self.instrument_precision.symbol != self.symbol:
+        if instrument_precision.symbol != self.symbol:
             raise ValueError("instrument precision symbol must match candidate symbol")
         if self.expires_at <= self.created_at:
             raise ValueError("candidate expiry must be after creation")
@@ -146,16 +166,16 @@ class StrategyCandidateV0(HashBoundModel):
         )
         for field_name, value in price_fields:
             if value is not None:
-                require_step_aligned(value, self.instrument_precision.price_tick, field_name)
+                require_step_aligned(value, instrument_precision.price_tick, field_name)
         for index, target in enumerate(self.target_prices):
             require_step_aligned(
                 target,
-                self.instrument_precision.price_tick,
+                instrument_precision.price_tick,
                 f"target_prices[{index}]",
             )
         if self.kind is CandidateKindV0.TRADE_SETUP:
             if not self.mandatory_feed_status.satisfies(
-                self.required_feed_contract,
+                required_feed_contract,
                 at=self.created_at,
             ):
                 raise ValueError(
@@ -221,18 +241,11 @@ class PromotionRecordV0(HashBoundModel):
                 raise ValueError("non-DRAFT promotion requires activated_at")
         if self.activated_at is not None and self.activated_at < self.reviewed_at:
             raise ValueError("promotion cannot activate before review")
-        if (
-            self.expires_at is not None
-            and self.activated_at is not None
-            and self.expires_at <= self.activated_at
-        ):
-            raise ValueError("promotion expiry must be after activation")
-        if (
-            self.revoked_at is not None
-            and self.activated_at is not None
-            and self.revoked_at < self.activated_at
-        ):
-            raise ValueError("revocation cannot predate activation")
+        effective_start = self.activated_at or self.reviewed_at
+        if self.expires_at is not None and self.expires_at <= effective_start:
+            raise ValueError("promotion expiry must be after its effective start")
+        if self.revoked_at is not None and self.revoked_at <= effective_start:
+            raise ValueError("promotion revocation must be after its effective start")
         return self
 
     @classmethod
@@ -256,6 +269,7 @@ class PromotionRecordV0(HashBoundModel):
             if state is not PromotionStateV0.DRAFT:
                 raise ValueError("initial promotion record must be DRAFT")
         else:
+            previous = _revalidate_promotion(previous)
             payload.update(
                 predecessor_record_id=previous.promotion_record_id,
                 predecessor_record_hash=previous.promotion_record_hash,
@@ -297,10 +311,7 @@ _PROMOTION_SUBJECT_FIELDS = (
 
 
 def _revalidate_promotion(record: PromotionRecordV0) -> PromotionRecordV0:
-    if type(record) is not PromotionRecordV0:
-        raise ValueError("expected exact PromotionRecordV0 authority object")
-    payload = BaseModel.model_dump(record, mode="python", round_trip=True)
-    return PromotionRecordV0.model_validate(payload)
+    return revalidate_hash_bound_instance(record, PromotionRecordV0)
 
 
 def validate_promotion_transition(
@@ -326,6 +337,11 @@ def validate_promotion_transition(
     else:
         if previous.state is PromotionStateV0.RETIRED:
             failures.append("RETIRED is terminal")
+        if (
+            previous.state is PromotionStateV0.QUARANTINED
+            and current.state is not PromotionStateV0.RETIRED
+        ):
+            failures.append("QUARANTINED recovery is not authorized")
         if current.promotion_record_id == previous.promotion_record_id:
             failures.append("promotion transition must create a new record")
         if current.predecessor_record_id != previous.promotion_record_id:
@@ -342,6 +358,17 @@ def validate_promotion_transition(
         previous_effective_at = previous.activated_at or previous.reviewed_at
         if current.reviewed_at < previous_effective_at:
             failures.append("transition review predates predecessor")
+        transition_times = [current.reviewed_at]
+        if current.activated_at is not None:
+            transition_times.append(current.activated_at)
+        if previous.expires_at is not None and any(
+            transition_time >= previous.expires_at for transition_time in transition_times
+        ):
+            failures.append("predecessor expired at transition time")
+        if previous.revoked_at is not None and any(
+            transition_time >= previous.revoked_at for transition_time in transition_times
+        ):
+            failures.append("predecessor revoked at transition time")
     if failures:
         raise ValueError("; ".join(failures))
 

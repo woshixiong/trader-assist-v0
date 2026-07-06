@@ -9,7 +9,7 @@ from contextvars import ContextVar
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Annotated, Any, ClassVar, Self
+from typing import Annotated, Any, ClassVar, Self, TypeVar
 
 from pydantic import (
     AfterValidator,
@@ -18,17 +18,41 @@ from pydantic import (
     BeforeValidator,
     ConfigDict,
     Field,
+    PlainSerializer,
     StringConstraints,
     ValidationInfo,
     model_validator,
 )
 
 MAX_DECIMAL_WIRE_LENGTH = 80
-FINITE_DECIMAL_STRING_PATTERN = r"^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)$"
-POSITIVE_DECIMAL_STRING_PATTERN = (
-    r"^\+?(?=[0-9.]*[1-9])(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)$"
+MAX_DECIMAL_SIGNIFICANT_DIGITS = 80
+MAX_DECIMAL_SCALE = 80
+MAX_DECIMAL_INTEGER_DIGITS = 80
+
+FINITE_DECIMAL_STRING_PATTERN = (
+    r"^(?:0|[1-9][0-9]*(?:\.[0-9]+)?|0\.[0-9]+|"
+    r"-(?:[1-9][0-9]*(?:\.[0-9]+)?|0\.[0-9]*[1-9][0-9]*))$"
 )
-NONNEGATIVE_DECIMAL_STRING_PATTERN = r"^\+?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)$"
+NONNEGATIVE_DECIMAL_STRING_PATTERN = r"^(?:0|[1-9][0-9]*(?:\.[0-9]+)?|0\.[0-9]+)$"
+POSITIVE_DECIMAL_STRING_PATTERN = (
+    r"^(?:[1-9][0-9]*(?:\.[0-9]+)?|0\.[0-9]*[1-9][0-9]*)$"
+)
+
+FiniteDecimalString = Annotated[
+    str,
+    StringConstraints(pattern=FINITE_DECIMAL_STRING_PATTERN, max_length=MAX_DECIMAL_WIRE_LENGTH),
+]
+NonNegativeFiniteDecimalString = Annotated[
+    str,
+    StringConstraints(
+        pattern=NONNEGATIVE_DECIMAL_STRING_PATTERN,
+        max_length=MAX_DECIMAL_WIRE_LENGTH,
+    ),
+]
+PositiveFiniteDecimalString = Annotated[
+    str,
+    StringConstraints(pattern=POSITIVE_DECIMAL_STRING_PATTERN, max_length=MAX_DECIMAL_WIRE_LENGTH),
+]
 
 _FINITE_DECIMAL_WIRE_RE = re.compile(FINITE_DECIMAL_STRING_PATTERN)
 _POSITIVE_DECIMAL_WIRE_RE = re.compile(POSITIVE_DECIMAL_STRING_PATTERN)
@@ -45,22 +69,86 @@ def _finite_decimal(value: Decimal) -> Decimal:
     return value
 
 
+def _trim_decimal_coefficient(value: Decimal) -> tuple[int, str, int]:
+    if not value.is_finite():
+        raise ValueError("decimal value must be finite")
+    sign, digits, exponent = value.as_tuple()
+    if not isinstance(exponent, int):
+        raise ValueError("decimal exponent must be finite")
+    coefficient = "".join(str(digit) for digit in digits) or "0"
+    if not coefficient.strip("0"):
+        return 0, "0", 0
+    while exponent < 0 and coefficient.endswith("0"):
+        coefficient = coefficient[:-1]
+        exponent += 1
+    return sign, coefficient, exponent
+
+
+def decimal_to_canonical_string(value: Decimal) -> str:
+    """Render an exact finite Decimal without consulting the ambient Decimal context."""
+    sign, coefficient, exponent = _trim_decimal_coefficient(value)
+    if coefficient == "0":
+        return "0"
+    if exponent >= 0:
+        rendered = coefficient + ("0" * exponent)
+    else:
+        split = len(coefficient) + exponent
+        if split > 0:
+            rendered = coefficient[:split] + "." + coefficient[split:]
+        else:
+            rendered = "0." + ("0" * (-split)) + coefficient
+    return ("-" if sign else "") + rendered
+
+
+def _validate_decimal_bounds(value: Decimal) -> Decimal:
+    sign, coefficient, exponent = _trim_decimal_coefficient(value)
+    del sign
+    if coefficient == "0":
+        return value
+    significant_digits = len(coefficient.lstrip("0"))
+    if exponent >= 0:
+        integer_digits = len(coefficient) + exponent
+        scale = 0
+    else:
+        split = len(coefficient) + exponent
+        integer_digits = max(split, 1)
+        scale = -exponent
+    failures: list[str] = []
+    if significant_digits > MAX_DECIMAL_SIGNIFICANT_DIGITS:
+        failures.append(
+            f"significant digits exceed {MAX_DECIMAL_SIGNIFICANT_DIGITS}"
+        )
+    if scale > MAX_DECIMAL_SCALE:
+        failures.append(f"scale exceeds {MAX_DECIMAL_SCALE}")
+    if integer_digits > MAX_DECIMAL_INTEGER_DIGITS:
+        failures.append(f"integer digits exceed {MAX_DECIMAL_INTEGER_DIGITS}")
+    canonical_length = len(decimal_to_canonical_string(value))
+    if canonical_length > MAX_DECIMAL_WIRE_LENGTH:
+        failures.append(
+            f"canonical wire length exceeds {MAX_DECIMAL_WIRE_LENGTH}"
+        )
+    if failures:
+        raise ValueError("decimal bounds exceeded: " + "; ".join(failures))
+    return value
+
+
 def _validate_decimal_wire(
     value: Any,
     info: ValidationInfo,
     pattern: re.Pattern[str],
     semantic_name: str,
 ) -> Any:
-    if info.mode != "json":
+    if isinstance(value, str):
+        if len(value) > MAX_DECIMAL_WIRE_LENGTH:
+            raise ValueError(
+                f"{semantic_name} decimal JSON string exceeds "
+                f"{MAX_DECIMAL_WIRE_LENGTH} characters"
+            )
+        if pattern.fullmatch(value) is None:
+            raise ValueError(f"{semantic_name} decimal JSON string has invalid syntax")
         return value
-    if not isinstance(value, str):
+    if info.mode == "json":
         raise ValueError(f"{semantic_name} decimal JSON value must be a string")
-    if len(value) > MAX_DECIMAL_WIRE_LENGTH:
-        raise ValueError(
-            f"{semantic_name} decimal JSON string exceeds {MAX_DECIMAL_WIRE_LENGTH} characters"
-        )
-    if pattern.fullmatch(value) is None:
-        raise ValueError(f"{semantic_name} decimal JSON string has invalid syntax")
     return value
 
 
@@ -92,18 +180,24 @@ FiniteDecimal = Annotated[
     Decimal,
     BeforeValidator(_finite_decimal_wire),
     AfterValidator(_finite_decimal),
+    AfterValidator(_validate_decimal_bounds),
+    PlainSerializer(decimal_to_canonical_string, return_type=str, when_used="json"),
 ]
 PositiveFiniteDecimal = Annotated[
     Decimal,
     BeforeValidator(_positive_decimal_wire),
     Field(gt=Decimal("0")),
     AfterValidator(_finite_decimal),
+    AfterValidator(_validate_decimal_bounds),
+    PlainSerializer(decimal_to_canonical_string, return_type=str, when_used="json"),
 ]
 NonNegativeFiniteDecimal = Annotated[
     Decimal,
     BeforeValidator(_nonnegative_decimal_wire),
     Field(ge=Decimal("0")),
     AfterValidator(_finite_decimal),
+    AfterValidator(_validate_decimal_bounds),
+    PlainSerializer(decimal_to_canonical_string, return_type=str, when_used="json"),
 ]
 
 
@@ -166,10 +260,8 @@ class StrictModel(BaseModel):
 def _normalize_decimal(value: Decimal) -> str:
     if not value.is_finite():
         raise ValueError("cannot hash non-finite decimal")
-    normalized = value.normalize()
-    if normalized == 0:
-        return "0"
-    return format(normalized, "f")
+    _validate_decimal_bounds(value)
+    return decimal_to_canonical_string(value)
 
 
 def _normalize(value: Any) -> Any:
@@ -222,8 +314,6 @@ def contract_hash(domain: HashDomainV0, model: BaseModel) -> str:
     return sha256_hex(material)
 
 
-# Bind-time bypass is process-internal and scoped to the exact model class. It cannot be
-# activated through caller-supplied Pydantic validation context.
 _HASH_BIND_TARGET: ContextVar[type[BaseModel] | None] = ContextVar(
     "trader_assist_v0_hash_bind_target",
     default=None,
@@ -273,13 +363,15 @@ class HashBoundModel(StrictModel):
 
     @model_validator(mode="after")
     def verify_contract_hash(self) -> Self:
-        if _HASH_BIND_TARGET.get() is type(self):
+        model_type = type(self)
+        if _HASH_BIND_TARGET.get() is model_type:
             return self
-        actual = getattr(self, self.hash_field)
-        expected = contract_hash(self.hash_domain, self)
+        actual = object.__getattribute__(self, model_type.hash_field)
+        expected = contract_hash(model_type.hash_domain, self)
         if not hmac.compare_digest(actual, expected):
             raise ValueError(
-                f"{self.hash_field} does not match canonical {self.hash_domain.value} payload"
+                f"{model_type.hash_field} does not match canonical "
+                f"{model_type.hash_domain.value} payload"
             )
         return self
 
@@ -294,3 +386,44 @@ class HashBoundModel(StrictModel):
             _HASH_BIND_TARGET.reset(token)
         digest = contract_hash(cls.hash_domain, provisional)
         return cls.model_validate({**payload, cls.hash_field: digest})
+
+
+HashBoundT = TypeVar("HashBoundT", bound=HashBoundModel)
+
+
+def revalidate_hash_bound_instance(
+    value: HashBoundT,
+    expected_type: type[HashBoundT],
+) -> HashBoundT:
+    """Return a newly validated exact-class authority object from non-virtual field storage."""
+    if type(value) is not expected_type:
+        raise ValueError(f"expected exact {expected_type.__name__} authority object")
+    payload = BaseModel.model_dump(value, mode="python", round_trip=True)
+    validated = expected_type.model_validate(payload)
+    actual = object.__getattribute__(validated, expected_type.hash_field)
+    expected = contract_hash(expected_type.hash_domain, validated)
+    if not hmac.compare_digest(actual, expected):
+        raise ValueError(
+            f"{expected_type.hash_field} does not match canonical authority payload"
+        )
+    return validated
+
+
+def revalidate_nested_hash_bound[T: HashBoundModel](
+    value: Any,
+    expected_type: type[T],
+    *,
+    json_mode: bool = False,
+) -> Any:
+    """Revalidate nested HashBound values before outer semantics and hash material are read."""
+    if isinstance(value, HashBoundModel):
+        return revalidate_hash_bound_instance(value, expected_type)
+    if isinstance(value, dict):
+        if json_mode:
+            validated = expected_type.model_validate_json(
+                json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+            )
+        else:
+            validated = expected_type.model_validate(value)
+        return revalidate_hash_bound_instance(validated, expected_type)
+    return value

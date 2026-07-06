@@ -285,8 +285,16 @@ def test_valid_chain_derives_execution_authority() -> None:
 @pytest.mark.parametrize(
     ("field", "valid", "invalid"),
     [
-        ("quantity", ("0.1", "+1", ".1", "1."), ("0", "-1", "-0.1", "+", "-", ".")),
-        ("max_slippage_bps", ("0", "0.0", "+1", ".1"), ("-1", "-0.1", "+", "-", ".")),
+        (
+            "quantity",
+            ("0.1", "1", "1.25", "3000.125"),
+            ("0", "-1", "-0.1", "+1", ".1", "1.", "01", "00.1", "+", "-", "."),
+        ),
+        (
+            "max_slippage_bps",
+            ("0", "0.0", "0.1", "1", "1.25"),
+            ("-1", "-0.1", "+1", ".1", "1.", "01", "00.1", "-0", "-0.0", "+", "-", "."),
+        ),
     ],
 )
 def test_decimal_schema_matches_sign_and_zero_semantics(

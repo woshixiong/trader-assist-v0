@@ -67,6 +67,8 @@ def _portable_schema(value: Any) -> Any:
         decimal_patterns = {
             PYDANTIC_DECIMAL_STRING_PATTERN,
             FINITE_DECIMAL_STRING_PATTERN,
+            NONNEGATIVE_DECIMAL_STRING_PATTERN,
+            POSITIVE_DECIMAL_STRING_PATTERN,
         }
         if value.get("type") == "string" and value.get("pattern") in decimal_patterns:
             converted["pattern"] = _decimal_pattern(value)
