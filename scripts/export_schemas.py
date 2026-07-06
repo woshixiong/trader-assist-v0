@@ -53,10 +53,10 @@ COMPACT_MODELS = frozenset({ProposalV0, StrategyCandidateV0})
 PYDANTIC_DECIMAL_STRING_PATTERN = r"^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$"
 
 
-def _decimal_pattern(number_branch: dict[str, Any]) -> str:
-    if number_branch.get("exclusiveMinimum") == 0.0:
+def _decimal_pattern(constraints: dict[str, Any]) -> str:
+    if constraints.get("exclusiveMinimum") == 0.0 or constraints.get("gt") == "0":
         return POSITIVE_DECIMAL_STRING_PATTERN
-    if number_branch.get("minimum") == 0.0:
+    if constraints.get("minimum") == 0.0 or constraints.get("ge") == "0":
         return NONNEGATIVE_DECIMAL_STRING_PATTERN
     return FINITE_DECIMAL_STRING_PATTERN
 
@@ -64,6 +64,16 @@ def _decimal_pattern(number_branch: dict[str, Any]) -> str:
 def _portable_schema(value: Any) -> Any:
     if isinstance(value, dict):
         converted = {key: _portable_schema(item) for key, item in value.items()}
+        decimal_patterns = {
+            PYDANTIC_DECIMAL_STRING_PATTERN,
+            FINITE_DECIMAL_STRING_PATTERN,
+        }
+        if value.get("type") == "string" and value.get("pattern") in decimal_patterns:
+            converted["pattern"] = _decimal_pattern(value)
+            converted["maxLength"] = MAX_DECIMAL_WIRE_LENGTH
+            converted.pop("gt", None)
+            converted.pop("ge", None)
+
         branches = value.get("anyOf")
         if isinstance(branches, list):
             number_branch = next(
@@ -80,14 +90,14 @@ def _portable_schema(value: Any) -> Any:
                     for branch in branches
                     if isinstance(branch, dict)
                     and branch.get("type") == "string"
-                    and branch.get("pattern") == PYDANTIC_DECIMAL_STRING_PATTERN
+                    and branch.get("pattern") in decimal_patterns
                 ),
                 None,
             )
             if number_branch is not None and decimal_string_branch is not None:
                 string_wire = {
                     "type": "string",
-                    "pattern": _decimal_pattern(number_branch),
+                    "pattern": _decimal_pattern(value),
                     "maxLength": MAX_DECIMAL_WIRE_LENGTH,
                 }
                 null_branches = [
@@ -96,6 +106,8 @@ def _portable_schema(value: Any) -> Any:
                     if isinstance(branch, dict) and branch.get("type") == "null"
                 ]
                 converted.pop("anyOf", None)
+                converted.pop("gt", None)
+                converted.pop("ge", None)
                 if null_branches:
                     converted["anyOf"] = [string_wire, *null_branches]
                 else:
