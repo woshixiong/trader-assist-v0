@@ -66,6 +66,7 @@ def test_extreme_exponents_remain_controlled_under_address_space_limit() -> None
         pytest.skip("RLIMIT_AS resource-safety regression is Linux-specific")
 
     script = r'''
+import os
 import resource
 from decimal import Decimal
 from pydantic import TypeAdapter, ValidationError
@@ -76,7 +77,10 @@ from trader_assist_v0.contracts.common import (
     decimal_to_canonical_string,
 )
 
-limit = 512 * 1024 * 1024
+with open("/proc/self/statm", encoding="ascii") as statm:
+    current_pages = int(statm.read().split()[0])
+current_vms = current_pages * os.sysconf("SC_PAGE_SIZE")
+limit = current_vms + 64 * 1024 * 1024
 resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
 values = (
     Decimal("1E+100000000"),
