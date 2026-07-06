@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+from collections.abc import Mapping
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -170,6 +171,8 @@ def contract_hash(domain: HashDomainV0, model: BaseModel) -> str:
     return sha256_hex(material)
 
 
+# Bind-time bypass is process-internal and scoped to the exact model class. It cannot be
+# activated through caller-supplied Pydantic validation context.
 _HASH_BIND_TARGET: ContextVar[type[BaseModel] | None] = ContextVar(
     "trader_assist_v0_hash_bind_target",
     default=None,
@@ -179,6 +182,18 @@ _HASH_BIND_TARGET: ContextVar[type[BaseModel] | None] = ContextVar(
 class HashBoundModel(StrictModel):
     hash_domain: ClassVar[HashDomainV0]
     hash_field: ClassVar[str]
+
+    def model_copy(
+        self,
+        *,
+        update: Mapping[str, Any] | None = None,
+        deep: bool = False,
+    ) -> Self:
+        if update is not None:
+            raise TypeError(
+                "hash-bound models cannot be copied with updates; construct a new bound model"
+            )
+        return super().model_copy(deep=deep)
 
     @model_validator(mode="after")
     def verify_contract_hash(self) -> Self:

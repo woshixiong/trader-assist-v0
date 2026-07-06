@@ -264,6 +264,13 @@ def test_bind_still_produces_self_verifying_hash():
     assert OrderPackageV0.model_validate(package.model_dump(mode="python")) == package
 
 
+def test_hash_bound_model_copy_rejects_updates():
+    package = order()
+    with pytest.raises(TypeError, match="cannot be copied with updates"):
+        package.model_copy(update={"quantity": Decimal("1.26")})
+    assert package.model_copy() == package
+
+
 @pytest.mark.parametrize(
     ("factory", "updates"),
     [
