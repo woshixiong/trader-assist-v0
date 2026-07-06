@@ -1,0 +1,252 @@
+{
+  "$defs": {
+    "EnvironmentV0": {
+      "enum": [
+        "READ_ONLY",
+        "SHADOW",
+        "HUMAN_REVIEW",
+        "TESTNET",
+        "MAINNET_PILOT"
+      ],
+      "title": "EnvironmentV0",
+      "type": "string"
+    },
+    "PermitActionV0": {
+      "enum": [
+        "SUBMIT_ENTRY",
+        "CANCEL_ENTRY",
+        "PLACE_PROTECTION",
+        "EMERGENCY_REDUCE_ONLY"
+      ],
+      "title": "PermitActionV0",
+      "type": "string"
+    },
+    "PlaybookIdV0": {
+      "enum": [
+        "LQS-FR",
+        "BRK-AR",
+        "TRD-PB",
+        "BAL-RV",
+        "MACRO-RP"
+      ],
+      "title": "PlaybookIdV0",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "account_snapshot_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Account Snapshot Hash",
+      "type": "string"
+    },
+    "approved_at": {
+      "format": "date-time",
+      "title": "Approved At",
+      "type": "string"
+    },
+    "environment": {
+      "$ref": "#/$defs/EnvironmentV0"
+    },
+    "expires_at": {
+      "format": "date-time",
+      "title": "Expires At",
+      "type": "string"
+    },
+    "human_decision_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Human Decision Hash",
+      "type": "string"
+    },
+    "human_decision_id": {
+      "maxLength": 160,
+      "minLength": 3,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "title": "Human Decision Id",
+      "type": "string"
+    },
+    "human_mainnet_authorization_id": {
+      "anyOf": [
+        {
+          "maxLength": 160,
+          "minLength": 3,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Human Mainnet Authorization Id"
+    },
+    "human_mainnet_authorized_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Human Mainnet Authorized At"
+    },
+    "issued_at": {
+      "format": "date-time",
+      "title": "Issued At",
+      "type": "string"
+    },
+    "operator_id": {
+      "maxLength": 160,
+      "minLength": 3,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "title": "Operator Id",
+      "type": "string"
+    },
+    "order_package_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Order Package Hash",
+      "type": "string"
+    },
+    "order_package_id": {
+      "maxLength": 160,
+      "minLength": 3,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "title": "Order Package Id",
+      "type": "string"
+    },
+    "parameter_version": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Parameter Version",
+      "type": "string"
+    },
+    "permit_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Permit Hash",
+      "type": "string"
+    },
+    "permit_id": {
+      "maxLength": 160,
+      "minLength": 3,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "title": "Permit Id",
+      "type": "string"
+    },
+    "permitted_actions": {
+      "items": {
+        "$ref": "#/$defs/PermitActionV0"
+      },
+      "title": "Permitted Actions",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "playbook_id": {
+      "$ref": "#/$defs/PlaybookIdV0"
+    },
+    "pre_pilot_review_completed_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Pre Pilot Review Completed At"
+    },
+    "pre_pilot_review_id": {
+      "anyOf": [
+        {
+          "maxLength": 160,
+          "minLength": 3,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Pre Pilot Review Id"
+    },
+    "promotion_record_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Promotion Record Hash",
+      "type": "string"
+    },
+    "promotion_record_id": {
+      "maxLength": 160,
+      "minLength": 3,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "title": "Promotion Record Id",
+      "type": "string"
+    },
+    "proposal_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Proposal Hash",
+      "type": "string"
+    },
+    "proposal_id": {
+      "maxLength": 160,
+      "minLength": 3,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "title": "Proposal Id",
+      "type": "string"
+    },
+    "risk_policy_version": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Risk Policy Version",
+      "type": "string"
+    },
+    "schema_version": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "single_use": {
+      "const": true,
+      "default": true,
+      "title": "Single Use",
+      "type": "boolean"
+    },
+    "strategy_version": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Strategy Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "permit_id",
+    "permit_hash",
+    "environment",
+    "playbook_id",
+    "strategy_version",
+    "parameter_version",
+    "risk_policy_version",
+    "operator_id",
+    "approved_at",
+    "human_decision_id",
+    "human_decision_hash",
+    "proposal_id",
+    "proposal_hash",
+    "order_package_id",
+    "order_package_hash",
+    "account_snapshot_hash",
+    "promotion_record_id",
+    "promotion_record_hash",
+    "issued_at",
+    "expires_at",
+    "permitted_actions"
+  ],
+  "title": "ExecutionPermitV0",
+  "type": "object"
+}

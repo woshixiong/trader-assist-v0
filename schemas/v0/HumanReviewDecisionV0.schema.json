@@ -1,0 +1,110 @@
+{
+  "$defs": {
+    "HumanDecisionKindV0": {
+      "enum": [
+        "APPROVE",
+        "REJECT",
+        "MODIFY",
+        "OBSERVE"
+      ],
+      "title": "HumanDecisionKindV0",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "approved_order_package_hash": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Approved Order Package Hash"
+    },
+    "decided_at": {
+      "format": "date-time",
+      "title": "Decided At",
+      "type": "string"
+    },
+    "decision": {
+      "$ref": "#/$defs/HumanDecisionKindV0"
+    },
+    "human_decision_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Human Decision Hash",
+      "type": "string"
+    },
+    "human_decision_id": {
+      "maxLength": 160,
+      "minLength": 3,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "title": "Human Decision Id",
+      "type": "string"
+    },
+    "operator_id": {
+      "maxLength": 160,
+      "minLength": 3,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "title": "Operator Id",
+      "type": "string"
+    },
+    "proposal_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Proposal Hash",
+      "type": "string"
+    },
+    "proposal_id": {
+      "maxLength": 160,
+      "minLength": 3,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "title": "Proposal Id",
+      "type": "string"
+    },
+    "reason_codes": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Reason Codes",
+      "type": "array"
+    },
+    "schema_version": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "superseding_proposal_id": {
+      "anyOf": [
+        {
+          "maxLength": 160,
+          "minLength": 3,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Superseding Proposal Id"
+    }
+  },
+  "required": [
+    "schema_version",
+    "human_decision_id",
+    "human_decision_hash",
+    "proposal_id",
+    "proposal_hash",
+    "decision",
+    "operator_id",
+    "decided_at"
+  ],
+  "title": "HumanReviewDecisionV0",
+  "type": "object"
+}

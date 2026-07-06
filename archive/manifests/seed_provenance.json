@@ -1,0 +1,136 @@
+{
+  "manifest_version": "0.1.0",
+  "source_archive_sha256": "16bdbfd5163211b37299514cd5c733d1fd9fe7d18b87a59a2a3c36b60fc6ed2f",
+  "canonical_baseline_zip_sha256": "4cbe6fc44bd49efe257937bca1213eabed238d73897f8e870b8d1f9d12368c05",
+  "imported_files": [],
+  "reviewed_entries": [
+    {
+      "source_archive_sha256": "16bdbfd5163211b37299514cd5c733d1fd9fe7d18b87a59a2a3c36b60fc6ed2f",
+      "source_path": "runtime_seed/v3_5_implementation/traderos_runtime/contracts.py",
+      "source_file_sha256": "ab0a447292d40ff5e7b8b958a0a79faca20f8bb087fe9e736e662830b164c7fa",
+      "disposition": "SEED_NOT_IMPORTED",
+      "retained_concepts": [
+        "strict model envelopes",
+        "UTC normalization"
+      ],
+      "rejected_behaviors": [
+        "legacy signal/risk thresholds",
+        "legacy state vocabulary"
+      ],
+      "target_paths": [],
+      "reviewed_at": "2026-07-06T00:00:00Z",
+      "rationale": "Contracts are frozen before any bounded port; no historical runtime file is copied into src during the initial bootstrap."
+    },
+    {
+      "source_archive_sha256": "16bdbfd5163211b37299514cd5c733d1fd9fe7d18b87a59a2a3c36b60fc6ed2f",
+      "source_path": "runtime_seed/v3_5_implementation/traderos_runtime/market_data_state.py",
+      "source_file_sha256": "1e5f1bfa6945df5c2713ab5c13e4c15528abd212cdeb9802612cfb603a699893",
+      "disposition": "REFERENCE_ONLY",
+      "retained_concepts": [
+        "fail-closed freshness assessment",
+        "future-skew detection"
+      ],
+      "rejected_behaviors": [
+        "single global freshness threshold",
+        "FRESH state name"
+      ],
+      "target_paths": [],
+      "reviewed_at": "2026-07-06T00:00:00Z",
+      "rationale": "Contracts are frozen before any bounded port; no historical runtime file is copied into src during the initial bootstrap."
+    },
+    {
+      "source_archive_sha256": "16bdbfd5163211b37299514cd5c733d1fd9fe7d18b87a59a2a3c36b60fc6ed2f",
+      "source_path": "runtime_seed/v3_5_implementation/traderos_runtime/strategy_candidates/candidate_schema.py",
+      "source_file_sha256": "8ab2fd3053eaf6efb6546585791c2c988d0209fd3253edbb9c8ec0c1a858ab56",
+      "disposition": "REFERENCE_ONLY",
+      "retained_concepts": [
+        "candidate envelope",
+        "candidate-to-signal separation"
+      ],
+      "rejected_behaviors": [
+        "implicit confidence thresholds",
+        "permission vocabulary"
+      ],
+      "target_paths": [],
+      "reviewed_at": "2026-07-06T00:00:00Z",
+      "rationale": "Contracts are frozen before any bounded port; no historical runtime file is copied into src during the initial bootstrap."
+    },
+    {
+      "source_archive_sha256": "16bdbfd5163211b37299514cd5c733d1fd9fe7d18b87a59a2a3c36b60fc6ed2f",
+      "source_path": "runtime_seed/v3_5_implementation/traderos_runtime/confirmation_tokens.py",
+      "source_file_sha256": "3fbb81ee1cd8dbdced732d821372eb0fa5e002b4d61bc025a9adbd94eb5f2316",
+      "disposition": "REFERENCE_ONLY",
+      "retained_concepts": [
+        "one-time approval concept",
+        "subject and expiry binding"
+      ],
+      "rejected_behaviors": [
+        "SQLite token runtime",
+        "secret handling in V0-00"
+      ],
+      "target_paths": [],
+      "reviewed_at": "2026-07-06T00:00:00Z",
+      "rationale": "Contracts are frozen before any bounded port; no historical runtime file is copied into src during the initial bootstrap."
+    },
+    {
+      "source_archive_sha256": "16bdbfd5163211b37299514cd5c733d1fd9fe7d18b87a59a2a3c36b60fc6ed2f",
+      "source_path": "runtime_seed/v3_5_implementation/traderos_runtime/execution_guard.py",
+      "source_file_sha256": "2a827224f6ba1e2f6f2c6104b98f6bb0171dfcc64981c4d2a814f55ea4492ef4",
+      "disposition": "REFERENCE_ONLY",
+      "retained_concepts": [
+        "explicit no-order guard"
+      ],
+      "rejected_behaviors": [
+        "legacy runtime configuration coupling"
+      ],
+      "target_paths": [],
+      "reviewed_at": "2026-07-06T00:00:00Z",
+      "rationale": "Contracts are frozen before any bounded port; no historical runtime file is copied into src during the initial bootstrap."
+    },
+    {
+      "source_archive_sha256": "16bdbfd5163211b37299514cd5c733d1fd9fe7d18b87a59a2a3c36b60fc6ed2f",
+      "source_path": "runtime_seed/v3_5_implementation/traderos_runtime/position_sizing.py",
+      "source_file_sha256": "c5f4efd4d2fc6d1cac19ad1a4a134649e3c36d9ee9197b1eec535f9aea6de73d",
+      "disposition": "REJECTED_FOR_V0_00",
+      "retained_concepts": [
+        "instrument precision concepts"
+      ],
+      "rejected_behaviors": [
+        "risk authority",
+        "stop mutation",
+        "leverage recommendation"
+      ],
+      "target_paths": [],
+      "reviewed_at": "2026-07-06T00:00:00Z",
+      "rationale": "Contracts are frozen before any bounded port; no historical runtime file is copied into src during the initial bootstrap."
+    },
+    {
+      "source_archive_sha256": "16bdbfd5163211b37299514cd5c733d1fd9fe7d18b87a59a2a3c36b60fc6ed2f",
+      "source_path": "runtime_seed/v3_5_implementation/traderos_runtime/hyperliquid_testnet_adapter.py",
+      "source_file_sha256": "c14d0b197dd71ff7c33208cf33fcc9c3203948ce411b804015389e06aa95f579",
+      "disposition": "REJECTED_FOR_V0_00",
+      "retained_concepts": [],
+      "rejected_behaviors": [
+        "network adapter",
+        "signing/execution path"
+      ],
+      "target_paths": [],
+      "reviewed_at": "2026-07-06T00:00:00Z",
+      "rationale": "Contracts are frozen before any bounded port; no historical runtime file is copied into src during the initial bootstrap."
+    },
+    {
+      "source_archive_sha256": "16bdbfd5163211b37299514cd5c733d1fd9fe7d18b87a59a2a3c36b60fc6ed2f",
+      "source_path": "runtime_seed/v3_5_implementation/traderos_runtime/execution_api.py",
+      "source_file_sha256": "8c433ae703ebd9d4978bef974c202d65f747d0d738268b31e127cc8283935ebd",
+      "disposition": "REJECTED_FOR_V0_00",
+      "retained_concepts": [],
+      "rejected_behaviors": [
+        "exchange-write boundary",
+        "runtime execution API"
+      ],
+      "target_paths": [],
+      "reviewed_at": "2026-07-06T00:00:00Z",
+      "rationale": "Contracts are frozen before any bounded port; no historical runtime file is copied into src during the initial bootstrap."
+    }
+  ]
+}
