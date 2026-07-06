@@ -165,7 +165,11 @@ def promotion_history(now, h, contract, *, through=PromotionStateV0.TESTNET_ELIG
     previous = None
     for index, (state, environment) in enumerate(steps):
         reviewed_at = now - timedelta(minutes=20 - index * 2)
-        activated_at = None if state is PromotionStateV0.DRAFT else reviewed_at + timedelta(minutes=1)
+        activated_at = (
+            None
+            if state is PromotionStateV0.DRAFT
+            else reviewed_at + timedelta(minutes=1)
+        )
         record = PromotionRecordV0.bind(
             previous=previous,
             schema_version="0.1.0",
@@ -180,7 +184,11 @@ def promotion_history(now, h, contract, *, through=PromotionStateV0.TESTNET_ELIG
             required_feed_contract_hash=contract.contract_hash,
             state=state,
             environment=environment,
-            evidence_dataset_ids=() if state is PromotionStateV0.DRAFT else (f"dataset-{index:03d}",),
+            evidence_dataset_ids=(
+                ()
+                if state is PromotionStateV0.DRAFT
+                else (f"dataset-{index:03d}",)
+            ),
             reviewed_by="reviewer-001",
             reviewed_at=reviewed_at,
             activated_at=activated_at,

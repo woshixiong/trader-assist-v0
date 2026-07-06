@@ -249,7 +249,9 @@ class PromotionRecordV0(HashBoundModel):
             "predecessor_state",
         }
         if predecessor_fields.intersection(payload):
-            raise ValueError("predecessor fields are derived from previous and must not be supplied")
+            raise ValueError(
+                "predecessor fields are derived from previous and must not be supplied"
+            )
         if previous is None:
             if state is not PromotionStateV0.DRAFT:
                 raise ValueError("initial promotion record must be DRAFT")

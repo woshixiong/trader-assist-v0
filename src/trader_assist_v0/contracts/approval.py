@@ -225,7 +225,8 @@ class ExecutionPermitV0(HashBoundModel):
         if self.environment is EnvironmentV0.MAINNET_PILOT:
             if any(item is None for item in mainnet_fields):
                 raise ValueError(
-                    "Mainnet pilot permit requires pre-pilot review and human authorization identities and times"
+                    "Mainnet pilot permit requires pre-pilot review and human authorization "
+                    "identities and times"
                 )
             assert self.pre_pilot_review_completed_at is not None
             assert self.human_mainnet_authorized_at is not None
@@ -235,7 +236,8 @@ class ExecutionPermitV0(HashBoundModel):
                 <= self.issued_at
             ):
                 raise ValueError(
-                    "Mainnet pre-pilot review, human authorization, and permit issue order is invalid"
+                    "Mainnet pre-pilot review, human authorization, and permit issue order "
+                    "is invalid"
                 )
         elif any(item is not None for item in mainnet_fields):
             raise ValueError("Testnet permit must not carry Mainnet authorization fields")
