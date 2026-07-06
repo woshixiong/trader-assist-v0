@@ -25,7 +25,9 @@ jobs:
           python -m pip install -e . --no-deps --no-build-isolation
       - name: Generate hashed lock evidence
         run: |
-          python -m pip install pip-tools==7.5.1
+          set +e
+          python -m pip install pip-tools==7.5.1 > /tmp/pip-tools-install.log 2>&1
+          install_status=$?
           cat > /tmp/requirements-ci.in <<'EOF'
           pydantic==2.13.4
           editables==0.5
@@ -36,11 +38,27 @@ jobs:
           pytest==8.4.1
           ruff==0.12.2
           EOF
-          python -m piptools compile /tmp/requirements-ci.in --generate-hashes --strip-extras \
-            --output-file /tmp/requirements-dev.generated.lock
-          echo '=== HASHED_LOCK_BEGIN ==='
-          cat /tmp/requirements-dev.generated.lock
-          echo '=== HASHED_LOCK_END ==='
+          python -m piptools compile /tmp/requirements-ci.in --generate-hashes \
+            --output-file /tmp/requirements-dev.generated.lock \
+            > /tmp/pip-compile.log 2>&1
+          compile_status=$?
+          {
+            echo "pip-tools install status: ${install_status}"
+            echo "pip-compile status: ${compile_status}"
+            echo "=== INSTALL LOG ==="
+            cat /tmp/pip-tools-install.log
+            echo "=== COMPILE LOG ==="
+            cat /tmp/pip-compile.log
+          } > /tmp/lock-generation.log
+          exit 0
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: hashed-lock-evidence
+          path: |
+            /tmp/requirements-ci.in
+            /tmp/requirements-dev.generated.lock
+            /tmp/lock-generation.log
+          if-no-files-found: warn
       - name: Dependency lock
         run: python scripts/check_dependency_lock.py && python -m pip check
       - name: Runtime dependency audit
