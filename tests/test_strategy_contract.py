@@ -8,6 +8,7 @@ from trader_assist_v0.contracts import (
     CandidateKindV0,
     DirectionV0,
     HealthStateV0,
+    InstrumentPrecisionContractV0,
     MandatoryFeedStatusV0,
     PlaybookIdV0,
     RequiredFeedContractV0,
@@ -22,6 +23,21 @@ def contract(now):
         playbook_id="LQS-FR",
         contract_version="feeds.0.1",
         mandatory_feed_ids=frozenset({"hl-bbo"}),
+        created_at=now,
+    )
+
+
+def precision(now, h):
+    return InstrumentPrecisionContractV0.bind(
+        schema_version="0.1.0",
+        contract_id="precision-hl-eth-001",
+        contract_version="precision.0.1",
+        venue="hyperliquid",
+        symbol="ETH",
+        price_tick=Decimal("0.1"),
+        quantity_step=Decimal("0.01"),
+        source_metadata_version="hl-meta.0.1",
+        source_snapshot_hash=h,
         created_at=now,
     )
 
@@ -47,6 +63,7 @@ def candidate(now, h, state=HealthStateV0.LIVE, kind=CandidateKindV0.TRADE_SETUP
         feature_version="features.0.1",
         label_version="labels.0.1",
         required_feed_contract=required,
+        instrument_precision=precision(now, h),
         created_at=now,
         expires_at=now + timedelta(minutes=5),
         kind=kind,

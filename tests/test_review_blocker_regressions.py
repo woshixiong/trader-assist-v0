@@ -16,6 +16,7 @@ from trader_assist_v0.contracts import (
     HealthStateV0,
     HumanDecisionKindV0,
     HumanReviewDecisionV0,
+    InstrumentPrecisionContractV0,
     MandatoryFeedStatusV0,
     OrderPackageV0,
     OrderTypeV0,
@@ -28,6 +29,21 @@ from trader_assist_v0.contracts import (
     StrategyCandidateV0,
     validate_execution_permit_bindings,
 )
+
+
+def precision(now, h):
+    return InstrumentPrecisionContractV0.bind(
+        schema_version="0.1.0",
+        contract_id="precision-hl-eth-001",
+        contract_version="precision.0.1",
+        venue="hyperliquid",
+        symbol="ETH",
+        price_tick=Decimal("0.1"),
+        quantity_step=Decimal("0.01"),
+        source_metadata_version="hl-meta.0.1",
+        source_snapshot_hash=h,
+        created_at=now - timedelta(hours=1),
+    )
 
 
 def feed_contract(now, feeds=frozenset({"hl-bbo", "hl-trades"})):
@@ -65,6 +81,7 @@ def candidate_payload(now, h, contract, status):
         feature_version="features.0.1",
         label_version="labels.0.1",
         required_feed_contract=contract,
+        instrument_precision=precision(now, h),
         created_at=now,
         expires_at=now + timedelta(minutes=5),
         kind=CandidateKindV0.TRADE_SETUP,
@@ -84,6 +101,7 @@ def order(now, h, quantity=Decimal("1.25")):
     return OrderPackageV0.bind(
         schema_version="0.1.0",
         order_package_id="order-package-001",
+        instrument_precision=precision(now, h),
         direction=DirectionV0.LONG,
         order_type=OrderTypeV0.LIMIT,
         quantity=quantity,
@@ -134,31 +152,45 @@ def decision(now, proposed):
     )
 
 
-def promotion(now, h, contract, *, state=PromotionStateV0.TESTNET_ELIGIBLE):
-    environment = (
-        EnvironmentV0.TESTNET
-        if state is PromotionStateV0.TESTNET_ELIGIBLE
-        else EnvironmentV0.MAINNET_PILOT
+def promotion_history(now, h, contract, *, through=PromotionStateV0.TESTNET_ELIGIBLE):
+    steps = (
+        (PromotionStateV0.DRAFT, EnvironmentV0.READ_ONLY),
+        (PromotionStateV0.SHADOW, EnvironmentV0.SHADOW),
+        (PromotionStateV0.HUMAN_REVIEW, EnvironmentV0.HUMAN_REVIEW),
+        (PromotionStateV0.TESTNET_ELIGIBLE, EnvironmentV0.TESTNET),
+        (PromotionStateV0.MAINNET_PILOT_ELIGIBLE, EnvironmentV0.MAINNET_PILOT),
+        (PromotionStateV0.MAINNET_PILOT_ACTIVE, EnvironmentV0.MAINNET_PILOT),
     )
-    return PromotionRecordV0.bind(
-        schema_version="0.1.0",
-        promotion_record_id="promotion-001",
-        playbook_id=PlaybookIdV0.LQS_FR,
-        strategy_version="lqs-fr.0.1",
-        parameter_version="params.0.1",
-        feature_version="features.0.1",
-        label_version="labels.0.1",
-        required_feed_contract_id=contract.contract_id,
-        required_feed_contract_version=contract.contract_version,
-        required_feed_contract_hash=contract.contract_hash,
-        state=state,
-        environment=environment,
-        evidence_dataset_ids=("dataset-001",),
-        reviewed_by="reviewer-001",
-        reviewed_at=now,
-        activated_at=now,
-        rationale="reviewed evidence supports this bounded state",
-    )
+    records = []
+    previous = None
+    for index, (state, environment) in enumerate(steps):
+        reviewed_at = now - timedelta(minutes=20 - index * 2)
+        activated_at = None if state is PromotionStateV0.DRAFT else reviewed_at + timedelta(minutes=1)
+        record = PromotionRecordV0.bind(
+            previous=previous,
+            schema_version="0.1.0",
+            promotion_record_id=f"promotion-{index:03d}",
+            playbook_id=PlaybookIdV0.LQS_FR,
+            strategy_version="lqs-fr.0.1",
+            parameter_version="params.0.1",
+            feature_version="features.0.1",
+            label_version="labels.0.1",
+            required_feed_contract_id=contract.contract_id,
+            required_feed_contract_version=contract.contract_version,
+            required_feed_contract_hash=contract.contract_hash,
+            state=state,
+            environment=environment,
+            evidence_dataset_ids=() if state is PromotionStateV0.DRAFT else (f"dataset-{index:03d}",),
+            reviewed_by="reviewer-001",
+            reviewed_at=reviewed_at,
+            activated_at=activated_at,
+            rationale="reviewed evidence supports this bounded state",
+        )
+        records.append(record)
+        previous = record
+        if state is through:
+            return tuple(records)
+    raise AssertionError(f"unsupported promotion target: {through}")
 
 
 def permit(now, proposed, approved, promoted, **updates):
@@ -206,10 +238,12 @@ def test_required_feed_contract_hash_tampering_is_rejected(now):
 
 def test_promotion_rejects_shadow_in_mainnet(now, h):
     contract = feed_contract(now)
+    draft = promotion_history(now, h, contract, through=PromotionStateV0.DRAFT)[0]
     with pytest.raises(ValidationError, match="environment"):
         PromotionRecordV0.bind(
+            previous=draft,
             schema_version="0.1.0",
-            promotion_record_id="promotion-001",
+            promotion_record_id="promotion-invalid",
             playbook_id=PlaybookIdV0.LQS_FR,
             strategy_version="lqs-fr.0.1",
             parameter_version="params.0.1",
@@ -230,7 +264,12 @@ def test_promotion_rejects_shadow_in_mainnet(now, h):
 
 def test_mainnet_eligible_is_not_execution_enabled(now, h):
     contract = feed_contract(now)
-    record = promotion(now, h, contract, state=PromotionStateV0.MAINNET_PILOT_ELIGIBLE)
+    record = promotion_history(
+        now,
+        h,
+        contract,
+        through=PromotionStateV0.MAINNET_PILOT_ELIGIBLE,
+    )[-1]
     assert record.active_at(now) is False
     assert record.execution_enabled_at(now) is False
 
@@ -296,9 +335,16 @@ def test_permit_cross_object_bindings_pass(now, h):
     package = order(now, h)
     proposed = proposal(now, h, package)
     approved = decision(now, proposed)
-    promoted = promotion(now, h, contract)
+    history = promotion_history(now, h, contract)
+    promoted = history[-1]
     execution_permit = permit(now, proposed, approved, promoted)
-    validate_execution_permit_bindings(execution_permit, proposed, approved, promoted)
+    validate_execution_permit_bindings(
+        execution_permit,
+        proposed,
+        approved,
+        promoted,
+        promotion_history=history,
+    )
 
 
 def test_permit_cross_object_mismatch_is_rejected(now, h):
@@ -306,7 +352,8 @@ def test_permit_cross_object_mismatch_is_rejected(now, h):
     package = order(now, h)
     proposed = proposal(now, h, package)
     approved = decision(now, proposed)
-    promoted = promotion(now, h, contract)
+    history = promotion_history(now, h, contract)
+    promoted = history[-1]
     execution_permit = permit(
         now,
         proposed,
@@ -315,4 +362,10 @@ def test_permit_cross_object_mismatch_is_rejected(now, h):
         risk_policy_version="risk.other",
     )
     with pytest.raises(ValueError, match="risk policy"):
-        validate_execution_permit_bindings(execution_permit, proposed, approved, promoted)
+        validate_execution_permit_bindings(
+            execution_permit,
+            proposed,
+            approved,
+            promoted,
+            promotion_history=history,
+        )

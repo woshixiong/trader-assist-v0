@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -12,6 +13,7 @@ from trader_assist_v0.contracts import (
     EvidenceBundleManifestV0,
     ExecutionPermitV0,
     HumanReviewDecisionV0,
+    InstrumentPrecisionContractV0,
     NormalizedEventV0,
     OrderPackageV0,
     PromotionRecordV0,
@@ -27,6 +29,7 @@ OUT = ROOT / "schemas" / "v0"
 MODELS: tuple[type[BaseModel], ...] = (
     RawEventV0,
     RequiredFeedContractV0,
+    InstrumentPrecisionContractV0,
     NormalizedEventV0,
     DataHealthEventV0,
     StrategyCandidateV0,
@@ -41,10 +44,28 @@ MODELS: tuple[type[BaseModel], ...] = (
 )
 
 
+DECIMAL_STRING_PATTERN = r"^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$"
+PORTABLE_DECIMAL_STRING_PATTERN = r"^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)$"
+
+
+def _portable_schema(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: (
+                PORTABLE_DECIMAL_STRING_PATTERN
+                if key == "pattern" and item == DECIMAL_STRING_PATTERN
+                else _portable_schema(item)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_portable_schema(item) for item in value]
+    return value
+
+
 def render(model: type[BaseModel]) -> str:
-    return (
-        json.dumps(model.model_json_schema(), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    )
+    schema = _portable_schema(model.model_json_schema())
+    return json.dumps(schema, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
 
 def main() -> int:

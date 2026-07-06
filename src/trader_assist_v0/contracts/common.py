@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
@@ -15,7 +16,6 @@ from pydantic import (
     ConfigDict,
     Field,
     StringConstraints,
-    ValidationInfo,
     model_validator,
 )
 
@@ -79,6 +79,7 @@ class SourceAuthorityV0(StrEnum):
 
 class HashDomainV0(StrEnum):
     REQUIRED_FEED_CONTRACT = "trader-assist-v0/required-feed-contract/v1"
+    INSTRUMENT_PRECISION_CONTRACT = "trader-assist-v0/instrument-precision-contract/v1"
     STRATEGY_CANDIDATE = "trader-assist-v0/strategy-candidate/v1"
     AI_RECOMMENDATION = "trader-assist-v0/ai-recommendation/v1"
     ORDER_PACKAGE = "trader-assist-v0/order-package/v1"
@@ -90,6 +91,7 @@ class HashDomainV0(StrEnum):
 
 HASH_FIELD_BY_DOMAIN: dict[HashDomainV0, str] = {
     HashDomainV0.REQUIRED_FEED_CONTRACT: "contract_hash",
+    HashDomainV0.INSTRUMENT_PRECISION_CONTRACT: "contract_hash",
     HashDomainV0.STRATEGY_CANDIDATE: "candidate_hash",
     HashDomainV0.AI_RECOMMENDATION: "recommendation_hash",
     HashDomainV0.ORDER_PACKAGE: "order_package_hash",
@@ -168,14 +170,19 @@ def contract_hash(domain: HashDomainV0, model: BaseModel) -> str:
     return sha256_hex(material)
 
 
+_HASH_BIND_TARGET: ContextVar[type[BaseModel] | None] = ContextVar(
+    "trader_assist_v0_hash_bind_target",
+    default=None,
+)
+
+
 class HashBoundModel(StrictModel):
     hash_domain: ClassVar[HashDomainV0]
     hash_field: ClassVar[str]
 
     @model_validator(mode="after")
-    def verify_contract_hash(self, info: ValidationInfo) -> Self:
-        skipped_domain = None if info.context is None else info.context.get("skip_hash_domain")
-        if skipped_domain == self.hash_domain.value:
+    def verify_contract_hash(self) -> Self:
+        if _HASH_BIND_TARGET.get() is type(self):
             return self
         actual = getattr(self, self.hash_field)
         expected = contract_hash(self.hash_domain, self)
@@ -189,9 +196,10 @@ class HashBoundModel(StrictModel):
     def bind(cls, **payload: Any) -> Self:
         if cls.hash_field in payload:
             raise ValueError(f"{cls.hash_field} must not be supplied to bind()")
-        provisional = cls.model_validate(
-            {**payload, cls.hash_field: "0" * 64},
-            context={"skip_hash_domain": cls.hash_domain.value},
-        )
+        token = _HASH_BIND_TARGET.set(cls)
+        try:
+            provisional = cls.model_validate({**payload, cls.hash_field: "0" * 64})
+        finally:
+            _HASH_BIND_TARGET.reset(token)
         digest = contract_hash(cls.hash_domain, provisional)
         return cls.model_validate({**payload, cls.hash_field: digest})

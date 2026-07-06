@@ -9,6 +9,7 @@ from trader_assist_v0.contracts import (
     ExecutionPermitV0,
     HumanDecisionKindV0,
     HumanReviewDecisionV0,
+    InstrumentPrecisionContractV0,
     OrderPackageV0,
     OrderTypeV0,
     PermitActionV0,
@@ -16,10 +17,26 @@ from trader_assist_v0.contracts import (
 )
 
 
+def precision(now, h):
+    return InstrumentPrecisionContractV0.bind(
+        schema_version="0.1.0",
+        contract_id="precision-hl-eth-001",
+        contract_version="precision.0.1",
+        venue="hyperliquid",
+        symbol="ETH",
+        price_tick=Decimal("0.1"),
+        quantity_step=Decimal("0.01"),
+        source_metadata_version="hl-meta.0.1",
+        source_snapshot_hash=h,
+        created_at=now,
+    )
+
+
 def order(now, h):
     return OrderPackageV0.bind(
         schema_version="0.1.0",
         order_package_id="order-package-001",
+        instrument_precision=precision(now, h),
         direction="LONG",
         order_type=OrderTypeV0.LIMIT,
         quantity=Decimal("1.25"),

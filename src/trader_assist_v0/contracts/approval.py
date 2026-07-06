@@ -16,11 +16,13 @@ from .common import (
     UTCDateTime,
     VersionId,
 )
+from .precision import InstrumentPrecisionContractV0, require_step_aligned
 from .strategy import (
     DirectionV0,
     PlaybookIdV0,
     PromotionRecordV0,
     PromotionStateV0,
+    validate_promotion_chain,
 )
 
 
@@ -71,6 +73,7 @@ class OrderPackageV0(HashBoundModel):
     order_package_id: OpaqueId
     order_package_hash: Sha256Hex
     symbol: Literal["ETH"] = "ETH"
+    instrument_precision: InstrumentPrecisionContractV0
     direction: DirectionV0
     order_type: OrderTypeV0
     quantity: PositiveFiniteDecimal
@@ -86,10 +89,23 @@ class OrderPackageV0(HashBoundModel):
 
     @model_validator(mode="after")
     def validate_order_type(self) -> OrderPackageV0:
+        if self.instrument_precision.symbol != self.symbol:
+            raise ValueError("instrument precision symbol must match order symbol")
+        require_step_aligned(
+            self.quantity,
+            self.instrument_precision.quantity_step,
+            "quantity",
+        )
         if self.order_type is OrderTypeV0.LIMIT and self.limit_price is None:
             raise ValueError("LIMIT order requires limit_price")
         if self.order_type is not OrderTypeV0.LIMIT and self.limit_price is not None:
             raise ValueError("non-LIMIT order must not contain limit_price")
+        if self.limit_price is not None:
+            require_step_aligned(
+                self.limit_price,
+                self.instrument_precision.price_tick,
+                "limit_price",
+            )
         return self
 
 
@@ -186,7 +202,9 @@ class ExecutionPermitV0(HashBoundModel):
     permitted_actions: frozenset[PermitActionV0]
     single_use: Literal[True] = True
     pre_pilot_review_id: OpaqueId | None = None
+    pre_pilot_review_completed_at: UTCDateTime | None = None
     human_mainnet_authorization_id: OpaqueId | None = None
+    human_mainnet_authorized_at: UTCDateTime | None = None
 
     @model_validator(mode="after")
     def validate_permit(self) -> ExecutionPermitV0:
@@ -198,12 +216,52 @@ class ExecutionPermitV0(HashBoundModel):
             raise ValueError("permit cannot be issued before human approval")
         if not self.permitted_actions:
             raise ValueError("permit must contain at least one action")
+        mainnet_fields = (
+            self.pre_pilot_review_id,
+            self.pre_pilot_review_completed_at,
+            self.human_mainnet_authorization_id,
+            self.human_mainnet_authorized_at,
+        )
         if self.environment is EnvironmentV0.MAINNET_PILOT:
-            if self.pre_pilot_review_id is None or self.human_mainnet_authorization_id is None:
+            if any(item is None for item in mainnet_fields):
                 raise ValueError(
-                    "Mainnet pilot permit requires pre-pilot review and human authorization"
+                    "Mainnet pilot permit requires pre-pilot review and human authorization identities and times"
                 )
+            assert self.pre_pilot_review_completed_at is not None
+            assert self.human_mainnet_authorized_at is not None
+            if not (
+                self.pre_pilot_review_completed_at
+                <= self.human_mainnet_authorized_at
+                <= self.issued_at
+            ):
+                raise ValueError(
+                    "Mainnet pre-pilot review, human authorization, and permit issue order is invalid"
+                )
+        elif any(item is not None for item in mainnet_fields):
+            raise ValueError("Testnet permit must not carry Mainnet authorization fields")
         return self
+
+
+def validate_human_decision_binding(
+    proposal: ProposalV0,
+    decision: HumanReviewDecisionV0,
+) -> None:
+    failures: list[str] = []
+    if (decision.proposal_id, decision.proposal_hash) != (
+        proposal.proposal_id,
+        proposal.proposal_hash,
+    ):
+        failures.append("human decision proposal binding mismatch")
+    if decision.decided_at < proposal.created_at:
+        failures.append("human decision predates proposal creation")
+    authority_end = min(proposal.expires_at, proposal.order_package.valid_until)
+    if decision.decided_at >= authority_end:
+        failures.append("human decision is outside proposal/order authority window")
+    if decision.decision is HumanDecisionKindV0.APPROVE:
+        if decision.approved_order_package_hash != proposal.order_package.order_package_hash:
+            failures.append("human decision did not approve exact order package")
+    if failures:
+        raise ValueError("; ".join(failures))
 
 
 def validate_execution_permit_bindings(
@@ -211,17 +269,27 @@ def validate_execution_permit_bindings(
     proposal: ProposalV0,
     decision: HumanReviewDecisionV0,
     promotion: PromotionRecordV0,
+    *,
+    promotion_history: tuple[PromotionRecordV0, ...],
 ) -> None:
     failures: list[str] = []
+    try:
+        validate_promotion_chain(promotion_history)
+    except ValueError as exc:
+        failures.append(f"invalid promotion chain: {exc}")
+    if not promotion_history or (
+        promotion_history[-1].promotion_record_id,
+        promotion_history[-1].promotion_record_hash,
+    ) != (promotion.promotion_record_id, promotion.promotion_record_hash):
+        failures.append("promotion must be the exact terminal record of promotion_history")
+    try:
+        validate_human_decision_binding(proposal, decision)
+    except ValueError as exc:
+        failures.append(str(exc))
     if decision.decision is not HumanDecisionKindV0.APPROVE:
         failures.append("human decision must be APPROVE")
     if (permit.proposal_id, permit.proposal_hash) != (proposal.proposal_id, proposal.proposal_hash):
         failures.append("permit proposal binding mismatch")
-    if (decision.proposal_id, decision.proposal_hash) != (
-        proposal.proposal_id,
-        proposal.proposal_hash,
-    ):
-        failures.append("human decision proposal binding mismatch")
     if permit.human_decision_id != decision.human_decision_id:
         failures.append("permit human decision id mismatch")
     if permit.human_decision_hash != decision.human_decision_hash:
@@ -232,8 +300,6 @@ def validate_execution_permit_bindings(
         failures.append("permit order package id mismatch")
     if permit.order_package_hash != proposal.order_package.order_package_hash:
         failures.append("permit order package hash mismatch")
-    if decision.approved_order_package_hash != proposal.order_package.order_package_hash:
-        failures.append("human decision did not approve exact order package")
     if permit.account_snapshot_hash != proposal.account_snapshot_hash:
         failures.append("permit account snapshot mismatch")
     subject = (proposal.playbook_id, proposal.strategy_version, proposal.parameter_version)
@@ -250,12 +316,44 @@ def validate_execution_permit_bindings(
         failures.append("promotion strategy subject mismatch")
     if promotion.environment is not permit.environment:
         failures.append("promotion environment mismatch")
+
+    proposal_authority_end = min(proposal.expires_at, proposal.order_package.valid_until)
+    if permit.issued_at >= proposal_authority_end:
+        failures.append("permit issued at or after proposal/order authority expiry")
+    authority_deadlines = [proposal.expires_at, proposal.order_package.valid_until]
+    if promotion.expires_at is not None:
+        authority_deadlines.append(promotion.expires_at)
+    if promotion.revoked_at is not None:
+        authority_deadlines.append(promotion.revoked_at)
+    earliest_authority_deadline = min(authority_deadlines)
+    if permit.expires_at > earliest_authority_deadline:
+        failures.append("permit expiry exceeds earliest authority boundary")
     if not promotion.execution_enabled_at(permit.issued_at):
         failures.append("promotion is not execution-enabled at permit issue time")
+
     if permit.environment is EnvironmentV0.TESTNET:
         if promotion.state is not PromotionStateV0.TESTNET_ELIGIBLE:
             failures.append("Testnet permit requires TESTNET_ELIGIBLE promotion")
-    elif promotion.state is not PromotionStateV0.MAINNET_PILOT_ACTIVE:
-        failures.append("Mainnet permit requires MAINNET_PILOT_ACTIVE promotion")
+    else:
+        if promotion.state is not PromotionStateV0.MAINNET_PILOT_ACTIVE:
+            failures.append("Mainnet permit requires MAINNET_PILOT_ACTIVE promotion")
+        if len(promotion_history) < 2:
+            failures.append("Mainnet permit requires a complete eligible-to-active history")
+        else:
+            eligible = promotion_history[-2]
+            if eligible.state is not PromotionStateV0.MAINNET_PILOT_ELIGIBLE:
+                failures.append("Mainnet active promotion must follow MAINNET_PILOT_ELIGIBLE")
+            eligible_at = eligible.activated_at or eligible.reviewed_at
+            if (
+                permit.pre_pilot_review_completed_at is None
+                or permit.pre_pilot_review_completed_at < eligible_at
+            ):
+                failures.append("pre-pilot review predates Mainnet eligibility")
+            if (
+                permit.human_mainnet_authorized_at is None
+                or promotion.activated_at is None
+                or promotion.activated_at < permit.human_mainnet_authorized_at
+            ):
+                failures.append("Mainnet activation predates explicit human authorization")
     if failures:
         raise ValueError("; ".join(failures))

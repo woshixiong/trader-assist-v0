@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Any, Literal
 
 from pydantic import Field, model_validator
 
@@ -15,6 +16,7 @@ from .common import (
     VersionId,
 )
 from .health import MandatoryFeedStatusV0, RequiredFeedContractV0
+from .precision import InstrumentPrecisionContractV0, require_step_aligned
 
 
 class PlaybookIdV0(StrEnum):
@@ -59,6 +61,46 @@ ALLOWED_PROMOTION_ENVIRONMENTS: dict[PromotionStateV0, frozenset[EnvironmentV0]]
 }
 
 
+LEGAL_PROMOTION_TRANSITIONS: dict[PromotionStateV0, frozenset[PromotionStateV0]] = {
+    PromotionStateV0.DRAFT: frozenset({PromotionStateV0.SHADOW}),
+    PromotionStateV0.SHADOW: frozenset(
+        {
+            PromotionStateV0.HUMAN_REVIEW,
+            PromotionStateV0.QUARANTINED,
+            PromotionStateV0.RETIRED,
+        }
+    ),
+    PromotionStateV0.HUMAN_REVIEW: frozenset(
+        {
+            PromotionStateV0.TESTNET_ELIGIBLE,
+            PromotionStateV0.QUARANTINED,
+            PromotionStateV0.RETIRED,
+        }
+    ),
+    PromotionStateV0.TESTNET_ELIGIBLE: frozenset(
+        {
+            PromotionStateV0.MAINNET_PILOT_ELIGIBLE,
+            PromotionStateV0.QUARANTINED,
+            PromotionStateV0.RETIRED,
+        }
+    ),
+    PromotionStateV0.MAINNET_PILOT_ELIGIBLE: frozenset(
+        {
+            PromotionStateV0.MAINNET_PILOT_ACTIVE,
+            PromotionStateV0.QUARANTINED,
+            PromotionStateV0.RETIRED,
+        }
+    ),
+    PromotionStateV0.MAINNET_PILOT_ACTIVE: frozenset(
+        {PromotionStateV0.QUARANTINED, PromotionStateV0.RETIRED}
+    ),
+    PromotionStateV0.QUARANTINED: frozenset(
+        {PromotionStateV0.SHADOW, PromotionStateV0.RETIRED}
+    ),
+    PromotionStateV0.RETIRED: frozenset(),
+}
+
+
 class StrategyCandidateV0(HashBoundModel):
     hash_domain = HashDomainV0.STRATEGY_CANDIDATE
     hash_field = "candidate_hash"
@@ -66,12 +108,14 @@ class StrategyCandidateV0(HashBoundModel):
     schema_version: VersionId
     candidate_id: OpaqueId
     candidate_hash: Sha256Hex
+    symbol: Literal["ETH"] = "ETH"
     playbook_id: PlaybookIdV0
     strategy_version: VersionId
     parameter_version: VersionId
     feature_version: VersionId
     label_version: VersionId
     required_feed_contract: RequiredFeedContractV0
+    instrument_precision: InstrumentPrecisionContractV0
     created_at: UTCDateTime
     expires_at: UTCDateTime
     kind: CandidateKindV0
@@ -91,8 +135,24 @@ class StrategyCandidateV0(HashBoundModel):
     def validate_candidate(self) -> StrategyCandidateV0:
         if self.required_feed_contract.playbook_id != self.playbook_id.value:
             raise ValueError("required feed contract playbook must match candidate playbook")
+        if self.instrument_precision.symbol != self.symbol:
+            raise ValueError("instrument precision symbol must match candidate symbol")
         if self.expires_at <= self.created_at:
             raise ValueError("candidate expiry must be after creation")
+        price_fields = (
+            ("entry_zone_low", self.entry_zone_low),
+            ("entry_zone_high", self.entry_zone_high),
+            ("stop_price", self.stop_price),
+        )
+        for field_name, value in price_fields:
+            if value is not None:
+                require_step_aligned(value, self.instrument_precision.price_tick, field_name)
+        for index, target in enumerate(self.target_prices):
+            require_step_aligned(
+                target,
+                self.instrument_precision.price_tick,
+                f"target_prices[{index}]",
+            )
         if self.kind is CandidateKindV0.TRADE_SETUP:
             if not self.mandatory_feed_status.satisfies(
                 self.required_feed_contract,
@@ -127,6 +187,9 @@ class PromotionRecordV0(HashBoundModel):
     required_feed_contract_hash: Sha256Hex
     state: PromotionStateV0
     environment: EnvironmentV0
+    predecessor_record_id: OpaqueId | None = None
+    predecessor_record_hash: Sha256Hex | None = None
+    predecessor_state: PromotionStateV0 | None = None
     evidence_dataset_ids: tuple[OpaqueId, ...]
     reviewed_by: OpaqueId
     reviewed_at: UTCDateTime
@@ -139,11 +202,23 @@ class PromotionRecordV0(HashBoundModel):
     def validate_promotion(self) -> PromotionRecordV0:
         if self.environment not in ALLOWED_PROMOTION_ENVIRONMENTS[self.state]:
             raise ValueError("promotion state is not valid for environment")
-        if self.state not in {PromotionStateV0.DRAFT, PromotionStateV0.RETIRED}:
+        predecessor_values = (
+            self.predecessor_record_id,
+            self.predecessor_record_hash,
+            self.predecessor_state,
+        )
+        if self.state is PromotionStateV0.DRAFT:
+            if any(item is not None for item in predecessor_values):
+                raise ValueError("initial DRAFT must not declare a predecessor")
+            if self.activated_at is not None:
+                raise ValueError("initial DRAFT must not be activated")
+        else:
+            if any(item is None for item in predecessor_values):
+                raise ValueError("non-DRAFT promotion requires complete predecessor binding")
             if not self.evidence_dataset_ids:
-                raise ValueError("non-draft promotion requires evidence_dataset_ids")
+                raise ValueError("non-DRAFT promotion requires transition-specific evidence")
             if self.activated_at is None:
-                raise ValueError("non-draft promotion requires activated_at")
+                raise ValueError("non-DRAFT promotion requires activated_at")
         if self.activated_at is not None and self.activated_at < self.reviewed_at:
             raise ValueError("promotion cannot activate before review")
         if (
@@ -159,6 +234,34 @@ class PromotionRecordV0(HashBoundModel):
         ):
             raise ValueError("revocation cannot predate activation")
         return self
+
+    @classmethod
+    def bind(
+        cls,
+        *,
+        previous: PromotionRecordV0 | None = None,
+        **payload: Any,
+    ) -> PromotionRecordV0:
+        state = PromotionStateV0(payload["state"])
+        predecessor_fields = {
+            "predecessor_record_id",
+            "predecessor_record_hash",
+            "predecessor_state",
+        }
+        if predecessor_fields.intersection(payload):
+            raise ValueError("predecessor fields are derived from previous and must not be supplied")
+        if previous is None:
+            if state is not PromotionStateV0.DRAFT:
+                raise ValueError("initial promotion record must be DRAFT")
+        else:
+            payload.update(
+                predecessor_record_id=previous.promotion_record_id,
+                predecessor_record_hash=previous.promotion_record_hash,
+                predecessor_state=previous.state,
+            )
+        current = super().bind(**payload)
+        validate_promotion_transition(previous, current)
+        return current
 
     def active_at(self, at: UTCDateTime) -> bool:
         if self.activated_at is None or at < self.activated_at:
@@ -184,3 +287,72 @@ class PromotionRecordV0(HashBoundModel):
             self.environment is EnvironmentV0.MAINNET_PILOT
             and self.state is PromotionStateV0.MAINNET_PILOT_ACTIVE
         )
+
+
+_PROMOTION_SUBJECT_FIELDS = (
+    "playbook_id",
+    "strategy_version",
+    "parameter_version",
+    "feature_version",
+    "label_version",
+    "required_feed_contract_id",
+    "required_feed_contract_version",
+    "required_feed_contract_hash",
+)
+
+
+def validate_promotion_transition(
+    previous: PromotionRecordV0 | None,
+    current: PromotionRecordV0,
+) -> None:
+    failures: list[str] = []
+    if previous is None:
+        if current.state is not PromotionStateV0.DRAFT:
+            failures.append("initial promotion record must be DRAFT")
+        if any(
+            item is not None
+            for item in (
+                current.predecessor_record_id,
+                current.predecessor_record_hash,
+                current.predecessor_state,
+            )
+        ):
+            failures.append("initial DRAFT must not bind a predecessor")
+    else:
+        if previous.state is PromotionStateV0.RETIRED:
+            failures.append("RETIRED is terminal")
+        if current.promotion_record_id == previous.promotion_record_id:
+            failures.append("promotion transition must create a new record")
+        if current.predecessor_record_id != previous.promotion_record_id:
+            failures.append("wrong predecessor ID")
+        if current.predecessor_record_hash != previous.promotion_record_hash:
+            failures.append("wrong predecessor hash")
+        if current.predecessor_state is not previous.state:
+            failures.append("declared predecessor state mismatch")
+        if current.state not in LEGAL_PROMOTION_TRANSITIONS[previous.state]:
+            failures.append("declared predecessor state does not permit this transition")
+        for field_name in _PROMOTION_SUBJECT_FIELDS:
+            if getattr(current, field_name) != getattr(previous, field_name):
+                failures.append(f"promotion subject mismatch: {field_name}")
+        previous_effective_at = previous.activated_at or previous.reviewed_at
+        if current.reviewed_at < previous_effective_at:
+            failures.append("transition review predates predecessor")
+    if failures:
+        raise ValueError("; ".join(failures))
+
+
+def validate_promotion_chain(records: tuple[PromotionRecordV0, ...]) -> None:
+    if not records:
+        raise ValueError("promotion chain must not be empty")
+    seen_ids: set[str] = set()
+    seen_hashes: set[str] = set()
+    previous: PromotionRecordV0 | None = None
+    for record in records:
+        if record.promotion_record_id in seen_ids:
+            raise ValueError("promotion chain contains duplicate record ID")
+        if record.promotion_record_hash in seen_hashes:
+            raise ValueError("promotion chain contains duplicate record hash")
+        validate_promotion_transition(previous, record)
+        seen_ids.add(record.promotion_record_id)
+        seen_hashes.add(record.promotion_record_hash)
+        previous = record

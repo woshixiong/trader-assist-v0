@@ -8,6 +8,7 @@ from .approval import (
     PermitActionV0,
     ProposalV0,
     validate_execution_permit_bindings,
+    validate_human_decision_binding,
 )
 from .common import (
     DataLayerV0,
@@ -28,6 +29,7 @@ from .health import (
     MandatoryFeedStatusV0,
     RequiredFeedContractV0,
 )
+from .precision import InstrumentPrecisionContractV0
 from .provenance import SeedDispositionV0, SeedProvenanceEntryV0
 from .strategy import (
     CandidateKindV0,
@@ -36,6 +38,8 @@ from .strategy import (
     PromotionRecordV0,
     PromotionStateV0,
     StrategyCandidateV0,
+    validate_promotion_chain,
+    validate_promotion_transition,
 )
 
 __all__ = [
@@ -56,6 +60,7 @@ __all__ = [
     "HealthStateV0",
     "HumanDecisionKindV0",
     "HumanReviewDecisionV0",
+    "InstrumentPrecisionContractV0",
     "MandatoryFeedStatusV0",
     "NormalizedEventV0",
     "OrderPackageV0",
@@ -75,4 +80,7 @@ __all__ = [
     "contract_hash",
     "sha256_hex",
     "validate_execution_permit_bindings",
+    "validate_human_decision_binding",
+    "validate_promotion_chain",
+    "validate_promotion_transition",
 ]

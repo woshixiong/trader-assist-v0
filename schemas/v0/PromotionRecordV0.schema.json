@@ -99,6 +99,45 @@
     "playbook_id": {
       "$ref": "#/$defs/PlaybookIdV0"
     },
+    "predecessor_record_hash": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Predecessor Record Hash"
+    },
+    "predecessor_record_id": {
+      "anyOf": [
+        {
+          "maxLength": 160,
+          "minLength": 3,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Predecessor Record Id"
+    },
+    "predecessor_state": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PromotionStateV0"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "promotion_record_hash": {
       "pattern": "^[0-9a-f]{64}$",
       "title": "Promotion Record Hash",

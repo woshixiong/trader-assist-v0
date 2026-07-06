@@ -80,6 +80,19 @@
       "default": null,
       "title": "Human Mainnet Authorization Id"
     },
+    "human_mainnet_authorized_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Human Mainnet Authorized At"
+    },
     "issued_at": {
       "format": "date-time",
       "title": "Issued At",
@@ -132,6 +145,19 @@
     },
     "playbook_id": {
       "$ref": "#/$defs/PlaybookIdV0"
+    },
+    "pre_pilot_review_completed_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Pre Pilot Review Completed At"
     },
     "pre_pilot_review_id": {
       "anyOf": [

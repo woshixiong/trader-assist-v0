@@ -8,6 +8,104 @@
       "title": "DirectionV0",
       "type": "string"
     },
+    "InstrumentPrecisionContractV0": {
+      "additionalProperties": false,
+      "properties": {
+        "contract_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Contract Hash",
+          "type": "string"
+        },
+        "contract_id": {
+          "maxLength": 160,
+          "minLength": 3,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "title": "Contract Id",
+          "type": "string"
+        },
+        "contract_version": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Contract Version",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "price_tick": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+              "type": "string"
+            }
+          ],
+          "title": "Price Tick"
+        },
+        "quantity_step": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+              "type": "string"
+            }
+          ],
+          "title": "Quantity Step"
+        },
+        "schema_version": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_metadata_version": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Source Metadata Version",
+          "type": "string"
+        },
+        "source_snapshot_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Snapshot Hash",
+          "type": "string"
+        },
+        "symbol": {
+          "const": "ETH",
+          "default": "ETH",
+          "title": "Symbol",
+          "type": "string"
+        },
+        "venue": {
+          "maxLength": 160,
+          "minLength": 3,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "title": "Venue",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "contract_id",
+        "contract_hash",
+        "contract_version",
+        "venue",
+        "price_tick",
+        "quantity_step",
+        "source_metadata_version",
+        "source_snapshot_hash",
+        "created_at"
+      ],
+      "title": "InstrumentPrecisionContractV0",
+      "type": "object"
+    },
     "OrderPackageV0": {
       "additionalProperties": false,
       "properties": {
@@ -24,6 +122,9 @@
           "title": "Emergency Reduce Only Policy Hash",
           "type": "string"
         },
+        "instrument_precision": {
+          "$ref": "#/$defs/InstrumentPrecisionContractV0"
+        },
         "limit_price": {
           "anyOf": [
             {
@@ -31,7 +132,7 @@
               "type": "number"
             },
             {
-              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
               "type": "string"
             },
             {
@@ -48,7 +149,7 @@
               "type": "number"
             },
             {
-              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
               "type": "string"
             }
           ],
@@ -76,7 +177,7 @@
               "type": "number"
             },
             {
-              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
               "type": "string"
             }
           ],
@@ -124,6 +225,7 @@
         "schema_version",
         "order_package_id",
         "order_package_hash",
+        "instrument_precision",
         "direction",
         "order_type",
         "quantity",
