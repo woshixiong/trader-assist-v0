@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import Decimal, DecimalException
 from typing import Literal
 
 from .common import (
@@ -32,5 +32,9 @@ class InstrumentPrecisionContractV0(HashBoundModel):
 
 
 def require_step_aligned(value: Decimal, step: Decimal, field_name: str) -> None:
-    if value % step != 0:
+    try:
+        aligned = value % step == 0
+    except DecimalException as exc:
+        raise ValueError(f"{field_name} cannot be evaluated against precision step") from exc
+    if not aligned:
         raise ValueError(f"{field_name} must align to precision step {step}")
