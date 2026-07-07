@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import UTC, date, datetime
+from pathlib import Path
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -12,16 +13,16 @@ from trader_assist_v0.contracts import (
     RawEventV0,
     RawManifestEntryV0,
 )
+from trader_assist_v0.contracts.events import MANIFEST_GENESIS_HASH
 from trader_assist_v0.data import (
-    SOURCE_CATALOG_VERSION,
     AppendDisposition,
     BronzeIntegrityError,
     BronzeStore,
     ManifestWriter,
     ObservationConflictError,
     PathConfinementError,
+    SegmentFinalizedError,
     SingleWriterError,
-    payload_sha256,
     read_manifest_entries,
 )
 
@@ -30,58 +31,74 @@ NOW = datetime(2026, 7, 7, 1, 0, tzinfo=UTC)
 SEGMENT = "segment-001"
 
 
-def _event(
+def make_event(
     store: BronzeStore,
-    payload: bytes,
+    payload: bytes = b'{"channel":"pong"}',
     *,
     sequence: int = 1,
     connection: str = "conn-001",
+    endpoint_id: str = "hl-ws-mainnet-public",
+    operation_type: str = "allMids",
+    coin: str | None = None,
+    candle_interval: str | None = None,
+    capture_mode: RawCaptureModeV0 = (
+        RawCaptureModeV0.WS_TEXT_UTF8_APPLICATION_PAYLOAD
+    ),
+    **overrides: object,
 ) -> RawEventV0:
     stored = store.write_payload(payload)
-    return RawEventV0.bind_observation(
-        schema_version="0.1.0",
-        source_id="hyperliquid-public-mainnet",
-        source_catalog_version=SOURCE_CATALOG_VERSION,
-        endpoint_id="hl-ws-mainnet-public",
-        connection_id=connection,
-        subscription_id="trades-ETH",
-        receive_sequence=sequence,
-        source_native_id=None,
-        source_native_cursor=None,
-        collector_version="collector.0.1",
-        environment=EnvironmentV0.READ_ONLY,
-        capture_mode=RawCaptureModeV0.WS_TEXT_UTF8_APPLICATION_PAYLOAD,
-        content_type="application/json",
-        payload_sha256=stored.payload_sha256,
-        payload_size_bytes=stored.payload_size_bytes,
-        payload_encoding="utf-8",
-        payload_ref=stored.payload_ref,
-        source_event_time=NOW,
-        source_publish_time=None,
-        first_observed_time=NOW,
-        collector_receive_time=NOW,
-        collector_monotonic_ns=123,
-        revision_time=None,
-    )
+    values: dict[str, object] = {
+        "endpoint_id": endpoint_id,
+        "operation_type": operation_type,
+        "coin": coin,
+        "candle_interval": candle_interval,
+        "capture_mode": capture_mode,
+        "connection_id": connection,
+        "subscription_id": "sub-001",
+        "receive_sequence": sequence,
+        "source_native_id": None,
+        "source_native_cursor": None,
+        "collector_version": "collector.0.1",
+        "environment": EnvironmentV0.READ_ONLY,
+        "content_type": "application/json",
+        "payload_sha256": stored.payload_sha256,
+        "payload_size_bytes": stored.payload_size_bytes,
+        "payload_encoding": "utf-8",
+        "payload_ref": stored.payload_ref,
+        "source_event_time": None,
+        "source_publish_time": None,
+        "first_observed_time": NOW,
+        "collector_receive_time": NOW,
+        "collector_monotonic_ns": 123,
+        "revision_time": None,
+    }
+    values.update(overrides)
+    return RawEventV0.bind_observation(**values)
 
 
-def test_exact_bytes_and_payload_observation_identity(tmp_path):
-    store = BronzeStore(tmp_path / "root")
+@pytest.fixture
+def store(tmp_path: Path) -> BronzeStore:
+    return BronzeStore(tmp_path / "root")
+
+
+def test_exact_bytes_and_payload_observation_identity(store: BronzeStore) -> None:
     compact = b'{"x":1}'
     spaced = b'{ "x": 1 }'
-    assert payload_sha256(compact) != payload_sha256(spaced)
-    first = _event(store, compact, sequence=1)
-    assert first == _event(store, compact, sequence=1)
-    second = _event(store, compact, sequence=2)
-    assert first.payload_sha256 == second.payload_sha256
-    assert first.source_event_id != second.source_event_id
-    assert first.observation_slot_id != second.observation_slot_id
+    first = make_event(store, compact, sequence=1)
+    duplicate = make_event(store, compact, sequence=1)
+    second_observation = make_event(store, compact, sequence=2)
+    different_bytes = make_event(store, spaced, sequence=3)
+
+    assert first == duplicate
+    assert first.payload_sha256 == second_observation.payload_sha256
+    assert first.source_event_id != second_observation.source_event_id
+    assert first.observation_slot_id != second_observation.observation_slot_id
+    assert first.payload_sha256 != different_bytes.payload_sha256
     assert store.write_payload(compact).created is False
 
 
-def test_caller_cannot_forge_authority_ids(tmp_path):
-    store = BronzeStore(tmp_path / "root")
-    event = _event(store, b"x")
+def test_caller_cannot_forge_authority_ids(store: BronzeStore) -> None:
+    event = make_event(store)
     data = event.model_dump(mode="python")
     data["source_event_id"] = "0" * 64
     with pytest.raises(ValidationError):
@@ -90,49 +107,60 @@ def test_caller_cannot_forge_authority_ids(tmp_path):
         RawEventV0.bind_observation(**data)
 
 
-def test_manifest_idempotency_conflict_and_single_writer(tmp_path):
-    store = BronzeStore(tmp_path / "root")
-    first = _event(store, b"one", sequence=1)
-    with ManifestWriter(store, manifest_date=DAY, segment_id=SEGMENT) as writer:
-        assert writer.append(first).disposition is AppendDisposition.APPENDED
-        assert writer.append(first).disposition is AppendDisposition.IDEMPOTENT
-        with pytest.raises(SingleWriterError):
-            ManifestWriter(store, manifest_date=DAY, segment_id=SEGMENT)
-        with pytest.raises(ObservationConflictError):
-            writer.append(_event(store, b"different", sequence=1))
-    with ManifestWriter(store, manifest_date=DAY, segment_id=SEGMENT):
-        pass
+def test_manifest_idempotency_conflict_and_finalization(store: BronzeStore) -> None:
+    first = make_event(store, b"one", sequence=1)
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id=SEGMENT)
+    assert writer.append(first).disposition is AppendDisposition.APPENDED
+    assert writer.append(first).disposition is AppendDisposition.IDEMPOTENT
+    with pytest.raises(SingleWriterError):
+        ManifestWriter(store, manifest_date=DAY, segment_id=SEGMENT)
+    with pytest.raises(ObservationConflictError):
+        writer.append(make_event(store, b"different", sequence=1))
+    writer.finalize()
+    with pytest.raises((SingleWriterError, SegmentFinalizedError)):
+        writer.append(make_event(store, b"later", sequence=2))
+    with pytest.raises(SegmentFinalizedError):
+        ManifestWriter(store, manifest_date=DAY, segment_id=SEGMENT)
 
 
-def test_stale_lock_fails_closed(tmp_path):
-    store = BronzeStore(tmp_path / "root")
+def test_different_segment_writers_may_coexist(store: BronzeStore) -> None:
+    first = ManifestWriter(store, manifest_date=DAY, segment_id="segment-one")
+    second = ManifestWriter(store, manifest_date=DAY, segment_id="segment-two")
+    second.close()
+    first.close()
+
+
+def test_stale_segment_lock_fails_closed(store: BronzeStore) -> None:
     lock = store.path(store.lock_ref(DAY, SEGMENT))
     lock.parent.mkdir(parents=True)
-    lock.write_bytes(b"")
+    lock.write_text("stale\n", encoding="utf-8")
     with pytest.raises(SingleWriterError):
         ManifestWriter(store, manifest_date=DAY, segment_id=SEGMENT)
 
 
-def test_manifest_chain_detects_reorder_deletion_and_insertion(tmp_path):
-    store = BronzeStore(tmp_path / "root")
-    with ManifestWriter(store, manifest_date=DAY, segment_id=SEGMENT) as writer:
-        writer.append(_event(store, b"one", sequence=1))
-        writer.append(_event(store, b"two", sequence=2))
+def test_manifest_chain_detects_reorder_deletion_and_insertion(store: BronzeStore) -> None:
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id=SEGMENT)
+    writer.append(make_event(store, b"one", sequence=1))
+    writer.append(make_event(store, b"two", sequence=2))
+    writer.close()
+
     path = store.path(store.manifest_ref(DAY, SEGMENT))
     lines = path.read_bytes().splitlines()
-    for mutated in (lines[::-1], lines[1:], [lines[0], lines[0], lines[1]]):
+    mutations = (lines[::-1], lines[1:], [lines[0], lines[0], lines[1]])
+    for mutated in mutations:
         path.write_bytes(b"\n".join(mutated) + b"\n")
         with pytest.raises(BronzeIntegrityError):
             read_manifest_entries(store, DAY, SEGMENT)
         path.write_bytes(b"\n".join(lines) + b"\n")
 
 
-def test_partial_and_corrupt_manifest_fail(tmp_path):
-    store = BronzeStore(tmp_path / "root")
-    with ManifestWriter(store, manifest_date=DAY, segment_id=SEGMENT) as writer:
-        writer.append(_event(store, b"one"))
+def test_partial_and_corrupt_manifest_fail(store: BronzeStore) -> None:
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id=SEGMENT)
+    writer.append(make_event(store, b"one"))
+    writer.close()
     path = store.path(store.manifest_ref(DAY, SEGMENT))
     original = path.read_bytes()
+
     path.write_bytes(original[:-1])
     with pytest.raises(BronzeIntegrityError):
         read_manifest_entries(store, DAY, SEGMENT)
@@ -145,12 +173,12 @@ def test_partial_and_corrupt_manifest_fail(tmp_path):
     "bad",
     ["/abs", "../x", "a/../x", "a//x", "a/./x", "C:/x", "a\\x", "a\x00x"],
 )
-def test_path_traversal_rejected(tmp_path, bad):
+def test_path_traversal_rejected(store: BronzeStore, bad: str) -> None:
     with pytest.raises(PathConfinementError):
-        BronzeStore(tmp_path / "root").path(bad)
+        store.path(bad)
 
 
-def test_root_and_intermediate_symlink_rejected(tmp_path):
+def test_root_and_intermediate_symlink_rejected(tmp_path: Path) -> None:
     outside = tmp_path / "outside"
     outside.mkdir()
     root_link = tmp_path / "root-link"
@@ -165,11 +193,10 @@ def test_root_and_intermediate_symlink_rejected(tmp_path):
         BronzeStore(root).write_payload(b"x")
 
 
-def test_payload_and_manifest_symlink_rejected(tmp_path):
+def test_payload_and_manifest_symlink_rejected(store: BronzeStore, tmp_path: Path) -> None:
     if not hasattr(os, "symlink"):
         pytest.skip("symlink unsupported")
-    store = BronzeStore(tmp_path / "root")
-    event = _event(store, b"x")
+    event = make_event(store, b"x")
     payload_path = store.path(event.payload_ref)
     payload_path.unlink()
     payload_path.symlink_to(tmp_path / "missing")
@@ -183,33 +210,37 @@ def test_payload_and_manifest_symlink_rejected(tmp_path):
         read_manifest_entries(store, DAY, SEGMENT)
 
 
-def test_authority_models_revalidate_copy_construct_and_subclass(tmp_path):
-    store = BronzeStore(tmp_path / "root")
-    event = _event(store, b"x")
+def test_authority_models_revalidate_copy_construct_and_subclass(
+    store: BronzeStore,
+) -> None:
+    event = make_event(store, b"x")
     with pytest.raises(TypeError):
         event.model_copy(update={"receive_sequence": 99})
     stale = BaseModel.model_copy(event, update={"receive_sequence": 99})
     with pytest.raises(ValidationError):
         RawEventV0.model_validate(stale)
-    built = BaseModel.model_construct.__func__(
-        RawEventV0, **event.model_dump(mode="python")
+    constructed = BaseModel.model_construct.__func__(
+        RawEventV0,
+        **event.model_dump(mode="python"),
     )
-    object.__setattr__(built, "receive_sequence", 99)
+    object.__setattr__(constructed, "receive_sequence", 99)
     with pytest.raises(ValidationError):
-        RawEventV0.model_validate(built)
+        RawEventV0.model_validate(constructed)
 
-    class Evil(RawEventV0):
+    class EvilRawEvent(RawEventV0):
         pass
 
-    evil = BaseModel.model_construct.__func__(Evil, **event.model_dump(mode="python"))
+    evil = BaseModel.model_construct.__func__(
+        EvilRawEvent,
+        **event.model_dump(mode="python"),
+    )
     with pytest.raises((ValueError, ValidationError)):
         RawEventV0.model_validate(evil)
 
     entry = RawManifestEntryV0.bind(
-        schema_version="0.1.0",
         segment_id=SEGMENT,
         entry_index=0,
-        previous_entry_hash="0" * 64,
+        previous_entry_hash=MANIFEST_GENESIS_HASH,
         raw_event=event,
     )
     stale_entry = BaseModel.model_copy(entry, update={"entry_index": 1})
