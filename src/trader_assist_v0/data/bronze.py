@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import errno
+import fcntl
 import hashlib
 import json
 import os
@@ -55,6 +57,12 @@ class SegmentFinalizedError(BronzeIntegrityError):
 class AppendDisposition(StrEnum):
     APPENDED = "APPENDED"
     IDEMPOTENT = "IDEMPOTENT"
+
+
+class _LockState(StrEnum):
+    ACTIVE = "ACTIVE"
+    RELEASED = "RELEASED"
+    COMPROMISED = "COMPROMISED"
 
 
 @dataclass(frozen=True)
@@ -220,8 +228,17 @@ class BronzeStore:
             raise PathConfinementError("resolved path escapes persistence root") from exc
         return candidate
 
-    def _open_parent(self, relative_path: str, *, create: bool) -> tuple[int, str]:
+    def _open_parent(
+        self,
+        relative_path: str,
+        *,
+        create: bool,
+        authority_fd: int | None = None,
+    ) -> tuple[int, str]:
         parts = _validate_relative_path(relative_path)
+        if authority_fd is not None:
+            parent_fd = _open_dir_chain(authority_fd, parts[:-1], create=create)
+            return parent_fd, parts[-1]
         root_fd = _open_root_fd(self.root)
         try:
             parent_fd = _open_dir_chain(root_fd, parts[:-1], create=create)
@@ -229,9 +246,13 @@ class BronzeStore:
             os.close(root_fd)
         return parent_fd, parts[-1]
 
-    def exists_regular(self, relative_path: str) -> bool:
+    def exists_regular(self, relative_path: str, *, authority_fd: int | None = None) -> bool:
         try:
-            parent_fd, name = self._open_parent(relative_path, create=False)
+            parent_fd, name = self._open_parent(
+                relative_path,
+                create=False,
+                authority_fd=authority_fd,
+            )
         except FileNotFoundError:
             return False
         try:
@@ -307,12 +328,16 @@ class BronzeStore:
                     pass
             os.close(parent_fd)
 
-    def verify_payload(self, event: RawEventV0) -> None:
+    def verify_payload(self, event: RawEventV0, *, authority_fd: int | None = None) -> None:
         exact_event = RawEventV0.model_validate(event)
         expected_ref = payload_relative_path(exact_event.payload_sha256)
         if exact_event.payload_ref != expected_ref:
             raise BronzeIntegrityError("payload reference is not content-addressed")
-        parent_fd, filename = self._open_parent(exact_event.payload_ref, create=False)
+        parent_fd, filename = self._open_parent(
+            exact_event.payload_ref,
+            create=False,
+            authority_fd=authority_fd,
+        )
         try:
             try:
                 payload_fd = _open_verified_at(parent_fd, filename, os.O_RDONLY, kind="regular")
@@ -344,8 +369,12 @@ class BronzeStore:
     def global_authority_lock_ref(self) -> str:
         return ".bronze-global-observation-authority.lock"
 
-    def read_bytes(self, relative_path: str) -> bytes:
-        parent_fd, filename = self._open_parent(relative_path, create=False)
+    def read_bytes(self, relative_path: str, *, authority_fd: int | None = None) -> bytes:
+        parent_fd, filename = self._open_parent(
+            relative_path,
+            create=False,
+            authority_fd=authority_fd,
+        )
         try:
             fd = _open_verified_at(parent_fd, filename, os.O_RDONLY, kind="regular")
             try:
@@ -355,14 +384,36 @@ class BronzeStore:
         finally:
             os.close(parent_fd)
 
-    def read_manifest_bytes(self, manifest_date: date, segment_id: str) -> bytes:
-        return self.read_bytes(self.manifest_ref(manifest_date, segment_id))
+    def read_manifest_bytes(
+        self,
+        manifest_date: date,
+        segment_id: str,
+        *,
+        authority_fd: int | None = None,
+    ) -> bytes:
+        return self.read_bytes(
+            self.manifest_ref(manifest_date, segment_id),
+            authority_fd=authority_fd,
+        )
 
-    def read_checkpoint_bytes(self, manifest_date: date, segment_id: str) -> bytes:
-        return self.read_bytes(self.checkpoint_ref(manifest_date, segment_id))
+    def read_checkpoint_bytes(
+        self,
+        manifest_date: date,
+        segment_id: str,
+        *,
+        authority_fd: int | None = None,
+    ) -> bytes:
+        return self.read_bytes(
+            self.checkpoint_ref(manifest_date, segment_id),
+            authority_fd=authority_fd,
+        )
 
-    def fsync_file(self, relative_path: str) -> None:
-        parent_fd, filename = self._open_parent(relative_path, create=False)
+    def fsync_file(self, relative_path: str, *, authority_fd: int | None = None) -> None:
+        parent_fd, filename = self._open_parent(
+            relative_path,
+            create=False,
+            authority_fd=authority_fd,
+        )
         try:
             fd = _open_verified_at(parent_fd, filename, os.O_RDONLY, kind="regular")
             try:
@@ -373,8 +424,17 @@ class BronzeStore:
         finally:
             os.close(parent_fd)
 
-    def ensure_empty_file(self, relative_path: str) -> None:
-        parent_fd, filename = self._open_parent(relative_path, create=True)
+    def ensure_empty_file(
+        self,
+        relative_path: str,
+        *,
+        authority_fd: int | None = None,
+    ) -> None:
+        parent_fd, filename = self._open_parent(
+            relative_path,
+            create=True,
+            authority_fd=authority_fd,
+        )
         try:
             try:
                 fd = os.open(
@@ -400,11 +460,17 @@ class BronzeStore:
         manifest_date: date,
         segment_id: str,
         checkpoint: RawManifestCheckpointV0,
+        *,
+        authority_fd: int | None = None,
     ) -> None:
         exact = RawManifestCheckpointV0.model_validate(checkpoint)
         relative = self.checkpoint_ref(manifest_date, segment_id)
         payload = exact.model_dump_json().encode("utf-8") + b"\n"
-        parent_fd, final_name = self._open_parent(relative, create=True)
+        parent_fd, final_name = self._open_parent(
+            relative,
+            create=True,
+            authority_fd=authority_fd,
+        )
         temporary_name = f".checkpoint-{secrets.token_hex(16)}.tmp"
         temp_created = False
         try:
@@ -473,29 +539,64 @@ class BronzeStore:
                 refs.add(relative)
         return refs
 
-    def manifest_files(self) -> tuple[tuple[date, str], ...]:
-        manifests_root = self.root / "manifests"
-        if not manifests_root.exists():
-            return ()
-        _reject_symlink(manifests_root)
-        found: list[tuple[date, str]] = []
-        for day_entry in os.scandir(manifests_root):
-            if day_entry.is_symlink() or not day_entry.is_dir(follow_symlinks=False):
-                raise BronzeIntegrityError("unexpected manifest-tree entry")
-            if _DATE_RE.fullmatch(day_entry.name) is None:
-                raise BronzeIntegrityError("unexpected manifest date directory")
-            day = date.fromisoformat(day_entry.name)
-            for item in os.scandir(day_entry.path):
-                if item.is_symlink() or not item.is_file(follow_symlinks=False):
-                    raise BronzeIntegrityError("unexpected manifest object")
-                if item.name.endswith(".lock") or item.name.endswith(".checkpoint.json"):
-                    continue
-                if not item.name.endswith(".jsonl"):
-                    raise BronzeIntegrityError("unexpected manifest file")
-                segment_id = item.name.removesuffix(".jsonl")
-                _validate_segment(segment_id)
-                found.append((day, segment_id))
-        return tuple(sorted(found, key=lambda value: (value[0], value[1])))
+    def manifest_files(
+        self,
+        *,
+        authority_fd: int | None = None,
+    ) -> tuple[tuple[date, str], ...]:
+        owned_root_fd = authority_fd is None
+        root_fd = _open_root_fd(self.root) if owned_root_fd else authority_fd
+        assert root_fd is not None
+        try:
+            try:
+                manifests_fd = _open_dir_chain(root_fd, ("manifests",), create=False)
+            except FileNotFoundError:
+                return ()
+            try:
+                found: list[tuple[date, str]] = []
+                with os.scandir(manifests_fd) as day_entries:
+                    for day_entry in day_entries:
+                        if day_entry.is_symlink() or not day_entry.is_dir(
+                            follow_symlinks=False
+                        ):
+                            raise BronzeIntegrityError("unexpected manifest-tree entry")
+                        if _DATE_RE.fullmatch(day_entry.name) is None:
+                            raise BronzeIntegrityError("unexpected manifest date directory")
+                        day = date.fromisoformat(day_entry.name)
+                        day_fd = _open_verified_at(
+                            manifests_fd,
+                            day_entry.name,
+                            os.O_RDONLY | _DIRECTORY,
+                            kind="directory",
+                        )
+                        try:
+                            with os.scandir(day_fd) as items:
+                                for item in items:
+                                    if item.is_symlink() or not item.is_file(
+                                        follow_symlinks=False
+                                    ):
+                                        raise BronzeIntegrityError(
+                                            "unexpected manifest object"
+                                        )
+                                    if item.name.endswith(".lock") or item.name.endswith(
+                                        ".checkpoint.json"
+                                    ):
+                                        continue
+                                    if not item.name.endswith(".jsonl"):
+                                        raise BronzeIntegrityError(
+                                            "unexpected manifest file"
+                                        )
+                                    segment_id = item.name.removesuffix(".jsonl")
+                                    _validate_segment(segment_id)
+                                    found.append((day, segment_id))
+                        finally:
+                            os.close(day_fd)
+                return tuple(sorted(found, key=lambda value: (value[0], value[1])))
+            finally:
+                os.close(manifests_fd)
+        finally:
+            if owned_root_fd:
+                os.close(root_fd)
 
 
 def _validate_segment(segment_id: str) -> None:
@@ -504,27 +605,29 @@ def _validate_segment(segment_id: str) -> None:
 
 
 class OwnedLock:
+    """Root-wide kernel-backed authority held on the Bronze root directory inode.
+
+    ``relative_path`` is retained only for API compatibility and diagnostics. No lock
+    pathname is created, verified, unlinked, cleaned, or used as an exclusivity
+    namespace. The open root directory descriptor is the authority for the complete
+    lock lifetime.
+    """
+
     def __init__(
         self,
         *,
         store: BronzeStore,
         relative_path: str,
-        parent_fd: int,
-        name: str,
         fd: int,
-        token: bytes,
         st_dev: int,
         st_ino: int,
     ) -> None:
         self.store = store
         self.relative_path = relative_path
-        self._parent_fd = parent_fd
-        self._name = name
         self._fd = fd
-        self._token = token
         self._st_dev = st_dev
         self._st_ino = st_ino
-        self._released = False
+        self._state = _LockState.ACTIVE
 
     @classmethod
     def acquire(
@@ -534,104 +637,126 @@ class OwnedLock:
         *,
         wait_timeout: float = 0.0,
     ) -> OwnedLock:
-        parent_fd, name = store._open_parent(relative_path, create=True)
-        token = secrets.token_hex(32).encode("ascii") + b"\n"
+        _validate_relative_path(relative_path)
+        fd = _open_root_fd(store.root)
+        locked = False
         deadline = time.monotonic() + wait_timeout
         try:
             while True:
                 try:
-                    fd = os.open(
-                        name,
-                        os.O_RDWR | os.O_CREAT | os.O_EXCL | _NOFOLLOW,
-                        0o600,
-                        dir_fd=parent_fd,
-                    )
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    locked = True
                     break
-                except FileExistsError as exc:
+                except BlockingIOError as exc:
                     if time.monotonic() >= deadline:
-                        raise SingleWriterError("authority lock already exists") from exc
+                        raise SingleWriterError(
+                            "Bronze root already has an active manifest writer"
+                        ) from exc
                     time.sleep(0.005)
-            try:
-                _write_all(fd, token)
-                os.fsync(fd)
-                metadata = os.fstat(fd)
-                if not stat.S_ISREG(metadata.st_mode):
-                    raise LockOwnershipError("authority lock is not a regular file")
-                _fsync_directory_fd(parent_fd)
-            except BaseException:
-                os.close(fd)
-                try:
-                    os.unlink(name, dir_fd=parent_fd)
-                    _fsync_directory_fd(parent_fd)
-                except FileNotFoundError:
-                    pass
-                raise
+                except OSError as exc:
+                    if exc.errno not in {errno.EACCES, errno.EAGAIN}:
+                        raise
+                    if time.monotonic() >= deadline:
+                        raise SingleWriterError(
+                            "Bronze root already has an active manifest writer"
+                        ) from exc
+                    time.sleep(0.005)
+            opened = os.fstat(fd)
+            if not stat.S_ISDIR(opened.st_mode):
+                raise LockOwnershipError("root authority descriptor is not a directory")
+            path_metadata = os.stat(store.root, follow_symlinks=False)
+            if not stat.S_ISDIR(path_metadata.st_mode):
+                raise LockOwnershipError("Bronze root path is not a directory")
+            if (path_metadata.st_dev, path_metadata.st_ino) != (
+                opened.st_dev,
+                opened.st_ino,
+            ):
+                raise LockOwnershipError(
+                    "Bronze root changed while acquiring root-wide authority"
+                )
             return cls(
                 store=store,
                 relative_path=relative_path,
-                parent_fd=parent_fd,
-                name=name,
                 fd=fd,
-                token=token,
-                st_dev=metadata.st_dev,
-                st_ino=metadata.st_ino,
+                st_dev=opened.st_dev,
+                st_ino=opened.st_ino,
             )
         except BaseException:
-            os.close(parent_fd)
+            if locked:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                except OSError:
+                    pass
+            os.close(fd)
             raise
 
     @property
     def released(self) -> bool:
-        return self._released
+        return self._state is not _LockState.ACTIVE
+
+    @property
+    def compromised(self) -> bool:
+        return self._state is _LockState.COMPROMISED
+
+    @property
+    def authority_fd(self) -> int:
+        if self._state is not _LockState.ACTIVE:
+            raise LockOwnershipError("root authority is no longer active")
+        return self._fd
+
+    def _close_owned_descriptor(self, *, state: _LockState) -> None:
+        fd = self._fd
+        self._fd = -1
+        self._state = state
+        if fd < 0:
+            return
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
 
     def _verify_owned(self) -> None:
-        if self._released:
-            raise LockOwnershipError("authority lock is already released")
-        opened = os.fstat(self._fd)
-        if not stat.S_ISREG(opened.st_mode):
-            raise LockOwnershipError("owned lock descriptor is not a regular file")
-        if (opened.st_dev, opened.st_ino) != (self._st_dev, self._st_ino):
-            raise LockOwnershipError("owned lock descriptor identity changed")
+        if self._state is _LockState.RELEASED:
+            raise LockOwnershipError("root authority is already released")
+        if self._state is _LockState.COMPROMISED:
+            raise LockOwnershipError("root authority is compromised")
         try:
-            path_metadata = os.stat(
-                self._name,
-                dir_fd=self._parent_fd,
-                follow_symlinks=False,
-            )
-        except FileNotFoundError as exc:
-            raise LockOwnershipError("authority lock path is missing") from exc
-        if not stat.S_ISREG(path_metadata.st_mode):
-            raise LockOwnershipError("authority lock path is not a regular file")
-        if (path_metadata.st_dev, path_metadata.st_ino) != (self._st_dev, self._st_ino):
-            raise LockOwnershipError("authority lock path no longer names the owned inode")
-        verification_fd = _open_verified_at(
-            self._parent_fd,
-            self._name,
-            os.O_RDONLY,
-            kind="regular",
-        )
-        try:
-            verified = os.fstat(verification_fd)
-            if (verified.st_dev, verified.st_ino) != (self._st_dev, self._st_ino):
-                raise LockOwnershipError("authority lock reopened with a different inode")
-            on_disk_token = _read_all(verification_fd)
-        finally:
-            os.close(verification_fd)
-        os.lseek(self._fd, 0, os.SEEK_SET)
-        owned_token = _read_all(self._fd)
-        if owned_token != self._token or on_disk_token != self._token:
-            raise LockOwnershipError("authority lock owner token does not match")
+            opened = os.fstat(self._fd)
+            if not stat.S_ISDIR(opened.st_mode):
+                raise LockOwnershipError("root authority descriptor is not a directory")
+            if (opened.st_dev, opened.st_ino) != (self._st_dev, self._st_ino):
+                raise LockOwnershipError("root authority descriptor identity changed")
+            path_metadata = os.stat(self.store.root, follow_symlinks=False)
+            if not stat.S_ISDIR(path_metadata.st_mode):
+                raise LockOwnershipError("Bronze root path is not a directory")
+            if (path_metadata.st_dev, path_metadata.st_ino) != (
+                self._st_dev,
+                self._st_ino,
+            ):
+                raise LockOwnershipError(
+                    "Bronze root path no longer names the locked root inode"
+                )
+        except BaseException as exc:
+            try:
+                self._close_owned_descriptor(state=_LockState.COMPROMISED)
+            except OSError as close_error:
+                raise LockOwnershipError(
+                    "root authority verification and descriptor cleanup failed"
+                ) from close_error
+            if isinstance(exc, LockOwnershipError):
+                raise
+            raise LockOwnershipError("root authority verification failed") from exc
 
     def assert_owned(self) -> None:
         self._verify_owned()
 
     def release(self) -> None:
         self._verify_owned()
-        os.unlink(self._name, dir_fd=self._parent_fd)
-        _fsync_directory_fd(self._parent_fd)
-        os.close(self._fd)
-        os.close(self._parent_fd)
-        self._released = True
+        try:
+            self._close_owned_descriptor(state=_LockState.RELEASED)
+        except OSError as exc:
+            self._state = _LockState.COMPROMISED
+            raise LockOwnershipError("root authority release failed") from exc
 
 
 def parse_manifest_bytes(
@@ -671,7 +796,9 @@ def parse_checkpoint_bytes(
     segment_id: str,
 ) -> RawManifestCheckpointV0:
     if not raw or not raw.endswith(b"\n") or raw.count(b"\n") != 1:
-        raise BronzeIntegrityError("checkpoint must be one complete newline-terminated JSON object")
+        raise BronzeIntegrityError(
+            "checkpoint must be one complete newline-terminated JSON object"
+        )
     try:
         checkpoint = RawManifestCheckpointV0.model_validate_json(raw[:-1])
     except (ValidationError, ValueError, json.JSONDecodeError) as exc:
@@ -685,9 +812,15 @@ def read_manifest_entries(
     store: BronzeStore,
     manifest_date: date,
     segment_id: str,
+    *,
+    authority_fd: int | None = None,
 ) -> tuple[RawManifestEntryV0, ...]:
     return parse_manifest_bytes(
-        store.read_manifest_bytes(manifest_date, segment_id),
+        store.read_manifest_bytes(
+            manifest_date,
+            segment_id,
+            authority_fd=authority_fd,
+        ),
         expected_segment_id=segment_id,
     )
 
@@ -696,9 +829,15 @@ def read_manifest_checkpoint(
     store: BronzeStore,
     manifest_date: date,
     segment_id: str,
+    *,
+    authority_fd: int | None = None,
 ) -> RawManifestCheckpointV0:
     return parse_checkpoint_bytes(
-        store.read_checkpoint_bytes(manifest_date, segment_id),
+        store.read_checkpoint_bytes(
+            manifest_date,
+            segment_id,
+            authority_fd=authority_fd,
+        ),
         manifest_date=manifest_date,
         segment_id=segment_id,
     )
@@ -717,16 +856,28 @@ def verify_checkpoint_against_entries(
 
 def scan_global_observation_authority(
     store: BronzeStore,
+    *,
+    authority_fd: int | None = None,
 ) -> tuple[
     dict[str, RawManifestEntryV0],
     dict[str, RawManifestEntryV0],
 ]:
     by_slot: dict[str, RawManifestEntryV0] = {}
     by_event_id: dict[str, RawManifestEntryV0] = {}
-    for manifest_date, segment_id in store.manifest_files():
-        entries = read_manifest_entries(store, manifest_date, segment_id)
+    for manifest_date, segment_id in store.manifest_files(authority_fd=authority_fd):
+        entries = read_manifest_entries(
+            store,
+            manifest_date,
+            segment_id,
+            authority_fd=authority_fd,
+        )
         try:
-            checkpoint = read_manifest_checkpoint(store, manifest_date, segment_id)
+            checkpoint = read_manifest_checkpoint(
+                store,
+                manifest_date,
+                segment_id,
+                authority_fd=authority_fd,
+            )
         except FileNotFoundError:
             checkpoint = None
         if checkpoint is not None:
@@ -757,17 +908,26 @@ class ManifestWriter:
         self.segment_id = segment_id
         self._closed = False
         self._finalized = False
+        self._terminal_error: LockOwnershipError | None = None
         self._manifest_ref = store.manifest_ref(manifest_date, segment_id)
         self._checkpoint_ref = store.checkpoint_ref(manifest_date, segment_id)
-        self._segment_lock = OwnedLock.acquire(
+        self._authority_lock = OwnedLock.acquire(
             store,
-            store.lock_ref(manifest_date, segment_id),
+            store.global_authority_lock_ref(),
         )
         try:
-            if store.exists_regular(self._checkpoint_ref):
+            authority_fd = self._authority_lock.authority_fd
+            if store.exists_regular(self._checkpoint_ref, authority_fd=authority_fd):
                 raise SegmentFinalizedError("manifest segment is permanently finalized")
-            store.ensure_empty_file(self._manifest_ref)
-            self.entries = list(read_manifest_entries(store, manifest_date, segment_id))
+            store.ensure_empty_file(self._manifest_ref, authority_fd=authority_fd)
+            self.entries = list(
+                read_manifest_entries(
+                    store,
+                    manifest_date,
+                    segment_id,
+                    authority_fd=authority_fd,
+                )
+            )
             self._by_slot: dict[str, RawManifestEntryV0] = {}
             for entry in self.entries:
                 slot = entry.raw_event.observation_slot_id
@@ -778,9 +938,12 @@ class ManifestWriter:
                 self._by_slot[slot] = entry
         except BaseException as initialization_error:
             try:
-                self._segment_lock.release()
+                self._authority_lock.release()
             except SingleWriterError as ownership_error:
+                self._closed = True
+                self._terminal_error = LockOwnershipError(str(ownership_error))
                 raise ownership_error from initialization_error
+            self._closed = True
             raise
 
     def __enter__(self) -> ManifestWriter:
@@ -794,82 +957,114 @@ class ManifestWriter:
     def finalized(self) -> bool:
         return self._finalized
 
+    def _assert_active(self) -> int:
+        if self._terminal_error is not None:
+            raise LockOwnershipError("manifest writer is terminal after authority failure") from (
+                self._terminal_error
+            )
+        if self._closed:
+            raise SingleWriterError("manifest writer is closed")
+        try:
+            self._authority_lock.assert_owned()
+        except LockOwnershipError as exc:
+            self._closed = True
+            self._terminal_error = exc
+            raise
+        return self._authority_lock.authority_fd
+
     def close(self) -> None:
+        if self._terminal_error is not None:
+            raise LockOwnershipError("manifest writer is terminal after authority failure") from (
+                self._terminal_error
+            )
         if self._closed:
             return
-        self._segment_lock.release()
+        try:
+            self._authority_lock.release()
+        except LockOwnershipError as exc:
+            self._closed = True
+            self._terminal_error = exc
+            raise
         self._closed = True
 
     def append(self, event: RawEventV0) -> ManifestAppendResult:
-        if self._closed:
-            raise SingleWriterError("manifest writer is closed")
-        if self._finalized or self.store.exists_regular(self._checkpoint_ref):
+        authority_fd = self._assert_active()
+        if self._finalized or self.store.exists_regular(
+            self._checkpoint_ref,
+            authority_fd=authority_fd,
+        ):
             raise SegmentFinalizedError("cannot append after segment finalization")
-        self._segment_lock.assert_owned()
         exact_event = RawEventV0.model_validate(event)
-        self.store.verify_payload(exact_event)
-        global_lock = OwnedLock.acquire(
+        self.store.verify_payload(exact_event, authority_fd=authority_fd)
+        by_slot, by_event_id = scan_global_observation_authority(
             self.store,
-            self.store.global_authority_lock_ref(),
-            wait_timeout=5.0,
+            authority_fd=authority_fd,
+        )
+        existing = by_slot.get(exact_event.observation_slot_id)
+        if existing is not None:
+            if existing.raw_event == exact_event:
+                return ManifestAppendResult(AppendDisposition.IDEMPOTENT, existing)
+            raise ObservationConflictError(
+                "global observation slot has conflicting RawEvent authority"
+            )
+        existing_event = by_event_id.get(exact_event.source_event_id)
+        if existing_event is not None:
+            if existing_event.raw_event == exact_event:
+                return ManifestAppendResult(AppendDisposition.IDEMPOTENT, existing_event)
+            raise ObservationConflictError(
+                "global source_event_id has conflicting RawEvent authority"
+            )
+        previous_hash = self.entries[-1].entry_hash if self.entries else MANIFEST_GENESIS_HASH
+        entry = RawManifestEntryV0.bind(
+            segment_id=self.segment_id,
+            entry_index=len(self.entries),
+            previous_entry_hash=previous_hash,
+            raw_event=exact_event,
+        )
+        line = entry.model_dump_json().encode("utf-8") + b"\n"
+
+        authority_fd = self._assert_active()
+        parent_fd, filename = self.store._open_parent(
+            self._manifest_ref,
+            create=False,
+            authority_fd=authority_fd,
         )
         try:
-            by_slot, by_event_id = scan_global_observation_authority(self.store)
-            existing = by_slot.get(exact_event.observation_slot_id)
-            if existing is not None:
-                if existing.raw_event == exact_event:
-                    return ManifestAppendResult(AppendDisposition.IDEMPOTENT, existing)
-                raise ObservationConflictError(
-                    "global observation slot has conflicting RawEvent authority"
-                )
-            existing_event = by_event_id.get(exact_event.source_event_id)
-            if existing_event is not None:
-                if existing_event.raw_event == exact_event:
-                    return ManifestAppendResult(AppendDisposition.IDEMPOTENT, existing_event)
-                raise ObservationConflictError(
-                    "global source_event_id has conflicting RawEvent authority"
-                )
-            previous_hash = self.entries[-1].entry_hash if self.entries else MANIFEST_GENESIS_HASH
-            entry = RawManifestEntryV0.bind(
-                segment_id=self.segment_id,
-                entry_index=len(self.entries),
-                previous_entry_hash=previous_hash,
-                raw_event=exact_event,
+            fd = _open_verified_at(
+                parent_fd,
+                filename,
+                os.O_WRONLY | os.O_APPEND,
+                kind="regular",
             )
-            line = entry.model_dump_json().encode("utf-8") + b"\n"
-            parent_fd, filename = self.store._open_parent(self._manifest_ref, create=False)
             try:
-                fd = _open_verified_at(
-                    parent_fd,
-                    filename,
-                    os.O_WRONLY | os.O_APPEND,
-                    kind="regular",
-                )
-                try:
-                    written = os.write(fd, line)
-                    if written != len(line):
-                        os.fsync(fd)
-                        raise OSError("short manifest append")
+                written = os.write(fd, line)
+                if written != len(line):
                     os.fsync(fd)
-                finally:
-                    os.close(fd)
-                _fsync_directory_fd(parent_fd)
+                    raise OSError("short manifest append")
+                os.fsync(fd)
             finally:
-                os.close(parent_fd)
-            self.entries.append(entry)
-            self._by_slot[exact_event.observation_slot_id] = entry
-            return ManifestAppendResult(AppendDisposition.APPENDED, entry)
+                os.close(fd)
+            _fsync_directory_fd(parent_fd)
         finally:
-            global_lock.release()
+            os.close(parent_fd)
+        self.entries.append(entry)
+        self._by_slot[exact_event.observation_slot_id] = entry
+        return ManifestAppendResult(AppendDisposition.APPENDED, entry)
 
     def finalize(self) -> RawManifestCheckpointV0:
-        if self._closed:
-            raise SingleWriterError("manifest writer is closed")
-        if self._finalized or self.store.exists_regular(self._checkpoint_ref):
+        authority_fd = self._assert_active()
+        if self._finalized or self.store.exists_regular(
+            self._checkpoint_ref,
+            authority_fd=authority_fd,
+        ):
             raise SegmentFinalizedError("manifest segment is already finalized")
-        self._segment_lock.assert_owned()
-        self.store.fsync_file(self._manifest_ref)
-        entries = read_manifest_entries(self.store, self.manifest_date, self.segment_id)
+        self.store.fsync_file(self._manifest_ref, authority_fd=authority_fd)
+        entries = read_manifest_entries(
+            self.store,
+            self.manifest_date,
+            self.segment_id,
+            authority_fd=authority_fd,
+        )
         if tuple(self.entries) != entries:
             raise BronzeIntegrityError("manifest changed outside the active writer")
         terminal = entries[-1].entry_hash if entries else MANIFEST_GENESIS_HASH
@@ -879,10 +1074,12 @@ class ManifestWriter:
             expected_entry_count=len(entries),
             terminal_entry_hash=terminal,
         )
+        authority_fd = self._assert_active()
         self.store.publish_checkpoint(
             self.manifest_date,
             self.segment_id,
             checkpoint,
+            authority_fd=authority_fd,
         )
         self._finalized = True
         self.close()
