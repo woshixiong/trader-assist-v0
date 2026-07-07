@@ -34,9 +34,9 @@ Payload publication writes and fsyncs a same-filesystem temporary file and atomi
 
 ## Lock authority
 
-A0 uses a root-wide single-writer protocol. `ManifestWriter` acquires an exclusive non-blocking `fcntl.flock` on the **parent directory** of the Bronze root (not the root directory itself). The root directory is opened through the locked parent descriptor with no-follow directory semantics. The same root descriptor anchors storage traversal for the complete writer lifetime, while the parent descriptor holds the kernel lock.
+A0 uses a root-wide single-writer protocol. `ManifestWriter` acquires an exclusive non-blocking `fcntl.flock` on the **authority_anchor directory** (supervisor-owned parent of the Bronze root by default), not the root directory itself. The root directory is opened through a relative path from the locked authority_anchor descriptor with no-follow directory semantics. The same root descriptor anchors storage traversal for the complete writer lifetime, while the authority_anchor descriptor holds the kernel lock.
 
-**Stable namespace authority (R3B-ROOTNS)**: Locking the parent directory ensures authority survives root rename or replacement within the same parent directory. The root inode identity (st_dev, st_ino) is verified at acquisition and at every authority boundary through the parent descriptor. If the root identity is lost, the authority fails closed.
+**Stable namespace authority (R3B-ROOTNS)**: Locking the supervisor-owned authority_anchor directory ensures authority survives root rename or replacement within the same authority_anchor directory. The root inode identity (st_dev, st_ino) is verified at acquisition and at every authority boundary through the authority_anchor descriptor. If the root identity is lost, the authority fails closed. The authority_anchor must be owned by the supervisor and not writable by the collector.
 
 **Fork safety (R3B-FORK)**: `OwnedLock` records the creating process PID. On fork, `os.register_at_fork(after_in_child=...)` marks all locks as FORK_INVALID. All authority methods (authority_fd, assert_owned, release, append, finalize, close) verify the calling PID and reject non-owner and fork-child callers.
 

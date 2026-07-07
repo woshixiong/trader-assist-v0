@@ -21,7 +21,7 @@ Observation slots and raw observation IDs are globally unique within one Bronze 
 
 Lock correctness does not depend on a removable pathname marker. Legacy segment/global `.lock` names are not created, overwritten, unlinked, cleaned, or used as an exclusivity namespace. Acquisition failure and release close only the descriptors owned by that acquisition.
 
-The kernel-backed exclusive lock is held on the **parent directory** of the Bronze persistence root, not the root directory itself. This ensures that authority survives root rename or replacement within the same parent directory. The root directory is opened through the locked parent descriptor, and its inode identity (st_dev, st_ino) is verified at acquisition and at every authority boundary.
+The kernel-backed exclusive lock is held on the **authority_anchor directory** (supervisor-owned parent of the Bronze persistence root), not the root directory itself. This ensures that authority survives root rename or replacement within the same authority_anchor directory. The root directory is opened through a relative path from the locked authority_anchor descriptor, and its inode identity (st_dev, st_ino) is verified at acquisition and at every authority boundary.
 
 Root-path loss, replacement, type change, descriptor identity mismatch, or kernel release failure places the lock and writer in a terminal compromised state; append and finalize remain disabled. A0 performs no automatic stale-lock recovery.
 
@@ -31,7 +31,7 @@ Root-path loss, replacement, type change, descriptor identity mismatch, or kerne
 
 **Writer serialization**: ManifestWriter uses a `threading.RLock` and a `_WriterState` state machine (ACTIVE, FINALIZING, FINALIZED, CLOSING, CLOSED, COMPROMISED, FORK_INVALID) to serialize all public operations. Repeated close is deterministic and safe. Concurrent append, close, and finalize calls are serialized through the lock.
 
-**Provisioning contract**: The Bronze persistence root must be provisioned by the collector account before any writer is created. The parent directory of the root must be writable only by the collector account. The root directory must be a real directory (not a symlink). All cooperative writers must use the same lock protocol. The parent directory must not be renamed or replaced while any writer holds authority.
+**Provisioning contract**: The Bronze persistence root must be provisioned by the collector account before any writer is created. The `authority_anchor` directory (parent of the root by default) must be owned by the supervisor and must not be writable by the collector account. The authority_anchor must be a real directory (not a symlink) and must remain stable for the lifetime of all writers. The root directory must be a real directory (not a symlink) and must reside under the authority_anchor. All cooperative writers must use the same lock protocol and the same authority_anchor. The authority_anchor must not be renamed or replaced while any writer holds authority. The collector account must not be able to rename, replace, or delete the authority_anchor directory.
 
 The kernel lock is advisory. The persistence root and its parent must be writable only by the collector account, and other software must use the same lock protocol. A0 does not claim protection against a privileged actor that can bypass advisory locks, replace higher-level filesystem mount or parent authorities, or directly mutate opened directory entries.
 

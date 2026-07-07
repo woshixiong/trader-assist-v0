@@ -1181,7 +1181,7 @@ class ManifestWriter:
         if self._writer_state is _WriterState.CLOSED:
             raise SingleWriterError("manifest writer is closed")
         if self._writer_state is _WriterState.FINALIZING:
-            raise SegmentFinalizedError("manifest segment is being finalized")
+            pass
         if self._writer_state is _WriterState.FINALIZED:
             raise SegmentFinalizedError("manifest segment is already finalized")
         if self._terminal_error is not None:

@@ -37,7 +37,7 @@ The root-wide authority is held for the complete writer lifetime. Different segm
 
 **R3B-OPERATION** (writer operation serialization): ManifestWriter serializes all public operations via `threading.RLock` and `_WriterState` state machine. Repeated close is deterministic. Concurrent append/close/finalize are safe.
 
-**R3B-ROOTNS** (stable namespace authority): OwnedLock acquires a kernel lock on the parent directory of the Bronze root, ensuring authority survives root rename/replacement. Root inode identity is verified at acquisition and at every authority boundary through the parent descriptor.
+**R3B-ROOTNS** (stable namespace authority): OwnedLock acquires a kernel lock on the supervisor-owned authority_anchor directory (parent of the Bronze root by default), ensuring authority survives root rename/replacement. Root inode identity is verified at acquisition and at every authority boundary through the parent descriptor. The authority_anchor must be owned by the supervisor and not writable by the collector.
 
 **R4B-FD** (descriptor lifecycle): Descriptor state tracked via `_FdState` (OPEN_OWNED, UNLOCKING, CLOSING, CLOSED, CLOSE_OUTCOME_UNKNOWN, POISONED, FORK_INVALID). Process-global poison gate blocks new writers when close outcome is uncertain. Descriptor is not invalidated before `os.close`.
 
