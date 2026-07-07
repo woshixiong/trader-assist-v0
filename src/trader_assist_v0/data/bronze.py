@@ -77,6 +77,16 @@ class _FdState(StrEnum):
     FORK_INVALID = "FORK_INVALID"
 
 
+class _WriterState(StrEnum):
+    ACTIVE = "ACTIVE"
+    FINALIZING = "FINALIZING"
+    FINALIZED = "FINALIZED"
+    CLOSING = "CLOSING"
+    CLOSED = "CLOSED"
+    COMPROMISED = "COMPROMISED"
+    FORK_INVALID = "FORK_INVALID"
+
+
 # Process-global poison gate: 0 = clean, 1 = poisoned
 _BRONZE_POISON_GATE = 0
 
@@ -978,6 +988,8 @@ class ManifestWriter:
         manifest_date: date,
         segment_id: str,
     ) -> None:
+        self._lock = threading.RLock()
+        self._writer_state = _WriterState.ACTIVE
         self.store = store
         self.manifest_date = manifest_date
         self.segment_id = segment_id
@@ -1025,8 +1037,9 @@ class ManifestWriter:
         return self
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
-        if not self._closed:
-            self.close()
+        with self._lock:
+            if self._writer_state is _WriterState.ACTIVE:
+                self.close()
 
     @property
     def finalized(self) -> bool:
@@ -1035,6 +1048,14 @@ class ManifestWriter:
     def _assert_active(self) -> int:
         if _BRONZE_POISON_GATE:
             raise LockOwnershipError("process bronze state is poisoned and cannot create new writers")
+        if self._writer_state is _WriterState.FORK_INVALID:
+            raise LockOwnershipError("manifest writer is invalid after fork")
+        if self._writer_state is _WriterState.COMPROMISED:
+            raise LockOwnershipError("manifest writer is terminal after authority failure")
+        if self._writer_state is _WriterState.CLOSED:
+            raise SingleWriterError("manifest writer is closed")
+        if self._writer_state is _WriterState.FINALIZED:
+            raise SegmentFinalizedError("manifest segment is already finalized")
         if self._terminal_error is not None:
             raise LockOwnershipError("manifest writer is terminal after authority failure") from (
                 self._terminal_error
@@ -1044,27 +1065,63 @@ class ManifestWriter:
         try:
             self._authority_lock.assert_owned()
         except LockOwnershipError as exc:
+            self._writer_state = _WriterState.COMPROMISED
             self._closed = True
             self._terminal_error = exc
             raise
         return self._authority_lock.authority_fd
 
     def close(self) -> None:
-        if self._terminal_error is not None:
-            raise LockOwnershipError("manifest writer is terminal after authority failure") from (
-                self._terminal_error
-            )
-        if self._closed:
+        with self._lock:
+            if self._writer_state is _WriterState.CLOSED:
+                return
+            if self._writer_state is _WriterState.FINALIZED:
+                return
+            if self._writer_state is _WriterState.COMPROMISED:
+                raise LockOwnershipError("manifest writer is terminal after authority failure")
+            if self._writer_state is _WriterState.FORK_INVALID:
+                raise LockOwnershipError("manifest writer is invalid after fork")
+            if self._terminal_error is not None:
+                raise LockOwnershipError("manifest writer is terminal after authority failure") from (
+                    self._terminal_error
+                )
+            if self._closed:
+                return
+            self._writer_state = _WriterState.CLOSING
+            try:
+                self._authority_lock.release()
+            except LockOwnershipError as exc:
+                self._writer_state = _WriterState.COMPROMISED
+                self._closed = True
+                self._terminal_error = exc
+                raise
+            self._writer_state = _WriterState.CLOSED
+            self._closed = True
+
+    def _close_locked(self) -> None:
+        """Internal close without acquiring the lock (caller must hold lock)."""
+        if self._writer_state is _WriterState.CLOSED:
             return
+        if self._writer_state is _WriterState.COMPROMISED:
+            return
+        if self._writer_state is _WriterState.FORK_INVALID:
+            return
+        self._writer_state = _WriterState.CLOSING
         try:
             self._authority_lock.release()
         except LockOwnershipError as exc:
+            self._writer_state = _WriterState.COMPROMISED
             self._closed = True
             self._terminal_error = exc
             raise
+        self._writer_state = _WriterState.CLOSED
         self._closed = True
 
     def append(self, event: RawEventV0) -> ManifestAppendResult:
+        with self._lock:
+            return self._append_locked(event)
+
+    def _append_locked(self, event: RawEventV0) -> ManifestAppendResult:
         authority_fd = self._assert_active()
         if self._finalized or self.store.exists_regular(
             self._checkpoint_ref,
@@ -1129,6 +1186,10 @@ class ManifestWriter:
         return ManifestAppendResult(AppendDisposition.APPENDED, entry)
 
     def finalize(self) -> RawManifestCheckpointV0:
+        with self._lock:
+            return self._finalize_locked()
+
+    def _finalize_locked(self) -> RawManifestCheckpointV0:
         authority_fd = self._assert_active()
         if self._finalized or self.store.exists_regular(
             self._checkpoint_ref,
@@ -1159,5 +1220,6 @@ class ManifestWriter:
             authority_fd=authority_fd,
         )
         self._finalized = True
-        self.close()
+        self._writer_state = _WriterState.FINALIZED
+        self._close_locked()
         return checkpoint
