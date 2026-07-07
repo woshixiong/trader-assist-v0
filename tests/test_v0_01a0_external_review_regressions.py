@@ -1799,8 +1799,480 @@ def test_root_identity_preserved_after_rename(tmp_path):
         pass
 
 # ============================================================
+# Tests added for Commit 6: parent replacement and root namespace tests
+# ============================================================
+
+def test_root_rename_blocked_with_authority_anchor(tmp_path):
+    """With authority_anchor, root rename does not release authority."""
+    store = BronzeStore(tmp_path / "root")
+    event = make_event(store, b"rename", sequence=1)
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-anchor")
+    writer.append(event)
+
+    context = mp.get_context("fork")
+    queue = context.Queue()
+
+    def rename_and_contend(root_str: str, anchor_str: str, queue_obj) -> None:
+        from pathlib import Path as _Path
+        try:
+            root_path = _Path(root_str)
+            anchor_path = _Path(anchor_str)
+            detached = anchor_path / "detached-root"
+            root_path.rename(detached)
+            root_path.mkdir()
+            queue_obj.put("RENAMED")
+            try:
+                new_store = BronzeStore(root_path, authority_anchor=anchor_path)
+                ManifestWriter(
+                    new_store,
+                    manifest_date=date(2026, 7, 8),
+                    segment_id="segment-new",
+                )
+                queue_obj.put("ACQUIRED_NEW")
+            except SingleWriterError:
+                queue_obj.put("BLOCKED_BY_OLD")
+        except Exception as exc:
+            queue_obj.put(f"ERROR:{exc}")
+
+    process = context.Process(
+        target=rename_and_contend,
+        args=(str(store.root), str(store.authority_anchor), queue),
+    )
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 0
+
+    result1 = queue.get(timeout=2)
+    result2 = queue.get(timeout=2)
+    assert result1 == "RENAMED"
+    # With authority_anchor, the new writer must be BLOCKED
+    assert result2 == "BLOCKED_BY_OLD",         f"Expected BLOCKED_BY_OLD, got {result2}"
+
+    writer.close()
+
+
+def test_immediate_parent_rename_blocked(tmp_path):
+    """Immediate parent rename should not release authority."""
+    store = BronzeStore(tmp_path / "root")
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-immediate")
+
+    context = mp.get_context("fork")
+    queue = context.Queue()
+
+    def parent_rename_contend(root_str: str, anchor_str: str, queue_obj) -> None:
+        from pathlib import Path as _Path
+        try:
+            root_path = _Path(root_str)
+            anchor_path = _Path(anchor_str)
+            # Rename the immediate parent directory
+            old_parent = root_path.parent
+            new_parent = anchor_path / "new-parent"
+            old_parent.rename(new_parent)
+            queue_obj.put("PARENT_RENAMED")
+            try:
+                new_store = BronzeStore(
+                    new_parent / root_path.name,
+                    authority_anchor=anchor_path,
+                )
+                ManifestWriter(
+                    new_store,
+                    manifest_date=date(2026, 7, 8),
+                    segment_id="segment-new",
+                )
+                queue_obj.put("ACQUIRED_NEW")
+            except SingleWriterError:
+                queue_obj.put("BLOCKED")
+        except Exception as exc:
+            queue_obj.put(f"ERROR:{exc}")
+
+    process = context.Process(
+        target=parent_rename_contend,
+        args=(str(store.root), str(store.authority_anchor), queue),
+    )
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 0
+
+    result1 = queue.get(timeout=2)
+    result2 = queue.get(timeout=2)
+    assert result1 == "PARENT_RENAMED"
+    # With authority_anchor, the new writer must be BLOCKED
+    assert result2 == "BLOCKED", f"Expected BLOCKED, got {result2}"
+
+    writer.close()
+
+
+def test_replacement_parent_new_root_blocked(tmp_path):
+    """Replacement parent with new root must still be blocked by authority."""
+    store = BronzeStore(tmp_path / "root")
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-replace")
+
+    context = mp.get_context("fork")
+    queue = context.Queue()
+
+    def replace_and_contend(root_str: str, anchor_str: str, queue_obj) -> None:
+        from pathlib import Path as _Path
+        try:
+            root_path = _Path(root_str)
+            anchor_path = _Path(anchor_str)
+            # Replace root with entirely new directory
+            import shutil
+            old_root = root_path
+            backup = anchor_path / "backup-root"
+            old_root.rename(backup)
+            new_root = anchor_path / root_path.name
+            new_root.mkdir()
+            queue_obj.put("REPLACED")
+            try:
+                new_store = BronzeStore(new_root, authority_anchor=anchor_path)
+                ManifestWriter(
+                    new_store,
+                    manifest_date=date(2026, 7, 8),
+                    segment_id="segment-new",
+                )
+                queue_obj.put("ACQUIRED_NEW")
+            except SingleWriterError:
+                queue_obj.put("BLOCKED")
+        except Exception as exc:
+            queue_obj.put(f"ERROR:{exc}")
+
+    process = context.Process(
+        target=replace_and_contend,
+        args=(str(store.root), str(store.authority_anchor), queue),
+    )
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 0
+
+    result1 = queue.get(timeout=2)
+    result2 = queue.get(timeout=2)
+    assert result1 == "REPLACED"
+    assert result2 == "BLOCKED", f"Expected BLOCKED, got {result2}"
+
+    writer.close()
+
+
+def test_second_writer_same_authority_namespace(tmp_path):
+    """Second writer must use the same authority namespace."""
+    store = BronzeStore(tmp_path / "root")
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-first")
+
+    context = mp.get_context("fork")
+    queue = context.Queue()
+
+    def second_writer(root_str: str, anchor_str: str, queue_obj) -> None:
+        from pathlib import Path as _Path
+        try:
+            new_store = BronzeStore(
+                _Path(root_str),
+                authority_anchor=_Path(anchor_str),
+            )
+            ManifestWriter(
+                new_store,
+                manifest_date=date(2026, 7, 8),
+                segment_id="segment-second",
+            )
+            queue_obj.put("ACQUIRED")
+        except SingleWriterError:
+            queue_obj.put("BLOCKED")
+        except Exception as exc:
+            queue_obj.put(f"ERROR:{exc}")
+
+    process = context.Process(
+        target=second_writer,
+        args=(str(store.root), str(store.authority_anchor), queue),
+    )
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 0
+    result = queue.get(timeout=2)
+    assert result == "BLOCKED", f"Expected BLOCKED, got {result}"
+
+    writer.close()
+
+
+def test_replacement_after_scan(tmp_path):
+    """Replacement after scan: authority must still hold."""
+    store = BronzeStore(tmp_path / "root")
+    event = make_event(store, b"scan", sequence=1)
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-scan")
+    writer.append(event)
+
+    context = mp.get_context("fork")
+    queue = context.Queue()
+
+    def replace_after_scan(root_str: str, anchor_str: str, queue_obj) -> None:
+        from pathlib import Path as _Path
+        try:
+            root_path = _Path(root_str)
+            anchor_path = _Path(anchor_str)
+            backup = anchor_path / "backup-scan"
+            root_path.rename(backup)
+            queue_obj.put("REPLACED_AFTER_SCAN")
+            try:
+                new_store = BronzeStore(anchor_path / root_path.name)
+                ManifestWriter(
+                    new_store,
+                    manifest_date=date(2026, 7, 8),
+                    segment_id="segment-new",
+                )
+                queue_obj.put("ACQUIRED_NEW")
+            except SingleWriterError:
+                queue_obj.put("BLOCKED")
+        except Exception as exc:
+            queue_obj.put(f"ERROR:{exc}")
+
+    process = context.Process(
+        target=replace_after_scan,
+        args=(str(store.root), str(store.authority_anchor), queue),
+    )
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 0
+
+    result1 = queue.get(timeout=2)
+    result2 = queue.get(timeout=2)
+    assert result1 == "REPLACED_AFTER_SCAN"
+    assert result2 == "BLOCKED", f"Expected BLOCKED after scan, got {result2}"
+
+    writer.close()
+
+
+def test_replacement_before_payload_publication(tmp_path):
+    """Replacement before payload publication: authority must still hold."""
+    store = BronzeStore(tmp_path / "root")
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-payload")
+
+    context = mp.get_context("fork")
+    queue = context.Queue()
+
+    def replace_before_payload(root_str: str, anchor_str: str, queue_obj) -> None:
+        from pathlib import Path as _Path
+        try:
+            root_path = _Path(root_str)
+            anchor_path = _Path(anchor_str)
+            backup = anchor_path / "backup-payload"
+            root_path.rename(backup)
+            queue_obj.put("REPLACED_BEFORE_PAYLOAD")
+            try:
+                new_store = BronzeStore(anchor_path / root_path.name)
+                ManifestWriter(
+                    new_store,
+                    manifest_date=date(2026, 7, 8),
+                    segment_id="segment-new",
+                )
+                queue_obj.put("ACQUIRED_NEW")
+            except SingleWriterError:
+                queue_obj.put("BLOCKED")
+        except Exception as exc:
+            queue_obj.put(f"ERROR:{exc}")
+
+    process = context.Process(
+        target=replace_before_payload,
+        args=(str(store.root), str(store.authority_anchor), queue),
+    )
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 0
+
+    result1 = queue.get(timeout=2)
+    result2 = queue.get(timeout=2)
+    assert result1 == "REPLACED_BEFORE_PAYLOAD"
+    assert result2 == "BLOCKED", f"Expected BLOCKED before payload, got {result2}"
+
+    writer.close()
+
+
+def test_replacement_before_manifest_write(tmp_path):
+    """Replacement before manifest write: authority must still hold."""
+    store = BronzeStore(tmp_path / "root")
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-manifest")
+
+    context = mp.get_context("fork")
+    queue = context.Queue()
+
+    def replace_before_manifest(root_str: str, anchor_str: str, queue_obj) -> None:
+        from pathlib import Path as _Path
+        try:
+            root_path = _Path(root_str)
+            anchor_path = _Path(anchor_str)
+            backup = anchor_path / "backup-manifest"
+            root_path.rename(backup)
+            queue_obj.put("REPLACED_BEFORE_MANIFEST")
+            try:
+                new_store = BronzeStore(anchor_path / root_path.name)
+                ManifestWriter(
+                    new_store,
+                    manifest_date=date(2026, 7, 8),
+                    segment_id="segment-new",
+                )
+                queue_obj.put("ACQUIRED_NEW")
+            except SingleWriterError:
+                queue_obj.put("BLOCKED")
+        except Exception as exc:
+            queue_obj.put(f"ERROR:{exc}")
+
+    process = context.Process(
+        target=replace_before_manifest,
+        args=(str(store.root), str(store.authority_anchor), queue),
+    )
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 0
+
+    result1 = queue.get(timeout=2)
+    result2 = queue.get(timeout=2)
+    assert result1 == "REPLACED_BEFORE_MANIFEST"
+    assert result2 == "BLOCKED", f"Expected BLOCKED before manifest, got {result2}"
+
+    writer.close()
+
+
+def test_replacement_after_manifest_fsync(tmp_path):
+    """Replacement after manifest fsync: authority must still hold."""
+    store = BronzeStore(tmp_path / "root")
+    event = make_event(store, b"fsync", sequence=1)
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-fsync")
+    writer.append(event)
+
+    context = mp.get_context("fork")
+    queue = context.Queue()
+
+    def replace_after_fsync(root_str: str, anchor_str: str, queue_obj) -> None:
+        from pathlib import Path as _Path
+        try:
+            root_path = _Path(root_str)
+            anchor_path = _Path(anchor_str)
+            backup = anchor_path / "backup-fsync"
+            root_path.rename(backup)
+            queue_obj.put("REPLACED_AFTER_FSYNC")
+            try:
+                new_store = BronzeStore(anchor_path / root_path.name)
+                ManifestWriter(
+                    new_store,
+                    manifest_date=date(2026, 7, 8),
+                    segment_id="segment-new",
+                )
+                queue_obj.put("ACQUIRED_NEW")
+            except SingleWriterError:
+                queue_obj.put("BLOCKED")
+        except Exception as exc:
+            queue_obj.put(f"ERROR:{exc}")
+
+    process = context.Process(
+        target=replace_after_fsync,
+        args=(str(store.root), str(store.authority_anchor), queue),
+    )
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 0
+
+    result1 = queue.get(timeout=2)
+    result2 = queue.get(timeout=2)
+    assert result1 == "REPLACED_AFTER_FSYNC"
+    assert result2 == "BLOCKED", f"Expected BLOCKED after fsync, got {result2}"
+
+    writer.close()
+
+
+def test_replacement_before_checkpoint_publication(tmp_path):
+    """Replacement before checkpoint publication: authority must still hold."""
+    store = BronzeStore(tmp_path / "root")
+    event = make_event(store, b"checkpoint", sequence=1)
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-checkpoint")
+    writer.append(event)
+
+    context = mp.get_context("fork")
+    queue = context.Queue()
+
+    def replace_before_checkpoint(root_str: str, anchor_str: str, queue_obj) -> None:
+        from pathlib import Path as _Path
+        try:
+            root_path = _Path(root_str)
+            anchor_path = _Path(anchor_str)
+            backup = anchor_path / "backup-checkpoint"
+            root_path.rename(backup)
+            queue_obj.put("REPLACED_BEFORE_CHECKPOINT")
+            try:
+                new_store = BronzeStore(anchor_path / root_path.name)
+                ManifestWriter(
+                    new_store,
+                    manifest_date=date(2026, 7, 8),
+                    segment_id="segment-new",
+                )
+                queue_obj.put("ACQUIRED_NEW")
+            except SingleWriterError:
+                queue_obj.put("BLOCKED")
+        except Exception as exc:
+            queue_obj.put(f"ERROR:{exc}")
+
+    process = context.Process(
+        target=replace_before_checkpoint,
+        args=(str(store.root), str(store.authority_anchor), queue),
+    )
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 0
+
+    result1 = queue.get(timeout=2)
+    result2 = queue.get(timeout=2)
+    assert result1 == "REPLACED_BEFORE_CHECKPOINT"
+    assert result2 == "BLOCKED", f"Expected BLOCKED before checkpoint, got {result2}"
+
+    writer.close()
+
+
+def test_replacement_during_finalize(tmp_path):
+    """Replacement during finalize: authority must still hold."""
+    store = BronzeStore(tmp_path / "root")
+    event = make_event(store, b"finalize", sequence=1)
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-finalize-r")
+    writer.append(event)
+
+    context = mp.get_context("fork")
+    queue = context.Queue()
+
+    def replace_during_finalize(root_str: str, anchor_str: str, queue_obj) -> None:
+        from pathlib import Path as _Path
+        try:
+            root_path = _Path(root_str)
+            anchor_path = _Path(anchor_str)
+            backup = anchor_path / "backup-finalize"
+            root_path.rename(backup)
+            queue_obj.put("REPLACED_DURING_FINALIZE")
+            try:
+                new_store = BronzeStore(anchor_path / root_path.name)
+                ManifestWriter(
+                    new_store,
+                    manifest_date=date(2026, 7, 8),
+                    segment_id="segment-new",
+                )
+                queue_obj.put("ACQUIRED_NEW")
+            except SingleWriterError:
+                queue_obj.put("BLOCKED")
+        except Exception as exc:
+            queue_obj.put(f"ERROR:{exc}")
+
+    process = context.Process(
+        target=replace_during_finalize,
+        args=(str(store.root), str(store.authority_anchor), queue),
+    )
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 0
+
+    result1 = queue.get(timeout=2)
+    result2 = queue.get(timeout=2)
+    assert result1 == "REPLACED_DURING_FINALIZE"
+    assert result2 == "BLOCKED", f"Expected BLOCKED during finalize, got {result2}"
+
+    writer.close()
+
+
+# ============================================================
 # Tests added for Commit 7: reproduce uncertain close lifecycle
 # ============================================================
+
 
 def test_poison_gate_prevents_new_writer(tmp_path):
     """When the poison gate is set, new writers cannot be created."""
