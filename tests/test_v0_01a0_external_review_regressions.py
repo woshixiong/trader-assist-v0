@@ -1059,8 +1059,8 @@ def test_fork_child_operations_after_parent_release_are_blocked(tmp_path):
         import time as _time
         _time.sleep(0.3)
         try:
-            lock.authority_fd
-            _os.write(write_pipe, b"CHILD_GOT_FD")
+            _fd = lock.authority_fd
+            _os.write(write_pipe, f"CHILD_GOT_FD:{_fd}".encode())
         except LockOwnershipError as exc:
             _os.write(write_pipe, f"CHILD_BLOCKED:{exc}".encode())
         except Exception as exc:

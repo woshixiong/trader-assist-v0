@@ -92,7 +92,7 @@ _BRONZE_POISON_GATE = 0
 
 
 # Module-level tracking for fork safety
-_owned_locks: list = []
+_owned_locks: list = []  # type: ignore[type-arg]
 
 
 def _after_fork_child() -> None:
