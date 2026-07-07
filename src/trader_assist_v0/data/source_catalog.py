@@ -17,21 +17,12 @@ RATE_LIMIT_OFFICIAL_SOURCE_LOCATION: Final = (
 ALLOWED_COINS: Final = ("BTC", "ETH")
 RUNTIME_CANDLE_INTERVALS: Final = ("1m", "3m", "5m", "15m", "1h")
 DOCUMENTED_CANDLE_INTERVALS: Final = (
-    "1m",
-    "3m",
-    "5m",
-    "15m",
-    "30m",
-    "1h",
-    "2h",
-    "4h",
-    "8h",
-    "12h",
-    "1d",
-    "3d",
-    "1w",
-    "1M",
+    "1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "8h", "12h",
+    "1d", "3d", "1w", "1M",
 )
+
+EndpointKind = Literal["WEBSOCKET", "INFO"]
+DocumentationStatus = Literal["VERIFIED", "AMBIGUOUS_DOCUMENTATION"]
 
 
 @dataclass(frozen=True)
@@ -39,12 +30,15 @@ class SourceCatalogEntry:
     catalog_version: str
     source_id: str
     endpoint_id: str
+    endpoint_kind: EndpointKind
     operation_type: str
+    coin_required: bool
     allowed_instruments: tuple[str, ...]
     allowed_candle_intervals: tuple[str, ...]
     documented_candle_intervals: tuple[str, ...]
     request_shape: str
     response_envelope: str
+    documentation_status: DocumentationStatus
     source_timestamp_availability: str
     timestamp_unit: str
     semantics: str
@@ -66,6 +60,7 @@ _INFO_DOC = "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/
 
 def _entry(
     endpoint_id: str,
+    endpoint_kind: EndpointKind,
     operation_type: str,
     request_shape: str,
     response_envelope: str,
@@ -78,18 +73,23 @@ def _entry(
     official_source_title: str,
     official_source_location: str,
     *,
+    coin_required: bool,
     candle: bool = False,
+    documentation_status: DocumentationStatus = "VERIFIED",
 ) -> SourceCatalogEntry:
     return SourceCatalogEntry(
         catalog_version=SOURCE_CATALOG_VERSION,
         source_id=SOURCE_ID,
         endpoint_id=endpoint_id,
+        endpoint_kind=endpoint_kind,
         operation_type=operation_type,
-        allowed_instruments=ALLOWED_COINS,
+        coin_required=coin_required,
+        allowed_instruments=ALLOWED_COINS if coin_required else (),
         allowed_candle_intervals=RUNTIME_CANDLE_INTERVALS if candle else (),
         documented_candle_intervals=DOCUMENTED_CANDLE_INTERVALS if candle else (),
         request_shape=request_shape,
         response_envelope=response_envelope,
+        documentation_status=documentation_status,
         source_timestamp_availability=source_timestamp_availability,
         timestamp_unit=timestamp_unit,
         semantics=semantics,
@@ -105,201 +105,123 @@ def _entry(
 
 ENTRIES: Final = (
     _entry(
-        "hl-ws-mainnet-public",
-        "trades",
+        "hl-ws-mainnet-public", "WEBSOCKET", "trades",
         '{"method":"subscribe","subscription":{"type":"trades","coin":"<ETH|BTC>"}}',
         '{"channel":"trades","data":"WsTrade[]"}',
-        "FIELD_TIME",
-        "MILLISECONDS",
-        "BATCHED_STREAM",
-        ("time", "coin", "tid"),
+        "FIELD_TIME", "MILLISECONDS", "BATCHED_STREAM", ("time", "coin", "tid"),
         "NO_DOCUMENTED_COMPLETE_PUBLIC_HISTORY_RECOVERY",
-        ("no documented source sequence", "reconnect continuity cannot be proven from local order"),
-        "WebSocket Subscriptions",
-        _WS_DOC,
+        ("no documented source sequence", "reconnect continuity cannot be proven"),
+        "WebSocket Subscriptions", _WS_DOC, coin_required=True,
     ),
     _entry(
-        "hl-ws-mainnet-public",
-        "l2Book",
+        "hl-ws-mainnet-public", "WEBSOCKET", "l2Book",
         '{"method":"subscribe","subscription":{"type":"l2Book","coin":"<ETH|BTC>"}}',
         '{"channel":"l2Book","data":"WsBook"}',
-        "FIELD_TIME",
-        "MILLISECONDS",
-        "FULL_SNAPSHOT_NOT_DELTA",
-        ("coin", "time"),
+        "FIELD_TIME", "MILLISECONDS", "FULL_SNAPSHOT_NOT_DELTA", ("coin", "time"),
         "CURRENT_SNAPSHOT_VIA_INFO_L2BOOK",
         ("no documented source sequence", "current snapshot cannot restore intermediate books"),
-        "WebSocket Subscriptions",
-        _WS_DOC,
+        "WebSocket Subscriptions", _WS_DOC, coin_required=True,
     ),
     _entry(
-        "hl-ws-mainnet-public",
-        "bbo",
+        "hl-ws-mainnet-public", "WEBSOCKET", "bbo",
         '{"method":"subscribe","subscription":{"type":"bbo","coin":"<ETH|BTC>"}}',
         '{"channel":"bbo","data":"WsBbo"}',
-        "FIELD_TIME",
-        "MILLISECONDS",
-        "CHANGE_ONLY_STREAM",
-        ("coin", "time"),
+        "FIELD_TIME", "MILLISECONDS", "CHANGE_ONLY_STREAM", ("coin", "time"),
         "CURRENT_STATE_CROSS_CHECK_ONLY",
         ("no documented source sequence", "silence does not imply disconnection"),
-        "WebSocket Subscriptions",
-        _WS_DOC,
+        "WebSocket Subscriptions", _WS_DOC, coin_required=True,
     ),
     _entry(
-        "hl-ws-mainnet-public",
-        "activeAssetCtx",
+        "hl-ws-mainnet-public", "WEBSOCKET", "activeAssetCtx",
         '{"method":"subscribe","subscription":{"type":"activeAssetCtx","coin":"<ETH|BTC>"}}',
         '{"channel":"activeAssetCtx","data":"WsActiveAssetCtx"}',
-        "NONE",
-        "NONE",
-        "CURRENT_OBSERVATION",
-        ("coin",),
+        "NONE", "NONE", "CURRENT_OBSERVATION", ("coin",),
         "CURRENT_CONTEXT_VIA_META_AND_ASSET_CONTEXTS",
         ("no documented source timestamp", "no documented source sequence"),
-        "WebSocket Subscriptions",
-        _WS_DOC,
+        "WebSocket Subscriptions", _WS_DOC, coin_required=True,
     ),
     _entry(
-        "hl-ws-mainnet-public",
-        "allMids",
+        "hl-ws-mainnet-public", "WEBSOCKET", "allMids",
         '{"method":"subscribe","subscription":{"type":"allMids"}}',
         '{"channel":"allMids","data":"AllMids"}',
-        "NONE",
-        "NONE",
-        "CURRENT_MAP_OBSERVATION",
-        (),
-        "CURRENT_MAP_VIA_INFO_ALL_MIDS",
+        "NONE", "NONE", "CURRENT_MAP_OBSERVATION", (), "CURRENT_MAP_VIA_INFO_ALL_MIDS",
         ("no documented source timestamp", "no documented source sequence"),
-        "WebSocket Subscriptions",
-        _WS_DOC,
+        "WebSocket Subscriptions", _WS_DOC, coin_required=False,
     ),
     _entry(
-        "hl-ws-mainnet-public",
-        "candle",
+        "hl-ws-mainnet-public", "WEBSOCKET", "candle",
         (
             '{"method":"subscribe","subscription":{"type":"candle",'
             '"coin":"<ETH|BTC>","interval":"<allowed>"}}'
         ),
-        '{"channel":"candle","data":"Candle[]"}',
-        "BAR_OPEN_AND_CLOSE_FIELDS",
-        "MILLISECONDS",
-        "MUTABLE_CURRENT_BAR_REVISION_CAPABLE",
-        ("coin", "interval", "open_time"),
-        "TIME_RANGE_BACKFILL_VIA_CANDLE_SNAPSHOT",
+        '{"channel":"candle","data":"Candle or Candle[]; official documentation differs"}',
+        "BAR_OPEN_AND_CLOSE_FIELDS", "MILLISECONDS", "MUTABLE_CURRENT_BAR_REVISION_CAPABLE",
+        ("coin", "interval", "open_time"), "TIME_RANGE_BACKFILL_VIA_CANDLE_SNAPSHOT",
         (
             "logical key is coin plus interval plus open time",
             "runtime enables only the bounded interval allowlist",
+            "actual data envelope must be fixture-verified before public transport is authorized",
         ),
-        "WebSocket Subscriptions",
-        _WS_DOC,
-        candle=True,
+        "WebSocket Subscriptions", _WS_DOC, coin_required=True, candle=True,
+        documentation_status="AMBIGUOUS_DOCUMENTATION",
     ),
     _entry(
-        "hl-info-mainnet-public",
-        "meta",
-        '{"type":"meta"}',
-        "PerpMeta",
-        "NONE",
-        "NONE",
-        "CURRENT_METADATA_SNAPSHOT",
-        ("universe_index", "name"),
-        "REQUERY_CURRENT_METADATA",
-        ("no historical metadata sequence",),
-        "Info endpoint",
-        _INFO_DOC,
+        "hl-info-mainnet-public", "INFO", "meta", '{"type":"meta"}', "PerpMeta",
+        "NONE", "NONE", "CURRENT_METADATA_SNAPSHOT", ("universe_index", "name"),
+        "REQUERY_CURRENT_METADATA", ("no historical metadata sequence",),
+        "Info endpoint", _INFO_DOC, coin_required=False,
     ),
     _entry(
-        "hl-info-mainnet-public",
-        "metaAndAssetCtxs",
-        '{"type":"metaAndAssetCtxs"}',
-        "[PerpMeta,PerpsAssetCtx[]]",
-        "NONE",
-        "NONE",
-        "CURRENT_METADATA_AND_CONTEXT_SNAPSHOT",
-        ("universe_index", "name"),
-        "REQUERY_CURRENT_METADATA_AND_CONTEXT",
-        ("no historical context sequence",),
-        "Info endpoint",
-        _INFO_DOC,
+        "hl-info-mainnet-public", "INFO", "metaAndAssetCtxs", '{"type":"metaAndAssetCtxs"}',
+        "[PerpMeta,PerpsAssetCtx[]]", "NONE", "NONE",
+        "CURRENT_METADATA_AND_CONTEXT_SNAPSHOT", ("universe_index", "name"),
+        "REQUERY_CURRENT_METADATA_AND_CONTEXT", ("no historical context sequence",),
+        "Info endpoint", _INFO_DOC, coin_required=False,
     ),
     _entry(
-        "hl-info-mainnet-public",
-        "allMids",
-        '{"type":"allMids"}',
-        "Record<string,string>",
-        "NONE",
-        "NONE",
-        "CURRENT_MAP_SNAPSHOT",
-        (),
-        "REQUERY_CURRENT_MAP",
-        ("empty books may use last trade price",),
-        "Info endpoint",
-        _INFO_DOC,
+        "hl-info-mainnet-public", "INFO", "allMids", '{"type":"allMids"}',
+        "Record<string,string>", "NONE", "NONE", "CURRENT_MAP_SNAPSHOT", (),
+        "REQUERY_CURRENT_MAP", ("empty books may use last trade price",),
+        "Info endpoint", _INFO_DOC, coin_required=False,
     ),
     _entry(
-        "hl-info-mainnet-public",
-        "l2Book",
-        '{"type":"l2Book","coin":"<ETH|BTC>"}',
-        "WsBook",
-        "FIELD_TIME",
-        "MILLISECONDS",
-        "CURRENT_FULL_SNAPSHOT",
-        ("coin", "time"),
-        "REQUERY_CURRENT_SNAPSHOT",
+        "hl-info-mainnet-public", "INFO", "l2Book",
+        '{"type":"l2Book","coin":"<ETH|BTC>"}', "WsBook", "FIELD_TIME", "MILLISECONDS",
+        "CURRENT_FULL_SNAPSHOT", ("coin", "time"), "REQUERY_CURRENT_SNAPSHOT",
         ("does not restore intermediate book history",),
-        "Info endpoint",
-        _INFO_DOC,
+        "Info endpoint", _INFO_DOC, coin_required=True,
     ),
     _entry(
-        "hl-info-mainnet-public",
-        "candleSnapshot",
+        "hl-info-mainnet-public", "INFO", "candleSnapshot",
         (
             '{"type":"candleSnapshot","req":{"coin":"<ETH|BTC>",'
             '"interval":"<allowed>","startTime":"<ms>","endTime":"<ms>"}}'
         ),
-        "Candle[]",
-        "BAR_OPEN_AND_CLOSE_FIELDS",
-        "MILLISECONDS",
-        "TIME_RANGE_SNAPSHOT",
-        ("coin", "interval", "open_time"),
-        "PAGINATED_TIME_RANGE_BACKFILL",
+        "Candle[]", "BAR_OPEN_AND_CLOSE_FIELDS", "MILLISECONDS", "TIME_RANGE_SNAPSHOT",
+        ("coin", "interval", "open_time"), "PAGINATED_TIME_RANGE_BACKFILL",
         ("official retention and response limits apply",),
-        "Info endpoint",
-        _INFO_DOC,
-        candle=True,
+        "Info endpoint", _INFO_DOC, coin_required=True, candle=True,
     ),
     _entry(
-        "hl-info-mainnet-public",
-        "fundingHistory",
+        "hl-info-mainnet-public", "INFO", "fundingHistory",
         '{"type":"fundingHistory","coin":"<ETH|BTC>","startTime":"<ms>"}',
-        "FundingHistory[]",
-        "FIELD_TIME",
-        "MILLISECONDS",
-        "TIME_RANGE_SNAPSHOT",
-        ("coin", "time"),
-        "PAGINATED_TIME_RANGE_BACKFILL",
+        "FundingHistory[]", "FIELD_TIME", "MILLISECONDS", "TIME_RANGE_SNAPSHOT",
+        ("coin", "time"), "PAGINATED_TIME_RANGE_BACKFILL",
         ("official retention and response limits apply",),
-        "Info endpoint",
-        _INFO_DOC,
+        "Info endpoint", _INFO_DOC, coin_required=True,
     ),
     _entry(
-        "hl-info-mainnet-public",
-        "predictedFundings",
-        '{"type":"predictedFundings"}',
-        "PredictedFunding[]",
-        "SOURCE_DEFINED",
-        "MILLISECONDS_WHERE_PRESENT",
-        "CURRENT_PREDICTION_SNAPSHOT",
-        ("venue", "coin"),
-        "REQUERY_CURRENT_PREDICTIONS",
-        ("prediction values may change",),
-        "Info endpoint",
-        _INFO_DOC,
+        "hl-info-mainnet-public", "INFO", "predictedFundings",
+        '{"type":"predictedFundings"}', "PredictedFunding[]", "SOURCE_DEFINED",
+        "MILLISECONDS_WHERE_PRESENT", "CURRENT_PREDICTION_SNAPSHOT", ("venue", "coin"),
+        "REQUERY_CURRENT_PREDICTIONS", ("prediction values may change",),
+        "Info endpoint", _INFO_DOC, coin_required=False,
     ),
 )
 
 ENTRY_BY_KEY: Final = {(entry.endpoint_id, entry.operation_type): entry for entry in ENTRIES}
+if len(ENTRY_BY_KEY) != len(ENTRIES):
+    raise RuntimeError("source catalog entry keys must be unique")
 
 
 def source_catalog_document() -> dict[str, object]:
@@ -320,8 +242,9 @@ def source_catalog_document() -> dict[str, object]:
 
 
 def source_catalog_hash() -> str:
-    material = canonical_json_bytes(source_catalog_document())
-    return sha256_hex(b"trader-assist-v0/source-catalog/v1\0" + material)
+    return sha256_hex(
+        b"trader-assist-v0/source-catalog/v1\0" + canonical_json_bytes(source_catalog_document())
+    )
 
 
 SOURCE_CATALOG_HASH: Final = source_catalog_hash()
@@ -342,12 +265,14 @@ def validate_public_selection(
     interval: str | None = None,
 ) -> SourceCatalogEntry:
     entry = get_entry(endpoint_id, operation_type)
-    if coin is not None and coin not in entry.allowed_instruments:
-        raise ValueError("unsupported instrument")
-    if operation_type not in {"allMids", "meta", "metaAndAssetCtxs", "predictedFundings"}:
+    if entry.coin_required:
         if coin is None:
             raise ValueError("coin is required for this source operation")
-    if operation_type in {"candle", "candleSnapshot"}:
+        if coin not in entry.allowed_instruments:
+            raise ValueError("unsupported instrument")
+    elif coin is not None:
+        raise ValueError("coin is not valid for this source operation")
+    if entry.allowed_candle_intervals:
         if interval not in entry.allowed_candle_intervals:
             raise ValueError("unsupported candle interval")
     elif interval is not None:
@@ -355,9 +280,8 @@ def validate_public_selection(
     return entry
 
 
-def endpoint_kind(endpoint_id: str) -> Literal["WEBSOCKET", "INFO"]:
-    if endpoint_id == "hl-ws-mainnet-public":
-        return "WEBSOCKET"
-    if endpoint_id == "hl-info-mainnet-public":
-        return "INFO"
-    raise ValueError("unsupported endpoint")
+def endpoint_kind(endpoint_id: str) -> EndpointKind:
+    kinds = {entry.endpoint_kind for entry in ENTRIES if entry.endpoint_id == endpoint_id}
+    if len(kinds) != 1:
+        raise ValueError("unsupported or ambiguous endpoint")
+    return next(iter(kinds))
