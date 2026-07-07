@@ -96,9 +96,24 @@ _owned_locks: list = []  # type: ignore[type-arg]
 
 
 def _after_fork_child() -> None:
-    """Mark all owned locks as FORK_INVALID in the child process."""
+    """Mark all owned locks as FORK_INVALID in the child process and close inherited fds."""
     global _BRONZE_POISON_GATE
     for lock in _owned_locks:
+        # Close inherited fd duplicates in child - must NOT call flock(LOCK_UN)
+        root_fd = lock._fd
+        parent_fd = lock._parent_fd
+        if root_fd >= 0:
+            try:
+                os.close(root_fd)
+            except OSError:
+                pass
+            lock._fd = -1
+        if parent_fd >= 0:
+            try:
+                os.close(parent_fd)
+            except OSError:
+                pass
+            lock._parent_fd = -1
         lock._fd_state = _FdState.FORK_INVALID
         lock._state = _LockState.FORK_INVALID
     _owned_locks.clear()
