@@ -26,6 +26,7 @@ from .events import (
     NormalizedEventV0,
     RawCaptureModeV0,
     RawEventV0,
+    RawManifestCheckpointV0,
     RawManifestEntryV0,
     ReplayStatusV0,
 )
@@ -82,6 +83,7 @@ __all__ = [
     "ProposalV0",
     "RawCaptureModeV0",
     "RawEventV0",
+    "RawManifestCheckpointV0",
     "RawManifestEntryV0",
     "ReplayStatusV0",
     "RequiredFeedContractV0",
