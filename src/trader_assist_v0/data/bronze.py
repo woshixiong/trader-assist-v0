@@ -684,6 +684,10 @@ class OwnedLock:
         *,
         wait_timeout: float = 0.0,
     ) -> OwnedLock:
+        if _BRONZE_POISON_GATE:
+            raise LockOwnershipError(
+                "process bronze state is poisoned and cannot create new writers"
+            )
         _validate_relative_path(relative_path)
         # Lock the parent directory of the Bronze root to ensure
         # authority survives root rename/replacement
@@ -1105,7 +1109,9 @@ class ManifestWriter:
 
     def _assert_active(self) -> int:
         if _BRONZE_POISON_GATE:
-            raise LockOwnershipError("process bronze state is poisoned and cannot create new writers")
+            raise LockOwnershipError(
+                "process bronze state is poisoned and cannot create new writers"
+            )
         if self._writer_state is _WriterState.FORK_INVALID:
             raise LockOwnershipError("manifest writer is invalid after fork")
         if self._writer_state is _WriterState.COMPROMISED:

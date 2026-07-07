@@ -1408,3 +1408,89 @@ def test_root_identity_preserved_after_rename(tmp_path):
         writer.close()
     except LockOwnershipError:
         pass
+
+# ============================================================
+# Tests added for Commit 7: reproduce uncertain close lifecycle
+# ============================================================
+
+def test_poison_gate_prevents_new_writer(tmp_path):
+    """When the poison gate is set, new writers cannot be created."""
+    store = BronzeStore(tmp_path / "root")
+    bronze_module._BRONZE_POISON_GATE = 1
+
+    with pytest.raises(LockOwnershipError, match="poisoned"):
+        ManifestWriter(store, manifest_date=DAY, segment_id="segment-poison")
+
+    # Reset poison gate
+    bronze_module._BRONZE_POISON_GATE = 0
+
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-clean")
+    writer.close()
+
+
+def test_fd_state_transitions_on_normal_close(tmp_path):
+    """Verify fd state transitions during normal close lifecycle."""
+    store = BronzeStore(tmp_path / "root")
+    lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
+
+    assert lock._fd_state == bronze_module._FdState.OPEN_OWNED
+    lock.release()
+    assert lock._fd_state == bronze_module._FdState.CLOSED
+    assert lock._fd == -1
+    assert lock._parent_fd == -1
+
+
+def test_double_release_does_not_double_free(tmp_path):
+    """Double release of OwnedLock should be safe and not double-free fds."""
+    store = BronzeStore(tmp_path / "root")
+    lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
+    lock.release()
+
+    with pytest.raises(LockOwnershipError):
+        lock.release()
+
+    assert lock._fd_state == bronze_module._FdState.CLOSED
+    assert lock._fd == -1
+
+
+def test_writer_state_transitions_on_normal_close(tmp_path):
+    """Verify writer state transitions during normal close lifecycle."""
+    store = BronzeStore(tmp_path / "root")
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-state")
+
+    assert writer._writer_state == bronze_module._WriterState.ACTIVE
+    writer.close()
+    assert writer._writer_state == bronze_module._WriterState.CLOSED
+
+
+def test_writer_state_transitions_on_finalize(tmp_path):
+    """Verify writer state transitions during finalize."""
+    store = BronzeStore(tmp_path / "root")
+    event = make_event(store, b"data", sequence=1)
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-finalize")
+    writer.append(event)
+
+    assert writer._writer_state == bronze_module._WriterState.ACTIVE
+    writer.finalize()
+    assert writer._writer_state == bronze_module._WriterState.CLOSED
+
+
+def test_writer_double_close_is_safe(tmp_path):
+    """Double close of ManifestWriter should be deterministic and safe."""
+    store = BronzeStore(tmp_path / "root")
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-dclose2")
+    writer.close()
+    # Second close should be a no-op
+    writer.close()
+    assert writer._writer_state == bronze_module._WriterState.CLOSED
+
+
+def test_writer_closed_raises_on_append(tmp_path):
+    """Append after close should raise SingleWriterError."""
+    store = BronzeStore(tmp_path / "root")
+    event = make_event(store, b"data", sequence=1)
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-closed")
+    writer.close()
+
+    with pytest.raises(SingleWriterError):
+        writer.append(event)
