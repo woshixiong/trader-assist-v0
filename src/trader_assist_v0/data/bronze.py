@@ -262,15 +262,32 @@ def _verify_regular_fd(fd: int, expected_size: int, expected_hash: str) -> None:
 
 
 class BronzeStore:
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, authority_anchor: Path | None = None) -> None:
         if _NOFOLLOW == 0 or _DIRECTORY == 0:
             raise RuntimeError("V0-01A0 requires O_NOFOLLOW and O_DIRECTORY support")
         _reject_symlink_ancestors(root)
         root.mkdir(parents=True, exist_ok=True)
         _reject_symlink(root)
         self.root = root.resolve(strict=True)
+        if authority_anchor is None:
+            self._authority_anchor = self.root.parent.resolve(strict=True)
+        else:
+            anchor = authority_anchor.resolve(strict=True)
+            if not anchor.is_dir():
+                raise ValueError("authority_anchor must be a directory")
+            # Verify the root is a child of the anchor
+            try:
+                self.root.relative_to(anchor)
+            except ValueError:
+                raise ValueError("root must be under the authority_anchor directory")
+            self._authority_anchor = anchor
         descriptor = _open_root_fd(self.root)
         os.close(descriptor)
+
+    @property
+    def authority_anchor(self) -> Path:
+        """The stable parent directory that holds the kernel lock authority."""
+        return self._authority_anchor
 
     def path(self, relative_path: str) -> Path:
         components = _validate_relative_path(relative_path)
@@ -704,9 +721,9 @@ class OwnedLock:
                 "process bronze state is poisoned and cannot create new writers"
             )
         _validate_relative_path(relative_path)
-        # Lock the parent directory of the Bronze root to ensure
-        # authority survives root rename/replacement
-        parent_dir = str(store.root.parent)
+        # Lock the stable authority anchor directory (supervisor-owned)
+        # to ensure authority survives root rename/replacement
+        parent_dir = str(store.authority_anchor)
         parent_fd = os.open(parent_dir, os.O_RDONLY | _DIRECTORY | _NOFOLLOW)
         locked = False
         deadline = time.monotonic() + wait_timeout
@@ -730,9 +747,10 @@ class OwnedLock:
                             "Bronze root already has an active manifest writer"
                         ) from exc
                     time.sleep(0.005)
-            # Open root through the locked parent directory
+            # Open root through the locked authority anchor directory
+            root_rel = store.root.relative_to(store.authority_anchor)
             root_fd = os.open(
-                store.root.name,
+                str(root_rel),
                 os.O_RDONLY | _DIRECTORY | _NOFOLLOW,
                 dir_fd=parent_fd,
             )
@@ -894,8 +912,9 @@ class OwnedLock:
             # Verify root identity through parent_fd if available
             if self._parent_fd >= 0:
                 try:
+                    root_rel = str(self.store.root.relative_to(self.store.authority_anchor))
                     root_meta = os.stat(
-                        self.store.root.name,
+                        root_rel,
                         dir_fd=self._parent_fd,
                         follow_symlinks=False,
                     )
