@@ -9,7 +9,6 @@ import pytest
 from jsonschema import ValidationError as JsonSchemaValidationError
 from jsonschema import validate as validate_schema
 from pydantic import BaseModel, ValidationError
-
 from trader_assist_v0.contracts import (
     BronzeReplayReportV0,
     EnvironmentV0,
@@ -316,7 +315,7 @@ def test_tail_entry_deletion_rejected(tmp_path, keep):
     store, _ = _finalized_store(tmp_path, (b"same", b"same"))
     manifest = store.path(store.manifest_ref(DAY, SEGMENT))
     lines = manifest.read_bytes().splitlines()
-    manifest.write_bytes((b"\n".join(lines[:keep]) + (b"\n" if keep else b"")))
+    manifest.write_bytes(b"\n".join(lines[:keep]) + (b"\n" if keep else b""))
     report = replay_segment(store, manifest_date=DAY, segment_id=SEGMENT)
     assert report.status is ReplayStatusV0.FAIL
     assert "CHECKPOINT_MANIFEST_MISMATCH" in report.reason_codes
