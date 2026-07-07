@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from trader_assist_v0.contracts import (
     AIRecommendationV0,
+    BronzeReplayReportV0,
     DataHealthEventV0,
     EvidenceBundleManifestV0,
     ExecutionPermitV0,
@@ -19,6 +20,7 @@ from trader_assist_v0.contracts import (
     PromotionRecordV0,
     ProposalV0,
     RawEventV0,
+    RawManifestEntryV0,
     RequiredFeedContractV0,
     SeedProvenanceEntryV0,
     StrategyCandidateV0,
@@ -34,6 +36,8 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "schemas" / "v0"
 MODELS: tuple[type[BaseModel], ...] = (
     RawEventV0,
+    RawManifestEntryV0,
+    BronzeReplayReportV0,
     RequiredFeedContractV0,
     InstrumentPrecisionContractV0,
     NormalizedEventV0,
