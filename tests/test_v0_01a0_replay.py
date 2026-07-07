@@ -7,7 +7,6 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
-
 import trader_assist_v0
 import trader_assist_v0.data.bronze as bronze_module
 from trader_assist_v0.contracts import (
