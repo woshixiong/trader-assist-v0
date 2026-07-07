@@ -1431,8 +1431,232 @@ def test_append_close_append_sequence_race(tmp_path):
     t2.join(timeout=5)
     assert not t1.is_alive()
     assert not t2.is_alive()# ============================================================
+# Tests added for Commit 4: fd close fault-injection at 1x/10x/50x
+# ============================================================
+
+def _run_fault_injection_subprocess(
+    tmp_path, iterations: int, fault_scenario: str, fault_fd: str
+) -> str:
+    """Run a subprocess that injects faults during fd close operations.
+
+    fault_scenario: "pre-syscall" or "post-syscall"
+    fault_fd: "root_fd" or "parent_fd"
+    """
+    import os as _os
+    import json as _json
+    context = mp.get_context("fork")
+    queue = context.Queue()
+
+    def worker(tmp_path_str: str, iterations: int, fault_scenario: str,
+               fault_fd: str, queue_obj) -> None:
+        from pathlib import Path as _Path
+        import os as _os
+        import json as _json
+        try:
+            # Import the module to access OwnedLock
+            from trader_assist_v0.data.bronze import (
+                BronzeStore, OwnedLock, _FdState, _BRONZE_POISON_GATE,
+                LockOwnershipError,
+            )
+            root = _Path(tmp_path_str) / "fault-root"
+            store = BronzeStore(root)
+
+            results = []
+            for i in range(iterations):
+                try:
+                    lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
+
+                    # Monkey-patch the _close_single_descriptor to inject faults
+                    original_close_single = OwnedLock._close_single_descriptor
+
+                    def faulty_close(fd, label, _original=original_close_single,
+                                    _scenario=fault_scenario, _target_fd=fault_fd):
+                        if label == _target_fd:
+                            if _scenario == "pre-syscall":
+                                raise OSError("pre-syscall fault injection")
+                            elif _scenario == "post-syscall":
+                                # Execute real close first, then raise error
+                                _os.close(fd)
+                                raise OSError("post-syscall fault injection")
+                        return _original(fd, label)
+
+                    OwnedLock._close_single_descriptor = staticmethod(faulty_close)
+
+                    try:
+                        lock.release()
+                    except (LockOwnershipError, OSError):
+                        pass
+                    finally:
+                        OwnedLock._close_single_descriptor = original_close_single
+
+                    # Check state
+                    fd_list = os.listdir("/proc/self/fd")
+                    results.append({
+                        "iteration": i,
+                        "fd_count": len(fd_list),
+                        "lock_state": str(lock._state),
+                        "fd_state": str(lock._fd_state),
+                        "poison_gate": _BRONZE_POISON_GATE,
+                        "fd_value": lock._fd,
+                        "parent_fd_value": lock._parent_fd,
+                    })
+
+                    # Reset poison gate for next iteration
+                    import trader_assist_v0.data.bronze as bronze_mod
+                    bronze_mod._BRONZE_POISON_GATE = 0
+
+                except Exception as exc:
+                    results.append({
+                        "iteration": i,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    })
+                    # Reset poison gate
+                    import trader_assist_v0.data.bronze as bronze_mod
+                    bronze_mod._BRONZE_POISON_GATE = 0
+
+            queue_obj.put(_json.dumps({"status": "ok", "results": results}))
+        except Exception as exc:
+            queue_obj.put(_json.dumps({"status": "error", "error": f"{type(exc).__name__}: {exc}"}))
+
+    process = context.Process(
+        target=worker,
+        args=(str(tmp_path), iterations, fault_scenario, fault_fd, queue),
+    )
+    process.start()
+    process.join(timeout=30)
+    assert process.exitcode == 0, f"Subprocess failed with exit code {process.exitcode}"
+    result = queue.get(timeout=5)
+    return result
+
+
+@pytest.mark.parametrize("iterations", [1, 10, 50])
+def test_fault_injection_pre_syscall_root_fd(tmp_path, iterations):
+    """Pre-syscall failure on root_fd close: fd known to be still open, no poison."""
+    import json as _json
+    result = _run_fault_injection_subprocess(
+        tmp_path, iterations, "pre-syscall", "root_fd"
+    )
+    data = _json.loads(result)
+    assert data["status"] == "ok"
+    # In pre-syscall failure, os.close is never called, so fd is known open
+    # The lock should enter a terminal state
+    for r in data["results"]:
+        if "error" not in r:
+            # After pre-syscall failure, state should be terminal
+            assert r["lock_state"] in ("COMPROMISED", "RELEASED"),                 f"Iteration {r['iteration']}: unexpected lock_state {r['lock_state']}"
+
+
+@pytest.mark.parametrize("iterations", [1, 10, 50])
+def test_fault_injection_post_syscall_root_fd(tmp_path, iterations):
+    """Post-syscall unknown on root_fd close: poison gate must be set."""
+    import json as _json
+    result = _run_fault_injection_subprocess(
+        tmp_path, iterations, "post-syscall", "root_fd"
+    )
+    data = _json.loads(result)
+    assert data["status"] == "ok"
+    for r in data["results"]:
+        if "error" not in r:
+            # After post-syscall unknown, poison gate should be set
+            assert r["poison_gate"] == 1,                 f"Iteration {r['iteration']}: poison gate not set"
+            assert r["fd_state"] in ("CLOSE_OUTCOME_UNKNOWN", "POISONED"),                 f"Iteration {r['iteration']}: unexpected fd_state {r['fd_state']}"
+
+
+@pytest.mark.parametrize("iterations", [1, 10, 50])
+def test_fault_injection_pre_syscall_parent_fd(tmp_path, iterations):
+    """Pre-syscall failure on parent_fd close: fd known to be still open."""
+    import json as _json
+    result = _run_fault_injection_subprocess(
+        tmp_path, iterations, "pre-syscall", "parent_fd"
+    )
+    data = _json.loads(result)
+    assert data["status"] == "ok"
+    for r in data["results"]:
+        if "error" not in r:
+            assert r["lock_state"] in ("COMPROMISED", "RELEASED"),                 f"Iteration {r['iteration']}: unexpected lock_state {r['lock_state']}"
+
+
+@pytest.mark.parametrize("iterations", [1, 10, 50])
+def test_fault_injection_post_syscall_parent_fd(tmp_path, iterations):
+    """Post-syscall unknown on parent_fd close: poison gate must be set."""
+    import json as _json
+    result = _run_fault_injection_subprocess(
+        tmp_path, iterations, "post-syscall", "parent_fd"
+    )
+    data = _json.loads(result)
+    assert data["status"] == "ok"
+    for r in data["results"]:
+        if "error" not in r:
+            assert r["poison_gate"] == 1,                 f"Iteration {r['iteration']}: poison gate not set"
+            assert r["fd_state"] in ("CLOSE_OUTCOME_UNKNOWN", "POISONED"),                 f"Iteration {r['iteration']}: unexpected fd_state {r['fd_state']}'
+
+
+def test_poison_gate_prevents_new_writer_after_close_unknown(tmp_path):
+    """After a close outcome unknown in a subprocess, new writers are blocked."""
+    import os as _os
+    import json as _json
+    context = mp.get_context("fork")
+    queue = context.Queue()
+
+    def worker(tmp_path_str: str, queue_obj) -> None:
+        from pathlib import Path as _Path
+        import os as _os
+        import json as _json
+        try:
+            from trader_assist_v0.data.bronze import (
+                BronzeStore, OwnedLock, _BRONZE_POISON_GATE, ManifestWriter,
+                LockOwnershipError, SingleWriterError,
+            )
+            root = _Path(tmp_path_str) / "poison-root"
+            store = BronzeStore(root)
+
+            lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
+
+            # Inject post-syscall fault on root_fd close
+            original_close_single = OwnedLock._close_single_descriptor
+
+            def faulty_close(fd, label, _original=original_close_single):
+                if label == "root_fd":
+                    _os.close(fd)  # Real close
+                    raise OSError("post-syscall fault injection")
+                return _original(fd, label)
+
+            OwnedLock._close_single_descriptor = staticmethod(faulty_close)
+
+            try:
+                lock.release()
+            except (LockOwnershipError, OSError):
+                pass
+            finally:
+                OwnedLock._close_single_descriptor = original_close_single
+
+            # Now try to create a new writer - should be blocked
+            try:
+                ManifestWriter(store, manifest_date=date(2026, 7, 7), segment_id="seg-poison")
+                queue_obj.put(_json.dumps({"status": "writer_created_unexpectedly"}))
+            except LockOwnershipError as exc:
+                queue_obj.put(_json.dumps({"status": "blocked", "reason": str(exc)}))
+            except Exception as exc:
+                queue_obj.put(_json.dumps({"status": "error", "error": str(exc)}))
+
+        except Exception as exc:
+            queue_obj.put(_json.dumps({"status": "error", "error": f"{type(exc).__name__}: {exc}"}))
+
+    process = context.Process(
+        target=worker,
+        args=(str(tmp_path), queue),
+    )
+    process.start()
+    process.join(timeout=15)
+    assert process.exitcode == 0
+    result = _json.loads(queue.get(timeout=5))
+    assert result["status"] == "blocked", f"Expected writer to be blocked, got: {result}"
+
+
+# ============================================================
 # Tests added for Commit 5: reproduce root namespace replacement
 # ============================================================
+
 
 def test_root_rename_while_authority_held_multiprocess(tmp_path):
     """Root rename should not release authority when parent directory is locked."""
