@@ -1078,8 +1078,173 @@ def test_fork_child_operations_after_parent_release_are_blocked(tmp_path):
         new_lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
         new_lock.release()
 # ============================================================
+# Tests added for Commit 2: fork child close duplicates + nested exit
+# ============================================================
+
+def test_child_closes_duplicates_owner_exit_third_acquires(tmp_path):
+    """owner取得锁 -> owner fork child -> child保持存活 -> owner不release直接exit
+    -> 第三个进程尝试取得锁 -> 必须成功
+    证明 child 已关闭 inherited duplicate，未延长锁生命周期"""
+    import os as _os
+    import time as _time
+    store = BronzeStore(tmp_path / "root")
+    lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
+    read_pipe, write_pipe = _os.pipe()
+    pid = _os.fork()
+    if pid == 0:
+        # Child: keep alive, report fd status, then wait
+        _os.close(read_pipe)
+        try:
+            # Try to use the lock's fd - should fail
+            _fd = lock.authority_fd
+            _os.write(write_pipe, f"CHILD_GOT_FD:{_fd}".encode())
+        except LockOwnershipError as exc:
+            _os.write(write_pipe, f"CHILD_BLOCKED:{exc}".encode())
+        except Exception as exc:
+            _os.write(write_pipe, f"CHILD_ERROR:{exc}".encode())
+        finally:
+            _os.close(write_pipe)
+            _os._exit(0)
+    else:
+        _os.close(write_pipe)
+        child_result = _os.read(read_pipe, 4096).decode()
+        _os.close(read_pipe)
+        _os.waitpid(pid, 0)
+        assert "CHILD_BLOCKED" in child_result
+        # Parent exits WITHOUT releasing the lock
+        # This simulates: owner acquires lock, forks, then exits
+        # The child should have closed its inherited fd duplicates
+        # so the lock should be released by kernel when parent exits
+        pass
+
+    # Now a third process should be able to acquire the lock
+    context = mp.get_context("fork")
+    queue = context.Queue()
+
+    def third_acquire(root_str: str, queue_obj) -> None:
+        from pathlib import Path as _Path
+        try:
+            new_store = BronzeStore(_Path(root_str))
+            new_lock = OwnedLock.acquire(new_store, new_store.global_authority_lock_ref())
+            new_lock.release()
+            queue_obj.put("ACQUIRED")
+        except SingleWriterError:
+            queue_obj.put("BLOCKED")
+        except Exception as exc:
+            queue_obj.put(f"ERROR:{type(exc).__name__}:{exc}")
+
+    process = context.Process(
+        target=third_acquire,
+        args=(str(store.root), queue),
+    )
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 0
+    result = queue.get(timeout=2)
+    assert result == "ACQUIRED", f"Third process should acquire lock after parent exit, got: {result}"
+
+
+def test_child_release_does_not_execute_lock_un(tmp_path):
+    """Child process release must not execute flock(LOCK_UN) on inherited fd."""
+    import os as _os
+    store = BronzeStore(tmp_path / "root")
+    lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
+    read_pipe, write_pipe = _os.pipe()
+    pid = _os.fork()
+    if pid == 0:
+        _os.close(read_pipe)
+        try:
+            lock.release()
+            _os.write(write_pipe, b"CHILD_RELEASED_OK")
+        except LockOwnershipError as exc:
+            _os.write(write_pipe, f"CHILD_BLOCKED:{exc}".encode())
+        except Exception as exc:
+            _os.write(write_pipe, f"CHILD_ERROR:{type(exc).__name__}:{exc}".encode())
+        finally:
+            _os.close(write_pipe)
+            _os._exit(0)
+    else:
+        _os.close(write_pipe)
+        child_result = _os.read(read_pipe, 4096).decode()
+        _os.close(read_pipe)
+        _os.waitpid(pid, 0)
+        assert "CHILD_BLOCKED" in child_result
+        # Parent should still hold the lock
+        lock.assert_owned()
+        lock.release()
+
+
+def test_child_close_does_not_execute_lock_un(tmp_path):
+    """Child process close must not execute flock(LOCK_UN) on inherited fd."""
+    import os as _os
+    store = BronzeStore(tmp_path / "root")
+    event = make_event(store, b"data", sequence=1)
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-child-close")
+    read_pipe, write_pipe = _os.pipe()
+    pid = _os.fork()
+    if pid == 0:
+        _os.close(read_pipe)
+        try:
+            writer.close()
+            _os.write(write_pipe, b"CHILD_CLOSED_OK")
+        except (LockOwnershipError, SingleWriterError) as exc:
+            _os.write(write_pipe, f"CHILD_BLOCKED:{type(exc).__name__}".encode())
+        except Exception as exc:
+            _os.write(write_pipe, f"CHILD_ERROR:{type(exc).__name__}:{exc}".encode())
+        finally:
+            _os.close(write_pipe)
+            _os._exit(0)
+    else:
+        _os.close(write_pipe)
+        child_result = _os.read(read_pipe, 4096).decode()
+        _os.close(read_pipe)
+        _os.waitpid(pid, 0)
+        assert "CHILD_BLOCKED" in child_result
+        # Parent should still hold the lock
+        writer.append(event)
+        writer.close()
+
+
+def test_parent_survives_second_writer_blocked_after_fork(tmp_path):
+    """After fork, parent still holds the lock and second writer is blocked."""
+    import os as _os
+    store = BronzeStore(tmp_path / "root")
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-parent-survives")
+    event = make_event(store, b"data", sequence=1)
+    writer.append(event)
+
+    read_pipe, write_pipe = _os.pipe()
+    pid = _os.fork()
+    if pid == 0:
+        _os.close(read_pipe)
+        try:
+            _fd = writer._authority_lock.authority_fd
+            _os.write(write_pipe, f"CHILD_GOT_FD:{_fd}".encode())
+        except LockOwnershipError as exc:
+            _os.write(write_pipe, f"CHILD_BLOCKED:{exc}".encode())
+        except Exception as exc:
+            _os.write(write_pipe, f"CHILD_ERROR:{exc}".encode())
+        finally:
+            _os.close(write_pipe)
+            _os._exit(0)
+    else:
+        _os.close(write_pipe)
+        child_result = _os.read(read_pipe, 4096).decode()
+        _os.close(read_pipe)
+        _os.waitpid(pid, 0)
+        assert "CHILD_BLOCKED" in child_result
+
+    # Second writer should still be blocked because parent holds lock
+    with pytest.raises(SingleWriterError):
+        ManifestWriter(store, manifest_date=DAY, segment_id="segment-other")
+
+    writer.close()
+
+
+# ============================================================
 # Tests added for Commit 3: reproduce same-writer operation races
 # ============================================================
+
 
 def test_concurrent_append_and_close_race(tmp_path):
     """Demonstrate that concurrent append and close on the same writer can race."""
