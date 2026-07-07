@@ -1,11 +1,34 @@
 from __future__ import annotations
 
+import hmac
+import re
 from enum import StrEnum
-from typing import Any
+from pathlib import PurePosixPath
+from typing import Any, Literal, Self
 
-from pydantic import Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .common import EnvironmentV0, OpaqueId, Sha256Hex, StrictModel, UTCDateTime, VersionId
+from .common import (
+    EnvironmentV0,
+    OpaqueId,
+    Sha256Hex,
+    StrictModel,
+    UTCDateTime,
+    VersionId,
+    canonical_json_bytes,
+    sha256_hex,
+)
+
+RAW_IDENTITY_VERSION = "trader-assist-v0/raw-observation/v1"
+OBSERVATION_SLOT_VERSION = "trader-assist-v0/raw-observation-slot/v1"
+MANIFEST_FORMAT_VERSION = "0.1.0"
+MANIFEST_HASH_CHAIN_VERSION = "trader-assist-v0/raw-manifest-entry/v1"
+REPLAY_REPORT_VERSION = "0.1.0"
+REPLAY_REPORT_HASH_VERSION = "trader-assist-v0/bronze-replay-report/v1"
+MANIFEST_GENESIS_HASH = "0" * 64
+_PAYLOAD_REF_RE = re.compile(
+    r"^payloads/sha256/(?P<prefix>[0-9a-f]{2})/(?P<digest>[0-9a-f]{64})\.payload$"
+)
 
 
 class EventTypeV0(StrEnum):
@@ -30,22 +53,318 @@ class EventTypeV0(StrEnum):
     DATA_HEALTH = "DataHealthEventV0"
 
 
+class RawCaptureModeV0(StrEnum):
+    WS_TEXT_UTF8_APPLICATION_PAYLOAD = "WS_TEXT_UTF8_APPLICATION_PAYLOAD"
+    HTTP_RESPONSE_BODY = "HTTP_RESPONSE_BODY"
+
+
+class ReplayStatusV0(StrEnum):
+    PASS = "PASS"
+    FAIL = "FAIL"
+
+
+def _validate_relative_path_text(value: str) -> str:
+    if "\x00" in value:
+        raise ValueError("relative path must not contain NUL")
+    if "\\" in value or re.match(r"^[A-Za-z]:", value):
+        raise ValueError("relative path must use portable POSIX syntax")
+    path = PurePosixPath(value)
+    if path.is_absolute() or value.startswith("/") or ".." in path.parts:
+        raise ValueError("relative path must be confined and must not traverse parents")
+    if any(part in {"", "."} for part in path.parts):
+        raise ValueError("relative path must not contain empty or current-directory components")
+    return value
+
+
+def compute_observation_slot_id(
+    *,
+    source_catalog_version: str,
+    source_id: str,
+    endpoint_id: str,
+    connection_id: str,
+    subscription_id: str,
+    receive_sequence: int,
+) -> str:
+    material = canonical_json_bytes(
+        {
+            "slot_version": OBSERVATION_SLOT_VERSION,
+            "source_catalog_version": source_catalog_version,
+            "source_id": source_id,
+            "endpoint_id": endpoint_id,
+            "connection_id": connection_id,
+            "subscription_id": subscription_id,
+            "receive_sequence": receive_sequence,
+        }
+    )
+    return sha256_hex(OBSERVATION_SLOT_VERSION.encode("utf-8") + b"\0" + material)
+
+
+def compute_raw_observation_id(
+    *,
+    source_catalog_version: str,
+    source_id: str,
+    endpoint_id: str,
+    connection_id: str,
+    subscription_id: str,
+    receive_sequence: int,
+    payload_sha256: str,
+) -> str:
+    material = canonical_json_bytes(
+        {
+            "identity_version": RAW_IDENTITY_VERSION,
+            "source_catalog_version": source_catalog_version,
+            "source_id": source_id,
+            "endpoint_id": endpoint_id,
+            "connection_id": connection_id,
+            "subscription_id": subscription_id,
+            "receive_sequence": receive_sequence,
+            "payload_sha256": payload_sha256,
+        }
+    )
+    return sha256_hex(RAW_IDENTITY_VERSION.encode("utf-8") + b"\0" + material)
+
+
 class RawEventV0(StrictModel):
+    model_config = ConfigDict(revalidate_instances="always")
+
     schema_version: VersionId
-    source_event_id: OpaqueId
+    source_event_id: Sha256Hex
+    observation_slot_id: Sha256Hex
     source_id: OpaqueId
+    source_catalog_version: VersionId
+    endpoint_id: OpaqueId = Field(validation_alias=AliasChoices("endpoint_id", "endpoint"))
     connection_id: OpaqueId
-    endpoint: str = Field(min_length=1, max_length=300)
-    subscription: str = Field(min_length=1, max_length=300)
-    environment: EnvironmentV0
-    collector_version: VersionId
-    collector_receive_time: UTCDateTime
-    source_event_time: UTCDateTime | None = None
+    subscription_id: OpaqueId = Field(
+        validation_alias=AliasChoices("subscription_id", "subscription")
+    )
     receive_sequence: int = Field(ge=0)
+    source_native_id: str | None = Field(default=None, max_length=300)
+    source_native_cursor: str | None = Field(default=None, max_length=300)
+    collector_version: VersionId
+    environment: Literal[EnvironmentV0.READ_ONLY]
+    capture_mode: RawCaptureModeV0
+    content_type: str = Field(min_length=1, max_length=120)
     payload_sha256: Sha256Hex
     payload_size_bytes: int = Field(ge=0)
     payload_encoding: str = Field(min_length=1, max_length=40)
     payload_ref: str = Field(min_length=1, max_length=500)
+    source_event_time: UTCDateTime | None = None
+    source_publish_time: UTCDateTime | None = None
+    first_observed_time: UTCDateTime
+    collector_receive_time: UTCDateTime
+    collector_monotonic_ns: int = Field(ge=0)
+    revision_time: UTCDateTime | None = None
+
+    @field_validator("payload_ref")
+    @classmethod
+    def validate_payload_ref(cls, value: str) -> str:
+        return _validate_relative_path_text(value)
+
+    @model_validator(mode="after")
+    def validate_authority(self) -> Self:
+        if self.environment is not EnvironmentV0.READ_ONLY:
+            raise ValueError("raw A0 observations must remain in READ_ONLY environment")
+        if self.first_observed_time > self.collector_receive_time:
+            raise ValueError("first_observed_time must be <= collector_receive_time")
+        match = _PAYLOAD_REF_RE.fullmatch(self.payload_ref)
+        if match is None:
+            raise ValueError("payload_ref must use the content-addressed payload layout")
+        if match.group("digest") != self.payload_sha256:
+            raise ValueError("payload_ref digest must equal payload_sha256")
+        if match.group("prefix") != self.payload_sha256[:2]:
+            raise ValueError("payload_ref prefix must match payload_sha256")
+        expected_slot = compute_observation_slot_id(
+            source_catalog_version=self.source_catalog_version,
+            source_id=self.source_id,
+            endpoint_id=self.endpoint_id,
+            connection_id=self.connection_id,
+            subscription_id=self.subscription_id,
+            receive_sequence=self.receive_sequence,
+        )
+        if not hmac.compare_digest(self.observation_slot_id, expected_slot):
+            raise ValueError("observation_slot_id does not match collector receive identity")
+        expected = compute_raw_observation_id(
+            source_catalog_version=self.source_catalog_version,
+            source_id=self.source_id,
+            endpoint_id=self.endpoint_id,
+            connection_id=self.connection_id,
+            subscription_id=self.subscription_id,
+            receive_sequence=self.receive_sequence,
+            payload_sha256=self.payload_sha256,
+        )
+        if not hmac.compare_digest(self.source_event_id, expected):
+            raise ValueError("source_event_id does not match raw observation identity")
+        return self
+
+    @classmethod
+    def bind_observation(cls, **payload: Any) -> RawEventV0:
+        if "source_event_id" in payload:
+            raise ValueError("source_event_id must not be supplied to bind_observation()")
+        slot = compute_observation_slot_id(
+            source_catalog_version=str(payload["source_catalog_version"]),
+            source_id=str(payload["source_id"]),
+            endpoint_id=str(payload["endpoint_id"]),
+            connection_id=str(payload["connection_id"]),
+            subscription_id=str(payload["subscription_id"]),
+            receive_sequence=int(payload["receive_sequence"]),
+        )
+        identity = compute_raw_observation_id(
+            source_catalog_version=str(payload["source_catalog_version"]),
+            source_id=str(payload["source_id"]),
+            endpoint_id=str(payload["endpoint_id"]),
+            connection_id=str(payload["connection_id"]),
+            subscription_id=str(payload["subscription_id"]),
+            receive_sequence=int(payload["receive_sequence"]),
+            payload_sha256=str(payload["payload_sha256"]),
+        )
+        return cls.model_validate(
+            {**payload, "observation_slot_id": slot, "source_event_id": identity}
+        )
+
+
+class RawManifestEntryV0(StrictModel):
+    schema_version: VersionId
+    manifest_format_version: VersionId = MANIFEST_FORMAT_VERSION
+    hash_chain_version: VersionId = MANIFEST_HASH_CHAIN_VERSION
+    segment_id: OpaqueId
+    entry_index: int = Field(ge=0)
+    previous_entry_hash: Sha256Hex
+    entry_hash: Sha256Hex
+    raw_event: RawEventV0
+
+    @model_validator(mode="after")
+    def validate_entry(self) -> Self:
+        if self.entry_index == 0 and self.previous_entry_hash != MANIFEST_GENESIS_HASH:
+            raise ValueError("first manifest entry must use the genesis previous hash")
+        if self.entry_index > 0 and self.previous_entry_hash == MANIFEST_GENESIS_HASH:
+            raise ValueError("non-first manifest entry cannot use the genesis previous hash")
+        expected = compute_manifest_entry_hash(
+            schema_version=self.schema_version,
+            manifest_format_version=self.manifest_format_version,
+            hash_chain_version=self.hash_chain_version,
+            segment_id=self.segment_id,
+            entry_index=self.entry_index,
+            previous_entry_hash=self.previous_entry_hash,
+            raw_event=self.raw_event,
+        )
+        if not hmac.compare_digest(self.entry_hash, expected):
+            raise ValueError("entry_hash does not match canonical manifest entry")
+        return self
+
+    @classmethod
+    def bind(
+        cls,
+        *,
+        schema_version: str,
+        segment_id: str,
+        entry_index: int,
+        previous_entry_hash: str,
+        raw_event: RawEventV0,
+    ) -> RawManifestEntryV0:
+        digest = compute_manifest_entry_hash(
+            schema_version=schema_version,
+            manifest_format_version=MANIFEST_FORMAT_VERSION,
+            hash_chain_version=MANIFEST_HASH_CHAIN_VERSION,
+            segment_id=segment_id,
+            entry_index=entry_index,
+            previous_entry_hash=previous_entry_hash,
+            raw_event=raw_event,
+        )
+        return cls(
+            schema_version=schema_version,
+            segment_id=segment_id,
+            entry_index=entry_index,
+            previous_entry_hash=previous_entry_hash,
+            entry_hash=digest,
+            raw_event=raw_event,
+        )
+
+
+def compute_manifest_entry_hash(
+    *,
+    schema_version: str,
+    manifest_format_version: str,
+    hash_chain_version: str,
+    segment_id: str,
+    entry_index: int,
+    previous_entry_hash: str,
+    raw_event: RawEventV0,
+) -> str:
+    material = canonical_json_bytes(
+        {
+            "schema_version": schema_version,
+            "manifest_format_version": manifest_format_version,
+            "hash_chain_version": hash_chain_version,
+            "segment_id": segment_id,
+            "entry_index": entry_index,
+            "previous_entry_hash": previous_entry_hash,
+            "raw_event": BaseModel.model_dump(raw_event, mode="python", round_trip=True),
+        }
+    )
+    return sha256_hex(MANIFEST_HASH_CHAIN_VERSION.encode("utf-8") + b"\0" + material)
+
+
+class BronzeReplayReportV0(StrictModel):
+    schema_version: VersionId
+    replay_report_version: VersionId = REPLAY_REPORT_VERSION
+    manifest_segment_id: OpaqueId
+    source_catalog_version: VersionId
+    entries_checked: int = Field(ge=0)
+    unique_payload_blobs: int = Field(ge=0)
+    duplicate_payload_observations: int = Field(ge=0)
+    idempotent_event_observations: int = Field(ge=0)
+    conflicting_event_identities: int = Field(ge=0)
+    missing_payload_count: int = Field(ge=0)
+    corrupt_payload_count: int = Field(ge=0)
+    orphan_payload_count: int = Field(ge=0)
+    partial_manifest_count: int = Field(ge=0)
+    first_receive_time: UTCDateTime | None = None
+    last_receive_time: UTCDateTime | None = None
+    manifest_terminal_hash: Sha256Hex
+    status: ReplayStatusV0
+    reason_codes: tuple[str, ...]
+    report_hash: Sha256Hex
+
+    @field_validator("reason_codes")
+    @classmethod
+    def validate_reason_codes(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if value != tuple(sorted(set(value))):
+            raise ValueError("reason_codes must be sorted and unique")
+        return value
+
+    @model_validator(mode="after")
+    def validate_report(self) -> Self:
+        failures = (
+            self.conflicting_event_identities
+            + self.missing_payload_count
+            + self.corrupt_payload_count
+            + self.orphan_payload_count
+            + self.partial_manifest_count
+            + self.idempotent_event_observations
+        )
+        if self.status is ReplayStatusV0.PASS and (failures or self.reason_codes):
+            raise ValueError("PASS replay report cannot contain integrity failures")
+        if self.status is ReplayStatusV0.FAIL and not self.reason_codes:
+            raise ValueError("FAIL replay report requires reason_codes")
+        expected = compute_replay_report_hash(self)
+        if not hmac.compare_digest(self.report_hash, expected):
+            raise ValueError("report_hash does not match canonical replay report")
+        return self
+
+    @classmethod
+    def bind(cls, **payload: Any) -> BronzeReplayReportV0:
+        if "report_hash" in payload:
+            raise ValueError("report_hash must not be supplied to bind()")
+        provisional = cls.model_construct(report_hash="0" * 64, **payload)
+        digest = compute_replay_report_hash(provisional)
+        return cls.model_validate({**payload, "report_hash": digest})
+
+
+def compute_replay_report_hash(report: BronzeReplayReportV0) -> str:
+    payload = BaseModel.model_dump(report, mode="python", round_trip=True)
+    payload.pop("report_hash", None)
+    material = canonical_json_bytes(payload)
+    return sha256_hex(REPLAY_REPORT_HASH_VERSION.encode("utf-8") + b"\0" + material)
 
 
 class NormalizedEventV0(StrictModel):
