@@ -13,13 +13,15 @@ The repository must not contain:
 
 ## Evidence-path safety
 
-Bronze payload, manifest, checkpoint, and lock references are portable relative paths confined to the configured persistence root. Absolute paths, parent traversal, NUL bytes, unexpected tree entries, and symlink escape are integrity failures. Payloads are addressed by exact application-payload SHA-256; canonicalized JSON is not a substitute for raw-byte authority.
+Bronze payload, manifest, and checkpoint references are portable relative paths confined to the configured persistence root. Absolute paths, parent traversal, NUL bytes, unexpected tree entries, and symlink escape are integrity failures. Payloads are addressed by exact application-payload SHA-256; canonicalized JSON is not a substitute for raw-byte authority.
 
 A segment is authoritative only after a one-time completion checkpoint binds its UTC date, segment ID, source-catalog version, entry count, and terminal entry hash. Missing, corrupt, truncated, reordered, inserted, deleted, or checkpoint-mismatched evidence fails replay. Replay never retrieves replacement data from a network source.
 
-Observation slots and raw observation IDs are globally unique within one Bronze persistence root. Appends are serialized by a root-level authority lock and fail closed if any manifest is partial, corrupt, duplicated, or conflicting.
+Observation slots and raw observation IDs are globally unique within one Bronze persistence root. A0 permits only one active `ManifestWriter` for the complete root. The writer holds a kernel-backed exclusive lock on an open descriptor for the Bronze root directory throughout initialization, global manifest scanning, idempotency/conflict decisions, manifest construction and publication, file fsync, parent-directory fsync, finalization, and close.
 
-Segment and global locks retain an unpredictable owner token, open file descriptor, device, and inode. Release verifies the current path, regular-file type, inode, and token before unlinking. A deleted, replaced, mismatched, or symlinked lock is never silently removed by the old owner. Stale-lock recovery is not automatic in A0.
+Lock correctness does not depend on a removable pathname marker. Legacy segment/global `.lock` names are not created, overwritten, unlinked, cleaned, or used as an exclusivity namespace. Acquisition failure and release close only the descriptor owned by that acquisition. Root-path loss, replacement, type change, descriptor identity mismatch, or kernel release failure places the lock and writer in a terminal compromised state; append and finalize remain disabled. A0 performs no automatic stale-lock recovery.
+
+The kernel lock is advisory. The persistence root and its parent must be writable only by the collector account, and other software must use the same lock protocol. A0 does not claim protection against a privileged actor that can bypass advisory locks, replace higher-level filesystem mount or parent authorities, or directly mutate opened directory entries.
 
 ## Source authority
 
