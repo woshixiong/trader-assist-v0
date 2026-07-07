@@ -1,0 +1,13 @@
+{
+  "activeAssetCtx": "{\"channel\":\"activeAssetCtx\",\"data\":{\"coin\":\"ETH\",\"ctx\":{\"funding\":\"0.00001\",\"openInterest\":\"1000\",\"oraclePx\":\"3000\",\"markPx\":\"3000.1\",\"midPx\":\"3000.0\",\"dayNtlVlm\":\"100000\",\"prevDayPx\":\"2950\"}}}",
+  "allMids": "{\"channel\":\"allMids\",\"data\":{\"mids\":{\"ETH\":\"3000.0\",\"BTC\":\"60000.0\"}}}",
+  "bboBothSides": "{\"channel\":\"bbo\",\"data\":{\"coin\":\"ETH\",\"time\":1783386000000,\"bbo\":[{\"px\":\"2999.9\",\"sz\":\"1.0\",\"n\":1},{\"px\":\"3000.1\",\"sz\":\"1.5\",\"n\":2}]}}",
+  "bboNullSide": "{\"channel\":\"bbo\",\"data\":{\"coin\":\"ETH\",\"time\":1783386000001,\"bbo\":[null,{\"px\":\"3000.1\",\"sz\":\"1.5\",\"n\":2}]}}",
+  "candle": "{\"channel\":\"candle\",\"data\":{\"t\":1783386000000,\"T\":1783386059999,\"s\":\"ETH\",\"i\":\"1m\",\"o\":\"3000\",\"c\":\"3001\",\"h\":\"3002\",\"l\":\"2999\",\"v\":\"10\",\"n\":42}}",
+  "l2BookSnapshot": "{\"channel\":\"l2Book\",\"data\":{\"coin\":\"ETH\",\"levels\":[[{\"px\":\"2999.9\",\"sz\":\"1.0\",\"n\":1}],[{\"px\":\"3000.1\",\"sz\":\"1.5\",\"n\":2}]],\"time\":1783386000000}}",
+  "malformedJSON": "{\"channel\":",
+  "pong": "{\"channel\":\"pong\"}",
+  "subscriptionResponse": "{\"channel\":\"subscriptionResponse\",\"data\":{\"method\":\"subscribe\",\"subscription\":{\"type\":\"trades\",\"coin\":\"ETH\"}}}",
+  "tradesBatch": "{\"channel\":\"trades\",\"data\":[{\"coin\":\"ETH\",\"side\":\"B\",\"px\":\"3000.0\",\"sz\":\"0.01\",\"hash\":\"synthetic-hash\",\"time\":1783386000000,\"tid\":123456,\"users\":[\"synthetic-a\",\"synthetic-b\"]}]}",
+  "unknownChannel": "{\"channel\":\"syntheticUnknown\",\"data\":{}}"
+}
