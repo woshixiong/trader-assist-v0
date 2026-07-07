@@ -9,6 +9,7 @@ import pytest
 from jsonschema import ValidationError as JsonSchemaValidationError
 from jsonschema import validate as validate_schema
 from pydantic import BaseModel, ValidationError
+
 from trader_assist_v0.contracts import (
     BronzeReplayReportV0,
     EnvironmentV0,
