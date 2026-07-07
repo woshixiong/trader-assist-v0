@@ -123,19 +123,22 @@ def test_manifest_idempotency_conflict_and_finalization(store: BronzeStore) -> N
         ManifestWriter(store, manifest_date=DAY, segment_id=SEGMENT)
 
 
-def test_different_segment_writers_may_coexist(store: BronzeStore) -> None:
+def test_root_wide_single_writer_blocks_different_segments(store: BronzeStore) -> None:
     first = ManifestWriter(store, manifest_date=DAY, segment_id="segment-one")
+    with pytest.raises(SingleWriterError):
+        ManifestWriter(store, manifest_date=DAY, segment_id="segment-two")
+    first.close()
     second = ManifestWriter(store, manifest_date=DAY, segment_id="segment-two")
     second.close()
-    first.close()
 
 
-def test_stale_segment_lock_fails_closed(store: BronzeStore) -> None:
-    lock = store.path(store.lock_ref(DAY, SEGMENT))
-    lock.parent.mkdir(parents=True)
-    lock.write_text("stale\n", encoding="utf-8")
-    with pytest.raises(SingleWriterError):
-        ManifestWriter(store, manifest_date=DAY, segment_id=SEGMENT)
+def test_legacy_lock_marker_is_inert_and_never_removed(store: BronzeStore) -> None:
+    legacy = store.path(store.lock_ref(DAY, SEGMENT))
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("stale-or-replacement\n", encoding="utf-8")
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id=SEGMENT)
+    writer.close()
+    assert legacy.read_text(encoding="utf-8") == "stale-or-replacement\n"
 
 
 def test_manifest_chain_detects_reorder_deletion_and_insertion(store: BronzeStore) -> None:
