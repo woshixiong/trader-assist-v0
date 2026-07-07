@@ -1077,3 +1077,192 @@ def test_fork_child_operations_after_parent_release_are_blocked(tmp_path):
         assert "CHILD_BLOCKED" in child_result
         new_lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
         new_lock.release()
+# ============================================================
+# Tests added for Commit 3: reproduce same-writer operation races
+# ============================================================
+
+def test_concurrent_append_and_close_race(tmp_path):
+    """Demonstrate that concurrent append and close on the same writer can race."""
+    store = BronzeStore(tmp_path / "root")
+    event = make_event(store, b"race", sequence=1)
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-race")
+    barrier = threading.Barrier(2)
+    errors: list[BaseException] = []
+    results: list[AppendDisposition] = []
+
+    def append_worker():
+        try:
+            barrier.wait(timeout=5)
+            results.append(writer.append(event).disposition)
+        except BaseException as exc:
+            errors.append(exc)
+
+    def close_worker():
+        try:
+            barrier.wait(timeout=5)
+            writer.close()
+        except BaseException as exc:
+            errors.append(exc)
+
+    t1 = threading.Thread(target=append_worker)
+    t2 = threading.Thread(target=close_worker)
+    t1.start()
+    t2.start()
+    t1.join(timeout=5)
+    t2.join(timeout=5)
+    # Both threads should complete without hanging
+    assert not t1.is_alive()
+    assert not t2.is_alive()
+
+
+def test_concurrent_append_and_finalize_race(tmp_path):
+    """Demonstrate that concurrent append and finalize on the same writer can race."""
+    store = BronzeStore(tmp_path / "root")
+    event = make_event(store, b"race2", sequence=1)
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-race2")
+    barrier = threading.Barrier(2)
+    errors: list[BaseException] = []
+    results: list[AppendDisposition] = []
+
+    def append_worker():
+        try:
+            barrier.wait(timeout=5)
+            results.append(writer.append(event).disposition)
+        except BaseException as exc:
+            errors.append(exc)
+
+    def finalize_worker():
+        try:
+            barrier.wait(timeout=5)
+            # This may race with append
+            writer.finalize()
+        except BaseException as exc:
+            errors.append(exc)
+
+    t1 = threading.Thread(target=append_worker)
+    t2 = threading.Thread(target=finalize_worker)
+    t1.start()
+    t2.start()
+    t1.join(timeout=5)
+    t2.join(timeout=5)
+    assert not t1.is_alive()
+    assert not t2.is_alive()
+
+
+def test_concurrent_double_close(tmp_path):
+    """Demonstrate that concurrent double close on the same writer is safe."""
+    store = BronzeStore(tmp_path / "root")
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-dclose")
+    barrier = threading.Barrier(2)
+    errors: list[BaseException] = []
+
+    def close_worker():
+        try:
+            barrier.wait(timeout=5)
+            writer.close()
+        except BaseException as exc:
+            errors.append(exc)
+
+    t1 = threading.Thread(target=close_worker)
+    t2 = threading.Thread(target=close_worker)
+    t1.start()
+    t2.start()
+    t1.join(timeout=5)
+    t2.join(timeout=5)
+    assert not t1.is_alive()
+    assert not t2.is_alive()
+
+
+def test_concurrent_close_and_finalize_race(tmp_path):
+    """Demonstrate that concurrent close and finalize on the same writer can race."""
+    store = BronzeStore(tmp_path / "root")
+    event = make_event(store, b"race3", sequence=1)
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-race3")
+    writer.append(event)
+    barrier = threading.Barrier(2)
+    errors: list[BaseException] = []
+
+    def close_worker():
+        try:
+            barrier.wait(timeout=5)
+            writer.close()
+        except BaseException as exc:
+            errors.append(exc)
+
+    def finalize_worker():
+        try:
+            barrier.wait(timeout=5)
+            writer.finalize()
+        except BaseException as exc:
+            errors.append(exc)
+
+    t1 = threading.Thread(target=close_worker)
+    t2 = threading.Thread(target=finalize_worker)
+    t1.start()
+    t2.start()
+    t1.join(timeout=5)
+    t2.join(timeout=5)
+    assert not t1.is_alive()
+    assert not t2.is_alive()
+
+
+def test_concurrent_multi_append_same_writer(tmp_path):
+    """Demonstrate concurrent multi-append on the same writer can race."""
+    store = BronzeStore(tmp_path / "root")
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-multi")
+    barrier = threading.Barrier(3)
+    errors: list[BaseException] = []
+    results: list[AppendDisposition] = []
+
+    def append_worker(seq: int):
+        try:
+            event = make_event(store, b"multi", sequence=seq, connection=f"conn-{seq:03d}")
+            barrier.wait(timeout=5)
+            results.append(writer.append(event).disposition)
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=append_worker, args=(i,)) for i in range(1, 4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=5)
+    assert not any(t.is_alive() for t in threads)
+    writer.close()
+
+
+def test_append_close_append_sequence_race(tmp_path):
+    """Demonstrate that append-close-append across threads can race on the same writer."""
+    store = BronzeStore(tmp_path / "root")
+    event1 = make_event(store, b"one", sequence=1, connection="conn-001")
+    event2 = make_event(store, b"two", sequence=2, connection="conn-002")
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-seq")
+    bar1 = threading.Barrier(2)
+    bar2 = threading.Barrier(2)
+    errors: list[BaseException] = []
+
+    def worker1():
+        try:
+            bar1.wait(timeout=5)
+            writer.append(event1)
+            bar2.wait(timeout=5)
+            writer.close()
+        except BaseException as exc:
+            errors.append(exc)
+
+    def worker2():
+        try:
+            bar1.wait(timeout=5)
+            bar2.wait(timeout=5)
+            writer.append(event2)
+        except BaseException as exc:
+            errors.append(exc)
+
+    t1 = threading.Thread(target=worker1)
+    t2 = threading.Thread(target=worker2)
+    t1.start()
+    t2.start()
+    t1.join(timeout=5)
+    t2.join(timeout=5)
+    assert not t1.is_alive()
+    assert not t2.is_alive()
