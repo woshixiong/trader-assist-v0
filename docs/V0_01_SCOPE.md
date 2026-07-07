@@ -4,7 +4,7 @@
 
 `V0-01A0 / BRONZE_AND_OFFLINE_REPLAY`
 
-This bounded slice freezes public source definitions and implements an entirely offline evidence path: exact synthetic application-payload bytes, catalog-bound domain-separated observation identities, immutable content-addressed local storage, globally serialized observation authority, single-writer hash-linked manifests, one-time segment completion checkpoints, strict integrity verification, and deterministic replay reports.
+This bounded slice freezes public source definitions and implements an entirely offline evidence path: exact synthetic application-payload bytes, catalog-bound domain-separated observation identities, immutable content-addressed local storage, root-wide single-writer observation authority, hash-linked manifests, one-time segment completion checkpoints, strict integrity verification, and deterministic replay reports.
 
 ## Fixed A0 authority versions
 
@@ -28,8 +28,10 @@ A0 supports only these values. Callers cannot override them, and the generated J
 - synthetic fixtures compatible with documented public response shapes;
 - local filesystem Bronze storage and replay using the Python standard library;
 - generated schemas and offline tests;
-- local segment and global observation locks with verified ownership;
+- one kernel-backed root-wide `ManifestWriter` authority per Bronze persistence root;
 - explicit segment finalization through an immutable checkpoint.
+
+The root-wide authority is held for the complete writer lifetime. Different segment writers do not coexist in A0. Legacy `.lock` path names are compatibility references only and are not created, removed, or used to establish ownership. A0 has no automatic stale-lock recovery.
 
 ## Prohibited
 
