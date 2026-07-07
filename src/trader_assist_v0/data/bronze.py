@@ -663,10 +663,12 @@ class OwnedLock:
         fd: int,
         st_dev: int,
         st_ino: int,
+        _parent_fd: int = -1,
     ) -> None:
         self.store = store
         self.relative_path = relative_path
         self._fd = fd
+        self._parent_fd = _parent_fd
         self._st_dev = st_dev
         self._st_ino = st_ino
         self._owner_pid = os.getpid()
@@ -683,13 +685,16 @@ class OwnedLock:
         wait_timeout: float = 0.0,
     ) -> OwnedLock:
         _validate_relative_path(relative_path)
-        fd = _open_root_fd(store.root)
+        # Lock the parent directory of the Bronze root to ensure
+        # authority survives root rename/replacement
+        parent_dir = str(store.root.parent)
+        parent_fd = os.open(parent_dir, os.O_RDONLY | _DIRECTORY | _NOFOLLOW)
         locked = False
         deadline = time.monotonic() + wait_timeout
         try:
             while True:
                 try:
-                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    fcntl.flock(parent_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     locked = True
                     break
                 except BlockingIOError as exc:
@@ -706,33 +711,49 @@ class OwnedLock:
                             "Bronze root already has an active manifest writer"
                         ) from exc
                     time.sleep(0.005)
-            opened = os.fstat(fd)
-            if not stat.S_ISDIR(opened.st_mode):
-                raise LockOwnershipError("root authority descriptor is not a directory")
-            path_metadata = os.stat(store.root, follow_symlinks=False)
-            if not stat.S_ISDIR(path_metadata.st_mode):
-                raise LockOwnershipError("Bronze root path is not a directory")
-            if (path_metadata.st_dev, path_metadata.st_ino) != (
-                opened.st_dev,
-                opened.st_ino,
-            ):
-                raise LockOwnershipError(
-                    "Bronze root changed while acquiring root-wide authority"
-                )
-            return cls(
-                store=store,
-                relative_path=relative_path,
-                fd=fd,
-                st_dev=opened.st_dev,
-                st_ino=opened.st_ino,
+            # Open root through the locked parent directory
+            root_fd = os.open(
+                store.root.name,
+                os.O_RDONLY | _DIRECTORY | _NOFOLLOW,
+                dir_fd=parent_fd,
             )
+            try:
+                opened = os.fstat(root_fd)
+                if not stat.S_ISDIR(opened.st_mode):
+                    raise LockOwnershipError("root authority descriptor is not a directory")
+                # Verify root identity through parent_fd
+                root_meta = os.stat(
+                    store.root.name,
+                    dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+                if not stat.S_ISDIR(root_meta.st_mode):
+                    raise LockOwnershipError("Bronze root path is not a directory")
+                if (root_meta.st_dev, root_meta.st_ino) != (
+                    opened.st_dev,
+                    opened.st_ino,
+                ):
+                    raise LockOwnershipError(
+                        "Bronze root changed while acquiring root-wide authority"
+                    )
+                return cls(
+                    store=store,
+                    relative_path=relative_path,
+                    fd=root_fd,
+                    st_dev=opened.st_dev,
+                    st_ino=opened.st_ino,
+                    _parent_fd=parent_fd,
+                )
+            except BaseException:
+                os.close(root_fd)
+                raise
         except BaseException:
             if locked:
                 try:
-                    fcntl.flock(fd, fcntl.LOCK_UN)
+                    fcntl.flock(parent_fd, fcntl.LOCK_UN)
                 except OSError:
                     pass
-            os.close(fd)
+            os.close(parent_fd)
             raise
 
     @property
@@ -765,30 +786,43 @@ class OwnedLock:
             self._fd_state = _FdState.FORK_INVALID
             self._state = state
             return
-        fd = self._fd
-        if fd < 0:
+        root_fd = self._fd
+        parent_fd = self._parent_fd
+        if root_fd < 0:
             self._fd_state = _FdState.CLOSED
             self._state = state
             return
         self._fd_state = _FdState.UNLOCKING
-        try:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-        except OSError:
-            self._fd_state = _FdState.CLOSE_OUTCOME_UNKNOWN
-            _BRONZE_POISON_GATE = 1
-            self._state = state
-            self._fd = -1
-            raise
+        # Unlock the parent directory (the lock is on parent_fd)
+        if parent_fd >= 0:
+            try:
+                fcntl.flock(parent_fd, fcntl.LOCK_UN)
+            except OSError:
+                self._fd_state = _FdState.CLOSE_OUTCOME_UNKNOWN
+                _BRONZE_POISON_GATE = 1
+                self._fd = -1
+                self._parent_fd = -1
+                self._state = state
+                raise
         self._fd_state = _FdState.CLOSING
+        # Close root_fd
         try:
-            os.close(fd)
+            os.close(root_fd)
         except OSError:
-            self._fd_state = _FdState.POISONED
-            _BRONZE_POISON_GATE = 1
-            self._fd = -1
-            self._state = state
-            return
+            pass
+        # Close parent_fd
+        if parent_fd >= 0:
+            try:
+                os.close(parent_fd)
+            except OSError:
+                self._fd_state = _FdState.POISONED
+                _BRONZE_POISON_GATE = 1
+                self._fd = -1
+                self._parent_fd = -1
+                self._state = state
+                return
         self._fd = -1
+        self._parent_fd = -1
         self._fd_state = _FdState.CLOSED
         self._state = state
 
@@ -804,21 +838,45 @@ class OwnedLock:
         if self._state is _LockState.COMPROMISED:
             raise LockOwnershipError("root authority is compromised")
         try:
+            # Verify root_fd is still a valid directory
             opened = os.fstat(self._fd)
             if not stat.S_ISDIR(opened.st_mode):
                 raise LockOwnershipError("root authority descriptor is not a directory")
             if (opened.st_dev, opened.st_ino) != (self._st_dev, self._st_ino):
                 raise LockOwnershipError("root authority descriptor identity changed")
-            path_metadata = os.stat(self.store.root, follow_symlinks=False)
-            if not stat.S_ISDIR(path_metadata.st_mode):
-                raise LockOwnershipError("Bronze root path is not a directory")
-            if (path_metadata.st_dev, path_metadata.st_ino) != (
-                self._st_dev,
-                self._st_ino,
-            ):
-                raise LockOwnershipError(
-                    "Bronze root path no longer names the locked root inode"
-                )
+            # Verify root identity through parent_fd if available
+            if self._parent_fd >= 0:
+                try:
+                    root_meta = os.stat(
+                        self.store.root.name,
+                        dir_fd=self._parent_fd,
+                        follow_symlinks=False,
+                    )
+                    if not stat.S_ISDIR(root_meta.st_mode):
+                        raise LockOwnershipError("Bronze root path is not a directory")
+                    if (root_meta.st_dev, root_meta.st_ino) != (
+                        self._st_dev,
+                        self._st_ino,
+                    ):
+                        raise LockOwnershipError(
+                            "Bronze root path no longer names the locked root inode"
+                        )
+                except FileNotFoundError:
+                    raise LockOwnershipError(
+                        "Bronze root no longer exists under parent directory"
+                    )
+            else:
+                # Fallback to path-based check (backward compatibility)
+                path_metadata = os.stat(self.store.root, follow_symlinks=False)
+                if not stat.S_ISDIR(path_metadata.st_mode):
+                    raise LockOwnershipError("Bronze root path is not a directory")
+                if (path_metadata.st_dev, path_metadata.st_ino) != (
+                    self._st_dev,
+                    self._st_ino,
+                ):
+                    raise LockOwnershipError(
+                        "Bronze root path no longer names the locked root inode"
+                    )
         except BaseException as exc:
             try:
                 self._close_owned_descriptor(state=_LockState.COMPROMISED)
