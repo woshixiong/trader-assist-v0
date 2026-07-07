@@ -63,8 +63,7 @@ def finalized(root: Path) -> BronzeStore:
 
 
 def test_replay_pass_and_cross_process_determinism(tmp_path: Path) -> None:
-    first_store = finalized(tmp_path / "a")
-    second_store = finalized(tmp_path / "b")
+    first_store, second_store = finalized(tmp_path / "a"), finalized(tmp_path / "b")
     first = replay_segment(first_store, manifest_date=DAY, segment_id=SEGMENT)
     second = replay_segment(second_store, manifest_date=DAY, segment_id=SEGMENT)
     assert first.status is ReplayStatusV0.PASS
@@ -78,52 +77,61 @@ def test_replay_pass_and_cross_process_determinism(tmp_path: Path) -> None:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(Path(trader_assist_v0.__file__).resolve().parents[1])
     actual = subprocess.check_output(
-        [sys.executable, "-c", script, str(first_store.root)],
-        text=True,
-        env=env,
+        [sys.executable, "-c", script, str(first_store.root)], text=True, env=env
     ).strip()
     assert actual == first.report_hash
 
 
 def test_missing_corrupt_orphan_partial_and_no_network_fail(tmp_path: Path) -> None:
     missing = replay_segment(
-        BronzeStore(tmp_path / "missing"),
-        manifest_date=DAY,
-        segment_id=SEGMENT,
+        BronzeStore(tmp_path / "missing"), manifest_date=DAY, segment_id=SEGMENT
     )
     assert missing.status is ReplayStatusV0.FAIL
     assert {"MISSING_MANIFEST", "MISSING_CHECKPOINT"}.issubset(missing.reason_codes)
 
     store = finalized(tmp_path / "root")
     manifest = store.path(store.manifest_ref(DAY, SEGMENT))
-    entry = RawManifestEntryV0.model_validate_json(manifest.read_bytes().splitlines()[0])
+    entry = RawManifestEntryV0.model_validate_json(
+        manifest.read_bytes().splitlines()[0]
+    )
     payload = store.path(entry.raw_event.payload_ref)
     original = payload.read_bytes()
     payload.unlink()
-    assert replay_segment(
-        store, manifest_date=DAY, segment_id=SEGMENT
-    ).missing_payload_count > 0
+    assert (
+        replay_segment(
+            store, manifest_date=DAY, segment_id=SEGMENT
+        ).missing_payload_count
+        > 0
+    )
     payload.write_bytes(b"bad")
-    assert replay_segment(
-        store, manifest_date=DAY, segment_id=SEGMENT
-    ).corrupt_payload_count > 0
+    assert (
+        replay_segment(
+            store, manifest_date=DAY, segment_id=SEGMENT
+        ).corrupt_payload_count
+        > 0
+    )
     payload.write_bytes(original)
     store.write_payload(b"orphan")
-    assert replay_segment(
-        store, manifest_date=DAY, segment_id=SEGMENT
-    ).orphan_payload_count > 0
+    assert (
+        replay_segment(
+            store, manifest_date=DAY, segment_id=SEGMENT
+        ).orphan_payload_count
+        > 0
+    )
 
     partial = finalized(tmp_path / "partial")
     path = partial.path(partial.manifest_ref(DAY, SEGMENT))
     path.write_bytes(path.read_bytes()[:-1])
-    assert replay_segment(
-        partial, manifest_date=DAY, segment_id=SEGMENT
-    ).partial_manifest_count == 1
+    assert (
+        replay_segment(
+            partial, manifest_date=DAY, segment_id=SEGMENT
+        ).partial_manifest_count
+        == 1
+    )
 
 
 def test_short_manifest_write_is_detected(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     store = BronzeStore(tmp_path / "root")
     raw = event(store)
