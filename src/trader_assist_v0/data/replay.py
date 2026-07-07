@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from datetime import date
-from pathlib import Path
 
 from trader_assist_v0.contracts.events import (
     MANIFEST_GENESIS_HASH,
@@ -14,32 +14,45 @@ from trader_assist_v0.data.bronze import (
     BronzeIntegrityError,
     BronzeStore,
     PathConfinementError,
+    SingleWriterError,
+    _open_verified_at,
+    parse_manifest_bytes,
     read_manifest_entries,
 )
 from trader_assist_v0.data.source_catalog import SOURCE_CATALOG_VERSION
 
 
-def _file_sha256(path: Path) -> str:
-    hasher = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            hasher.update(chunk)
-    return hasher.hexdigest()
+def _payload_file_hash(store: BronzeStore, relative_path: str) -> str:
+    parent_fd, filename = store._open_parent(relative_path, create=False)
+    try:
+        fd = _open_verified_at(parent_fd, filename, os.O_RDONLY, kind="regular")
+        try:
+            hasher = hashlib.sha256()
+            while True:
+                chunk = os.read(fd, 1024 * 1024)
+                if not chunk:
+                    return hasher.hexdigest()
+                hasher.update(chunk)
+        finally:
+            os.close(fd)
+    finally:
+        os.close(parent_fd)
 
 
 def _all_referenced_payloads(store: BronzeStore) -> tuple[set[str], set[str]]:
     references: set[str] = set()
     reasons: set[str] = set()
-    manifests_root = store.path("manifests")
-    if not manifests_root.exists():
-        return references, reasons
-    for manifest_path in manifests_root.rglob("*.jsonl"):
+    try:
+        manifests = store.manifest_files()
+    except SingleWriterError:
+        return references, {"ACTIVE_OR_STALE_WRITER_LOCK"}
+    except (OSError, ValueError, BronzeIntegrityError, PathConfinementError):
+        return references, {"MANIFEST_TREE_INVALID"}
+    for manifest_date, segment_id in manifests:
         try:
-            resolved = manifest_path.resolve(strict=True)
-            resolved.relative_to(store.root)
-            entries = read_manifest_entries(manifest_path)
-        except (OSError, ValueError, BronzeIntegrityError) as exc:
-            reasons.add(f"INVALID_MANIFEST:{type(exc).__name__}")
+            entries = read_manifest_entries(store, manifest_date, segment_id)
+        except (OSError, ValueError, BronzeIntegrityError, PathConfinementError):
+            reasons.add("GLOBAL_MANIFEST_INVALID")
             continue
         references.update(entry.raw_event.payload_ref for entry in entries)
     return references, reasons
@@ -62,27 +75,20 @@ def replay_segment(
     idempotent_event_observations = 0
 
     try:
-        manifest_path = store.manifest_path(manifest_date, segment_id)
-    except (ValueError, PathConfinementError):
-        reasons.add("MANIFEST_PATH_ESCAPE")
-        manifest_path = store.root / "invalid-manifest-path"
-
-    if not manifest_path.exists():
+        raw_manifest = store.read_manifest_bytes(manifest_date, segment_id)
+    except FileNotFoundError:
         reasons.add("MISSING_MANIFEST")
+    except (PathConfinementError, OSError):
+        reasons.add("MANIFEST_PATH_OR_READ_FAILURE")
     else:
-        try:
-            raw_manifest = manifest_path.read_bytes()
-            if raw_manifest and not raw_manifest.endswith(b"\n"):
-                partial_manifest_count = 1
-                reasons.add("PARTIAL_MANIFEST")
-            else:
-                entries = read_manifest_entries(manifest_path)
-        except PathConfinementError:
-            reasons.add("MANIFEST_PATH_ESCAPE")
-        except BronzeIntegrityError:
-            reasons.add("INVALID_MANIFEST")
-        except OSError:
-            reasons.add("MANIFEST_READ_ERROR")
+        if raw_manifest and not raw_manifest.endswith(b"\n"):
+            partial_manifest_count = 1
+            reasons.add("PARTIAL_MANIFEST")
+        else:
+            try:
+                entries = parse_manifest_bytes(raw_manifest, expected_segment_id=segment_id)
+            except BronzeIntegrityError:
+                reasons.add("INVALID_MANIFEST")
 
     payload_hashes: set[str] = set()
     slot_map: dict[str, tuple[str, str]] = {}
@@ -107,30 +113,25 @@ def replay_segment(
         payload_hashes.add(event.payload_sha256)
         receive_times.append(event.collector_receive_time)
         try:
-            payload_path = store.path(event.payload_ref)
-        except PathConfinementError:
+            store.verify_payload(event)
+        except BronzeIntegrityError as exc:
+            if "missing payload" in str(exc):
+                missing_payload_count += 1
+                reasons.add("MISSING_PAYLOAD")
+            else:
+                corrupt_payload_count += 1
+                reasons.add("CORRUPT_PAYLOAD")
+        except (PathConfinementError, OSError):
             corrupt_payload_count += 1
-            reasons.add("PAYLOAD_PATH_ESCAPE")
-            continue
-        if payload_path.is_symlink():
-            corrupt_payload_count += 1
-            reasons.add("PAYLOAD_SYMLINK")
-            continue
-        if not payload_path.exists():
-            missing_payload_count += 1
-            reasons.add("MISSING_PAYLOAD")
-            continue
-        if not payload_path.is_file():
-            corrupt_payload_count += 1
-            reasons.add("PAYLOAD_NOT_REGULAR_FILE")
-            continue
-        if payload_path.stat().st_size != event.payload_size_bytes:
-            corrupt_payload_count += 1
-            reasons.add("PAYLOAD_SIZE_MISMATCH")
-            continue
-        if _file_sha256(payload_path) != event.payload_sha256:
-            corrupt_payload_count += 1
-            reasons.add("PAYLOAD_HASH_MISMATCH")
+            reasons.add("PAYLOAD_PATH_OR_READ_FAILURE")
+        else:
+            try:
+                if _payload_file_hash(store, event.payload_ref) != event.payload_sha256:
+                    corrupt_payload_count += 1
+                    reasons.add("PAYLOAD_HASH_MISMATCH")
+            except (OSError, PathConfinementError):
+                corrupt_payload_count += 1
+                reasons.add("PAYLOAD_PATH_OR_READ_FAILURE")
 
     terminal_hash = entries[-1].entry_hash if entries else MANIFEST_GENESIS_HASH
     if expected_terminal_hash is not None and terminal_hash != expected_terminal_hash:
@@ -140,7 +141,7 @@ def replay_segment(
     reasons.update(global_manifest_reasons)
     try:
         all_payloads = store.payload_refs()
-    except (PathConfinementError, BronzeIntegrityError):
+    except (PathConfinementError, BronzeIntegrityError, OSError):
         all_payloads = set()
         reasons.add("PAYLOAD_TREE_INVALID")
     orphan_payload_count = len(all_payloads - referenced_payloads)
