@@ -20,7 +20,15 @@ from .common import (
     contract_hash,
     sha256_hex,
 )
-from .events import EventTypeV0, NormalizedEventV0, RawEventV0
+from .events import (
+    BronzeReplayReportV0,
+    EventTypeV0,
+    NormalizedEventV0,
+    RawCaptureModeV0,
+    RawEventV0,
+    RawManifestEntryV0,
+    ReplayStatusV0,
+)
 from .evidence import CorrelationChainV0, EvidenceBundleManifestV0, EvidenceFileV0
 from .health import (
     DataHealthEventV0,
@@ -45,6 +53,7 @@ from .strategy import (
 
 __all__ = [
     "AIRecommendationV0",
+    "BronzeReplayReportV0",
     "CandidateKindV0",
     "CorrelationChainV0",
     "DataHealthEventV0",
@@ -71,7 +80,10 @@ __all__ = [
     "PromotionRecordV0",
     "PromotionStateV0",
     "ProposalV0",
+    "RawCaptureModeV0",
     "RawEventV0",
+    "RawManifestEntryV0",
+    "ReplayStatusV0",
     "RequiredFeedContractV0",
     "SeedDispositionV0",
     "SeedProvenanceEntryV0",
