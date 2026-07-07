@@ -894,3 +894,186 @@ def test_bind_rejects_caller_authority_fields(store):
     ):
         with pytest.raises(ValueError):
             RawEventV0.bind_observation(**base, **{field: value})
+
+# ============================================================
+# Tests added for Commit 1: reproduce fork ownership failure
+# ============================================================
+
+def test_fork_child_release_does_not_unlock_parent(tmp_path):
+    """Child process release() must not release the parent's kernel lock."""
+    import os as _os
+    store = BronzeStore(tmp_path / "root")
+    lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
+    read_pipe, write_pipe = _os.pipe()
+    pid = _os.fork()
+    if pid == 0:
+        _os.close(read_pipe)
+        try:
+            lock.release()
+            _os.write(write_pipe, b"CHILD_RELEASED_OK")
+        except LockOwnershipError as exc:
+            _os.write(write_pipe, f"CHILD_BLOCKED:{exc}".encode())
+        except Exception as exc:
+            _os.write(write_pipe, f"CHILD_ERROR:{exc}".encode())
+        finally:
+            _os.close(write_pipe)
+            _os._exit(0)
+    else:
+        _os.close(write_pipe)
+        child_result = _os.read(read_pipe, 4096).decode()
+        _os.close(read_pipe)
+        _os.waitpid(pid, 0)
+        assert "CHILD_BLOCKED" in child_result
+        assert not lock.released
+        assert not lock.compromised
+        lock.release()
+
+
+def test_fork_child_authority_fd_is_blocked(tmp_path):
+    """Child process must not be able to access authority_fd after fork."""
+    import os as _os
+    store = BronzeStore(tmp_path / "root")
+    lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
+    read_pipe, write_pipe = _os.pipe()
+    pid = _os.fork()
+    if pid == 0:
+        _os.close(read_pipe)
+        try:
+            fd = lock.authority_fd
+            _os.write(write_pipe, f"CHILD_GOT_FD:{fd}".encode())
+        except LockOwnershipError as exc:
+            _os.write(write_pipe, f"CHILD_BLOCKED:{exc}".encode())
+        except Exception as exc:
+            _os.write(write_pipe, f"CHILD_ERROR:{exc}".encode())
+        finally:
+            _os.close(write_pipe)
+            _os._exit(0)
+    else:
+        _os.close(write_pipe)
+        child_result = _os.read(read_pipe, 4096).decode()
+        _os.close(read_pipe)
+        _os.waitpid(pid, 0)
+        assert "CHILD_BLOCKED" in child_result
+        assert lock.authority_fd >= 0
+        lock.release()
+
+
+def test_fork_child_append_is_blocked(tmp_path):
+    """Child process must not be able to append through a parent's ManifestWriter."""
+    import os as _os
+    store = BronzeStore(tmp_path / "root")
+    event = make_event(store, b"data", sequence=1)
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-fork")
+    read_pipe, write_pipe = _os.pipe()
+    pid = _os.fork()
+    if pid == 0:
+        _os.close(read_pipe)
+        try:
+            result = writer.append(event)
+            _os.write(write_pipe, f"CHILD_APPENDED:{result.disposition}".encode())
+        except (LockOwnershipError, SingleWriterError) as exc:
+            _os.write(write_pipe, f"CHILD_BLOCKED:{type(exc).__name__}".encode())
+        except Exception as exc:
+            _os.write(write_pipe, f"CHILD_ERROR:{type(exc).__name__}:{exc}".encode())
+        finally:
+            _os.close(write_pipe)
+            _os._exit(0)
+    else:
+        _os.close(write_pipe)
+        child_result = _os.read(read_pipe, 4096).decode()
+        _os.close(read_pipe)
+        _os.waitpid(pid, 0)
+        assert "CHILD_BLOCKED" in child_result
+        assert writer.append(event).disposition is AppendDisposition.APPENDED
+        writer.close()
+
+
+def test_fork_child_finalize_is_blocked(tmp_path):
+    """Child process must not be able to finalize a parent's ManifestWriter."""
+    import os as _os
+    store = BronzeStore(tmp_path / "root")
+    event = make_event(store, b"data", sequence=1)
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-fork2")
+    writer.append(event)
+    read_pipe, write_pipe = _os.pipe()
+    pid = _os.fork()
+    if pid == 0:
+        _os.close(read_pipe)
+        try:
+            writer.finalize()
+            _os.write(write_pipe, b"CHILD_FINALIZED_OK")
+        except (LockOwnershipError, SingleWriterError) as exc:
+            _os.write(write_pipe, f"CHILD_BLOCKED:{type(exc).__name__}".encode())
+        except Exception as exc:
+            _os.write(write_pipe, f"CHILD_ERROR:{type(exc).__name__}:{exc}".encode())
+        finally:
+            _os.close(write_pipe)
+            _os._exit(0)
+    else:
+        _os.close(write_pipe)
+        child_result = _os.read(read_pipe, 4096).decode()
+        _os.close(read_pipe)
+        _os.waitpid(pid, 0)
+        assert "CHILD_BLOCKED" in child_result
+        writer.finalize()
+
+
+def test_fork_child_assert_owned_is_blocked(tmp_path):
+    """Child process assert_owned must fail after fork."""
+    import os as _os
+    store = BronzeStore(tmp_path / "root")
+    lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
+    read_pipe, write_pipe = _os.pipe()
+    pid = _os.fork()
+    if pid == 0:
+        _os.close(read_pipe)
+        try:
+            lock.assert_owned()
+            _os.write(write_pipe, b"CHILD_ASSERTED_OK")
+        except LockOwnershipError as exc:
+            _os.write(write_pipe, f"CHILD_BLOCKED:{exc}".encode())
+        except Exception as exc:
+            _os.write(write_pipe, f"CHILD_ERROR:{exc}".encode())
+        finally:
+            _os.close(write_pipe)
+            _os._exit(0)
+    else:
+        _os.close(write_pipe)
+        child_result = _os.read(read_pipe, 4096).decode()
+        _os.close(read_pipe)
+        _os.waitpid(pid, 0)
+        assert "CHILD_BLOCKED" in child_result
+        lock.assert_owned()
+        lock.release()
+
+
+def test_fork_child_operations_after_parent_release_are_blocked(tmp_path):
+    """Even after parent releases, a forked child cannot use the stale lock."""
+    import os as _os
+    store = BronzeStore(tmp_path / "root")
+    lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
+    read_pipe, write_pipe = _os.pipe()
+    pid = _os.fork()
+    if pid == 0:
+        _os.close(read_pipe)
+        import time as _time
+        _time.sleep(0.3)
+        try:
+            lock.authority_fd
+            _os.write(write_pipe, b"CHILD_GOT_FD")
+        except LockOwnershipError as exc:
+            _os.write(write_pipe, f"CHILD_BLOCKED:{exc}".encode())
+        except Exception as exc:
+            _os.write(write_pipe, f"CHILD_ERROR:{exc}".encode())
+        finally:
+            _os.close(write_pipe)
+            _os._exit(0)
+    else:
+        _os.close(write_pipe)
+        lock.release()
+        child_result = _os.read(read_pipe, 4096).decode()
+        _os.close(read_pipe)
+        _os.waitpid(pid, 0)
+        assert "CHILD_BLOCKED" in child_result
+        new_lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
+        new_lock.release()
