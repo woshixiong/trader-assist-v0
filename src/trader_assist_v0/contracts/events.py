@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import hmac
 import re
+from collections.abc import Mapping, Set
 from enum import StrEnum
 from pathlib import PurePosixPath
-from typing import Any, Literal, Self
+from typing import Any, Literal, Self, TypeVar
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic.config import ExtraValues
 
 from .common import (
     EnvironmentV0,
@@ -64,15 +66,20 @@ class ReplayStatusV0(StrEnum):
 
 
 def _validate_relative_path_text(value: str) -> str:
+    if not value:
+        raise ValueError("relative path must be non-empty")
     if "\x00" in value:
         raise ValueError("relative path must not contain NUL")
     if "\\" in value or re.match(r"^[A-Za-z]:", value):
         raise ValueError("relative path must use portable POSIX syntax")
+    if value.startswith("/"):
+        raise ValueError("relative path must not be absolute")
+    components = value.split("/")
+    if any(component in {"", ".", ".."} for component in components):
+        raise ValueError("relative path contains a forbidden component")
     path = PurePosixPath(value)
-    if path.is_absolute() or value.startswith("/") or ".." in path.parts:
-        raise ValueError("relative path must be confined and must not traverse parents")
-    if any(part in {"", "."} for part in path.parts):
-        raise ValueError("relative path must not contain empty or current-directory components")
+    if path.is_absolute() or path.as_posix() != value:
+        raise ValueError("relative path must be canonical POSIX syntax")
     return value
 
 
@@ -96,7 +103,7 @@ def compute_observation_slot_id(
             "receive_sequence": receive_sequence,
         }
     )
-    return sha256_hex(OBSERVATION_SLOT_VERSION.encode("utf-8") + b"\0" + material)
+    return sha256_hex(OBSERVATION_SLOT_VERSION.encode() + b"\0" + material)
 
 
 def compute_raw_observation_id(
@@ -121,22 +128,78 @@ def compute_raw_observation_id(
             "payload_sha256": payload_sha256,
         }
     )
-    return sha256_hex(RAW_IDENTITY_VERSION.encode("utf-8") + b"\0" + material)
+    return sha256_hex(RAW_IDENTITY_VERSION.encode() + b"\0" + material)
 
 
-class RawEventV0(StrictModel):
+class _A0AuthorityModel(StrictModel):
     model_config = ConfigDict(revalidate_instances="always")
 
+    @classmethod
+    def model_validate(
+        cls,
+        obj: Any,
+        *,
+        strict: bool | None = None,
+        extra: ExtraValues | None = None,
+        from_attributes: bool | None = None,
+        context: Any | None = None,
+        by_alias: bool | None = None,
+        by_name: bool | None = None,
+    ) -> Self:
+        if isinstance(obj, BaseModel):
+            if type(obj) is not cls:
+                raise ValueError(f"expected exact {cls.__name__} authority object")
+            obj = BaseModel.model_dump(obj, mode="python", round_trip=True)
+        return super().model_validate(
+            obj,
+            strict=strict,
+            extra=extra,
+            from_attributes=from_attributes,
+            context=context,
+            by_alias=by_alias,
+            by_name=by_name,
+        )
+
+    def model_copy(
+        self,
+        *,
+        update: Mapping[str, Any] | None = None,
+        deep: bool = False,
+    ) -> Self:
+        if update is not None:
+            raise TypeError("A0 authority models cannot be copied with updates")
+        return super().model_copy(deep=deep)
+
+    def copy(
+        self,
+        *,
+        include: Set[int] | Set[str] | Mapping[int, Any] | Mapping[str, Any] | None = None,
+        exclude: Set[int] | Set[str] | Mapping[int, Any] | Mapping[str, Any] | None = None,
+        update: dict[str, Any] | None = None,
+        deep: bool = False,
+    ) -> Self:
+        if include is not None or exclude is not None or update is not None:
+            raise TypeError("A0 authority models cannot be copied with field changes")
+        return self.model_copy(deep=deep)
+
+    @classmethod
+    def model_construct(
+        cls,
+        _fields_set: set[str] | None = None,
+        **values: Any,
+    ) -> Self:
+        raise TypeError("A0 authority models cannot bypass validation with model_construct")
+
+
+class RawEventV0(_A0AuthorityModel):
     schema_version: VersionId
     source_event_id: Sha256Hex
     observation_slot_id: Sha256Hex
     source_id: OpaqueId
     source_catalog_version: VersionId
-    endpoint_id: OpaqueId = Field(validation_alias=AliasChoices("endpoint_id", "endpoint"))
+    endpoint_id: OpaqueId
     connection_id: OpaqueId
-    subscription_id: OpaqueId = Field(
-        validation_alias=AliasChoices("subscription_id", "subscription")
-    )
+    subscription_id: OpaqueId
     receive_sequence: int = Field(ge=0)
     source_native_id: str | None = Field(default=None, max_length=300)
     source_native_cursor: str | None = Field(default=None, max_length=300)
@@ -162,8 +225,8 @@ class RawEventV0(StrictModel):
 
     @model_validator(mode="after")
     def validate_authority(self) -> Self:
-        if self.environment is not EnvironmentV0.READ_ONLY:
-            raise ValueError("raw A0 observations must remain in READ_ONLY environment")
+        if type(self) is not RawEventV0:
+            raise ValueError("expected exact RawEventV0 authority object")
         if self.first_observed_time > self.collector_receive_time:
             raise ValueError("first_observed_time must be <= collector_receive_time")
         match = _PAYLOAD_REF_RE.fullmatch(self.payload_ref)
@@ -198,8 +261,8 @@ class RawEventV0(StrictModel):
 
     @classmethod
     def bind_observation(cls, **payload: Any) -> RawEventV0:
-        if "source_event_id" in payload:
-            raise ValueError("source_event_id must not be supplied to bind_observation()")
+        if "source_event_id" in payload or "observation_slot_id" in payload:
+            raise ValueError("authority identities must not be supplied to bind_observation()")
         slot = compute_observation_slot_id(
             source_catalog_version=str(payload["source_catalog_version"]),
             source_id=str(payload["source_id"]),
@@ -222,7 +285,21 @@ class RawEventV0(StrictModel):
         )
 
 
-class RawManifestEntryV0(StrictModel):
+ModelT = TypeVar("ModelT", bound=BaseModel)
+
+
+def _revalidate_exact(value: Any, expected_type: type[ModelT]) -> ModelT:
+    if isinstance(value, BaseModel):
+        if type(value) is not expected_type:
+            raise ValueError(f"expected exact {expected_type.__name__} authority object")
+        value = BaseModel.model_dump(value, mode="python", round_trip=True)
+    validated = expected_type.model_validate(value)
+    if type(validated) is not expected_type:
+        raise ValueError(f"expected exact {expected_type.__name__} authority object")
+    return validated
+
+
+class RawManifestEntryV0(_A0AuthorityModel):
     schema_version: VersionId
     manifest_format_version: VersionId = MANIFEST_FORMAT_VERSION
     hash_chain_version: VersionId = MANIFEST_HASH_CHAIN_VERSION
@@ -232,8 +309,17 @@ class RawManifestEntryV0(StrictModel):
     entry_hash: Sha256Hex
     raw_event: RawEventV0
 
+    @field_validator("raw_event", mode="before")
+    @classmethod
+    def validate_raw_event(cls, value: Any) -> RawEventV0:
+        return _revalidate_exact(value, RawEventV0)
+
     @model_validator(mode="after")
     def validate_entry(self) -> Self:
+        if type(self) is not RawManifestEntryV0:
+            raise ValueError("expected exact RawManifestEntryV0 authority object")
+        if type(self.raw_event) is not RawEventV0:
+            raise ValueError("manifest entry requires exact RawEventV0")
         if self.entry_index == 0 and self.previous_entry_hash != MANIFEST_GENESIS_HASH:
             raise ValueError("first manifest entry must use the genesis previous hash")
         if self.entry_index > 0 and self.previous_entry_hash == MANIFEST_GENESIS_HASH:
@@ -261,6 +347,7 @@ class RawManifestEntryV0(StrictModel):
         previous_entry_hash: str,
         raw_event: RawEventV0,
     ) -> RawManifestEntryV0:
+        exact_event = _revalidate_exact(raw_event, RawEventV0)
         digest = compute_manifest_entry_hash(
             schema_version=schema_version,
             manifest_format_version=MANIFEST_FORMAT_VERSION,
@@ -268,15 +355,19 @@ class RawManifestEntryV0(StrictModel):
             segment_id=segment_id,
             entry_index=entry_index,
             previous_entry_hash=previous_entry_hash,
-            raw_event=raw_event,
+            raw_event=exact_event,
         )
-        return cls(
-            schema_version=schema_version,
-            segment_id=segment_id,
-            entry_index=entry_index,
-            previous_entry_hash=previous_entry_hash,
-            entry_hash=digest,
-            raw_event=raw_event,
+        return cls.model_validate(
+            {
+                "schema_version": schema_version,
+                "manifest_format_version": MANIFEST_FORMAT_VERSION,
+                "hash_chain_version": MANIFEST_HASH_CHAIN_VERSION,
+                "segment_id": segment_id,
+                "entry_index": entry_index,
+                "previous_entry_hash": previous_entry_hash,
+                "entry_hash": digest,
+                "raw_event": exact_event,
+            }
         )
 
 
@@ -290,6 +381,7 @@ def compute_manifest_entry_hash(
     previous_entry_hash: str,
     raw_event: RawEventV0,
 ) -> str:
+    exact_event = _revalidate_exact(raw_event, RawEventV0)
     material = canonical_json_bytes(
         {
             "schema_version": schema_version,
@@ -298,13 +390,13 @@ def compute_manifest_entry_hash(
             "segment_id": segment_id,
             "entry_index": entry_index,
             "previous_entry_hash": previous_entry_hash,
-            "raw_event": BaseModel.model_dump(raw_event, mode="python", round_trip=True),
+            "raw_event": BaseModel.model_dump(exact_event, mode="python", round_trip=True),
         }
     )
-    return sha256_hex(MANIFEST_HASH_CHAIN_VERSION.encode("utf-8") + b"\0" + material)
+    return sha256_hex(MANIFEST_HASH_CHAIN_VERSION.encode() + b"\0" + material)
 
 
-class BronzeReplayReportV0(StrictModel):
+class BronzeReplayReportV0(_A0AuthorityModel):
     schema_version: VersionId
     replay_report_version: VersionId = REPLAY_REPORT_VERSION
     manifest_segment_id: OpaqueId
@@ -334,6 +426,8 @@ class BronzeReplayReportV0(StrictModel):
 
     @model_validator(mode="after")
     def validate_report(self) -> Self:
+        if type(self) is not BronzeReplayReportV0:
+            raise ValueError("expected exact BronzeReplayReportV0 authority object")
         failures = (
             self.conflicting_event_identities
             + self.missing_payload_count
@@ -355,16 +449,20 @@ class BronzeReplayReportV0(StrictModel):
     def bind(cls, **payload: Any) -> BronzeReplayReportV0:
         if "report_hash" in payload:
             raise ValueError("report_hash must not be supplied to bind()")
-        provisional = cls.model_construct(report_hash="0" * 64, **payload)
-        digest = compute_replay_report_hash(provisional)
-        return cls.model_validate({**payload, "report_hash": digest})
+        normalized = {"replay_report_version": REPLAY_REPORT_VERSION, **payload}
+        digest = compute_replay_report_hash_from_payload(normalized)
+        return cls.model_validate({**normalized, "report_hash": digest})
+
+
+def compute_replay_report_hash_from_payload(payload: Mapping[str, Any]) -> str:
+    material = canonical_json_bytes(dict(payload))
+    return sha256_hex(REPLAY_REPORT_HASH_VERSION.encode() + b"\0" + material)
 
 
 def compute_replay_report_hash(report: BronzeReplayReportV0) -> str:
     payload = BaseModel.model_dump(report, mode="python", round_trip=True)
     payload.pop("report_hash", None)
-    material = canonical_json_bytes(payload)
-    return sha256_hex(REPLAY_REPORT_HASH_VERSION.encode("utf-8") + b"\0" + material)
+    return compute_replay_report_hash_from_payload(payload)
 
 
 class NormalizedEventV0(StrictModel):
