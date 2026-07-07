@@ -17,6 +17,7 @@ from .common import (
     Sha256Hex,
     StrictModel,
     UTCDateTime,
+    VersionId,
     canonical_json_bytes,
     sha256_hex,
 )
@@ -722,7 +723,7 @@ def compute_replay_report_hash(report: BronzeReplayReportV0) -> str:
 
 
 class NormalizedEventV0(StrictModel):
-    schema_version: str
+    schema_version: VersionId
     normalized_event_id: OpaqueId
     source_event_id: OpaqueId
     event_type: EventTypeV0
