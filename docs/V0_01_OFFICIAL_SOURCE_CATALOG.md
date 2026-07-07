@@ -4,9 +4,13 @@ Catalog version: `hyperliquid-public-mainnet.0.1.0`
 
 Catalog hash: `0ca27f650f399f8fa481ad9421eab4183c1c13812c71dfa8daaf878719bd99b7`
 
+Catalog-entry hash domain: `trader-assist-v0/source-catalog-entry/v1`
+
 Officially verified: `2026-07-07`
 
-The executable catalog is `src/trader_assist_v0/data/source_catalog.py`. This document records public interface facts only; A0 does not connect to any endpoint.
+The single executable catalog authority is `src/trader_assist_v0/contracts/source_catalog.py`. It depends only on the standard library and `contracts/common.py`, so `RawEventV0` can validate catalog authority without a contracts-to-data import cycle. `src/trader_assist_v0/data/source_catalog.py` is a compatibility re-export and does not define a second catalog.
+
+A0 records public interface facts only and does not connect to any endpoint.
 
 ## Coverage
 
@@ -17,6 +21,21 @@ WebSocket definitions: `trades`, `l2Book`, `bbo`, `activeAssetCtx`, `allMids`, `
 Info definitions: `meta`, `metaAndAssetCtxs`, `allMids`, `l2Book`, `candleSnapshot`, `fundingHistory`, `predictedFundings`.
 
 Runtime candle interval allowlist: `1m`, `3m`, `5m`, `15m`, `1h`.
+
+## RawEvent binding
+
+Each A0 RawEvent binds and revalidates:
+
+- source ID, catalog version, and catalog hash;
+- endpoint ID and operation type;
+- catalog-entry hash;
+- coin and candle interval selection;
+- endpoint kind and capture mode;
+- connection, subscription, collector-local receive sequence, and payload hash.
+
+WebSocket entries require `WS_TEXT_UTF8_APPLICATION_PAYLOAD`. Info entries require `HTTP_RESPONSE_BODY`. Unknown endpoints or operations, `/exchange`, Testnet, unsupported coins or intervals, missing required coins, and coins supplied to non-coin operations are rejected.
+
+A0 does not parse raw payload fields. `source_event_time`, `source_publish_time`, `revision_time`, `source_native_id`, and `source_native_cursor` must all be `None` until a later separately reviewed extractor contract exists.
 
 ## Frozen semantics
 

@@ -4,20 +4,38 @@
 
 `V0-01A0 / BRONZE_AND_OFFLINE_REPLAY`
 
-This bounded slice freezes public source definitions and implements an entirely offline evidence path: exact synthetic application-payload bytes, domain-separated observation identities, immutable content-addressed local storage, a single-writer hash-linked manifest, strict integrity verification, and deterministic replay reports.
+This bounded slice freezes public source definitions and implements an entirely offline evidence path: exact synthetic application-payload bytes, catalog-bound domain-separated observation identities, immutable content-addressed local storage, globally serialized observation authority, single-writer hash-linked manifests, one-time segment completion checkpoints, strict integrity verification, and deterministic replay reports.
+
+## Fixed A0 authority versions
+
+```text
+A0_SCHEMA_VERSION: 0.1.0
+RAW_IDENTITY_VERSION: trader-assist-v0/raw-observation/v2
+OBSERVATION_SLOT_VERSION: trader-assist-v0/raw-observation-slot/v2
+MANIFEST_FORMAT_VERSION: 0.1.0
+MANIFEST_HASH_CHAIN_VERSION: trader-assist-v0/raw-manifest-entry/v1
+MANIFEST_CHECKPOINT_VERSION: 0.1.0
+MANIFEST_CHECKPOINT_HASH_VERSION: trader-assist-v0/raw-manifest-checkpoint/v1
+REPLAY_REPORT_VERSION: 0.1.0
+REPLAY_REPORT_HASH_VERSION: trader-assist-v0/bronze-replay-report/v1
+```
+
+A0 supports only these values. Callers cannot override them, and the generated JSON Schemas expose them as `const` authorities.
 
 ## Allowed
 
 - ETH and BTC public-source definitions for Hyperliquid mainnet public read-only data;
 - synthetic fixtures compatible with documented public response shapes;
 - local filesystem Bronze storage and replay using the Python standard library;
-- generated schemas and offline tests.
+- generated schemas and offline tests;
+- local segment and global observation locks with verified ownership;
+- explicit segment finalization through an immutable checkpoint.
 
 ## Prohibited
 
-No HTTP or WebSocket client, DNS, live endpoint connection, account address, credential, wallet, signing, exchange write, Testnet/Mainnet execution enablement, strategy, candidate, AI recommendation, risk sizing, health/reconnect/backfill runtime, database, dashboard, cloud SDK, or soak runner is included.
+No HTTP or WebSocket client, DNS, live endpoint connection, account address, credential, wallet, signing, exchange write, Testnet/Mainnet execution enablement, strategy, candidate, AI recommendation, risk sizing, health/reconnect/backfill runtime, Silver normalization, database, dashboard, cloud SDK, or soak runner is included.
 
-Raw payloads, manifests, reports, databases, logs, caches, and real operational data are runtime artifacts and must not be committed to Git.
+Raw payloads, manifests, checkpoints, reports, databases, logs, caches, and real operational data are runtime artifacts and must not be committed to Git.
 
 ## Authority
 
