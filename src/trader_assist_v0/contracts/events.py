@@ -5,7 +5,7 @@ import re
 from collections.abc import Mapping, Set
 from enum import StrEnum
 from pathlib import PurePosixPath
-from typing import Any, Literal, Self, TypeVar
+from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.config import ExtraValues
@@ -285,10 +285,7 @@ class RawEventV0(_A0AuthorityModel):
         )
 
 
-ModelT = TypeVar("ModelT", bound=BaseModel)
-
-
-def _revalidate_exact(value: Any, expected_type: type[ModelT]) -> ModelT:
+def _revalidate_exact[T: BaseModel](value: Any, expected_type: type[T]) -> T:
     if isinstance(value, BaseModel):
         if type(value) is not expected_type:
             raise ValueError(f"expected exact {expected_type.__name__} authority object")
