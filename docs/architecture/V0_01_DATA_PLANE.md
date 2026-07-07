@@ -34,7 +34,15 @@ Payload publication writes and fsyncs a same-filesystem temporary file and atomi
 
 ## Lock authority
 
-A0 uses a root-wide single-writer protocol. `ManifestWriter` opens the Bronze root directory with no-follow directory semantics and obtains an exclusive non-blocking `fcntl.flock` on that retained descriptor. The same descriptor anchors storage traversal for the complete writer lifetime, including initialization, complete-root scan, slot/source-event decision, manifest publication, file fsync, directory fsync, and checkpoint publication.
+A0 uses a root-wide single-writer protocol. `ManifestWriter` acquires an exclusive non-blocking `fcntl.flock` on the **parent directory** of the Bronze root (not the root directory itself). The root directory is opened through the locked parent descriptor with no-follow directory semantics. The same root descriptor anchors storage traversal for the complete writer lifetime, while the parent descriptor holds the kernel lock.
+
+**Stable namespace authority (R3B-ROOTNS)**: Locking the parent directory ensures authority survives root rename or replacement within the same parent directory. The root inode identity (st_dev, st_ino) is verified at acquisition and at every authority boundary through the parent descriptor. If the root identity is lost, the authority fails closed.
+
+**Fork safety (R3B-FORK)**: `OwnedLock` records the creating process PID. On fork, `os.register_at_fork(after_in_child=...)` marks all locks as FORK_INVALID. All authority methods (authority_fd, assert_owned, release, append, finalize, close) verify the calling PID and reject non-owner and fork-child callers.
+
+**Descriptor lifecycle (R4B-FD)**: Each descriptor is tracked through a `_FdState` state machine (OPEN_OWNED, UNLOCKING, CLOSING, CLOSED, CLOSE_OUTCOME_UNKNOWN, POISONED, FORK_INVALID). The descriptor is not invalidated before `os.close`. When `flock(LOCK_UN)` or `os.close` fails, the state transitions to uncertain states, and a process-global poison gate is set to prevent new writers in the same process.
+
+**Writer serialization (R3B-OPERATION)**: `ManifestWriter` uses a `threading.RLock` and a `_WriterState` state machine (ACTIVE, FINALIZING, FINALIZED, CLOSING, CLOSED, COMPROMISED, FORK_INVALID) to serialize all public operations. Repeated close is deterministic and safe. Concurrent append, close, and finalize calls are serialized through the lock.
 
 The protocol does not create or delete lock pathname markers. `lock_ref()` and `global_authority_lock_ref()` remain compatibility names only; their presence, absence, token contents, replacement, or symlink substitution cannot create a second writer namespace and is never cleaned by ordinary release. Acquisition cleanup and release operate only on the descriptor owned by that acquisition, eliminating blind-unlink and verify-then-unlink races.
 

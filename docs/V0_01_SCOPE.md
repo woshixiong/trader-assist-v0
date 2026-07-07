@@ -33,6 +33,14 @@ A0 supports only these values. Callers cannot override them, and the generated J
 
 The root-wide authority is held for the complete writer lifetime. Different segment writers do not coexist in A0. Legacy `.lock` path names are compatibility references only and are not created, removed, or used to establish ownership. A0 has no automatic stale-lock recovery.
 
+**R3B-FORK** (fork ownership safety): OwnedLock binds authority to the creating process PID. `os.register_at_fork` marks all locks as FORK_INVALID in the child. All authority methods reject non-owner and fork-child callers.
+
+**R3B-OPERATION** (writer operation serialization): ManifestWriter serializes all public operations via `threading.RLock` and `_WriterState` state machine. Repeated close is deterministic. Concurrent append/close/finalize are safe.
+
+**R3B-ROOTNS** (stable namespace authority): OwnedLock acquires a kernel lock on the parent directory of the Bronze root, ensuring authority survives root rename/replacement. Root inode identity is verified at acquisition and at every authority boundary through the parent descriptor.
+
+**R4B-FD** (descriptor lifecycle): Descriptor state tracked via `_FdState` (OPEN_OWNED, UNLOCKING, CLOSING, CLOSED, CLOSE_OUTCOME_UNKNOWN, POISONED, FORK_INVALID). Process-global poison gate blocks new writers when close outcome is uncertain. Descriptor is not invalidated before `os.close`.
+
 ## Prohibited
 
 No HTTP or WebSocket client, DNS, live endpoint connection, account address, credential, wallet, signing, exchange write, Testnet/Mainnet execution enablement, strategy, candidate, AI recommendation, risk sizing, health/reconnect/backfill runtime, Silver normalization, database, dashboard, cloud SDK, or soak runner is included.
