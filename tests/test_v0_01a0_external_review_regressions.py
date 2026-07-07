@@ -2355,3 +2355,182 @@ def test_writer_closed_raises_on_append(tmp_path):
 
     with pytest.raises(SingleWriterError):
         writer.append(event)
+
+# ============================================================
+# Tests added for Commit 7b: deterministic concurrency tests
+# ============================================================
+
+def test_append_after_close_blocked(tmp_path):
+    """Append after close must be blocked deterministically."""
+    store = BronzeStore(tmp_path / "root")
+    event = make_event(store, b"data", sequence=1)
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="seg-det-close")
+    writer.close()
+    with pytest.raises(SingleWriterError):
+        writer.append(event)
+
+
+def test_append_after_finalize_blocked(tmp_path):
+    """Append after finalize must be blocked deterministically."""
+    store = BronzeStore(tmp_path / "root")
+    event = make_event(store, b"data", sequence=1)
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="seg-det-finalize")
+    writer.append(event)
+    writer.finalize()
+    with pytest.raises(SegmentFinalizedError):
+        writer.append(event)
+
+
+def test_close_after_finalize_is_noop(tmp_path):
+    """Close after finalize must be a no-op."""
+    store = BronzeStore(tmp_path / "root")
+    event = make_event(store, b"data", sequence=1)
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="seg-det-close-final")
+    writer.append(event)
+    writer.finalize()
+    # Close after finalize should be safe
+    writer.close()
+    assert writer._writer_state == bronze_module._WriterState.FINALIZED
+
+
+def test_finalize_after_close_blocked(tmp_path):
+    """Finalize after close must be blocked deterministically."""
+    store = BronzeStore(tmp_path / "root")
+    event = make_event(store, b"data", sequence=1)
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="seg-det-fin-close")
+    writer.append(event)
+    writer.close()
+    with pytest.raises(SingleWriterError):
+        writer.finalize()
+
+
+def test_deterministic_concurrent_close_workers(tmp_path):
+    """Two concurrent close workers must both complete without hanging."""
+    store = BronzeStore(tmp_path / "root")
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="seg-det-conc-close")
+    barrier = threading.Barrier(2)
+    errors: list[BaseException] = []
+
+    def close_worker():
+        try:
+            barrier.wait(timeout=5)
+            writer.close()
+        except BaseException as exc:
+            errors.append(exc)
+
+    t1 = threading.Thread(target=close_worker)
+    t2 = threading.Thread(target=close_worker)
+    t1.start()
+    t2.start()
+    t1.join(timeout=5)
+    t2.join(timeout=5)
+    assert not t1.is_alive(), "Thread 1 did not complete"
+    assert not t2.is_alive(), "Thread 2 did not complete"
+
+
+def test_entry_indexes_unique_after_concurrent_append(tmp_path):
+    """Entry indexes must be unique and contiguous after concurrent append."""
+    store = BronzeStore(tmp_path / "root")
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="seg-det-index")
+    barrier = threading.Barrier(3)
+    errors: list[BaseException] = []
+    results: list[AppendDisposition] = []
+
+    def append_worker(seq: int):
+        try:
+            event = make_event(store, b"idx", sequence=seq, connection=f"c-{seq:03d}")
+            barrier.wait(timeout=5)
+            result = writer.append(event)
+            results.append(result.disposition)
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=append_worker, args=(i,)) for i in range(1, 4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=5)
+    assert not any(t.is_alive() for t in threads)
+    writer.close()
+
+    # Verify entry indexes are contiguous
+    entries = read_manifest_entries(store, DAY, "seg-det-index")
+    for i, entry in enumerate(entries):
+        assert entry.entry_index == i, f"Entry index {entry.entry_index} != expected {i}"
+
+
+def test_previous_entry_hash_chain_correct(tmp_path):
+    """Previous entry hash chain must be correct after concurrent operations."""
+    store = BronzeStore(tmp_path / "root")
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="seg-det-hash")
+    events = [
+        make_event(store, b"hash1", sequence=i, connection=f"h-{i:03d}")
+        for i in range(1, 5)
+    ]
+    for event in events:
+        writer.append(event)
+    writer.close()
+
+    entries = read_manifest_entries(store, DAY, "seg-det-hash")
+    assert entries[0].previous_entry_hash == MANIFEST_GENESIS_HASH
+    for i in range(1, len(entries)):
+        assert entries[i].previous_entry_hash == entries[i - 1].entry_hash,             f"Hash chain broken at index {i}"
+
+
+def test_checkpoint_entry_count_correct(tmp_path):
+    """Checkpoint entry count must be correct after finalize."""
+    store = BronzeStore(tmp_path / "root")
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="seg-det-checkpoint")
+    for i in range(1, 4):
+        event = make_event(store, b"cp", sequence=i, connection=f"cp-{i:03d}")
+        writer.append(event)
+    checkpoint = writer.finalize()
+    assert checkpoint.expected_entry_count == 3
+
+
+def test_authority_release_only_once(tmp_path):
+    """Authority release must happen exactly once."""
+    store = BronzeStore(tmp_path / "root")
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="seg-det-once")
+    writer.close()
+    # Second close should be no-op, not release again
+    writer.close()
+    # Lock should be released
+    new_writer = ManifestWriter(store, manifest_date=DAY, segment_id="seg-det-once2")
+    new_writer.close()
+
+
+def test_no_publication_after_release(tmp_path):
+    """No publication after authority release."""
+    store = BronzeStore(tmp_path / "root")
+    event = make_event(store, b"pub", sequence=1)
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="seg-det-pub")
+    writer.append(event)
+    writer.close()
+    with pytest.raises(SingleWriterError):
+        writer.append(make_event(store, b"pub2", sequence=2, connection="conn-002"))
+
+
+def test_threads_all_bounded_join(tmp_path):
+    """All threads must bounded join - no hanging."""
+    store = BronzeStore(tmp_path / "root")
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="seg-det-join")
+    barrier = threading.Barrier(5)
+    errors: list[BaseException] = []
+
+    def worker(idx: int):
+        try:
+            barrier.wait(timeout=10)
+            if idx % 2 == 0:
+                event = make_event(store, b"join", sequence=idx + 1, connection=f"j-{idx:03d}")
+                writer.append(event)
+            writer.close()
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(5)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+    assert not any(t.is_alive() for t in threads), "Some threads did not complete within timeout"

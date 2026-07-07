@@ -1180,6 +1180,8 @@ class ManifestWriter:
             raise LockOwnershipError("manifest writer is terminal after authority failure")
         if self._writer_state is _WriterState.CLOSED:
             raise SingleWriterError("manifest writer is closed")
+        if self._writer_state is _WriterState.FINALIZING:
+            raise SegmentFinalizedError("manifest segment is being finalized")
         if self._writer_state is _WriterState.FINALIZED:
             raise SegmentFinalizedError("manifest segment is already finalized")
         if self._terminal_error is not None:
@@ -1203,6 +1205,8 @@ class ManifestWriter:
                 return
             if self._writer_state is _WriterState.FINALIZED:
                 return
+            if self._writer_state is _WriterState.FINALIZING:
+                raise LockOwnershipError("manifest writer is finalizing, cannot close")
             if self._writer_state is _WriterState.COMPROMISED:
                 raise LockOwnershipError("manifest writer is terminal after authority failure")
             if self._writer_state is _WriterState.FORK_INVALID:
@@ -1322,30 +1326,36 @@ class ManifestWriter:
             authority_fd=authority_fd,
         ):
             raise SegmentFinalizedError("manifest segment is already finalized")
-        self.store.fsync_file(self._manifest_ref, authority_fd=authority_fd)
-        entries = read_manifest_entries(
-            self.store,
-            self.manifest_date,
-            self.segment_id,
-            authority_fd=authority_fd,
-        )
-        if tuple(self.entries) != entries:
-            raise BronzeIntegrityError("manifest changed outside the active writer")
-        terminal = entries[-1].entry_hash if entries else MANIFEST_GENESIS_HASH
-        checkpoint = RawManifestCheckpointV0.bind(
-            manifest_date=self.manifest_date,
-            segment_id=self.segment_id,
-            expected_entry_count=len(entries),
-            terminal_entry_hash=terminal,
-        )
-        authority_fd = self._assert_active()
-        self.store.publish_checkpoint(
-            self.manifest_date,
-            self.segment_id,
-            checkpoint,
-            authority_fd=authority_fd,
-        )
-        self._finalized = True
-        self._writer_state = _WriterState.FINALIZED
-        self._close_locked()
-        return checkpoint
+        self._writer_state = _WriterState.FINALIZING
+        try:
+            self.store.fsync_file(self._manifest_ref, authority_fd=authority_fd)
+            entries = read_manifest_entries(
+                self.store,
+                self.manifest_date,
+                self.segment_id,
+                authority_fd=authority_fd,
+            )
+            if tuple(self.entries) != entries:
+                raise BronzeIntegrityError("manifest changed outside the active writer")
+            terminal = entries[-1].entry_hash if entries else MANIFEST_GENESIS_HASH
+            checkpoint = RawManifestCheckpointV0.bind(
+                manifest_date=self.manifest_date,
+                segment_id=self.segment_id,
+                expected_entry_count=len(entries),
+                terminal_entry_hash=terminal,
+            )
+            authority_fd = self._assert_active()
+            self.store.publish_checkpoint(
+                self.manifest_date,
+                self.segment_id,
+                checkpoint,
+                authority_fd=authority_fd,
+            )
+            self._finalized = True
+            self._writer_state = _WriterState.FINALIZED
+            self._close_locked()
+            return checkpoint
+        except BaseException:
+            self._writer_state = _WriterState.COMPROMISED
+            self._closed = True
+            raise
