@@ -19,7 +19,9 @@ def _atomic_write(path: Path, payload: bytes) -> None:
             mode="w+b", prefix=".report-", suffix=".tmp", dir=path.parent, delete=False
         ) as handle:
             temporary_name = handle.name
-            handle.write(payload)
+            written = handle.write(payload)
+            if written != len(payload):
+                raise OSError("short derived replay-report write")
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary_name, path)
@@ -35,12 +37,17 @@ def _atomic_write(path: Path, payload: bytes) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Verify and replay one offline Bronze segment")
+    parser = argparse.ArgumentParser(
+        description="Verify one explicitly finalized offline Bronze segment"
+    )
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--date", type=date.fromisoformat, required=True)
     parser.add_argument("--segment", required=True)
     parser.add_argument("--source-catalog-version", default=SOURCE_CATALOG_VERSION)
-    parser.add_argument("--expected-terminal-hash")
+    parser.add_argument(
+        "--expected-terminal-hash",
+        help="Optional additional assertion; never replaces the mandatory checkpoint",
+    )
     parser.add_argument("--write-report", action="store_true")
     args = parser.parse_args()
 
