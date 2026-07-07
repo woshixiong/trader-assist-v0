@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import threading
 import secrets
 import stat
 import time
@@ -63,6 +64,37 @@ class _LockState(StrEnum):
     ACTIVE = "ACTIVE"
     RELEASED = "RELEASED"
     COMPROMISED = "COMPROMISED"
+    FORK_INVALID = "FORK_INVALID"
+
+
+class _FdState(StrEnum):
+    OPEN_OWNED = "OPEN_OWNED"
+    UNLOCKING = "UNLOCKING"
+    CLOSING = "CLOSING"
+    CLOSED = "CLOSED"
+    CLOSE_OUTCOME_UNKNOWN = "CLOSE_OUTCOME_UNKNOWN"
+    POISONED = "POISONED"
+    FORK_INVALID = "FORK_INVALID"
+
+
+# Process-global poison gate: 0 = clean, 1 = poisoned
+_BRONZE_POISON_GATE = 0
+
+
+# Module-level tracking for fork safety
+_owned_locks: list = []
+
+
+def _after_fork_child() -> None:
+    """Mark all owned locks as FORK_INVALID in the child process."""
+    global _BRONZE_POISON_GATE
+    for lock in _owned_locks:
+        lock._fd_state = _FdState.FORK_INVALID
+        lock._state = _LockState.FORK_INVALID
+    _owned_locks.clear()
+
+
+os.register_at_fork(after_in_child=_after_fork_child)
 
 
 @dataclass(frozen=True)
@@ -627,7 +659,10 @@ class OwnedLock:
         self._fd = fd
         self._st_dev = st_dev
         self._st_ino = st_ino
+        self._owner_pid = os.getpid()
         self._state = _LockState.ACTIVE
+        self._fd_state = _FdState.OPEN_OWNED
+        _owned_locks.append(self)
 
     @classmethod
     def acquire(
@@ -695,27 +730,65 @@ class OwnedLock:
         return self._state is not _LockState.ACTIVE
 
     @property
+    def fork_invalid(self) -> bool:
+        return self._state is _LockState.FORK_INVALID
+
+    @property
     def compromised(self) -> bool:
         return self._state is _LockState.COMPROMISED
 
     @property
     def authority_fd(self) -> int:
+        if self._state is _LockState.FORK_INVALID:
+            raise LockOwnershipError("root authority is invalid after fork")
         if self._state is not _LockState.ACTIVE:
             raise LockOwnershipError("root authority is no longer active")
+        if os.getpid() != self._owner_pid:
+            self._state = _LockState.FORK_INVALID
+            self._fd_state = _FdState.FORK_INVALID
+            raise LockOwnershipError("root authority belongs to a different process")
         return self._fd
 
     def _close_owned_descriptor(self, *, state: _LockState) -> None:
-        fd = self._fd
-        self._fd = -1
-        self._state = state
-        if fd < 0:
+        global _BRONZE_POISON_GATE
+        if self._state is _LockState.FORK_INVALID:
+            self._fd_state = _FdState.FORK_INVALID
+            self._state = state
             return
+        fd = self._fd
+        if fd < 0:
+            self._fd_state = _FdState.CLOSED
+            self._state = state
+            return
+        self._fd_state = _FdState.UNLOCKING
         try:
             fcntl.flock(fd, fcntl.LOCK_UN)
-        finally:
+        except OSError:
+            self._fd_state = _FdState.CLOSE_OUTCOME_UNKNOWN
+            _BRONZE_POISON_GATE = 1
+            self._state = state
+            self._fd = -1
+            raise
+        self._fd_state = _FdState.CLOSING
+        try:
             os.close(fd)
+        except OSError:
+            self._fd_state = _FdState.POISONED
+            _BRONZE_POISON_GATE = 1
+            self._fd = -1
+            self._state = state
+            return
+        self._fd = -1
+        self._fd_state = _FdState.CLOSED
+        self._state = state
 
     def _verify_owned(self) -> None:
+        if self._state is _LockState.FORK_INVALID:
+            raise LockOwnershipError("root authority is invalid after fork")
+        if os.getpid() != self._owner_pid:
+            self._state = _LockState.FORK_INVALID
+            self._fd_state = _FdState.FORK_INVALID
+            raise LockOwnershipError("root authority belongs to a different process")
         if self._state is _LockState.RELEASED:
             raise LockOwnershipError("root authority is already released")
         if self._state is _LockState.COMPROMISED:
@@ -751,6 +824,8 @@ class OwnedLock:
         self._verify_owned()
 
     def release(self) -> None:
+        if self._state is _LockState.FORK_INVALID:
+            raise LockOwnershipError("root authority is invalid after fork")
         self._verify_owned()
         try:
             self._close_owned_descriptor(state=_LockState.RELEASED)
@@ -958,6 +1033,8 @@ class ManifestWriter:
         return self._finalized
 
     def _assert_active(self) -> int:
+        if _BRONZE_POISON_GATE:
+            raise LockOwnershipError("process bronze state is poisoned and cannot create new writers")
         if self._terminal_error is not None:
             raise LockOwnershipError("manifest writer is terminal after authority failure") from (
                 self._terminal_error
