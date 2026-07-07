@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import gc
 import json
+import multiprocessing as mp
 import threading
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -10,6 +12,7 @@ from jsonschema import ValidationError as JsonSchemaValidationError
 from jsonschema import validate as validate_schema
 from pydantic import BaseModel, ValidationError
 
+import trader_assist_v0.data.bronze as bronze_module
 from trader_assist_v0.contracts import (
     BronzeReplayReportV0,
     EnvironmentV0,
@@ -46,6 +49,7 @@ from trader_assist_v0.data import (
     ObservationConflictError,
     OwnedLock,
     SegmentFinalizedError,
+    SingleWriterError,
     read_manifest_entries,
     replay_segment,
 )
@@ -126,6 +130,28 @@ def _finalized_store(tmp_path: Path, payloads: tuple[bytes, ...] = (b"a", b"b"))
     return store, checkpoint
 
 
+def _try_manifest_writer(root: str, manifest_date: date, segment_id: str, queue) -> None:
+    candidate_store = BronzeStore(Path(root))
+    try:
+        writer = ManifestWriter(
+            candidate_store,
+            manifest_date=manifest_date,
+            segment_id=segment_id,
+        )
+    except SingleWriterError:
+        queue.put("BLOCKED")
+    else:
+        writer.close()
+        queue.put("ACQUIRED")
+
+
+def _fd_count() -> int:
+    fd_root = Path("/proc/self/fd")
+    if not fd_root.exists():
+        pytest.skip("Linux /proc fd accounting is unavailable")
+    return len(tuple(fd_root.iterdir()))
+
+
 @pytest.mark.parametrize(
     ("model", "field", "bad"),
     [
@@ -143,11 +169,14 @@ def test_version_fields_emit_schema_const(model, field, bad):
     schema = model.model_json_schema()
     assert "const" in schema["properties"][field]
     with pytest.raises(JsonSchemaValidationError):
-        validate_schema({field: bad}, {
-            "type": "object",
-            "properties": {field: schema["properties"][field]},
-            "required": [field],
-        })
+        validate_schema(
+            {field: bad},
+            {
+                "type": "object",
+                "properties": {field: schema["properties"][field]},
+                "required": [field],
+            },
+        )
 
 
 def test_version_constants_are_frozen():
@@ -306,9 +335,10 @@ def test_zero_entry_finalized_segment_passes(tmp_path):
     checkpoint = writer.finalize()
     assert checkpoint.expected_entry_count == 0
     assert checkpoint.terminal_entry_hash == MANIFEST_GENESIS_HASH
-    assert replay_segment(
-        store, manifest_date=DAY, segment_id="segment-zero"
-    ).status is ReplayStatusV0.PASS
+    assert (
+        replay_segment(store, manifest_date=DAY, segment_id="segment-zero").status
+        is ReplayStatusV0.PASS
+    )
 
 
 @pytest.mark.parametrize("keep", [0, 1])
@@ -355,6 +385,7 @@ def _rewrite_checkpoint(store: BronzeStore, mutator) -> None:
 @pytest.mark.parametrize("field", ["expected_entry_count", "terminal_entry_hash", "segment_id"])
 def test_wrong_checkpoint_authority_rejected(tmp_path, field):
     store, _ = _finalized_store(tmp_path)
+
     def mutate(data):
         if field == "expected_entry_count":
             data[field] += 1
@@ -362,6 +393,7 @@ def test_wrong_checkpoint_authority_rejected(tmp_path, field):
             data[field] = "f" * 64
         else:
             data[field] = "other-segment"
+
     _rewrite_checkpoint(store, mutate)
     assert (
         replay_segment(store, manifest_date=DAY, segment_id=SEGMENT).status
@@ -425,39 +457,122 @@ def test_cross_date_same_source_event_id_idempotent(tmp_path):
     two.close()
 
 
-def test_concurrent_same_slot_at_most_one_authority(tmp_path):
-    store = BronzeStore(tmp_path / "root")
-    event = make_event(store, b"same", sequence=1)
-    writers = [
-        ManifestWriter(store, manifest_date=DAY, segment_id="segment-one"),
-        ManifestWriter(store, manifest_date=DAY, segment_id="segment-two"),
-    ]
-    barrier = threading.Barrier(2)
-    results = []
-    errors = []
 
-    def run(writer):
+
+def test_scan_append_critical_section_cannot_split_on_marker_replacement(
+    tmp_path, monkeypatch
+):
+    store = BronzeStore(tmp_path / "root")
+    event = make_event(store, b"one", sequence=1)
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-one")
+    scanned = threading.Event()
+    proceed = threading.Event()
+    original_scan = bronze_module.scan_global_observation_authority
+
+    def paused_scan(*args, **kwargs):
+        authority = original_scan(*args, **kwargs)
+        scanned.set()
+        assert proceed.wait(timeout=5)
+        return authority
+
+    monkeypatch.setattr(bronze_module, "scan_global_observation_authority", paused_scan)
+    results: list[AppendDisposition] = []
+    errors: list[BaseException] = []
+
+    def append_first() -> None:
         try:
-            barrier.wait()
             results.append(writer.append(event).disposition)
-        except Exception as exc:
+        except BaseException as exc:
             errors.append(exc)
 
-    threads = [threading.Thread(target=run, args=(writer,)) for writer in writers]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
-    for writer in writers:
-        writer.close()
+    thread = threading.Thread(target=append_first)
+    thread.start()
+    assert scanned.wait(timeout=5)
+
+    global_marker = store.path(store.global_authority_lock_ref())
+    global_marker.write_text("replacement-global-token\n", encoding="utf-8")
+    segment_marker = store.path(store.lock_ref(DAY, "segment-one"))
+    segment_marker.write_text("replacement-segment-token\n", encoding="utf-8")
+    with pytest.raises(SingleWriterError):
+        ManifestWriter(
+            store,
+            manifest_date=date(2026, 7, 8),
+            segment_id="segment-two",
+        )
+
+    proceed.set()
+    thread.join(timeout=5)
+    assert not thread.is_alive()
     assert not errors
-    assert results.count(AppendDisposition.APPENDED) == 1
-    assert results.count(AppendDisposition.IDEMPOTENT) == 1
-    total = sum(
-        len(read_manifest_entries(store, DAY, segment))
-        for segment in ("segment-one", "segment-two")
+    assert results == [AppendDisposition.APPENDED]
+    writer.close()
+    assert global_marker.read_text(encoding="utf-8") == "replacement-global-token\n"
+    assert segment_marker.read_text(encoding="utf-8") == "replacement-segment-token\n"
+    assert len(read_manifest_entries(store, DAY, "segment-one")) == 1
+
+def test_root_wide_authority_blocks_replacement_namespace_multiprocess(tmp_path):
+    store = BronzeStore(tmp_path / "root")
+    event = make_event(store, b"one", sequence=1)
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-one")
+
+    legacy_global = store.path(store.global_authority_lock_ref())
+    legacy_global.write_text("replacement-global-token\n", encoding="utf-8")
+    legacy_segment = store.path(store.lock_ref(DAY, "segment-one"))
+    legacy_segment.write_text("replacement-segment-token\n", encoding="utf-8")
+
+    context = mp.get_context("fork")
+    queue = context.Queue()
+    process = context.Process(
+        target=_try_manifest_writer,
+        args=(str(store.root), date(2026, 7, 8), "segment-two", queue),
     )
-    assert total == 1
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 0
+    assert queue.get(timeout=2) == "BLOCKED"
+    assert legacy_global.read_text(encoding="utf-8") == "replacement-global-token\n"
+    assert legacy_segment.read_text(encoding="utf-8") == "replacement-segment-token\n"
+
+    assert writer.append(event).disposition is AppendDisposition.APPENDED
+    writer.close()
+
+    contender = ManifestWriter(
+        store,
+        manifest_date=date(2026, 7, 8),
+        segment_id="segment-two",
+    )
+    with pytest.raises(ObservationConflictError):
+        contender.append(make_event(store, b"two", sequence=1))
+    contender.close()
+    assert len(read_manifest_entries(store, DAY, "segment-one")) == 1
+    assert read_manifest_entries(store, date(2026, 7, 8), "segment-two") == ()
+
+
+def test_root_wide_authority_same_event_is_idempotent_after_waiting_writer(tmp_path):
+    store = BronzeStore(tmp_path / "root")
+    event = make_event(store, b"same", sequence=1)
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-one")
+
+    context = mp.get_context("fork")
+    queue = context.Queue()
+    process = context.Process(
+        target=_try_manifest_writer,
+        args=(str(store.root), date(2026, 7, 8), "segment-two", queue),
+    )
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 0
+    assert queue.get(timeout=2) == "BLOCKED"
+
+    writer.append(event)
+    writer.close()
+    contender = ManifestWriter(
+        store,
+        manifest_date=date(2026, 7, 8),
+        segment_id="segment-two",
+    )
+    assert contender.append(event).disposition is AppendDisposition.IDEMPOTENT
+    contender.close()
 
 
 def test_corrupt_other_manifest_blocks_new_append(tmp_path):
@@ -473,55 +588,215 @@ def test_corrupt_other_manifest_blocks_new_append(tmp_path):
     second.close()
 
 
-def test_segment_lock_delete_replace_token_inode_and_symlink_fail_closed(tmp_path):
+def test_lock_acquire_eliminates_marker_write_and_directory_fsync_cleanup(
+    tmp_path, monkeypatch
+):
+    store = BronzeStore(tmp_path / "root")
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("kernel-backed lock acquisition must not write or fsync markers")
+
+    monkeypatch.setattr(bronze_module, "_write_all", forbidden)
+    monkeypatch.setattr(bronze_module, "_fsync_directory_fd", forbidden)
+    lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
+    assert not store.path(store.global_authority_lock_ref()).exists()
+    lock.release()
+
+
+
+
+@pytest.mark.parametrize("failure_point", ["fstat", "stat", "constructor"])
+def test_post_flock_acquire_failures_release_authority_without_path_cleanup(
+    tmp_path, monkeypatch, failure_point
+):
+    store = BronzeStore(tmp_path / "root")
+    legacy = store.path(store.global_authority_lock_ref())
+    legacy.write_text("replacement-token\n", encoding="utf-8")
+    real_fstat = bronze_module.os.fstat
+    real_stat = bronze_module.os.stat
+    real_init = OwnedLock.__init__
+
+    if failure_point == "fstat":
+        monkeypatch.setattr(
+            bronze_module.os,
+            "fstat",
+            lambda fd: (_ for _ in ()).throw(OSError("injected fstat failure")),
+        )
+    elif failure_point == "stat":
+        monkeypatch.setattr(
+            bronze_module.os,
+            "stat",
+            lambda *args, **kwargs: (_ for _ in ()).throw(OSError("injected stat failure")),
+        )
+    else:
+        monkeypatch.setattr(
+            OwnedLock,
+            "__init__",
+            lambda self, **kwargs: (_ for _ in ()).throw(
+                OSError("injected pre-return constructor failure")
+            ),
+        )
+
+    with pytest.raises(OSError):
+        OwnedLock.acquire(store, store.global_authority_lock_ref())
+
+    monkeypatch.setattr(bronze_module.os, "fstat", real_fstat)
+    monkeypatch.setattr(bronze_module.os, "stat", real_stat)
+    monkeypatch.setattr(OwnedLock, "__init__", real_init)
+    replacement = OwnedLock.acquire(store, store.global_authority_lock_ref())
+    replacement.release()
+    assert legacy.read_text(encoding="utf-8") == "replacement-token\n"
+
+
+def test_descriptor_identity_mismatch_is_terminal_and_closes_fd(tmp_path, monkeypatch):
+    store = BronzeStore(tmp_path / "root")
+    lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
+    authority_fd = lock.authority_fd
+    real_fstat = bronze_module.os.fstat
+
+    def mismatched(fd):
+        metadata = real_fstat(fd)
+        if fd == authority_fd:
+            return type(
+                "MismatchedStat",
+                (),
+                {
+                    "st_mode": metadata.st_mode,
+                    "st_dev": metadata.st_dev,
+                    "st_ino": metadata.st_ino + 1,
+                },
+            )()
+        return metadata
+
+    monkeypatch.setattr(bronze_module.os, "fstat", mismatched)
+    with pytest.raises(LockOwnershipError, match="identity changed"):
+        lock.assert_owned()
+    monkeypatch.setattr(bronze_module.os, "fstat", real_fstat)
+    assert lock.released
+    assert lock.compromised
+    with pytest.raises(LockOwnershipError, match="compromised"):
+        lock.release()
+
+def test_lock_acquire_exception_closes_descriptor_and_releases_kernel_lock(
+    tmp_path, monkeypatch
+):
+    store = BronzeStore(tmp_path / "root")
+    before = _fd_count()
+    real_fstat = bronze_module.os.fstat
+    failed = False
+
+    def fail_once(fd):
+        nonlocal failed
+        if not failed:
+            failed = True
+            raise OSError("injected post-flock identity failure")
+        return real_fstat(fd)
+
+    monkeypatch.setattr(bronze_module.os, "fstat", fail_once)
+    with pytest.raises(OSError, match="injected post-flock identity failure"):
+        OwnedLock.acquire(store, store.global_authority_lock_ref())
+    monkeypatch.setattr(bronze_module.os, "fstat", real_fstat)
+    replacement = OwnedLock.acquire(store, store.global_authority_lock_ref())
+    replacement.release()
+    gc.collect()
+    assert _fd_count() <= before + 1
+
+
+def test_release_verify_to_unlock_race_never_deletes_replacement_root(
+    tmp_path, monkeypatch
+):
+    store = BronzeStore(tmp_path / "root")
+    lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
+    verified = threading.Event()
+    proceed = threading.Event()
+    original_verify = lock._verify_owned
+
+    def paused_verify():
+        original_verify()
+        verified.set()
+        assert proceed.wait(timeout=5)
+
+    monkeypatch.setattr(lock, "_verify_owned", paused_verify)
+    errors: list[BaseException] = []
+
+    def release():
+        try:
+            lock.release()
+        except BaseException as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=release)
+    thread.start()
+    assert verified.wait(timeout=5)
+    detached = tmp_path / "detached-root"
+    store.root.rename(detached)
+    store.root.mkdir()
+    replacement = store.root / "replacement-authority"
+    replacement.write_text("new-owner\n", encoding="utf-8")
+    proceed.set()
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+    assert not errors
+    assert replacement.read_text(encoding="utf-8") == "new-owner\n"
+    assert detached.exists()
+
+
+@pytest.mark.parametrize("replacement_kind", ["missing", "symlink", "file", "directory"])
+def test_root_namespace_loss_is_terminal_and_closes_owned_descriptor(
+    tmp_path, replacement_kind
+):
     store = BronzeStore(tmp_path / "root")
     writer = ManifestWriter(store, manifest_date=DAY, segment_id=SEGMENT)
-    path = store.path(store.lock_ref(DAY, SEGMENT))
+    event = make_event(store)
+    detached = tmp_path / "detached-root"
+    store.root.rename(detached)
+    if replacement_kind == "symlink":
+        target = tmp_path / "replacement-target"
+        target.mkdir()
+        store.root.symlink_to(target, target_is_directory=True)
+    elif replacement_kind == "file":
+        store.root.write_text("not-a-directory", encoding="utf-8")
+    elif replacement_kind == "directory":
+        store.root.mkdir()
 
-    path.unlink()
     with pytest.raises(LockOwnershipError):
+        writer.append(event)
+    with pytest.raises(LockOwnershipError, match="terminal"):
+        writer.append(event)
+    with pytest.raises(LockOwnershipError, match="terminal"):
+        writer.finalize()
+    with pytest.raises(LockOwnershipError, match="terminal"):
         writer.close()
-
-    store2 = BronzeStore(tmp_path / "root2")
-    writer2 = ManifestWriter(store2, manifest_date=DAY, segment_id=SEGMENT)
-    path2 = store2.path(store2.lock_ref(DAY, SEGMENT))
-    path2.unlink()
-    path2.write_text("replacement-token\n")
-    with pytest.raises(LockOwnershipError):
-        writer2.close()
-    assert path2.read_text() == "replacement-token\n"
-
-    store3 = BronzeStore(tmp_path / "root3")
-    writer3 = ManifestWriter(store3, manifest_date=DAY, segment_id=SEGMENT)
-    path3 = store3.path(store3.lock_ref(DAY, SEGMENT))
-    path3.write_text("mutated-token\n")
-    with pytest.raises(LockOwnershipError):
-        writer3.close()
-    assert path3.exists()
-
-    store4 = BronzeStore(tmp_path / "root4")
-    writer4 = ManifestWriter(store4, manifest_date=DAY, segment_id=SEGMENT)
-    path4 = store4.path(store4.lock_ref(DAY, SEGMENT))
-    path4.unlink()
-    target = tmp_path / "target-lock"
-    target.write_text("target")
-    path4.symlink_to(target)
-    with pytest.raises(LockOwnershipError):
-        writer4.close()
-    assert path4.is_symlink()
+    assert writer._authority_lock.released
+    assert writer._authority_lock.compromised
 
 
-def test_old_lock_does_not_delete_new_owner_lock(tmp_path):
+def test_repeated_release_is_deterministic_and_legacy_tokens_are_never_unlinked(tmp_path):
     store = BronzeStore(tmp_path / "root")
-    relative = store.global_authority_lock_ref()
-    old = OwnedLock.acquire(store, relative)
-    path = store.path(relative)
-    path.unlink()
-    new = OwnedLock.acquire(store, relative)
-    with pytest.raises(LockOwnershipError):
-        old.release()
-    assert path.exists()
-    new.release()
+    legacy = store.path(store.global_authority_lock_ref())
+    legacy.write_text("replacement-token\n", encoding="utf-8")
+    lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
+    lock.release()
+    with pytest.raises(LockOwnershipError, match="already released"):
+        lock.release()
+    assert legacy.read_text(encoding="utf-8") == "replacement-token\n"
+
+
+def test_repeated_acquire_failures_do_not_leak_descriptors(tmp_path, monkeypatch):
+    store = BronzeStore(tmp_path / "root")
+    before = _fd_count()
+    real_fstat = bronze_module.os.fstat
+
+    def fail(fd):
+        raise OSError("injected identity failure")
+
+    monkeypatch.setattr(bronze_module.os, "fstat", fail)
+    for _ in range(20):
+        with pytest.raises(OSError, match="injected identity failure"):
+            OwnedLock.acquire(store, store.global_authority_lock_ref())
+    monkeypatch.setattr(bronze_module.os, "fstat", real_fstat)
+    gc.collect()
+    assert _fd_count() <= before + 1
 
 
 def test_raw_event_catalog_binding_and_source_time_policy(store):
