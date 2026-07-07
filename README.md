@@ -4,14 +4,17 @@ Trader Assist V0 is an isolated ETH/Hyperliquid experiment lane for reliable dat
 
 ## Current stage
 
-`V0-00 / CONTRACT_AND_REPOSITORY_BOOTSTRAP`
+`V0-01A0 / BRONZE_AND_OFFLINE_REPLAY`
 
-This repository contains contracts and governance only. It contains no exchange adapter, credential, wallet, order-submission path, Testnet enablement, or Mainnet enablement.
+The current slice provides only a versioned public-source catalog, exact raw fixture/application-payload authority, local content-addressed immutable Bronze storage, append-only hash-linked manifests, and deterministic offline replay.
+
+It contains no network client, live endpoint connection, credential, account address, wallet, signing code, exchange-write path, Testnet/Mainnet execution enablement, strategy logic, AI recommendation, risk sizing, health runtime, database, dashboard, or soak runner.
 
 ## Authority boundary
 
 - `woshixiong/trade-os` remains authoritative for cross-project architecture, governance, evidence-import requirements, and TraderOS production authorities.
-- This repository becomes authoritative only for reviewed and merged V0 runtime source, tests, deployment, and operations.
-- Historical V3.5 code is `SEED`, not authority, and is not copied wholesale.
+- This repository is authoritative only for reviewed and merged V0 runtime source, tests, deployment, and operations.
+- Public market-data definitions do not authorize exchange writes.
+- Historical V3.5 code remains `SEED`, not authority, and is not copied wholesale.
 
-See `docs/architecture/AUTHORITY_BOUNDARY.md` and `docs/V0_00_SCOPE.md`.
+See `docs/architecture/AUTHORITY_BOUNDARY.md` and the active TraderOS Issue #57.
