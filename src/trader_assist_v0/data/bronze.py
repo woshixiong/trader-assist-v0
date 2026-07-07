@@ -811,39 +811,67 @@ class OwnedLock:
             self._fd_state = _FdState.CLOSED
             self._state = state
             return
+
         self._fd_state = _FdState.UNLOCKING
         # Unlock the parent directory (the lock is on parent_fd)
         if parent_fd >= 0:
             try:
                 fcntl.flock(parent_fd, fcntl.LOCK_UN)
             except OSError:
+                # Post-syscall unknown: flock may or may not have succeeded
                 self._fd_state = _FdState.CLOSE_OUTCOME_UNKNOWN
                 _BRONZE_POISON_GATE = 1
                 self._fd = -1
                 self._parent_fd = -1
                 self._state = state
                 raise
+
         self._fd_state = _FdState.CLOSING
-        # Close root_fd
-        try:
-            os.close(root_fd)
-        except OSError:
-            pass
+        # Close root_fd - distinguish pre-syscall vs post-syscall unknown
+        root_close_result = self._close_single_descriptor(root_fd, "root_fd")
+        if root_close_result == "unknown":
+            # Post-syscall unknown: fd may or may not be closed
+            self._fd_state = _FdState.CLOSE_OUTCOME_UNKNOWN
+            _BRONZE_POISON_GATE = 1
+            self._fd = -1
+            self._parent_fd = -1
+            self._state = state
+            raise OSError("root_fd close outcome unknown, process poisoned")
+
         # Close parent_fd
         if parent_fd >= 0:
-            try:
-                os.close(parent_fd)
-            except OSError:
-                self._fd_state = _FdState.POISONED
+            parent_close_result = self._close_single_descriptor(parent_fd, "parent_fd")
+            if parent_close_result == "unknown":
+                self._fd_state = _FdState.CLOSE_OUTCOME_UNKNOWN
                 _BRONZE_POISON_GATE = 1
                 self._fd = -1
                 self._parent_fd = -1
                 self._state = state
-                return
+                raise OSError("parent_fd close outcome unknown, process poisoned")
+
         self._fd = -1
         self._parent_fd = -1
         self._fd_state = _FdState.CLOSED
         self._state = state
+
+    @staticmethod
+    def _close_single_descriptor(fd: int, label: str) -> str:
+        """Close a single descriptor with outcome tracking.
+
+        Returns:
+            "closed" - fd was closed successfully
+            "pre-syscall" - syscall was not attempted (fd known to be still open)
+            "unknown" - syscall executed but outcome is uncertain
+        """
+        if fd < 0:
+            return "closed"
+        try:
+            os.close(fd)
+        except OSError:
+            # Post-syscall unknown: os.close may have succeeded or failed
+            # We cannot determine the disposition of the descriptor
+            return "unknown"
+        return "closed"
 
     def _verify_owned(self) -> None:
         if self._state is _LockState.FORK_INVALID:
