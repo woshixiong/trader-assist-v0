@@ -18,6 +18,7 @@ from trader_assist_v0.contracts import (
     ReplayStatusV0,
 )
 from trader_assist_v0.data import BronzeStore, ManifestWriter, replay_segment
+from trader_assist_v0.data.bronze import _open_anchor_fd
 
 DAY = date(2026, 7, 7)
 NOW = datetime(2026, 7, 7, 1, 0, tzinfo=UTC)
@@ -55,10 +56,13 @@ def event(store: BronzeStore, sequence: int = 1) -> RawEventV0:
 
 def finalized(root: Path) -> BronzeStore:
     store = BronzeStore(root)
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id=SEGMENT)
+    anchor_fd = _open_anchor_fd(store)
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id=SEGMENT,
+                            authority_anchor_fd=anchor_fd)
     writer.append(event(store, 1))
     writer.append(event(store, 2))
     writer.finalize()
+    os.close(anchor_fd)
     return store
 
 
@@ -140,7 +144,9 @@ def test_short_manifest_write_is_detected(
     def short(fd: int, payload: bytes) -> int:
         return original(fd, payload[: max(1, len(payload) // 2)])
 
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id=SEGMENT)
+    anchor_fd = _open_anchor_fd(store)
+    writer = ManifestWriter(store, manifest_date=DAY, segment_id=SEGMENT,
+                            authority_anchor_fd=anchor_fd)
     monkeypatch.setattr(bronze_module.os, "write", short)
     with pytest.raises(OSError, match="short manifest append"):
         writer.append(raw)

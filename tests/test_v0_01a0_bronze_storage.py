@@ -25,6 +25,7 @@ from trader_assist_v0.data import (
     SingleWriterError,
     read_manifest_entries,
 )
+from trader_assist_v0.data.bronze import _open_anchor_fd
 
 DAY = date(2026, 7, 7)
 NOW = datetime(2026, 7, 7, 1, 0, tzinfo=UTC)
@@ -109,43 +110,81 @@ def test_caller_cannot_forge_authority_ids(store: BronzeStore) -> None:
 
 def test_manifest_idempotency_conflict_and_finalization(store: BronzeStore) -> None:
     first = make_event(store, b"one", sequence=1)
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id=SEGMENT)
+    anchor_fd = _open_anchor_fd(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id=SEGMENT, authority_anchor_fd=anchor_fd
+    )
     assert writer.append(first).disposition is AppendDisposition.APPENDED
     assert writer.append(first).disposition is AppendDisposition.IDEMPOTENT
-    with pytest.raises(SingleWriterError):
-        ManifestWriter(store, manifest_date=DAY, segment_id=SEGMENT)
+    anchor_fd2 = _open_anchor_fd(store)
+    try:
+        with pytest.raises(SingleWriterError):
+            ManifestWriter(
+                store, manifest_date=DAY, segment_id=SEGMENT, authority_anchor_fd=anchor_fd2
+            )
+    finally:
+        os.close(anchor_fd2)
     with pytest.raises(ObservationConflictError):
         writer.append(make_event(store, b"different", sequence=1))
     writer.finalize()
     with pytest.raises((SingleWriterError, SegmentFinalizedError)):
         writer.append(make_event(store, b"later", sequence=2))
-    with pytest.raises(SegmentFinalizedError):
-        ManifestWriter(store, manifest_date=DAY, segment_id=SEGMENT)
+    anchor_fd3 = _open_anchor_fd(store)
+    try:
+        with pytest.raises(SegmentFinalizedError):
+            ManifestWriter(
+                store, manifest_date=DAY, segment_id=SEGMENT, authority_anchor_fd=anchor_fd3
+            )
+    finally:
+        os.close(anchor_fd3)
+    os.close(anchor_fd)
 
 
 def test_root_wide_single_writer_blocks_different_segments(store: BronzeStore) -> None:
-    first = ManifestWriter(store, manifest_date=DAY, segment_id="segment-one")
-    with pytest.raises(SingleWriterError):
-        ManifestWriter(store, manifest_date=DAY, segment_id="segment-two")
+    anchor_fd = _open_anchor_fd(store)
+    first = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-one", authority_anchor_fd=anchor_fd
+    )
+    anchor_fd2 = _open_anchor_fd(store)
+    try:
+        with pytest.raises(SingleWriterError):
+            ManifestWriter(
+                store, manifest_date=DAY, segment_id="segment-two", authority_anchor_fd=anchor_fd2
+            )
+    finally:
+        os.close(anchor_fd2)
     first.close()
-    second = ManifestWriter(store, manifest_date=DAY, segment_id="segment-two")
+    os.close(anchor_fd)
+    anchor_fd3 = _open_anchor_fd(store)
+    second = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-two", authority_anchor_fd=anchor_fd3
+    )
     second.close()
+    os.close(anchor_fd3)
 
 
 def test_legacy_lock_marker_is_inert_and_never_removed(store: BronzeStore) -> None:
     legacy = store.path(store.lock_ref(DAY, SEGMENT))
     legacy.parent.mkdir(parents=True)
     legacy.write_text("stale-or-replacement\n", encoding="utf-8")
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id=SEGMENT)
+    anchor_fd = _open_anchor_fd(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id=SEGMENT, authority_anchor_fd=anchor_fd
+    )
     writer.close()
+    os.close(anchor_fd)
     assert legacy.read_text(encoding="utf-8") == "stale-or-replacement\n"
 
 
 def test_manifest_chain_detects_reorder_deletion_and_insertion(store: BronzeStore) -> None:
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id=SEGMENT)
+    anchor_fd = _open_anchor_fd(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id=SEGMENT, authority_anchor_fd=anchor_fd
+    )
     writer.append(make_event(store, b"one", sequence=1))
     writer.append(make_event(store, b"two", sequence=2))
     writer.close()
+    os.close(anchor_fd)
 
     path = store.path(store.manifest_ref(DAY, SEGMENT))
     lines = path.read_bytes().splitlines()
@@ -158,9 +197,13 @@ def test_manifest_chain_detects_reorder_deletion_and_insertion(store: BronzeStor
 
 
 def test_partial_and_corrupt_manifest_fail(store: BronzeStore) -> None:
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id=SEGMENT)
+    anchor_fd = _open_anchor_fd(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id=SEGMENT, authority_anchor_fd=anchor_fd
+    )
     writer.append(make_event(store, b"one"))
     writer.close()
+    os.close(anchor_fd)
     path = store.path(store.manifest_ref(DAY, SEGMENT))
     original = path.read_bytes()
 

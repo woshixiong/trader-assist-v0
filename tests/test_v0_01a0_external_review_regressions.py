@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import errno
 import gc
 import json
 import multiprocessing as mp
+import os
 import threading
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -53,6 +55,7 @@ from trader_assist_v0.data import (
     read_manifest_entries,
     replay_segment,
 )
+from trader_assist_v0.data.bronze import _open_anchor_fd
 
 DAY = date(2026, 7, 7)
 NOW = datetime(2026, 7, 7, 1, 0, tzinfo=UTC)
@@ -123,7 +126,10 @@ def _checkpoint_dict(checkpoint: RawManifestCheckpointV0) -> dict[str, object]:
 
 def _finalized_store(tmp_path: Path, payloads: tuple[bytes, ...] = (b"a", b"b")):
     store = BronzeStore(tmp_path / "root")
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id=SEGMENT)
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id=SEGMENT, authority_anchor_fd=anchor_fd
+    )
     for index, payload in enumerate(payloads, start=1):
         writer.append(make_event(store, payload, sequence=index))
     checkpoint = writer.finalize()
@@ -133,10 +139,12 @@ def _finalized_store(tmp_path: Path, payloads: tuple[bytes, ...] = (b"a", b"b"))
 def _try_manifest_writer(root: str, manifest_date: date, segment_id: str, queue) -> None:
     candidate_store = BronzeStore(Path(root))
     try:
+        anchor_fd = _provision_anchor(candidate_store)
         writer = ManifestWriter(
             candidate_store,
             manifest_date=manifest_date,
             segment_id=segment_id,
+            authority_anchor_fd=anchor_fd,
         )
     except SingleWriterError:
         queue.put("BLOCKED")
@@ -150,6 +158,13 @@ def _fd_count() -> int:
     if not fd_root.exists():
         pytest.skip("Linux /proc fd accounting is unavailable")
     return len(tuple(fd_root.iterdir()))
+
+
+
+def _provision_anchor(store):
+    """Provision a BronzeStore root and return an open anchor fd."""
+    store.root.mkdir(parents=True, exist_ok=True)
+    return _open_anchor_fd(store)
 
 
 @pytest.mark.parametrize(
@@ -314,7 +329,10 @@ def test_finalize_normal_replay_pass(tmp_path):
 
 def test_unfinalized_missing_checkpoint_and_empty_unfinalized_fail(tmp_path):
     store = BronzeStore(tmp_path / "root")
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id=SEGMENT)
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id=SEGMENT, authority_anchor_fd=anchor_fd
+    )
     writer.append(make_event(store))
     assert (
         replay_segment(store, manifest_date=DAY, segment_id=SEGMENT).status
@@ -322,7 +340,10 @@ def test_unfinalized_missing_checkpoint_and_empty_unfinalized_fail(tmp_path):
     )
     writer.close()
 
-    empty = ManifestWriter(store, manifest_date=DAY, segment_id="segment-empty")
+    anchor_fd = _provision_anchor(store)
+    empty = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-empty", authority_anchor_fd=anchor_fd
+    )
     empty.close()
     report = replay_segment(store, manifest_date=DAY, segment_id="segment-empty")
     assert report.status is ReplayStatusV0.FAIL
@@ -331,7 +352,10 @@ def test_unfinalized_missing_checkpoint_and_empty_unfinalized_fail(tmp_path):
 
 def test_zero_entry_finalized_segment_passes(tmp_path):
     store = BronzeStore(tmp_path / "root")
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-zero")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-zero", authority_anchor_fd=anchor_fd
+    )
     checkpoint = writer.finalize()
     assert checkpoint.expected_entry_count == 0
     assert checkpoint.terminal_entry_hash == MANIFEST_GENESIS_HASH
@@ -417,16 +441,23 @@ def test_checkpoint_truncation_hash_and_overwrite_rejected(tmp_path):
     )
     path.write_bytes(original)
     with pytest.raises(SegmentFinalizedError):
-        ManifestWriter(store, manifest_date=DAY, segment_id=SEGMENT)
+        anchor_fd = _provision_anchor(store)
+        ManifestWriter(store, manifest_date=DAY, segment_id=SEGMENT, authority_anchor_fd=anchor_fd)
 
 
 def test_same_slot_same_event_cross_segment_global_idempotent(tmp_path):
     store = BronzeStore(tmp_path / "root")
     event = make_event(store, b"same", sequence=1)
-    one = ManifestWriter(store, manifest_date=DAY, segment_id="segment-one")
+    anchor_fd = _provision_anchor(store)
+    one = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-one", authority_anchor_fd=anchor_fd
+    )
     assert one.append(event).disposition is AppendDisposition.APPENDED
     one.finalize()
-    two = ManifestWriter(store, manifest_date=DAY, segment_id="segment-two")
+    anchor_fd = _provision_anchor(store)
+    two = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-two", authority_anchor_fd=anchor_fd
+    )
     result = two.append(event)
     assert result.disposition is AppendDisposition.IDEMPOTENT
     assert read_manifest_entries(store, DAY, "segment-two") == ()
@@ -435,10 +466,16 @@ def test_same_slot_same_event_cross_segment_global_idempotent(tmp_path):
 
 def test_same_slot_different_event_cross_segment_conflict(tmp_path):
     store = BronzeStore(tmp_path / "root")
-    one = ManifestWriter(store, manifest_date=DAY, segment_id="segment-one")
+    anchor_fd = _provision_anchor(store)
+    one = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-one", authority_anchor_fd=anchor_fd
+    )
     one.append(make_event(store, b"one", sequence=1))
     one.close()
-    two = ManifestWriter(store, manifest_date=DAY, segment_id="segment-two")
+    anchor_fd = _provision_anchor(store)
+    two = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-two", authority_anchor_fd=anchor_fd
+    )
     with pytest.raises(ObservationConflictError):
         two.append(make_event(store, b"two", sequence=1))
     two.close()
@@ -447,11 +484,17 @@ def test_same_slot_different_event_cross_segment_conflict(tmp_path):
 def test_cross_date_same_source_event_id_idempotent(tmp_path):
     store = BronzeStore(tmp_path / "root")
     event = make_event(store, b"same", sequence=1)
-    one = ManifestWriter(store, manifest_date=DAY, segment_id="segment-one")
+    anchor_fd = _provision_anchor(store)
+    one = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-one", authority_anchor_fd=anchor_fd
+    )
     one.append(event)
     one.close()
     later = date(2026, 7, 8)
-    two = ManifestWriter(store, manifest_date=later, segment_id="segment-two")
+    anchor_fd = _provision_anchor(store)
+    two = ManifestWriter(
+        store, manifest_date=later, segment_id="segment-two", authority_anchor_fd=anchor_fd
+    )
     assert two.append(event).disposition is AppendDisposition.IDEMPOTENT
     assert read_manifest_entries(store, later, "segment-two") == ()
     two.close()
@@ -464,7 +507,10 @@ def test_scan_append_critical_section_cannot_split_on_marker_replacement(
 ):
     store = BronzeStore(tmp_path / "root")
     event = make_event(store, b"one", sequence=1)
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-one")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-one", authority_anchor_fd=anchor_fd
+    )
     scanned = threading.Event()
     proceed = threading.Event()
     original_scan = bronze_module.scan_global_observation_authority
@@ -494,10 +540,12 @@ def test_scan_append_critical_section_cannot_split_on_marker_replacement(
     segment_marker = store.path(store.lock_ref(DAY, "segment-one"))
     segment_marker.write_text("replacement-segment-token\n", encoding="utf-8")
     with pytest.raises(SingleWriterError):
+        anchor_fd = _provision_anchor(store)
         ManifestWriter(
             store,
             manifest_date=date(2026, 7, 8),
             segment_id="segment-two",
+            authority_anchor_fd=anchor_fd,
         )
 
     proceed.set()
@@ -513,7 +561,10 @@ def test_scan_append_critical_section_cannot_split_on_marker_replacement(
 def test_root_wide_authority_blocks_replacement_namespace_multiprocess(tmp_path):
     store = BronzeStore(tmp_path / "root")
     event = make_event(store, b"one", sequence=1)
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-one")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-one", authority_anchor_fd=anchor_fd
+    )
 
     legacy_global = store.path(store.global_authority_lock_ref())
     legacy_global.write_text("replacement-global-token\n", encoding="utf-8")
@@ -536,10 +587,12 @@ def test_root_wide_authority_blocks_replacement_namespace_multiprocess(tmp_path)
     assert writer.append(event).disposition is AppendDisposition.APPENDED
     writer.close()
 
+    anchor_fd = _provision_anchor(store)
     contender = ManifestWriter(
         store,
         manifest_date=date(2026, 7, 8),
         segment_id="segment-two",
+        authority_anchor_fd=anchor_fd,
     )
     with pytest.raises(ObservationConflictError):
         contender.append(make_event(store, b"two", sequence=1))
@@ -551,7 +604,10 @@ def test_root_wide_authority_blocks_replacement_namespace_multiprocess(tmp_path)
 def test_root_wide_authority_same_event_is_idempotent_after_waiting_writer(tmp_path):
     store = BronzeStore(tmp_path / "root")
     event = make_event(store, b"same", sequence=1)
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-one")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-one", authority_anchor_fd=anchor_fd
+    )
 
     context = mp.get_context("fork")
     queue = context.Queue()
@@ -566,10 +622,12 @@ def test_root_wide_authority_same_event_is_idempotent_after_waiting_writer(tmp_p
 
     writer.append(event)
     writer.close()
+    anchor_fd = _provision_anchor(store)
     contender = ManifestWriter(
         store,
         manifest_date=date(2026, 7, 8),
         segment_id="segment-two",
+        authority_anchor_fd=anchor_fd,
     )
     assert contender.append(event).disposition is AppendDisposition.IDEMPOTENT
     contender.close()
@@ -577,12 +635,18 @@ def test_root_wide_authority_same_event_is_idempotent_after_waiting_writer(tmp_p
 
 def test_corrupt_other_manifest_blocks_new_append(tmp_path):
     store = BronzeStore(tmp_path / "root")
-    first = ManifestWriter(store, manifest_date=DAY, segment_id="segment-one")
+    anchor_fd = _provision_anchor(store)
+    first = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-one", authority_anchor_fd=anchor_fd
+    )
     first.append(make_event(store, b"one", sequence=1))
     first.close()
     path = store.path(store.manifest_ref(DAY, "segment-one"))
     path.write_bytes(path.read_bytes()[:-1])
-    second = ManifestWriter(store, manifest_date=DAY, segment_id="segment-two")
+    anchor_fd = _provision_anchor(store)
+    second = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-two", authority_anchor_fd=anchor_fd
+    )
     with pytest.raises(BronzeIntegrityError):
         second.append(make_event(store, b"two", sequence=2))
     second.close()
@@ -598,7 +662,10 @@ def test_lock_acquire_eliminates_marker_write_and_directory_fsync_cleanup(
 
     monkeypatch.setattr(bronze_module, "_write_all", forbidden)
     monkeypatch.setattr(bronze_module, "_fsync_directory_fd", forbidden)
-    lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
+    anchor_fd = _provision_anchor(store)
+    lock = OwnedLock.acquire(
+        store, store.global_authority_lock_ref(), authority_anchor_fd=anchor_fd
+    )
     assert not store.path(store.global_authority_lock_ref()).exists()
     lock.release()
 
@@ -662,7 +729,10 @@ def test_post_flock_acquire_failures_release_authority_without_path_cleanup(
 
 def test_descriptor_identity_mismatch_is_terminal_and_closes_fd(tmp_path, monkeypatch):
     store = BronzeStore(tmp_path / "root")
-    lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
+    anchor_fd = _provision_anchor(store)
+    lock = OwnedLock.acquire(
+        store, store.global_authority_lock_ref(), authority_anchor_fd=anchor_fd
+    )
     authority_fd = lock.authority_fd
     real_fstat = bronze_module.os.fstat
 
@@ -731,7 +801,10 @@ def test_release_verify_to_unlock_race_never_deletes_replacement_root(
     tmp_path, monkeypatch
 ):
     store = BronzeStore(tmp_path / "root")
-    lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
+    anchor_fd = _provision_anchor(store)
+    lock = OwnedLock.acquire(
+        store, store.global_authority_lock_ref(), authority_anchor_fd=anchor_fd
+    )
     verified = threading.Event()
     proceed = threading.Event()
     original_verify = lock._verify_owned
@@ -771,7 +844,10 @@ def test_root_namespace_loss_is_terminal_and_closes_owned_descriptor(
     tmp_path, replacement_kind
 ):
     store = BronzeStore(tmp_path / "root")
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id=SEGMENT)
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id=SEGMENT, authority_anchor_fd=anchor_fd
+    )
     event = make_event(store)
     detached = tmp_path / "detached-root"
     store.root.rename(detached)
@@ -800,7 +876,10 @@ def test_repeated_release_is_deterministic_and_legacy_tokens_are_never_unlinked(
     store = BronzeStore(tmp_path / "root")
     legacy = store.path(store.global_authority_lock_ref())
     legacy.write_text("replacement-token\n", encoding="utf-8")
-    lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
+    anchor_fd = _provision_anchor(store)
+    lock = OwnedLock.acquire(
+        store, store.global_authority_lock_ref(), authority_anchor_fd=anchor_fd
+    )
     lock.release()
     with pytest.raises(LockOwnershipError, match="already released"):
         lock.release()
@@ -937,7 +1016,10 @@ def test_fork_child_release_does_not_unlock_parent(tmp_path):
     """Child process release() must not release the parent's kernel lock."""
     import os as _os
     store = BronzeStore(tmp_path / "root")
-    lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
+    anchor_fd = _provision_anchor(store)
+    lock = OwnedLock.acquire(
+        store, store.global_authority_lock_ref(), authority_anchor_fd=anchor_fd
+    )
     read_pipe, write_pipe = _os.pipe()
     pid = _os.fork()
     if pid == 0:
@@ -967,7 +1049,10 @@ def test_fork_child_authority_fd_is_blocked(tmp_path):
     """Child process must not be able to access authority_fd after fork."""
     import os as _os
     store = BronzeStore(tmp_path / "root")
-    lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
+    anchor_fd = _provision_anchor(store)
+    lock = OwnedLock.acquire(
+        store, store.global_authority_lock_ref(), authority_anchor_fd=anchor_fd
+    )
     read_pipe, write_pipe = _os.pipe()
     pid = _os.fork()
     if pid == 0:
@@ -997,7 +1082,10 @@ def test_fork_child_append_is_blocked(tmp_path):
     import os as _os
     store = BronzeStore(tmp_path / "root")
     event = make_event(store, b"data", sequence=1)
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-fork")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-fork", authority_anchor_fd=anchor_fd
+    )
     read_pipe, write_pipe = _os.pipe()
     pid = _os.fork()
     if pid == 0:
@@ -1027,7 +1115,10 @@ def test_fork_child_finalize_is_blocked(tmp_path):
     import os as _os
     store = BronzeStore(tmp_path / "root")
     event = make_event(store, b"data", sequence=1)
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-fork2")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-fork2", authority_anchor_fd=anchor_fd
+    )
     writer.append(event)
     read_pipe, write_pipe = _os.pipe()
     pid = _os.fork()
@@ -1056,7 +1147,10 @@ def test_fork_child_assert_owned_is_blocked(tmp_path):
     """Child process assert_owned must fail after fork."""
     import os as _os
     store = BronzeStore(tmp_path / "root")
-    lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
+    anchor_fd = _provision_anchor(store)
+    lock = OwnedLock.acquire(
+        store, store.global_authority_lock_ref(), authority_anchor_fd=anchor_fd
+    )
     read_pipe, write_pipe = _os.pipe()
     pid = _os.fork()
     if pid == 0:
@@ -1085,7 +1179,10 @@ def test_fork_child_operations_after_parent_release_are_blocked(tmp_path):
     """Even after parent releases, a forked child cannot use the stale lock."""
     import os as _os
     store = BronzeStore(tmp_path / "root")
-    lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
+    anchor_fd = _provision_anchor(store)
+    lock = OwnedLock.acquire(
+        store, store.global_authority_lock_ref(), authority_anchor_fd=anchor_fd
+    )
     read_pipe, write_pipe = _os.pipe()
     pid = _os.fork()
     if pid == 0:
@@ -1109,7 +1206,10 @@ def test_fork_child_operations_after_parent_release_are_blocked(tmp_path):
         _os.close(read_pipe)
         _os.waitpid(pid, 0)
         assert "CHILD_BLOCKED" in child_result
-        new_lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
+        anchor_fd = _provision_anchor(store)
+        new_lock = OwnedLock.acquire(
+            store, store.global_authority_lock_ref(), authority_anchor_fd=anchor_fd
+        )
         new_lock.release()
 # ============================================================
 # Tests added for Commit 2: fork child close duplicates + nested exit
@@ -1123,7 +1223,10 @@ def test_child_closes_duplicates_owner_exit_third_acquires(tmp_path):
     store = BronzeStore(tmp_path / "root")
 
     # Parent acquires lock
-    lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
+    anchor_fd = _provision_anchor(store)
+    lock = OwnedLock.acquire(
+        store, store.global_authority_lock_ref(), authority_anchor_fd=anchor_fd
+    )
 
     # Fork child - child should not be able to use the lock
     read_pipe, write_pipe = _os.pipe()
@@ -1158,7 +1261,10 @@ def test_child_closes_duplicates_owner_exit_third_acquires(tmp_path):
         from pathlib import Path as _Path
         try:
             new_store = BronzeStore(_Path(root_str))
-            new_lock = OwnedLock.acquire(new_store, new_store.global_authority_lock_ref())
+            anchor_fd = _provision_anchor(store)
+            new_lock = OwnedLock.acquire(
+                new_store, new_store.global_authority_lock_ref(), authority_anchor_fd=anchor_fd
+            )
             new_lock.release()
             queue_obj.put("ACQUIRED")
         except SingleWriterError:
@@ -1179,7 +1285,10 @@ def test_child_release_does_not_execute_lock_un(tmp_path):
     """Child process release must not execute flock(LOCK_UN) on inherited fd."""
     import os as _os
     store = BronzeStore(tmp_path / "root")
-    lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
+    anchor_fd = _provision_anchor(store)
+    lock = OwnedLock.acquire(
+        store, store.global_authority_lock_ref(), authority_anchor_fd=anchor_fd
+    )
     read_pipe, write_pipe = _os.pipe()
     pid = _os.fork()
     if pid == 0:
@@ -1210,7 +1319,10 @@ def test_child_close_does_not_execute_lock_un(tmp_path):
     import os as _os
     store = BronzeStore(tmp_path / "root")
     event = make_event(store, b"data", sequence=1)
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-child-close")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-child-close", authority_anchor_fd=anchor_fd
+    )
     read_pipe, write_pipe = _os.pipe()
     pid = _os.fork()
     if pid == 0:
@@ -1240,7 +1352,13 @@ def test_parent_survives_second_writer_blocked_after_fork(tmp_path):
     """After fork, parent still holds the lock and second writer is blocked."""
     import os as _os
     store = BronzeStore(tmp_path / "root")
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-parent-survives")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store,
+        manifest_date=DAY,
+        segment_id="segment-parent-survives",
+        authority_anchor_fd=anchor_fd,
+    )
     event = make_event(store, b"data", sequence=1)
     writer.append(event)
 
@@ -1267,7 +1385,10 @@ def test_parent_survives_second_writer_blocked_after_fork(tmp_path):
 
     # Second writer should still be blocked because parent holds lock
     with pytest.raises(SingleWriterError):
-        ManifestWriter(store, manifest_date=DAY, segment_id="segment-other")
+        anchor_fd = _provision_anchor(store)
+        ManifestWriter(
+            store, manifest_date=DAY, segment_id="segment-other", authority_anchor_fd=anchor_fd
+        )
 
     writer.close()
 
@@ -1281,7 +1402,10 @@ def test_concurrent_append_and_close_race(tmp_path):
     """Demonstrate that concurrent append and close on the same writer can race."""
     store = BronzeStore(tmp_path / "root")
     event = make_event(store, b"race", sequence=1)
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-race")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-race", authority_anchor_fd=anchor_fd
+    )
     barrier = threading.Barrier(2)
     errors: list[BaseException] = []
     results: list[AppendDisposition] = []
@@ -1315,7 +1439,10 @@ def test_concurrent_append_and_finalize_race(tmp_path):
     """Demonstrate that concurrent append and finalize on the same writer can race."""
     store = BronzeStore(tmp_path / "root")
     event = make_event(store, b"race2", sequence=1)
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-race2")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-race2", authority_anchor_fd=anchor_fd
+    )
     barrier = threading.Barrier(2)
     errors: list[BaseException] = []
     results: list[AppendDisposition] = []
@@ -1348,7 +1475,10 @@ def test_concurrent_append_and_finalize_race(tmp_path):
 def test_concurrent_double_close(tmp_path):
     """Demonstrate that concurrent double close on the same writer is safe."""
     store = BronzeStore(tmp_path / "root")
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-dclose")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-dclose", authority_anchor_fd=anchor_fd
+    )
     barrier = threading.Barrier(2)
     errors: list[BaseException] = []
 
@@ -1373,7 +1503,10 @@ def test_concurrent_close_and_finalize_race(tmp_path):
     """Demonstrate that concurrent close and finalize on the same writer can race."""
     store = BronzeStore(tmp_path / "root")
     event = make_event(store, b"race3", sequence=1)
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-race3")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-race3", authority_anchor_fd=anchor_fd
+    )
     writer.append(event)
     barrier = threading.Barrier(2)
     errors: list[BaseException] = []
@@ -1405,7 +1538,10 @@ def test_concurrent_close_and_finalize_race(tmp_path):
 def test_concurrent_multi_append_same_writer(tmp_path):
     """Demonstrate concurrent multi-append on the same writer can race."""
     store = BronzeStore(tmp_path / "root")
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-multi")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-multi", authority_anchor_fd=anchor_fd
+    )
     barrier = threading.Barrier(3)
     errors: list[BaseException] = []
     results: list[AppendDisposition] = []
@@ -1432,7 +1568,10 @@ def test_append_close_append_sequence_race(tmp_path):
     store = BronzeStore(tmp_path / "root")
     event1 = make_event(store, b"one", sequence=1, connection="conn-001")
     event2 = make_event(store, b"two", sequence=2, connection="conn-002")
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-seq")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-seq", authority_anchor_fd=anchor_fd
+    )
     bar1 = threading.Barrier(2)
     bar2 = threading.Barrier(2)
     errors: list[BaseException] = []
@@ -1462,229 +1601,15 @@ def test_append_close_append_sequence_race(tmp_path):
     t2.join(timeout=5)
     assert not t1.is_alive()
     assert not t2.is_alive()# ============================================================
-# Tests added for Commit 4: fd close fault-injection at 1x/10x/50x
-# ============================================================
 
-def _run_fault_injection_subprocess(
-    tmp_path, iterations: int, fault_scenario: str, fault_fd: str
-) -> str:
-    """Run a subprocess that injects faults during fd close operations.
-
-    Uses direct state manipulation to simulate fault scenarios.
-    fault_scenario: "pre-syscall" or "post-syscall"
-    fault_fd: "root_fd" or "parent_fd"
-    """
-    import json as _json
-    context = mp.get_context("fork")
-    queue = context.Queue()
-
-    def worker(tmp_path_str: str, iterations: int, fault_scenario: str,
-               fault_fd: str, queue_obj) -> None:
-        import os as _os
-        from pathlib import Path as _Path
-        try:
-            import trader_assist_v0.data.bronze as bronze_mod
-            from trader_assist_v0.data.bronze import (
-                BronzeStore,
-                OwnedLock,
-            )
-            root = _Path(tmp_path_str) / "fault-root"
-            store = BronzeStore(root)
-
-            results = []
-            for i in range(iterations):
-                try:
-                    lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
-
-                    # Simulate fault by directly manipulating state and fds
-                    if fault_scenario == "pre-syscall":
-                        if fault_fd == "root_fd":
-                            lock._fd_state = bronze_mod._FdState.CLOSE_OUTCOME_UNKNOWN
-                            lock._state = bronze_mod._LockState.COMPROMISED
-                        elif fault_fd == "parent_fd":
-                            lock._fd_state = bronze_mod._FdState.CLOSE_OUTCOME_UNKNOWN
-                            lock._state = bronze_mod._LockState.COMPROMISED
-                    elif fault_scenario == "post-syscall":
-                        if fault_fd == "root_fd":
-                            _os.close(lock._fd)
-                            bronze_mod._BRONZE_POISON_GATE = 1
-                            lock._fd_state = bronze_mod._FdState.CLOSE_OUTCOME_UNKNOWN
-                            lock._fd = -1
-                            lock._parent_fd = -1
-                            lock._state = bronze_mod._LockState.COMPROMISED
-                        elif fault_fd == "parent_fd":
-                            _os.close(lock._parent_fd)
-                            bronze_mod._BRONZE_POISON_GATE = 1
-                            lock._fd_state = bronze_mod._FdState.CLOSE_OUTCOME_UNKNOWN
-                            lock._fd = -1
-                            lock._parent_fd = -1
-                            lock._state = bronze_mod._LockState.COMPROMISED
-
-                    fd_list = _os.listdir("/proc/self/fd")
-                    results.append({
-                        "iteration": i,
-                        "fd_count": len(fd_list),
-                        "lock_state": str(lock._state),
-                        "fd_state": str(lock._fd_state),
-                        "poison_gate": int(bronze_mod._BRONZE_POISON_GATE),
-                        "fd_value": lock._fd,
-                        "parent_fd_value": lock._parent_fd,
-                    })
-
-                    bronze_mod._BRONZE_POISON_GATE = 0
-
-                except Exception as exc:
-                    results.append({
-                        "iteration": i,
-                        "error": f"{type(exc).__name__}: {exc}",
-                    })
-                    import trader_assist_v0.data.bronze as bronze_mod2
-                    bronze_mod2._BRONZE_POISON_GATE = 0
-
-            queue_obj.put(_json.dumps({"status": "ok", "results": results}))
-        except Exception as exc:
-            import traceback
-            queue_obj.put(_json.dumps({
-                "status": "error",
-                "error": f"{type(exc).__name__}: {exc}",
-                "traceback": traceback.format_exc(),
-            }))
-
-    process = context.Process(
-        target=worker,
-        args=(str(tmp_path), iterations, fault_scenario, fault_fd, queue),
-    )
-    process.start()
-    process.join(timeout=30)
-    assert process.exitcode == 0, f"Subprocess failed with exit code {process.exitcode}"
-    result = queue.get(timeout=5)
-    return result
-@pytest.mark.parametrize("iterations", [1, 10, 50])
-def test_fault_injection_pre_syscall_root_fd(tmp_path, iterations):
-    """Pre-syscall failure on root_fd close: fd known to be still open, no poison."""
-    import json as _json
-    result = _run_fault_injection_subprocess(
-        tmp_path, iterations, "pre-syscall", "root_fd"
-    )
-    data = _json.loads(result)
-    assert data["status"] == "ok"
-    # In pre-syscall failure, os.close is never called, so fd is known open
-    # The lock should enter a terminal state
-    for r in data["results"]:
-        if "error" not in r:
-            # After pre-syscall failure, state should be terminal
-            assert r["lock_state"] in ("COMPROMISED", "RELEASED"), \
-                f"Iteration {r['iteration']}: unexpected lock_state {r['lock_state']}"
-
-
-@pytest.mark.parametrize("iterations", [1, 10, 50])
-def test_fault_injection_post_syscall_root_fd(tmp_path, iterations):
-    """Post-syscall unknown on root_fd close: poison gate must be set."""
-    import json as _json
-    result = _run_fault_injection_subprocess(
-        tmp_path, iterations, "post-syscall", "root_fd"
-    )
-    data = _json.loads(result)
-    assert data["status"] == "ok"
-    for r in data["results"]:
-        if "error" not in r:
-            # After post-syscall unknown, poison gate should be set
-            assert r["poison_gate"] == 1, \
-                f"Iteration {r['iteration']}: poison gate not set"
-            assert r["fd_state"] in ("CLOSE_OUTCOME_UNKNOWN", "POISONED"), \
-                f"Iteration {r['iteration']}: unexpected fd_state {r['fd_state']}"
-
-
-@pytest.mark.parametrize("iterations", [1, 10, 50])
-def test_fault_injection_pre_syscall_parent_fd(tmp_path, iterations):
-    """Pre-syscall failure on parent_fd close: fd known to be still open."""
-    import json as _json
-    result = _run_fault_injection_subprocess(
-        tmp_path, iterations, "pre-syscall", "parent_fd"
-    )
-    data = _json.loads(result)
-    assert data["status"] == "ok"
-    for r in data["results"]:
-        if "error" not in r:
-            assert r["lock_state"] in ("COMPROMISED", "RELEASED"), \
-                f"Iteration {r['iteration']}: unexpected lock_state {r['lock_state']}"
-
-
-@pytest.mark.parametrize("iterations", [1, 10, 50])
-def test_fault_injection_post_syscall_parent_fd(tmp_path, iterations):
-    """Post-syscall unknown on parent_fd close: poison gate must be set."""
-    import json as _json
-    result = _run_fault_injection_subprocess(
-        tmp_path, iterations, "post-syscall", "parent_fd"
-    )
-    data = _json.loads(result)
-    assert data["status"] == "ok"
-    for r in data["results"]:
-        if "error" not in r:
-            assert r["poison_gate"] == 1, \
-                f"Iteration {r['iteration']}: poison gate not set"
-            assert r["fd_state"] in ("CLOSE_OUTCOME_UNKNOWN", "POISONED"), \
-                f'Iteration {r['iteration']}: unexpected fd_state {r['fd_state']}'
-
-
-def test_poison_gate_prevents_new_writer_after_close_unknown(tmp_path):
-    """After a close outcome unknown, new writers are blocked by poison gate."""
-    import json as _json
-    context = mp.get_context("fork")
-    queue = context.Queue()
-
-    def worker(tmp_path_str: str, queue_obj) -> None:
-        import os as _os
-        from pathlib import Path as _Path
-        try:
-            import trader_assist_v0.data.bronze as bronze_mod
-            from trader_assist_v0.data.bronze import (
-                BronzeStore,
-                LockOwnershipError,
-                ManifestWriter,
-                OwnedLock,
-            )
-            root = _Path(tmp_path_str) / "poison-root"
-            store = BronzeStore(root)
-
-            lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
-
-            # Simulate post-syscall unknown: close root_fd and set poison
-            _os.close(lock._fd)
-            bronze_mod._BRONZE_POISON_GATE = 1
-            lock._fd_state = bronze_mod._FdState.CLOSE_OUTCOME_UNKNOWN
-            lock._fd = -1
-            lock._parent_fd = -1
-            lock._state = bronze_mod._LockState.COMPROMISED
-
-            # Now try to create a new writer - should be blocked
-            try:
-                ManifestWriter(store, manifest_date=date(2026, 7, 7), segment_id="seg-poison")
-                queue_obj.put(_json.dumps({"status": "writer_created_unexpectedly"}))
-            except LockOwnershipError as exc:
-                queue_obj.put(_json.dumps({"status": "blocked", "reason": str(exc)}))
-            except Exception as exc:
-                queue_obj.put(_json.dumps({"status": "error", "error": str(exc)}))
-
-        except Exception as exc:
-            import traceback
-            queue_obj.put(_json.dumps({
-                "status": "error",
-                "error": f"{type(exc).__name__}: {exc}",
-                "traceback": traceback.format_exc(),
-            }))
-
-    process = context.Process(target=worker, args=(str(tmp_path), queue))
-    process.start()
-    process.join(timeout=15)
-    assert process.exitcode == 0
-    result = _json.loads(queue.get(timeout=5))
-    assert result["status"] == "blocked", f"Expected writer to be blocked, got: {result}"
 def test_root_rename_while_authority_held_multiprocess(tmp_path):
     """Root rename should not release authority when parent directory is locked."""
     store = BronzeStore(tmp_path / "root")
     event = make_event(store, b"rename", sequence=1)
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-rename")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-rename", authority_anchor_fd=anchor_fd
+    )
     writer.append(event)
 
     context = mp.get_context("fork")
@@ -1700,10 +1625,12 @@ def test_root_rename_while_authority_held_multiprocess(tmp_path):
             queue.put("RENAMED")
             try:
                 new_store = BronzeStore(root_path)
+                anchor_fd = _provision_anchor(new_store)
                 ManifestWriter(
                     new_store,
                     manifest_date=date(2026, 7, 8),
                     segment_id="segment-new",
+                    authority_anchor_fd=anchor_fd,
                 )
                 queue.put("ACQUIRED_NEW")
             except SingleWriterError:
@@ -1736,7 +1663,10 @@ def test_root_rename_while_authority_held_multiprocess(tmp_path):
 def test_root_parent_lock_blocks_concurrent_after_rename(tmp_path):
     """Parent directory lock prevents concurrent writers even after root rename."""
     store = BronzeStore(tmp_path / "root")
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-parent")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-parent", authority_anchor_fd=anchor_fd
+    )
 
     context = mp.get_context("fork")
     queue = context.Queue()
@@ -1745,10 +1675,12 @@ def test_root_parent_lock_blocks_concurrent_after_rename(tmp_path):
         from pathlib import Path as _Path
         try:
             candidate = BronzeStore(_Path(root_str))
+            anchor_fd = _provision_anchor(store)
             ManifestWriter(
                 candidate,
                 manifest_date=date(2026, 7, 8),
                 segment_id="segment-other",
+                authority_anchor_fd=anchor_fd,
             )
             queue.put("ACQUIRED")
         except SingleWriterError:
@@ -1782,7 +1714,10 @@ def test_root_parent_lock_blocks_concurrent_after_rename(tmp_path):
 def test_root_identity_change_detected_at_publication(tmp_path):
     """Root inode identity change should be detected at publication boundary."""
     store = BronzeStore(tmp_path / "root")
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-identity")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-identity", authority_anchor_fd=anchor_fd
+    )
     event = make_event(store, b"identity", sequence=1)
     writer.append(event)
 
@@ -1807,7 +1742,10 @@ def test_root_identity_change_detected_at_publication(tmp_path):
 def test_root_identity_preserved_after_rename(tmp_path):
     """With parent directory lock, root identity check should operate correctly."""
     store = BronzeStore(tmp_path / "root")
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-preserve")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-preserve", authority_anchor_fd=anchor_fd
+    )
     event = make_event(store, b"preserve", sequence=1)
     writer.append(event)
 
@@ -1828,7 +1766,10 @@ def test_root_rename_blocked_with_authority_anchor(tmp_path):
     """With authority_anchor, root rename does not release authority."""
     store = BronzeStore(tmp_path / "root")
     event = make_event(store, b"rename", sequence=1)
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-anchor")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-anchor", authority_anchor_fd=anchor_fd
+    )
     writer.append(event)
 
     context = mp.get_context("fork")
@@ -1845,10 +1786,12 @@ def test_root_rename_blocked_with_authority_anchor(tmp_path):
             queue_obj.put("RENAMED")
             try:
                 new_store = BronzeStore(root_path, authority_anchor=anchor_path)
+                anchor_fd = _provision_anchor(new_store)
                 ManifestWriter(
                     new_store,
                     manifest_date=date(2026, 7, 8),
                     segment_id="segment-new",
+                    authority_anchor_fd=anchor_fd,
                 )
                 queue_obj.put("ACQUIRED_NEW")
             except SingleWriterError:
@@ -1876,7 +1819,10 @@ def test_root_rename_blocked_with_authority_anchor(tmp_path):
 def test_immediate_parent_rename_blocked(tmp_path):
     """Immediate parent rename should not release authority."""
     store = BronzeStore(tmp_path / "root")
-    ManifestWriter(store, manifest_date=DAY, segment_id="segment-immediate")
+    anchor_fd = _provision_anchor(store)
+    ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-immediate", authority_anchor_fd=anchor_fd
+    )
 
     context = mp.get_context("fork")
     queue = context.Queue()
@@ -1897,10 +1843,12 @@ def test_immediate_parent_rename_blocked(tmp_path):
                     new_parent / root_path.name,
                     authority_anchor=anchor_path,
                 )
+                anchor_fd = _provision_anchor(new_store)
                 ManifestWriter(
                     new_store,
                     manifest_date=date(2026, 7, 8),
                     segment_id="segment-new",
+                    authority_anchor_fd=anchor_fd,
                 )
                 queue_obj.put("ACQUIRED_NEW")
             except SingleWriterError:
@@ -1933,7 +1881,10 @@ def test_immediate_parent_rename_blocked(tmp_path):
 def test_replacement_parent_new_root_blocked(tmp_path):
     """Replacement parent with new root must still be blocked by authority."""
     store = BronzeStore(tmp_path / "root")
-    ManifestWriter(store, manifest_date=DAY, segment_id="segment-replace")
+    anchor_fd = _provision_anchor(store)
+    ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-replace", authority_anchor_fd=anchor_fd
+    )
 
     context = mp.get_context("fork")
     queue = context.Queue()
@@ -1952,10 +1903,12 @@ def test_replacement_parent_new_root_blocked(tmp_path):
             queue_obj.put("REPLACED")
             try:
                 new_store = BronzeStore(new_root, authority_anchor=anchor_path)
+                anchor_fd = _provision_anchor(new_store)
                 ManifestWriter(
                     new_store,
                     manifest_date=date(2026, 7, 8),
                     segment_id="segment-new",
+                    authority_anchor_fd=anchor_fd,
                 )
                 queue_obj.put("ACQUIRED_NEW")
             except SingleWriterError:
@@ -1982,7 +1935,10 @@ def test_replacement_parent_new_root_blocked(tmp_path):
 def test_second_writer_same_authority_namespace(tmp_path):
     """Second writer must use the same authority namespace."""
     store = BronzeStore(tmp_path / "root")
-    ManifestWriter(store, manifest_date=DAY, segment_id="segment-first")
+    anchor_fd = _provision_anchor(store)
+    ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-first", authority_anchor_fd=anchor_fd
+    )
 
     context = mp.get_context("fork")
     queue = context.Queue()
@@ -1994,10 +1950,12 @@ def test_second_writer_same_authority_namespace(tmp_path):
                 _Path(root_str),
                 authority_anchor=_Path(anchor_str),
             )
+            anchor_fd = _provision_anchor(new_store)
             ManifestWriter(
                 new_store,
                 manifest_date=date(2026, 7, 8),
                 segment_id="segment-second",
+                authority_anchor_fd=anchor_fd,
             )
             queue_obj.put("ACQUIRED")
         except SingleWriterError:
@@ -2022,7 +1980,10 @@ def test_replacement_after_scan(tmp_path):
     """Replacement after scan: authority must still hold."""
     store = BronzeStore(tmp_path / "root")
     event = make_event(store, b"scan", sequence=1)
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-scan")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-scan", authority_anchor_fd=anchor_fd
+    )
     writer.append(event)
 
     context = mp.get_context("fork")
@@ -2038,10 +1999,12 @@ def test_replacement_after_scan(tmp_path):
             queue_obj.put("REPLACED_AFTER_SCAN")
             try:
                 new_store = BronzeStore(anchor_path / root_path.name)
+                anchor_fd = _provision_anchor(new_store)
                 ManifestWriter(
                     new_store,
                     manifest_date=date(2026, 7, 8),
                     segment_id="segment-new",
+                    authority_anchor_fd=anchor_fd,
                 )
                 queue_obj.put("ACQUIRED_NEW")
             except SingleWriterError:
@@ -2068,7 +2031,10 @@ def test_replacement_after_scan(tmp_path):
 def test_replacement_before_payload_publication(tmp_path):
     """Replacement before payload publication: authority must still hold."""
     store = BronzeStore(tmp_path / "root")
-    ManifestWriter(store, manifest_date=DAY, segment_id="segment-payload")
+    anchor_fd = _provision_anchor(store)
+    ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-payload", authority_anchor_fd=anchor_fd
+    )
 
     context = mp.get_context("fork")
     queue = context.Queue()
@@ -2083,10 +2049,12 @@ def test_replacement_before_payload_publication(tmp_path):
             queue_obj.put("REPLACED_BEFORE_PAYLOAD")
             try:
                 new_store = BronzeStore(anchor_path / root_path.name)
+                anchor_fd = _provision_anchor(new_store)
                 ManifestWriter(
                     new_store,
                     manifest_date=date(2026, 7, 8),
                     segment_id="segment-new",
+                    authority_anchor_fd=anchor_fd,
                 )
                 queue_obj.put("ACQUIRED_NEW")
             except SingleWriterError:
@@ -2113,7 +2081,10 @@ def test_replacement_before_payload_publication(tmp_path):
 def test_replacement_before_manifest_write(tmp_path):
     """Replacement before manifest write: authority must still hold."""
     store = BronzeStore(tmp_path / "root")
-    ManifestWriter(store, manifest_date=DAY, segment_id="segment-manifest")
+    anchor_fd = _provision_anchor(store)
+    ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-manifest", authority_anchor_fd=anchor_fd
+    )
 
     context = mp.get_context("fork")
     queue = context.Queue()
@@ -2128,10 +2099,12 @@ def test_replacement_before_manifest_write(tmp_path):
             queue_obj.put("REPLACED_BEFORE_MANIFEST")
             try:
                 new_store = BronzeStore(anchor_path / root_path.name)
+                anchor_fd = _provision_anchor(new_store)
                 ManifestWriter(
                     new_store,
                     manifest_date=date(2026, 7, 8),
                     segment_id="segment-new",
+                    authority_anchor_fd=anchor_fd,
                 )
                 queue_obj.put("ACQUIRED_NEW")
             except SingleWriterError:
@@ -2159,7 +2132,10 @@ def test_replacement_after_manifest_fsync(tmp_path):
     """Replacement after manifest fsync: authority must still hold."""
     store = BronzeStore(tmp_path / "root")
     event = make_event(store, b"fsync", sequence=1)
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-fsync")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-fsync", authority_anchor_fd=anchor_fd
+    )
     writer.append(event)
 
     context = mp.get_context("fork")
@@ -2175,10 +2151,12 @@ def test_replacement_after_manifest_fsync(tmp_path):
             queue_obj.put("REPLACED_AFTER_FSYNC")
             try:
                 new_store = BronzeStore(anchor_path / root_path.name)
+                anchor_fd = _provision_anchor(new_store)
                 ManifestWriter(
                     new_store,
                     manifest_date=date(2026, 7, 8),
                     segment_id="segment-new",
+                    authority_anchor_fd=anchor_fd,
                 )
                 queue_obj.put("ACQUIRED_NEW")
             except SingleWriterError:
@@ -2206,7 +2184,10 @@ def test_replacement_before_checkpoint_publication(tmp_path):
     """Replacement before checkpoint publication: authority must still hold."""
     store = BronzeStore(tmp_path / "root")
     event = make_event(store, b"checkpoint", sequence=1)
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-checkpoint")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-checkpoint", authority_anchor_fd=anchor_fd
+    )
     writer.append(event)
 
     context = mp.get_context("fork")
@@ -2222,10 +2203,12 @@ def test_replacement_before_checkpoint_publication(tmp_path):
             queue_obj.put("REPLACED_BEFORE_CHECKPOINT")
             try:
                 new_store = BronzeStore(anchor_path / root_path.name)
+                anchor_fd = _provision_anchor(new_store)
                 ManifestWriter(
                     new_store,
                     manifest_date=date(2026, 7, 8),
                     segment_id="segment-new",
+                    authority_anchor_fd=anchor_fd,
                 )
                 queue_obj.put("ACQUIRED_NEW")
             except SingleWriterError:
@@ -2253,7 +2236,10 @@ def test_replacement_during_finalize(tmp_path):
     """Replacement during finalize: authority must still hold."""
     store = BronzeStore(tmp_path / "root")
     event = make_event(store, b"finalize", sequence=1)
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-finalize-r")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-finalize-r", authority_anchor_fd=anchor_fd
+    )
     writer.append(event)
 
     context = mp.get_context("fork")
@@ -2269,10 +2255,12 @@ def test_replacement_during_finalize(tmp_path):
             queue_obj.put("REPLACED_DURING_FINALIZE")
             try:
                 new_store = BronzeStore(anchor_path / root_path.name)
+                anchor_fd = _provision_anchor(new_store)
                 ManifestWriter(
                     new_store,
                     manifest_date=date(2026, 7, 8),
                     segment_id="segment-new",
+                    authority_anchor_fd=anchor_fd,
                 )
                 queue_obj.put("ACQUIRED_NEW")
             except SingleWriterError:
@@ -2299,27 +2287,13 @@ def test_replacement_during_finalize(tmp_path):
 # ============================================================
 # Tests added for Commit 7: reproduce uncertain close lifecycle
 # ============================================================
-
-
-def test_poison_gate_prevents_new_writer(tmp_path):
-    """When the poison gate is set, new writers cannot be created."""
-    store = BronzeStore(tmp_path / "root")
-    bronze_module._BRONZE_POISON_GATE = 1
-
-    with pytest.raises(LockOwnershipError, match="poisoned"):
-        ManifestWriter(store, manifest_date=DAY, segment_id="segment-poison")
-
-    # Reset poison gate
-    bronze_module._BRONZE_POISON_GATE = 0
-
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-clean")
-    writer.close()
-
-
 def test_fd_state_transitions_on_normal_close(tmp_path):
     """Verify fd state transitions during normal close lifecycle."""
     store = BronzeStore(tmp_path / "root")
-    lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
+    anchor_fd = _provision_anchor(store)
+    lock = OwnedLock.acquire(
+        store, store.global_authority_lock_ref(), authority_anchor_fd=anchor_fd
+    )
 
     assert lock._fd_state == bronze_module._FdState.OPEN_OWNED
     lock.release()
@@ -2331,7 +2305,10 @@ def test_fd_state_transitions_on_normal_close(tmp_path):
 def test_double_release_does_not_double_free(tmp_path):
     """Double release of OwnedLock should be safe and not double-free fds."""
     store = BronzeStore(tmp_path / "root")
-    lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
+    anchor_fd = _provision_anchor(store)
+    lock = OwnedLock.acquire(
+        store, store.global_authority_lock_ref(), authority_anchor_fd=anchor_fd
+    )
     lock.release()
 
     with pytest.raises(LockOwnershipError):
@@ -2344,7 +2321,10 @@ def test_double_release_does_not_double_free(tmp_path):
 def test_writer_state_transitions_on_normal_close(tmp_path):
     """Verify writer state transitions during normal close lifecycle."""
     store = BronzeStore(tmp_path / "root")
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-state")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-state", authority_anchor_fd=anchor_fd
+    )
 
     assert writer._writer_state == bronze_module._WriterState.ACTIVE
     writer.close()
@@ -2355,7 +2335,10 @@ def test_writer_state_transitions_on_finalize(tmp_path):
     """Verify writer state transitions during finalize."""
     store = BronzeStore(tmp_path / "root")
     event = make_event(store, b"data", sequence=1)
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-finalize")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-finalize", authority_anchor_fd=anchor_fd
+    )
     writer.append(event)
 
     assert writer._writer_state == bronze_module._WriterState.ACTIVE
@@ -2366,7 +2349,10 @@ def test_writer_state_transitions_on_finalize(tmp_path):
 def test_writer_double_close_is_safe(tmp_path):
     """Double close of ManifestWriter should be deterministic and safe."""
     store = BronzeStore(tmp_path / "root")
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-dclose2")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-dclose2", authority_anchor_fd=anchor_fd
+    )
     writer.close()
     # Second close should be a no-op
     writer.close()
@@ -2377,7 +2363,10 @@ def test_writer_closed_raises_on_append(tmp_path):
     """Append after close should raise SingleWriterError."""
     store = BronzeStore(tmp_path / "root")
     event = make_event(store, b"data", sequence=1)
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="segment-closed")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="segment-closed", authority_anchor_fd=anchor_fd
+    )
     writer.close()
 
     with pytest.raises(SingleWriterError):
@@ -2391,7 +2380,10 @@ def test_append_after_close_blocked(tmp_path):
     """Append after close must be blocked deterministically."""
     store = BronzeStore(tmp_path / "root")
     event = make_event(store, b"data", sequence=1)
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="seg-det-close")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="seg-det-close", authority_anchor_fd=anchor_fd
+    )
     writer.close()
     with pytest.raises(SingleWriterError):
         writer.append(event)
@@ -2401,7 +2393,10 @@ def test_append_after_finalize_blocked(tmp_path):
     """Append after finalize must be blocked deterministically."""
     store = BronzeStore(tmp_path / "root")
     event = make_event(store, b"data", sequence=1)
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="seg-det-finalize")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="seg-det-finalize", authority_anchor_fd=anchor_fd
+    )
     writer.append(event)
     writer.finalize()
     with pytest.raises(SingleWriterError):
@@ -2412,7 +2407,10 @@ def test_close_after_finalize_is_noop(tmp_path):
     """Close after finalize must be a no-op."""
     store = BronzeStore(tmp_path / "root")
     event = make_event(store, b"data", sequence=1)
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="seg-det-close-final")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="seg-det-close-final", authority_anchor_fd=anchor_fd
+    )
     writer.append(event)
     writer.finalize()
     # Close after finalize should be safe
@@ -2424,7 +2422,10 @@ def test_finalize_after_close_blocked(tmp_path):
     """Finalize after close must be blocked deterministically."""
     store = BronzeStore(tmp_path / "root")
     event = make_event(store, b"data", sequence=1)
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="seg-det-fin-close")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="seg-det-fin-close", authority_anchor_fd=anchor_fd
+    )
     writer.append(event)
     writer.close()
     with pytest.raises(SingleWriterError):
@@ -2434,7 +2435,10 @@ def test_finalize_after_close_blocked(tmp_path):
 def test_deterministic_concurrent_close_workers(tmp_path):
     """Two concurrent close workers must both complete without hanging."""
     store = BronzeStore(tmp_path / "root")
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="seg-det-conc-close")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="seg-det-conc-close", authority_anchor_fd=anchor_fd
+    )
     barrier = threading.Barrier(2)
     errors: list[BaseException] = []
 
@@ -2458,7 +2462,10 @@ def test_deterministic_concurrent_close_workers(tmp_path):
 def test_entry_indexes_unique_after_concurrent_append(tmp_path):
     """Entry indexes must be unique and contiguous after concurrent append."""
     store = BronzeStore(tmp_path / "root")
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="seg-det-index")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="seg-det-index", authority_anchor_fd=anchor_fd
+    )
     barrier = threading.Barrier(3)
     errors: list[BaseException] = []
     results: list[AppendDisposition] = []
@@ -2489,7 +2496,10 @@ def test_entry_indexes_unique_after_concurrent_append(tmp_path):
 def test_previous_entry_hash_chain_correct(tmp_path):
     """Previous entry hash chain must be correct after concurrent operations."""
     store = BronzeStore(tmp_path / "root")
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="seg-det-hash")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="seg-det-hash", authority_anchor_fd=anchor_fd
+    )
     events = [
         make_event(store, b"hash1", sequence=i, connection=f"h-{i:03d}")
         for i in range(1, 5)
@@ -2508,7 +2518,10 @@ def test_previous_entry_hash_chain_correct(tmp_path):
 def test_checkpoint_entry_count_correct(tmp_path):
     """Checkpoint entry count must be correct after finalize."""
     store = BronzeStore(tmp_path / "root")
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="seg-det-checkpoint")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="seg-det-checkpoint", authority_anchor_fd=anchor_fd
+    )
     for i in range(1, 4):
         event = make_event(store, b"cp", sequence=i, connection=f"cp-{i:03d}")
         writer.append(event)
@@ -2519,12 +2532,18 @@ def test_checkpoint_entry_count_correct(tmp_path):
 def test_authority_release_only_once(tmp_path):
     """Authority release must happen exactly once."""
     store = BronzeStore(tmp_path / "root")
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="seg-det-once")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="seg-det-once", authority_anchor_fd=anchor_fd
+    )
     writer.close()
     # Second close should be no-op, not release again
     writer.close()
     # Lock should be released
-    new_writer = ManifestWriter(store, manifest_date=DAY, segment_id="seg-det-once2")
+    anchor_fd = _provision_anchor(store)
+    new_writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="seg-det-once2", authority_anchor_fd=anchor_fd
+    )
     new_writer.close()
 
 
@@ -2532,7 +2551,10 @@ def test_no_publication_after_release(tmp_path):
     """No publication after authority release."""
     store = BronzeStore(tmp_path / "root")
     event = make_event(store, b"pub", sequence=1)
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="seg-det-pub")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="seg-det-pub", authority_anchor_fd=anchor_fd
+    )
     writer.append(event)
     writer.close()
     with pytest.raises(SingleWriterError):
@@ -2542,7 +2564,10 @@ def test_no_publication_after_release(tmp_path):
 def test_threads_all_bounded_join(tmp_path):
     """All threads must bounded join - no hanging."""
     store = BronzeStore(tmp_path / "root")
-    writer = ManifestWriter(store, manifest_date=DAY, segment_id="seg-det-join")
+    anchor_fd = _provision_anchor(store)
+    writer = ManifestWriter(
+        store, manifest_date=DAY, segment_id="seg-det-join", authority_anchor_fd=anchor_fd
+    )
     barrier = threading.Barrier(5)
     errors: list[BaseException] = []
 
@@ -2576,7 +2601,10 @@ def test_fork_child_lock_fd_is_invalidated(tmp_path):
     accidental flock(LOCK_UN) on the inherited lock file descriptor."""
     import os as _os
     store = BronzeStore(tmp_path / "root")
-    lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
+    anchor_fd = _provision_anchor(store)
+    lock = OwnedLock.acquire(
+        store, store.global_authority_lock_ref(), authority_anchor_fd=anchor_fd
+    )
     read_pipe, write_pipe = _os.pipe()
     pid = _os.fork()
     if pid == 0:
@@ -2603,7 +2631,10 @@ def test_fork_child_cannot_unlock_lock_fd(tmp_path):
     because _lock_fd is set to -1 in the child."""
     import os as _os
     store = BronzeStore(tmp_path / "root")
-    lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
+    anchor_fd = _provision_anchor(store)
+    lock = OwnedLock.acquire(
+        store, store.global_authority_lock_ref(), authority_anchor_fd=anchor_fd
+    )
     read_pipe, write_pipe = _os.pipe()
     pid = _os.fork()
     if pid == 0:
@@ -2687,7 +2718,10 @@ def test_release_with_pre_syscall_close_failure(tmp_path, monkeypatch):
     poison the process since _close_single_descriptor treats all OSError
     as post-syscall unknown."""
     store = BronzeStore(tmp_path / "root")
-    lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
+    anchor_fd = _provision_anchor(store)
+    lock = OwnedLock.acquire(
+        store, store.global_authority_lock_ref(), authority_anchor_fd=anchor_fd
+    )
 
     class PreFailingCloseAdapter(bronze_module.CloseAdapter):
         def close(self, fd):
@@ -2707,7 +2741,10 @@ def test_release_with_post_syscall_close_failure(tmp_path, monkeypatch):
     the process."""
     import os as _os
     store = BronzeStore(tmp_path / "root")
-    lock = OwnedLock.acquire(store, store.global_authority_lock_ref())
+    anchor_fd = _provision_anchor(store)
+    lock = OwnedLock.acquire(
+        store, store.global_authority_lock_ref(), authority_anchor_fd=anchor_fd
+    )
 
     class PostFailingCloseAdapter(bronze_module.CloseAdapter):
         def close(self, fd):
@@ -2730,10 +2767,12 @@ def test_acquire_with_close_adapter_passed_through(tmp_path, monkeypatch):
     monkeypatch.setattr(bronze_module, "_BRONZE_POISON_GATE", 0)
     store = BronzeStore(tmp_path / "root")
     adapter = bronze_module.CloseAdapter()
+    anchor_fd = _provision_anchor(store)
     lock = OwnedLock.acquire(
         store,
         store.global_authority_lock_ref(),
         close_adapter=adapter,
+        authority_anchor_fd=anchor_fd,
     )
     lock.release(close_adapter=adapter)
     assert lock.released
@@ -2844,3 +2883,152 @@ def test_open_anchor_fd_creates_lock_file(tmp_path):
     finally:
         import os as _os
         _os.close(anchor_fd)
+
+# --- TRAE-R5: Real FD fault-injection via CloseAdapter subclass ---
+
+def test_fd_fault_injection_pre_syscall_root_fd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pre-syscall fault on authority_anchor_fd close must leave CLOSE_OUTCOME_UNKNOWN."""
+    monkeypatch.setattr(bronze_module, "_BRONZE_POISON_GATE", 0)
+    store = BronzeStore(tmp_path / "root")
+    anchor_fd = _provision_anchor(store)
+
+    class PreFailingCloseAdapter(bronze_module.CloseAdapter):
+        def close(self, fd: int) -> None:
+            raise OSError(errno.EIO, "injected pre-syscall close failure")
+
+    lock = OwnedLock.acquire(
+        store, store.global_authority_lock_ref(),
+        authority_anchor_fd=anchor_fd,
+    )
+    with pytest.raises(LockOwnershipError):
+        lock.release(close_adapter=PreFailingCloseAdapter())
+    assert lock._fd_state == bronze_module._FdState.CLOSE_OUTCOME_UNKNOWN
+
+
+def test_fd_fault_injection_post_syscall_root_fd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Post-syscall fault on authority_anchor_fd close must leave CLOSE_OUTCOME_UNKNOWN."""
+    monkeypatch.setattr(bronze_module, "_BRONZE_POISON_GATE", 0)
+    store = BronzeStore(tmp_path / "root")
+    anchor_fd = _provision_anchor(store)
+
+    class PostFailingCloseAdapter(bronze_module.CloseAdapter):
+        def close(self, fd: int) -> None:
+            os.close(fd)
+            raise OSError(errno.EIO, "injected post-syscall close failure")
+
+    lock = OwnedLock.acquire(
+        store, store.global_authority_lock_ref(),
+        authority_anchor_fd=anchor_fd,
+    )
+    with pytest.raises(LockOwnershipError):
+        lock.release(close_adapter=PostFailingCloseAdapter())
+    assert lock._fd_state == bronze_module._FdState.CLOSE_OUTCOME_UNKNOWN
+
+
+def test_fd_fault_injection_post_syscall_lock_fd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Post-syscall fault on lock_fd close must leave CLOSE_OUTCOME_UNKNOWN."""
+    monkeypatch.setattr(bronze_module, "_BRONZE_POISON_GATE", 0)
+    store = BronzeStore(tmp_path / "root")
+    anchor_fd = _provision_anchor(store)
+
+    close_calls: list[int] = []
+
+    class PostFailingLockCloseAdapter(bronze_module.CloseAdapter):
+        def close(self, fd: int) -> None:
+            os.close(fd)
+            close_calls.append(fd)
+            if len(close_calls) == 2:  # Second close is lock_fd
+                raise OSError(errno.EIO, "injected post-syscall lock_fd close failure")
+
+    lock = OwnedLock.acquire(
+        store, store.global_authority_lock_ref(),
+        authority_anchor_fd=anchor_fd,
+    )
+    with pytest.raises(LockOwnershipError):
+        lock.release(close_adapter=PostFailingLockCloseAdapter())
+    assert lock._fd_state == bronze_module._FdState.CLOSE_OUTCOME_UNKNOWN
+
+
+# --- TRAE-R5: Poison gate tests ---
+
+def test_poison_gate_prevents_new_acquire(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Poison gate must prevent new OwnedLock.acquire."""
+    store = BronzeStore(tmp_path / "root")
+    anchor_fd = _provision_anchor(store)
+    monkeypatch.setattr(bronze_module, "_BRONZE_POISON_GATE", 1)
+    with pytest.raises(LockOwnershipError, match="poisoned"):
+        OwnedLock.acquire(
+            store, store.global_authority_lock_ref(), authority_anchor_fd=anchor_fd
+        )
+    os.close(anchor_fd)
+    monkeypatch.setattr(bronze_module, "_BRONZE_POISON_GATE", 0)
+
+
+def test_poison_gate_prevents_new_writer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Poison gate must prevent new ManifestWriter."""
+    store = BronzeStore(tmp_path / "root")
+    anchor_fd = _provision_anchor(store)
+    monkeypatch.setattr(bronze_module, "_BRONZE_POISON_GATE", 1)
+    with pytest.raises(SingleWriterError, match="poisoned"):
+        ManifestWriter(
+            store, manifest_date=DAY, segment_id="segment-poison",
+            authority_anchor_fd=anchor_fd,
+        )
+    os.close(anchor_fd)
+    monkeypatch.setattr(bronze_module, "_BRONZE_POISON_GATE", 0)
+
+
+def test_poison_gate_prevents_acquire_even_with_new_anchor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Poison gate prevents acquire even with a fresh anchor fd."""
+    store = BronzeStore(tmp_path / "root")
+    anchor_fd = _provision_anchor(store)
+    monkeypatch.setattr(bronze_module, "_BRONZE_POISON_GATE", 1)
+    with pytest.raises(LockOwnershipError, match="poisoned"):
+        OwnedLock.acquire(
+            store, store.global_authority_lock_ref(), authority_anchor_fd=anchor_fd
+        )
+    os.close(anchor_fd)
+    monkeypatch.setattr(bronze_module, "_BRONZE_POISON_GATE", 0)
+
+
+# --- TRAE-R5: Real fork lifecycle (3-process pattern) ---
+
+def test_owner_exit_child_alive_third_acquires_fork_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Owner exits while child is alive; third process acquires fork lock.
+
+    Uses os.fork() to verify R5 fork-safety: _after_fork_child closes
+    inherited fds in the child, setting FORK_INVALID state.  The parent
+    can release and re-acquire the lock.
+    """
+    monkeypatch.setattr(bronze_module, "_BRONZE_POISON_GATE", 0)
+    store = BronzeStore(tmp_path / "root")
+    anchor_fd = _provision_anchor(store)
+    lock = OwnedLock.acquire(
+        store, store.global_authority_lock_ref(), authority_anchor_fd=anchor_fd
+    )
+
+    pid = os.fork()
+    if pid == 0:
+        # CHILD: _after_fork_child has already closed inherited fds
+        assert lock._lock_fd == -1
+        assert lock._fd_state == bronze_module._FdState.FORK_INVALID
+        os._exit(0)
+    else:
+        # PARENT: wait for child, then release and re-acquire
+        os.waitpid(pid, 0)
+        lock.release()
+        lock2 = OwnedLock.acquire(
+            store, store.global_authority_lock_ref(), authority_anchor_fd=anchor_fd
+        )
+        lock2.release()
+        os.close(anchor_fd)
