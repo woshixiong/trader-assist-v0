@@ -610,18 +610,22 @@ def test_post_flock_acquire_failures_release_authority_without_path_cleanup(
     tmp_path, monkeypatch, failure_point
 ):
     store = BronzeStore(tmp_path / "root")
+    store.root.mkdir(parents=True, exist_ok=True)
     legacy = store.path(store.global_authority_lock_ref())
     legacy.write_text("replacement-token\n", encoding="utf-8")
+    # Pre-open anchor fd to avoid the new os.fstat validation in acquire()
+    anchor_fd = bronze_module._open_anchor_fd(store)
     real_fstat = bronze_module.os.fstat
     real_stat = bronze_module.os.stat
     real_init = OwnedLock.__init__
 
     if failure_point == "fstat":
-        monkeypatch.setattr(
-            bronze_module.os,
-            "fstat",
-            lambda fd: (_ for _ in ()).throw(OSError("injected fstat failure")),
-        )
+        # Only fail fstat for the lock_fd (not the authority_anchor_fd validation)
+        def fstat_fail(fd):
+            if fd == anchor_fd:
+                return real_fstat(fd)
+            raise OSError("injected fstat failure")
+        monkeypatch.setattr(bronze_module.os, "fstat", fstat_fail)
     elif failure_point == "stat":
         monkeypatch.setattr(
             bronze_module.os,
@@ -637,13 +641,21 @@ def test_post_flock_acquire_failures_release_authority_without_path_cleanup(
             ),
         )
 
-    with pytest.raises(OSError):
-        OwnedLock.acquire(store, store.global_authority_lock_ref())
+    with pytest.raises((OSError, LockOwnershipError)):
+        OwnedLock.acquire(
+            store,
+            store.global_authority_lock_ref(),
+            authority_anchor_fd=anchor_fd,
+        )
 
     monkeypatch.setattr(bronze_module.os, "fstat", real_fstat)
     monkeypatch.setattr(bronze_module.os, "stat", real_stat)
     monkeypatch.setattr(OwnedLock, "__init__", real_init)
-    replacement = OwnedLock.acquire(store, store.global_authority_lock_ref())
+    replacement = OwnedLock.acquire(
+        store,
+        store.global_authority_lock_ref(),
+        authority_anchor_fd=anchor_fd,
+    )
     replacement.release()
     assert legacy.read_text(encoding="utf-8") == "replacement-token\n"
 
@@ -681,22 +693,35 @@ def test_lock_acquire_exception_closes_descriptor_and_releases_kernel_lock(
     tmp_path, monkeypatch
 ):
     store = BronzeStore(tmp_path / "root")
+    store.root.mkdir(parents=True, exist_ok=True)
+    # Pre-open anchor fd to avoid the new os.fstat validation in acquire()
+    anchor_fd = bronze_module._open_anchor_fd(store)
     before = _fd_count()
     real_fstat = bronze_module.os.fstat
     failed = False
 
     def fail_once(fd):
         nonlocal failed
+        if fd == anchor_fd:
+            return real_fstat(fd)
         if not failed:
             failed = True
             raise OSError("injected post-flock identity failure")
         return real_fstat(fd)
 
     monkeypatch.setattr(bronze_module.os, "fstat", fail_once)
-    with pytest.raises(OSError, match="injected post-flock identity failure"):
-        OwnedLock.acquire(store, store.global_authority_lock_ref())
+    with pytest.raises(LockOwnershipError, match="cannot stat lock file descriptor"):
+        OwnedLock.acquire(
+            store,
+            store.global_authority_lock_ref(),
+            authority_anchor_fd=anchor_fd,
+        )
     monkeypatch.setattr(bronze_module.os, "fstat", real_fstat)
-    replacement = OwnedLock.acquire(store, store.global_authority_lock_ref())
+    replacement = OwnedLock.acquire(
+        store,
+        store.global_authority_lock_ref(),
+        authority_anchor_fd=anchor_fd,
+    )
     replacement.release()
     gc.collect()
     assert _fd_count() <= before + 1
@@ -784,16 +809,25 @@ def test_repeated_release_is_deterministic_and_legacy_tokens_are_never_unlinked(
 
 def test_repeated_acquire_failures_do_not_leak_descriptors(tmp_path, monkeypatch):
     store = BronzeStore(tmp_path / "root")
+    store.root.mkdir(parents=True, exist_ok=True)
+    # Pre-open anchor fd to avoid the new os.fstat validation in acquire()
+    anchor_fd = bronze_module._open_anchor_fd(store)
     before = _fd_count()
     real_fstat = bronze_module.os.fstat
 
     def fail(fd):
+        if fd == anchor_fd:
+            return real_fstat(fd)
         raise OSError("injected identity failure")
 
     monkeypatch.setattr(bronze_module.os, "fstat", fail)
     for _ in range(20):
-        with pytest.raises(OSError, match="injected identity failure"):
-            OwnedLock.acquire(store, store.global_authority_lock_ref())
+        with pytest.raises(LockOwnershipError, match="cannot stat lock file descriptor"):
+            OwnedLock.acquire(
+                store,
+                store.global_authority_lock_ref(),
+                authority_anchor_fd=anchor_fd,
+            )
     monkeypatch.setattr(bronze_module.os, "fstat", real_fstat)
     gc.collect()
     assert _fd_count() <= before + 1
@@ -2291,7 +2325,7 @@ def test_fd_state_transitions_on_normal_close(tmp_path):
     lock.release()
     assert lock._fd_state == bronze_module._FdState.CLOSED
     assert lock._fd == -1
-    assert lock._parent_fd == -1
+    assert lock._lock_fd == -1
 
 
 def test_double_release_does_not_double_free(tmp_path):
