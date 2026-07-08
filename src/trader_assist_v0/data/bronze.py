@@ -95,7 +95,7 @@ _BRONZE_POISON_GATE = 0
 
 
 def _open_anchor_fd(store: BronzeStore) -> int:
-    store.root.mkdir(parents=True, exist_ok=True)
+    # BronzeStore.root must be pre-created by supervisor
     anchor_dir = store.root.parent
     lock_file = anchor_dir / ".bronze-global-observation-authority.lock"
     lock_file.touch()
@@ -753,7 +753,9 @@ class OwnedLock:
                 "process bronze state is poisoned and cannot create new writers"
             )
         if authority_anchor_fd is None:
-            authority_anchor_fd = _open_anchor_fd(store)
+            raise LockOwnershipError(
+                "authority_anchor_fd must be provided by supervisor, cannot open from pathname"
+            )
         # Validate that authority_anchor_fd is an open directory descriptor
         try:
             anchor_stat = os.fstat(authority_anchor_fd)
@@ -1226,6 +1228,9 @@ class ManifestWriter:
         lock_name: str = ".bronze-global-observation-authority.lock",
     ) -> None:
         self._lock = threading.RLock()
+        if _BRONZE_POISON_GATE:
+            self._writer_state = _WriterState.POISONED
+            raise SingleWriterError("process bronze state is poisoned")
         self._writer_state = _WriterState.ACTIVE
         self.store = store
         self.manifest_date = manifest_date
@@ -1288,6 +1293,8 @@ class ManifestWriter:
             raise LockOwnershipError(
                 "process bronze state is poisoned and cannot create new writers"
             )
+        if self._writer_state is _WriterState.POISONED:
+            raise LockOwnershipError("manifest writer is terminal after process poison")
         if self._writer_state is _WriterState.FORK_INVALID:
             raise LockOwnershipError("manifest writer is invalid after fork")
         if self._writer_state is _WriterState.COMPROMISED:
@@ -1315,6 +1322,8 @@ class ManifestWriter:
 
     def close(self) -> None:
         with self._lock:
+            if self._writer_state is _WriterState.POISONED:
+                raise LockOwnershipError("manifest writer is terminal after process poison")
             if self._writer_state is _WriterState.CLOSED:
                 return
             if self._writer_state is _WriterState.FINALIZED:
@@ -1344,6 +1353,8 @@ class ManifestWriter:
 
     def _close_locked(self) -> None:
         """Internal close without acquiring the lock (caller must hold lock)."""
+        if self._writer_state is _WriterState.POISONED:
+            return
         if self._writer_state is _WriterState.CLOSED:
             return
         if self._writer_state is _WriterState.COMPROMISED:
