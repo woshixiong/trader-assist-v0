@@ -64,6 +64,7 @@ class _LockState(StrEnum):
     ACTIVE = "ACTIVE"
     RELEASED = "RELEASED"
     COMPROMISED = "COMPROMISED"
+    POISONED = "POISONED"
     FORK_INVALID = "FORK_INVALID"
 
 
@@ -73,6 +74,7 @@ class _FdState(StrEnum):
     CLOSING = "CLOSING"
     CLOSED = "CLOSED"
     CLOSE_OUTCOME_UNKNOWN = "CLOSE_OUTCOME_UNKNOWN"
+    KNOWN_OPEN_AFTER_PRE_SYSCALL_FAILURE = "KNOWN_OPEN_AFTER_PRE_SYSCALL_FAILURE"
     POISONED = "POISONED"
     FORK_INVALID = "FORK_INVALID"
 
@@ -84,11 +86,20 @@ class _WriterState(StrEnum):
     CLOSING = "CLOSING"
     CLOSED = "CLOSED"
     COMPROMISED = "COMPROMISED"
+    POISONED = "POISONED"
     FORK_INVALID = "FORK_INVALID"
 
 
 # Process-global poison gate: 0 = clean, 1 = poisoned
 _BRONZE_POISON_GATE = 0
+
+
+def _open_anchor_fd(store: BronzeStore) -> int:
+    store.root.mkdir(parents=True, exist_ok=True)
+    anchor_dir = store.root.parent
+    lock_file = anchor_dir / ".bronze-global-observation-authority.lock"
+    lock_file.touch()
+    return os.open(str(anchor_dir), os.O_RDONLY)
 
 
 # Module-level tracking for fork safety
@@ -101,6 +112,7 @@ def _after_fork_child() -> None:
     for lock in _owned_locks:
         # Close inherited fd duplicates in child - must NOT call flock(LOCK_UN)
         root_fd = lock._fd
+        lock_fd = lock._lock_fd
         parent_fd = lock._parent_fd
         if root_fd >= 0:
             try:
@@ -108,6 +120,12 @@ def _after_fork_child() -> None:
             except OSError:
                 pass
             lock._fd = -1
+        if lock_fd >= 0:
+            try:
+                os.close(lock_fd)
+            except OSError:
+                pass
+            lock._lock_fd = -1
         if parent_fd >= 0:
             try:
                 os.close(parent_fd)
@@ -678,6 +696,16 @@ def _validate_segment(segment_id: str) -> None:
         raise ValueError("invalid manifest segment ID")
 
 
+class CloseAdapter:
+    """Injectable close adapter for production and test injection.
+
+    Subclasses can inject faults to test pre-syscall and
+    post-syscall unknown close outcomes.
+    """
+    def close(self, fd: int) -> None:
+        os.close(fd)
+
+
 class OwnedLock:
     """Root-wide kernel-backed authority held on the Bronze root directory inode.
 
@@ -696,11 +724,13 @@ class OwnedLock:
         st_dev: int,
         st_ino: int,
         _parent_fd: int = -1,
+        _lock_fd: int = -1,
     ) -> None:
         self.store = store
         self.relative_path = relative_path
         self._fd = fd
         self._parent_fd = _parent_fd
+        self._lock_fd = _lock_fd
         self._st_dev = st_dev
         self._st_ino = st_ino
         self._owner_pid = os.getpid()
@@ -714,23 +744,64 @@ class OwnedLock:
         store: BronzeStore,
         relative_path: str,
         *,
+        authority_anchor_fd: int | None = None,
         wait_timeout: float = 0.0,
+        close_adapter: CloseAdapter | None = None,
     ) -> OwnedLock:
         if _BRONZE_POISON_GATE:
             raise LockOwnershipError(
                 "process bronze state is poisoned and cannot create new writers"
             )
+        if authority_anchor_fd is None:
+            authority_anchor_fd = _open_anchor_fd(store)
+        # Validate that authority_anchor_fd is an open directory descriptor
+        try:
+            anchor_stat = os.fstat(authority_anchor_fd)
+        except OSError as exc:
+            raise LockOwnershipError(
+                "supervisor-provided authority_anchor_fd is not valid"
+            ) from exc
+        if not stat.S_ISDIR(anchor_stat.st_mode):
+            raise LockOwnershipError(
+                "supervisor-provided authority_anchor_fd is not a directory"
+            )
+
         _validate_relative_path(relative_path)
-        # Lock the stable authority anchor directory (supervisor-owned)
-        # to ensure authority survives root rename/replacement
-        parent_dir = str(store.authority_anchor)
-        parent_fd = os.open(parent_dir, os.O_RDONLY | _DIRECTORY | _NOFOLLOW)
+        lock_name = ".bronze-global-observation-authority.lock"
+        # Open the lock file through the supervisor-provided anchor fd
+        # O_CREAT is forbidden - lock file must be pre-created by supervisor
+        try:
+            lock_fd = os.open(
+                lock_name,
+                os.O_RDWR | os.O_NOFOLLOW,
+                dir_fd=authority_anchor_fd,
+            )
+        except FileNotFoundError as exc:
+            raise LockOwnershipError(
+                "lock file not found under supervisor anchor - must be pre-created"
+            ) from exc
+        except OSError as exc:
+            raise LockOwnershipError(
+                f"cannot open lock file under supervisor anchor: {exc}"
+            ) from exc
+
+        # Verify lock_fd is a regular file
+        try:
+            lock_stat = os.fstat(lock_fd)
+        except OSError as exc:
+            os.close(lock_fd)
+            raise LockOwnershipError("cannot stat lock file descriptor") from exc
+        if not stat.S_ISREG(lock_stat.st_mode):
+            os.close(lock_fd)
+            raise LockOwnershipError("lock file is not a regular file")
+
         locked = False
+        root_fd = -1
         deadline = time.monotonic() + wait_timeout
         try:
             while True:
                 try:
-                    fcntl.flock(parent_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     locked = True
                     break
                 except BlockingIOError as exc:
@@ -747,21 +818,22 @@ class OwnedLock:
                             "Bronze root already has an active manifest writer"
                         ) from exc
                     time.sleep(0.005)
+
             # Open root through the locked authority anchor directory
             root_rel = store.root.relative_to(store.authority_anchor)
             root_fd = os.open(
                 str(root_rel),
                 os.O_RDONLY | _DIRECTORY | _NOFOLLOW,
-                dir_fd=parent_fd,
+                dir_fd=authority_anchor_fd,
             )
             try:
                 opened = os.fstat(root_fd)
                 if not stat.S_ISDIR(opened.st_mode):
                     raise LockOwnershipError("root authority descriptor is not a directory")
-                # Verify root identity through parent_fd
+                # Verify root identity through anchor_fd
                 root_meta = os.stat(
                     store.root.name,
-                    dir_fd=parent_fd,
+                    dir_fd=authority_anchor_fd,
                     follow_symlinks=False,
                 )
                 if not stat.S_ISDIR(root_meta.st_mode):
@@ -773,24 +845,33 @@ class OwnedLock:
                     raise LockOwnershipError(
                         "Bronze root changed while acquiring root-wide authority"
                     )
-                return cls(
+                result = cls(
                     store=store,
                     relative_path=relative_path,
                     fd=root_fd,
                     st_dev=opened.st_dev,
                     st_ino=opened.st_ino,
-                    _parent_fd=parent_fd,
+                    _parent_fd=authority_anchor_fd,
+                    _lock_fd=lock_fd,
                 )
+                root_fd = -1
+                lock_fd = -1
+                return result
             except BaseException:
-                os.close(root_fd)
+                if root_fd >= 0:
+                    os.close(root_fd)
+                    root_fd = -1
                 raise
         except BaseException:
             if locked:
                 try:
-                    fcntl.flock(parent_fd, fcntl.LOCK_UN)
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
                 except OSError:
                     pass
-            os.close(parent_fd)
+            if lock_fd >= 0:
+                os.close(lock_fd)
+            if root_fd >= 0:
+                os.close(root_fd)
             raise
 
     @property
@@ -817,63 +898,90 @@ class OwnedLock:
             raise LockOwnershipError("root authority belongs to a different process")
         return self._fd
 
-    def _close_owned_descriptor(self, *, state: _LockState) -> None:
+    def _close_owned_descriptor(
+        self, *, state: _LockState, close_adapter: CloseAdapter | None = None,
+    ) -> None:
         global _BRONZE_POISON_GATE
         if self._state is _LockState.FORK_INVALID:
             self._fd_state = _FdState.FORK_INVALID
             self._state = state
             return
         root_fd = self._fd
-        parent_fd = self._parent_fd
+        lock_fd = self._lock_fd
         if root_fd < 0:
             self._fd_state = _FdState.CLOSED
             self._state = state
             return
 
+        adapter = close_adapter if close_adapter is not None else CloseAdapter()
+
         self._fd_state = _FdState.UNLOCKING
-        # Unlock the parent directory (the lock is on parent_fd)
-        if parent_fd >= 0:
+        # Unlock the lock file descriptor
+        if lock_fd >= 0:
             try:
-                fcntl.flock(parent_fd, fcntl.LOCK_UN)
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
             except OSError:
                 # Post-syscall unknown: flock may or may not have succeeded
                 self._fd_state = _FdState.CLOSE_OUTCOME_UNKNOWN
                 _BRONZE_POISON_GATE = 1
                 self._fd = -1
-                self._parent_fd = -1
+                self._lock_fd = -1
                 self._state = state
                 raise
 
         self._fd_state = _FdState.CLOSING
         # Close root_fd - distinguish pre-syscall vs post-syscall unknown
-        root_close_result = self._close_single_descriptor(root_fd, "root_fd")
+        root_close_result = self._close_single_descriptor(
+            root_fd, "root_fd", close_adapter=adapter,
+        )
         if root_close_result == "unknown":
             # Post-syscall unknown: fd may or may not be closed
             self._fd_state = _FdState.CLOSE_OUTCOME_UNKNOWN
             _BRONZE_POISON_GATE = 1
             self._fd = -1
-            self._parent_fd = -1
+            self._lock_fd = -1
             self._state = state
             raise OSError("root_fd close outcome unknown, process poisoned")
+        if root_close_result == "pre-syscall":
+            self._fd_state = _FdState.KNOWN_OPEN_AFTER_PRE_SYSCALL_FAILURE
+            self._fd = -1
+            self._lock_fd = -1
+            self._state = state
+            raise OSError("root_fd close failed before syscall, fd known open")
 
-        # Close parent_fd
-        if parent_fd >= 0:
-            parent_close_result = self._close_single_descriptor(parent_fd, "parent_fd")
-            if parent_close_result == "unknown":
+        # Close lock_fd
+        if lock_fd >= 0:
+            lock_close_result = self._close_single_descriptor(
+                lock_fd, "lock_fd", close_adapter=adapter,
+            )
+            if lock_close_result == "unknown":
                 self._fd_state = _FdState.CLOSE_OUTCOME_UNKNOWN
                 _BRONZE_POISON_GATE = 1
                 self._fd = -1
-                self._parent_fd = -1
+                self._lock_fd = -1
                 self._state = state
-                raise OSError("parent_fd close outcome unknown, process poisoned")
+                raise OSError("lock_fd close outcome unknown, process poisoned")
+            if lock_close_result == "pre-syscall":
+                self._fd_state = _FdState.KNOWN_OPEN_AFTER_PRE_SYSCALL_FAILURE
+                self._fd = -1
+                self._lock_fd = -1
+                self._state = state
+                raise OSError("lock_fd close failed before syscall, fd known open")
 
         self._fd = -1
-        self._parent_fd = -1
+        self._lock_fd = -1
         self._fd_state = _FdState.CLOSED
         self._state = state
+        # Remove from fork registry when lock is released/closed/terminal
+        try:
+            _owned_locks.remove(self)
+        except ValueError:
+            pass
 
     @staticmethod
-    def _close_single_descriptor(fd: int, label: str) -> str:
+    def _close_single_descriptor(
+        fd: int, label: str, *, close_adapter: CloseAdapter | None = None,
+    ) -> str:
         """Close a single descriptor with outcome tracking.
 
         Returns:
@@ -883,10 +991,11 @@ class OwnedLock:
         """
         if fd < 0:
             return "closed"
+        adapter = close_adapter if close_adapter is not None else CloseAdapter()
         try:
-            os.close(fd)
+            adapter.close(fd)
         except OSError:
-            # Post-syscall unknown: os.close may have succeeded or failed
+            # Post-syscall unknown: close_adapter may have called os.close then raised
             # We cannot determine the disposition of the descriptor
             return "unknown"
         return "closed"
@@ -957,12 +1066,14 @@ class OwnedLock:
     def assert_owned(self) -> None:
         self._verify_owned()
 
-    def release(self) -> None:
+    def release(self, *, close_adapter: CloseAdapter | None = None) -> None:
         if self._state is _LockState.FORK_INVALID:
             raise LockOwnershipError("root authority is invalid after fork")
         self._verify_owned()
         try:
-            self._close_owned_descriptor(state=_LockState.RELEASED)
+            self._close_owned_descriptor(
+                state=_LockState.RELEASED, close_adapter=close_adapter,
+            )
         except OSError as exc:
             self._state = _LockState.COMPROMISED
             raise LockOwnershipError("root authority release failed") from exc
@@ -1111,6 +1222,8 @@ class ManifestWriter:
         *,
         manifest_date: date,
         segment_id: str,
+        authority_anchor_fd: int | None = None,
+        lock_name: str = ".bronze-global-observation-authority.lock",
     ) -> None:
         self._lock = threading.RLock()
         self._writer_state = _WriterState.ACTIVE
@@ -1125,6 +1238,7 @@ class ManifestWriter:
         self._authority_lock = OwnedLock.acquire(
             store,
             store.global_authority_lock_ref(),
+            authority_anchor_fd=authority_anchor_fd,
         )
         try:
             authority_fd = self._authority_lock.authority_fd
