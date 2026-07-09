@@ -89,6 +89,14 @@ A3_PREFLIGHT_EXECUTION_MARKERS: Final = (
     "order_mutation",
     "testnet",
 )
+A3_PREFLIGHT_KILL_SWITCH_BYPASS_MARKERS: Final = (
+    "bypass",
+    "disable_kill_switch",
+    "disabled_kill_switch",
+    "kill_switch_bypass",
+    "kill_switch_override",
+    "override",
+)
 FIXTURE_ALLOWED_PROVENANCE: Final = (
     "SYNTHETIC_DOCUMENTATION_DERIVED",
     "MINIMAL_REDACTED_EXAMPLE",
@@ -497,6 +505,11 @@ def validate_public_readonly_transport_preflight(
         operation_class,
         *config_keys,
         *config_values,
+    )
+    _reject_a3_markers(
+        "kill-switch bypass material is prohibited",
+        A3_PREFLIGHT_KILL_SWITCH_BYPASS_MARKERS,
+        *text_values,
     )
     _reject_a3_markers(
         "credential-like material is prohibited",
