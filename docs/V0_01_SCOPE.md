@@ -39,6 +39,24 @@ The root-wide authority is held for the complete writer lifetime. Different segm
 
 **R3B-ROOTNS** (stable namespace authority): OwnedLock acquires a kernel lock on the supervisor-owned authority_anchor directory (parent of the Bronze root by default), ensuring authority survives root rename/replacement. Root inode identity is verified at acquisition and at every authority boundary through the parent descriptor. The authority_anchor must be owned by the supervisor and not writable by the collector.
 
+**R6-AUTHORITY (supervisor authority contract): The authority_anchor directory
+MUST be owned by the supervisor and MUST NOT be writable by the collector
+account (effective UID/GID/other). The lock file MUST be pre-created by the
+supervisor — `OwnedLock.acquire()` MUST NOT use `O_CREAT`. The
+`authority_anchor_fd` parameter is required and MUST be provided by the
+supervisor. `_open_anchor_fd` has been renamed to `_test_open_anchor_fd` and
+is a TEST-ONLY helper. Production writers MUST NOT use pathname-based
+authority provisioning. `BronzeStore.__init__` MUST NOT auto-create the root
+directory — the supervisor MUST pre-create it. `CloseAdapter.close()` returns
+a typed `CloseOutcome` enum (CLOSED, PRE_SYSCALL_FAILED_KNOWN_OPEN,
+POST_SYSCALL_UNKNOWN) instead of relying on unclassified OSError.
+`UnlockAdapter` provides an injection seam for `flock(LOCK_UN)` failure
+testing. The `_BRONZE_POISON_GATE` is one-way with no production reset API.
+Root rename, replacement, and parent rename tests assert deterministic
+security outcomes. Effective-writability check via `os.access(fd, os.W_OK,
+effective_ids=True)` fails closed if the collector can write the
+authority_anchor.**
+
 **R4B-FD** (descriptor lifecycle): Descriptor state tracked via `_FdState` (OPEN_OWNED, UNLOCKING, CLOSING, CLOSED, CLOSE_OUTCOME_UNKNOWN, POISONED, FORK_INVALID). Process-global poison gate blocks new writers when close outcome is uncertain. Descriptor is not invalidated before `os.close`.
 
 ## Prohibited

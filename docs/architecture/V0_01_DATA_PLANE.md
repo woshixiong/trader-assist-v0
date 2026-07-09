@@ -44,6 +44,45 @@ A0 uses a root-wide single-writer protocol. `ManifestWriter` acquires an exclusi
 
 **Descriptor lifecycle (R4B-FD)**: Each descriptor is tracked through a `_FdState` state machine (OPEN_OWNED, KNOWN_OPEN_AFTER_PRE_SYSCALL_FAILURE, UNLOCKING, CLOSING, CLOSED, CLOSE_OUTCOME_UNKNOWN, POISONED, FORK_INVALID). The descriptor is not invalidated before `os.close`. When `flock(LOCK_UN)` or `os.close` fails, the state transitions to uncertain states, and a process-global `_BRONZE_POISON_GATE` is set to prevent new writers in the same process. The `CloseAdapter` injection seam enables fault-injection testing by allowing tests to substitute a custom `close()` implementation that can fail before or after the syscall.
 
+
+**R6-AUTHORITY (supervisor authority contract): The authority_anchor directory is
+supervisor-owned and MUST NOT be writable by the collector. The lock file
+`.bronze-global-observation-authority.lock` MUST be pre-created by the
+supervisor within the authority_anchor directory. `OwnedLock.acquire()` opens
+the lock file via `os.open(lock_name, os.O_RDWR | os.O_NOFOLLOW,
+dir_fd=authority_anchor_fd)` — no `O_CREAT`. Missing lock file causes
+fail-closed. `BronzeStore.__init__` MUST NOT auto-create the root directory;
+the supervisor MUST pre-create it. The `authority_anchor_fd` parameter is
+required for `OwnedLock.acquire()` and `ManifestWriter`. `_test_open_anchor_fd`
+is a TEST-ONLY provisioning helper and MUST NOT be used by production writers.
+
+R6-FD-CLOSE (typed close outcomes): `CloseAdapter.close()` returns a typed
+`CloseOutcome` enum: CLOSED (successful close), PRE_SYSCALL_FAILED_KNOWN_OPEN
+(failure before os.close, fd still open), POST_SYSCALL_UNKNOWN (failure after
+os.close, fd status unknown). `_close_single_descriptor()` delegates to the
+adapter and returns the typed outcome. `_close_owned_descriptor()` uses
+CloseOutcome to determine state transitions: CLOSED -> fd = -1, _fd_operable =
+False; PRE_SYSCALL_FAILED_KNOWN_OPEN -> preserves fd, _fd_operable = True;
+POST_SYSCALL_UNKNOWN -> preserves fd diagnostic, _fd_operable = False.
+Diagnostic fields (`_fd_diagnostic`, `_lock_fd_diagnostic`,
+`_parent_fd_diagnostic`) preserve original fd numbers for forensic analysis.
+`_operable` flags prevent retry on potentially closed and reused fd numbers.
+
+R6-UNLOCK (unlock adapter): `UnlockAdapter` provides an injection seam for
+`flock(LOCK_UN)` failure testing. `OwnedLock.release()` accepts an
+`unlock_adapter` parameter. Unlock failure transitions the lock to POISONED
+state and sets the process-global poison gate.
+
+R6-WRITABILITY (effective-writability check): `OwnedLock.acquire()` verifies
+that the collector does not have write permission on the authority_anchor
+directory via `os.access(fd, os.W_OK, effective_ids=True)`. Writable
+authority_anchor causes fail-closed with `LockOwnershipError`.
+
+R6-ROOTNS (deterministic outcomes): All root namespace boundary tests now
+assert deterministic security outcomes. The ambiguous
+`BLOCKED_BY_OLD or ACQUIRED_NEW` assertion has been removed. Root rename,
+parent rename, authority_anchor pathname replacement, and replacement root
+tests each assert a single expected outcome.**
 **Writer serialization (R3B-OPERATION)**: `ManifestWriter` uses a `threading.RLock` and a `_WriterState` state machine (ACTIVE, FINALIZING, FINALIZED, CLOSING, CLOSED, COMPROMISED, POISONED, FORK_INVALID) to serialize all public operations. Repeated close is deterministic and safe. Concurrent append, close, and finalize calls are serialized through the lock.
 
 The protocol does not create or delete lock pathname markers. `lock_ref()` and `global_authority_lock_ref()` remain compatibility names only; their presence, absence, token contents, replacement, or symlink substitution cannot create a second writer namespace and is never cleaned by ordinary release. Acquisition cleanup and release operate only on the descriptor owned by that acquisition, eliminating blind-unlink and verify-then-unlink races.
