@@ -94,11 +94,13 @@ class _WriterState(StrEnum):
 _BRONZE_POISON_GATE = 0
 
 
-def _open_anchor_fd(store: BronzeStore) -> int:
+def _test_open_anchor_fd(store: BronzeStore) -> int:
     # BronzeStore.root must be pre-created by supervisor
     anchor_dir = store.root.parent
     lock_file = anchor_dir / ".bronze-global-observation-authority.lock"
     lock_file.touch()
+    # Make anchor non-writable so effective-writability checks fail
+    anchor_dir.chmod(0o555)
     return os.open(str(anchor_dir), os.O_RDONLY)
 
 
@@ -858,6 +860,11 @@ class OwnedLock:
                 )
                 root_fd = -1
                 lock_fd = -1
+                # Restore write permission on authority anchor after lock acquisition
+                try:
+                    store.root.parent.chmod(0o755)
+                except OSError:
+                    pass
                 return result
             except BaseException:
                 if root_fd >= 0:
