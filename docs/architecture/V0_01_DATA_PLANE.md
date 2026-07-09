@@ -1,6 +1,6 @@
-# V0-01A0 Bronze Data Plane
+# V0-01 Data Plane
 
-## Evidence flow
+## A0 completed evidence flow
 
 ```text
 frozen public source catalog + catalog-entry hash
@@ -16,6 +16,19 @@ frozen public source catalog + catalog-entry hash
   -> deterministic offline replay report
 ```
 
+## A1 contract-freeze insertion point
+
+```text
+official public source catalog
+  -> A1 candle envelope policy: data:Candle or data:Candle[]
+  -> A1 rate-limit entry gate: UNRESOLVED_OFFICIAL_LIMIT blocks live transport
+  -> A1 read-only transport configuration checks
+  -> A1 fixture admission policy
+  -> exact RawEventV0 application-payload bytes only
+```
+
+A1 adds no HTTP client, WebSocket client, DNS, live endpoint connection, polling loop, reconnect runtime, heartbeat runtime, health runtime, backfill runtime, event loop, async runtime, database, dashboard, cloud SDK, strategy logic, AI recommendation, or risk sizing.
+
 ## Identity separation
 
 `payload_sha256` hashes exact bytes. JSON whitespace or key ordering changes therefore change the payload identity.
@@ -23,6 +36,43 @@ frozen public source catalog + catalog-entry hash
 The v2 observation slot binds catalog version, catalog hash, catalog-entry hash, source, endpoint, operation, coin, candle interval, capture mode, connection, subscription, and collector-local receive sequence. The v2 raw observation identity additionally binds the payload hash. Collector-local sequence is never represented as a venue sequence.
 
 Within one Bronze persistence root, an observation slot and a source-event ID are globally unique rather than segment-local. Re-appending the same complete RawEvent in another segment is globally idempotent and creates no second authority entry. The same slot with different RawEvent authority is a conflict.
+
+A1 does not parse candle payloads into source-native IDs, source-native cursors, normalized timestamps, Silver events, strategy signals, AI explanations, or risk fields. Those fields remain unavailable until a later separately reviewed extractor/normalizer contract exists.
+
+## A1 public source envelope authority
+
+The candle WebSocket contract accepts only these frozen public envelope shapes:
+
+```text
+data:Candle
+data:Candle[]
+```
+
+These tokens describe public envelope policy and fixture shape. They are not runtime subscription code, not connection code, and not transport recovery logic.
+
+## A1 rate-limit authority
+
+`RATE_LIMIT_STATUS` remains `UNRESOLVED_OFFICIAL_LIMIT`. While that value is present, the entry gate blocks live public transport, polling, reconnect, backfill, and health runtime. A later task may encode official numeric limits only if the values are clearly present in official Hyperliquid documentation at implementation time.
+
+## A1 read-only transport entry checks
+
+The pure contract checker accepts only:
+
+- `source_id = hyperliquid-public-mainnet`;
+- `environment = mainnet public read-only`;
+- `operation_class = public read-only observation only`;
+- ETH/BTC when the operation requires a coin;
+- candle intervals `1m`, `3m`, `5m`, `15m`, `1h` when the operation is candle-shaped;
+- WebSocket capture as `WS_TEXT_UTF8_APPLICATION_PAYLOAD`;
+- Info capture as `HTTP_RESPONSE_BODY`.
+
+It rejects private, user/account, wallet/signing, nonce, order, exchange-write, unsupported source, unsupported environment, unsupported coin, unsupported interval, and unsupported capture-mode selections.
+
+## A1 fixture admission
+
+Fixtures committed to Git must be synthetic documentation-derived or minimal redacted examples, sanitized, and explicitly provenanced. Real raw observations, real market/account logs, wallet addresses, API keys, signatures, nonces, credentials, database/cache artifacts, and unredacted operational payloads are forbidden.
+
+If a later read-only observation task is authorized, raw observations must remain outside Git. Only sanitized derived fixtures may be committed after review.
 
 ## Persistence
 
@@ -34,60 +84,7 @@ Payload publication writes and fsyncs a same-filesystem temporary file and atomi
 
 ## Lock authority
 
-A0 uses a root-wide single-writer protocol. `ManifestWriter` acquires an exclusive non-blocking `fcntl.flock` on a **lock file** within the authority_anchor directory (supervisor-provided directory fd), not the root directory itself. The lock file is pre-created by the supervisor and opened by `OwnedLock.acquire()` through the supervisor-provided anchor directory fd. The authority_anchor directory descriptor is owned by the supervisor and passed to `OwnedLock.acquire()` as the `authority_anchor_fd` parameter.
-
-**Supervisor-provided anchor (R4-SUPERVISOR)**: The `authority_anchor_fd` is a supervisor-owned directory file descriptor passed to `OwnedLock.acquire()`. If `authority_anchor_fd` is `None` or invalid, the lock fails closed. The lock file at `.bronze-global-observation-authority.lock` within the anchor directory must be pre-created by the supervisor — `acquire()` never creates it via `O_CREAT`. Production code exposes no `_open_anchor_fd`, `_test_open_anchor_fd`, or equivalent pathname-based provisioning helper. Test-only supervisor simulations may create the root, lock object, permissions, and anchor fd inside test files. The `_lock_fd` field on `OwnedLock` holds the lock file descriptor acquired by the instance, while `_parent_fd` records the externally-owned `authority_anchor_fd` for root identity checks.
-
-**Stable namespace authority (R3B-ROOTNS)**: Locking the lock file within the supervisor-owned authority_anchor directory ensures authority survives root rename or replacement within the same authority_anchor directory. The root inode identity (st_dev, st_ino) is verified at acquisition and at every authority boundary through the authority_anchor descriptor. The lock file inode identity (st_dev, st_ino) is verified via `os.fstat`. If either identity is lost, the authority fails closed. The authority_anchor must be owned by the supervisor and not writable by the collector.
-
-**Fork safety (R3B-FORK)**: `OwnedLock` records the creating process PID. On fork, `os.register_at_fork(after_in_child=...)` marks all locks as FORK_INVALID, sets `_lock_fd` to -1, and removes the lock from the fork registry. All authority methods (authority_fd, assert_owned, release, append, finalize, close) verify the calling PID and reject non-owner and fork-child callers. The child's `_lock_fd` is invalidated to prevent accidental `flock(LOCK_UN)` on the inherited lock file descriptor.
-
-**Descriptor lifecycle (R4B-FD)**: Each descriptor is tracked through a `_FdState` state machine (OPEN_OWNED, KNOWN_OPEN_AFTER_PRE_SYSCALL_FAILURE, UNLOCKING, CLOSING, CLOSED, CLOSE_OUTCOME_UNKNOWN, POISONED, FORK_INVALID). The descriptor is not invalidated before `os.close`. When `flock(LOCK_UN)` or `os.close` fails, the state transitions to uncertain states, and a process-global `_BRONZE_POISON_GATE` is set to prevent new writers in the same process. The `CloseAdapter` injection seam enables fault-injection testing by allowing tests to substitute a custom `close()` implementation that can fail before or after the syscall.
-
-
-**R6-AUTHORITY (supervisor authority contract): The authority_anchor directory is
-supervisor-owned and MUST NOT be writable by the collector. The lock file
-`.bronze-global-observation-authority.lock` MUST be pre-created by the
-supervisor within the authority_anchor directory. `OwnedLock.acquire()` opens
-the lock file via `os.open(lock_name, os.O_RDWR | os.O_NOFOLLOW,
-dir_fd=authority_anchor_fd)` — no `O_CREAT`. Missing lock file causes
-fail-closed. `BronzeStore.__init__` MUST NOT auto-create the root directory;
-the supervisor MUST pre-create it. The `authority_anchor_fd` parameter is
-required for `OwnedLock.acquire()` and `ManifestWriter`. Production writers have
-no pathname-based authority provisioning helper; tests simulate supervisor
-provisioning locally.
-
-R6-FD-CLOSE (typed close outcomes): `CloseAdapter.close()` returns a typed
-`CloseOutcome` enum: CLOSED (successful close), PRE_SYSCALL_FAILED_KNOWN_OPEN
-(failure before os.close, fd still open), POST_SYSCALL_UNKNOWN (failure after
-os.close, fd status unknown). `_close_single_descriptor()` delegates to the
-adapter and returns the typed outcome. `_close_owned_descriptor()` uses
-CloseOutcome to determine state transitions: CLOSED -> fd = -1, _fd_operable =
-False; PRE_SYSCALL_FAILED_KNOWN_OPEN -> preserves fd, _fd_operable = True;
-POST_SYSCALL_UNKNOWN -> preserves fd diagnostic, _fd_operable = False.
-Diagnostic fields (`_fd_diagnostic`, `_lock_fd_diagnostic`,
-`_parent_fd_diagnostic`) preserve original fd numbers for forensic analysis.
-`_operable` flags prevent retry on potentially closed and reused fd numbers.
-
-R6-UNLOCK (unlock adapter): `UnlockAdapter` provides an injection seam for
-`flock(LOCK_UN)` failure testing. `OwnedLock.release()` accepts an
-`unlock_adapter` parameter. Unlock failure transitions the lock to POISONED
-state and sets the process-global poison gate.
-
-R6-WRITABILITY (effective-writability check): `OwnedLock.acquire()` verifies
-that the collector does not have write permission on the authority_anchor
-directory via an fd-addressed path such as
-`/proc/self/fd/<authority_anchor_fd>` with
-`os.access(..., os.W_OK, effective_ids=True)`, or a platform-equivalent
-effective UID/GID mode check. Writable or unverifiable authority_anchor causes
-fail-closed with `LockOwnershipError`.
-
-R6-ROOTNS (deterministic outcomes): All root namespace boundary tests now
-assert deterministic security outcomes. The ambiguous
-`BLOCKED_BY_OLD or ACQUIRED_NEW` assertion has been removed. Root rename,
-parent rename, authority_anchor pathname replacement, and replacement root
-tests each assert a single expected outcome.**
-**Writer serialization (R3B-OPERATION)**: `ManifestWriter` uses a `threading.RLock` and a `_WriterState` state machine (ACTIVE, FINALIZING, FINALIZED, CLOSING, CLOSED, COMPROMISED, POISONED, FORK_INVALID) to serialize all public operations. Repeated close is deterministic and safe. Concurrent append, close, and finalize calls are serialized through the lock.
+A0 uses a root-wide single-writer protocol. `ManifestWriter` acquires an exclusive non-blocking `fcntl.flock` on a lock file within the authority_anchor directory, not the root directory itself. The lock file is pre-created by the supervisor and opened by `OwnedLock.acquire()` through the supervisor-provided anchor directory fd. The authority_anchor directory descriptor is owned by the supervisor and passed to `OwnedLock.acquire()` as the `authority_anchor_fd` parameter.
 
 The protocol does not create or delete lock pathname markers. `lock_ref()` and `global_authority_lock_ref()` remain compatibility names only; their presence, absence, token contents, replacement, or symlink substitution cannot create a second writer namespace and is never cleaned by ordinary release. Acquisition cleanup and release operate only on the descriptor owned by that acquisition, eliminating blind-unlink and verify-then-unlink races.
 
@@ -108,3 +105,7 @@ Replay performs no networking and requires a valid completion checkpoint. It ver
 An unfinalized segment, missing or invalid checkpoint, tail deletion, count or terminal mismatch, corrupt evidence, conflicting global authority, unexpected tree entry, or orphan payload yields `FAIL`. A zero-entry segment passes only when an empty manifest exists with an explicit completed checkpoint binding count zero and the genesis terminal hash.
 
 The report hash excludes absolute paths, current time, random values, process IDs, and filesystem metadata, so the same evidence yields the same logical report across roots and processes.
+
+## A1-to-A2 gate
+
+A2 is not authorized by A1 completion alone. A2 may only be considered after A1 merge, external exact-head review PASS, explicit rate-limit gate, frozen public envelope contract, and a new exact-head write lease from project control.
