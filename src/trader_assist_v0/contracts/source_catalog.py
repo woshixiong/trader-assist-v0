@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass
 from typing import Final, Literal
 
@@ -61,6 +62,12 @@ _FIXTURE_FORBIDDEN_MARKERS: Final = (
     "cache",
     "raw_operational",
 )
+_FIXTURE_FORBIDDEN_WORD_RE: Final = re.compile(
+    r"(?<![a-z0-9_])"
+    r"(?:address|authorization|bearer|db|log|logs|password|token)"
+    r"(?![a-z0-9_])"
+)
+_FIXTURE_ADDRESS_RE: Final = re.compile(r"\b0x[0-9a-fA-F]{40}\b")
 
 EndpointKind = Literal["WEBSOCKET", "INFO"]
 DocumentationStatus = Literal["VERIFIED", "AMBIGUOUS_DOCUMENTATION"]
@@ -418,7 +425,11 @@ def validate_fixture_admission(
     if raw_operational or private_or_account_data or contains_secret:
         raise ValueError("fixture contains prohibited operational or private material")
     lowered = payload_text.lower()
-    if any(marker in lowered for marker in _FIXTURE_FORBIDDEN_MARKERS):
+    if (
+        any(marker in lowered for marker in _FIXTURE_FORBIDDEN_MARKERS)
+        or _FIXTURE_FORBIDDEN_WORD_RE.search(lowered)
+        or _FIXTURE_ADDRESS_RE.search(payload_text)
+    ):
         raise ValueError("fixture contains prohibited marker")
 
 

@@ -47,6 +47,12 @@ def test_synthetic_documentation_derived_candle_fixture_is_allowed() -> None:
         {"payload_text": '{"nonce":123}'},
         {"payload_text": '{"database":"bronze.db"}'},
         {"payload_text": '{"cache":"runtime-cache"}'},
+        {"payload_text": '{"address":"0x1111111111111111111111111111111111111111"}'},
+        {"payload_text": '{"log":"runtime observation"}'},
+        {"payload_text": '{"db":"bronze.db"}'},
+        {"payload_text": '{"authorization":"Bearer redacted"}'},
+        {"payload_text": '{"password":"redacted"}'},
+        {"payload_text": '{"token":"redacted"}'},
     ],
 )
 def test_fixture_admission_rejects_operational_private_or_secret_material(
