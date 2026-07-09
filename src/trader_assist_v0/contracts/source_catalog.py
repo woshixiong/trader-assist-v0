@@ -355,7 +355,9 @@ def rate_limit_entry_gate() -> dict[str, object]:
 
 def assert_rate_limit_allows_live_transport() -> None:
     if RATE_LIMIT_STATUS == "UNRESOLVED_OFFICIAL_LIMIT":
-        raise ValueError("official numeric rate limit is unresolved; live transport remains blocked")
+        raise ValueError(
+            "official numeric rate limit is unresolved; live transport remains blocked"
+        )
 
 
 def _reject_prohibited_transport_text(*values: str) -> None:
