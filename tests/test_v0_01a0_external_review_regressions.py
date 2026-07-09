@@ -55,7 +55,7 @@ from trader_assist_v0.data import (
     read_manifest_entries,
     replay_segment,
 )
-from trader_assist_v0.data.bronze import _open_anchor_fd
+from trader_assist_v0.data.bronze import _test_open_anchor_fd
 
 DAY = date(2026, 7, 7)
 NOW = datetime(2026, 7, 7, 1, 0, tzinfo=UTC)
@@ -125,11 +125,13 @@ def _checkpoint_dict(checkpoint: RawManifestCheckpointV0) -> dict[str, object]:
 
 
 def _finalized_store(tmp_path: Path, payloads: tuple[bytes, ...] = (b"a", b"b")):
+    (tmp_path / "root").mkdir(parents=True, exist_ok=True)
     store = BronzeStore(tmp_path / "root")
     anchor_fd = _provision_anchor(store)
     writer = ManifestWriter(
         store, manifest_date=DAY, segment_id=SEGMENT, authority_anchor_fd=anchor_fd
     )
+    store.root.parent.chmod(0o755)
     for index, payload in enumerate(payloads, start=1):
         writer.append(make_event(store, payload, sequence=index))
     checkpoint = writer.finalize()
@@ -137,6 +139,7 @@ def _finalized_store(tmp_path: Path, payloads: tuple[bytes, ...] = (b"a", b"b"))
 
 
 def _try_manifest_writer(root: str, manifest_date: date, segment_id: str, queue) -> None:
+    Path(root).mkdir(parents=True, exist_ok=True)
     candidate_store = BronzeStore(Path(root))
     try:
         anchor_fd = _provision_anchor(candidate_store)
@@ -164,7 +167,15 @@ def _fd_count() -> int:
 def _provision_anchor(store):
     """Provision a BronzeStore root and return an open anchor fd."""
     store.root.mkdir(parents=True, exist_ok=True)
-    return _open_anchor_fd(store)
+    anchor_dir = store.root.parent
+    # Create lock file
+    lock_file = anchor_dir / ".bronze-global-observation-authority.lock"
+    lock_file.touch()
+    # Make anchor non-writable for effective-writability check
+    anchor_dir.chmod(0o555)
+    anchor_fd = os.open(str(anchor_dir), os.O_RDONLY)
+    return anchor_fd
+    return _test_open_anchor_fd(store)
 
 
 @pytest.mark.parametrize(
@@ -443,6 +454,7 @@ def test_checkpoint_truncation_hash_and_overwrite_rejected(tmp_path):
     with pytest.raises(SegmentFinalizedError):
         anchor_fd = _provision_anchor(store)
         ManifestWriter(store, manifest_date=DAY, segment_id=SEGMENT, authority_anchor_fd=anchor_fd)
+        store.root.parent.chmod(0o755)
 
 
 def test_same_slot_same_event_cross_segment_global_idempotent(tmp_path):
@@ -681,7 +693,7 @@ def test_post_flock_acquire_failures_release_authority_without_path_cleanup(
     legacy = store.path(store.global_authority_lock_ref())
     legacy.write_text("replacement-token\n", encoding="utf-8")
     # Pre-open anchor fd to avoid the new os.fstat validation in acquire()
-    anchor_fd = bronze_module._open_anchor_fd(store)
+    anchor_fd = bronze_module._test_open_anchor_fd(store)
     real_fstat = bronze_module.os.fstat
     real_stat = bronze_module.os.stat
     real_init = OwnedLock.__init__
@@ -765,7 +777,7 @@ def test_lock_acquire_exception_closes_descriptor_and_releases_kernel_lock(
     store = BronzeStore(tmp_path / "root")
     store.root.mkdir(parents=True, exist_ok=True)
     # Pre-open anchor fd to avoid the new os.fstat validation in acquire()
-    anchor_fd = bronze_module._open_anchor_fd(store)
+    anchor_fd = bronze_module._test_open_anchor_fd(store)
     before = _fd_count()
     real_fstat = bronze_module.os.fstat
     failed = False
@@ -890,7 +902,7 @@ def test_repeated_acquire_failures_do_not_leak_descriptors(tmp_path, monkeypatch
     store = BronzeStore(tmp_path / "root")
     store.root.mkdir(parents=True, exist_ok=True)
     # Pre-open anchor fd to avoid the new os.fstat validation in acquire()
-    anchor_fd = bronze_module._open_anchor_fd(store)
+    anchor_fd = bronze_module._test_open_anchor_fd(store)
     before = _fd_count()
     real_fstat = bronze_module.os.fstat
 
@@ -1260,6 +1272,7 @@ def test_child_closes_duplicates_owner_exit_third_acquires(tmp_path):
     def third_acquire(root_str: str, queue_obj) -> None:
         from pathlib import Path as _Path
         try:
+            _Path(root_str).mkdir(parents=True, exist_ok=True)
             new_store = BronzeStore(_Path(root_str))
             anchor_fd = _provision_anchor(store)
             new_lock = OwnedLock.acquire(
@@ -1624,6 +1637,7 @@ def test_root_rename_while_authority_held_multiprocess(tmp_path):
             root_path.mkdir()
             queue.put("RENAMED")
             try:
+                root_path.mkdir(parents=True, exist_ok=True)
                 new_store = BronzeStore(root_path)
                 anchor_fd = _provision_anchor(new_store)
                 ManifestWriter(
@@ -1785,6 +1799,7 @@ def test_root_rename_blocked_with_authority_anchor(tmp_path):
             root_path.mkdir()
             queue_obj.put("RENAMED")
             try:
+                root_path.mkdir(parents=True, exist_ok=True)
                 new_store = BronzeStore(root_path, authority_anchor=anchor_path)
                 anchor_fd = _provision_anchor(new_store)
                 ManifestWriter(
@@ -1902,6 +1917,7 @@ def test_replacement_parent_new_root_blocked(tmp_path):
             new_root.mkdir()
             queue_obj.put("REPLACED")
             try:
+                new_root.mkdir(parents=True, exist_ok=True)
                 new_store = BronzeStore(new_root, authority_anchor=anchor_path)
                 anchor_fd = _provision_anchor(new_store)
                 ManifestWriter(
@@ -1998,6 +2014,7 @@ def test_replacement_after_scan(tmp_path):
             root_path.rename(backup)
             queue_obj.put("REPLACED_AFTER_SCAN")
             try:
+                (anchor_path / root_path.name).mkdir(parents=True, exist_ok=True)
                 new_store = BronzeStore(anchor_path / root_path.name)
                 anchor_fd = _provision_anchor(new_store)
                 ManifestWriter(
@@ -2048,6 +2065,7 @@ def test_replacement_before_payload_publication(tmp_path):
             root_path.rename(backup)
             queue_obj.put("REPLACED_BEFORE_PAYLOAD")
             try:
+                (anchor_path / root_path.name).mkdir(parents=True, exist_ok=True)
                 new_store = BronzeStore(anchor_path / root_path.name)
                 anchor_fd = _provision_anchor(new_store)
                 ManifestWriter(
@@ -2098,6 +2116,7 @@ def test_replacement_before_manifest_write(tmp_path):
             root_path.rename(backup)
             queue_obj.put("REPLACED_BEFORE_MANIFEST")
             try:
+                (anchor_path / root_path.name).mkdir(parents=True, exist_ok=True)
                 new_store = BronzeStore(anchor_path / root_path.name)
                 anchor_fd = _provision_anchor(new_store)
                 ManifestWriter(
@@ -2150,6 +2169,7 @@ def test_replacement_after_manifest_fsync(tmp_path):
             root_path.rename(backup)
             queue_obj.put("REPLACED_AFTER_FSYNC")
             try:
+                (anchor_path / root_path.name).mkdir(parents=True, exist_ok=True)
                 new_store = BronzeStore(anchor_path / root_path.name)
                 anchor_fd = _provision_anchor(new_store)
                 ManifestWriter(
@@ -2202,6 +2222,7 @@ def test_replacement_before_checkpoint_publication(tmp_path):
             root_path.rename(backup)
             queue_obj.put("REPLACED_BEFORE_CHECKPOINT")
             try:
+                (anchor_path / root_path.name).mkdir(parents=True, exist_ok=True)
                 new_store = BronzeStore(anchor_path / root_path.name)
                 anchor_fd = _provision_anchor(new_store)
                 ManifestWriter(
@@ -2254,6 +2275,7 @@ def test_replacement_during_finalize(tmp_path):
             root_path.rename(backup)
             queue_obj.put("REPLACED_DURING_FINALIZE")
             try:
+                (anchor_path / root_path.name).mkdir(parents=True, exist_ok=True)
                 new_store = BronzeStore(anchor_path / root_path.name)
                 anchor_fd = _provision_anchor(new_store)
                 ManifestWriter(
@@ -2785,7 +2807,7 @@ def test_anchor_replacement_acquire_new_anchor_after_release(tmp_path, monkeypat
     authority_anchor_fd."""
     monkeypatch.setattr(bronze_module, "_BRONZE_POISON_GATE", 0)
     store = BronzeStore(tmp_path / "root")
-    anchor_fd_1 = bronze_module._open_anchor_fd(store)
+    anchor_fd_1 = bronze_module._test_open_anchor_fd(store)
     lock1 = OwnedLock.acquire(
         store,
         store.global_authority_lock_ref(),
@@ -2793,7 +2815,7 @@ def test_anchor_replacement_acquire_new_anchor_after_release(tmp_path, monkeypat
     )
     lock1.release()
     # New anchor fd
-    anchor_fd_2 = bronze_module._open_anchor_fd(store)
+    anchor_fd_2 = bronze_module._test_open_anchor_fd(store)
     lock2 = OwnedLock.acquire(
         store,
         store.global_authority_lock_ref(),
@@ -2810,7 +2832,7 @@ def test_anchor_replacement_stale_anchor_blocked(tmp_path, monkeypatch):
     import os as _os
     monkeypatch.setattr(bronze_module, "_BRONZE_POISON_GATE", 0)
     store = BronzeStore(tmp_path / "root")
-    anchor_fd = bronze_module._open_anchor_fd(store)
+    anchor_fd = bronze_module._test_open_anchor_fd(store)
     lock = OwnedLock.acquire(
         store,
         store.global_authority_lock_ref(),
@@ -2854,7 +2876,7 @@ def test_anchor_fd_reuse_across_multiple_locks(tmp_path, monkeypatch):
     """Same anchor_fd can be used for multiple sequential lock acquisitions."""
     monkeypatch.setattr(bronze_module, "_BRONZE_POISON_GATE", 0)
     store = BronzeStore(tmp_path / "root")
-    anchor_fd = bronze_module._open_anchor_fd(store)
+    anchor_fd = bronze_module._test_open_anchor_fd(store)
     for _ in range(5):
         lock = OwnedLock.acquire(
             store,
@@ -2862,13 +2884,14 @@ def test_anchor_fd_reuse_across_multiple_locks(tmp_path, monkeypatch):
             authority_anchor_fd=anchor_fd,
         )
         lock.release()
+        store.root.parent.chmod(0o555)
     # Clean up
     import os as _os
     _os.close(anchor_fd)
 
 
-def test_open_anchor_fd_creates_lock_file(tmp_path):
-    """_open_anchor_fd must create the lock file if it does not exist."""
+def test_test_open_anchor_fd_creates_lock_file(tmp_path):
+    """_test_open_anchor_fd must create the lock file if it does not exist."""
     store = BronzeStore(tmp_path / "root")
     store.root.mkdir(parents=True, exist_ok=True)
     anchor_dir = store.root.parent
@@ -2877,7 +2900,7 @@ def test_open_anchor_fd_creates_lock_file(tmp_path):
     if lock_file.exists():
         lock_file.unlink()
     assert not lock_file.exists()
-    anchor_fd = bronze_module._open_anchor_fd(store)
+    anchor_fd = bronze_module._test_open_anchor_fd(store)
     try:
         assert lock_file.exists()
     finally:

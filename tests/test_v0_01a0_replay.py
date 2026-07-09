@@ -18,7 +18,7 @@ from trader_assist_v0.contracts import (
     ReplayStatusV0,
 )
 from trader_assist_v0.data import BronzeStore, ManifestWriter, replay_segment
-from trader_assist_v0.data.bronze import _open_anchor_fd
+from trader_assist_v0.data.bronze import _test_open_anchor_fd
 
 DAY = date(2026, 7, 7)
 NOW = datetime(2026, 7, 7, 1, 0, tzinfo=UTC)
@@ -56,7 +56,7 @@ def event(store: BronzeStore, sequence: int = 1) -> RawEventV0:
 
 def finalized(root: Path) -> BronzeStore:
     store = BronzeStore(root)
-    anchor_fd = _open_anchor_fd(store)
+    anchor_fd = _test_open_anchor_fd(store)
     writer = ManifestWriter(store, manifest_date=DAY, segment_id=SEGMENT,
                             authority_anchor_fd=anchor_fd)
     writer.append(event(store, 1))
@@ -87,6 +87,7 @@ def test_replay_pass_and_cross_process_determinism(tmp_path: Path) -> None:
 
 
 def test_missing_corrupt_orphan_partial_and_no_network_fail(tmp_path: Path) -> None:
+    (tmp_path / "missing").mkdir(parents=True, exist_ok=True)
     missing = replay_segment(
         BronzeStore(tmp_path / "missing"), manifest_date=DAY, segment_id=SEGMENT
     )
@@ -144,7 +145,7 @@ def test_short_manifest_write_is_detected(
     def short(fd: int, payload: bytes) -> int:
         return original(fd, payload[: max(1, len(payload) // 2)])
 
-    anchor_fd = _open_anchor_fd(store)
+    anchor_fd = _test_open_anchor_fd(store)
     writer = ManifestWriter(store, manifest_date=DAY, segment_id=SEGMENT,
                             authority_anchor_fd=anchor_fd)
     monkeypatch.setattr(bronze_module.os, "write", short)
