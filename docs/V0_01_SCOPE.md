@@ -14,13 +14,19 @@ A1 froze public envelope policy, rate-limit entry authority, future read-only tr
 
 A1 does not implement live transport.
 
-## Active slice
-
 `V0-01A2 / NO_NETWORK_PUBLIC_OBSERVATION_INGRESS_CONTRACT`
 
-A2 is a bounded no-network ingress contract/helper layer. It accepts caller-supplied exact public observation bytes, validates every selection through the A1 public read-only transport-entry contract, binds exact bytes into `RawEventV0` authority, and can optionally persist payloads / append RawEvent entries through existing A0 Bronze authority.
+A2 added a bounded no-network ingress contract/helper layer. It accepts caller-supplied exact public observation bytes, validates every selection through the A1 public read-only transport-entry contract, binds exact bytes into `RawEventV0` authority, and can optionally persist payloads / append RawEvent entries through existing A0 Bronze authority.
 
 A2 does not implement live transport.
+
+## Active slice
+
+`V0-01A3 / PUBLIC_READONLY_TRANSPORT_PREFLIGHT_CONTRACT`
+
+A3 freezes a pure public read-only transport preflight contract for a future collector runtime. It validates configuration authority only: source identity, environment, operation class, endpoint/operation allowlist, coin/interval, capture mode, runtime-disabled default, kill-switch fail-closed behavior, credential absence, private/user/account absence, and no-write/no-execution proof.
+
+A3 does not implement live transport.
 
 ## Fixed A0 authority versions
 
@@ -37,10 +43,11 @@ REPLAY_REPORT_VERSION: 0.1.0
 
 A0 supports only these values. Callers cannot override them, and the generated JSON Schemas expose them as `const` authorities.
 
-## A1 frozen authorities used by A2
+## A1 frozen authorities used by A2/A3
 
 ```text
 A1_CONTRACT_ID: V0-01A1-SCOPE-FREEZE
+A3_CONTRACT_ID: V0-01A3-PUBLIC-READONLY-TRANSPORT-PREFLIGHT-CONTRACT
 SOURCE_ID: hyperliquid-public-mainnet
 ENVIRONMENT: mainnet public read-only
 OPERATION_CLASS: public read-only observation only
@@ -51,24 +58,22 @@ ALLOWED_COINS: BTC, ETH
 RUNTIME_CANDLE_INTERVALS: 1m, 3m, 5m, 15m, 1h
 ```
 
-## A2 allowed
+## A3 allowed
 
-- add a pure no-network public observation ingress/helper layer;
-- accept only caller-supplied exact bytes as public observation payload evidence;
-- require injected `first_observed_time`, `collector_receive_time`, `collector_monotonic_ns`, `connection_id`, `subscription_id`, and collector-local `receive_sequence` for deterministic tests;
-- validate source, environment, operation class, endpoint, operation, coin, interval, and capture mode through A1 `validate_read_only_transport_entry()`;
-- bind exact bytes into `RawEventV0` using content-addressed payload hash and payload ref authority;
-- keep `source_event_time`, `source_publish_time`, `source_native_id`, `source_native_cursor`, and `revision_time` unavailable until a later extractor contract;
-- optionally persist payloads through `BronzeStore.write_payload()`;
-- optionally append RawEvent entries through an existing A0 `ManifestWriter` so root-wide single-writer and supervisor-owned authority are preserved;
-- prove unresolved rate limits still block live transport;
-- test no network / async transport capability in implementation code.
+- add a pure public read-only transport preflight helper;
+- validate only future public read-only collector configuration shape;
+- require the frozen source ID, environment, operation class, endpoint, operation, coin, interval, and capture mode authorities;
+- keep `runtime_enabled` absent or false by default;
+- keep `live_transport_authorized` false while numeric rate limits remain unresolved;
+- reject kill-switch bypass/override semantics;
+- reject credentials, wallet/signing/nonce/account material, private/user/account endpoints, `/exchange`, orders, and Testnet/Mainnet execution wording;
+- prove no network / async transport capability in implementation code.
 
-## A2 prohibited
+## A3 prohibited
 
 No HTTP client, WebSocket client, DNS, socket, live endpoint connection, polling loop, reconnect runtime, heartbeat runtime, health runtime, backfill runtime, async runtime, event loop, new dependency, account address, private endpoint, user/account endpoint, credential, API wallet, signing, nonce handling, order mutation, exchange write path, Testnet/Mainnet execution enablement, strategy candidate, AI recommendation, risk sizing, Silver normalization, dashboard, database, cloud SDK, soak runner, real operational payload, log, cache, DB, source archive, or secret is included.
 
-The A2 ingress contract is not a parser, not a candle normalizer, not a strategy signal generator, not an AI advice layer, and not a risk-sizing layer.
+The A3 preflight contract is not a collector runtime, not a parser, not a candle normalizer, not a strategy signal generator, not an AI advice layer, and not a risk-sizing layer.
 
 `mainnet public read-only` is a public source identity / environment label. It is not Mainnet execution enablement.
 
@@ -78,11 +83,11 @@ Official numeric rate limits remain `UNRESOLVED_OFFICIAL_LIMIT` until an impleme
 
 Third-party, remembered, inferred, community, blog, StackOverflow, Discord, or model-memory rate-limit numbers are not authority.
 
-A2 must not resolve official numeric rate limits unless project control amends the task after current official docs are readable and cited.
+A3 must not resolve official numeric rate limits unless project control amends the task after current official docs are readable and cited.
 
-## A1 read-only transport entry checks
+## A1/A3 read-only transport checks
 
-The pure contract checker accepts only:
+The pure contract checkers accept only:
 
 - `source_id = hyperliquid-public-mainnet`;
 - `environment = mainnet public read-only`;
@@ -92,7 +97,7 @@ The pure contract checker accepts only:
 - WebSocket capture as `WS_TEXT_UTF8_APPLICATION_PAYLOAD`;
 - Info capture as `HTTP_RESPONSE_BODY`.
 
-It rejects private, user/account, wallet/signing, nonce, order, exchange-write, unsupported source, unsupported environment, unsupported coin, unsupported interval, and unsupported capture-mode selections.
+They reject private, user/account, wallet/signing, nonce, order, exchange-write, unsupported source, unsupported environment, unsupported coin, unsupported interval, unsupported capture-mode, credential, kill-switch bypass, and execution selections.
 
 ## A1 fixture admission
 
