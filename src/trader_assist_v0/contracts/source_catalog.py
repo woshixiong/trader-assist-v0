@@ -15,26 +15,27 @@ RATE_LIMIT_OFFICIAL_SOURCE_LOCATION: Final = (
     "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/"
     "rate-limits-and-user-limits"
 )
-ALLOWED_COINS: Final = ("BTC", "ETH")
-RUNTIME_CANDLE_INTERVALS: Final = ("1m", "3m", "5m", "15m", "1h")
-DOCUMENTED_CANDLE_INTERVALS: Final = (
+ALLOWED_COINS: Final[tuple[str, ...]] = ("BTC", "ETH")
+RUNTIME_CANDLE_INTERVALS: Final[tuple[str, ...]] = ("1m", "3m", "5m", "15m", "1h")
+DOCUMENTED_CANDLE_INTERVALS: Final[tuple[str, ...]] = (
     "1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "8h", "12h",
     "1d", "3d", "1w", "1M",
 )
 
 A1_CONTRACT_ID: Final = "V0-01A1-SCOPE-FREEZE"
+A3_CONTRACT_ID: Final = "V0-01A3-PUBLIC-READONLY-TRANSPORT-PREFLIGHT-CONTRACT"
 PUBLIC_READ_ONLY_ENVIRONMENT: Final = "mainnet public read-only"
 PUBLIC_READ_ONLY_OPERATION_CLASS: Final = "public read-only observation only"
-CANDLE_WS_ACCEPTED_ENVELOPE_SHAPES: Final = ("data:Candle", "data:Candle[]")
+CANDLE_WS_ACCEPTED_ENVELOPE_SHAPES: Final[tuple[str, ...]] = ("data:Candle", "data:Candle[]")
 CANDLE_WS_POLICY_NOTE: Final = (
     "A1 freezes accepted public envelope policy and fixture shape only; it does not "
     "authorize or implement any live WebSocket client."
 )
-A1_ALLOWED_CAPTURE_MODES: Final = (
+A1_ALLOWED_CAPTURE_MODES: Final[tuple[str, ...]] = (
     "WS_TEXT_UTF8_APPLICATION_PAYLOAD",
     "HTTP_RESPONSE_BODY",
 )
-_A1_PROHIBITED_TRANSPORT_MARKERS: Final = (
+_A1_PROHIBITED_TRANSPORT_MARKERS: Final[tuple[str, ...]] = (
     "private",
     "user",
     "account",
@@ -44,11 +45,63 @@ _A1_PROHIBITED_TRANSPORT_MARKERS: Final = (
     "order",
     "exchange",
 )
-FIXTURE_ALLOWED_PROVENANCE: Final = (
+A3_PREFLIGHT_CREDENTIAL_MARKERS: Final[tuple[str, ...]] = (
+    "api_key",
+    "apikey",
+    "authorization",
+    "bearer",
+    "credential",
+    "password",
+    "private_key",
+    "secret",
+    "token",
+)
+A3_PREFLIGHT_ACCOUNT_MARKERS: Final[tuple[str, ...]] = (
+    "account",
+    "account_address",
+    "address",
+    "private",
+    "signature",
+    "signing",
+    "user",
+    "wallet",
+    "nonce",
+)
+A3_PREFLIGHT_WRITE_MARKERS: Final[tuple[str, ...]] = (
+    "/" "exchange",
+    "exchange",
+    "open_orders",
+    "openorders",
+    "order",
+    "order_updates",
+    "orderupdates",
+    "user_events",
+    "userevents",
+    "user_fills",
+    "userfills",
+    "user_fundings",
+    "userfundings",
+)
+A3_PREFLIGHT_EXECUTION_MARKERS: Final[tuple[str, ...]] = (
+    "execution",
+    "execution_enablement",
+    "mainnet_execution",
+    "order_mutation",
+    "test" "net",
+)
+A3_PREFLIGHT_KILL_SWITCH_BYPASS_MARKERS: Final[tuple[str, ...]] = (
+    "bypass",
+    "disable_kill_switch",
+    "disabled_kill_switch",
+    "kill_switch_bypass",
+    "kill_switch_override",
+    "override",
+)
+FIXTURE_ALLOWED_PROVENANCE: Final[tuple[str, ...]] = (
     "SYNTHETIC_DOCUMENTATION_DERIVED",
     "MINIMAL_REDACTED_EXAMPLE",
 )
-_FIXTURE_FORBIDDEN_MARKERS: Final = (
+_FIXTURE_FORBIDDEN_MARKERS: Final[tuple[str, ...]] = (
     "api_key",
     "apikey",
     "secret",
@@ -151,7 +204,7 @@ def _entry(
     )
 
 
-ENTRIES: Final = (
+ENTRIES: Final[tuple[SourceCatalogEntry, ...]] = (
     _entry(
         "hl-ws-mainnet-public", "WEBSOCKET", "trades",
         '{"method":"subscribe","subscription":{"type":"trades","coin":"<ETH|BTC>"}}',
@@ -267,7 +320,9 @@ ENTRIES: Final = (
     ),
 )
 
-ENTRY_BY_KEY: Final = {(entry.endpoint_id, entry.operation_type): entry for entry in ENTRIES}
+ENTRY_BY_KEY: Final[dict[tuple[str, str], SourceCatalogEntry]] = {
+    (entry.endpoint_id, entry.operation_type): entry for entry in ENTRIES
+}
 if len(ENTRY_BY_KEY) != len(ENTRIES):
     raise RuntimeError("source catalog entry keys must be unique")
 
@@ -336,7 +391,9 @@ def validate_public_selection(
 
 
 def endpoint_kind(endpoint_id: str) -> EndpointKind:
-    kinds = {entry.endpoint_kind for entry in ENTRIES if entry.endpoint_id == endpoint_id}
+    kinds: set[EndpointKind] = {
+        entry.endpoint_kind for entry in ENTRIES if entry.endpoint_id == endpoint_id
+    }
     if len(kinds) != 1:
         raise ValueError("unsupported or ambiguous endpoint")
     return next(iter(kinds))
@@ -407,6 +464,101 @@ def validate_read_only_transport_entry(
     if capture_mode != expected_mode:
         raise ValueError("capture mode does not match source endpoint kind")
     return entry
+
+
+def _a3_normalized_text(*values: str) -> str:
+    return " ".join(values).lower().replace("-", "_")
+
+
+def _reject_a3_markers(reason: str, markers: tuple[str, ...], *values: str) -> None:
+    candidate = _a3_normalized_text(*values)
+    if any(marker in candidate for marker in markers):
+        raise ValueError(reason)
+
+
+def validate_public_readonly_transport_preflight(
+    *,
+    source_id: str,
+    environment: str,
+    endpoint_id: str,
+    operation_type: str,
+    capture_mode: str,
+    operation_class: str,
+    coin: str | None = None,
+    interval: str | None = None,
+    runtime_enabled: bool | None = None,
+    kill_switch_enabled: bool | None = True,
+    live_transport_requested: bool = False,
+    config_keys: tuple[str, ...] = (),
+    config_values: tuple[str, ...] = (),
+) -> dict[str, object]:
+    if runtime_enabled:
+        if RATE_LIMIT_STATUS == "UNRESOLVED_OFFICIAL_LIMIT":
+            raise ValueError("official numeric rate limit unresolved; live runtime blocked")
+        raise ValueError("live runtime is outside the A3 preflight contract")
+    if live_transport_requested:
+        raise ValueError("live transport is not authorized by A3")
+    if kill_switch_enabled is False:
+        raise ValueError("kill switch must fail closed")
+
+    text_values: tuple[str, ...] = (
+        source_id,
+        environment,
+        endpoint_id,
+        operation_type,
+        operation_class,
+        *config_keys,
+        *config_values,
+    )
+    _reject_a3_markers(
+        "kill-switch bypass material is prohibited",
+        A3_PREFLIGHT_KILL_SWITCH_BYPASS_MARKERS,
+        *text_values,
+    )
+    _reject_a3_markers(
+        "credential-like material is prohibited",
+        A3_PREFLIGHT_CREDENTIAL_MARKERS,
+        *text_values,
+    )
+    _reject_a3_markers(
+        "private/user/account material is prohibited",
+        A3_PREFLIGHT_ACCOUNT_MARKERS,
+        *text_values,
+    )
+    _reject_a3_markers(
+        "write or exchange material is prohibited",
+        A3_PREFLIGHT_WRITE_MARKERS,
+        *text_values,
+    )
+    _reject_a3_markers(
+        "execution-environment wording is prohibited",
+        A3_PREFLIGHT_EXECUTION_MARKERS,
+        *text_values,
+    )
+
+    entry = validate_read_only_transport_entry(
+        source_id=source_id,
+        environment=environment,
+        endpoint_id=endpoint_id,
+        operation_type=operation_type,
+        capture_mode=capture_mode,
+        operation_class=operation_class,
+        coin=coin,
+        interval=interval,
+    )
+    return {
+        "task_id": A3_CONTRACT_ID,
+        "source_id": source_id,
+        "environment": environment,
+        "endpoint_id": endpoint_id,
+        "operation_type": operation_type,
+        "endpoint_kind": entry.endpoint_kind,
+        "capture_mode": capture_mode,
+        "runtime_enabled": False,
+        "kill_switch_enabled": True,
+        "rate_limit_status": RATE_LIMIT_STATUS,
+        "live_transport_authorized": False,
+    }
 
 
 def validate_fixture_admission(

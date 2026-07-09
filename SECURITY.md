@@ -1,5 +1,15 @@
 # Security
 
+## V0-01A3 Public Read-Only Transport Preflight Threat Model
+
+V0-01A3 is a pure contract-level preflight gate for a future public read-only collector runtime. It validates only configuration authority: source identity, environment, operation class, endpoint/operation allowlist, coin/interval, capture mode, disabled-runtime default, kill-switch fail-closed semantics, credential absence, private/user/account absence, and no-write/no-execution proof.
+
+A3 still has no HTTP client, WebSocket client, DNS, socket use, live endpoint connection, polling loop, reconnect runtime, heartbeat runtime, health runtime, backfill runtime, async runtime, event loop, credentials, account address, wallet, signing, nonce handling, order mutation, exchange-write path, Testnet/Mainnet execution enablement, strategy logic, AI recommendation, risk sizing, database, dashboard, cloud SDK, or soak runner.
+
+Official numeric rate limits remain `UNRESOLVED_OFFICIAL_LIMIT`. While unresolved, `runtime_enabled=true` and live transport authorization must fail closed. A3 does not encode remembered, inferred, third-party, community, blog, StackOverflow, Discord, or model-memory rate-limit numbers.
+
+`mainnet public read-only` remains only a public source identity / environment label. It is not Mainnet execution enablement and must not authorize `/exchange`, private endpoints, user/account endpoints, orders, account data, signing, wallets, nonces, credentials, or kill-switch bypass.
+
 ## V0-01A2 No-Network Ingress Threat Model
 
 V0-01A2 is a no-network public observation ingress contract only. It accepts caller-supplied public observation bytes, validates each source selection through the frozen A1 public read-only transport-entry contract, binds exact bytes into `RawEventV0` authority, and may optionally persist payloads / append manifest entries only through existing A0 Bronze authority.

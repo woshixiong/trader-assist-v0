@@ -10,7 +10,7 @@ Officially verified: `2026-07-07`
 
 The single executable catalog authority is `src/trader_assist_v0/contracts/source_catalog.py`. It depends only on the standard library and `contracts/common.py`, so `RawEventV0` can validate catalog authority without a contracts-to-data import cycle. `src/trader_assist_v0/data/source_catalog.py` is a compatibility re-export and does not define a second catalog.
 
-A0 records public interface facts only and does not connect to any endpoint. A1 freezes public transport-entry contracts only and still does not connect to any endpoint. A2 uses those contracts for caller-supplied public observation bytes and still does not connect to any endpoint.
+A0 records public interface facts only and does not connect to any endpoint. A1 freezes public transport-entry contracts only and still does not connect to any endpoint. A2 uses those contracts for caller-supplied public observation bytes and still does not connect to any endpoint. A3 freezes future public read-only transport preflight checks and still does not connect to any endpoint.
 
 ## Coverage
 
@@ -35,7 +35,7 @@ Each A0/A2 RawEvent binds and revalidates:
 
 WebSocket entries require `WS_TEXT_UTF8_APPLICATION_PAYLOAD`. Info entries require `HTTP_RESPONSE_BODY`. Unknown endpoints or operations, `/exchange`, Testnet, unsupported coins or intervals, missing required coins, and coins supplied to non-coin operations are rejected.
 
-A0, A1, and A2 do not parse raw payload fields. `source_event_time`, `source_publish_time`, `revision_time`, `source_native_id`, and `source_native_cursor` must all be `None` until a later separately reviewed extractor contract exists.
+A0, A1, A2, and A3 do not parse raw payload fields. `source_event_time`, `source_publish_time`, `revision_time`, `source_native_id`, and `source_native_cursor` must all be `None` until a later separately reviewed extractor contract exists.
 
 ## Frozen semantics
 
@@ -45,6 +45,14 @@ A0, A1, and A2 do not parse raw payload fields. `source_event_time`, `source_pub
 - `activeAssetCtx`: current observation, no documented source timestamp.
 - `allMids`: current map observation, no documented source timestamp.
 - `candle`: mutable current bar; logical key is coin, interval, and open time.
+
+## A3 public read-only transport preflight
+
+A3 freezes only future public read-only collector configuration preflight. It accepts only the frozen source, environment, operation class, endpoint/operation allowlist, coin/interval rules, and capture-mode match already recorded by the catalog. `runtime_enabled` must be absent or false, `live_transport_authorized` remains false, and the kill switch must fail closed.
+
+A3 rejects credentials, wallet/signing/nonce/account material, private/user/account endpoints, `/exchange`, order/update/fill/funding user classes, Testnet/Mainnet execution wording, unsupported coins, unsupported intervals, unsupported capture modes, and capture-mode mismatch.
+
+A3 is not a runtime collector, not an HTTP client, not a WebSocket client, not a reconnect/heartbeat/backfill/health loop, not a payload parser, not a Silver normalizer, not a strategy/risk/AI layer, and not an execution path.
 
 ## A1 candle WebSocket envelope contract
 
@@ -71,15 +79,15 @@ A2 binds exact bytes into `RawEventV0` authority using the catalog-bound payload
 
 Optional payload persistence and RawEvent manifest append must use existing A0 `BronzeStore` and `ManifestWriter` authority. A2 does not create a second persistence authority.
 
-## A1/A2 rate-limit entry gate
+## A1/A2/A3 rate-limit entry gate
 
 The official rate-limit page was not readable during A0 verification. Numeric limits remain recorded as `UNRESOLVED_OFFICIAL_LIMIT`; no remembered, inferred, third-party, community, blog, StackOverflow, Discord, or model-memory value is substituted.
 
 When numeric limits are unresolved, live polling, WebSocket reconnect, backfill, health runtime, and any public transport runtime remain prohibited. Only official documented numeric values may replace `UNRESOLVED_OFFICIAL_LIMIT` in a later authorized task.
 
-A2 must not resolve official numeric rate limits unless this exact task is amended by project control after current official docs are readable and cited.
+A3 must not resolve official numeric rate limits unless this exact task is amended by project control after current official docs are readable and cited.
 
-## A1 read-only transport entry contract
+## A1/A3 read-only transport entry contract
 
 Future transport configuration shape is restricted to:
 
@@ -92,7 +100,7 @@ runtime candle intervals: 1m, 3m, 5m, 15m, 1h
 capture modes: WS_TEXT_UTF8_APPLICATION_PAYLOAD, HTTP_RESPONSE_BODY
 ```
 
-A1/A2 must reject private endpoints, user/account endpoints, wallet/signing material, nonces, order mutation, `/exchange`, Testnet/Mainnet execution enablement, strategy/risk logic, and AI recommendation logic.
+A1/A2/A3 must reject private endpoints, user/account endpoints, wallet/signing material, nonces, order mutation, `/exchange`, Testnet/Mainnet execution enablement, strategy/risk logic, and AI recommendation logic.
 
 `mainnet public read-only` is a public source identity / environment label only. It is not Mainnet execution enablement.
 
