@@ -44,7 +44,23 @@ caller-supplied public observation bytes
 
 A2 adds no HTTP client, WebSocket client, DNS, socket, live endpoint connection, polling loop, reconnect runtime, heartbeat runtime, health runtime, backfill runtime, event loop, async runtime, database, dashboard, cloud SDK, strategy logic, AI recommendation, or risk sizing.
 
-`mainnet public read-only` is only a public source identity / environment label. It is not Mainnet execution enablement and does not authorize private endpoints, user/account endpoints, `/exchange`, order mutation, signing, nonces, wallets, or credentials.
+## A3 public read-only preflight insertion point
+
+```text
+future collector configuration
+  -> A3 validate_public_readonly_transport_preflight()
+  -> A1 validate_read_only_transport_entry()
+  -> source / environment / operation-class authority
+  -> endpoint / operation / coin / interval / capture-mode authority
+  -> runtime_enabled absent or false
+  -> kill switch fail-closed
+  -> credential absence + account/private absence + no-write/no-execution proof
+  -> live_transport_authorized false while rate limits remain unresolved
+```
+
+A3 adds no HTTP client, WebSocket client, DNS, socket, live endpoint connection, polling loop, reconnect runtime, heartbeat runtime, health runtime, backfill runtime, event loop, async runtime, database, dashboard, cloud SDK, strategy logic, AI recommendation, or risk sizing.
+
+`mainnet public read-only` is only a public source identity / environment label. It is not Mainnet execution enablement and does not authorize private endpoints, user/account endpoints, `/exchange`, order mutation, signing, nonces, wallets, credentials, or kill-switch bypass.
 
 ## Identity separation
 
@@ -54,7 +70,7 @@ The v2 observation slot binds catalog version, catalog hash, catalog-entry hash,
 
 Within one Bronze persistence root, an observation slot and a source-event ID are globally unique rather than segment-local. Re-appending the same complete RawEvent in another segment is globally idempotent and creates no second authority entry. The same slot with different RawEvent authority is a conflict.
 
-A1/A2 do not parse candle payloads into source-native IDs, source-native cursors, normalized timestamps, Silver events, strategy signals, AI explanations, or risk fields. Those fields remain unavailable until a later separately reviewed extractor/normalizer contract exists.
+A1/A2/A3 do not parse candle payloads into source-native IDs, source-native cursors, normalized timestamps, Silver events, strategy signals, AI explanations, or risk fields. Those fields remain unavailable until a later separately reviewed extractor/normalizer contract exists.
 
 ## A1 public source envelope authority
 
@@ -67,15 +83,15 @@ data:Candle[]
 
 These tokens describe public envelope policy and fixture shape. They are not runtime subscription code, not connection code, and not transport recovery logic.
 
-## A1/A2 rate-limit authority
+## A1/A2/A3 rate-limit authority
 
 `RATE_LIMIT_STATUS` remains `UNRESOLVED_OFFICIAL_LIMIT`. While that value is present, the entry gate blocks live public transport, polling, reconnect, backfill, and health runtime. A later task may encode official numeric limits only if the values are clearly present in official Hyperliquid documentation at implementation time.
 
-A2 must not resolve official numeric rate limits unless project control amends the task after current official docs are readable and cited.
+A3 must not resolve official numeric rate limits unless project control amends the task after current official docs are readable and cited.
 
-## A1 read-only transport entry checks
+## A1/A3 read-only transport entry checks
 
-The pure contract checker accepts only:
+The pure contract checkers accept only:
 
 - `source_id = hyperliquid-public-mainnet`;
 - `environment = mainnet public read-only`;
@@ -85,7 +101,7 @@ The pure contract checker accepts only:
 - WebSocket capture as `WS_TEXT_UTF8_APPLICATION_PAYLOAD`;
 - Info capture as `HTTP_RESPONSE_BODY`.
 
-It rejects private, user/account, wallet/signing, nonce, order, exchange-write, unsupported source, unsupported environment, unsupported coin, unsupported interval, and unsupported capture-mode selections.
+They reject private, user/account, wallet/signing, nonce, order, exchange-write, unsupported source, unsupported environment, unsupported coin, unsupported interval, unsupported capture-mode, credential, kill-switch bypass, and execution selections.
 
 ## A1 fixture admission
 
@@ -127,4 +143,4 @@ The report hash excludes absolute paths, current time, random values, process ID
 
 ## Next gate
 
-A2 completion does not authorize live public transport, health runtime, backfill, reconnect, extractor/normalizer, Silver, strategy, AI recommendation, risk sizing, dashboard, Testnet/Mainnet execution, or exchange write paths. Each later slice requires a separate exact-head lease and review.
+A3 completion does not authorize live public transport, health runtime, backfill, reconnect, extractor/normalizer, Silver, strategy, AI recommendation, risk sizing, dashboard, Testnet/Mainnet execution, or exchange write paths. Each later slice requires a separate exact-head lease and review.
