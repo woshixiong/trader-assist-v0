@@ -349,7 +349,6 @@ def source_catalog_document() -> dict[str, object]:
         "runtime_candle_intervals": list(RUNTIME_CANDLE_INTERVALS),
         "documented_candle_intervals": list(DOCUMENTED_CANDLE_INTERVALS),
         "rate_limit_status": RATE_LIMIT_STATUS,
-        "rate_limit_allowed_statuses": list(RATE_LIMIT_ALLOWED_STATUSES),
         "rate_limit_official_source_title": RATE_LIMIT_OFFICIAL_SOURCE_TITLE,
         "rate_limit_official_source_location": RATE_LIMIT_OFFICIAL_SOURCE_LOCATION,
         "rate_limit_verified_date": OFFICIALLY_VERIFIED_DATE,
