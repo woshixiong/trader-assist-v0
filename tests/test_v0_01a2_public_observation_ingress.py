@@ -157,5 +157,8 @@ def test_a2_implementation_has_no_network_imports_or_async_runtime() -> None:
             assert imported.isdisjoint(banned_modules)
         if isinstance(node, ast.ImportFrom) and node.module is not None:
             assert node.module not in banned_modules
-        if isinstance(node, (ast.AsyncFunctionDef, ast.Await, ast.AsyncFor, ast.AsyncWith)):
+        if isinstance(
+            node,
+            ast.AsyncFunctionDef | ast.Await | ast.AsyncFor | ast.AsyncWith,
+        ):
             raise AssertionError("A2 ingress must not introduce async runtime syntax")
