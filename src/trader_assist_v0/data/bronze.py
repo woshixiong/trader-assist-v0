@@ -6,9 +6,9 @@ import hashlib
 import json
 import os
 import re
-import threading
 import secrets
 import stat
+import threading
 import time
 from dataclasses import dataclass
 from datetime import date
@@ -60,6 +60,12 @@ class AppendDisposition(StrEnum):
     IDEMPOTENT = "IDEMPOTENT"
 
 
+class CloseOutcome(StrEnum):
+    CLOSED = "CLOSED"
+    PRE_SYSCALL_FAILED_KNOWN_OPEN = "PRE_SYSCALL_FAILED_KNOWN_OPEN"
+    POST_SYSCALL_UNKNOWN = "POST_SYSCALL_UNKNOWN"
+
+
 class _LockState(StrEnum):
     ACTIVE = "ACTIVE"
     RELEASED = "RELEASED"
@@ -94,16 +100,6 @@ class _WriterState(StrEnum):
 _BRONZE_POISON_GATE = 0
 
 
-def _test_open_anchor_fd(store: BronzeStore) -> int:
-    # BronzeStore.root must be pre-created by supervisor
-    anchor_dir = store.root.parent
-    lock_file = anchor_dir / ".bronze-global-observation-authority.lock"
-    lock_file.touch()
-    # Make anchor non-writable so effective-writability checks fail
-    anchor_dir.chmod(0o555)
-    return os.open(str(anchor_dir), os.O_RDONLY)
-
-
 # Module-level tracking for fork safety
 _owned_locks: list = []  # type: ignore[type-arg]
 
@@ -122,18 +118,21 @@ def _after_fork_child() -> None:
             except OSError:
                 pass
             lock._fd = -1
+            lock._fd_operable = False
         if lock_fd >= 0:
             try:
                 os.close(lock_fd)
             except OSError:
                 pass
             lock._lock_fd = -1
+            lock._lock_fd_operable = False
         if parent_fd >= 0:
             try:
                 os.close(parent_fd)
             except OSError:
                 pass
             lock._parent_fd = -1
+            lock._parent_fd_operable = False
         lock._fd_state = _FdState.FORK_INVALID
         lock._state = _LockState.FORK_INVALID
     _owned_locks.clear()
@@ -207,6 +206,40 @@ def _fsync_directory_fd(fd: int) -> None:
 
 def _open_root_fd(root: Path) -> int:
     return os.open(root, os.O_RDONLY | _DIRECTORY | _NOFOLLOW)
+
+
+def _mode_allows_effective_write(metadata: os.stat_result) -> bool:
+    mode = metadata.st_mode
+    effective_uid = os.geteuid()
+    if effective_uid == 0:
+        return True
+    if metadata.st_uid == effective_uid:
+        return bool(mode & stat.S_IWUSR)
+    effective_groups = {os.getegid(), *os.getgroups()}
+    if metadata.st_gid in effective_groups:
+        return bool(mode & stat.S_IWGRP)
+    return bool(mode & stat.S_IWOTH)
+
+
+def _authority_anchor_is_effectively_writable(
+    authority_anchor_fd: int,
+    metadata: os.stat_result,
+) -> bool:
+    proc_access_path = f"/proc/self/fd/{authority_anchor_fd}"
+    if os.path.exists(proc_access_path):
+        try:
+            return os.access(proc_access_path, os.W_OK, effective_ids=True)
+        except (NotImplementedError, TypeError):
+            pass
+
+    dev_access_path = f"/dev/fd/{authority_anchor_fd}"
+    if os.path.exists(dev_access_path):
+        try:
+            return os.access(dev_access_path, os.W_OK, effective_ids=True)
+        except (NotImplementedError, TypeError):
+            pass
+
+    return _mode_allows_effective_write(metadata)
 
 
 def _open_verified_at(parent_fd: int, name: str, flags: int, *, kind: str) -> int:
@@ -286,20 +319,26 @@ class BronzeStore:
         if _NOFOLLOW == 0 or _DIRECTORY == 0:
             raise RuntimeError("V0-01A0 requires O_NOFOLLOW and O_DIRECTORY support")
         _reject_symlink_ancestors(root)
-        root.mkdir(parents=True, exist_ok=True)
+        if not root.exists():
+            raise FileNotFoundError("Bronze root must be supervisor-provisioned")
         _reject_symlink(root)
+        if not root.is_dir():
+            raise ValueError("Bronze root must be a directory")
         self.root = root.resolve(strict=True)
         if authority_anchor is None:
             self._authority_anchor = self.root.parent.resolve(strict=True)
         else:
+            _reject_symlink_ancestors(authority_anchor)
             anchor = authority_anchor.resolve(strict=True)
             if not anchor.is_dir():
                 raise ValueError("authority_anchor must be a directory")
             # Verify the root is a child of the anchor
             try:
                 self.root.relative_to(anchor)
-            except ValueError:
-                raise ValueError("root must be under the authority_anchor directory")
+            except ValueError as exc:
+                raise ValueError(
+                    "root must be under the authority_anchor directory"
+                ) from exc
             self._authority_anchor = anchor
         descriptor = _open_root_fd(self.root)
         os.close(descriptor)
@@ -701,11 +740,22 @@ def _validate_segment(segment_id: str) -> None:
 class CloseAdapter:
     """Injectable close adapter for production and test injection.
 
-    Subclasses can inject faults to test pre-syscall and
-    post-syscall unknown close outcomes.
+    Subclasses can return explicit pre-syscall or post-syscall outcomes.
     """
-    def close(self, fd: int) -> None:
-        os.close(fd)
+
+    def close(self, fd: int) -> CloseOutcome:
+        try:
+            os.close(fd)
+        except OSError:
+            return CloseOutcome.POST_SYSCALL_UNKNOWN
+        return CloseOutcome.CLOSED
+
+
+class UnlockAdapter:
+    """Injectable unlock adapter for release fault injection."""
+
+    def unlock(self, fd: int) -> None:
+        fcntl.flock(fd, fcntl.LOCK_UN)
 
 
 class OwnedLock:
@@ -738,6 +788,12 @@ class OwnedLock:
         self._owner_pid = os.getpid()
         self._state = _LockState.ACTIVE
         self._fd_state = _FdState.OPEN_OWNED
+        self._fd_diagnostic = fd
+        self._lock_fd_diagnostic = _lock_fd
+        self._parent_fd_diagnostic = _parent_fd
+        self._fd_operable = fd >= 0
+        self._lock_fd_operable = _lock_fd >= 0
+        self._parent_fd_operable = _parent_fd >= 0
         _owned_locks.append(self)
 
     @classmethod
@@ -769,6 +825,13 @@ class OwnedLock:
             raise LockOwnershipError(
                 "supervisor-provided authority_anchor_fd is not a directory"
             )
+        if _authority_anchor_is_effectively_writable(
+            authority_anchor_fd,
+            anchor_stat,
+        ):
+            raise LockOwnershipError(
+                "authority_anchor is writable by collector effective identity"
+            )
 
         _validate_relative_path(relative_path)
         lock_name = ".bronze-global-observation-authority.lock"
@@ -777,7 +840,7 @@ class OwnedLock:
         try:
             lock_fd = os.open(
                 lock_name,
-                os.O_RDWR | os.O_NOFOLLOW,
+                os.O_RDWR | _NOFOLLOW,
                 dir_fd=authority_anchor_fd,
             )
         except FileNotFoundError as exc:
@@ -836,7 +899,7 @@ class OwnedLock:
                     raise LockOwnershipError("root authority descriptor is not a directory")
                 # Verify root identity through anchor_fd
                 root_meta = os.stat(
-                    store.root.name,
+                    str(root_rel),
                     dir_fd=authority_anchor_fd,
                     follow_symlinks=False,
                 )
@@ -860,11 +923,6 @@ class OwnedLock:
                 )
                 root_fd = -1
                 lock_fd = -1
-                # Restore write permission on authority anchor after lock acquisition
-                try:
-                    store.root.parent.chmod(0o755)
-                except OSError:
-                    pass
                 return result
             except BaseException:
                 if root_fd >= 0:
@@ -893,7 +951,7 @@ class OwnedLock:
 
     @property
     def compromised(self) -> bool:
-        return self._state is _LockState.COMPROMISED
+        return self._state in {_LockState.COMPROMISED, _LockState.POISONED}
 
     @property
     def authority_fd(self) -> int:
@@ -904,110 +962,132 @@ class OwnedLock:
         if os.getpid() != self._owner_pid:
             self._state = _LockState.FORK_INVALID
             self._fd_state = _FdState.FORK_INVALID
+            self._fd_operable = False
+            self._lock_fd_operable = False
+            self._parent_fd_operable = False
             raise LockOwnershipError("root authority belongs to a different process")
+        if not self._fd_operable:
+            raise LockOwnershipError("root authority descriptor is not operable")
         return self._fd
 
-    def _close_owned_descriptor(
-        self, *, state: _LockState, close_adapter: CloseAdapter | None = None,
-    ) -> None:
-        global _BRONZE_POISON_GATE
-        if self._state is _LockState.FORK_INVALID:
-            self._fd_state = _FdState.FORK_INVALID
-            self._state = state
-            return
-        root_fd = self._fd
-        lock_fd = self._lock_fd
-        if root_fd < 0:
-            self._fd_state = _FdState.CLOSED
-            self._state = state
-            return
-
-        adapter = close_adapter if close_adapter is not None else CloseAdapter()
-
-        self._fd_state = _FdState.UNLOCKING
-        # Unlock the lock file descriptor
-        if lock_fd >= 0:
-            try:
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)
-            except OSError:
-                # Post-syscall unknown: flock may or may not have succeeded
-                self._fd_state = _FdState.CLOSE_OUTCOME_UNKNOWN
-                _BRONZE_POISON_GATE = 1
-                self._fd = -1
-                self._lock_fd = -1
-                self._state = state
-                raise
-
-        self._fd_state = _FdState.CLOSING
-        # Close root_fd - distinguish pre-syscall vs post-syscall unknown
-        root_close_result = self._close_single_descriptor(
-            root_fd, "root_fd", close_adapter=adapter,
-        )
-        if root_close_result == "unknown":
-            # Post-syscall unknown: fd may or may not be closed
-            self._fd_state = _FdState.CLOSE_OUTCOME_UNKNOWN
-            _BRONZE_POISON_GATE = 1
-            self._fd = -1
-            self._lock_fd = -1
-            self._state = state
-            raise OSError("root_fd close outcome unknown, process poisoned")
-        if root_close_result == "pre-syscall":
-            self._fd_state = _FdState.KNOWN_OPEN_AFTER_PRE_SYSCALL_FAILURE
-            self._fd = -1
-            self._lock_fd = -1
-            self._state = state
-            raise OSError("root_fd close failed before syscall, fd known open")
-
-        # Close lock_fd
-        if lock_fd >= 0:
-            lock_close_result = self._close_single_descriptor(
-                lock_fd, "lock_fd", close_adapter=adapter,
-            )
-            if lock_close_result == "unknown":
-                self._fd_state = _FdState.CLOSE_OUTCOME_UNKNOWN
-                _BRONZE_POISON_GATE = 1
-                self._fd = -1
-                self._lock_fd = -1
-                self._state = state
-                raise OSError("lock_fd close outcome unknown, process poisoned")
-            if lock_close_result == "pre-syscall":
-                self._fd_state = _FdState.KNOWN_OPEN_AFTER_PRE_SYSCALL_FAILURE
-                self._fd = -1
-                self._lock_fd = -1
-                self._state = state
-                raise OSError("lock_fd close failed before syscall, fd known open")
-
-        self._fd = -1
-        self._lock_fd = -1
-        self._fd_state = _FdState.CLOSED
-        self._state = state
-        # Remove from fork registry when lock is released/closed/terminal
+    def _remove_from_fork_registry(self) -> None:
         try:
             _owned_locks.remove(self)
         except ValueError:
             pass
 
+    def _close_owned_descriptor(
+        self,
+        *,
+        state: _LockState,
+        close_adapter: CloseAdapter | None = None,
+        unlock_adapter: UnlockAdapter | None = None,
+    ) -> None:
+        global _BRONZE_POISON_GATE
+        if self._state is _LockState.FORK_INVALID:
+            self._fd_state = _FdState.FORK_INVALID
+            self._fd_operable = False
+            self._lock_fd_operable = False
+            self._parent_fd_operable = False
+            self._state = state
+            self._remove_from_fork_registry()
+            return
+        root_fd = self._fd
+        lock_fd = self._lock_fd
+        if root_fd < 0:
+            self._fd_state = _FdState.CLOSED
+            self._fd_operable = False
+            self._lock_fd_operable = False
+            self._parent_fd_operable = False
+            self._state = state
+            self._remove_from_fork_registry()
+            return
+
+        close = close_adapter if close_adapter is not None else CloseAdapter()
+        unlock = unlock_adapter if unlock_adapter is not None else UnlockAdapter()
+
+        self._fd_state = _FdState.UNLOCKING
+        if lock_fd >= 0:
+            try:
+                unlock.unlock(lock_fd)
+            except OSError:
+                self._fd_state = _FdState.POISONED
+                self._fd_operable = False
+                self._lock_fd_operable = False
+                self._parent_fd_operable = False
+                _BRONZE_POISON_GATE = 1
+                self._state = _LockState.POISONED
+                self._remove_from_fork_registry()
+                raise OSError("LOCK_UN failed, process poisoned") from None
+
+        self._fd_state = _FdState.CLOSING
+        root_close_outcome = self._close_single_descriptor(
+            root_fd,
+            "root_fd",
+            close_adapter=close,
+        )
+        if root_close_outcome is CloseOutcome.POST_SYSCALL_UNKNOWN:
+            self._fd_state = _FdState.CLOSE_OUTCOME_UNKNOWN
+            _BRONZE_POISON_GATE = 1
+            self._fd_operable = False
+            self._lock_fd_operable = False
+            self._parent_fd_operable = False
+            self._state = _LockState.POISONED
+            self._remove_from_fork_registry()
+            raise OSError("root_fd close outcome unknown, process poisoned")
+        if root_close_outcome is CloseOutcome.PRE_SYSCALL_FAILED_KNOWN_OPEN:
+            self._fd_state = _FdState.KNOWN_OPEN_AFTER_PRE_SYSCALL_FAILURE
+            self._fd_operable = False
+            self._lock_fd_operable = False
+            self._parent_fd_operable = False
+            self._state = _LockState.COMPROMISED
+            self._remove_from_fork_registry()
+            raise OSError("root_fd close failed before syscall, fd known open")
+        self._fd = -1
+        self._fd_operable = False
+
+        if lock_fd >= 0:
+            lock_close_outcome = self._close_single_descriptor(
+                lock_fd,
+                "lock_fd",
+                close_adapter=close,
+            )
+            if lock_close_outcome is CloseOutcome.POST_SYSCALL_UNKNOWN:
+                self._fd_state = _FdState.CLOSE_OUTCOME_UNKNOWN
+                _BRONZE_POISON_GATE = 1
+                self._lock_fd_operable = False
+                self._parent_fd_operable = False
+                self._state = _LockState.POISONED
+                self._remove_from_fork_registry()
+                raise OSError("lock_fd close outcome unknown, process poisoned")
+            if lock_close_outcome is CloseOutcome.PRE_SYSCALL_FAILED_KNOWN_OPEN:
+                self._fd_state = _FdState.KNOWN_OPEN_AFTER_PRE_SYSCALL_FAILURE
+                self._lock_fd_operable = False
+                self._parent_fd_operable = False
+                self._state = _LockState.COMPROMISED
+                self._remove_from_fork_registry()
+                raise OSError("lock_fd close failed before syscall, fd known open")
+
+        self._lock_fd = -1
+        self._lock_fd_operable = False
+        self._parent_fd = -1
+        self._parent_fd_operable = False
+        self._fd_state = _FdState.CLOSED
+        self._state = state
+        self._remove_from_fork_registry()
+
     @staticmethod
     def _close_single_descriptor(
         fd: int, label: str, *, close_adapter: CloseAdapter | None = None,
-    ) -> str:
-        """Close a single descriptor with outcome tracking.
-
-        Returns:
-            "closed" - fd was closed successfully
-            "pre-syscall" - syscall was not attempted (fd known to be still open)
-            "unknown" - syscall executed but outcome is uncertain
-        """
+    ) -> CloseOutcome:
+        """Close a single descriptor with typed outcome tracking."""
         if fd < 0:
-            return "closed"
+            return CloseOutcome.CLOSED
         adapter = close_adapter if close_adapter is not None else CloseAdapter()
-        try:
-            adapter.close(fd)
-        except OSError:
-            # Post-syscall unknown: close_adapter may have called os.close then raised
-            # We cannot determine the disposition of the descriptor
-            return "unknown"
-        return "closed"
+        outcome = adapter.close(fd)
+        if not isinstance(outcome, CloseOutcome):
+            raise TypeError("CloseAdapter.close must return CloseOutcome")
+        return outcome
 
     def _verify_owned(self) -> None:
         if self._state is _LockState.FORK_INVALID:
@@ -1015,11 +1095,18 @@ class OwnedLock:
         if os.getpid() != self._owner_pid:
             self._state = _LockState.FORK_INVALID
             self._fd_state = _FdState.FORK_INVALID
+            self._fd_operable = False
+            self._lock_fd_operable = False
+            self._parent_fd_operable = False
             raise LockOwnershipError("root authority belongs to a different process")
         if self._state is _LockState.RELEASED:
             raise LockOwnershipError("root authority is already released")
         if self._state is _LockState.COMPROMISED:
             raise LockOwnershipError("root authority is compromised")
+        if self._state is _LockState.POISONED:
+            raise LockOwnershipError("root authority is poisoned")
+        if not self._fd_operable:
+            raise LockOwnershipError("root authority descriptor is not operable")
         try:
             # Verify root_fd is still a valid directory
             opened = os.fstat(self._fd)
@@ -1045,10 +1132,10 @@ class OwnedLock:
                         raise LockOwnershipError(
                             "Bronze root path no longer names the locked root inode"
                         )
-                except FileNotFoundError:
+                except FileNotFoundError as exc:
                     raise LockOwnershipError(
                         "Bronze root no longer exists under parent directory"
-                    )
+                    ) from exc
             else:
                 # Fallback to path-based check (backward compatibility)
                 path_metadata = os.stat(self.store.root, follow_symlinks=False)
@@ -1075,16 +1162,24 @@ class OwnedLock:
     def assert_owned(self) -> None:
         self._verify_owned()
 
-    def release(self, *, close_adapter: CloseAdapter | None = None) -> None:
+    def release(
+        self,
+        *,
+        close_adapter: CloseAdapter | None = None,
+        unlock_adapter: UnlockAdapter | None = None,
+    ) -> None:
         if self._state is _LockState.FORK_INVALID:
             raise LockOwnershipError("root authority is invalid after fork")
         self._verify_owned()
         try:
             self._close_owned_descriptor(
-                state=_LockState.RELEASED, close_adapter=close_adapter,
+                state=_LockState.RELEASED,
+                close_adapter=close_adapter,
+                unlock_adapter=unlock_adapter,
             )
         except OSError as exc:
-            self._state = _LockState.COMPROMISED
+            if self._state is not _LockState.POISONED:
+                self._state = _LockState.COMPROMISED
             raise LockOwnershipError("root authority release failed") from exc
 
 
@@ -1342,9 +1437,9 @@ class ManifestWriter:
             if self._writer_state is _WriterState.FORK_INVALID:
                 raise LockOwnershipError("manifest writer is invalid after fork")
             if self._terminal_error is not None:
-                raise LockOwnershipError("manifest writer is terminal after authority failure") from (
-                    self._terminal_error
-                )
+                raise LockOwnershipError(
+                    "manifest writer is terminal after authority failure"
+                ) from self._terminal_error
             if self._closed:
                 return
             self._writer_state = _WriterState.CLOSING

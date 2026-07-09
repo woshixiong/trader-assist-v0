@@ -44,18 +44,22 @@ MUST be owned by the supervisor and MUST NOT be writable by the collector
 account (effective UID/GID/other). The lock file MUST be pre-created by the
 supervisor — `OwnedLock.acquire()` MUST NOT use `O_CREAT`. The
 `authority_anchor_fd` parameter is required and MUST be provided by the
-supervisor. `_open_anchor_fd` has been renamed to `_test_open_anchor_fd` and
-is a TEST-ONLY helper. Production writers MUST NOT use pathname-based
-authority provisioning. `BronzeStore.__init__` MUST NOT auto-create the root
-directory — the supervisor MUST pre-create it. `CloseAdapter.close()` returns
-a typed `CloseOutcome` enum (CLOSED, PRE_SYSCALL_FAILED_KNOWN_OPEN,
-POST_SYSCALL_UNKNOWN) instead of relying on unclassified OSError.
+supervisor. Production code exposes no `_open_anchor_fd`,
+`_test_open_anchor_fd`, or equivalent pathname-based authority provisioning
+helper. Tests that need provisioning simulate the supervisor in test-local
+helpers only. `BronzeStore.__init__` MUST NOT auto-create the root directory
+or lock object — the supervisor MUST pre-create them. `CloseAdapter.close()`
+returns a typed `CloseOutcome` enum (CLOSED,
+PRE_SYSCALL_FAILED_KNOWN_OPEN, POST_SYSCALL_UNKNOWN) instead of relying on
+unclassified OSError.
 `UnlockAdapter` provides an injection seam for `flock(LOCK_UN)` failure
 testing. The `_BRONZE_POISON_GATE` is one-way with no production reset API.
 Root rename, replacement, and parent rename tests assert deterministic
-security outcomes. Effective-writability check via `os.access(fd, os.W_OK,
-effective_ids=True)` fails closed if the collector can write the
-authority_anchor.**
+security outcomes. Effective-writability checks use an fd-addressed path such
+as `/proc/self/fd/<authority_anchor_fd>` with
+`os.access(..., os.W_OK, effective_ids=True)`, or a platform-equivalent
+effective UID/GID mode check, and fail closed if the collector can write the
+authority_anchor or the check cannot be performed.**
 
 **R4B-FD** (descriptor lifecycle): Descriptor state tracked via `_FdState` (OPEN_OWNED, UNLOCKING, CLOSING, CLOSED, CLOSE_OUTCOME_UNKNOWN, POISONED, FORK_INVALID). Process-global poison gate blocks new writers when close outcome is uncertain. Descriptor is not invalidated before `os.close`.
 

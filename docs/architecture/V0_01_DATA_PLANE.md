@@ -34,9 +34,9 @@ Payload publication writes and fsyncs a same-filesystem temporary file and atomi
 
 ## Lock authority
 
-A0 uses a root-wide single-writer protocol. `ManifestWriter` acquires an exclusive non-blocking `fcntl.flock` on a **lock file** within the authority_anchor directory (supervisor-provided directory fd), not the root directory itself. The lock file is pre-created by the supervisor via `_open_anchor_fd(store)` and the file descriptor is managed separately from the anchor directory fd. The authority_anchor directory descriptor is owned by the supervisor and passed to `OwnedLock.acquire()` as the `authority_anchor_fd` parameter.
+A0 uses a root-wide single-writer protocol. `ManifestWriter` acquires an exclusive non-blocking `fcntl.flock` on a **lock file** within the authority_anchor directory (supervisor-provided directory fd), not the root directory itself. The lock file is pre-created by the supervisor and opened by `OwnedLock.acquire()` through the supervisor-provided anchor directory fd. The authority_anchor directory descriptor is owned by the supervisor and passed to `OwnedLock.acquire()` as the `authority_anchor_fd` parameter.
 
-**Supervisor-provided anchor (R4-SUPERVISOR)**: The `authority_anchor_fd` is a supervisor-owned directory file descriptor passed to `OwnedLock.acquire()`. If `authority_anchor_fd` is `None` or invalid, the lock fails closed. The lock file at `.bronze-global-observation-authority.lock` within the anchor directory must be pre-created by the supervisor — `acquire()` never creates it via `O_CREAT`. The helper `_open_anchor_fd(store)` provides backward-compatible anchor provisioning: it creates the lock file if missing, opens the anchor directory, and returns the fd. The `_lock_fd` field on `OwnedLock` holds the lock file descriptor acquired by the instance, while `_parent_fd` is replaced by the externally-owned `authority_anchor_fd`.
+**Supervisor-provided anchor (R4-SUPERVISOR)**: The `authority_anchor_fd` is a supervisor-owned directory file descriptor passed to `OwnedLock.acquire()`. If `authority_anchor_fd` is `None` or invalid, the lock fails closed. The lock file at `.bronze-global-observation-authority.lock` within the anchor directory must be pre-created by the supervisor — `acquire()` never creates it via `O_CREAT`. Production code exposes no `_open_anchor_fd`, `_test_open_anchor_fd`, or equivalent pathname-based provisioning helper. Test-only supervisor simulations may create the root, lock object, permissions, and anchor fd inside test files. The `_lock_fd` field on `OwnedLock` holds the lock file descriptor acquired by the instance, while `_parent_fd` records the externally-owned `authority_anchor_fd` for root identity checks.
 
 **Stable namespace authority (R3B-ROOTNS)**: Locking the lock file within the supervisor-owned authority_anchor directory ensures authority survives root rename or replacement within the same authority_anchor directory. The root inode identity (st_dev, st_ino) is verified at acquisition and at every authority boundary through the authority_anchor descriptor. The lock file inode identity (st_dev, st_ino) is verified via `os.fstat`. If either identity is lost, the authority fails closed. The authority_anchor must be owned by the supervisor and not writable by the collector.
 
@@ -53,8 +53,9 @@ the lock file via `os.open(lock_name, os.O_RDWR | os.O_NOFOLLOW,
 dir_fd=authority_anchor_fd)` — no `O_CREAT`. Missing lock file causes
 fail-closed. `BronzeStore.__init__` MUST NOT auto-create the root directory;
 the supervisor MUST pre-create it. The `authority_anchor_fd` parameter is
-required for `OwnedLock.acquire()` and `ManifestWriter`. `_test_open_anchor_fd`
-is a TEST-ONLY provisioning helper and MUST NOT be used by production writers.
+required for `OwnedLock.acquire()` and `ManifestWriter`. Production writers have
+no pathname-based authority provisioning helper; tests simulate supervisor
+provisioning locally.
 
 R6-FD-CLOSE (typed close outcomes): `CloseAdapter.close()` returns a typed
 `CloseOutcome` enum: CLOSED (successful close), PRE_SYSCALL_FAILED_KNOWN_OPEN
@@ -75,8 +76,11 @@ state and sets the process-global poison gate.
 
 R6-WRITABILITY (effective-writability check): `OwnedLock.acquire()` verifies
 that the collector does not have write permission on the authority_anchor
-directory via `os.access(fd, os.W_OK, effective_ids=True)`. Writable
-authority_anchor causes fail-closed with `LockOwnershipError`.
+directory via an fd-addressed path such as
+`/proc/self/fd/<authority_anchor_fd>` with
+`os.access(..., os.W_OK, effective_ids=True)`, or a platform-equivalent
+effective UID/GID mode check. Writable or unverifiable authority_anchor causes
+fail-closed with `LockOwnershipError`.
 
 R6-ROOTNS (deterministic outcomes): All root namespace boundary tests now
 assert deterministic security outcomes. The ambiguous
@@ -95,7 +99,7 @@ Root-path loss, replacement, non-directory substitution, descriptor identity mis
 
 Authoritative opens walk directory file descriptors, reject symlinks with non-following metadata checks, and compare device/inode after open. Payload and manifest trees reject unexpected entries. This closes ordinary traversal and symlink escape under a non-hostile runtime account.
 
-The kernel lock is advisory. All cooperative writers must use this protocol, and the persistence root plus its parent must be writable only by the collector account. The implementation does not claim protection against a privileged local actor that can bypass advisory locks, replace higher-level mount or parent authorities, or directly mutate opened directory entries. Such an actor is outside A0's threat boundary.
+The kernel lock is advisory. All cooperative writers must use this protocol. Bronze root contents are collector-writable; the authority_anchor and root immediate parent are supervisor-controlled and not collector-writable. The collector must not create, replace, chmod, rename, delete, or otherwise mutate the authority_anchor, root immediate parent, or authority lock object. The implementation does not claim protection against a privileged local actor that can bypass advisory locks, replace higher-level mount or parent authorities, or directly mutate opened directory entries. Such an actor is outside A0's threat boundary.
 
 ## Replay
 

@@ -25,11 +25,49 @@ from trader_assist_v0.data import (
     SingleWriterError,
     read_manifest_entries,
 )
-from trader_assist_v0.data.bronze import _test_open_anchor_fd
 
 DAY = date(2026, 7, 7)
 NOW = datetime(2026, 7, 7, 1, 0, tzinfo=UTC)
 SEGMENT = "segment-001"
+AUTHORITY_LOCK_NAME = ".bronze-global-observation-authority.lock"
+
+
+@pytest.fixture(autouse=True)
+def _restore_tmp_permissions(tmp_path: Path):
+    yield
+    directories = [tmp_path]
+    try:
+        directories.extend(path for path in tmp_path.rglob("*") if path.is_dir())
+    except FileNotFoundError:
+        pass
+    for directory in sorted(directories, key=lambda path: len(path.parts), reverse=True):
+        try:
+            os.chmod(directory, 0o700)
+        except FileNotFoundError:
+            pass
+
+
+def _supervisor_provision_authority(root: Path) -> None:
+    """Test-only supervisor simulation for Bronze root and authority anchor."""
+    if root.parent.exists():
+        root.parent.chmod((root.parent.stat().st_mode & 0o777) | 0o200)
+    root.mkdir(parents=True, exist_ok=True)
+    root.chmod(0o700)
+    anchor_dir = root.parent
+    lock_file = anchor_dir / AUTHORITY_LOCK_NAME
+    lock_file.touch(exist_ok=True)
+    lock_file.chmod(0o600)
+    anchor_dir.chmod(0o555)
+
+
+def _supervisor_store(root: Path) -> BronzeStore:
+    _supervisor_provision_authority(root)
+    return BronzeStore(root)
+
+
+def _test_supervisor_anchor_fd(store: BronzeStore) -> int:
+    """Test-only supervisor simulation: return a pre-opened anchor fd."""
+    return os.open(str(store.authority_anchor), os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
 
 
 def make_event(
@@ -79,7 +117,7 @@ def make_event(
 
 @pytest.fixture
 def store(tmp_path: Path) -> BronzeStore:
-    return BronzeStore(tmp_path / "root")
+    return _supervisor_store(tmp_path / "root")
 
 
 def test_exact_bytes_and_payload_observation_identity(store: BronzeStore) -> None:
@@ -110,13 +148,13 @@ def test_caller_cannot_forge_authority_ids(store: BronzeStore) -> None:
 
 def test_manifest_idempotency_conflict_and_finalization(store: BronzeStore) -> None:
     first = make_event(store, b"one", sequence=1)
-    anchor_fd = _test_open_anchor_fd(store)
+    anchor_fd = _test_supervisor_anchor_fd(store)
     writer = ManifestWriter(
         store, manifest_date=DAY, segment_id=SEGMENT, authority_anchor_fd=anchor_fd
     )
     assert writer.append(first).disposition is AppendDisposition.APPENDED
     assert writer.append(first).disposition is AppendDisposition.IDEMPOTENT
-    anchor_fd2 = _test_open_anchor_fd(store)
+    anchor_fd2 = _test_supervisor_anchor_fd(store)
     try:
         with pytest.raises(SingleWriterError):
             ManifestWriter(
@@ -129,7 +167,7 @@ def test_manifest_idempotency_conflict_and_finalization(store: BronzeStore) -> N
     writer.finalize()
     with pytest.raises((SingleWriterError, SegmentFinalizedError)):
         writer.append(make_event(store, b"later", sequence=2))
-    anchor_fd3 = _test_open_anchor_fd(store)
+    anchor_fd3 = _test_supervisor_anchor_fd(store)
     try:
         with pytest.raises(SegmentFinalizedError):
             ManifestWriter(
@@ -141,11 +179,11 @@ def test_manifest_idempotency_conflict_and_finalization(store: BronzeStore) -> N
 
 
 def test_root_wide_single_writer_blocks_different_segments(store: BronzeStore) -> None:
-    anchor_fd = _test_open_anchor_fd(store)
+    anchor_fd = _test_supervisor_anchor_fd(store)
     first = ManifestWriter(
         store, manifest_date=DAY, segment_id="segment-one", authority_anchor_fd=anchor_fd
     )
-    anchor_fd2 = _test_open_anchor_fd(store)
+    anchor_fd2 = _test_supervisor_anchor_fd(store)
     try:
         with pytest.raises(SingleWriterError):
             ManifestWriter(
@@ -155,7 +193,7 @@ def test_root_wide_single_writer_blocks_different_segments(store: BronzeStore) -
         os.close(anchor_fd2)
     first.close()
     os.close(anchor_fd)
-    anchor_fd3 = _test_open_anchor_fd(store)
+    anchor_fd3 = _test_supervisor_anchor_fd(store)
     second = ManifestWriter(
         store, manifest_date=DAY, segment_id="segment-two", authority_anchor_fd=anchor_fd3
     )
@@ -167,7 +205,7 @@ def test_legacy_lock_marker_is_inert_and_never_removed(store: BronzeStore) -> No
     legacy = store.path(store.lock_ref(DAY, SEGMENT))
     legacy.parent.mkdir(parents=True)
     legacy.write_text("stale-or-replacement\n", encoding="utf-8")
-    anchor_fd = _test_open_anchor_fd(store)
+    anchor_fd = _test_supervisor_anchor_fd(store)
     writer = ManifestWriter(
         store, manifest_date=DAY, segment_id=SEGMENT, authority_anchor_fd=anchor_fd
     )
@@ -177,7 +215,7 @@ def test_legacy_lock_marker_is_inert_and_never_removed(store: BronzeStore) -> No
 
 
 def test_manifest_chain_detects_reorder_deletion_and_insertion(store: BronzeStore) -> None:
-    anchor_fd = _test_open_anchor_fd(store)
+    anchor_fd = _test_supervisor_anchor_fd(store)
     writer = ManifestWriter(
         store, manifest_date=DAY, segment_id=SEGMENT, authority_anchor_fd=anchor_fd
     )
@@ -197,7 +235,7 @@ def test_manifest_chain_detects_reorder_deletion_and_insertion(store: BronzeStor
 
 
 def test_partial_and_corrupt_manifest_fail(store: BronzeStore) -> None:
-    anchor_fd = _test_open_anchor_fd(store)
+    anchor_fd = _test_supervisor_anchor_fd(store)
     writer = ManifestWriter(
         store, manifest_date=DAY, segment_id=SEGMENT, authority_anchor_fd=anchor_fd
     )

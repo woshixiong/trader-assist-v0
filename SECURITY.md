@@ -55,9 +55,11 @@ fsync, finalization, and close.
 ### Effective-Writability Check
 
 `OwnedLock.acquire()` MUST verify that the collector does not have write
-permission on the authority_anchor directory via `os.access(fd, os.W_OK,
-effective_ids=True)`. If the collector can write the authority_anchor, the
-acquire MUST fail closed with `LockOwnershipError`.
+permission on the authority_anchor directory via an fd-addressed path such as
+`/proc/self/fd/<authority_anchor_fd>` with `os.access(..., os.W_OK,
+effective_ids=True)`, or a platform-equivalent effective UID/GID mode check. If
+the collector can write the authority_anchor, or the check cannot be performed,
+the acquire MUST fail closed with `LockOwnershipError`.
 
 ### Lock File Contract
 
@@ -118,8 +120,9 @@ NUL bytes, unexpected tree entries, and symlink escape are integrity failures.
 ### Kernel Lock Scope
 
 The kernel lock is advisory. All cooperative writers MUST use this protocol, and
-the persistence root plus its parent MUST be writable only by the collector
-account. The implementation does not claim protection against a privileged local
-actor that can bypass advisory locks, replace higher-level mount or parent
-authorities, or directly mutate opened directory entries. Such an actor is
-outside A0's threat boundary.
+Bronze root contents are collector-writable. The authority_anchor and root
+immediate parent are supervisor-controlled and not collector-writable. The
+implementation does not claim protection against a privileged local actor that
+can bypass advisory locks, replace higher-level mount or parent authorities, or
+directly mutate opened directory entries. Such an actor is outside A0's threat
+boundary.
