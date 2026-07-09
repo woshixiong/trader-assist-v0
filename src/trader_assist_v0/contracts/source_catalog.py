@@ -15,9 +15,9 @@ RATE_LIMIT_OFFICIAL_SOURCE_LOCATION: Final = (
     "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/"
     "rate-limits-and-user-limits"
 )
-ALLOWED_COINS: Final = ("BTC", "ETH")
-RUNTIME_CANDLE_INTERVALS: Final = ("1m", "3m", "5m", "15m", "1h")
-DOCUMENTED_CANDLE_INTERVALS: Final = (
+ALLOWED_COINS: Final[tuple[str, ...]] = ("BTC", "ETH")
+RUNTIME_CANDLE_INTERVALS: Final[tuple[str, ...]] = ("1m", "3m", "5m", "15m", "1h")
+DOCUMENTED_CANDLE_INTERVALS: Final[tuple[str, ...]] = (
     "1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "8h", "12h",
     "1d", "3d", "1w", "1M",
 )
@@ -26,16 +26,16 @@ A1_CONTRACT_ID: Final = "V0-01A1-SCOPE-FREEZE"
 A3_CONTRACT_ID: Final = "V0-01A3-PUBLIC-READONLY-TRANSPORT-PREFLIGHT-CONTRACT"
 PUBLIC_READ_ONLY_ENVIRONMENT: Final = "mainnet public read-only"
 PUBLIC_READ_ONLY_OPERATION_CLASS: Final = "public read-only observation only"
-CANDLE_WS_ACCEPTED_ENVELOPE_SHAPES: Final = ("data:Candle", "data:Candle[]")
+CANDLE_WS_ACCEPTED_ENVELOPE_SHAPES: Final[tuple[str, ...]] = ("data:Candle", "data:Candle[]")
 CANDLE_WS_POLICY_NOTE: Final = (
     "A1 freezes accepted public envelope policy and fixture shape only; it does not "
     "authorize or implement any live WebSocket client."
 )
-A1_ALLOWED_CAPTURE_MODES: Final = (
+A1_ALLOWED_CAPTURE_MODES: Final[tuple[str, ...]] = (
     "WS_TEXT_UTF8_APPLICATION_PAYLOAD",
     "HTTP_RESPONSE_BODY",
 )
-_A1_PROHIBITED_TRANSPORT_MARKERS: Final = (
+_A1_PROHIBITED_TRANSPORT_MARKERS: Final[tuple[str, ...]] = (
     "private",
     "user",
     "account",
@@ -45,7 +45,7 @@ _A1_PROHIBITED_TRANSPORT_MARKERS: Final = (
     "order",
     "exchange",
 )
-A3_PREFLIGHT_CREDENTIAL_MARKERS: Final = (
+A3_PREFLIGHT_CREDENTIAL_MARKERS: Final[tuple[str, ...]] = (
     "api_key",
     "apikey",
     "authorization",
@@ -56,7 +56,7 @@ A3_PREFLIGHT_CREDENTIAL_MARKERS: Final = (
     "secret",
     "token",
 )
-A3_PREFLIGHT_ACCOUNT_MARKERS: Final = (
+A3_PREFLIGHT_ACCOUNT_MARKERS: Final[tuple[str, ...]] = (
     "account",
     "account_address",
     "address",
@@ -67,7 +67,7 @@ A3_PREFLIGHT_ACCOUNT_MARKERS: Final = (
     "wallet",
     "nonce",
 )
-A3_PREFLIGHT_WRITE_MARKERS: Final = (
+A3_PREFLIGHT_WRITE_MARKERS: Final[tuple[str, ...]] = (
     "/exchange",
     "exchange",
     "open_orders",
@@ -82,14 +82,14 @@ A3_PREFLIGHT_WRITE_MARKERS: Final = (
     "user_fundings",
     "userfundings",
 )
-A3_PREFLIGHT_EXECUTION_MARKERS: Final = (
+A3_PREFLIGHT_EXECUTION_MARKERS: Final[tuple[str, ...]] = (
     "execution",
     "execution_enablement",
     "mainnet_execution",
     "order_mutation",
     "testnet",
 )
-A3_PREFLIGHT_KILL_SWITCH_BYPASS_MARKERS: Final = (
+A3_PREFLIGHT_KILL_SWITCH_BYPASS_MARKERS: Final[tuple[str, ...]] = (
     "bypass",
     "disable_kill_switch",
     "disabled_kill_switch",
@@ -97,11 +97,11 @@ A3_PREFLIGHT_KILL_SWITCH_BYPASS_MARKERS: Final = (
     "kill_switch_override",
     "override",
 )
-FIXTURE_ALLOWED_PROVENANCE: Final = (
+FIXTURE_ALLOWED_PROVENANCE: Final[tuple[str, ...]] = (
     "SYNTHETIC_DOCUMENTATION_DERIVED",
     "MINIMAL_REDACTED_EXAMPLE",
 )
-_FIXTURE_FORBIDDEN_MARKERS: Final = (
+_FIXTURE_FORBIDDEN_MARKERS: Final[tuple[str, ...]] = (
     "api_key",
     "apikey",
     "secret",
@@ -204,7 +204,7 @@ def _entry(
     )
 
 
-ENTRIES: Final = (
+ENTRIES: Final[tuple[SourceCatalogEntry, ...]] = (
     _entry(
         "hl-ws-mainnet-public", "WEBSOCKET", "trades",
         '{"method":"subscribe","subscription":{"type":"trades","coin":"<ETH|BTC>"}}',
@@ -320,7 +320,9 @@ ENTRIES: Final = (
     ),
 )
 
-ENTRY_BY_KEY: Final = {(entry.endpoint_id, entry.operation_type): entry for entry in ENTRIES}
+ENTRY_BY_KEY: Final[dict[tuple[str, str], SourceCatalogEntry]] = {
+    (entry.endpoint_id, entry.operation_type): entry for entry in ENTRIES
+}
 if len(ENTRY_BY_KEY) != len(ENTRIES):
     raise RuntimeError("source catalog entry keys must be unique")
 
@@ -389,7 +391,7 @@ def validate_public_selection(
 
 
 def endpoint_kind(endpoint_id: str) -> EndpointKind:
-    kinds = {entry.endpoint_kind for entry in ENTRIES if entry.endpoint_id == endpoint_id}
+    kinds: set[EndpointKind] = {entry.endpoint_kind for entry in ENTRIES if entry.endpoint_id == endpoint_id}
     if len(kinds) != 1:
         raise ValueError("unsupported or ambiguous endpoint")
     return next(iter(kinds))
@@ -497,7 +499,7 @@ def validate_public_readonly_transport_preflight(
     if kill_switch_enabled is False:
         raise ValueError("kill switch must fail closed")
 
-    text_values = (
+    text_values: tuple[str, ...] = (
         source_id,
         environment,
         endpoint_id,
