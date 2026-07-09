@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+from typing import Any
 
 import pytest
 
@@ -17,7 +18,7 @@ from trader_assist_v0.contracts.source_catalog import (
 )
 
 
-def _valid_ws_request() -> dict[str, object]:
+def _valid_ws_request() -> dict[str, Any]:
     return {
         "source_id": SOURCE_ID,
         "environment": PUBLIC_READ_ONLY_ENVIRONMENT,
@@ -30,7 +31,7 @@ def _valid_ws_request() -> dict[str, object]:
     }
 
 
-def _valid_info_request() -> dict[str, object]:
+def _valid_info_request() -> dict[str, Any]:
     return {
         "source_id": SOURCE_ID,
         "environment": PUBLIC_READ_ONLY_ENVIRONMENT,
@@ -88,7 +89,7 @@ def test_runtime_enabled_true_fails_while_rate_limits_unresolved() -> None:
     ],
 )
 def test_kill_switch_disabled_bypass_or_override_fails_closed(
-    kwargs: dict[str, object],
+    kwargs: dict[str, Any],
 ) -> None:
     request = _valid_ws_request()
     request.update(kwargs)
@@ -123,7 +124,7 @@ def test_kill_switch_disabled_bypass_or_override_fails_closed(
     ],
 )
 def test_preflight_rejects_forbidden_or_unsupported_material(
-    kwargs: dict[str, object],
+    kwargs: dict[str, Any],
 ) -> None:
     request = _valid_ws_request()
     request.update(kwargs)
