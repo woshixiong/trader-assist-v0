@@ -171,13 +171,17 @@ def test_a4_resolved_candidate_requires_complete_official_metadata_but_no_runtim
     assert candidate["live_transport_authorized"] is False
 
 
-def test_a4_source_catalog_exposes_allowed_statuses_without_numeric_values() -> None:
-    document = source_catalog_document()
-    assert document["rate_limit_status"] == "UNRESOLVED_OFFICIAL_LIMIT"
-    assert document["rate_limit_allowed_statuses"] == [
+def test_a4_authority_document_does_not_mutate_source_catalog_hash_input() -> None:
+    catalog_document = source_catalog_document()
+    authority_document = rate_limit_authority_document()
+
+    assert catalog_document["rate_limit_status"] == "UNRESOLVED_OFFICIAL_LIMIT"
+    assert "rate_limit_allowed_statuses" not in catalog_document
+    assert authority_document["status"] == "UNRESOLVED_OFFICIAL_LIMIT"
+    assert RATE_LIMIT_ALLOWED_STATUSES == (
         "UNRESOLVED_OFFICIAL_LIMIT",
         "OFFICIAL_NUMERIC_LIMIT_RESOLVED",
-    ]
+    )
 
 
 FORBIDDEN_IMPORTS = {
