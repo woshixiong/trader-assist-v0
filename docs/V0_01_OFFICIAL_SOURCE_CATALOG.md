@@ -10,7 +10,7 @@ Officially verified: `2026-07-07`
 
 The single executable catalog authority is `src/trader_assist_v0/contracts/source_catalog.py`. It depends only on the standard library and `contracts/common.py`, so `RawEventV0` can validate catalog authority without a contracts-to-data import cycle. `src/trader_assist_v0/data/source_catalog.py` is a compatibility re-export and does not define a second catalog.
 
-A0 records public interface facts only and does not connect to any endpoint.
+A0 records public interface facts only and does not connect to any endpoint. A1 freezes public transport-entry contracts only and still does not connect to any endpoint.
 
 ## Coverage
 
@@ -35,7 +35,7 @@ Each A0 RawEvent binds and revalidates:
 
 WebSocket entries require `WS_TEXT_UTF8_APPLICATION_PAYLOAD`. Info entries require `HTTP_RESPONSE_BODY`. Unknown endpoints or operations, `/exchange`, Testnet, unsupported coins or intervals, missing required coins, and coins supplied to non-coin operations are rejected.
 
-A0 does not parse raw payload fields. `source_event_time`, `source_publish_time`, `revision_time`, `source_native_id`, and `source_native_cursor` must all be `None` until a later separately reviewed extractor contract exists.
+A0 and A1 do not parse raw payload fields. `source_event_time`, `source_publish_time`, `revision_time`, `source_native_id`, and `source_native_cursor` must all be `None` until a later separately reviewed extractor contract exists.
 
 ## Frozen semantics
 
@@ -46,9 +46,69 @@ A0 does not parse raw payload fields. `source_event_time`, `source_publish_time`
 - `allMids`: current map observation, no documented source timestamp.
 - `candle`: mutable current bar; logical key is coin, interval, and open time.
 
-The official candle subscription table and type definition use inconsistent singular/array descriptions. The catalog therefore records `Candle or Candle[]; official documentation differs` with `AMBIGUOUS_DOCUMENTATION`; A1 must freeze the actual envelope using a separately authorized fixture or read-only observation.
+## A1 candle WebSocket envelope contract
 
-The official rate-limit page was not readable during verification. Numeric limits are recorded as `UNRESOLVED_OFFICIAL_LIMIT`; no remembered or third-party value is substituted. This is an A1 entry gate, not an A0 blocker.
+A1 freezes the public-source envelope authority for Hyperliquid candle data.
+
+Accepted public envelope policy:
+
+```text
+data: Candle
+data: Candle[]
+```
+
+The contract accepts both shapes because the official candle subscription table and type definition use inconsistent singular/array descriptions. A1 records the accepted policy and fixture shape only. It is not a live WebSocket client and does not authorize observation runtime.
+
+The internal evidence model remains exact `RawEventV0` application-payload bytes. A1 does not parse candle values into strategy signals, normalize them into Silver, infer direction, create AI recommendations, or size risk.
+
+## A1 rate-limit entry gate
+
+The official rate-limit page was not readable during A0 verification. Numeric limits remain recorded as `UNRESOLVED_OFFICIAL_LIMIT`; no remembered, inferred, third-party, community, blog, StackOverflow, Discord, or model-memory value is substituted.
+
+When numeric limits are unresolved, live polling, WebSocket reconnect, backfill, health runtime, and any public transport runtime remain prohibited. Only official documented numeric values may replace `UNRESOLVED_OFFICIAL_LIMIT` in a later authorized task.
+
+## A1 read-only transport entry contract
+
+Future transport configuration shape is restricted to:
+
+```text
+source: hyperliquid-public-mainnet
+environment: mainnet public read-only
+operation class: public read-only observation only
+coins: ETH, BTC
+runtime candle intervals: 1m, 3m, 5m, 15m, 1h
+capture modes: WS_TEXT_UTF8_APPLICATION_PAYLOAD, HTTP_RESPONSE_BODY
+```
+
+A1 must reject private endpoints, user/account endpoints, wallet/signing material, nonces, order mutation, `/exchange`, Testnet/Mainnet execution enablement, strategy/risk logic, and AI recommendation logic.
+
+## A1 fixture admission policy
+
+Allowed fixtures:
+
+- synthetic documentation-derived fixtures;
+- minimal redacted examples;
+- fixtures with explicit provenance and no operational secrets.
+
+Forbidden fixtures:
+
+- raw operational payloads;
+- real market/account logs;
+- private/user/account data;
+- wallet addresses;
+- API keys;
+- signatures;
+- nonces;
+- credentials;
+- database artifacts;
+- caches;
+- unredacted observations.
+
+If later read-only observation is authorized, only sanitized derived fixtures may be committed. Raw observation artifacts must remain outside Git.
+
+## A1-to-A2 gate
+
+A1 completion does not authorize A2 automatically. A2 may only be considered after A1 PR merge, external exact-head review PASS, explicit rate-limit entry gate, frozen public source envelope contract, and a new exact-head project-control lease.
 
 ## Official locations
 

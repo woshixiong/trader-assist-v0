@@ -1,0 +1,6 @@
+{
+  "provenance": "SYNTHETIC_DOCUMENTATION_DERIVED",
+  "description": "Synthetic A1 candle envelope examples derived from public documentation shape only. Not a live observation.",
+  "single_candle_payload": "{\"channel\":\"candle\",\"data\":{\"t\":1783386000000,\"T\":1783386059999,\"s\":\"ETH\",\"i\":\"1m\",\"o\":\"3000\",\"c\":\"3001\",\"h\":\"3002\",\"l\":\"2999\",\"v\":\"10\",\"n\":42}}",
+  "array_candle_payload": "{\"channel\":\"candle\",\"data\":[{\"t\":1783386000000,\"T\":1783386059999,\"s\":\"ETH\",\"i\":\"1m\",\"o\":\"3000\",\"c\":\"3001\",\"h\":\"3002\",\"l\":\"2999\",\"v\":\"10\",\"n\":42}]}"
+}

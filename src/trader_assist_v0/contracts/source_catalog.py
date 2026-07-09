@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass
 from typing import Final, Literal
 
@@ -20,6 +21,53 @@ DOCUMENTED_CANDLE_INTERVALS: Final = (
     "1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "8h", "12h",
     "1d", "3d", "1w", "1M",
 )
+
+A1_CONTRACT_ID: Final = "V0-01A1-SCOPE-FREEZE"
+PUBLIC_READ_ONLY_ENVIRONMENT: Final = "mainnet public read-only"
+PUBLIC_READ_ONLY_OPERATION_CLASS: Final = "public read-only observation only"
+CANDLE_WS_ACCEPTED_ENVELOPE_SHAPES: Final = ("data:Candle", "data:Candle[]")
+CANDLE_WS_POLICY_NOTE: Final = (
+    "A1 freezes accepted public envelope policy and fixture shape only; it does not "
+    "authorize or implement any live WebSocket client."
+)
+A1_ALLOWED_CAPTURE_MODES: Final = (
+    "WS_TEXT_UTF8_APPLICATION_PAYLOAD",
+    "HTTP_RESPONSE_BODY",
+)
+_A1_PROHIBITED_TRANSPORT_MARKERS: Final = (
+    "private",
+    "user",
+    "account",
+    "wallet",
+    "sign",
+    "nonce",
+    "order",
+    "exchange",
+)
+FIXTURE_ALLOWED_PROVENANCE: Final = (
+    "SYNTHETIC_DOCUMENTATION_DERIVED",
+    "MINIMAL_REDACTED_EXAMPLE",
+)
+_FIXTURE_FORBIDDEN_MARKERS: Final = (
+    "api_key",
+    "apikey",
+    "secret",
+    "credential",
+    "private_key",
+    "signature",
+    "nonce",
+    "wallet",
+    "account",
+    "database",
+    "cache",
+    "raw_operational",
+)
+_FIXTURE_FORBIDDEN_WORD_RE: Final = re.compile(
+    r"(?<![a-z0-9_])"
+    r"(?:address|authorization|bearer|db|log|logs|password|token)"
+    r"(?![a-z0-9_])"
+)
+_FIXTURE_ADDRESS_RE: Final = re.compile(r"\b0x[0-9a-fA-F]{40}\b")
 
 EndpointKind = Literal["WEBSOCKET", "INFO"]
 DocumentationStatus = Literal["VERIFIED", "AMBIGUOUS_DOCUMENTATION"]
@@ -292,3 +340,114 @@ def endpoint_kind(endpoint_id: str) -> EndpointKind:
     if len(kinds) != 1:
         raise ValueError("unsupported or ambiguous endpoint")
     return next(iter(kinds))
+
+
+def validate_candle_websocket_envelope_shape(envelope_shape: str) -> str:
+    if envelope_shape not in CANDLE_WS_ACCEPTED_ENVELOPE_SHAPES:
+        raise ValueError("unsupported candle websocket envelope shape")
+    return envelope_shape
+
+
+def rate_limit_entry_gate() -> dict[str, object]:
+    numeric_limits_resolved = RATE_LIMIT_STATUS != "UNRESOLVED_OFFICIAL_LIMIT"
+    return {
+        "task_id": A1_CONTRACT_ID,
+        "status": RATE_LIMIT_STATUS,
+        "official_source_title": RATE_LIMIT_OFFICIAL_SOURCE_TITLE,
+        "official_source_location": RATE_LIMIT_OFFICIAL_SOURCE_LOCATION,
+        "numeric_limits_resolved": numeric_limits_resolved,
+        "live_transport_authorized": numeric_limits_resolved,
+    }
+
+
+def assert_rate_limit_allows_live_transport() -> None:
+    if RATE_LIMIT_STATUS == "UNRESOLVED_OFFICIAL_LIMIT":
+        raise ValueError(
+            "official numeric rate limit is unresolved; live transport remains blocked"
+        )
+
+
+def _reject_prohibited_transport_text(*values: str) -> None:
+    candidate = " ".join(values).lower()
+    if any(marker in candidate for marker in _A1_PROHIBITED_TRANSPORT_MARKERS):
+        raise ValueError("prohibited transport endpoint class")
+
+
+def validate_read_only_transport_entry(
+    *,
+    source_id: str,
+    environment: str,
+    endpoint_id: str,
+    operation_type: str,
+    capture_mode: str,
+    operation_class: str,
+    coin: str | None = None,
+    interval: str | None = None,
+) -> SourceCatalogEntry:
+    if source_id != SOURCE_ID:
+        raise ValueError("unsupported source")
+    if environment != PUBLIC_READ_ONLY_ENVIRONMENT:
+        raise ValueError("unsupported public observation environment")
+    if operation_class != PUBLIC_READ_ONLY_OPERATION_CLASS:
+        raise ValueError("unsupported operation class")
+    if capture_mode not in A1_ALLOWED_CAPTURE_MODES:
+        raise ValueError("unsupported capture mode")
+    _reject_prohibited_transport_text(endpoint_id, operation_type)
+    entry = validate_public_selection(
+        endpoint_id,
+        operation_type,
+        coin=coin,
+        interval=interval,
+    )
+    expected_mode = (
+        "WS_TEXT_UTF8_APPLICATION_PAYLOAD"
+        if entry.endpoint_kind == "WEBSOCKET"
+        else "HTTP_RESPONSE_BODY"
+    )
+    if capture_mode != expected_mode:
+        raise ValueError("capture mode does not match source endpoint kind")
+    return entry
+
+
+def validate_fixture_admission(
+    *,
+    provenance: str,
+    payload_text: str,
+    sanitized: bool,
+    raw_operational: bool = False,
+    private_or_account_data: bool = False,
+    contains_secret: bool = False,
+) -> None:
+    if provenance not in FIXTURE_ALLOWED_PROVENANCE:
+        raise ValueError("unsupported fixture provenance")
+    if not sanitized:
+        raise ValueError("fixture must be sanitized before admission")
+    if raw_operational or private_or_account_data or contains_secret:
+        raise ValueError("fixture contains prohibited operational or private material")
+    lowered = payload_text.lower()
+    if (
+        any(marker in lowered for marker in _FIXTURE_FORBIDDEN_MARKERS)
+        or _FIXTURE_FORBIDDEN_WORD_RE.search(lowered)
+        or _FIXTURE_ADDRESS_RE.search(payload_text)
+    ):
+        raise ValueError("fixture contains prohibited marker")
+
+
+def validate_a1_to_a2_gate(
+    *,
+    a1_pr_merged: bool,
+    external_exact_head_review_passed: bool,
+    rate_limit_entry_gate_explicit: bool,
+    public_source_envelope_contract_frozen: bool,
+    new_exact_head_lease_granted: bool,
+) -> None:
+    if not all(
+        (
+            a1_pr_merged,
+            external_exact_head_review_passed,
+            rate_limit_entry_gate_explicit,
+            public_source_envelope_contract_frozen,
+            new_exact_head_lease_granted,
+        )
+    ):
+        raise ValueError("A2 gate is closed")

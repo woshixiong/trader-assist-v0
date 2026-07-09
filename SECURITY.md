@@ -1,5 +1,21 @@
 # Security
 
+## V0-01A1 Contract-Freeze Threat Model
+
+V0-01A1 is a public-source contract freeze only. It freezes candle envelope policy, rate-limit entry-gate behavior, future public read-only transport configuration checks, fixture admission policy, and the A1-to-A2 gate.
+
+A1 still has no HTTP client, WebSocket client, DNS, live endpoint connection, polling loop, reconnect runtime, heartbeat runtime, health runtime, backfill runtime, async runtime, event loop, credentials, account address, wallet, signing, nonce handling, order mutation, exchange-write path, Testnet/Mainnet execution enablement, strategy logic, AI recommendation, risk sizing, database, dashboard, cloud SDK, or soak runner.
+
+## A1 Fixture Security
+
+Fixtures committed to Git must be synthetic documentation-derived or minimal redacted examples with explicit provenance. Real raw observations, real market/account logs, private/user/account data, wallet addresses, API keys, signatures, nonces, credentials, database artifacts, caches, unredacted observations, and raw operational payloads are forbidden.
+
+If later read-only observation is authorized, raw observations must remain outside Git. Only sanitized derived fixtures may be committed after review.
+
+## A1 Rate-Limit Security
+
+Official numeric rate limits are currently `UNRESOLVED_OFFICIAL_LIMIT`. While unresolved, live polling, WebSocket reconnect, backfill, health runtime, and any public transport runtime remain blocked. Third-party, remembered, inferred, community, blog, StackOverflow, Discord, or model-memory rate-limit numbers are not authority.
+
 ## V0-01A0 Threat Model
 
 V0-01A0 is offline and read-only. Public market-data documentation and synthetic
