@@ -7,7 +7,8 @@
 5. Uncertain, stale, gapped, disconnected, conflicted, or unreconciled mandatory state means no new risk.
 6. Never use simulated, sentinel, or default market/account data as decision evidence.
 7. Historical code is `SEED` or `REFERENCE` until ported behind a reviewed V0 contract with provenance and tests.
-8. Do not add an adapter, API wallet, credential, Testnet/Mainnet enablement, or automatic execution in V0-00.
-9. Do not commit raw market/account data, databases, logs, virtual environments, caches, secrets, or source archives.
-10. No direct commits to `main`, no force-push after review begins, no auto-merge, and no shared-history rewrite.
-11. Every completion report lists exact changed files, commands/tests actually observed, artifacts/hashes, residual risks, rollback, issue/PR, and merge state.
+8. V0-01 may add bounded offline evidence runtime and public read-only source definitions. Any public network transport requires its own later bounded authorization and review.
+9. Credentials, wallets, signing, exchange-write endpoints, order mutation, Testnet/Mainnet execution enablement, strategy logic, AI recommendations, and risk sizing remain prohibited unless a later task explicitly authorizes them.
+10. Do not commit raw market/account data, databases, logs, virtual environments, caches, secrets, source archives, or real account identifiers.
+11. No direct commits to `main`, no force-push after review begins, no auto-merge, and no shared-history rewrite.
+12. Every completion report lists exact changed files, commands/tests actually observed, artifacts/hashes, residual risks, rollback, issue/PR, and merge state.
