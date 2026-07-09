@@ -10,7 +10,7 @@ Officially verified: `2026-07-07`
 
 The single executable catalog authority is `src/trader_assist_v0/contracts/source_catalog.py`. It depends only on the standard library and `contracts/common.py`, so `RawEventV0` can validate catalog authority without a contracts-to-data import cycle. `src/trader_assist_v0/data/source_catalog.py` is a compatibility re-export and does not define a second catalog.
 
-A0 records public interface facts only and does not connect to any endpoint. A1 freezes public transport-entry contracts only and still does not connect to any endpoint.
+A0 records public interface facts only and does not connect to any endpoint. A1 freezes public transport-entry contracts only and still does not connect to any endpoint. A2 uses those contracts for caller-supplied public observation bytes and still does not connect to any endpoint.
 
 ## Coverage
 
@@ -24,7 +24,7 @@ Runtime candle interval allowlist: `1m`, `3m`, `5m`, `15m`, `1h`.
 
 ## RawEvent binding
 
-Each A0 RawEvent binds and revalidates:
+Each A0/A2 RawEvent binds and revalidates:
 
 - source ID, catalog version, and catalog hash;
 - endpoint ID and operation type;
@@ -35,7 +35,7 @@ Each A0 RawEvent binds and revalidates:
 
 WebSocket entries require `WS_TEXT_UTF8_APPLICATION_PAYLOAD`. Info entries require `HTTP_RESPONSE_BODY`. Unknown endpoints or operations, `/exchange`, Testnet, unsupported coins or intervals, missing required coins, and coins supplied to non-coin operations are rejected.
 
-A0 and A1 do not parse raw payload fields. `source_event_time`, `source_publish_time`, `revision_time`, `source_native_id`, and `source_native_cursor` must all be `None` until a later separately reviewed extractor contract exists.
+A0, A1, and A2 do not parse raw payload fields. `source_event_time`, `source_publish_time`, `revision_time`, `source_native_id`, and `source_native_cursor` must all be `None` until a later separately reviewed extractor contract exists.
 
 ## Frozen semantics
 
@@ -61,11 +61,23 @@ The contract accepts both shapes because the official candle subscription table 
 
 The internal evidence model remains exact `RawEventV0` application-payload bytes. A1 does not parse candle values into strategy signals, normalize them into Silver, infer direction, create AI recommendations, or size risk.
 
-## A1 rate-limit entry gate
+## A2 no-network public observation ingress
+
+A2 accepts only exact bytes supplied by its caller. It does not acquire bytes by HTTP, WebSocket, DNS, socket, polling, reconnect, heartbeat, health, backfill, async runtime, or any other live transport runtime.
+
+A2 must validate each accepted selection through the frozen A1 read-only transport entry contract. Private endpoints, user/account endpoints, wallet/signing material, nonces, order mutation, `/exchange`, Testnet/Mainnet execution enablement, strategy/risk logic, and AI recommendation logic remain rejected.
+
+A2 binds exact bytes into `RawEventV0` authority using the catalog-bound payload hash and content-addressed payload reference. Different byte forms, including JSON whitespace or ordering differences, are different evidence.
+
+Optional payload persistence and RawEvent manifest append must use existing A0 `BronzeStore` and `ManifestWriter` authority. A2 does not create a second persistence authority.
+
+## A1/A2 rate-limit entry gate
 
 The official rate-limit page was not readable during A0 verification. Numeric limits remain recorded as `UNRESOLVED_OFFICIAL_LIMIT`; no remembered, inferred, third-party, community, blog, StackOverflow, Discord, or model-memory value is substituted.
 
 When numeric limits are unresolved, live polling, WebSocket reconnect, backfill, health runtime, and any public transport runtime remain prohibited. Only official documented numeric values may replace `UNRESOLVED_OFFICIAL_LIMIT` in a later authorized task.
+
+A2 must not resolve official numeric rate limits unless this exact task is amended by project control after current official docs are readable and cited.
 
 ## A1 read-only transport entry contract
 
@@ -80,7 +92,9 @@ runtime candle intervals: 1m, 3m, 5m, 15m, 1h
 capture modes: WS_TEXT_UTF8_APPLICATION_PAYLOAD, HTTP_RESPONSE_BODY
 ```
 
-A1 must reject private endpoints, user/account endpoints, wallet/signing material, nonces, order mutation, `/exchange`, Testnet/Mainnet execution enablement, strategy/risk logic, and AI recommendation logic.
+A1/A2 must reject private endpoints, user/account endpoints, wallet/signing material, nonces, order mutation, `/exchange`, Testnet/Mainnet execution enablement, strategy/risk logic, and AI recommendation logic.
+
+`mainnet public read-only` is a public source identity / environment label only. It is not Mainnet execution enablement.
 
 ## A1 fixture admission policy
 

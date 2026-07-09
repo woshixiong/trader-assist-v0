@@ -2,26 +2,27 @@
 
 ## Current bounded task
 
-`V0-01A0 — Bronze authority and offline replay foundation`
+`V0-01A2 — no-network public observation ingress contract`
 
 ## Allowed
 
-- governance updates for the V0-01A0 ceiling;
-- versioned public-source catalog definitions;
-- strict raw-observation, manifest-entry, and replay-report contracts;
-- exact fixture/application payload hashing;
-- local content-addressed immutable payload storage;
-- append-only hash-linked manifests;
-- deterministic offline replay and corruption/path-boundary tests;
-- generated JSON schemas for the three A0 contracts.
+- governance and documentation updates for the V0-01A2 ceiling;
+- a pure no-network public observation ingress/helper layer;
+- caller-supplied exact public observation bytes only;
+- A1 `validate_read_only_transport_entry()` checks for every accepted selection;
+- `RawEventV0` authority binding using exact payload bytes, injected timestamps, injected monotonic time, connection ID, subscription ID, and receive sequence;
+- optional Bronze payload persistence and manifest append through existing A0 `BronzeStore` / `ManifestWriter` authority only;
+- deterministic A2 tests proving byte-exact identity, fail-closed public-only selection, unresolved rate-limit live-transport blocking, and absence of network/async transport capability.
 
 ## Forbidden
 
-- HTTP or WebSocket clients and any live endpoint connection;
+- HTTP or WebSocket clients, sockets, DNS, async runtime, live endpoint connection, polling, reconnect, heartbeat, health, backfill, or soak runtime;
 - new runtime or development dependencies;
-- credentials, public account addresses, wallets, signing, exchange writes, order mutation, Testnet/Mainnet execution configuration;
-- strategy candidates, AI recommendations, risk sizing, health/reconnect/backfill runtime, dashboards, databases, cloud storage, soak operation, or later V0 slices;
-- modifications to `woshixiong/trade-os` or Issue #47 files.
+- resolving official numeric rate limits while `RATE_LIMIT_STATUS` remains `UNRESOLVED_OFFICIAL_LIMIT`;
+- credentials, public account addresses, wallets, signing, nonces, exchange writes, order mutation, Testnet/Mainnet execution configuration;
+- strategy candidates, AI recommendations, risk sizing, Silver normalization, dashboards, databases, cloud storage, or later V0 slices;
+- raw operational payloads, logs, caches, databases, source archives, private/user/account data, secrets, or unredacted live observations in Git;
+- modifications to `woshixiong/trade-os`.
 
 ## Required checks
 
@@ -32,6 +33,8 @@ python scripts/scan_secrets.py .
 ruff check .
 mypy src scripts
 pytest -q
+pytest -q tests/test_v0_01a2_*.py
+pytest -q tests/test_v0_01a1_transport_entry_gate.py tests/test_v0_01a1_source_envelope_contract.py tests/test_v0_01a1_fixture_admission.py
 git diff --check
 ```
 
