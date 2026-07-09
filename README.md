@@ -4,13 +4,15 @@ Trader Assist V0 is an isolated ETH/Hyperliquid experiment lane for reliable dat
 
 ## Current stage
 
-`V0-01A2 / NO_NETWORK_PUBLIC_OBSERVATION_INGRESS_CONTRACT`
+`V0-01A3 / PUBLIC_READONLY_TRANSPORT_PREFLIGHT_CONTRACT`
 
 A0 completed the versioned public-source catalog, exact raw fixture/application-payload authority, local content-addressed immutable Bronze storage, append-only hash-linked manifests, and deterministic offline replay.
 
 A1 froze public candle envelope policy, rate-limit entry-gate behavior, future read-only transport configuration checks, fixture admission rules, and the A1-to-A2 gate. It did not implement live transport.
 
-A2 adds a no-network ingress contract/helper for caller-supplied public observation bytes. Every accepted selection must pass A1 public read-only transport-entry checks, exact bytes are bound into `RawEventV0` authority, and optional Bronze persistence uses the existing A0 `BronzeStore` / `ManifestWriter` authority boundaries.
+A2 added a no-network ingress contract/helper for caller-supplied public observation bytes. Every accepted selection must pass A1 public read-only transport-entry checks, exact bytes are bound into `RawEventV0` authority, and optional Bronze persistence uses the existing A0 `BronzeStore` / `ManifestWriter` authority boundaries.
+
+A3 freezes a future public read-only transport preflight contract. It validates source identity, environment, operation class, endpoint/operation allowlist, capture-mode match, disabled-runtime default, kill-switch fail-closed semantics, credential absence, account/private absence, and no-write/no-execution proof before any later collector runtime may be considered.
 
 `mainnet public read-only` is a public source identity and environment label only. It is not Mainnet execution enablement.
 
