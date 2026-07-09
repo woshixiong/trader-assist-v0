@@ -23,6 +23,7 @@ DOCUMENTED_CANDLE_INTERVALS: Final = (
 )
 
 A1_CONTRACT_ID: Final = "V0-01A1-SCOPE-FREEZE"
+A3_CONTRACT_ID: Final = "V0-01A3-PUBLIC-READONLY-TRANSPORT-PREFLIGHT-CONTRACT"
 PUBLIC_READ_ONLY_ENVIRONMENT: Final = "mainnet public read-only"
 PUBLIC_READ_ONLY_OPERATION_CLASS: Final = "public read-only observation only"
 CANDLE_WS_ACCEPTED_ENVELOPE_SHAPES: Final = ("data:Candle", "data:Candle[]")
@@ -43,6 +44,50 @@ _A1_PROHIBITED_TRANSPORT_MARKERS: Final = (
     "nonce",
     "order",
     "exchange",
+)
+A3_PREFLIGHT_CREDENTIAL_MARKERS: Final = (
+    "api_key",
+    "apikey",
+    "authorization",
+    "bearer",
+    "credential",
+    "password",
+    "private_key",
+    "secret",
+    "token",
+)
+A3_PREFLIGHT_ACCOUNT_MARKERS: Final = (
+    "account",
+    "account_address",
+    "address",
+    "private",
+    "signature",
+    "signing",
+    "user",
+    "wallet",
+    "nonce",
+)
+A3_PREFLIGHT_WRITE_MARKERS: Final = (
+    "/exchange",
+    "exchange",
+    "open_orders",
+    "openorders",
+    "order",
+    "order_updates",
+    "orderupdates",
+    "user_events",
+    "userevents",
+    "user_fills",
+    "userfills",
+    "user_fundings",
+    "userfundings",
+)
+A3_PREFLIGHT_EXECUTION_MARKERS: Final = (
+    "execution",
+    "execution_enablement",
+    "mainnet_execution",
+    "order_mutation",
+    "testnet",
 )
 FIXTURE_ALLOWED_PROVENANCE: Final = (
     "SYNTHETIC_DOCUMENTATION_DERIVED",
@@ -407,6 +452,96 @@ def validate_read_only_transport_entry(
     if capture_mode != expected_mode:
         raise ValueError("capture mode does not match source endpoint kind")
     return entry
+
+
+def _a3_normalized_text(*values: str) -> str:
+    return " ".join(values).lower().replace("-", "_")
+
+
+def _reject_a3_markers(reason: str, markers: tuple[str, ...], *values: str) -> None:
+    candidate = _a3_normalized_text(*values)
+    if any(marker in candidate for marker in markers):
+        raise ValueError(reason)
+
+
+def validate_public_readonly_transport_preflight(
+    *,
+    source_id: str,
+    environment: str,
+    endpoint_id: str,
+    operation_type: str,
+    capture_mode: str,
+    operation_class: str,
+    coin: str | None = None,
+    interval: str | None = None,
+    runtime_enabled: bool | None = None,
+    kill_switch_enabled: bool | None = True,
+    live_transport_requested: bool = False,
+    config_keys: tuple[str, ...] = (),
+    config_values: tuple[str, ...] = (),
+) -> dict[str, object]:
+    if runtime_enabled:
+        if RATE_LIMIT_STATUS == "UNRESOLVED_OFFICIAL_LIMIT":
+            raise ValueError("official numeric rate limit unresolved; live runtime blocked")
+        raise ValueError("live runtime is outside the A3 preflight contract")
+    if live_transport_requested:
+        raise ValueError("live transport is not authorized by A3")
+    if kill_switch_enabled is False:
+        raise ValueError("kill switch must fail closed")
+
+    text_values = (
+        source_id,
+        environment,
+        endpoint_id,
+        operation_type,
+        operation_class,
+        *config_keys,
+        *config_values,
+    )
+    _reject_a3_markers(
+        "credential-like material is prohibited",
+        A3_PREFLIGHT_CREDENTIAL_MARKERS,
+        *text_values,
+    )
+    _reject_a3_markers(
+        "private/user/account material is prohibited",
+        A3_PREFLIGHT_ACCOUNT_MARKERS,
+        *text_values,
+    )
+    _reject_a3_markers(
+        "write or exchange material is prohibited",
+        A3_PREFLIGHT_WRITE_MARKERS,
+        *text_values,
+    )
+    _reject_a3_markers(
+        "Testnet/Mainnet execution wording is prohibited",
+        A3_PREFLIGHT_EXECUTION_MARKERS,
+        *text_values,
+    )
+
+    entry = validate_read_only_transport_entry(
+        source_id=source_id,
+        environment=environment,
+        endpoint_id=endpoint_id,
+        operation_type=operation_type,
+        capture_mode=capture_mode,
+        operation_class=operation_class,
+        coin=coin,
+        interval=interval,
+    )
+    return {
+        "task_id": A3_CONTRACT_ID,
+        "source_id": source_id,
+        "environment": environment,
+        "endpoint_id": endpoint_id,
+        "operation_type": operation_type,
+        "endpoint_kind": entry.endpoint_kind,
+        "capture_mode": capture_mode,
+        "runtime_enabled": False,
+        "kill_switch_enabled": kill_switch_enabled is not False,
+        "rate_limit_status": RATE_LIMIT_STATUS,
+        "live_transport_authorized": False,
+    }
 
 
 def validate_fixture_admission(
