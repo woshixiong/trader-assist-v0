@@ -391,7 +391,9 @@ def validate_public_selection(
 
 
 def endpoint_kind(endpoint_id: str) -> EndpointKind:
-    kinds: set[EndpointKind] = {entry.endpoint_kind for entry in ENTRIES if entry.endpoint_id == endpoint_id}
+    kinds: set[EndpointKind] = {
+        entry.endpoint_kind for entry in ENTRIES if entry.endpoint_id == endpoint_id
+    }
     if len(kinds) != 1:
         raise ValueError("unsupported or ambiguous endpoint")
     return next(iter(kinds))
