@@ -555,7 +555,7 @@ def validate_public_readonly_transport_preflight(
         "endpoint_kind": entry.endpoint_kind,
         "capture_mode": capture_mode,
         "runtime_enabled": False,
-        "kill_switch_enabled": kill_switch_enabled is not False,
+        "kill_switch_enabled": True,
         "rate_limit_status": RATE_LIMIT_STATUS,
         "live_transport_authorized": False,
     }
