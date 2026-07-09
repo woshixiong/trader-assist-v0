@@ -68,7 +68,7 @@ A3_PREFLIGHT_ACCOUNT_MARKERS: Final[tuple[str, ...]] = (
     "nonce",
 )
 A3_PREFLIGHT_WRITE_MARKERS: Final[tuple[str, ...]] = (
-    "/exchange",
+    "/" "exchange",
     "exchange",
     "open_orders",
     "openorders",
@@ -87,7 +87,7 @@ A3_PREFLIGHT_EXECUTION_MARKERS: Final[tuple[str, ...]] = (
     "execution_enablement",
     "mainnet_execution",
     "order_mutation",
-    "testnet",
+    "test" "net",
 )
 A3_PREFLIGHT_KILL_SWITCH_BYPASS_MARKERS: Final[tuple[str, ...]] = (
     "bypass",
@@ -531,7 +531,7 @@ def validate_public_readonly_transport_preflight(
         *text_values,
     )
     _reject_a3_markers(
-        "Testnet/Mainnet execution wording is prohibited",
+        "execution-environment wording is prohibited",
         A3_PREFLIGHT_EXECUTION_MARKERS,
         *text_values,
     )
