@@ -20,13 +20,21 @@ A2 added a bounded no-network ingress contract/helper layer. It accepts caller-s
 
 A2 does not implement live transport.
 
-## Active slice
-
 `V0-01A3 / PUBLIC_READONLY_TRANSPORT_PREFLIGHT_CONTRACT`
 
-A3 freezes a pure public read-only transport preflight contract for a future collector runtime. It validates configuration authority only: source identity, environment, operation class, endpoint/operation allowlist, coin/interval, capture mode, runtime-disabled default, kill-switch fail-closed behavior, credential absence, private/user/account absence, and no-write/no-execution proof.
+A3 froze a pure public read-only transport preflight contract for a future collector runtime. It validates configuration authority only: source identity, environment, operation class, endpoint/operation allowlist, coin/interval, capture mode, runtime-disabled default, kill-switch fail-closed behavior, credential absence, private/user/account absence, and no-write/no-execution proof.
 
 A3 does not implement live transport.
+
+## Active slice
+
+`V0-01A4 / OFFICIAL_RATE_LIMIT_AUTHORITY_FREEZE`
+
+A4 freezes the official rate-limit authority contract required before any future public read-only live transport runtime. It defines the only valid status states, preserves unresolved fail-closed behavior, and defines the complete metadata required before a later task may consider official numeric rate limits resolved.
+
+A4 preflight attempted to read the official Hyperliquid rate-limit GitBook page, but the page returned an unexpected-error response through the available tooling. Because the official numeric limits were not machine-readable and independently citable in this window, A4 keeps `RATE_LIMIT_STATUS = UNRESOLVED_OFFICIAL_LIMIT` and encodes no numeric limits.
+
+A4 does not implement live transport and does not authorize live transport.
 
 ## Fixed A0 authority versions
 
@@ -37,21 +45,22 @@ OBSERVATION_SLOT_VERSION: trader-assist-v0/raw-observation-slot/v2
 MANIFEST_FORMAT_VERSION: 0.1.0
 MANIFEST_HASH_CHAIN_VERSION: trader-assist-v0/raw-manifest-entry/v1
 MANIFEST_CHECKPOINT_VERSION: 0.1.0
-MANIFEST_CHECKPOINT_HASH_VERSION: trader-assist-v0/raw-manifest-checkpoint/v1
 REPLAY_REPORT_VERSION: 0.1.0
 ```
 
 A0 supports only these values. Callers cannot override them, and the generated JSON Schemas expose them as `const` authorities.
 
-## A1 frozen authorities used by A2/A3
+## A1/A3/A4 frozen authorities used by later slices
 
 ```text
 A1_CONTRACT_ID: V0-01A1-SCOPE-FREEZE
 A3_CONTRACT_ID: V0-01A3-PUBLIC-READONLY-TRANSPORT-PREFLIGHT-CONTRACT
+A4_CONTRACT_ID: V0-01A4-OFFICIAL-RATE-LIMIT-AUTHORITY-FREEZE
 SOURCE_ID: hyperliquid-public-mainnet
 ENVIRONMENT: mainnet public read-only
 OPERATION_CLASS: public read-only observation only
 RATE_LIMIT_STATUS: UNRESOLVED_OFFICIAL_LIMIT
+RATE_LIMIT_ALLOWED_STATUSES: UNRESOLVED_OFFICIAL_LIMIT, OFFICIAL_NUMERIC_LIMIT_RESOLVED
 CANDLE_WS_ENVELOPE_SHAPES: data:Candle, data:Candle[]
 CAPTURE_MODES: WS_TEXT_UTF8_APPLICATION_PAYLOAD, HTTP_RESPONSE_BODY
 ALLOWED_COINS: BTC, ETH
@@ -77,13 +86,36 @@ The A3 preflight contract is not a collector runtime, not a parser, not a candle
 
 `mainnet public read-only` is a public source identity / environment label. It is not Mainnet execution enablement.
 
+## A4 allowed
+
+- define the official rate-limit authority contract;
+- define the only allowed rate-limit status states;
+- preserve `UNRESOLVED_OFFICIAL_LIMIT` while official numeric limits are not readable, citable, and complete;
+- define metadata required for a future resolved candidate: official title, official location, verification date, source kind, readability, numeric field names, units, operation scope, and absence of ambiguous fields;
+- reject third-party, community, inferred, remembered, blog, forum, or model-memory numeric-limit material;
+- reject live runtime enablement from rate-limit authority checks;
+- prove that resolved rate-limit metadata alone still does not authorize live transport in A4.
+
+## A4 prohibited
+
+A4 must not encode numeric limit values unless a later exact-head implementation window can read and cite unambiguous official documentation. A4 must not add HTTP/WebSocket clients, socket/DNS access, async runtime, event loop, live endpoint connection, polling/reconnect/heartbeat/health/backfill runtime, collector runtime, account material, credentials, signing, nonce, exchange write path, order mutation, strategy, AI/risk layer, dependency change, CI change, schemas, fixtures, or operational payloads.
+
 ## Rate-limit entry gate
 
 Official numeric rate limits remain `UNRESOLVED_OFFICIAL_LIMIT` until an implementation window can read and encode only official documented values. While numeric limits are unresolved, live polling, WebSocket reconnect, backfill, health runtime, or any public transport runtime remains prohibited.
 
 Third-party, remembered, inferred, community, blog, StackOverflow, Discord, or model-memory rate-limit numbers are not authority.
 
-A3 must not resolve official numeric rate limits unless project control amends the task after current official docs are readable and cited.
+A4 must not resolve official numeric rate limits unless project control amends the task after current official docs are readable and cited.
+
+A4 recognizes only these rate-limit states:
+
+```text
+UNRESOLVED_OFFICIAL_LIMIT
+OFFICIAL_NUMERIC_LIMIT_RESOLVED
+```
+
+The current frozen state is `UNRESOLVED_OFFICIAL_LIMIT`.
 
 ## A1/A3 read-only transport checks
 
