@@ -18,7 +18,7 @@ A4 froze the official-only rate-limit authority contract. `RATE_LIMIT_STATUS` re
 
 A5 is a bounded offline-only extraction slice. It accepts an exact `RawEventV0` plus caller-supplied exact matching candle payload bytes and produces a typed, domain-separated `CandlePayloadExtractionV0`. It does not read `payload_ref`, connect to any endpoint, write Bronze, emit `NormalizedEventV0`, enter Silver, reconcile revisions, or infer candle finality.
 
-`mainnet public read only` remains only a source identity and environment label. It is not Mainnet execution enablement.
+`mainnet public read-only` remains only a source identity and environment label. It is not Mainnet execution enablement.
 
 This repository still contains no network client, live endpoint connection, credential, account address, wallet, signing code, nonce handling, exchange-write path, order mutation, Testnet/Mainnet execution enablement, strategy logic, AI recommendation, risk sizing, health runtime, database, dashboard, or soak runner.
 
