@@ -38,6 +38,7 @@ A6 accepts only independently revalidated exact A5 WebSocket and Info candle ext
 - compare the logical-key union in `(open_time_ms, candle_logical_key)` order;
 - compare only close time, OHLC, base volume, and trade count in the frozen field order;
 - emit only `MATCH`, `CONFLICT`, `WS_ONLY`, and `INFO_ONLY` with exact counts and a domain-separated report hash;
+- reject noncanonical A6 JSON wire encodings and keep generated Schema role/status constraints in parity with runtime, while requiring runtime validation for dynamic semantic authority;
 - allow empty/empty inputs without sentinel/default evidence;
 - keep tolerance, source priority, latest-wins, finality, revisions, canonical winner, normalization, and Silver promotion out of scope.
 

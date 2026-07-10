@@ -117,6 +117,8 @@ exact A5 WebSocket extraction + exact A5 Info extraction
 
 A6 binds each item to its logical identity, nullable WS/Info candle and extraction authorities, and exact ordered differences. Identity inconsistency fails closed. Empty/empty inputs yield an empty comparison tuple and four zero counts.
 
+The portable A6 JSON Schema validates structure, JSON types and patterns, frozen WS/Info role pairings, and status/source-presence constraints expressible in standard JSON Schema. Schema validation alone does not authenticate an A6 report; runtime semantic validation remains mandatory for reconciliation-hash recomputation, dynamic counts, uniqueness, canonical item and difference ordering, cross-item identity, and exact difference authority.
+
 A6 applies no tolerance, normalization, source priority, latest-wins rule, revision ordering, finality inference, or canonical winner selection. It emits no `NormalizedEventV0`, writes no Silver or other persistence, and adds no network, health, gap, backfill, strategy, AI, risk, dashboard, credential, or execution capability.
 
 Current authority state:

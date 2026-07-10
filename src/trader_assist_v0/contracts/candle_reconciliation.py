@@ -6,7 +6,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
 from pydantic.config import ExtraValues
 
 from .candles import (
@@ -26,6 +26,49 @@ from .common import (
 A6_CONTRACT_ID = "V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT"
 A6_SCHEMA_VERSION = "0.1.0"
 A6_HASH_VERSION = "trader-assist-v0/candle-cross-source-reconciliation/v1"
+
+_A6_INTEGER_WIRE_FIELDS = frozenset(
+    {
+        "open_time_ms",
+        "close_time_ms",
+        "trade_count",
+        "match_count",
+        "conflict_count",
+        "ws_only_count",
+        "info_only_count",
+    }
+)
+_A6_STRING_WIRE_FIELDS = frozenset(
+    {
+        "schema_version",
+        "contract_id",
+        "hash_version",
+        "source_id",
+        "coin",
+        "candle_interval",
+        "ws_source_event_id",
+        "ws_extraction_hash",
+        "info_source_event_id",
+        "info_extraction_hash",
+        "reconciliation_hash",
+        "candle_logical_key",
+        "status",
+        "side",
+        "source_event_id",
+        "extraction_hash",
+        "endpoint_id",
+        "operation_type",
+        "envelope_shape",
+        "field_name",
+        "ws_value",
+        "info_value",
+        "open_price",
+        "high_price",
+        "low_price",
+        "close_price",
+        "volume_base",
+    }
+)
 
 CANDLE_CROSS_SOURCE_COMPARABLE_FIELDS = (
     "close_time_ms",
@@ -61,8 +104,35 @@ class CandleCrossSourceAuthoritySideV0(StrEnum):
     INFO = "INFO"
 
 
+def _validate_a6_json_wire(value: Any) -> None:
+    if isinstance(value, dict):
+        for field_name, item in value.items():
+            if field_name in _A6_INTEGER_WIRE_FIELDS and type(item) is not int:
+                raise ValueError(f"{field_name} JSON value must be an integer")
+            if field_name in _A6_STRING_WIRE_FIELDS and type(item) is not str:
+                raise ValueError(f"{field_name} JSON value must be a string")
+            _validate_a6_json_wire(item)
+        return
+    if isinstance(value, list):
+        for item in value:
+            _validate_a6_json_wire(item)
+        return
+    if isinstance(value, str) and value != value.strip():
+        raise ValueError("A6 JSON strings must not be whitespace padded")
+
+
 class _A6AuthorityModel(StrictModel):
-    model_config = ConfigDict(revalidate_instances="always")
+    model_config = ConfigDict(
+        revalidate_instances="always",
+        str_strip_whitespace=False,
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_json_wire(cls, value: Any, info: ValidationInfo) -> Any:
+        if info.mode == "json":
+            _validate_a6_json_wire(value)
+        return value
 
     @classmethod
     def model_validate(

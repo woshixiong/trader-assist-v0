@@ -1,4 +1,5 @@
 {
+  "$comment": "Portable structural validation for the A6 reconciliation report. This artifact enforces JSON-Schema-expressible authority constraints only. Complete A6 authority validation requires CandleCrossSourceReconciliationV0 runtime validation, including hash recomputation, dynamic counts, uniqueness, canonical ordering, cross-item identity, and exact difference checks. Schema validation alone does not authenticate an A6 reconciliation report.",
   "$defs": {
     "CandleCrossSourceAuthoritySideV0": {
       "enum": [
@@ -27,6 +28,121 @@
     },
     "CandleCrossSourceComparisonItemV0": {
       "additionalProperties": false,
+      "description": "A6 comparison item with JSON-Schema-enforced source presence and difference cardinality for MATCH, CONFLICT, WS_ONLY, and INFO_ONLY.",
+      "oneOf": [
+        {
+          "properties": {
+            "field_differences": {
+              "maxItems": 0
+            },
+            "info_authority": {
+              "not": {
+                "type": "null"
+              }
+            },
+            "info_candle": {
+              "not": {
+                "type": "null"
+              }
+            },
+            "status": {
+              "const": "MATCH"
+            },
+            "ws_authority": {
+              "not": {
+                "type": "null"
+              }
+            },
+            "ws_candle": {
+              "not": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "field_differences": {
+              "minItems": 1
+            },
+            "info_authority": {
+              "not": {
+                "type": "null"
+              }
+            },
+            "info_candle": {
+              "not": {
+                "type": "null"
+              }
+            },
+            "status": {
+              "const": "CONFLICT"
+            },
+            "ws_authority": {
+              "not": {
+                "type": "null"
+              }
+            },
+            "ws_candle": {
+              "not": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "field_differences": {
+              "maxItems": 0
+            },
+            "info_authority": {
+              "type": "null"
+            },
+            "info_candle": {
+              "type": "null"
+            },
+            "status": {
+              "const": "WS_ONLY"
+            },
+            "ws_authority": {
+              "not": {
+                "type": "null"
+              }
+            },
+            "ws_candle": {
+              "not": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "field_differences": {
+              "maxItems": 0
+            },
+            "info_authority": {
+              "not": {
+                "type": "null"
+              }
+            },
+            "info_candle": {
+              "not": {
+                "type": "null"
+              }
+            },
+            "status": {
+              "const": "INFO_ONLY"
+            },
+            "ws_authority": {
+              "type": "null"
+            },
+            "ws_candle": {
+              "type": "null"
+            }
+          }
+        }
+      ],
       "properties": {
         "candle_interval": {
           "enum": [
@@ -162,6 +278,44 @@
     },
     "CandleCrossSourceInputAuthorityV0": {
       "additionalProperties": false,
+      "description": "A6 input authority with a JSON-Schema-enforced WS or Info endpoint, operation, and envelope role.",
+      "oneOf": [
+        {
+          "properties": {
+            "endpoint_id": {
+              "const": "hl-ws-mainnet-public"
+            },
+            "envelope_shape": {
+              "enum": [
+                "WS_DATA_CANDLE",
+                "WS_DATA_CANDLE_ARRAY"
+              ]
+            },
+            "operation_type": {
+              "const": "candle"
+            },
+            "side": {
+              "const": "WS"
+            }
+          }
+        },
+        {
+          "properties": {
+            "endpoint_id": {
+              "const": "hl-info-mainnet-public"
+            },
+            "envelope_shape": {
+              "const": "INFO_CANDLE_ARRAY"
+            },
+            "operation_type": {
+              "const": "candleSnapshot"
+            },
+            "side": {
+              "const": "INFO"
+            }
+          }
+        }
+      ],
       "properties": {
         "endpoint_id": {
           "enum": [
@@ -286,6 +440,7 @@
     }
   },
   "additionalProperties": false,
+  "description": "Portable structural validation for the A6 reconciliation report. This artifact enforces JSON-Schema-expressible authority constraints only. Complete A6 authority validation requires CandleCrossSourceReconciliationV0 runtime validation, including hash recomputation, dynamic counts, uniqueness, canonical ordering, cross-item identity, and exact difference checks. Schema validation alone does not authenticate an A6 reconciliation report.",
   "properties": {
     "candle_interval": {
       "enum": [

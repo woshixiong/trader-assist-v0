@@ -106,7 +106,9 @@ Both inputs must have identical source, coin, and candle interval identities. Ea
 - exact logical-key union comparison with deterministic ordering;
 - exact field equality without tolerance or normalization;
 - typed per-item source authorities, exact field differences, status counts, and a domain-separated reconciliation hash;
-- self-validating immutable Pydantic models and generated JSON Schema.
+- strict non-coercing A6 JSON wire validation, self-validating immutable Pydantic models, and generated JSON Schema for structural and standard JSON-Schema-expressible authority constraints.
+
+The portable Schema enforces frozen input-role pairings and comparison-status/source-presence coupling. It cannot recompute the reconciliation hash, dynamic counts, business-key uniqueness, canonical item/difference ordering, cross-item identity, or exact difference values. Schema validation alone is not complete A6 authority validation; runtime semantic validation remains mandatory.
 
 ## A6 prohibited
 

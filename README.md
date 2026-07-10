@@ -18,7 +18,7 @@ A4 froze the official-only rate-limit authority contract. `RATE_LIMIT_STATUS` re
 
 A5 is a bounded offline-only extraction slice. It accepts an exact `RawEventV0` plus caller-supplied exact matching candle payload bytes and produces a typed, domain-separated `CandlePayloadExtractionV0`. It does not read `payload_ref`, connect to any endpoint, write Bronze, emit `NormalizedEventV0`, enter Silver, reconcile revisions, or infer candle finality.
 
-A6 is a bounded offline-only reconciliation slice. It accepts independently revalidated exact A5 WebSocket and Info candle extractions, compares their union by the A5 candle logical key, and emits only deterministic `MATCH`, `CONFLICT`, `WS_ONLY`, and `INFO_ONLY` evidence. It applies no tolerance or source priority and does not select a canonical winner, order revisions, infer finality, emit `NormalizedEventV0`, or persist Silver data.
+A6 is a bounded offline-only reconciliation slice. It accepts independently revalidated exact A5 WebSocket and Info candle extractions, compares their union by the A5 candle logical key, and emits only deterministic `MATCH`, `CONFLICT`, `WS_ONLY`, and `INFO_ONLY` evidence. Its portable JSON Schema validates structure and standard JSON-Schema-expressible role/status constraints; complete authority validation still requires the A6 runtime semantic validators. It applies no tolerance or source priority and does not select a canonical winner, order revisions, infer finality, emit `NormalizedEventV0`, or persist Silver data.
 
 `mainnet public read-only` remains only a source identity and environment label. It is not Mainnet execution enablement.
 

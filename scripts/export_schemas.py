@@ -70,6 +70,14 @@ COMPACT_MODELS = frozenset(
 )
 
 PYDANTIC_DECIMAL_STRING_PATTERN = r"^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$"
+A6_SCHEMA_BOUNDARY_DESCRIPTION = (
+    "Portable structural validation for the A6 reconciliation report. This artifact "
+    "enforces JSON-Schema-expressible authority constraints only. Complete A6 authority "
+    "validation requires CandleCrossSourceReconciliationV0 runtime validation, including "
+    "hash recomputation, dynamic counts, uniqueness, canonical ordering, cross-item "
+    "identity, and exact difference checks. Schema validation alone does not authenticate "
+    "an A6 reconciliation report."
+)
 
 
 def _decimal_pattern(constraints: dict[str, Any]) -> str:
@@ -139,8 +147,97 @@ def _portable_schema(value: Any) -> Any:
     return value
 
 
+def _a6_authority_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    definitions = schema.get("$defs")
+    if not isinstance(definitions, dict):
+        raise ValueError("A6 schema is missing definitions")
+    authority = definitions.get("CandleCrossSourceInputAuthorityV0")
+    comparison = definitions.get("CandleCrossSourceComparisonItemV0")
+    if not isinstance(authority, dict) or not isinstance(comparison, dict):
+        raise ValueError("A6 schema is missing authority definitions")
+
+    schema["$comment"] = A6_SCHEMA_BOUNDARY_DESCRIPTION
+    schema["description"] = A6_SCHEMA_BOUNDARY_DESCRIPTION
+    authority["description"] = (
+        "A6 input authority with a JSON-Schema-enforced WS or Info endpoint, operation, "
+        "and envelope role."
+    )
+    authority["oneOf"] = [
+        {
+            "properties": {
+                "side": {"const": "WS"},
+                "endpoint_id": {"const": "hl-ws-mainnet-public"},
+                "operation_type": {"const": "candle"},
+                "envelope_shape": {
+                    "enum": ["WS_DATA_CANDLE", "WS_DATA_CANDLE_ARRAY"]
+                },
+            }
+        },
+        {
+            "properties": {
+                "side": {"const": "INFO"},
+                "endpoint_id": {"const": "hl-info-mainnet-public"},
+                "operation_type": {"const": "candleSnapshot"},
+                "envelope_shape": {"const": "INFO_CANDLE_ARRAY"},
+            }
+        },
+    ]
+
+    present = {"not": {"type": "null"}}
+    absent = {"type": "null"}
+    comparison["description"] = (
+        "A6 comparison item with JSON-Schema-enforced source presence and difference "
+        "cardinality for MATCH, CONFLICT, WS_ONLY, and INFO_ONLY."
+    )
+    comparison["oneOf"] = [
+        {
+            "properties": {
+                "status": {"const": "MATCH"},
+                "ws_candle": present,
+                "ws_authority": present,
+                "info_candle": present,
+                "info_authority": present,
+                "field_differences": {"maxItems": 0},
+            }
+        },
+        {
+            "properties": {
+                "status": {"const": "CONFLICT"},
+                "ws_candle": present,
+                "ws_authority": present,
+                "info_candle": present,
+                "info_authority": present,
+                "field_differences": {"minItems": 1},
+            }
+        },
+        {
+            "properties": {
+                "status": {"const": "WS_ONLY"},
+                "ws_candle": present,
+                "ws_authority": present,
+                "info_candle": absent,
+                "info_authority": absent,
+                "field_differences": {"maxItems": 0},
+            }
+        },
+        {
+            "properties": {
+                "status": {"const": "INFO_ONLY"},
+                "ws_candle": absent,
+                "ws_authority": absent,
+                "info_candle": present,
+                "info_authority": present,
+                "field_differences": {"maxItems": 0},
+            }
+        },
+    ]
+    return schema
+
+
 def render(model: type[BaseModel]) -> str:
     schema = _portable_schema(model.model_json_schema())
+    if model is CandleCrossSourceReconciliationV0:
+        schema = _a6_authority_schema(schema)
     if model in COMPACT_MODELS:
         return json.dumps(
             schema,

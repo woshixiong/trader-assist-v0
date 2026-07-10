@@ -10,17 +10,19 @@ from typing import Any, cast
 
 import pytest
 from jsonschema import Draft202012Validator
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
-from scripts.export_schemas import render
+from scripts.export_schemas import A6_SCHEMA_BOUNDARY_DESCRIPTION, render
 from trader_assist_v0.contracts.candle_reconciliation import (
     A6_CONTRACT_ID,
     A6_HASH_VERSION,
     A6_SCHEMA_VERSION,
     CANDLE_CROSS_SOURCE_COMPARABLE_FIELDS,
+    CandleCrossSourceAuthoritySideV0,
     CandleCrossSourceComparisonItemV0,
     CandleCrossSourceComparisonStatusV0,
     CandleCrossSourceFieldDifferenceV0,
+    CandleCrossSourceInputAuthorityV0,
     CandleCrossSourceReconciliationV0,
     compute_candle_cross_source_reconciliation_hash,
     compute_candle_cross_source_reconciliation_hash_from_payload,
@@ -145,6 +147,28 @@ def _rehash(value: dict[str, Any]) -> dict[str, Any]:
             compute_candle_cross_source_reconciliation_hash_from_payload(material)
         ),
     }
+
+
+def _wire(report: CandleCrossSourceReconciliationV0) -> dict[str, Any]:
+    return cast(dict[str, Any], json.loads(report.model_dump_json()))
+
+
+def _validate_runtime_json(value: dict[str, Any]) -> CandleCrossSourceReconciliationV0:
+    return CandleCrossSourceReconciliationV0.model_validate_json(
+        json.dumps(value, separators=(",", ":"))
+    )
+
+
+def _base_class_bypasses(model: BaseModel, update: dict[str, Any]) -> tuple[BaseModel, ...]:
+    payload = BaseModel.model_dump(model, mode="python", round_trip=True)
+    payload.update(update)
+    authority_base = type(model).__mro__[1]
+    return (
+        BaseModel.model_copy(model, update=update),
+        BaseModel.copy(model, update=update),
+        super(authority_base, model).model_copy(update=update),
+        BaseModel.model_construct.__func__(type(model), **payload),
+    )
 
 
 def _replace_nested(
@@ -516,6 +540,243 @@ def test_comparison_and_report_models_block_construct_copy_and_subclasses() -> N
         ReconciliationSubclass.model_validate(report.model_dump(mode="python", round_trip=True))
 
 
+@pytest.mark.parametrize(
+    ("path", "replacement"),
+    [
+        (("match_count",), "1"),
+        (("match_count",), 1.0),
+        (("comparisons", 0, "open_time_ms"), "1000"),
+        (("comparisons", 0, "open_time_ms"), 1000.0),
+        (("comparisons", 0, "ws_candle", "open_time_ms"), "1000"),
+        (("comparisons", 0, "ws_candle", "open_time_ms"), 1000.0),
+        (("comparisons", 0, "ws_candle", "trade_count"), "7"),
+        (("comparisons", 0, "ws_candle", "trade_count"), 7.0),
+        (("comparisons", 0, "ws_candle", "trade_count"), True),
+        (("ws_source_event_id",), " " + ("1" * 64)),
+        (("comparisons", 0, "ws_authority", "extraction_hash"), ("a" * 64) + " "),
+        (("contract_id",), " " + A6_CONTRACT_ID),
+        (("comparisons", 0, "status"), "CONFLICT "),
+        (("comparisons", 0, "ws_authority", "side"), " WS"),
+        (("comparisons", 0, "ws_authority", "side"), 1),
+        (("comparisons", 0, "field_differences", 0, "ws_value"), 7),
+    ],
+)
+def test_a6_public_json_rejects_noncanonical_scalar_encodings(
+    path: tuple[str | int, ...],
+    replacement: Any,
+) -> None:
+    payload = _wire(
+        _reconcile(
+            (_candle(open_time_ms=1000),),
+            (_candle(open_time_ms=1000, trade_count=8),),
+        )
+    )
+    _replace_nested(payload, path, replacement)
+    with pytest.raises(ValidationError, match="JSON value|whitespace padded"):
+        _validate_runtime_json(payload)
+
+
+def test_schema_expressible_role_and_status_corpus_fails_schema_and_runtime() -> None:
+    schema = json.loads(render(CandleCrossSourceReconciliationV0))
+    validator = Draft202012Validator(schema)
+    match = _wire(_reconcile((_candle(open_time_ms=1000),), (_candle(open_time_ms=1000),)))
+    conflict = _wire(
+        _reconcile(
+            (_candle(open_time_ms=1000),),
+            (_candle(open_time_ms=1000, trade_count=8),),
+        )
+    )
+    ws_only = _wire(_reconcile((_candle(open_time_ms=1000),), ()))
+    info_only = _wire(_reconcile((), (_candle(open_time_ms=1000),)))
+
+    malformed: list[tuple[str, dict[str, Any]]] = []
+    for field, invalid in (
+        ("endpoint_id", "hl-info-mainnet-public"),
+        ("operation_type", "candleSnapshot"),
+        ("envelope_shape", "INFO_CANDLE_ARRAY"),
+    ):
+        value = copy.deepcopy(conflict)
+        value["comparisons"][0]["ws_authority"][field] = invalid
+        malformed.append((f"WS role {field}", _rehash(value)))
+    for field, invalid in (
+        ("endpoint_id", "hl-ws-mainnet-public"),
+        ("operation_type", "candle"),
+        ("envelope_shape", "WS_DATA_CANDLE"),
+    ):
+        value = copy.deepcopy(conflict)
+        value["comparisons"][0]["info_authority"][field] = invalid
+        malformed.append((f"Info role {field}", _rehash(value)))
+
+    match_missing = copy.deepcopy(match)
+    match_missing["comparisons"][0]["info_candle"] = None
+    match_missing["comparisons"][0]["info_authority"] = None
+    malformed.append(("MATCH missing source", _rehash(match_missing)))
+
+    match_differences = copy.deepcopy(match)
+    match_differences["comparisons"][0]["field_differences"] = copy.deepcopy(
+        conflict["comparisons"][0]["field_differences"]
+    )
+    malformed.append(("MATCH with differences", _rehash(match_differences)))
+
+    conflict_missing = copy.deepcopy(conflict)
+    conflict_missing["comparisons"][0]["info_candle"] = None
+    conflict_missing["comparisons"][0]["info_authority"] = None
+    malformed.append(("CONFLICT missing source", _rehash(conflict_missing)))
+
+    conflict_empty = copy.deepcopy(conflict)
+    conflict_empty["comparisons"][0]["field_differences"] = []
+    malformed.append(("CONFLICT without differences", _rehash(conflict_empty)))
+
+    ws_with_info = copy.deepcopy(ws_only)
+    ws_with_info["info_source_event_id"] = match["info_source_event_id"]
+    ws_with_info["info_extraction_hash"] = match["info_extraction_hash"]
+    ws_with_info["comparisons"][0]["info_candle"] = copy.deepcopy(
+        match["comparisons"][0]["info_candle"]
+    )
+    ws_with_info["comparisons"][0]["info_authority"] = copy.deepcopy(
+        match["comparisons"][0]["info_authority"]
+    )
+    malformed.append(("WS_ONLY with Info source", _rehash(ws_with_info)))
+
+    info_with_ws = copy.deepcopy(info_only)
+    info_with_ws["ws_source_event_id"] = match["ws_source_event_id"]
+    info_with_ws["ws_extraction_hash"] = match["ws_extraction_hash"]
+    info_with_ws["comparisons"][0]["ws_candle"] = copy.deepcopy(
+        match["comparisons"][0]["ws_candle"]
+    )
+    info_with_ws["comparisons"][0]["ws_authority"] = copy.deepcopy(
+        match["comparisons"][0]["ws_authority"]
+    )
+    malformed.append(("INFO_ONLY with WS source", _rehash(info_with_ws)))
+
+    for name, payload in malformed:
+        assert not validator.is_valid(payload), name
+        with pytest.raises(ValidationError):
+            _validate_runtime_json(payload)
+
+
+def test_coherently_rehashed_dynamic_invalid_corpus_requires_runtime_validation() -> None:
+    report = _reconcile(
+        (
+            _candle(open_time_ms=1000),
+            _candle(open_time_ms=2000),
+            _candle(open_time_ms=3000),
+        ),
+        (
+            _candle(
+                open_time_ms=1000,
+                close_time_ms=2001,
+                high_price="3003",
+                close_price="3002",
+                volume_base="13.5",
+                trade_count=8,
+            ),
+            _candle(open_time_ms=2000),
+            _candle(open_time_ms=4000),
+        ),
+    )
+    base = _wire(report)
+    validator = Draft202012Validator(
+        json.loads(render(CandleCrossSourceReconciliationV0))
+    )
+
+    duplicate_identity = copy.deepcopy(base)
+    duplicate_identity["comparisons"].insert(
+        2,
+        copy.deepcopy(duplicate_identity["comparisons"][1]),
+    )
+    duplicate_identity["match_count"] += 1
+
+    duplicate_membership = copy.deepcopy(base)
+    duplicate_membership["comparisons"][2]["ws_candle"] = copy.deepcopy(
+        duplicate_membership["comparisons"][1]["ws_candle"]
+    )
+
+    comparison_order = copy.deepcopy(base)
+    comparison_order["comparisons"][0:2] = reversed(comparison_order["comparisons"][0:2])
+
+    difference_order = copy.deepcopy(base)
+    difference_order["comparisons"][0]["field_differences"] = list(
+        reversed(difference_order["comparisons"][0]["field_differences"])
+    )
+
+    wrong_identity = copy.deepcopy(base)
+    wrong_identity["comparisons"][1]["coin"] = "BTC"
+
+    wrong_counts = copy.deepcopy(base)
+    wrong_counts["match_count"] += 1
+
+    status_source = copy.deepcopy(base)
+    status_source["comparisons"][1]["status"] = "WS_ONLY"
+    status_source["match_count"] -= 1
+    status_source["ws_only_count"] += 1
+
+    forged_values = copy.deepcopy(base)
+    forged_values["comparisons"][0]["field_differences"][0]["ws_value"] = "999"
+
+    malformed = (
+        ("duplicate comparison logical identity", duplicate_identity, True),
+        ("duplicate source membership", duplicate_membership, True),
+        ("noncanonical comparison order", comparison_order, True),
+        ("noncanonical field-difference order", difference_order, True),
+        ("wrong item identity", wrong_identity, True),
+        ("wrong counts", wrong_counts, True),
+        ("status/source inconsistency", status_source, False),
+        ("forged difference values", forged_values, True),
+    )
+    for name, value, schema_may_pass in malformed:
+        payload = _rehash(value)
+        material = copy.deepcopy(payload)
+        supplied_hash = material.pop("reconciliation_hash")
+        assert supplied_hash == compute_candle_cross_source_reconciliation_hash_from_payload(
+            material
+        ), name
+        assert validator.is_valid(payload) is schema_may_pass, name
+        with pytest.raises(ValidationError):
+            _validate_runtime_json(payload)
+
+
+@pytest.mark.filterwarnings("ignore:The `copy` method is deprecated")
+@pytest.mark.filterwarnings("ignore:Pydantic serializer warnings")
+def test_base_class_bypass_attacks_fail_at_a5_and_a6_public_boundaries() -> None:
+    ws = _extraction(side="ws", candles=(_candle(open_time_ms=1000),))
+    info = _extraction(side="info", candles=(_candle(open_time_ms=1000),))
+    for bypassed in _base_class_bypasses(
+        ws,
+        {"endpoint_id": "hl-info-mainnet-public"},
+    ):
+        with pytest.raises(CandleCrossSourceReconciliationError, match="revalidation"):
+            reconcile_candle_extractions(
+                ws_extraction=cast(Any, bypassed),
+                info_extraction=info,
+            )
+
+    report = reconcile_candle_extractions(ws_extraction=ws, info_extraction=info)
+    item = report.comparisons[0]
+    ws_authority = item.ws_authority
+    assert ws_authority is not None
+    for bypassed in _base_class_bypasses(
+        ws_authority,
+        {"side": CandleCrossSourceAuthoritySideV0.INFO},
+    ):
+        with pytest.raises((ValueError, ValidationError)):
+            CandleCrossSourceInputAuthorityV0.model_validate(bypassed)
+
+    for bypassed in _base_class_bypasses(
+        item,
+        {"status": CandleCrossSourceComparisonStatusV0.WS_ONLY},
+    ):
+        with pytest.raises((ValueError, ValidationError)):
+            CandleCrossSourceComparisonItemV0.model_validate(bypassed)
+
+    for bypassed in _base_class_bypasses(report, {"match_count": 2}):
+        with pytest.raises((ValueError, ValidationError)):
+            CandleCrossSourceReconciliationV0.model_validate(bypassed)
+
+    with pytest.raises(ValueError, match="expected exact"):
+        CandleCrossSourceReconciliationV0.model_validate(ws)
+
+
 def test_runtime_json_schema_and_checked_in_schema_agree() -> None:
     report = _reconcile(
         (_candle(open_time_ms=1000),),
@@ -527,10 +788,19 @@ def test_runtime_json_schema_and_checked_in_schema_agree() -> None:
         / "schemas/v0/CandleCrossSourceReconciliationV0.schema.json"
     )
     assert schema_path.read_text(encoding="utf-8") == rendered
-    validator = Draft202012Validator(json.loads(rendered))
+    schema = json.loads(rendered)
+    validator = Draft202012Validator(schema)
     payload = json.loads(report.model_dump_json())
     assert validator.is_valid(payload)
     assert CandleCrossSourceReconciliationV0.model_validate_json(report.model_dump_json()) == report
+    assert schema["description"] == A6_SCHEMA_BOUNDARY_DESCRIPTION
+    assert "Schema validation alone does not authenticate" in schema["$comment"]
+
+    data_plane = (
+        Path(__file__).resolve().parents[1] / "docs/architecture/V0_01_DATA_PLANE.md"
+    ).read_text(encoding="utf-8")
+    assert "Schema validation alone does not authenticate an A6 report" in data_plane
+    assert "runtime semantic validation remains mandatory" in data_plane
 
 
 def test_repeated_execution_is_deterministic() -> None:
