@@ -72,8 +72,20 @@ class _A5AuthorityModel(StrictModel):
     def copy(
         self,
         *,
-        include: Set[int] | Set[str] | Mapping[int, Any] | Mapping[str, Any] | None = None,
-        exclude: Set[int] | Set[str] | Mapping[int, Any] | Mapping[str, Any] | None = None,
+        include: (
+            Set[int]
+            | Set[str]
+            | Mapping[int, Any]
+            | Mapping[str, Any]
+            | None
+        ) = None,
+        exclude: (
+            Set[int]
+            | Set[str]
+            | Mapping[int, Any]
+            | Mapping[str, Any]
+            | None
+        ) = None,
         update: dict[str, Any] | None = None,
         deep: bool = False,
     ) -> Self:
@@ -126,19 +138,29 @@ class ExtractedCandleV0(_A5AuthorityModel):
             raise ValueError("expected exact ExtractedCandleV0 authority object")
         if self.close_time_ms <= self.open_time_ms:
             raise ValueError("close_time_ms must be greater than open_time_ms")
-        if self.high_price < max(self.open_price, self.close_price, self.low_price):
+        if self.high_price < max(
+            self.open_price,
+            self.close_price,
+            self.low_price,
+        ):
             raise ValueError("high_price is below candle price range")
-        if self.low_price > min(self.open_price, self.close_price, self.high_price):
+        if self.low_price > min(
+            self.open_price,
+            self.close_price,
+            self.high_price,
+        ):
             raise ValueError("low_price is above candle price range")
         return self
 
 
 class CandlePayloadExtractionV0(_A5AuthorityModel):
     schema_version: Literal["0.1.0"] = "0.1.0"
-    contract_id: Literal["V0-01A5-OFFLINE-CANDLE-PAYLOAD-EXTRACTION-CONTRACT"] = A5_CONTRACT_ID
-    extraction_version: Literal["trader-assist-v0/candle-payload-extraction/v1"] = (
-        CANDLE_EXTRACTION_HASH_VERSION
-    )
+    contract_id: Literal[
+        "V0-01A5-OFFLINE-CANDLE-PAYLOAD-EXTRACTION-CONTRACT"
+    ] = A5_CONTRACT_ID
+    extraction_version: Literal[
+        "trader-assist-v0/candle-payload-extraction/v1"
+    ] = CANDLE_EXTRACTION_HASH_VERSION
     source_id: Literal["hyperliquid-public-mainnet"] = SOURCE_ID
     source_event_id: Sha256Hex
     payload_sha256: Sha256Hex
@@ -161,10 +183,14 @@ class CandlePayloadExtractionV0(_A5AuthorityModel):
                 CandleEnvelopeShapeV0.WS_DATA_CANDLE,
                 CandleEnvelopeShapeV0.WS_DATA_CANDLE_ARRAY,
             }:
-                raise ValueError("WebSocket candle extraction has invalid envelope shape")
+                raise ValueError(
+                    "WebSocket candle extraction has invalid envelope shape"
+                )
         else:
             if self.operation_type != "candleSnapshot":
-                raise ValueError("Info candle extraction requires operation candleSnapshot")
+                raise ValueError(
+                    "Info candle extraction requires operation candleSnapshot"
+                )
             if self.envelope_shape is not CandleEnvelopeShapeV0.INFO_CANDLE_ARRAY:
                 raise ValueError("Info candle extraction has invalid envelope shape")
 
@@ -177,7 +203,9 @@ class CandlePayloadExtractionV0(_A5AuthorityModel):
                 open_time_ms=candle.open_time_ms,
             )
             if not hmac.compare_digest(candle.candle_logical_key, expected_key):
-                raise ValueError("candle_logical_key does not match extraction authority")
+                raise ValueError(
+                    "candle_logical_key does not match extraction authority"
+                )
             if candle.candle_logical_key in logical_keys:
                 raise ValueError("duplicate candle logical key in extraction")
             logical_keys.add(candle.candle_logical_key)
@@ -202,7 +230,9 @@ class CandlePayloadExtractionV0(_A5AuthorityModel):
         **forbidden_authority: Any,
     ) -> CandlePayloadExtractionV0:
         if forbidden_authority:
-            raise ValueError("A5 extraction authority fields are implementation-controlled")
+            raise ValueError(
+                "A5 extraction authority fields are implementation-controlled"
+            )
         payload = {
             "schema_version": CANDLE_EXTRACTION_SCHEMA_VERSION,
             "contract_id": A5_CONTRACT_ID,
@@ -221,7 +251,9 @@ class CandlePayloadExtractionV0(_A5AuthorityModel):
         return cls.model_validate({**payload, "extraction_hash": digest})
 
 
-def compute_candle_extraction_hash_from_payload(payload: Mapping[str, Any]) -> str:
+def compute_candle_extraction_hash_from_payload(
+    payload: Mapping[str, Any],
+) -> str:
     return sha256_hex(
         CANDLE_EXTRACTION_HASH_VERSION.encode()
         + b"\0"
@@ -229,7 +261,9 @@ def compute_candle_extraction_hash_from_payload(payload: Mapping[str, Any]) -> s
     )
 
 
-def compute_candle_extraction_hash(extraction: CandlePayloadExtractionV0) -> str:
+def compute_candle_extraction_hash(
+    extraction: CandlePayloadExtractionV0,
+) -> str:
     payload = BaseModel.model_dump(extraction, mode="python", round_trip=True)
     payload.pop("extraction_hash", None)
     return compute_candle_extraction_hash_from_payload(payload)
