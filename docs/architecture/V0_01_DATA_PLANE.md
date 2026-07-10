@@ -62,6 +62,32 @@ A3 adds no HTTP client, WebSocket client, DNS, socket, live endpoint connection,
 
 `mainnet public read-only` is only a public source identity / environment label. It is not Mainnet execution enablement and does not authorize private endpoints, user/account endpoints, `/exchange`, order mutation, signing, nonces, wallets, credentials, or kill-switch bypass.
 
+## A4 official rate-limit authority insertion point
+
+```text
+frozen official rate-limit source identity
+  -> source_kind = official
+  -> title = Rate limits and user limits
+  -> official GitBook location
+  -> status in {UNRESOLVED_OFFICIAL_LIMIT, OFFICIAL_NUMERIC_LIMIT_RESOLVED}
+  -> unresolved state rejects all numeric material
+  -> resolved candidate requires readable official source
+  -> resolved candidate requires field names + units + operation scope
+  -> ambiguity fails closed
+  -> live_transport_authorized remains false
+```
+
+A4 rejects community, third-party, inferred, remembered, blog, forum, Discord, StackOverflow, and model-memory authority metadata in both unresolved and resolved states. A4 encodes no numeric rate-limit values and adds no live transport capability.
+
+Current authority state:
+
+```text
+RATE_LIMIT_STATUS: UNRESOLVED_OFFICIAL_LIMIT
+LIVE_TRANSPORT_AUTHORIZED: FALSE
+ACTIVE_IMPLEMENTATION_SLICE: NONE
+ACTIVE_IMPLEMENTATION_WRITE_LEASE: NONE
+```
+
 ## Identity separation
 
 `payload_sha256` hashes exact bytes. JSON whitespace or key ordering changes therefore change the payload identity.
@@ -70,24 +96,24 @@ The v2 observation slot binds catalog version, catalog hash, catalog-entry hash,
 
 Within one Bronze persistence root, an observation slot and a source-event ID are globally unique rather than segment-local. Re-appending the same complete RawEvent in another segment is globally idempotent and creates no second authority entry. The same slot with different RawEvent authority is a conflict.
 
-A1/A2/A3 do not parse candle payloads into source-native IDs, source-native cursors, normalized timestamps, Silver events, strategy signals, AI explanations, or risk fields. Those fields remain unavailable until a later separately reviewed extractor/normalizer contract exists.
+A1/A2/A3/A4 do not parse candle payloads into source-native IDs, source-native cursors, normalized timestamps, Silver events, strategy signals, AI explanations, or risk fields. Those fields remain unavailable until a later separately reviewed extractor/normalizer contract exists.
 
 ## A1 public source envelope authority
 
 The candle WebSocket contract accepts only these frozen public envelope shapes:
 
 ```text
-data:Candle
-data:Candle[]
+data: Candle
+data: Candle[]
 ```
 
 These tokens describe public envelope policy and fixture shape. They are not runtime subscription code, not connection code, and not transport recovery logic.
 
-## A1/A2/A3 rate-limit authority
+## A1/A2/A3/A4 rate-limit authority
 
-`RATE_LIMIT_STATUS` remains `UNRESOLVED_OFFICIAL_LIMIT`. While that value is present, the entry gate blocks live public transport, polling, reconnect, backfill, and health runtime. A later task may encode official numeric limits only if the values are clearly present in official Hyperliquid documentation at implementation time.
+`RATE_LIMIT_STATUS` remains `UNRESOLVED_OFFICIAL_LIMIT`. While that value is present, the entry gate blocks live public transport, polling, reconnect, backfill, and health runtime.
 
-A3 must not resolve official numeric rate limits unless project control amends the task after current official docs are readable and cited.
+Only the frozen official Hyperliquid rate-limit source identity may supply authority metadata. A later task may encode official numeric limits only if the values are unambiguous, readable, and independently citable in official documentation at implementation time. Even a resolved metadata candidate does not by itself authorize live transport.
 
 ## A1/A3 read-only transport entry checks
 
@@ -143,4 +169,4 @@ The report hash excludes absolute paths, current time, random values, process ID
 
 ## Next gate
 
-A3 completion does not authorize live public transport, health runtime, backfill, reconnect, extractor/normalizer, Silver, strategy, AI recommendation, risk sizing, dashboard, Testnet/Mainnet execution, or exchange write paths. Each later slice requires a separate exact-head lease and review.
+A4 completion does not authorize any later implementation automatically. There is no active implementation slice. Live public transport, health runtime, backfill, reconnect, extractor/normalizer, Silver, strategy, AI recommendation, risk sizing, dashboard, Testnet/Mainnet execution, and exchange write paths each require a separate exact-head scope freeze, explicit write lease, CI success, external independent review, and finalization authorization.
