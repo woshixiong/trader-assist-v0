@@ -104,20 +104,23 @@ A5 does not read `payload_ref`, open files, connect to endpoints, execute REST r
 
 ```text
 exact A5 WebSocket extraction + exact A5 Info extraction
-  -> independent exact-class A5 authority and extraction-hash revalidation
+  -> strict current-representation checks before any coercive conversion
+  -> independent exact-class A5 authority, logical-key and extraction-hash revalidation
   -> frozen endpoint / operation / envelope role validation
   -> identical source / coin / candle-interval identity gate
-  -> union of A5 candle logical keys as sole cross-source identity
+  -> one contract-layer derivation authority builds the complete logical-key union
   -> deterministic (open_time_ms, candle_logical_key) ordering
   -> exact comparable-field equality in frozen field order
   -> MATCH / CONFLICT / WS_ONLY / INFO_ONLY items
   -> exact status counts
-  -> domain-separated CandleCrossSourceReconciliationV0 hash
+  -> embed both complete A5 extraction authorities and matching scalar authority
+  -> domain-separated CandleCrossSourceReconciliationV0 hash over all authority
+  -> runtime reconstructs and requires the same exact complete union
 ```
 
-A6 binds each item to its logical identity, nullable WS/Info candle and extraction authorities, and exact ordered differences. Identity inconsistency fails closed. Empty/empty inputs yield an empty comparison tuple and four zero counts.
+A6 binds each item to its logical identity, nullable WS/Info candle and extraction authorities, and exact ordered differences. The report also embeds both complete A5 extraction authorities, and its scalar source-event and extraction-hash fields must match them. `bind()` accepts only those two exact extractions; the data layer calls the same derivation authority. Every accepted report independently revalidates the embedded A5 authorities and reconstructs comparisons, membership, ordering, differences, and counts from their exact logical-key union before checking the final hash. Identity inconsistency fails closed. Empty/empty inputs yield an empty comparison tuple and four zero counts.
 
-The portable A6 JSON Schema validates structure, JSON types and patterns, frozen WS/Info role pairings, and status/source-presence constraints expressible in standard JSON Schema. Schema validation alone does not authenticate an A6 report; runtime semantic validation remains mandatory for reconciliation-hash recomputation, dynamic counts, uniqueness, canonical item and difference ordering, cross-item identity, and exact difference authority.
+The portable A6 JSON Schema validates structure, mandatory serialized fields for both embedded A5 authorities, JSON types and patterns, frozen WS/Info role pairings, status/source-presence constraints, and canonical ASCII nonnegative integer strings for close-time and trade-count differences. Schema validation alone does not authenticate an A6 report; runtime semantic validation remains mandatory for A5/A6 hash recomputation, exact A5 authority, extraction membership, dynamic counts, uniqueness, canonical item and difference ordering, cross-item identity, exact difference authority, and complete-union proof.
 
 A6 applies no tolerance, normalization, source priority, latest-wins rule, revision ordering, finality inference, or canonical winner selection. It emits no `NormalizedEventV0`, writes no Silver or other persistence, and adds no network, health, gap, backfill, strategy, AI, risk, dashboard, credential, or execution capability.
 

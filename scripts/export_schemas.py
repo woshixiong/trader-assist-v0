@@ -28,6 +28,9 @@ from trader_assist_v0.contracts import (
     SeedProvenanceEntryV0,
     StrategyCandidateV0,
 )
+from trader_assist_v0.contracts.candle_reconciliation import (
+    A6_CANONICAL_NONNEGATIVE_INTEGER_STRING_PATTERN,
+)
 from trader_assist_v0.contracts.common import (
     FINITE_DECIMAL_STRING_PATTERN,
     MAX_DECIMAL_WIRE_LENGTH,
@@ -72,10 +75,11 @@ COMPACT_MODELS = frozenset(
 PYDANTIC_DECIMAL_STRING_PATTERN = r"^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$"
 A6_SCHEMA_BOUNDARY_DESCRIPTION = (
     "Portable structural validation for the A6 reconciliation report. This artifact "
-    "enforces JSON-Schema-expressible authority constraints only. Complete A6 authority "
-    "validation requires CandleCrossSourceReconciliationV0 runtime validation, including "
-    "hash recomputation, dynamic counts, uniqueness, canonical ordering, cross-item "
-    "identity, and exact difference checks. Schema validation alone does not authenticate "
+    "enforces JSON-Schema-expressible authority constraints only, including complete "
+    "serialized A5 field presence and integer field-difference value kinds. Complete A6 "
+    "authority validation requires CandleCrossSourceReconciliationV0 runtime semantic "
+    "validation for hashes, exact A5 authority, membership, ordering, counts, differences, "
+    "and complete logical-key union proof. Schema validation alone does not authenticate "
     "an A6 reconciliation report."
 )
 
@@ -153,8 +157,20 @@ def _a6_authority_schema(schema: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("A6 schema is missing definitions")
     authority = definitions.get("CandleCrossSourceInputAuthorityV0")
     comparison = definitions.get("CandleCrossSourceComparisonItemV0")
-    if not isinstance(authority, dict) or not isinstance(comparison, dict):
+    difference = definitions.get("CandleCrossSourceFieldDifferenceV0")
+    extraction = definitions.get("CandlePayloadExtractionV0")
+    candle = definitions.get("ExtractedCandleV0")
+    if not all(
+        isinstance(item, dict)
+        for item in (authority, comparison, difference, extraction, candle)
+    ):
         raise ValueError("A6 schema is missing authority definitions")
+
+    assert isinstance(authority, dict)
+    assert isinstance(comparison, dict)
+    assert isinstance(difference, dict)
+    assert isinstance(extraction, dict)
+    assert isinstance(candle, dict)
 
     schema["$comment"] = A6_SCHEMA_BOUNDARY_DESCRIPTION
     schema["description"] = A6_SCHEMA_BOUNDARY_DESCRIPTION
@@ -181,6 +197,80 @@ def _a6_authority_schema(schema: dict[str, Any]) -> dict[str, Any]:
                 "envelope_shape": {"const": "INFO_CANDLE_ARRAY"},
             }
         },
+    ]
+
+    extraction_required = [
+        "schema_version",
+        "contract_id",
+        "extraction_version",
+        "source_id",
+        "source_event_id",
+        "payload_sha256",
+        "endpoint_id",
+        "operation_type",
+        "coin",
+        "candle_interval",
+        "envelope_shape",
+        "candles",
+        "extraction_hash",
+    ]
+    extraction["required"] = extraction_required
+    extraction["description"] = (
+        "Complete embedded A5 extraction authority. Every serialized authority field is "
+        "required at the A6 boundary; runtime independently revalidates hashes, candle "
+        "logical keys, duplicates, and the frozen source role."
+    )
+    extraction_properties = extraction.get("properties")
+    if not isinstance(extraction_properties, dict):
+        raise ValueError("A6 embedded extraction schema is missing properties")
+    for field_name in extraction_required:
+        field_schema = extraction_properties.get(field_name)
+        if isinstance(field_schema, dict):
+            field_schema.pop("default", None)
+
+    candle_required = [
+        "candle_logical_key",
+        "open_time_ms",
+        "close_time_ms",
+        "open_price",
+        "high_price",
+        "low_price",
+        "close_price",
+        "volume_base",
+        "trade_count",
+    ]
+    candle["required"] = candle_required
+    candle["description"] = (
+        "Complete embedded A5 candle authority. Runtime validation is required to prove "
+        "logical-key and extraction membership authority."
+    )
+
+    difference["description"] = (
+        "A6 exact field difference. close_time_ms and trade_count values use canonical "
+        "nonnegative ASCII integer strings; other comparable values use canonical finite "
+        "decimal strings."
+    )
+    difference["allOf"] = [
+        {
+            "if": {
+                "properties": {
+                    "field_name": {"enum": ["close_time_ms", "trade_count"]}
+                },
+                "required": ["field_name"],
+            },
+            "then": {
+                "properties": {
+                    "ws_value": {
+                        "type": "string",
+                        "pattern": A6_CANONICAL_NONNEGATIVE_INTEGER_STRING_PATTERN,
+                    },
+                    "info_value": {
+                        "type": "string",
+                        "pattern": A6_CANONICAL_NONNEGATIVE_INTEGER_STRING_PATTERN,
+                    },
+                }
+            },
+        }
     ]
 
     present = {"not": {"type": "null"}}

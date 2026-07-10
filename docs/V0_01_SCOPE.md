@@ -103,12 +103,14 @@ Both inputs must have identical source, coin, and candle interval identities. Ea
 
 - exact-class independent revalidation of both A5 extraction authorities and nested candles;
 - frozen WS/Info role validation and role-reversal rejection;
-- exact logical-key union comparison with deterministic ordering;
+- complete embedded A5 extraction authorities plus matching scalar event/hash authority;
+- exact logical-key union reconstruction with deterministic ordering during both construction and validation;
+- one contract-layer derivation authority used by `bind()` and the data-layer reconciler;
 - exact field equality without tolerance or normalization;
 - typed per-item source authorities, exact field differences, status counts, and a domain-separated reconciliation hash;
-- strict non-coercing A6 JSON wire validation, self-validating immutable Pydantic models, and generated JSON Schema for structural and standard JSON-Schema-expressible authority constraints.
+- strict non-coercing A6 decoded-mapping and exact-object validation on every Pydantic core path, self-validating immutable models, and generated JSON Schema for structural and standard JSON-Schema-expressible authority constraints.
 
-The portable Schema enforces frozen input-role pairings and comparison-status/source-presence coupling. It cannot recompute the reconciliation hash, dynamic counts, business-key uniqueness, canonical item/difference ordering, cross-item identity, or exact difference values. Schema validation alone is not complete A6 authority validation; runtime semantic validation remains mandatory.
+The portable Schema enforces mandatory serialized fields for the two complete embedded A5 authorities, frozen input-role pairings, comparison-status/source-presence coupling, and canonical ASCII nonnegative integer strings for close-time and trade-count differences. It cannot recompute A5 or A6 hashes, dynamic counts, business-key uniqueness, canonical item/difference ordering, extraction membership, cross-item identity, exact difference values, or the complete union. Schema validation alone is not complete A6 authority validation; runtime semantic validation remains mandatory.
 
 ## A6 prohibited
 

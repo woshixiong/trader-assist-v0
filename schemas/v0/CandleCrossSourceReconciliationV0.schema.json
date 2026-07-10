@@ -1,5 +1,5 @@
 {
-  "$comment": "Portable structural validation for the A6 reconciliation report. This artifact enforces JSON-Schema-expressible authority constraints only. Complete A6 authority validation requires CandleCrossSourceReconciliationV0 runtime validation, including hash recomputation, dynamic counts, uniqueness, canonical ordering, cross-item identity, and exact difference checks. Schema validation alone does not authenticate an A6 reconciliation report.",
+  "$comment": "Portable structural validation for the A6 reconciliation report. This artifact enforces JSON-Schema-expressible authority constraints only, including complete serialized A5 field presence and integer field-difference value kinds. Complete A6 authority validation requires CandleCrossSourceReconciliationV0 runtime semantic validation for hashes, exact A5 authority, membership, ordering, counts, differences, and complete logical-key union proof. Schema validation alone does not authenticate an A6 reconciliation report.",
   "$defs": {
     "CandleCrossSourceAuthoritySideV0": {
       "enum": [
@@ -202,7 +202,6 @@
         },
         "source_id": {
           "const": "hyperliquid-public-mainnet",
-          "default": "hyperliquid-public-mainnet",
           "title": "Source Id",
           "type": "string"
         },
@@ -232,6 +231,7 @@
       },
       "required": [
         "candle_logical_key",
+        "source_id",
         "coin",
         "candle_interval",
         "open_time_ms",
@@ -257,6 +257,36 @@
     },
     "CandleCrossSourceFieldDifferenceV0": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "field_name": {
+                "enum": [
+                  "close_time_ms",
+                  "trade_count"
+                ]
+              }
+            },
+            "required": [
+              "field_name"
+            ]
+          },
+          "then": {
+            "properties": {
+              "info_value": {
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": "string"
+              },
+              "ws_value": {
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": "string"
+              }
+            }
+          }
+        }
+      ],
+      "description": "A6 exact field difference. close_time_ms and trade_count values use canonical nonnegative ASCII integer strings; other comparable values use canonical finite decimal strings.",
       "properties": {
         "field_name": {
           "$ref": "#/$defs/CandleCrossSourceComparableFieldV0"
@@ -370,8 +400,112 @@
       "title": "CandleEnvelopeShapeV0",
       "type": "string"
     },
+    "CandlePayloadExtractionV0": {
+      "additionalProperties": false,
+      "description": "Complete embedded A5 extraction authority. Every serialized authority field is required at the A6 boundary; runtime independently revalidates hashes, candle logical keys, duplicates, and the frozen source role.",
+      "properties": {
+        "candle_interval": {
+          "enum": [
+            "1m",
+            "3m",
+            "5m",
+            "15m",
+            "1h"
+          ],
+          "title": "Candle Interval",
+          "type": "string"
+        },
+        "candles": {
+          "items": {
+            "$ref": "#/$defs/ExtractedCandleV0"
+          },
+          "title": "Candles",
+          "type": "array"
+        },
+        "coin": {
+          "enum": [
+            "BTC",
+            "ETH"
+          ],
+          "title": "Coin",
+          "type": "string"
+        },
+        "contract_id": {
+          "const": "V0-01A5-OFFLINE-CANDLE-PAYLOAD-EXTRACTION-CONTRACT",
+          "title": "Contract Id",
+          "type": "string"
+        },
+        "endpoint_id": {
+          "enum": [
+            "hl-ws-mainnet-public",
+            "hl-info-mainnet-public"
+          ],
+          "title": "Endpoint Id",
+          "type": "string"
+        },
+        "envelope_shape": {
+          "$ref": "#/$defs/CandleEnvelopeShapeV0"
+        },
+        "extraction_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Extraction Hash",
+          "type": "string"
+        },
+        "extraction_version": {
+          "const": "trader-assist-v0/candle-payload-extraction/v1",
+          "title": "Extraction Version",
+          "type": "string"
+        },
+        "operation_type": {
+          "enum": [
+            "candle",
+            "candleSnapshot"
+          ],
+          "title": "Operation Type",
+          "type": "string"
+        },
+        "payload_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Payload Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "0.1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_event_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Event Id",
+          "type": "string"
+        },
+        "source_id": {
+          "const": "hyperliquid-public-mainnet",
+          "title": "Source Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "contract_id",
+        "extraction_version",
+        "source_id",
+        "source_event_id",
+        "payload_sha256",
+        "endpoint_id",
+        "operation_type",
+        "coin",
+        "candle_interval",
+        "envelope_shape",
+        "candles",
+        "extraction_hash"
+      ],
+      "title": "CandlePayloadExtractionV0",
+      "type": "object"
+    },
     "ExtractedCandleV0": {
       "additionalProperties": false,
+      "description": "Complete embedded A5 candle authority. Runtime validation is required to prove logical-key and extraction membership authority.",
       "properties": {
         "candle_logical_key": {
           "pattern": "^[0-9a-f]{64}$",
@@ -440,7 +574,7 @@
     }
   },
   "additionalProperties": false,
-  "description": "Portable structural validation for the A6 reconciliation report. This artifact enforces JSON-Schema-expressible authority constraints only. Complete A6 authority validation requires CandleCrossSourceReconciliationV0 runtime validation, including hash recomputation, dynamic counts, uniqueness, canonical ordering, cross-item identity, and exact difference checks. Schema validation alone does not authenticate an A6 reconciliation report.",
+  "description": "Portable structural validation for the A6 reconciliation report. This artifact enforces JSON-Schema-expressible authority constraints only, including complete serialized A5 field presence and integer field-difference value kinds. Complete A6 authority validation requires CandleCrossSourceReconciliationV0 runtime semantic validation for hashes, exact A5 authority, membership, ordering, counts, differences, and complete logical-key union proof. Schema validation alone does not authenticate an A6 reconciliation report.",
   "properties": {
     "candle_interval": {
       "enum": [
@@ -475,15 +609,16 @@
     },
     "contract_id": {
       "const": "V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT",
-      "default": "V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT",
       "title": "Contract Id",
       "type": "string"
     },
     "hash_version": {
       "const": "trader-assist-v0/candle-cross-source-reconciliation/v1",
-      "default": "trader-assist-v0/candle-cross-source-reconciliation/v1",
       "title": "Hash Version",
       "type": "string"
+    },
+    "info_extraction": {
+      "$ref": "#/$defs/CandlePayloadExtractionV0"
     },
     "info_extraction_hash": {
       "pattern": "^[0-9a-f]{64}$",
@@ -512,15 +647,16 @@
     },
     "schema_version": {
       "const": "0.1.0",
-      "default": "0.1.0",
       "title": "Schema Version",
       "type": "string"
     },
     "source_id": {
       "const": "hyperliquid-public-mainnet",
-      "default": "hyperliquid-public-mainnet",
       "title": "Source Id",
       "type": "string"
+    },
+    "ws_extraction": {
+      "$ref": "#/$defs/CandlePayloadExtractionV0"
     },
     "ws_extraction_hash": {
       "pattern": "^[0-9a-f]{64}$",
@@ -539,8 +675,14 @@
     }
   },
   "required": [
+    "schema_version",
+    "contract_id",
+    "hash_version",
+    "source_id",
     "coin",
     "candle_interval",
+    "ws_extraction",
+    "info_extraction",
     "ws_source_event_id",
     "ws_extraction_hash",
     "info_source_event_id",

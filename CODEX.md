@@ -37,8 +37,12 @@ A6 accepts only independently revalidated exact A5 WebSocket and Info candle ext
 - use each A5 `candle_logical_key` as the sole cross-source identity;
 - compare the logical-key union in `(open_time_ms, candle_logical_key)` order;
 - compare only close time, OHLC, base volume, and trade count in the frozen field order;
-- emit only `MATCH`, `CONFLICT`, `WS_ONLY`, and `INFO_ONLY` with exact counts and a domain-separated report hash;
-- reject noncanonical A6 JSON wire encodings and keep generated Schema role/status constraints in parity with runtime, while requiring runtime validation for dynamic semantic authority;
+- embed both complete A5 extraction authorities while retaining matching scalar event/hash authority;
+- derive comparisons, source authority, counts, identity, and the report hash only from those two exact extractions through one deterministic contract-layer authority;
+- reconstruct the complete logical-key union during every report validation and reject coherently rehashed omissions, injections, substitutions, or membership changes;
+- emit only `MATCH`, `CONFLICT`, `WS_ONLY`, and `INFO_ONLY` with exact counts and a domain-separated report hash covering both complete extractions;
+- reject noncanonical A6 decoded mappings on every Pydantic core validation path before coercion, including malformed exact A5 objects;
+- keep generated Schema role/status, required embedded A5 fields, and integer-difference value kinds in parity with runtime, while requiring runtime semantic validation for hashes and complete-union authority;
 - allow empty/empty inputs without sentinel/default evidence;
 - keep tolerance, source priority, latest-wins, finality, revisions, canonical winner, normalization, and Silver promotion out of scope.
 
