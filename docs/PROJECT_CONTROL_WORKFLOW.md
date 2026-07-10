@@ -221,29 +221,48 @@ Project-control windows must periodically check whether a new window is needed.
 
 Trigger window rotation when any of the following occurs:
 
-1. A PR is merged.
-2. An Issue / Epic is completed.
-3. A phase completes and the next phase is about to start.
-4. HEAD drift, writer collision, or permission conflict occurs.
-5. Review + repair exceeds two rounds.
-6. The window contains multiple PRs, phases, or stale states.
-7. The user repeatedly asks for the current project node.
-8. The context becomes long enough that stale facts may contaminate current decisions.
-9. The project switches between V0 and Trade OS lines.
-10. The window has generated many execution, review, repair, or finalization prompts.
+1. The current PR is merged.
+2. The current Issue or Epic is completed.
+3. The current stage ends and the project is about to enter a new stage.
+4. Review plus repair exceeds two rounds.
+5. HEAD drift occurs.
+6. Writer collision occurs.
+7. The write lease is revoked or any permission boundary changes.
+8. The window accumulates multiple PRs, multiple stages, or stale states.
+9. The user repeatedly needs to ask where the project currently stands.
+10. Context becomes long enough that old facts may contaminate current decisions.
+11. An old HEAD, old CI result, or old PR state is at risk of being reused.
+12. The project switches between Trader Assist V0 and Trade OS.
+13. The user explicitly requests a new window.
+14. The current window has generated several execution, review, repair, or finalization prompts.
 
 When triggered, output:
 
 ```text
 WINDOW_ROTATION_REQUIRED: YES
+
 REASON:
-<reason>
+<why a new project-control window is required>
+
+CURRENT_SAFE_STOP_POINT:
+<the exact repository, PR, stage, permission and review point at which work is safely paused>
 
 NEXT_WINDOW_HANDOFF_PROMPT:
 <complete copyable prompt>
 ```
 
-Do not merely suggest opening a new window. Generate the full handoff prompt.
+Do not merely recommend opening a new window. Always generate the complete handoff prompt and identify the current safe stop point.
+
+### Recursive window rotation requirement
+
+Every future project-control handoff must reproduce:
+
+1. the full window-rotation policy;
+2. the full rotation trigger set;
+3. the required rotation output contract;
+4. the `RECURSIVE_WINDOW_ROTATION_REQUIREMENT` itself.
+
+The receiving project-control window must apply the same requirement when it later generates another handoff. This requirement applies to every later handoff generation, not only the first rotation, and must continue recursively across all later project-control windows. A one-time summary or simplified version that cannot propagate the same mechanism must not replace the complete requirement.
 
 ## 9. Handoff requirements
 
@@ -271,10 +290,19 @@ TRAE_USAGE_POLICY:
 REVIEW_POLICY:
 FINALIZATION_POLICY:
 WINDOW_ROTATION_POLICY:
+RECURSIVE_WINDOW_ROTATION_REQUIREMENT:
 KNOWN_OPEN_ITEMS:
 NEXT_RECOMMENDED_ACTION:
 STOP_CONDITIONS:
 ```
+
+The `RECURSIVE_WINDOW_ROTATION_REQUIREMENT:` field must state at minimum:
+
+```text
+Every future handoff must again include the complete window-rotation policy, its trigger conditions, the required rotation output format, and this recursive requirement itself.
+```
+
+A handoff that omits `RECURSIVE_WINDOW_ROTATION_REQUIREMENT:` is incomplete and must not be treated as a valid project-control handoff.
 
 Every handoff must include this warning:
 
