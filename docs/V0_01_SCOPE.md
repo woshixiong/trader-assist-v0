@@ -24,14 +24,18 @@ A3 froze a pure public read-only transport preflight contract for a future colle
 
 A4 froze the official-only rate-limit authority contract required before any future public read-only live transport runtime. `RATE_LIMIT_STATUS` remains `UNRESOLVED_OFFICIAL_LIMIT`, no numeric limit values are encoded, only the frozen official source identity is accepted, and live transport remains unauthorized.
 
+`V0-01A5 / OFFLINE_CANDLE_PAYLOAD_EXTRACTION_CONTRACT`
+
+A5 added a bounded offline-only typed extraction contract. It consumes an exact `RawEventV0` and caller-supplied exact matching candle payload bytes and emits a deterministic, domain-separated `CandlePayloadExtractionV0`. It does not read `payload_ref`, connect to endpoints, write Bronze, emit `NormalizedEventV0`, enter Silver, reconcile revisions, or infer finality.
+
 ## Active slice
 
 ```text
-ACTIVE_IMPLEMENTATION_SLICE: V0-01A5-OFFLINE-CANDLE-PAYLOAD-EXTRACTION-CONTRACT
+ACTIVE_IMPLEMENTATION_SLICE: V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT
 ACTIVE_IMPLEMENTATION_WRITE_LEASE: BOUNDED
 ```
 
-A5 is an offline-only typed extraction contract. It consumes an exact `RawEventV0` and caller-supplied exact matching candle payload bytes. It does not read `payload_ref`, connect to endpoints, write Bronze, emit `NormalizedEventV0`, enter Silver, reconcile revisions, infer finality, generate health, strategy, AI, risk, dashboard, or execution output.
+A6 is an offline-only pairwise reconciliation contract. It consumes exact independently revalidated A5 WebSocket and Info candle extractions, compares the union of A5 logical candle keys, and emits a deterministic hash-bound report. It does not parse payloads, read `payload_ref`, connect to endpoints, write Bronze, emit `NormalizedEventV0`, enter Silver, order revisions, infer finality, select a canonical winner, or generate health, strategy, AI, risk, dashboard, or execution output.
 
 ## Fixed A0 authority versions
 
@@ -80,6 +84,34 @@ SUPPORTED_ENVELOPES: WS_DATA_CANDLE, WS_DATA_CANDLE_ARRAY, INFO_CANDLE_ARRAY
 
 The candle logical key binds source ID, coin, interval, and candle open time. It deliberately excludes endpoint so later separately authorized reconciliation may map WebSocket and Info observations to the same logical candle.
 
+## A6 frozen authorities
+
+```text
+A6_CONTRACT_ID: V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT
+A6_SCHEMA_VERSION: 0.1.0
+A6_HASH_VERSION: trader-assist-v0/candle-cross-source-reconciliation/v1
+WS_ROLE: hl-ws-mainnet-public/candle with WS_DATA_CANDLE or WS_DATA_CANDLE_ARRAY
+INFO_ROLE: hl-info-mainnet-public/candleSnapshot with INFO_CANDLE_ARRAY
+STATUSES: MATCH, CONFLICT, WS_ONLY, INFO_ONLY
+COMPARABLE_FIELDS: close_time_ms, open_price, high_price, low_price, close_price, volume_base, trade_count
+ORDERING: (open_time_ms, candle_logical_key)
+```
+
+Both inputs must have identical source, coin, and candle interval identities. Each A5 logical candle key is the sole cross-source identity. Identity inconsistency fails closed rather than becoming `CONFLICT`. Empty/empty inputs produce an empty comparison tuple and zero counts.
+
+## A6 allowed
+
+- exact-class independent revalidation of both A5 extraction authorities and nested candles;
+- frozen WS/Info role validation and role-reversal rejection;
+- exact logical-key union comparison with deterministic ordering;
+- exact field equality without tolerance or normalization;
+- typed per-item source authorities, exact field differences, status counts, and a domain-separated reconciliation hash;
+- self-validating immutable Pydantic models and generated JSON Schema.
+
+## A6 prohibited
+
+A6 must not modify A5 contracts/extractor, source catalog code/documentation, existing tests/schemas, dependencies, or CI. It must not add networking, filesystem payload loading, Bronze/manifest writes, database/cloud persistence, tolerance, source priority, latest-wins, revision ordering, finality inference, canonical winner selection, gap/backfill/health runtime, `NormalizedEventV0`, Silver, strategy, AI, risk, dashboard, credentials, account endpoints, signing, nonces, `/exchange`, order mutation, or Testnet/Mainnet execution.
+
 ## A5 allowed
 
 - exact-class revalidation of `RawEventV0`;
@@ -92,7 +124,7 @@ The candle logical key binds source ID, coin, interval, and candle open time. It
 - deterministic typed candle items, logical keys, extraction ordering, and extraction hash;
 - empty arrays with zero extracted items and no sentinel/default event.
 
-## A5 prohibited
+## A5 preserved boundary
 
 A5 must not modify `events.py`, `source_catalog.py`, `ingress.py`, `bronze.py`, or `replay.py`. It must not add HTTP/WebSocket clients, sockets, DNS, async runtime, event loop, live endpoint connection, polling, reconnect, heartbeat, health, backfill, REST request execution, filesystem payload loading, Bronze/manifest writes, database, cloud SDK, dependency changes, credentials, account/user material, wallet/signing/nonces, `/exchange`, order mutation, `NormalizedEventV0` emission, Silver normalization, revision ordering, finality inference, reconciliation, strategy, AI, risk sizing, dashboard, Testnet/Mainnet execution, or raw operational artifacts.
 
@@ -124,4 +156,4 @@ The root-wide authority is held for the complete writer lifetime. Different segm
 
 ## Authority
 
-TraderOS remains authoritative for cross-project architecture and production governance. Public market-data definitions never authorize exchange writes. Completion of A5 does not authorize transport, health, backfill, reconciliation, Silver, strategy, AI, risk, dashboard, or execution. Every later slice requires a separate exact-head scope freeze, write lease, CI run, external independent review, and finalization authorization.
+TraderOS remains authoritative for cross-project architecture and production governance. Public market-data definitions never authorize exchange writes. Completion of A6 does not authorize live transport, health, backfill, finality inference, revision ordering, canonical winner selection, normalized events, Silver, strategy, AI, risk, dashboard, execution, or A7. Every later slice requires a separate exact-head scope freeze, write lease, CI run, external independent review, and finalization authorization.

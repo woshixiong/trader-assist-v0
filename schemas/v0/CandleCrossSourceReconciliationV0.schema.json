@@ -1,0 +1,402 @@
+{
+  "$defs": {
+    "CandleCrossSourceAuthoritySideV0": {
+      "enum": [
+        "WS",
+        "INFO"
+      ],
+      "title": "CandleCrossSourceAuthoritySideV0",
+      "type": "string"
+    },
+    "CandleCrossSourceComparableFieldV0": {
+      "enum": [
+        "close_time_ms",
+        "open_price",
+        "high_price",
+        "low_price",
+        "close_price",
+        "volume_base",
+        "trade_count"
+      ],
+      "type": "string"
+    },
+    "CandleCrossSourceComparableValueV0": {
+      "maxLength": 80,
+      "pattern": "^(?:0|[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]+|-(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*))$",
+      "type": "string"
+    },
+    "CandleCrossSourceComparisonItemV0": {
+      "additionalProperties": false,
+      "properties": {
+        "candle_interval": {
+          "enum": [
+            "1m",
+            "3m",
+            "5m",
+            "15m",
+            "1h"
+          ],
+          "title": "Candle Interval",
+          "type": "string"
+        },
+        "candle_logical_key": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Candle Logical Key",
+          "type": "string"
+        },
+        "coin": {
+          "enum": [
+            "BTC",
+            "ETH"
+          ],
+          "title": "Coin",
+          "type": "string"
+        },
+        "field_differences": {
+          "items": {
+            "$ref": "#/$defs/CandleCrossSourceFieldDifferenceV0"
+          },
+          "title": "Field Differences",
+          "type": "array"
+        },
+        "info_authority": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CandleCrossSourceInputAuthorityV0"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "info_candle": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExtractedCandleV0"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "open_time_ms": {
+          "minimum": 0,
+          "title": "Open Time Ms",
+          "type": "integer"
+        },
+        "source_id": {
+          "const": "hyperliquid-public-mainnet",
+          "default": "hyperliquid-public-mainnet",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/CandleCrossSourceComparisonStatusV0"
+        },
+        "ws_authority": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CandleCrossSourceInputAuthorityV0"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ws_candle": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExtractedCandleV0"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "candle_logical_key",
+        "coin",
+        "candle_interval",
+        "open_time_ms",
+        "status",
+        "ws_candle",
+        "ws_authority",
+        "info_candle",
+        "info_authority",
+        "field_differences"
+      ],
+      "title": "CandleCrossSourceComparisonItemV0",
+      "type": "object"
+    },
+    "CandleCrossSourceComparisonStatusV0": {
+      "enum": [
+        "MATCH",
+        "CONFLICT",
+        "WS_ONLY",
+        "INFO_ONLY"
+      ],
+      "title": "CandleCrossSourceComparisonStatusV0",
+      "type": "string"
+    },
+    "CandleCrossSourceFieldDifferenceV0": {
+      "additionalProperties": false,
+      "properties": {
+        "field_name": {
+          "$ref": "#/$defs/CandleCrossSourceComparableFieldV0"
+        },
+        "info_value": {
+          "$ref": "#/$defs/CandleCrossSourceComparableValueV0"
+        },
+        "ws_value": {
+          "$ref": "#/$defs/CandleCrossSourceComparableValueV0"
+        }
+      },
+      "required": [
+        "field_name",
+        "ws_value",
+        "info_value"
+      ],
+      "title": "CandleCrossSourceFieldDifferenceV0",
+      "type": "object"
+    },
+    "CandleCrossSourceInputAuthorityV0": {
+      "additionalProperties": false,
+      "properties": {
+        "endpoint_id": {
+          "enum": [
+            "hl-ws-mainnet-public",
+            "hl-info-mainnet-public"
+          ],
+          "title": "Endpoint Id",
+          "type": "string"
+        },
+        "envelope_shape": {
+          "$ref": "#/$defs/CandleEnvelopeShapeV0"
+        },
+        "extraction_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Extraction Hash",
+          "type": "string"
+        },
+        "operation_type": {
+          "enum": [
+            "candle",
+            "candleSnapshot"
+          ],
+          "title": "Operation Type",
+          "type": "string"
+        },
+        "side": {
+          "$ref": "#/$defs/CandleCrossSourceAuthoritySideV0"
+        },
+        "source_event_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "side",
+        "source_event_id",
+        "extraction_hash",
+        "endpoint_id",
+        "operation_type",
+        "envelope_shape"
+      ],
+      "title": "CandleCrossSourceInputAuthorityV0",
+      "type": "object"
+    },
+    "CandleEnvelopeShapeV0": {
+      "enum": [
+        "WS_DATA_CANDLE",
+        "WS_DATA_CANDLE_ARRAY",
+        "INFO_CANDLE_ARRAY"
+      ],
+      "title": "CandleEnvelopeShapeV0",
+      "type": "string"
+    },
+    "ExtractedCandleV0": {
+      "additionalProperties": false,
+      "properties": {
+        "candle_logical_key": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Candle Logical Key",
+          "type": "string"
+        },
+        "close_price": {
+          "maxLength": 80,
+          "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$",
+          "title": "Close Price",
+          "type": "string"
+        },
+        "close_time_ms": {
+          "minimum": 0,
+          "title": "Close Time Ms",
+          "type": "integer"
+        },
+        "high_price": {
+          "maxLength": 80,
+          "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$",
+          "title": "High Price",
+          "type": "string"
+        },
+        "low_price": {
+          "maxLength": 80,
+          "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$",
+          "title": "Low Price",
+          "type": "string"
+        },
+        "open_price": {
+          "maxLength": 80,
+          "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$",
+          "title": "Open Price",
+          "type": "string"
+        },
+        "open_time_ms": {
+          "minimum": 0,
+          "title": "Open Time Ms",
+          "type": "integer"
+        },
+        "trade_count": {
+          "minimum": 0,
+          "title": "Trade Count",
+          "type": "integer"
+        },
+        "volume_base": {
+          "maxLength": 80,
+          "pattern": "^(?:0|[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]+)$",
+          "title": "Volume Base",
+          "type": "string"
+        }
+      },
+      "required": [
+        "candle_logical_key",
+        "open_time_ms",
+        "close_time_ms",
+        "open_price",
+        "high_price",
+        "low_price",
+        "close_price",
+        "volume_base",
+        "trade_count"
+      ],
+      "title": "ExtractedCandleV0",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "candle_interval": {
+      "enum": [
+        "1m",
+        "3m",
+        "5m",
+        "15m",
+        "1h"
+      ],
+      "title": "Candle Interval",
+      "type": "string"
+    },
+    "coin": {
+      "enum": [
+        "BTC",
+        "ETH"
+      ],
+      "title": "Coin",
+      "type": "string"
+    },
+    "comparisons": {
+      "items": {
+        "$ref": "#/$defs/CandleCrossSourceComparisonItemV0"
+      },
+      "title": "Comparisons",
+      "type": "array"
+    },
+    "conflict_count": {
+      "minimum": 0,
+      "title": "Conflict Count",
+      "type": "integer"
+    },
+    "contract_id": {
+      "const": "V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT",
+      "default": "V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT",
+      "title": "Contract Id",
+      "type": "string"
+    },
+    "hash_version": {
+      "const": "trader-assist-v0/candle-cross-source-reconciliation/v1",
+      "default": "trader-assist-v0/candle-cross-source-reconciliation/v1",
+      "title": "Hash Version",
+      "type": "string"
+    },
+    "info_extraction_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Info Extraction Hash",
+      "type": "string"
+    },
+    "info_only_count": {
+      "minimum": 0,
+      "title": "Info Only Count",
+      "type": "integer"
+    },
+    "info_source_event_id": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Info Source Event Id",
+      "type": "string"
+    },
+    "match_count": {
+      "minimum": 0,
+      "title": "Match Count",
+      "type": "integer"
+    },
+    "reconciliation_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Reconciliation Hash",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "0.1.0",
+      "default": "0.1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_id": {
+      "const": "hyperliquid-public-mainnet",
+      "default": "hyperliquid-public-mainnet",
+      "title": "Source Id",
+      "type": "string"
+    },
+    "ws_extraction_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Ws Extraction Hash",
+      "type": "string"
+    },
+    "ws_only_count": {
+      "minimum": 0,
+      "title": "Ws Only Count",
+      "type": "integer"
+    },
+    "ws_source_event_id": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Ws Source Event Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "coin",
+    "candle_interval",
+    "ws_source_event_id",
+    "ws_extraction_hash",
+    "info_source_event_id",
+    "info_extraction_hash",
+    "comparisons",
+    "match_count",
+    "conflict_count",
+    "ws_only_count",
+    "info_only_count",
+    "reconciliation_hash"
+  ],
+  "title": "CandleCrossSourceReconciliationV0",
+  "type": "object"
+}

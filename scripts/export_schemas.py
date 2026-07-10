@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from trader_assist_v0.contracts import (
     AIRecommendationV0,
     BronzeReplayReportV0,
+    CandleCrossSourceReconciliationV0,
     CandlePayloadExtractionV0,
     DataHealthEventV0,
     EvidenceBundleManifestV0,
@@ -42,6 +43,7 @@ MODELS: tuple[type[BaseModel], ...] = (
     RawManifestCheckpointV0,
     BronzeReplayReportV0,
     CandlePayloadExtractionV0,
+    CandleCrossSourceReconciliationV0,
     RequiredFeedContractV0,
     InstrumentPrecisionContractV0,
     NormalizedEventV0,
