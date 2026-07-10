@@ -10,7 +10,7 @@ Officially verified: `2026-07-07`
 
 The single executable catalog authority is `src/trader_assist_v0/contracts/source_catalog.py`. It depends only on the standard library and `contracts/common.py`, so `RawEventV0` can validate catalog authority without a contracts-to-data import cycle. `src/trader_assist_v0/data/source_catalog.py` is a compatibility re-export and does not define a second catalog.
 
-A0 records public interface facts only and does not connect to any endpoint. A1 freezes public transport-entry contracts only and still does not connect to any endpoint. A2 uses those contracts for caller-supplied public observation bytes and still does not connect to any endpoint. A3 freezes future public read-only transport preflight checks and still does not connect to any endpoint. A4 completed the official-only rate-limit authority freeze and still does not connect to any endpoint.
+A0 records public interface facts only and does not connect to any endpoint. A1 freezes public transport-entry contracts only and still does not connect to any endpoint. A2 uses those contracts for caller-supplied public observation bytes and still does not connect to any endpoint. A3 freezes future public read-only transport preflight checks and still does not connect to any endpoint. A4 completed the official-only rate-limit authority freeze and still does not connect to any endpoint. A5 consumes only caller-supplied exact bytes already bound to `RawEventV0`; it also does not connect to any endpoint.
 
 ## Coverage
 
@@ -35,13 +35,13 @@ Each A0/A2 RawEvent binds and revalidates:
 
 WebSocket entries require `WS_TEXT_UTF8_APPLICATION_PAYLOAD`. Info entries require `HTTP_RESPONSE_BODY`. Unknown endpoints or operations, `/exchange`, Testnet, unsupported coins or intervals, missing required coins, and coins supplied to non-coin operations are rejected.
 
-A0, A1, A2, A3, and A4 do not parse raw payload fields. `source_event_time`, `source_publish_time`, `revision_time`, `source_native_id`, and `source_native_cursor` must all be `None` until a later separately reviewed extractor contract exists.
+A0, A1, A2, A3, and A4 do not parse raw payload fields. `source_event_time`, `source_publish_time`, `revision_time`, `source_native_id`, and `source_native_cursor` remain `None` in RawEvent authority. A5 extracts candle fields into a separate typed result and does not modify or rebind RawEvent.
 
 ## Frozen semantics
 
 - `l2Book`: `FULL_SNAPSHOT_NOT_DELTA`.
 - `trades`: batched stream, no documented source sequence.
-- `bbo`: change-only stream, no documented source sequence.
+- `bbo`: change-only stream; timestamp availability is `FIELD_TIME` in milliseconds; no documented source sequence.
 - `activeAssetCtx`: current observation, no documented source timestamp.
 - `allMids`: current map observation, no documented source timestamp.
 - `candle`: mutable current bar; logical key is coin, interval, and open time.
@@ -80,19 +80,9 @@ official_source_title: Rate limits and user limits
 official_source_location: https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/rate-limits-and-user-limits
 ```
 
-A future resolved candidate must include all of the following, from the frozen official source only:
+A future resolved candidate must include the official source title/location, verification date, source kind `official`, proof the source was readable, numeric field names, limit units, operation scope, and no ambiguous fields.
 
-- official source title;
-- official source location;
-- verification date;
-- source kind of `official`;
-- proof that the official source was readable;
-- numeric field names;
-- limit units;
-- operation scope;
-- no ambiguous fields.
-
-A4 rejects third-party, community, remembered, inferred, blog, forum, Discord, StackOverflow, or model-memory authority metadata in unresolved and resolved states. A4 also rejects live runtime requests through rate-limit authority checks. Even a complete resolved metadata candidate does not authorize live transport in A4; live transport requires a later exact-head task.
+A4 rejects third-party, community, remembered, inferred, blog, forum, Discord, StackOverflow, or model-memory authority metadata in unresolved and resolved states. Even complete resolved metadata does not authorize live transport in A4.
 
 ## A1 candle WebSocket envelope contract
 
@@ -105,7 +95,7 @@ data: Candle
 data: Candle[]
 ```
 
-The contract accepts both shapes because the official candle subscription table and type definition use inconsistent singular/array descriptions. A1 records the accepted policy and fixture shape only. It is not a live WebSocket client and does not authorize observation runtime.
+The contract accepts both shapes because the official candle subscription table and type definition have historically differed between singular and array descriptions. A1 records accepted policy only; it is not live subscription code.
 
 The internal evidence model remains exact `RawEventV0` application-payload bytes. A1 does not parse candle values into strategy signals, normalize them into Silver, infer direction, create AI recommendations, or size risk.
 
@@ -113,19 +103,43 @@ The internal evidence model remains exact `RawEventV0` application-payload bytes
 
 A2 accepts only exact bytes supplied by its caller. It does not acquire bytes by HTTP, WebSocket, DNS, socket, polling, reconnect, heartbeat, health, backfill, async runtime, or any other live transport runtime.
 
-A2 must validate each accepted selection through the frozen A1 read-only transport entry contract. Private endpoints, user/account endpoints, wallet/signing material, nonces, order mutation, `/exchange`, Testnet/Mainnet execution enablement, strategy/risk logic, and AI recommendation logic remain rejected.
+A2 validates each selection through the frozen A1 read-only transport entry contract and binds exact bytes into `RawEventV0` authority. Optional payload persistence and manifest append use existing A0 authority; A2 creates no second persistence authority.
 
-A2 binds exact bytes into `RawEventV0` authority using the catalog-bound payload hash and content-addressed payload reference. Different byte forms, including JSON whitespace or ordering differences, are different evidence.
+## A5 offline candle payload extraction
 
-Optional payload persistence and RawEvent manifest append must use existing A0 `BronzeStore` and `ManifestWriter` authority. A2 does not create a second persistence authority.
+A5 supports only:
 
-## A1/A2/A3/A4 rate-limit entry gate
+```text
+hl-ws-mainnet-public / candle / WS_TEXT_UTF8_APPLICATION_PAYLOAD
+hl-info-mainnet-public / candleSnapshot / HTTP_RESPONSE_BODY
+```
 
-The official rate-limit page was not readable during A0 verification and remained unreadable during A4 preflight through available tooling. Numeric limits remain recorded as `UNRESOLVED_OFFICIAL_LIMIT`; no remembered, inferred, third-party, community, blog, StackOverflow, Discord, or model-memory value is substituted.
+A5 accepts only exact caller-supplied bytes whose length and SHA-256 match an exact `RawEventV0`. It does not read `payload_ref` or any other file.
 
-When numeric limits are unresolved, live polling, WebSocket reconnect, backfill, health runtime, and any public transport runtime remain prohibited. Only official documented numeric values may replace `UNRESOLVED_OFFICIAL_LIMIT` in a later authorized task.
+Frozen candle fields are exactly:
 
-A later task must not resolve official numeric rate limits unless project control amends its scope after current official docs are readable and cited.
+```text
+t  open time in milliseconds
+T  close time in milliseconds
+s  coin
+i  interval
+o  open price
+c  close price
+h  high price
+l  low price
+v  base-unit volume
+n  trade count
+```
+
+A5 rejects missing/extra fields, duplicate JSON keys, invalid UTF-8, BOM, malformed JSON, NaN/Infinity, booleans in integer positions, strings in numeric positions, negative timestamps/volume/trade count, nonpositive OHLC, inconsistent high/low ranges, unsupported selections, and coin/interval mismatch.
+
+A5 produces `CandlePayloadExtractionV0` with domain-separated logical candle keys and an extraction hash. The logical key binds source ID, coin, interval, and open time and deliberately excludes endpoint. A5 does not decide finality, revision ordering, latest-wins behavior, WebSocket/Info reconciliation, gaps, backfill, normalization, or Silver promotion.
+
+## A1/A2/A3/A4/A5 rate-limit entry gate
+
+Numeric limits remain `UNRESOLVED_OFFICIAL_LIMIT`; no remembered, inferred, third-party, community, blog, StackOverflow, Discord, or model-memory value is substituted.
+
+When numeric limits are unresolved, live polling, WebSocket reconnect, backfill, health runtime, and any public transport runtime remain prohibited. A5 is offline and does not weaken this gate.
 
 ## A1/A3 read-only transport entry contract
 
@@ -140,41 +154,21 @@ runtime candle intervals: 1m, 3m, 5m, 15m, 1h
 capture modes: WS_TEXT_UTF8_APPLICATION_PAYLOAD, HTTP_RESPONSE_BODY
 ```
 
-A1/A2/A3/A4 must reject private endpoints, user/account endpoints, wallet/signing material, nonces, order mutation, `/exchange`, Testnet/Mainnet execution enablement, strategy/risk logic, and AI recommendation logic.
+A1/A2/A3/A4/A5 reject private endpoints, user/account endpoints, wallet/signing material, nonces, order mutation, `/exchange`, Testnet/Mainnet execution enablement, strategy/risk logic, and AI recommendation logic.
 
 `mainnet public read-only` is a public source identity / environment label only. It is not Mainnet execution enablement.
 
 ## A1 fixture admission policy
 
-Allowed fixtures:
-
-- synthetic documentation-derived fixtures;
-- minimal redacted examples;
-- fixtures with explicit provenance and no operational secrets.
-
-Forbidden fixtures:
-
-- raw operational payloads;
-- real market/account logs;
-- private/user/account data;
-- wallet addresses;
-- API keys;
-- signatures;
-- nonces;
-- credentials;
-- database artifacts;
-- caches;
-- unredacted observations.
-
-If later read-only observation is authorized, only sanitized derived fixtures may be committed. Raw observation artifacts must remain outside Git.
+Allowed fixtures are synthetic documentation-derived fixtures, minimal redacted examples, and fixtures with explicit provenance and no operational secrets. Forbidden fixtures include raw operational payloads, real market/account logs, private/user/account data, wallet addresses, API keys, signatures, nonces, credentials, databases, caches, and unredacted observations. A5 adds no payload fixture.
 
 ## A1-to-A2 gate
 
-A1 completion does not authorize A2 automatically. A2 may only be considered after A1 PR merge, external exact-head review PASS, explicit rate-limit entry gate, frozen public source envelope contract, and a new exact-head project-control lease.
+A1 completion did not authorize A2 automatically. A2 could only be considered after A1 PR merge, external exact-head review PASS, the explicit rate-limit entry gate, the frozen public source envelope contract, and a new exact-head project-control lease. This historical authority chain remains part of the completed A1/A2 governance record and is not weakened by A5.
 
-## Post-A4 next gate
+## A5 next gate
 
-There is no active implementation slice and no active implementation write lease. A4 completion does not authorize live public transport, health, backfill, reconnect, extractor/normalizer, Silver, strategy, AI recommendation, risk sizing, dashboard, Testnet/Mainnet execution, or exchange writes. Each later slice requires a new exact-head scope freeze, write lease, CI run, external independent review, and finalization authorization.
+A5 completion does not authorize live public transport, health, backfill, reconnect, revision reconciliation, Silver, strategy, AI recommendation, risk sizing, dashboard, Testnet/Mainnet execution, or exchange writes. Each later slice requires a new exact-head scope freeze, write lease, CI run, external independent review, and finalization authorization.
 
 ## Official locations
 

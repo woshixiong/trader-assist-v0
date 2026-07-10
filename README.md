@@ -4,7 +4,7 @@ Trader Assist V0 is an isolated ETH/Hyperliquid experiment lane for reliable dat
 
 ## Current stage
 
-`V0-01A4 / OFFICIAL_RATE_LIMIT_AUTHORITY_FREEZE — COMPLETED`
+`V0-01A5 / OFFLINE_CANDLE_PAYLOAD_EXTRACTION_CONTRACT — ACTIVE DRAFT`
 
 A0 completed the versioned public-source catalog, exact raw fixture/application-payload authority, local content-addressed immutable Bronze storage, append-only hash-linked manifests, and deterministic offline replay.
 
@@ -16,9 +16,9 @@ A3 froze a future public read-only transport preflight contract. It validates so
 
 A4 froze the official-only rate-limit authority contract. `RATE_LIMIT_STATUS` remains `UNRESOLVED_OFFICIAL_LIMIT`; no numeric rate-limit values are encoded; live transport remains unauthorized.
 
-There is currently no active implementation slice and no active implementation write lease. Any later extractor, normalizer, transport, health, backfill, strategy, AI, risk, or execution task requires a new exact-head scope freeze, write lease, CI run, and external independent review.
+A5 is a bounded offline-only extraction slice. It accepts an exact `RawEventV0` plus caller-supplied exact matching candle payload bytes and produces a typed, domain-separated `CandlePayloadExtractionV0`. It does not read `payload_ref`, connect to any endpoint, write Bronze, emit `NormalizedEventV0`, enter Silver, reconcile revisions, or infer candle finality.
 
-`mainnet public read-only` is a public source identity and environment label only. It is not Mainnet execution enablement.
+`mainnet public read-only` remains only a source identity and environment label. It is not Mainnet execution enablement.
 
 This repository still contains no network client, live endpoint connection, credential, account address, wallet, signing code, nonce handling, exchange-write path, order mutation, Testnet/Mainnet execution enablement, strategy logic, AI recommendation, risk sizing, health runtime, database, dashboard, or soak runner.
 

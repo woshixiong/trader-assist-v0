@@ -1,0 +1,181 @@
+{
+  "$defs": {
+    "CandleEnvelopeShapeV0": {
+      "enum": [
+        "WS_DATA_CANDLE",
+        "WS_DATA_CANDLE_ARRAY",
+        "INFO_CANDLE_ARRAY"
+      ],
+      "title": "CandleEnvelopeShapeV0",
+      "type": "string"
+    },
+    "ExtractedCandleV0": {
+      "additionalProperties": false,
+      "properties": {
+        "candle_logical_key": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Candle Logical Key",
+          "type": "string"
+        },
+        "close_price": {
+          "maxLength": 80,
+          "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$",
+          "title": "Close Price",
+          "type": "string"
+        },
+        "close_time_ms": {
+          "minimum": 0,
+          "title": "Close Time Ms",
+          "type": "integer"
+        },
+        "high_price": {
+          "maxLength": 80,
+          "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$",
+          "title": "High Price",
+          "type": "string"
+        },
+        "low_price": {
+          "maxLength": 80,
+          "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$",
+          "title": "Low Price",
+          "type": "string"
+        },
+        "open_price": {
+          "maxLength": 80,
+          "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$",
+          "title": "Open Price",
+          "type": "string"
+        },
+        "open_time_ms": {
+          "minimum": 0,
+          "title": "Open Time Ms",
+          "type": "integer"
+        },
+        "trade_count": {
+          "minimum": 0,
+          "title": "Trade Count",
+          "type": "integer"
+        },
+        "volume_base": {
+          "maxLength": 80,
+          "pattern": "^(?:0|[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]+)$",
+          "title": "Volume Base",
+          "type": "string"
+        }
+      },
+      "required": [
+        "candle_logical_key",
+        "open_time_ms",
+        "close_time_ms",
+        "open_price",
+        "high_price",
+        "low_price",
+        "close_price",
+        "volume_base",
+        "trade_count"
+      ],
+      "title": "ExtractedCandleV0",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "candle_interval": {
+      "enum": [
+        "1m",
+        "3m",
+        "5m",
+        "15m",
+        "1h"
+      ],
+      "title": "Candle Interval",
+      "type": "string"
+    },
+    "candles": {
+      "items": {
+        "$ref": "#/$defs/ExtractedCandleV0"
+      },
+      "title": "Candles",
+      "type": "array"
+    },
+    "coin": {
+      "enum": [
+        "BTC",
+        "ETH"
+      ],
+      "title": "Coin",
+      "type": "string"
+    },
+    "contract_id": {
+      "const": "V0-01A5-OFFLINE-CANDLE-PAYLOAD-EXTRACTION-CONTRACT",
+      "default": "V0-01A5-OFFLINE-CANDLE-PAYLOAD-EXTRACTION-CONTRACT",
+      "title": "Contract Id",
+      "type": "string"
+    },
+    "endpoint_id": {
+      "enum": [
+        "hl-ws-mainnet-public",
+        "hl-info-mainnet-public"
+      ],
+      "title": "Endpoint Id",
+      "type": "string"
+    },
+    "envelope_shape": {
+      "$ref": "#/$defs/CandleEnvelopeShapeV0"
+    },
+    "extraction_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Extraction Hash",
+      "type": "string"
+    },
+    "extraction_version": {
+      "const": "trader-assist-v0/candle-payload-extraction/v1",
+      "default": "trader-assist-v0/candle-payload-extraction/v1",
+      "title": "Extraction Version",
+      "type": "string"
+    },
+    "operation_type": {
+      "enum": [
+        "candle",
+        "candleSnapshot"
+      ],
+      "title": "Operation Type",
+      "type": "string"
+    },
+    "payload_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Payload Sha256",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "0.1.0",
+      "default": "0.1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_event_id": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Event Id",
+      "type": "string"
+    },
+    "source_id": {
+      "const": "hyperliquid-public-mainnet",
+      "default": "hyperliquid-public-mainnet",
+      "title": "Source Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "source_event_id",
+    "payload_sha256",
+    "endpoint_id",
+    "operation_type",
+    "coin",
+    "candle_interval",
+    "envelope_shape",
+    "candles",
+    "extraction_hash"
+  ],
+  "title": "CandlePayloadExtractionV0",
+  "type": "object"
+}
