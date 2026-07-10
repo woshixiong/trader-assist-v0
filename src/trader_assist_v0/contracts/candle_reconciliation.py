@@ -4,7 +4,7 @@ import hmac
 import json
 import re
 from collections.abc import Mapping, Set
-from contextvars import ContextVar
+from copy import deepcopy
 from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated, Any, Literal, Self, cast
@@ -18,6 +18,7 @@ from pydantic import (
     model_validator,
 )
 from pydantic.config import ExtraValues
+from pydantic_core import SchemaValidator
 
 from .candles import (
     CandleEnvelopeShapeV0,
@@ -42,11 +43,6 @@ A6_CANONICAL_NONNEGATIVE_INTEGER_STRING_PATTERN = r"^(0|[1-9][0-9]*)$"
 
 _A6_CANONICAL_NONNEGATIVE_INTEGER_STRING_RE = re.compile(
     A6_CANONICAL_NONNEGATIVE_INTEGER_STRING_PATTERN
-)
-_A6_TRUSTED_JSON_MODE_SENTINEL = object()
-_A6_JSON_MODE_GATE: ContextVar[object | None] = ContextVar(
-    "_A6_JSON_MODE_GATE",
-    default=None,
 )
 _A6_CANONICAL_JSON_INTEGER_RE = re.compile(r"(?:0|-[1-9][0-9]*|[1-9][0-9]*)\Z")
 _A6_INTEGER_WIRE_FIELDS = frozenset(
@@ -176,41 +172,29 @@ _A6_REPORT_FIELDS = frozenset(
 )
 
 
-def _trusted_json_extracted_candle(
+def _persistent_json_extracted_candle(
     value: Any,
     handler: Any,
-    info: ValidationInfo,
+    _info: ValidationInfo,
 ) -> Any:
-    if (
-        info.mode == "json"
-        and _A6_JSON_MODE_GATE.get() is _A6_TRUSTED_JSON_MODE_SENTINEL
-        and type(value) is ExtractedCandleV0
-    ):
-        return value
     return handler(value)
 
 
-def _trusted_json_candle_extraction(
+def _persistent_json_candle_extraction(
     value: Any,
     handler: Any,
-    info: ValidationInfo,
+    _info: ValidationInfo,
 ) -> Any:
-    if (
-        info.mode == "json"
-        and _A6_JSON_MODE_GATE.get() is _A6_TRUSTED_JSON_MODE_SENTINEL
-        and type(value) is CandlePayloadExtractionV0
-    ):
-        return value
     return handler(value)
 
 
 _A6ExtractedCandleV0 = Annotated[
     ExtractedCandleV0,
-    WrapValidator(_trusted_json_extracted_candle),
+    WrapValidator(_persistent_json_extracted_candle),
 ]
 _A6CandlePayloadExtractionV0 = Annotated[
     CandlePayloadExtractionV0,
-    WrapValidator(_trusted_json_candle_extraction),
+    WrapValidator(_persistent_json_candle_extraction),
 ]
 
 CANDLE_CROSS_SOURCE_COMPARABLE_FIELDS = (
@@ -431,7 +415,7 @@ def _approved_canonical_a6_json_bytes(
     return raw_bytes
 
 
-def _restore_trusted_json_mode_values(
+def _restore_call_local_json_values(
     model_type: type[BaseModel],
     value: Any,
 ) -> dict[str, Any]:
@@ -469,11 +453,7 @@ class _A6AuthorityModel(StrictModel):
         value: Any,
         info: ValidationInfo,
     ) -> Any:
-        trusted_json_mode = (
-            info.mode == "json"
-            and _A6_JSON_MODE_GATE.get() is _A6_TRUSTED_JSON_MODE_SENTINEL
-        )
-        if info.mode != "python" and not trusted_json_mode:
+        if info.mode != "python":
             raise ValueError(
                 "A6 inherited/core JSON and string validation paths are unsupported"
             )
@@ -487,8 +467,6 @@ class _A6AuthorityModel(StrictModel):
                 round_trip=True,
             )
         _validate_wire_for_model(cls, value)
-        if trusted_json_mode:
-            return _restore_trusted_json_mode_values(cls, value)
         return value
 
     @classmethod
@@ -503,21 +481,134 @@ class _A6AuthorityModel(StrictModel):
         by_name: bool | None = None,
     ) -> Self:
         canonical_bytes = _approved_canonical_a6_json_bytes(json_data)
-        token = _A6_JSON_MODE_GATE.set(_A6_TRUSTED_JSON_MODE_SENTINEL)
-        try:
-            return cast(
-                Self,
-                cls.__pydantic_validator__.validate_json(
-                    canonical_bytes,
-                    strict=strict,
-                    extra=extra,
-                    context=context,
-                    by_alias=by_alias,
-                    by_name=by_name,
-                ),
-            )
-        finally:
-            _A6_JSON_MODE_GATE.reset(token)
+        expected_a6_nodes: dict[type[BaseModel], tuple[type[BaseModel], ...]] = {
+            CandleCrossSourceInputAuthorityV0: (
+                CandleCrossSourceInputAuthorityV0,
+            ),
+            CandleCrossSourceFieldDifferenceV0: (
+                CandleCrossSourceFieldDifferenceV0,
+            ),
+            CandleCrossSourceComparisonItemV0: (
+                CandleCrossSourceComparisonItemV0,
+                CandleCrossSourceFieldDifferenceV0,
+                CandleCrossSourceInputAuthorityV0,
+            ),
+            CandleCrossSourceReconciliationV0: (
+                CandleCrossSourceReconciliationV0,
+                CandleCrossSourceComparisonItemV0,
+                CandleCrossSourceFieldDifferenceV0,
+                CandleCrossSourceInputAuthorityV0,
+            ),
+        }
+        expected_nested_nodes: dict[
+            type[BaseModel], tuple[type[BaseModel], ...]
+        ] = {
+            CandleCrossSourceInputAuthorityV0: (),
+            CandleCrossSourceFieldDifferenceV0: (),
+            CandleCrossSourceComparisonItemV0: (
+                ExtractedCandleV0,
+                ExtractedCandleV0,
+            ),
+            CandleCrossSourceReconciliationV0: (
+                CandlePayloadExtractionV0,
+                CandlePayloadExtractionV0,
+                ExtractedCandleV0,
+                ExtractedCandleV0,
+            ),
+        }
+        if cls not in expected_a6_nodes:
+            raise ValueError("unsupported A6 authority model class")
+
+        call_schema = deepcopy(cls.__pydantic_core_schema__)
+        replaced_a6_nodes: list[type[BaseModel]] = []
+        replaced_nested_nodes: list[type[BaseModel]] = []
+        persistent_before_function = (
+            _A6AuthorityModel.validate_canonical_authority_input.__func__
+        )
+
+        def call_local_a6_before(
+            model_type: type[BaseModel],
+        ) -> Any:
+            def validate(value: Any, info: ValidationInfo) -> Any:
+                if info.mode != "json":
+                    raise ValueError("call-local A6 validator requires JSON mode")
+                _validate_wire_for_model(model_type, value)
+                return _restore_call_local_json_values(model_type, value)
+
+            return validate
+
+        def call_local_nested_wrap(
+            model_type: type[BaseModel],
+        ) -> Any:
+            def validate(value: Any, _handler: Any, info: ValidationInfo) -> Any:
+                if info.mode != "json" or type(value) is not model_type:
+                    raise ValueError(
+                        "call-local nested authority requires exact JSON-restored authority"
+                    )
+                return value
+
+            return validate
+
+        def replace_call_local_nodes(value: Any) -> None:
+            if isinstance(value, dict):
+                function = value.get("function")
+                if isinstance(function, dict):
+                    callable_value = function.get("function")
+                    callable_function = getattr(callable_value, "__func__", callable_value)
+                    if callable_function is persistent_before_function:
+                        if value.get("type") != "function-before" or function.get(
+                            "type"
+                        ) != "with-info":
+                            raise ValueError("unexpected A6 before-validator schema shape")
+                        model_type = getattr(callable_value, "__self__", None)
+                        if model_type not in expected_a6_nodes[cls]:
+                            raise ValueError("unexpected A6 authority schema node")
+                        function["function"] = call_local_a6_before(model_type)
+                        replaced_a6_nodes.append(model_type)
+                    elif callable_value is _persistent_json_extracted_candle:
+                        if value.get("type") != "function-wrap" or function.get(
+                            "type"
+                        ) != "with-info":
+                            raise ValueError("unexpected A5 candle wrapper schema shape")
+                        function["function"] = call_local_nested_wrap(ExtractedCandleV0)
+                        replaced_nested_nodes.append(ExtractedCandleV0)
+                    elif callable_value is _persistent_json_candle_extraction:
+                        if value.get("type") != "function-wrap" or function.get(
+                            "type"
+                        ) != "with-info":
+                            raise ValueError("unexpected A5 extraction wrapper schema shape")
+                        function["function"] = call_local_nested_wrap(
+                            CandlePayloadExtractionV0
+                        )
+                        replaced_nested_nodes.append(CandlePayloadExtractionV0)
+                for item in value.values():
+                    replace_call_local_nodes(item)
+            elif isinstance(value, list | tuple):
+                for item in value:
+                    replace_call_local_nodes(item)
+
+        replace_call_local_nodes(call_schema)
+        if sorted(item.__name__ for item in replaced_a6_nodes) != sorted(
+            item.__name__ for item in expected_a6_nodes[cls]
+        ):
+            raise ValueError("unexpected A6 before-validator identity or count")
+        if sorted(item.__name__ for item in replaced_nested_nodes) != sorted(
+            item.__name__ for item in expected_nested_nodes[cls]
+        ):
+            raise ValueError("unexpected nested authority wrapper identity or count")
+
+        call_validator = SchemaValidator(call_schema)
+        return cast(
+            Self,
+            call_validator.validate_json(
+                canonical_bytes,
+                strict=strict,
+                extra=extra,
+                context=context,
+                by_alias=by_alias,
+                by_name=by_name,
+            ),
+        )
 
     def model_copy(
         self,

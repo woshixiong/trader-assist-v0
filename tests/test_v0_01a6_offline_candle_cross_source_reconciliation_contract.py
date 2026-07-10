@@ -5,6 +5,7 @@ import copy
 import inspect
 import json
 from decimal import Decimal
+from functools import partial
 from itertools import product
 from pathlib import Path
 from typing import Any, cast
@@ -14,6 +15,7 @@ from jsonschema import Draft202012Validator
 from pydantic import BaseModel, TypeAdapter, ValidationError
 from pydantic_core import SchemaValidator
 
+import trader_assist_v0.contracts.candle_reconciliation as module
 from scripts.export_schemas import A6_SCHEMA_BOUNDARY_DESCRIPTION, render
 from trader_assist_v0.contracts.candle_reconciliation import (
     A6_CANONICAL_NONNEGATIVE_INTEGER_STRING_PATTERN,
@@ -156,6 +158,51 @@ def _rehash(value: dict[str, Any]) -> dict[str, Any]:
 
 def _wire(report: CandleCrossSourceReconciliationV0) -> dict[str, Any]:
     return cast(dict[str, Any], json.loads(report.model_dump_json()))
+
+
+def _semantic_equivalent_raw_json_materials(
+    report: CandleCrossSourceReconciliationV0,
+) -> tuple[tuple[str, bytes], ...]:
+    payload = _wire(report)
+    canonical = canonical_json_bytes(report)
+    zero_field = b'"match_count":0'
+    assert canonical.count(zero_field) == 1
+    nested_key = b'"endpoint_id":"hl-ws-mainnet-public"'
+    assert canonical.count(nested_key) >= 1
+    reordered = json.dumps(
+        dict(reversed(list(json.loads(canonical).items()))),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    materials = (
+        ("canonical complete JSON", canonical),
+        (
+            "identical root duplicate",
+            canonical.replace(zero_field, zero_field + b"," + zero_field),
+        ),
+        (
+            "conflicting-earlier root duplicate",
+            canonical.replace(zero_field, b'"match_count":1,' + zero_field),
+        ),
+        (
+            "identical nested duplicate",
+            canonical.replace(nested_key, nested_key + b"," + nested_key, 1),
+        ),
+        ("negative zero", canonical.replace(zero_field, b'"match_count":-0')),
+        ("reordered root keys", reordered),
+        ("insignificant whitespace", canonical.replace(b":", b": ", 1)),
+        (
+            "alternate JSON escape",
+            canonical.replace(
+                b'"source_id":"hyperliquid-public-mainnet"',
+                b'"source_id":"\\u0068yperliquid-public-mainnet"',
+                1,
+            ),
+        ),
+    )
+    for name, material in materials:
+        assert json.loads(material) == payload, name
+    return materials
 
 
 def _validate_runtime_json(value: dict[str, Any]) -> CandleCrossSourceReconciliationV0:
@@ -421,10 +468,19 @@ def test_every_a6_authority_class_preserves_native_json_parameter_semantics(
     )
     comparison = conflict_report.comparisons[0]
     ws_authority = comparison.ws_authority
+    info_authority = comparison.info_authority
     assert ws_authority is not None
+    assert info_authority is not None
     difference = comparison.field_differences[0]
     empty_report = _reconcile((), ())
-    authorities = (ws_authority, difference, comparison, empty_report)
+    authorities = (
+        ws_authority,
+        info_authority,
+        difference,
+        comparison,
+        empty_report,
+        conflict_report,
+    )
 
     assert inspect.signature(CandleCrossSourceReconciliationV0.model_validate_json) == (
         inspect.signature(BaseModel.model_validate_json)
@@ -444,6 +500,50 @@ def test_every_a6_authority_class_preserves_native_json_parameter_semantics(
             strict=strict,
             **validation_kwargs,
         ) == authority
+
+
+@pytest.mark.parametrize("strict", (None, False, True))
+def test_every_a6_authority_persistent_json_validator_fails_closed(
+    strict: bool | None,
+) -> None:
+    report = _reconcile(
+        (_candle(open_time_ms=1000),),
+        (_candle(open_time_ms=1000, trade_count=8),),
+    )
+    comparison = report.comparisons[0]
+    ws_authority = comparison.ws_authority
+    assert ws_authority is not None
+    authorities: tuple[BaseModel, ...] = (
+        ws_authority,
+        comparison.field_differences[0],
+        comparison,
+        report,
+    )
+    for authority in authorities:
+        authority_type = type(authority)
+        canonical = canonical_json_bytes(authority)
+        persistent_validator = authority_type.__pydantic_validator__
+        standalone_validator = SchemaValidator(
+            copy.deepcopy(authority_type.__pydantic_core_schema__)
+        )
+        paths = (
+            partial(
+                BaseModel.model_validate_json.__func__,
+                authority_type,
+                canonical,
+                strict=strict,
+            ),
+            partial(
+                TypeAdapter(authority_type).validate_json,
+                canonical,
+                strict=strict,
+            ),
+            partial(persistent_validator.validate_json, canonical, strict=strict),
+            partial(standalone_validator.validate_json, canonical, strict=strict),
+        )
+        for validate in paths:
+            with pytest.raises(ValidationError, match="unsupported"):
+                validate()
 
 
 def test_a6_raw_json_entrypoint_rejects_noncanonical_tokens_and_bytes() -> None:
@@ -547,7 +647,7 @@ def test_a6_raw_json_entrypoint_rejects_noncanonical_tokens_and_bytes() -> None:
             CandleCrossSourceReconciliationV0.model_validate_json(attacked)
 
 
-@pytest.mark.parametrize("strict", (None, True))
+@pytest.mark.parametrize("strict", (None, False, True))
 def test_inherited_core_json_and_string_paths_fail_closed_in_non_python_mode(
     strict: bool | None,
 ) -> None:
@@ -556,33 +656,10 @@ def test_inherited_core_json_and_string_paths_fail_closed_in_non_python_mode(
         (_candle(open_time_ms=1000, trade_count=8),),
     )
     payload = _wire(report)
-    canonical = canonical_json_bytes(report)
     adapter = TypeAdapter(CandleCrossSourceReconciliationV0)
     class_validator = CandleCrossSourceReconciliationV0.__pydantic_validator__
     schema_validator = SchemaValidator(
         copy.deepcopy(CandleCrossSourceReconciliationV0.__pydantic_core_schema__)
-    )
-    json_paths = (
-        (
-            "BaseModel.model_validate_json.__func__",
-            lambda: BaseModel.model_validate_json.__func__(
-                CandleCrossSourceReconciliationV0,
-                canonical,
-                strict=strict,
-            ),
-        ),
-        (
-            "TypeAdapter.validate_json",
-            lambda: adapter.validate_json(canonical, strict=strict),
-        ),
-        (
-            "__pydantic_validator__.validate_json",
-            lambda: class_validator.validate_json(canonical, strict=strict),
-        ),
-        (
-            "SchemaValidator.validate_json",
-            lambda: schema_validator.validate_json(canonical, strict=strict),
-        ),
     )
     string_paths = (
         (
@@ -619,12 +696,42 @@ def test_inherited_core_json_and_string_paths_fail_closed_in_non_python_mode(
             ),
         ),
     )
-    for _path_name, validate in (*json_paths, *string_paths):
+    for _material_name, material in _semantic_equivalent_raw_json_materials(report):
+        attacked_json_paths = (
+            (
+                "BaseModel.model_validate_json.__func__",
+                lambda material=material: BaseModel.model_validate_json.__func__(
+                    CandleCrossSourceReconciliationV0,
+                    material,
+                    strict=strict,
+                ),
+            ),
+            (
+                "TypeAdapter.validate_json",
+                lambda material=material: adapter.validate_json(material, strict=strict),
+            ),
+            (
+                "__pydantic_validator__.validate_json",
+                lambda material=material: class_validator.validate_json(
+                    material, strict=strict
+                ),
+            ),
+            (
+                "SchemaValidator.validate_json",
+                lambda material=material: schema_validator.validate_json(
+                    material, strict=strict
+                ),
+            ),
+        )
+        for _path_name, validate in attacked_json_paths:
+            with pytest.raises(ValidationError, match="unsupported"):
+                validate()
+    for _path_name, validate in string_paths:
         with pytest.raises(ValidationError, match="unsupported"):
             validate()
 
 
-@pytest.mark.parametrize("strict", (None, True))
+@pytest.mark.parametrize("strict", (None, False, True))
 def test_all_core_partial_json_modes_fail_closed_for_complete_and_partial_material(
     strict: bool | None,
 ) -> None:
@@ -638,6 +745,7 @@ def test_all_core_partial_json_modes_fail_closed_for_complete_and_partial_materi
         ("truncated JSON", canonical[:-1]),
         ("trailing garbage", canonical + b"garbage"),
         ("trailing string", canonical + b'"trailing'),
+        ("second JSON value", canonical + b"{}"),
     )
     partial_modes: tuple[bool | str, ...] = (
         True,
@@ -675,11 +783,11 @@ def test_all_core_partial_json_modes_fail_closed_for_complete_and_partial_materi
 
 
 @pytest.mark.parametrize(
-    "trusted_outcome",
+    "call_outcome",
     ("success", "validation-error", "repeated-nested-success"),
 )
-def test_private_json_gate_resets_after_every_trusted_scope(
-    trusted_outcome: str,
+def test_supported_json_call_leaves_persistent_schema_and_validator_unchanged(
+    call_outcome: str,
 ) -> None:
     report = _reconcile(
         (_candle(open_time_ms=1000),),
@@ -687,12 +795,17 @@ def test_private_json_gate_resets_after_every_trusted_scope(
     )
     canonical = canonical_json_bytes(report)
 
-    if trusted_outcome == "success":
+    validator = CandleCrossSourceReconciliationV0.__pydantic_validator__
+    core_schema = CandleCrossSourceReconciliationV0.__pydantic_core_schema__
+    module_keys = frozenset(vars(module))
+    class_keys = frozenset(vars(CandleCrossSourceReconciliationV0))
+
+    if call_outcome == "success":
         assert CandleCrossSourceReconciliationV0.model_validate_json(
             canonical,
             strict=True,
         ) == report
-    elif trusted_outcome == "validation-error":
+    elif call_outcome == "validation-error":
         attacked = _wire(report)
         attacked["comparisons"][0]["status"] = "INVALID"
         with pytest.raises(ValidationError):
@@ -707,11 +820,30 @@ def test_private_json_gate_resets_after_every_trusted_scope(
                 strict=True,
             ) == report
 
+    assert CandleCrossSourceReconciliationV0.__pydantic_validator__ is validator
+    assert CandleCrossSourceReconciliationV0.__pydantic_core_schema__ is core_schema
+    assert frozenset(vars(module)) == module_keys
+    assert frozenset(vars(CandleCrossSourceReconciliationV0)) == class_keys
     with pytest.raises(ValidationError, match="unsupported"):
         CandleCrossSourceReconciliationV0.__pydantic_validator__.validate_json(
             canonical,
             strict=True,
         )
+
+
+def test_module_reflection_exposes_no_persistent_json_authorization_capability() -> None:
+    assert not hasattr(module, "_A6_TRUSTED_JSON_MODE_SENTINEL")
+    assert not hasattr(module, "_A6_JSON_MODE_GATE")
+    authorization_names = {
+        name
+        for name in vars(module)
+        if any(
+            token in name.lower()
+            for token in ("authorization", "capability", "sentinel", "trusted", "gate")
+        )
+    }
+    assert authorization_names == set()
+    assert "ContextVar" not in inspect.getsource(module)
 
 
 @pytest.mark.parametrize(

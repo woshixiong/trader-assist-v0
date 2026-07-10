@@ -109,7 +109,7 @@ Both inputs must have identical source, coin, and candle interval identities. Ea
 - exact field equality without tolerance or normalization;
 - typed per-item source authorities, exact field differences, status counts, and a domain-separated reconciliation hash;
 - `AuthorityClass.model_validate_json(...)` as the sole supported A6 raw JSON boundary, with a pre-Pydantic canonical check that accepts only exact `canonical_json_bytes(authority)` representation;
-- a private scoped JSON-mode validation gate for the already-approved canonical bytes, preserving native Pydantic JSON-mode semantics for `strict=None`, `strict=False`, and `strict=True` without allowing caller context to authorize the gate;
+- one-shot call-local Pydantic JSON-mode validation of the already-approved canonical bytes, preserving native Pydantic JSON-mode semantics for `strict=None`, `strict=False`, and `strict=True`, without any persistent caller-settable capability that can authorize core JSON validation;
 - pre-Pydantic rejection of duplicate keys at every nesting level, `-0`, noncanonical numeric tokens, invalid UTF-8, BOM, alternate encodings, truncation, trailing material, reordered keys, alternate escapes, and other noncanonical raw forms;
 - decoded Python validation through class/base `model_validate`, `TypeAdapter.validate_python`, and core `validate_python`, which authenticates only the current decoded representation and does not prove raw-wire provenance;
 - intentional fail-closed behavior for inherited/core JSON, all string-validation paths, and all partial-validation paths;
