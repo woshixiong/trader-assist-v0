@@ -27,7 +27,7 @@ official public source catalog
   -> exact RawEventV0 application-payload bytes only
 ```
 
-A1 adds no HTTP client, WebSocket client, DNS, live endpoint connection, polling loop, reconnect runtime, heartbeat runtime, health runtime, backfill runtime, event loop, async runtime, database, dashboard, cloud SDK, strategy logic, AI recommendation, or risk sizing.
+A1 adds no transport runtime, parser, database, dashboard, strategy, AI, or risk layer.
 
 ## A2 no-network ingress insertion point
 
@@ -35,14 +35,14 @@ A1 adds no HTTP client, WebSocket client, DNS, live endpoint connection, polling
 caller-supplied public observation bytes
   -> A2 no-network ingress contract/helper
   -> A1 validate_read_only_transport_entry()
-  -> A1 unresolved rate-limit gate keeps live transport blocked
+  -> unresolved rate-limit gate keeps live transport blocked
   -> exact payload SHA-256 + content-addressed payload ref
   -> RawEventV0.bind_observation()
   -> optional BronzeStore.write_payload()
   -> optional ManifestWriter.append()
 ```
 
-A2 adds no HTTP client, WebSocket client, DNS, socket, live endpoint connection, polling loop, reconnect runtime, heartbeat runtime, health runtime, backfill runtime, event loop, async runtime, database, dashboard, cloud SDK, strategy logic, AI recommendation, or risk sizing.
+A2 adds no live transport, reconnect, health, backfill, async runtime, database, strategy, AI, or risk layer.
 
 ## A3 public read-only preflight insertion point
 
@@ -58,7 +58,7 @@ future collector configuration
   -> live_transport_authorized false while rate limits remain unresolved
 ```
 
-A3 adds no HTTP client, WebSocket client, DNS, socket, live endpoint connection, polling loop, reconnect runtime, heartbeat runtime, health runtime, backfill runtime, event loop, async runtime, database, dashboard, cloud SDK, strategy logic, AI recommendation, or risk sizing.
+A3 adds no HTTP/WebSocket client, socket, live connection, polling, reconnect, heartbeat, health, backfill, async runtime, database, strategy, AI, or risk layer.
 
 `mainnet public read-only` is only a public source identity / environment label. It is not Mainnet execution enablement and does not authorize private endpoints, user/account endpoints, `/exchange`, order mutation, signing, nonces, wallets, credentials, or kill-switch bypass.
 
@@ -77,96 +77,95 @@ frozen official rate-limit source identity
   -> live_transport_authorized remains false
 ```
 
-A4 rejects community, third-party, inferred, remembered, blog, forum, Discord, StackOverflow, and model-memory authority metadata in both unresolved and resolved states. A4 encodes no numeric rate-limit values and adds no live transport capability.
+A4 rejects community, third-party, inferred, remembered, blog, forum, Discord, StackOverflow, and model-memory authority metadata. A4 encodes no numeric rate-limit values and adds no live transport capability.
+
+## A5 offline candle extraction insertion point
+
+```text
+exact RawEventV0 authority + caller-supplied exact payload bytes
+  -> exact-class RawEvent revalidation
+  -> content-type / encoding / payload length / payload SHA-256 match
+  -> supported candle endpoint + operation + capture-mode gate
+  -> strict UTF-8 JSON parse with duplicate-key / BOM / non-finite rejection
+  -> exact frozen candle field set
+  -> exact numeric parse without binary-float conversion
+  -> timestamp / OHLC / volume / trade-count invariants
+  -> coin + interval equality with RawEvent authority
+  -> domain-separated candle logical key
+  -> ordered tuple of typed ExtractedCandleV0 items
+  -> domain-separated CandlePayloadExtractionV0 hash
+```
+
+A5 supports only `hl-ws-mainnet-public/candle` and `hl-info-mainnet-public/candleSnapshot`. It accepts WebSocket `data:Candle`, WebSocket `data:Candle[]`, and Info `Candle[]` according to the frozen envelope authority. Empty arrays yield zero items and no sentinel/default event.
+
+A5 does not read `payload_ref`, open files, connect to endpoints, execute REST requests, write Bronze or manifests, emit `NormalizedEventV0`, enter Silver, decide candle finality, order revisions, reconcile WebSocket and Info observations, detect gaps, backfill, generate health, strategy, AI, risk, dashboard, or execution output.
 
 Current authority state:
 
 ```text
 RATE_LIMIT_STATUS: UNRESOLVED_OFFICIAL_LIMIT
 LIVE_TRANSPORT_AUTHORIZED: FALSE
-ACTIVE_IMPLEMENTATION_SLICE: NONE
-ACTIVE_IMPLEMENTATION_WRITE_LEASE: NONE
+ACTIVE_IMPLEMENTATION_SLICE: V0-01A5-OFFLINE-CANDLE-PAYLOAD-EXTRACTION-CONTRACT
+ACTIVE_IMPLEMENTATION_WRITE_LEASE: BOUNDED
 ```
 
 ## Identity separation
 
-`payload_sha256` hashes exact bytes. JSON whitespace or key ordering changes therefore change the payload identity.
+`payload_sha256` hashes exact bytes. JSON whitespace or key ordering therefore changes payload identity.
 
-The v2 observation slot binds catalog version, catalog hash, catalog-entry hash, source, endpoint, operation, coin, candle interval, capture mode, connection, subscription, and collector-local receive sequence. The v2 raw observation identity additionally binds the payload hash. Collector-local sequence is never represented as a venue sequence.
+The v2 observation slot binds catalog version, catalog hash, catalog-entry hash, source, endpoint, operation, coin, candle interval, capture mode, connection, subscription, and collector-local receive sequence. The v2 raw observation identity additionally binds payload hash. Collector-local sequence is never represented as a venue sequence.
 
-Within one Bronze persistence root, an observation slot and a source-event ID are globally unique rather than segment-local. Re-appending the same complete RawEvent in another segment is globally idempotent and creates no second authority entry. The same slot with different RawEvent authority is a conflict.
+A5 preserves RawEvent authority unchanged. `CandlePayloadExtractionV0` separately binds the source event ID, payload hash, endpoint, operation, coin, interval, envelope shape, ordered typed candle items, and extraction hash.
 
-A1/A2/A3/A4 do not parse candle payloads into source-native IDs, source-native cursors, normalized timestamps, Silver events, strategy signals, AI explanations, or risk fields. Those fields remain unavailable until a later separately reviewed extractor/normalizer contract exists.
+The candle logical key binds source ID, coin, interval, and open time. It excludes endpoint so a later separately reviewed reconciliation slice may compare WebSocket and Info observations of the same logical candle. A5 performs no reconciliation or latest-wins decision.
+
+Within one Bronze persistence root, an observation slot and source-event ID remain globally unique rather than segment-local. A5 adds no persistence authority.
 
 ## A1 public source envelope authority
 
-The candle WebSocket contract accepts only these frozen public envelope shapes:
+The candle WebSocket contract accepts only:
 
 ```text
 data: Candle
 data: Candle[]
 ```
 
-These tokens describe public envelope policy and fixture shape. They are not runtime subscription code, not connection code, and not transport recovery logic.
+These tokens describe public envelope policy and payload shape. They are not runtime subscription, connection, or transport-recovery code.
 
-## A1/A2/A3/A4 rate-limit authority
+## A1/A2/A3/A4/A5 rate-limit authority
 
-`RATE_LIMIT_STATUS` remains `UNRESOLVED_OFFICIAL_LIMIT`. While that value is present, the entry gate blocks live public transport, polling, reconnect, backfill, and health runtime.
+`RATE_LIMIT_STATUS` remains `UNRESOLVED_OFFICIAL_LIMIT`. While present, the gate blocks live public transport, polling, reconnect, backfill, and health runtime. A5 is offline and does not weaken or bypass this gate.
 
-Only the frozen official Hyperliquid rate-limit source identity may supply authority metadata. A later task may encode official numeric limits only if the values are unambiguous, readable, and independently citable in official documentation at implementation time. Even a resolved metadata candidate does not by itself authorize live transport.
+Only the frozen official Hyperliquid rate-limit source identity may supply authority metadata. Even a resolved metadata candidate does not by itself authorize live transport.
 
 ## A1/A3 read-only transport entry checks
 
-The pure contract checkers accept only:
-
-- `source_id = hyperliquid-public-mainnet`;
-- `environment = mainnet public read-only`;
-- `operation_class = public read-only observation only`;
-- ETH/BTC when the operation requires a coin;
-- candle intervals `1m`, `3m`, `5m`, `15m`, `1h` when the operation is candle-shaped;
-- WebSocket capture as `WS_TEXT_UTF8_APPLICATION_PAYLOAD`;
-- Info capture as `HTTP_RESPONSE_BODY`.
-
-They reject private, user/account, wallet/signing, nonce, order, exchange-write, unsupported source, unsupported environment, unsupported coin, unsupported interval, unsupported capture-mode, credential, kill-switch bypass, and execution selections.
+The pure contract checkers accept only the frozen source, public read-only environment and operation class, ETH/BTC when required, candle intervals `1m`, `3m`, `5m`, `15m`, `1h`, WebSocket capture as `WS_TEXT_UTF8_APPLICATION_PAYLOAD`, and Info capture as `HTTP_RESPONSE_BODY`. They reject private, user/account, wallet/signing, nonce, order, exchange-write, unsupported source/environment/coin/interval/capture-mode, credential, kill-switch bypass, and execution selections.
 
 ## A1 fixture admission
 
-Fixtures committed to Git must be synthetic documentation-derived or minimal redacted examples, sanitized, and explicitly provenanced. Real raw observations, real market/account logs, wallet addresses, API keys, signatures, nonces, credentials, database/cache artifacts, and unredacted operational payloads are forbidden.
-
-If a later read-only observation task is authorized, raw observations must remain outside Git. Only sanitized derived fixtures may be committed after review.
+Fixtures committed to Git must be synthetic documentation-derived or minimal redacted examples, sanitized, and explicitly provenanced. Real raw observations, market/account logs, wallet addresses, API keys, signatures, nonces, credentials, database/cache artifacts, and unredacted operational payloads are forbidden. A5 adds no payload fixture.
 
 ## Persistence
 
 Payloads use `payloads/sha256/<prefix>/<digest>.payload`. Manifest lines use `manifests/<UTC-date>/<segment>.jsonl`. Completion checkpoints use `manifests/<UTC-date>/<segment>.checkpoint.json`. Paths are portable relative paths; absolute paths are never hashed or serialized into authority records.
 
-Payload publication writes and fsyncs a same-filesystem temporary file and atomically links it into its immutable final name without overwrite. Manifest append runs under the root-wide writer authority, validates every manifest, performs global idempotency/conflict checks, writes exactly one JSON line, fsyncs the manifest, and fsyncs the parent directory before the authority may be released.
+Payload publication writes and fsyncs a same-filesystem temporary file and atomically links it into its immutable final name without overwrite. Manifest append runs under root-wide writer authority, validates every manifest, performs global idempotency/conflict checks, writes one JSON line, fsyncs the manifest, and fsyncs the parent directory before authority may be released.
 
-`ManifestWriter.close()` releases the root-wide authority but does not claim completion. `ManifestWriter.finalize()` rereads and validates the manifest while the same authority remains continuously held, fsyncs it, binds entry count and terminal hash into a self-hashed checkpoint, publishes that checkpoint exactly once, fsyncs the parent directory, and then closes. A finalized segment cannot be reopened for append.
+`ManifestWriter.close()` releases authority but does not claim completion. `ManifestWriter.finalize()` validates and fsyncs the manifest while authority remains continuously held, publishes a one-time self-hashed checkpoint, fsyncs the parent directory, and then closes.
 
-## Lock authority
+## Lock and path authority
 
-A0 uses a root-wide single-writer protocol. `ManifestWriter` acquires an exclusive non-blocking `fcntl.flock` on a lock file within the authority_anchor directory, not the root directory itself. The lock file is pre-created by the supervisor and opened by `OwnedLock.acquire()` through the supervisor-provided anchor directory fd. The authority_anchor directory descriptor is owned by the supervisor and passed to `OwnedLock.acquire()` as the `authority_anchor_fd` parameter.
+A0 uses a root-wide exclusive non-blocking `fcntl.flock` on a supervisor-provisioned lock file in the `authority_anchor` directory. The protocol does not create or delete lock pathname markers. Root-path loss, replacement, descriptor mismatch, or uncertain close transitions the writer to a fail-closed terminal state.
 
-The protocol does not create or delete lock pathname markers. `lock_ref()` and `global_authority_lock_ref()` remain compatibility names only; their presence, absence, token contents, replacement, or symlink substitution cannot create a second writer namespace and is never cleaned by ordinary release. Acquisition cleanup and release operate only on the descriptor owned by that acquisition, eliminating blind-unlink and verify-then-unlink races.
-
-Different segment writers do not coexist in A0. A second writer for any date or segment in the same Bronze root fails closed until the active writer releases its kernel authority. After release, global replay of every manifest preserves cross-segment and cross-date idempotency/conflict semantics. Any partial, corrupt, duplicated, or conflicting manifest blocks new authority writes across the root.
-
-Root-path loss, replacement, non-directory substitution, descriptor identity mismatch, or kernel release failure transitions the lock and writer to a terminal compromised state. Its owned descriptor is closed, append/finalize remain disabled, repeated release is deterministic, and no current pathname is removed. A0 does not automatically recover stale authority.
-
-## Path boundary
-
-Authoritative opens walk directory file descriptors, reject symlinks with non-following metadata checks, and compare device/inode after open. Payload and manifest trees reject unexpected entries. This closes ordinary traversal and symlink escape under a non-hostile runtime account.
-
-The kernel lock is advisory. All cooperative writers must use this protocol. Bronze root contents are collector-writable; the authority_anchor and root immediate parent are supervisor-controlled and not collector-writable. The collector must not create, replace, chmod, rename, delete, or otherwise mutate the authority_anchor, root immediate parent, or authority lock object. The implementation does not claim protection against a privileged local actor that can bypass advisory locks, replace higher-level mount or parent authorities, or directly mutate opened directory entries. Such an actor is outside A0's threat boundary.
+Authoritative opens walk directory file descriptors, reject symlinks, and compare device/inode identity. The kernel lock is advisory; all cooperative writers must use the protocol. Privileged local actors able to bypass advisory locks or mutate supervisor authorities remain outside the stated A0 threat boundary.
 
 ## Replay
 
-Replay performs no networking and requires a valid completion checkpoint. It verifies manifest framing, strict schemas, fixed versions, index continuity, segment identity, previous hashes, self-hashes, checkpoint date/segment/catalog/count/terminal hash, payload path confinement, existence, type, byte length, SHA-256, global observation authority, optional extra terminal-hash assertion, and global orphan status.
+Replay performs no networking and requires a valid completion checkpoint. It verifies manifest framing, schemas, fixed versions, index continuity, segment identity, hash chain, checkpoint binding, payload confinement/existence/type/length/SHA-256, global observation authority, terminal hash, and orphan status.
 
-An unfinalized segment, missing or invalid checkpoint, tail deletion, count or terminal mismatch, corrupt evidence, conflicting global authority, unexpected tree entry, or orphan payload yields `FAIL`. A zero-entry segment passes only when an empty manifest exists with an explicit completed checkpoint binding count zero and the genesis terminal hash.
-
-The report hash excludes absolute paths, current time, random values, process IDs, and filesystem metadata, so the same evidence yields the same logical report across roots and processes.
+An unfinalized segment, missing/invalid checkpoint, tail deletion, corrupt evidence, conflicting authority, unexpected tree entry, or orphan payload yields `FAIL`. A zero-entry segment passes only with an explicit completed zero-entry checkpoint.
 
 ## Next gate
 
-A4 completion does not authorize any later implementation automatically. There is no active implementation slice. Live public transport, health runtime, backfill, reconnect, extractor/normalizer, Silver, strategy, AI recommendation, risk sizing, dashboard, Testnet/Mainnet execution, and exchange write paths each require a separate exact-head scope freeze, explicit write lease, CI success, external independent review, and finalization authorization.
+A5 completion does not authorize live public transport, health, reconnect, backfill, revision reconciliation, normalized events, Silver, strategy, AI recommendation, risk sizing, dashboard, Testnet/Mainnet execution, or exchange writes. Each later slice requires a separate exact-head scope freeze, explicit write lease, CI success, external independent review, and finalization authorization.
