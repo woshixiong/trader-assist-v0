@@ -2,13 +2,15 @@
 
 Catalog version: `hyperliquid-public-mainnet.0.1.0`
 
+Fixed source catalog hash: `0ca27f650f399f8fa481ad9421eab4183c1c13812c71dfa8daaf878719bd99b7`
+
 Catalog-entry hash domain: `trader-assist-v0/source-catalog-entry/v1`
 
 Officially verified: `2026-07-07`
 
 The single executable catalog authority is `src/trader_assist_v0/contracts/source_catalog.py`. It depends only on the standard library and `contracts/common.py`, so `RawEventV0` can validate catalog authority without a contracts-to-data import cycle. `src/trader_assist_v0/data/source_catalog.py` is a compatibility re-export and does not define a second catalog.
 
-A0 records public interface facts only and does not connect to any endpoint. A1 freezes public transport-entry contracts only and still does not connect to any endpoint. A2 uses those contracts for caller-supplied public observation bytes and still does not connect to any endpoint. A3 freezes future public read-only transport preflight checks and still does not connect to any endpoint. A4 freezes the official rate-limit authority contract and still does not connect to any endpoint.
+A0 records public interface facts only and does not connect to any endpoint. A1 freezes public transport-entry contracts only and still does not connect to any endpoint. A2 uses those contracts for caller-supplied public observation bytes and still does not connect to any endpoint. A3 freezes future public read-only transport preflight checks and still does not connect to any endpoint. A4 completed the official-only rate-limit authority freeze and still does not connect to any endpoint.
 
 ## Coverage
 
@@ -52,9 +54,9 @@ A3 rejects credentials, wallet/signing/nonce/account material, private/user/acco
 
 A3 is not a runtime collector, not an HTTP client, not a WebSocket client, not a reconnect/heartbeat/backfill/health loop, not a payload parser, not a Silver normalizer, not a strategy/risk/AI layer, and not an execution path.
 
-## A4 official rate-limit authority
+## A4 official rate-limit authority — completed
 
-A4 freezes the official rate-limit authority contract required before any future public read-only live transport runtime. A4 preflight attempted to inspect the official Hyperliquid rate-limit GitBook location, but the available tooling received an unexpected-error response. Therefore A4 keeps the current authority unresolved and encodes no numeric limit values.
+A4 froze the official-only rate-limit authority contract required before any future public read-only live transport runtime. A4 preflight could not read and independently cite unambiguous official numeric values. Therefore A4 keeps the current authority unresolved and encodes no numeric limit values.
 
 Recognized status states:
 
@@ -66,7 +68,16 @@ OFFICIAL_NUMERIC_LIMIT_RESOLVED
 Current frozen status:
 
 ```text
-UNRESOLVED_OFFICIAL_LIMIT
+RATE_LIMIT_STATUS: UNRESOLVED_OFFICIAL_LIMIT
+LIVE_TRANSPORT_AUTHORIZED: FALSE
+```
+
+The only accepted authority identity is:
+
+```text
+source_kind: official
+official_source_title: Rate limits and user limits
+official_source_location: https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/rate-limits-and-user-limits
 ```
 
 A future resolved candidate must include all of the following, from the frozen official source only:
@@ -81,7 +92,7 @@ A future resolved candidate must include all of the following, from the frozen o
 - operation scope;
 - no ambiguous fields.
 
-A4 rejects third-party, community, remembered, inferred, blog, forum, Discord, StackOverflow, or model-memory rate-limit material. A4 also rejects live runtime requests through rate-limit authority checks. Even a complete resolved metadata candidate does not authorize live transport in A4; live transport requires a later exact-head task.
+A4 rejects third-party, community, remembered, inferred, blog, forum, Discord, StackOverflow, or model-memory authority metadata in unresolved and resolved states. A4 also rejects live runtime requests through rate-limit authority checks. Even a complete resolved metadata candidate does not authorize live transport in A4; live transport requires a later exact-head task.
 
 ## A1 candle WebSocket envelope contract
 
@@ -114,7 +125,7 @@ The official rate-limit page was not readable during A0 verification and remaine
 
 When numeric limits are unresolved, live polling, WebSocket reconnect, backfill, health runtime, and any public transport runtime remain prohibited. Only official documented numeric values may replace `UNRESOLVED_OFFICIAL_LIMIT` in a later authorized task.
 
-A4 must not resolve official numeric rate limits unless project control amends a later task after current official docs are readable and cited.
+A later task must not resolve official numeric rate limits unless project control amends its scope after current official docs are readable and cited.
 
 ## A1/A3 read-only transport entry contract
 
@@ -160,6 +171,10 @@ If later read-only observation is authorized, only sanitized derived fixtures ma
 ## A1-to-A2 gate
 
 A1 completion does not authorize A2 automatically. A2 may only be considered after A1 PR merge, external exact-head review PASS, explicit rate-limit entry gate, frozen public source envelope contract, and a new exact-head project-control lease.
+
+## Post-A4 next gate
+
+There is no active implementation slice and no active implementation write lease. A4 completion does not authorize live public transport, health, backfill, reconnect, extractor/normalizer, Silver, strategy, AI recommendation, risk sizing, dashboard, Testnet/Mainnet execution, or exchange writes. Each later slice requires a new exact-head scope freeze, write lease, CI run, external independent review, and finalization authorization.
 
 ## Official locations
 
