@@ -282,8 +282,10 @@ def test_rejects_duplicate_logical_candle_key() -> None:
 def test_rejects_payload_hash_and_size_mismatch() -> None:
     payload = _json_bytes({"channel": "candle", "data": _candle()})
     raw = _raw(payload)
+    same_length_tamper = payload[:-1] + b" "
+    assert len(same_length_tamper) == len(payload)
     with pytest.raises(CandlePayloadExtractionError, match="hash"):
-        extract_candle_payload(raw_event=raw, payload=payload + b" ")
+        extract_candle_payload(raw_event=raw, payload=same_length_tamper)
 
     material = raw.model_dump(mode="python", round_trip=True)
     material["payload_size_bytes"] += 1
