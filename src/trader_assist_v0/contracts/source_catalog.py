@@ -456,10 +456,10 @@ def validate_official_rate_limit_authority(
         official_source_location,
         source_kind,
     )
-    has_numeric_material = bool(numeric_limit_fields or limit_units or operation_scope)
-
-    if not source_matches and (status == "OFFICIAL_NUMERIC_LIMIT_RESOLVED" or has_numeric_material):
+    if not source_matches:
         raise ValueError("rate-limit authority must use the frozen official source")
+
+    has_numeric_material = bool(numeric_limit_fields or limit_units or operation_scope)
 
     if status == "UNRESOLVED_OFFICIAL_LIMIT":
         if has_numeric_material:
@@ -480,8 +480,6 @@ def validate_official_rate_limit_authority(
             "live_transport_authorized": False,
         }
 
-    if not source_matches:
-        raise ValueError("resolved rate-limit authority requires the frozen official source")
     if not official_source_readable:
         raise ValueError("official rate-limit source must be readable before resolving")
     if ambiguous_fields:
