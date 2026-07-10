@@ -4,7 +4,7 @@ Trader Assist V0 is an isolated ETH/Hyperliquid experiment lane for reliable dat
 
 ## Current stage
 
-`V0-01A3 / PUBLIC_READONLY_TRANSPORT_PREFLIGHT_CONTRACT`
+`V0-01A4 / OFFICIAL_RATE_LIMIT_AUTHORITY_FREEZE — COMPLETED`
 
 A0 completed the versioned public-source catalog, exact raw fixture/application-payload authority, local content-addressed immutable Bronze storage, append-only hash-linked manifests, and deterministic offline replay.
 
@@ -12,7 +12,11 @@ A1 froze public candle envelope policy, rate-limit entry-gate behavior, future r
 
 A2 added a no-network ingress contract/helper for caller-supplied public observation bytes. Every accepted selection must pass A1 public read-only transport-entry checks, exact bytes are bound into `RawEventV0` authority, and optional Bronze persistence uses the existing A0 `BronzeStore` / `ManifestWriter` authority boundaries.
 
-A3 freezes a future public read-only transport preflight contract. It validates source identity, environment, operation class, endpoint/operation allowlist, capture-mode match, disabled-runtime default, kill-switch fail-closed semantics, credential absence, account/private absence, and no-write/no-execution proof before any later collector runtime may be considered.
+A3 froze a future public read-only transport preflight contract. It validates source identity, environment, operation class, endpoint/operation allowlist, capture-mode match, disabled-runtime default, kill-switch fail-closed semantics, credential absence, account/private absence, and no-write/no-execution proof.
+
+A4 froze the official-only rate-limit authority contract. `RATE_LIMIT_STATUS` remains `UNRESOLVED_OFFICIAL_LIMIT`; no numeric rate-limit values are encoded; live transport remains unauthorized.
+
+There is currently no active implementation slice and no active implementation write lease. Any later extractor, normalizer, transport, health, backfill, strategy, AI, risk, or execution task requires a new exact-head scope freeze, write lease, CI run, and external independent review.
 
 `mainnet public read-only` is a public source identity and environment label only. It is not Mainnet execution enablement.
 
