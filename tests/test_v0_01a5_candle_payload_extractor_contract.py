@@ -20,7 +20,10 @@ from trader_assist_v0.contracts.candles import (
     compute_candle_extraction_hash,
 )
 from trader_assist_v0.contracts.events import RawCaptureModeV0, RawEventV0
-from trader_assist_v0.contracts.source_catalog import RATE_LIMIT_STATUS, SOURCE_CATALOG_HASH
+from trader_assist_v0.contracts.source_catalog import (
+    RATE_LIMIT_STATUS,
+    SOURCE_CATALOG_HASH,
+)
 from trader_assist_v0.data import candle_extractor
 from trader_assist_v0.data.candle_extractor import (
     CandlePayloadExtractionError,
@@ -59,7 +62,11 @@ def _candle(
 
 
 def _json_bytes(value: Any) -> bytes:
-    return json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return json.dumps(
+        value,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
 
 
 def _raw(
@@ -67,7 +74,9 @@ def _raw(
     *,
     endpoint_id: str = "hl-ws-mainnet-public",
     operation_type: str = "candle",
-    capture_mode: RawCaptureModeV0 = RawCaptureModeV0.WS_TEXT_UTF8_APPLICATION_PAYLOAD,
+    capture_mode: RawCaptureModeV0 = (
+        RawCaptureModeV0.WS_TEXT_UTF8_APPLICATION_PAYLOAD
+    ),
     coin: str | None = "ETH",
     interval: str | None = "1m",
     content_type: str = "application/json",
@@ -91,16 +100,34 @@ def _raw(
     )
 
 
-def _extract(payload: bytes, **raw_overrides: Any) -> CandlePayloadExtractionV0:
-    return extract_candle_payload(raw_event=_raw(payload, **raw_overrides), payload=payload)
+def _extract(
+    payload: bytes,
+    **raw_overrides: Any,
+) -> CandlePayloadExtractionV0:
+    return extract_candle_payload(
+        raw_event=_raw(payload, **raw_overrides),
+        payload=payload,
+    )
 
 
 def test_a5_frozen_authorities_and_existing_gates_remain_fail_closed() -> None:
-    assert A5_CONTRACT_ID == "V0-01A5-OFFLINE-CANDLE-PAYLOAD-EXTRACTION-CONTRACT"
+    assert (
+        A5_CONTRACT_ID
+        == "V0-01A5-OFFLINE-CANDLE-PAYLOAD-EXTRACTION-CONTRACT"
+    )
     assert CANDLE_EXTRACTION_SCHEMA_VERSION == "0.1.0"
-    assert CANDLE_EXTRACTION_HASH_VERSION == "trader-assist-v0/candle-payload-extraction/v1"
-    assert CANDLE_LOGICAL_KEY_VERSION == "trader-assist-v0/candle-logical-key/v1"
-    assert SOURCE_CATALOG_HASH == "0ca27f650f399f8fa481ad9421eab4183c1c13812c71dfa8daaf878719bd99b7"
+    assert (
+        CANDLE_EXTRACTION_HASH_VERSION
+        == "trader-assist-v0/candle-payload-extraction/v1"
+    )
+    assert (
+        CANDLE_LOGICAL_KEY_VERSION
+        == "trader-assist-v0/candle-logical-key/v1"
+    )
+    assert (
+        SOURCE_CATALOG_HASH
+        == "0ca27f650f399f8fa481ad9421eab4183c1c13812c71dfa8daaf878719bd99b7"
+    )
     assert RATE_LIMIT_STATUS == "UNRESOLVED_OFFICIAL_LIMIT"
 
 
@@ -117,13 +144,21 @@ def test_extracts_valid_ws_singular_candle_deterministically() -> None:
     assert candle.close_price == Decimal("3001")
     assert candle.volume_base == Decimal("12.5")
     assert first.extraction_hash == compute_candle_extraction_hash(first)
-    assert first.model_dump(mode="json")["candles"][0]["volume_base"] == "12.5"
+    dumped = first.model_dump(mode="json")
+    assert dumped["candles"][0]["volume_base"] == "12.5"
 
 
 def test_extracts_valid_ws_array_in_payload_order() -> None:
     first_candle = _candle(open_time=1000, close_time=1999)
-    second_candle = _candle(open_time=2000, close_time=2999, close_price=3002, high_price=3003)
-    payload = _json_bytes({"channel": "candle", "data": [first_candle, second_candle]})
+    second_candle = _candle(
+        open_time=2000,
+        close_time=2999,
+        close_price=3002,
+        high_price=3003,
+    )
+    payload = _json_bytes(
+        {"channel": "candle", "data": [first_candle, second_candle]}
+    )
 
     result = _extract(payload)
 
@@ -162,7 +197,9 @@ def test_extracts_valid_info_array_and_empty_arrays_without_sentinel_events() ->
         b'{"channel":"candle","channel":"candle","data":[]}',
     ],
 )
-def test_rejects_invalid_utf8_bom_malformed_nonfinite_and_duplicate_keys(payload: bytes) -> None:
+def test_rejects_invalid_utf8_bom_malformed_nonfinite_and_duplicate_keys(
+    payload: bytes,
+) -> None:
     with pytest.raises(CandlePayloadExtractionError):
         _extract(payload)
 
@@ -213,7 +250,10 @@ def test_rejects_invalid_info_envelope() -> None:
         ("i", "5m"),
     ],
 )
-def test_rejects_invalid_candle_fields(mutation: str, value: Any) -> None:
+def test_rejects_invalid_candle_fields(
+    mutation: str,
+    value: Any,
+) -> None:
     candle = _candle(open_time=1000, close_time=1999)
     if mutation == "missing":
         candle.pop("o")
@@ -229,8 +269,13 @@ def test_rejects_invalid_candle_fields(mutation: str, value: Any) -> None:
 
 def test_rejects_duplicate_logical_candle_key() -> None:
     candle = _candle()
-    payload = _json_bytes({"channel": "candle", "data": [candle, candle]})
-    with pytest.raises(CandlePayloadExtractionError, match="duplicate candle logical key"):
+    payload = _json_bytes(
+        {"channel": "candle", "data": [candle, candle]}
+    )
+    with pytest.raises(
+        CandlePayloadExtractionError,
+        match="duplicate candle logical key",
+    ):
         _extract(payload)
 
 
@@ -251,9 +296,16 @@ def test_rejects_payload_hash_and_size_mismatch() -> None:
     ("content_type", "payload_encoding"),
     [("text/plain", "utf-8"), ("application/json", "UTF-8")],
 )
-def test_rejects_wrong_content_type_or_encoding(content_type: str, payload_encoding: str) -> None:
+def test_rejects_wrong_content_type_or_encoding(
+    content_type: str,
+    payload_encoding: str,
+) -> None:
     payload = _json_bytes({"channel": "candle", "data": _candle()})
-    raw = _raw(payload, content_type=content_type, payload_encoding=payload_encoding)
+    raw = _raw(
+        payload,
+        content_type=content_type,
+        payload_encoding=payload_encoding,
+    )
     with pytest.raises(CandlePayloadExtractionError):
         extract_candle_payload(raw_event=raw, payload=payload)
 
@@ -280,8 +332,16 @@ def test_rejects_wrong_source_selection_and_capture_mode() -> None:
     ("coin", "interval"),
     [("SOL", "1m"), ("ETH", "30m")],
 )
-def test_unsupported_coin_and_interval_fail_at_raw_authority(coin: str, interval: str) -> None:
-    payload = _json_bytes({"channel": "candle", "data": _candle(coin=coin, interval=interval)})
+def test_unsupported_coin_and_interval_fail_at_raw_authority(
+    coin: str,
+    interval: str,
+) -> None:
+    payload = _json_bytes(
+        {
+            "channel": "candle",
+            "data": _candle(coin=coin, interval=interval),
+        }
+    )
     with pytest.raises((ValueError, ValidationError)):
         _raw(payload, coin=coin, interval=interval)
 
@@ -291,14 +351,17 @@ def test_requires_exact_raw_event_and_exact_payload_bytes() -> None:
     with pytest.raises(TypeError):
         extract_candle_payload(raw_event=cast(Any, {}), payload=payload)
     with pytest.raises(TypeError):
-        extract_candle_payload(raw_event=_raw(payload), payload=cast(Any, bytearray(payload)))
+        extract_candle_payload(
+            raw_event=_raw(payload),
+            payload=cast(Any, bytearray(payload)),
+        )
 
     class RawEventSubclass(RawEventV0):
         pass
 
     fabricated = object.__new__(RawEventSubclass)
     with pytest.raises(TypeError):
-        extract_candle_payload(raw_event=cast(RawEventV0, fabricated), payload=payload)
+        extract_candle_payload(raw_event=fabricated, payload=payload)
 
 
 def test_a5_models_reject_mutation_and_hash_forgery() -> None:
@@ -328,10 +391,17 @@ def test_extractor_has_no_network_async_or_filesystem_capability() -> None:
         "websocket",
         "websockets",
     }
+    forbidden_async_nodes = (
+        ast.AsyncFunctionDef,
+        ast.Await,
+        ast.AsyncFor,
+        ast.AsyncWith,
+    )
     for node in ast.walk(tree):
-        assert not isinstance(node, (ast.AsyncFunctionDef, ast.Await, ast.AsyncFor, ast.AsyncWith))
+        assert not isinstance(node, forbidden_async_nodes)
         if isinstance(node, ast.Import):
-            assert all(alias.name.split(".")[0] not in forbidden_import_roots for alias in node.names)
+            roots = {alias.name.split(".")[0] for alias in node.names}
+            assert roots.isdisjoint(forbidden_import_roots)
         if isinstance(node, ast.ImportFrom) and node.module is not None:
             assert node.module.split(".")[0] not in forbidden_import_roots
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
