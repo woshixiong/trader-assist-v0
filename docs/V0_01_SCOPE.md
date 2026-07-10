@@ -26,15 +26,22 @@ A3 froze a pure public read-only transport preflight contract for a future colle
 
 A3 does not implement live transport.
 
-## Active slice
-
 `V0-01A4 / OFFICIAL_RATE_LIMIT_AUTHORITY_FREEZE`
 
-A4 freezes the official rate-limit authority contract required before any future public read-only live transport runtime. It defines the only valid status states, preserves unresolved fail-closed behavior, and defines the complete metadata required before a later task may consider official numeric rate limits resolved.
+A4 froze the official-only rate-limit authority contract required before any future public read-only live transport runtime. It defines the only valid status states, preserves unresolved fail-closed behavior, and defines the complete metadata required before a later task may consider official numeric rate limits resolved.
 
-A4 preflight attempted to read the official Hyperliquid rate-limit GitBook page, but the page returned an unexpected-error response through the available tooling. Because the official numeric limits were not machine-readable and independently citable in this window, A4 keeps `RATE_LIMIT_STATUS = UNRESOLVED_OFFICIAL_LIMIT` and encodes no numeric limits.
+A4 preflight could not read and independently cite unambiguous official numeric values. Therefore A4 keeps `RATE_LIMIT_STATUS = UNRESOLVED_OFFICIAL_LIMIT`, encodes no numeric limit values, accepts only the frozen official source identity, and keeps live transport unauthorized.
 
 A4 does not implement live transport and does not authorize live transport.
+
+## Active slice
+
+```text
+ACTIVE_IMPLEMENTATION_SLICE: NONE
+ACTIVE_IMPLEMENTATION_WRITE_LEASE: NONE
+```
+
+No extractor, normalizer, transport, health, backfill, Silver, strategy, AI, risk, dashboard, Testnet/Mainnet execution, or exchange-write task is currently authorized. Every later slice requires a new exact-head scope freeze and write lease.
 
 ## Fixed A0 authority versions
 
@@ -45,10 +52,12 @@ OBSERVATION_SLOT_VERSION: trader-assist-v0/raw-observation-slot/v2
 MANIFEST_FORMAT_VERSION: 0.1.0
 MANIFEST_HASH_CHAIN_VERSION: trader-assist-v0/raw-manifest-entry/v1
 MANIFEST_CHECKPOINT_VERSION: 0.1.0
+MANIFEST_CHECKPOINT_HASH_VERSION: trader-assist-v0/raw-manifest-checkpoint/v1
 REPLAY_REPORT_VERSION: 0.1.0
+REPLAY_REPORT_HASH_VERSION: trader-assist-v0/bronze-replay-report/v1
 ```
 
-A0 supports only these values. Callers cannot override them, and the generated JSON Schemas expose them as `const` authorities.
+A0 supports only these values. Callers cannot override them, and the generated JSON Schemas expose them as `const` authorities where applicable.
 
 ## A1/A3/A4 frozen authorities used by later slices
 
@@ -57,6 +66,7 @@ A1_CONTRACT_ID: V0-01A1-SCOPE-FREEZE
 A3_CONTRACT_ID: V0-01A3-PUBLIC-READONLY-TRANSPORT-PREFLIGHT-CONTRACT
 A4_CONTRACT_ID: V0-01A4-OFFICIAL-RATE-LIMIT-AUTHORITY-FREEZE
 SOURCE_ID: hyperliquid-public-mainnet
+SOURCE_CATALOG_HASH: 0ca27f650f399f8fa481ad9421eab4183c1c13812c71dfa8daaf878719bd99b7
 ENVIRONMENT: mainnet public read-only
 OPERATION_CLASS: public read-only observation only
 RATE_LIMIT_STATUS: UNRESOLVED_OFFICIAL_LIMIT
@@ -92,7 +102,8 @@ The A3 preflight contract is not a collector runtime, not a parser, not a candle
 - define the only allowed rate-limit status states;
 - preserve `UNRESOLVED_OFFICIAL_LIMIT` while official numeric limits are not readable, citable, and complete;
 - define metadata required for a future resolved candidate: official title, official location, verification date, source kind, readability, numeric field names, units, operation scope, and absence of ambiguous fields;
-- reject third-party, community, inferred, remembered, blog, forum, or model-memory numeric-limit material;
+- reject third-party, community, inferred, remembered, blog, forum, Discord, StackOverflow, or model-memory authority metadata in unresolved and resolved states;
+- reject numeric rate-limit material while unresolved;
 - reject live runtime enablement from rate-limit authority checks;
 - prove that resolved rate-limit metadata alone still does not authorize live transport in A4.
 
@@ -102,11 +113,11 @@ A4 must not encode numeric limit values unless a later exact-head implementation
 
 ## Rate-limit entry gate
 
-Official numeric rate limits remain `UNRESOLVED_OFFICIAL_LIMIT` until an implementation window can read and encode only official documented values. While numeric limits are unresolved, live polling, WebSocket reconnect, backfill, health runtime, or any public transport runtime remains prohibited.
+Official numeric rate limits remain `UNRESOLVED_OFFICIAL_LIMIT` until a separately authorized implementation window can read, cite, and encode only official documented values. While numeric limits are unresolved, live polling, WebSocket reconnect, backfill, health runtime, or any public transport runtime remains prohibited.
 
-Third-party, remembered, inferred, community, blog, StackOverflow, Discord, or model-memory rate-limit numbers are not authority.
+Third-party, remembered, inferred, community, blog, StackOverflow, Discord, or model-memory rate-limit material is not authority.
 
-A4 must not resolve official numeric rate limits unless project control amends the task after current official docs are readable and cited.
+A later task must not resolve official numeric rate limits unless project control amends its scope after current official docs are readable and cited.
 
 A4 recognizes only these rate-limit states:
 
@@ -153,4 +164,4 @@ The root-wide authority is held for the complete writer lifetime. Different segm
 
 ## Authority
 
-TraderOS remains authoritative for cross-project architecture and production governance. Public market-data definitions never authorize exchange writes. The next transport or health slice requires a separate exact-head lease and review.
+TraderOS remains authoritative for cross-project architecture and production governance. Public market-data definitions never authorize exchange writes. The next slice requires a separate exact-head scope freeze, write lease, CI run, and external independent review.
