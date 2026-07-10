@@ -67,6 +67,26 @@ def test_a4_rate_limit_authority_never_enables_runtime(kwargs: dict[str, bool]) 
     "kwargs, match",
     [
         (
+            {"source_kind": "community"},
+            "frozen official source",
+        ),
+        (
+            {"official_source_title": "community notes"},
+            "frozen official source",
+        ),
+        (
+            {"official_source_location": "discord"},
+            "frozen official source",
+        ),
+        (
+            {
+                "source_kind": "model-memory",
+                "official_source_title": "remembered rate limit",
+                "official_source_location": "blog/forum",
+            },
+            "frozen official source",
+        ),
+        (
             {"numeric_limit_fields": ("request_budget",)},
             "numeric rate-limit material",
         ),
