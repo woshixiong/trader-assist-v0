@@ -10,6 +10,17 @@ from .approval import (
     validate_execution_permit_bindings,
     validate_human_decision_binding,
 )
+from .candles import (
+    A5_CONTRACT_ID,
+    CANDLE_EXTRACTION_HASH_VERSION,
+    CANDLE_EXTRACTION_SCHEMA_VERSION,
+    CANDLE_LOGICAL_KEY_VERSION,
+    CandleEnvelopeShapeV0,
+    CandlePayloadExtractionV0,
+    ExtractedCandleV0,
+    compute_candle_extraction_hash,
+    compute_candle_logical_key,
+)
 from .common import (
     DataLayerV0,
     EnvironmentV0,
@@ -53,9 +64,15 @@ from .strategy import (
 )
 
 __all__ = [
+    "A5_CONTRACT_ID",
     "AIRecommendationV0",
     "BronzeReplayReportV0",
+    "CANDLE_EXTRACTION_HASH_VERSION",
+    "CANDLE_EXTRACTION_SCHEMA_VERSION",
+    "CANDLE_LOGICAL_KEY_VERSION",
     "CandidateKindV0",
+    "CandleEnvelopeShapeV0",
+    "CandlePayloadExtractionV0",
     "CorrelationChainV0",
     "DataHealthEventV0",
     "DataLayerV0",
@@ -65,6 +82,7 @@ __all__ = [
     "EvidenceBundleManifestV0",
     "EvidenceFileV0",
     "ExecutionPermitV0",
+    "ExtractedCandleV0",
     "FeedHealthPolicyV0",
     "HashBoundModel",
     "HashDomainV0",
@@ -92,6 +110,8 @@ __all__ = [
     "SourceAuthorityV0",
     "StrategyCandidateV0",
     "canonical_json_bytes",
+    "compute_candle_extraction_hash",
+    "compute_candle_logical_key",
     "contract_hash",
     "sha256_hex",
     "validate_execution_permit_bindings",
