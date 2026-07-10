@@ -157,11 +157,11 @@ class CandlePayloadExtractionV0(_A5AuthorityModel):
     schema_version: Literal["0.1.0"] = "0.1.0"
     contract_id: Literal[
         "V0-01A5-OFFLINE-CANDLE-PAYLOAD-EXTRACTION-CONTRACT"
-    ] = A5_CONTRACT_ID
+    ] = "V0-01A5-OFFLINE-CANDLE-PAYLOAD-EXTRACTION-CONTRACT"
     extraction_version: Literal[
         "trader-assist-v0/candle-payload-extraction/v1"
-    ] = CANDLE_EXTRACTION_HASH_VERSION
-    source_id: Literal["hyperliquid-public-mainnet"] = SOURCE_ID
+    ] = "trader-assist-v0/candle-payload-extraction/v1"
+    source_id: Literal["hyperliquid-public-mainnet"] = "hyperliquid-public-mainnet"
     source_event_id: Sha256Hex
     payload_sha256: Sha256Hex
     endpoint_id: Literal["hl-ws-mainnet-public", "hl-info-mainnet-public"]
