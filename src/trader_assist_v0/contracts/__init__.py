@@ -65,11 +65,11 @@ from .strategy import (
 
 __all__ = [
     "A5_CONTRACT_ID",
-    "AIRecommendationV0",
-    "BronzeReplayReportV0",
     "CANDLE_EXTRACTION_HASH_VERSION",
     "CANDLE_EXTRACTION_SCHEMA_VERSION",
     "CANDLE_LOGICAL_KEY_VERSION",
+    "AIRecommendationV0",
+    "BronzeReplayReportV0",
     "CandidateKindV0",
     "CandleEnvelopeShapeV0",
     "CandlePayloadExtractionV0",
