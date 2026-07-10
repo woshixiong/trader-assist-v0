@@ -41,8 +41,12 @@ A6 accepts only independently revalidated exact A5 WebSocket and Info candle ext
 - derive comparisons, source authority, counts, identity, and the report hash only from those two exact extractions through one deterministic contract-layer authority;
 - reconstruct the complete logical-key union during every report validation and reject coherently rehashed omissions, injections, substitutions, or membership changes;
 - emit only `MATCH`, `CONFLICT`, `WS_ONLY`, and `INFO_ONLY` with exact counts and a domain-separated report hash covering both complete extractions;
-- reject noncanonical A6 decoded mappings on every Pydantic core validation path before coercion, including malformed exact A5 objects;
-- keep generated Schema role/status, required embedded A5 fields, and integer-difference value kinds in parity with runtime, while requiring runtime semantic validation for hashes and complete-union authority;
+- support `AuthorityClass.model_validate_json(...)` as the sole A6 raw JSON authority entrypoint and require its input bytes to equal `canonical_json_bytes(authority)` exactly;
+- reject duplicate object keys at every depth, `-0`, float/exponent/non-finite tokens, non-UTF-8/BOM input, alternate encodings, truncation, trailing material, and every other noncanonical raw representation before Pydantic validation;
+- support decoded Python `model_validate`, base-class `model_validate`, `TypeAdapter.validate_python`, and core `validate_python` paths as authentication of the current decoded representation only, without claiming raw-wire provenance;
+- fail closed on inherited/core JSON, string, and partial-validation paths; they are not alternative raw authority entrypoints;
+- keep generated Schema root WS/Info extraction roles, comparison role/status, required embedded A5 fields, integer-difference value kinds, and portable absolute-end patterns in parity with runtime;
+- keep Schema validation structural and JSON-Schema-expressible only; runtime remains authoritative for hashes, exact A5 authority, membership, ordering, counts, differences, and complete logical-key union proof;
 - allow empty/empty inputs without sentinel/default evidence;
 - keep tolerance, source priority, latest-wins, finality, revisions, canonical winner, normalization, and Silver promotion out of scope.
 

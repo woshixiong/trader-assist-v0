@@ -76,8 +76,9 @@ PYDANTIC_DECIMAL_STRING_PATTERN = r"^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$"
 A6_SCHEMA_BOUNDARY_DESCRIPTION = (
     "Portable structural validation for the A6 reconciliation report. This artifact "
     "enforces JSON-Schema-expressible authority constraints only, including complete "
-    "serialized A5 field presence and integer field-difference value kinds. Complete A6 "
-    "authority validation requires CandleCrossSourceReconciliationV0 runtime semantic "
+    "serialized A5 field presence, root WebSocket/Info extraction roles, integer "
+    "field-difference value kinds, and portable absolute-end string patterns. Complete "
+    "A6 authority validation requires CandleCrossSourceReconciliationV0 runtime semantic "
     "validation for hashes, exact A5 authority, membership, ordering, counts, differences, "
     "and complete logical-key union proof. Schema validation alone does not authenticate "
     "an A6 reconciliation report."
@@ -151,6 +152,36 @@ def _portable_schema(value: Any) -> Any:
     return value
 
 
+def _has_terminal_unescaped_dollar(pattern: str) -> bool:
+    if not pattern.endswith("$"):
+        return False
+    backslash_count = 0
+    index = len(pattern) - 2
+    while index >= 0 and pattern[index] == "\\":
+        backslash_count += 1
+        index -= 1
+    return backslash_count % 2 == 0
+
+
+def _portable_a6_absolute_end_patterns(value: Any) -> Any:
+    if isinstance(value, dict):
+        converted = {
+            key: _portable_a6_absolute_end_patterns(item)
+            for key, item in value.items()
+        }
+        pattern = value.get("pattern")
+        if (
+            isinstance(pattern, str)
+            and pattern.startswith("^")
+            and _has_terminal_unescaped_dollar(pattern)
+        ):
+            converted["pattern"] = pattern[:-1] + r"(?![\s\S])"
+        return converted
+    if isinstance(value, list):
+        return [_portable_a6_absolute_end_patterns(item) for item in value]
+    return value
+
+
 def _a6_authority_schema(schema: dict[str, Any]) -> dict[str, Any]:
     definitions = schema.get("$defs")
     if not isinstance(definitions, dict):
@@ -174,6 +205,41 @@ def _a6_authority_schema(schema: dict[str, Any]) -> dict[str, Any]:
 
     schema["$comment"] = A6_SCHEMA_BOUNDARY_DESCRIPTION
     schema["description"] = A6_SCHEMA_BOUNDARY_DESCRIPTION
+
+    root_properties = schema.get("properties")
+    if not isinstance(root_properties, dict):
+        raise ValueError("A6 schema is missing root properties")
+    ws_extraction = root_properties.get("ws_extraction")
+    info_extraction = root_properties.get("info_extraction")
+    if not isinstance(ws_extraction, dict) or not isinstance(info_extraction, dict):
+        raise ValueError("A6 schema is missing root extraction properties")
+    root_properties["ws_extraction"] = {
+        "allOf": [
+            ws_extraction,
+            {
+                "properties": {
+                    "endpoint_id": {"const": "hl-ws-mainnet-public"},
+                    "operation_type": {"const": "candle"},
+                    "envelope_shape": {
+                        "enum": ["WS_DATA_CANDLE", "WS_DATA_CANDLE_ARRAY"]
+                    },
+                }
+            },
+        ]
+    }
+    root_properties["info_extraction"] = {
+        "allOf": [
+            info_extraction,
+            {
+                "properties": {
+                    "endpoint_id": {"const": "hl-info-mainnet-public"},
+                    "operation_type": {"const": "candleSnapshot"},
+                    "envelope_shape": {"const": "INFO_CANDLE_ARRAY"},
+                }
+            },
+        ]
+    }
+
     authority["description"] = (
         "A6 input authority with a JSON-Schema-enforced WS or Info endpoint, operation, "
         "and envelope role."
@@ -328,6 +394,7 @@ def render(model: type[BaseModel]) -> str:
     schema = _portable_schema(model.model_json_schema())
     if model is CandleCrossSourceReconciliationV0:
         schema = _a6_authority_schema(schema)
+        schema = _portable_a6_absolute_end_patterns(schema)
     if model in COMPACT_MODELS:
         return json.dumps(
             schema,

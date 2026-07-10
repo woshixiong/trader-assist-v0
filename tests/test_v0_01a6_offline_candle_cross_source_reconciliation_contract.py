@@ -5,12 +5,14 @@ import copy
 import inspect
 import json
 from decimal import Decimal
+from itertools import product
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 from jsonschema import Draft202012Validator
 from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic_core import SchemaValidator
 
 from scripts.export_schemas import A6_SCHEMA_BOUNDARY_DESCRIPTION, render
 from trader_assist_v0.contracts.candle_reconciliation import (
@@ -32,8 +34,10 @@ from trader_assist_v0.contracts.candles import (
     CandleEnvelopeShapeV0,
     CandlePayloadExtractionV0,
     ExtractedCandleV0,
+    compute_candle_extraction_hash_from_payload,
     compute_candle_logical_key,
 )
+from trader_assist_v0.contracts.common import canonical_json_bytes
 from trader_assist_v0.contracts.source_catalog import (
     RATE_LIMIT_STATUS,
     SOURCE_CATALOG_HASH,
@@ -156,14 +160,14 @@ def _wire(report: CandleCrossSourceReconciliationV0) -> dict[str, Any]:
 
 def _validate_runtime_json(value: dict[str, Any]) -> CandleCrossSourceReconciliationV0:
     return CandleCrossSourceReconciliationV0.model_validate_json(
-        json.dumps(value, separators=(",", ":"))
+        canonical_json_bytes(value)
     )
 
 
 def _validation_path_calls(
     value: dict[str, Any],
 ) -> tuple[tuple[str, Any], ...]:
-    encoded = json.dumps(value, separators=(",", ":"))
+    encoded = canonical_json_bytes(value)
     return (
         (
             "model_validate_json",
@@ -186,7 +190,31 @@ def _validation_path_calls(
                 copy.deepcopy(value)
             ),
         ),
+        (
+            "__pydantic_validator__.validate_python",
+            lambda: CandleCrossSourceReconciliationV0.__pydantic_validator__.validate_python(
+                copy.deepcopy(value)
+            ),
+        ),
     )
+
+
+def _checked_a6_schema() -> dict[str, Any]:
+    return cast(
+        dict[str, Any],
+        json.loads(
+            (
+                Path(__file__).resolve().parents[1]
+                / "schemas/v0/CandleCrossSourceReconciliationV0.schema.json"
+            ).read_text(encoding="utf-8")
+        ),
+    )
+
+
+def _rehash_extraction_mapping(extraction: dict[str, Any]) -> None:
+    material = copy.deepcopy(extraction)
+    material.pop("extraction_hash", None)
+    extraction["extraction_hash"] = compute_candle_extraction_hash_from_payload(material)
 
 
 def _base_class_bypasses(model: BaseModel, update: dict[str, Any]) -> tuple[BaseModel, ...]:
@@ -357,8 +385,233 @@ def test_canonical_wire_rejection_is_identical_across_every_public_validation_pa
 
     for _attack_name, attacked in attacks:
         for _path_name, validate in _validation_path_calls(attacked):
-            with pytest.raises(ValidationError):
+            with pytest.raises((ValueError, ValidationError)):
                 validate()
+
+
+def test_every_a6_authority_class_accepts_only_its_canonical_raw_json_entrypoint() -> None:
+    report = _reconcile(
+        (_candle(open_time_ms=1000),),
+        (_candle(open_time_ms=1000, trade_count=8),),
+    )
+    comparison = report.comparisons[0]
+    ws_authority = comparison.ws_authority
+    assert ws_authority is not None
+    difference = comparison.field_differences[0]
+    authorities = (report, comparison, ws_authority, difference)
+
+    assert inspect.signature(CandleCrossSourceReconciliationV0.model_validate_json) == (
+        inspect.signature(BaseModel.model_validate_json)
+    )
+    for authority in authorities:
+        authority_type = type(authority)
+        canonical = canonical_json_bytes(authority)
+        assert authority_type.model_validate_json(canonical) == authority
+        assert authority_type.model_validate_json(bytearray(canonical)) == authority
+        assert (
+            authority_type.model_validate_json(
+                canonical.decode("utf-8"),
+                extra="forbid",
+                context={"a6_raw_boundary": True},
+                by_alias=True,
+                by_name=True,
+            )
+            == authority
+        )
+
+
+def test_a6_raw_json_entrypoint_rejects_noncanonical_tokens_and_bytes() -> None:
+    report = _reconcile(
+        (_candle(open_time_ms=1000),),
+        (_candle(open_time_ms=1000, trade_count=8),),
+    )
+    payload = _wire(report)
+    canonical = canonical_json_bytes(report)
+    zero_field = b'"match_count":0'
+    assert canonical.count(zero_field) == 1
+
+    duplicate_identical = canonical.replace(
+        zero_field,
+        b'"match_count":0,"match_count":0',
+    )
+    duplicate_conflicting_earlier = canonical.replace(
+        zero_field,
+        b'"match_count":1,"match_count":0',
+    )
+    nested_key = b'"endpoint_id":"hl-ws-mainnet-public"'
+    assert canonical.count(nested_key) >= 1
+    nested_duplicate_identical = canonical.replace(
+        nested_key,
+        nested_key + b"," + nested_key,
+        1,
+    )
+    nested_duplicate_conflicting_earlier = canonical.replace(
+        nested_key,
+        b'"endpoint_id":"hl-info-mainnet-public",' + nested_key,
+        1,
+    )
+    negative_zero = canonical.replace(zero_field, b'"match_count":-0')
+    assert json.loads(duplicate_identical) == payload
+    assert json.loads(duplicate_conflicting_earlier) == payload
+    assert json.loads(nested_duplicate_identical) == payload
+    assert json.loads(nested_duplicate_conflicting_earlier) == payload
+    assert json.loads(negative_zero) == payload
+
+    root_reordered_mapping = dict(reversed(list(json.loads(canonical).items())))
+    root_reordered = json.dumps(
+        root_reordered_mapping,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    nested_reordered_mapping = json.loads(canonical)
+    nested_reordered_mapping["ws_extraction"] = dict(
+        reversed(list(nested_reordered_mapping["ws_extraction"].items()))
+    )
+    nested_reordered = json.dumps(
+        nested_reordered_mapping,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    alternate_escape = canonical.replace(
+        b'"source_id":"hyperliquid-public-mainnet"',
+        b'"source_id":"\\u0068yperliquid-public-mainnet"',
+        1,
+    )
+    assert json.loads(root_reordered) == payload
+    assert json.loads(nested_reordered) == payload
+    assert json.loads(alternate_escape) == payload
+
+    attacks = (
+        ("duplicate identical key", duplicate_identical),
+        ("duplicate conflicting earlier key", duplicate_conflicting_earlier),
+        ("nested duplicate identical key", nested_duplicate_identical),
+        (
+            "nested duplicate conflicting earlier key",
+            nested_duplicate_conflicting_earlier,
+        ),
+        ("negative zero", negative_zero),
+        ("float token", canonical.replace(zero_field, b'"match_count":0.0')),
+        ("exponent token", canonical.replace(zero_field, b'"match_count":0e0')),
+        ("root key reorder", root_reordered),
+        ("nested key reorder", nested_reordered),
+        ("insignificant space", canonical.replace(b":", b": ", 1)),
+        (
+            "pretty JSON",
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True).encode(
+                "utf-8"
+            ),
+        ),
+        ("leading whitespace", b" " + canonical),
+        ("trailing whitespace", canonical + b"\n"),
+        ("alternate escape", alternate_escape),
+        ("UTF-8 BOM", b"\xef\xbb\xbf" + canonical),
+        ("UTF-16 bytes", canonical.decode("utf-8").encode("utf-16")),
+        ("UTF-32 bytes", canonical.decode("utf-8").encode("utf-32")),
+        ("invalid UTF-8 bytes", b"\xff" + canonical),
+        ("trailing garbage", canonical + b"garbage"),
+        ("second trailing JSON value", canonical + b"{}"),
+        ("truncated root", canonical[:-1]),
+        ("truncated nested object", b'{"ws_extraction":{'),
+        ("truncated string", b'{"source_id":"hyperliquid'),
+        ("NaN", canonical.replace(zero_field, b'"match_count":NaN')),
+        ("Infinity", canonical.replace(zero_field, b'"match_count":Infinity')),
+    )
+    for _attack_name, attacked in attacks:
+        with pytest.raises((TypeError, ValueError), match="A6|duplicate|JSON|UTF-8"):
+            CandleCrossSourceReconciliationV0.model_validate_json(attacked)
+
+
+def test_inherited_core_json_and_string_paths_fail_closed_in_non_python_mode() -> None:
+    report = _reconcile(
+        (_candle(open_time_ms=1000),),
+        (_candle(open_time_ms=1000, trade_count=8),),
+    )
+    payload = _wire(report)
+    canonical = canonical_json_bytes(report)
+    adapter = TypeAdapter(CandleCrossSourceReconciliationV0)
+    class_validator = CandleCrossSourceReconciliationV0.__pydantic_validator__
+    schema_validator = SchemaValidator(
+        copy.deepcopy(CandleCrossSourceReconciliationV0.__pydantic_core_schema__)
+    )
+    json_paths = (
+        (
+            "BaseModel.model_validate_json.__func__",
+            lambda: BaseModel.model_validate_json.__func__(
+                CandleCrossSourceReconciliationV0,
+                canonical,
+            ),
+        ),
+        ("TypeAdapter.validate_json", lambda: adapter.validate_json(canonical)),
+        ("__pydantic_validator__.validate_json", lambda: class_validator.validate_json(canonical)),
+        ("SchemaValidator.validate_json", lambda: schema_validator.validate_json(canonical)),
+    )
+    string_paths = (
+        (
+            "model_validate_strings",
+            lambda: CandleCrossSourceReconciliationV0.model_validate_strings(
+                copy.deepcopy(payload)
+            ),
+        ),
+        (
+            "BaseModel.model_validate_strings.__func__",
+            lambda: BaseModel.model_validate_strings.__func__(
+                CandleCrossSourceReconciliationV0,
+                copy.deepcopy(payload),
+            ),
+        ),
+        ("TypeAdapter.validate_strings", lambda: adapter.validate_strings(copy.deepcopy(payload))),
+        (
+            "__pydantic_validator__.validate_strings",
+            lambda: class_validator.validate_strings(copy.deepcopy(payload)),
+        ),
+    )
+    for _path_name, validate in (*json_paths, *string_paths):
+        with pytest.raises(ValidationError, match="unsupported"):
+            validate()
+
+
+def test_all_core_partial_json_modes_fail_closed_for_complete_and_partial_material() -> None:
+    report = _reconcile(
+        (_candle(open_time_ms=1000),),
+        (_candle(open_time_ms=1000, trade_count=8),),
+    )
+    canonical = canonical_json_bytes(report)
+    materials = (
+        ("complete canonical JSON", canonical),
+        ("truncated JSON", canonical[:-1]),
+        ("trailing garbage", canonical + b"garbage"),
+        ("trailing string", canonical + b'"trailing'),
+    )
+    partial_modes: tuple[bool | str, ...] = (
+        True,
+        "on",
+        "trailing-strings",
+    )
+    for material_name, material in materials:
+        expected_message = (
+            "unsupported" if material_name == "complete canonical JSON" else None
+        )
+        for partial_mode in partial_modes:
+            adapter = TypeAdapter(CandleCrossSourceReconciliationV0)
+            class_validator = CandleCrossSourceReconciliationV0.__pydantic_validator__
+            schema_validator = SchemaValidator(
+                copy.deepcopy(CandleCrossSourceReconciliationV0.__pydantic_core_schema__)
+            )
+            with pytest.raises(ValidationError, match=expected_message):
+                adapter.validate_json(
+                    material,
+                    experimental_allow_partial=cast(Any, partial_mode),
+                )
+            with pytest.raises(ValidationError, match=expected_message):
+                class_validator.validate_json(
+                    material,
+                    allow_partial=partial_mode,
+                )
+            with pytest.raises(ValidationError, match=expected_message):
+                schema_validator.validate_json(
+                    material,
+                    allow_partial=partial_mode,
+                )
 
 
 def test_a6_schema_and_runtime_require_every_serialized_authority_field() -> None:
@@ -867,7 +1120,10 @@ def test_a6_public_json_rejects_noncanonical_scalar_encodings(
         )
     )
     _replace_nested(payload, path, replacement)
-    with pytest.raises(ValidationError, match="JSON value|whitespace padded"):
+    with pytest.raises(
+        (ValueError, ValidationError),
+        match="A6 JSON numbers|JSON value|whitespace padded",
+    ):
         _validate_runtime_json(payload)
 
 
@@ -948,6 +1204,186 @@ def test_schema_expressible_role_and_status_corpus_fails_schema_and_runtime() ->
         assert not validator.is_valid(payload), name
         with pytest.raises(ValidationError):
             _validate_runtime_json(payload)
+
+
+def test_root_extraction_role_attack_corpus_has_generated_checked_and_runtime_parity() -> None:
+    schemas = (
+        cast(dict[str, Any], json.loads(render(CandleCrossSourceReconciliationV0))),
+        _checked_a6_schema(),
+    )
+    validators = tuple(Draft202012Validator(schema) for schema in schemas)
+    for schema in schemas:
+        assert "allOf" in schema["properties"]["ws_extraction"]
+        assert "allOf" in schema["properties"]["info_extraction"]
+
+    base = _wire(_reconcile((), ()))
+    attacks: list[tuple[str, dict[str, Any]]] = []
+
+    reversed_roles = copy.deepcopy(base)
+    reversed_roles["ws_extraction"], reversed_roles["info_extraction"] = (
+        reversed_roles["info_extraction"],
+        reversed_roles["ws_extraction"],
+    )
+    for side in ("ws", "info"):
+        extraction = reversed_roles[f"{side}_extraction"]
+        reversed_roles[f"{side}_source_event_id"] = extraction["source_event_id"]
+        reversed_roles[f"{side}_extraction_hash"] = extraction["extraction_hash"]
+    attacks.append(("full root role reversal", _rehash(reversed_roles)))
+
+    endpoints = ("hl-ws-mainnet-public", "hl-info-mainnet-public")
+    operations = ("candle", "candleSnapshot")
+    envelopes = (
+        "WS_DATA_CANDLE",
+        "WS_DATA_CANDLE_ARRAY",
+        "INFO_CANDLE_ARRAY",
+    )
+    for side, endpoint_id, operation_type, envelope_shape in product(
+        ("ws", "info"),
+        endpoints,
+        operations,
+        envelopes,
+    ):
+        valid_ws = side == "ws" and (
+            endpoint_id == "hl-ws-mainnet-public"
+            and operation_type == "candle"
+            and envelope_shape in {"WS_DATA_CANDLE", "WS_DATA_CANDLE_ARRAY"}
+        )
+        valid_info = side == "info" and (
+            endpoint_id == "hl-info-mainnet-public"
+            and operation_type == "candleSnapshot"
+            and envelope_shape == "INFO_CANDLE_ARRAY"
+        )
+        if valid_ws or valid_info:
+            continue
+        attacked = copy.deepcopy(base)
+        extraction = attacked[f"{side}_extraction"]
+        extraction["endpoint_id"] = endpoint_id
+        extraction["operation_type"] = operation_type
+        extraction["envelope_shape"] = envelope_shape
+        _rehash_extraction_mapping(extraction)
+        attacked[f"{side}_extraction_hash"] = extraction["extraction_hash"]
+        attacks.append(
+            (
+                f"{side} root role {endpoint_id}/{operation_type}/{envelope_shape}",
+                _rehash(attacked),
+            )
+        )
+
+    assert len(attacks) == 22
+    for attack_name, attacked in attacks:
+        for side in ("ws", "info"):
+            extraction = copy.deepcopy(attacked[f"{side}_extraction"])
+            supplied_extraction_hash = extraction.pop("extraction_hash")
+            assert supplied_extraction_hash == compute_candle_extraction_hash_from_payload(
+                extraction
+            ), attack_name
+        material = copy.deepcopy(attacked)
+        supplied_reconciliation_hash = material.pop("reconciliation_hash")
+        assert supplied_reconciliation_hash == (
+            compute_candle_cross_source_reconciliation_hash_from_payload(material)
+        ), attack_name
+        for validator in validators:
+            assert not validator.is_valid(attacked), attack_name
+        with pytest.raises(ValidationError):
+            CandleCrossSourceReconciliationV0.model_validate(attacked)
+
+
+def test_a6_schema_absolute_end_patterns_and_terminal_character_corpus() -> None:
+    schemas = (
+        cast(dict[str, Any], json.loads(render(CandleCrossSourceReconciliationV0))),
+        _checked_a6_schema(),
+    )
+
+    def all_patterns(value: Any) -> tuple[str, ...]:
+        if isinstance(value, dict):
+            current = (value["pattern"],) if isinstance(value.get("pattern"), str) else ()
+            return current + tuple(
+                pattern for item in value.values() for pattern in all_patterns(item)
+            )
+        if isinstance(value, list):
+            return tuple(pattern for item in value for pattern in all_patterns(item))
+        return ()
+
+    def has_terminal_unescaped_dollar(pattern: str) -> bool:
+        if not pattern.endswith("$"):
+            return False
+        backslash_count = 0
+        index = len(pattern) - 2
+        while index >= 0 and pattern[index] == "\\":
+            backslash_count += 1
+            index -= 1
+        return backslash_count % 2 == 0
+
+    validators = tuple(Draft202012Validator(schema) for schema in schemas)
+    for schema in schemas:
+        patterns = all_patterns(schema)
+        assert patterns
+        assert not [
+            pattern for pattern in patterns if has_terminal_unescaped_dollar(pattern)
+        ]
+        assert any(pattern.endswith(r"(?![\s\S])") for pattern in patterns)
+
+    base = _wire(
+        _reconcile(
+            (_candle(open_time_ms=1000),),
+            (
+                _candle(
+                    open_time_ms=1000,
+                    close_price="3000.5",
+                    trade_count=8,
+                ),
+            ),
+        )
+    )
+    terminal_characters = (
+        ("LF", "\n"),
+        ("CR", "\r"),
+        ("CRLF", "\r\n"),
+        ("TAB", "\t"),
+        ("space", " "),
+        ("U+0085", "\u0085"),
+        ("U+00A0", "\u00a0"),
+        ("U+2028", "\u2028"),
+        ("U+2029", "\u2029"),
+    )
+    for terminal_name, terminal in terminal_characters:
+        attacks: list[tuple[str, dict[str, Any]]] = []
+        for field_name in ("trade_count", "close_price"):
+            attacked = copy.deepcopy(base)
+            difference = next(
+                item
+                for item in attacked["comparisons"][0]["field_differences"]
+                if item["field_name"] == field_name
+            )
+            difference["ws_value"] += terminal
+            attacks.append((f"{field_name} difference {terminal_name}", _rehash(attacked)))
+
+        embedded_decimal = copy.deepcopy(base)
+        embedded_value = embedded_decimal["ws_extraction"]["candles"][0]["open_price"]
+        embedded_decimal["ws_extraction"]["candles"][0]["open_price"] = (
+            embedded_value + terminal
+        )
+        _rehash_extraction_mapping(embedded_decimal["ws_extraction"])
+        embedded_decimal["ws_extraction_hash"] = embedded_decimal["ws_extraction"][
+            "extraction_hash"
+        ]
+        embedded_decimal["comparisons"][0]["ws_candle"]["open_price"] = (
+            embedded_value + terminal
+        )
+        embedded_decimal["comparisons"][0]["ws_authority"]["extraction_hash"] = (
+            embedded_decimal["ws_extraction_hash"]
+        )
+        attacks.append((f"embedded candle decimal {terminal_name}", _rehash(embedded_decimal)))
+
+        sha256_field = copy.deepcopy(base)
+        sha256_field["reconciliation_hash"] += terminal
+        attacks.append((f"SHA-256 field {terminal_name}", sha256_field))
+
+        for attack_name, attacked in attacks:
+            for validator in validators:
+                assert not validator.is_valid(attacked), attack_name
+            with pytest.raises(ValidationError, match="whitespace padded|string_pattern"):
+                CandleCrossSourceReconciliationV0.model_validate(attacked)
 
 
 @pytest.mark.parametrize("field_name", ["close_time_ms", "trade_count"])
@@ -1279,7 +1715,9 @@ def test_runtime_json_schema_and_checked_in_schema_agree() -> None:
     validator = Draft202012Validator(schema)
     payload = json.loads(report.model_dump_json())
     assert validator.is_valid(payload)
-    assert CandleCrossSourceReconciliationV0.model_validate_json(report.model_dump_json()) == report
+    assert CandleCrossSourceReconciliationV0.model_validate_json(
+        canonical_json_bytes(report)
+    ) == report
     assert schema["description"] == A6_SCHEMA_BOUNDARY_DESCRIPTION
     assert "Schema validation alone does not authenticate" in schema["$comment"]
 

@@ -108,9 +108,13 @@ Both inputs must have identical source, coin, and candle interval identities. Ea
 - one contract-layer derivation authority used by `bind()` and the data-layer reconciler;
 - exact field equality without tolerance or normalization;
 - typed per-item source authorities, exact field differences, status counts, and a domain-separated reconciliation hash;
-- strict non-coercing A6 decoded-mapping and exact-object validation on every Pydantic core path, self-validating immutable models, and generated JSON Schema for structural and standard JSON-Schema-expressible authority constraints.
+- `AuthorityClass.model_validate_json(...)` as the sole supported A6 raw JSON authority entrypoint, accepting only exact `canonical_json_bytes(authority)` representation;
+- pre-Pydantic rejection of duplicate keys at every nesting level, `-0`, noncanonical numeric tokens, invalid UTF-8, BOM, alternate encodings, truncation, trailing material, reordered keys, alternate escapes, and other noncanonical raw forms;
+- decoded Python validation through class/base `model_validate`, `TypeAdapter.validate_python`, and core `validate_python`, which authenticates only the current decoded representation and does not prove raw-wire provenance;
+- intentional fail-closed behavior for inherited/core JSON, string, and partial paths;
+- self-validating immutable models and generated JSON Schema for structural and standard JSON-Schema-expressible authority constraints.
 
-The portable Schema enforces mandatory serialized fields for the two complete embedded A5 authorities, frozen input-role pairings, comparison-status/source-presence coupling, and canonical ASCII nonnegative integer strings for close-time and trade-count differences. It cannot recompute A5 or A6 hashes, dynamic counts, business-key uniqueness, canonical item/difference ordering, extraction membership, cross-item identity, exact difference values, or the complete union. Schema validation alone is not complete A6 authority validation; runtime semantic validation remains mandatory.
+The portable Schema enforces mandatory serialized fields for the two complete embedded A5 authorities, side-specific root WS/Info extraction roles, comparison-status/source-presence coupling, canonical ASCII nonnegative integer strings for close-time and trade-count differences, and ECMA-compatible absolute-end patterns that do not rely on terminal `$`. The Schema remains structural and JSON-Schema-expressible only. It cannot recompute A5 or A6 hashes, dynamic counts, business-key uniqueness, canonical item/difference ordering, extraction membership, cross-item identity, exact difference values, or the complete union. Runtime remains authoritative for hashes, exact A5 authority, membership, ordering, counts, differences, and complete logical-key union proof.
 
 ## A6 prohibited
 

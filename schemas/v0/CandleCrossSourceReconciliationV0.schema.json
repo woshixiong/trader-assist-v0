@@ -1,5 +1,5 @@
 {
-  "$comment": "Portable structural validation for the A6 reconciliation report. This artifact enforces JSON-Schema-expressible authority constraints only, including complete serialized A5 field presence and integer field-difference value kinds. Complete A6 authority validation requires CandleCrossSourceReconciliationV0 runtime semantic validation for hashes, exact A5 authority, membership, ordering, counts, differences, and complete logical-key union proof. Schema validation alone does not authenticate an A6 reconciliation report.",
+  "$comment": "Portable structural validation for the A6 reconciliation report. This artifact enforces JSON-Schema-expressible authority constraints only, including complete serialized A5 field presence, root WebSocket/Info extraction roles, integer field-difference value kinds, and portable absolute-end string patterns. Complete A6 authority validation requires CandleCrossSourceReconciliationV0 runtime semantic validation for hashes, exact A5 authority, membership, ordering, counts, differences, and complete logical-key union proof. Schema validation alone does not authenticate an A6 reconciliation report.",
   "$defs": {
     "CandleCrossSourceAuthoritySideV0": {
       "enum": [
@@ -23,7 +23,7 @@
     },
     "CandleCrossSourceComparableValueV0": {
       "maxLength": 80,
-      "pattern": "^(?:0|[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]+|-(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*))$",
+      "pattern": "^(?:0|[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]+|-(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*))(?![\\s\\S])",
       "type": "string"
     },
     "CandleCrossSourceComparisonItemV0": {
@@ -156,7 +156,7 @@
           "type": "string"
         },
         "candle_logical_key": {
-          "pattern": "^[0-9a-f]{64}$",
+          "pattern": "^[0-9a-f]{64}(?![\\s\\S])",
           "title": "Candle Logical Key",
           "type": "string"
         },
@@ -275,11 +275,11 @@
           "then": {
             "properties": {
               "info_value": {
-                "pattern": "^(0|[1-9][0-9]*)$",
+                "pattern": "^(0|[1-9][0-9]*)(?![\\s\\S])",
                 "type": "string"
               },
               "ws_value": {
-                "pattern": "^(0|[1-9][0-9]*)$",
+                "pattern": "^(0|[1-9][0-9]*)(?![\\s\\S])",
                 "type": "string"
               }
             }
@@ -359,7 +359,7 @@
           "$ref": "#/$defs/CandleEnvelopeShapeV0"
         },
         "extraction_hash": {
-          "pattern": "^[0-9a-f]{64}$",
+          "pattern": "^[0-9a-f]{64}(?![\\s\\S])",
           "title": "Extraction Hash",
           "type": "string"
         },
@@ -375,7 +375,7 @@
           "$ref": "#/$defs/CandleCrossSourceAuthoritySideV0"
         },
         "source_event_id": {
-          "pattern": "^[0-9a-f]{64}$",
+          "pattern": "^[0-9a-f]{64}(?![\\s\\S])",
           "title": "Source Event Id",
           "type": "string"
         }
@@ -447,7 +447,7 @@
           "$ref": "#/$defs/CandleEnvelopeShapeV0"
         },
         "extraction_hash": {
-          "pattern": "^[0-9a-f]{64}$",
+          "pattern": "^[0-9a-f]{64}(?![\\s\\S])",
           "title": "Extraction Hash",
           "type": "string"
         },
@@ -465,7 +465,7 @@
           "type": "string"
         },
         "payload_sha256": {
-          "pattern": "^[0-9a-f]{64}$",
+          "pattern": "^[0-9a-f]{64}(?![\\s\\S])",
           "title": "Payload Sha256",
           "type": "string"
         },
@@ -475,7 +475,7 @@
           "type": "string"
         },
         "source_event_id": {
-          "pattern": "^[0-9a-f]{64}$",
+          "pattern": "^[0-9a-f]{64}(?![\\s\\S])",
           "title": "Source Event Id",
           "type": "string"
         },
@@ -508,13 +508,13 @@
       "description": "Complete embedded A5 candle authority. Runtime validation is required to prove logical-key and extraction membership authority.",
       "properties": {
         "candle_logical_key": {
-          "pattern": "^[0-9a-f]{64}$",
+          "pattern": "^[0-9a-f]{64}(?![\\s\\S])",
           "title": "Candle Logical Key",
           "type": "string"
         },
         "close_price": {
           "maxLength": 80,
-          "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$",
+          "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)(?![\\s\\S])",
           "title": "Close Price",
           "type": "string"
         },
@@ -525,19 +525,19 @@
         },
         "high_price": {
           "maxLength": 80,
-          "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$",
+          "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)(?![\\s\\S])",
           "title": "High Price",
           "type": "string"
         },
         "low_price": {
           "maxLength": 80,
-          "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$",
+          "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)(?![\\s\\S])",
           "title": "Low Price",
           "type": "string"
         },
         "open_price": {
           "maxLength": 80,
-          "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$",
+          "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)(?![\\s\\S])",
           "title": "Open Price",
           "type": "string"
         },
@@ -553,7 +553,7 @@
         },
         "volume_base": {
           "maxLength": 80,
-          "pattern": "^(?:0|[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]+)$",
+          "pattern": "^(?:0|[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]+)(?![\\s\\S])",
           "title": "Volume Base",
           "type": "string"
         }
@@ -574,7 +574,7 @@
     }
   },
   "additionalProperties": false,
-  "description": "Portable structural validation for the A6 reconciliation report. This artifact enforces JSON-Schema-expressible authority constraints only, including complete serialized A5 field presence and integer field-difference value kinds. Complete A6 authority validation requires CandleCrossSourceReconciliationV0 runtime semantic validation for hashes, exact A5 authority, membership, ordering, counts, differences, and complete logical-key union proof. Schema validation alone does not authenticate an A6 reconciliation report.",
+  "description": "Portable structural validation for the A6 reconciliation report. This artifact enforces JSON-Schema-expressible authority constraints only, including complete serialized A5 field presence, root WebSocket/Info extraction roles, integer field-difference value kinds, and portable absolute-end string patterns. Complete A6 authority validation requires CandleCrossSourceReconciliationV0 runtime semantic validation for hashes, exact A5 authority, membership, ordering, counts, differences, and complete logical-key union proof. Schema validation alone does not authenticate an A6 reconciliation report.",
   "properties": {
     "candle_interval": {
       "enum": [
@@ -618,10 +618,27 @@
       "type": "string"
     },
     "info_extraction": {
-      "$ref": "#/$defs/CandlePayloadExtractionV0"
+      "allOf": [
+        {
+          "$ref": "#/$defs/CandlePayloadExtractionV0"
+        },
+        {
+          "properties": {
+            "endpoint_id": {
+              "const": "hl-info-mainnet-public"
+            },
+            "envelope_shape": {
+              "const": "INFO_CANDLE_ARRAY"
+            },
+            "operation_type": {
+              "const": "candleSnapshot"
+            }
+          }
+        }
+      ]
     },
     "info_extraction_hash": {
-      "pattern": "^[0-9a-f]{64}$",
+      "pattern": "^[0-9a-f]{64}(?![\\s\\S])",
       "title": "Info Extraction Hash",
       "type": "string"
     },
@@ -631,7 +648,7 @@
       "type": "integer"
     },
     "info_source_event_id": {
-      "pattern": "^[0-9a-f]{64}$",
+      "pattern": "^[0-9a-f]{64}(?![\\s\\S])",
       "title": "Info Source Event Id",
       "type": "string"
     },
@@ -641,7 +658,7 @@
       "type": "integer"
     },
     "reconciliation_hash": {
-      "pattern": "^[0-9a-f]{64}$",
+      "pattern": "^[0-9a-f]{64}(?![\\s\\S])",
       "title": "Reconciliation Hash",
       "type": "string"
     },
@@ -656,10 +673,30 @@
       "type": "string"
     },
     "ws_extraction": {
-      "$ref": "#/$defs/CandlePayloadExtractionV0"
+      "allOf": [
+        {
+          "$ref": "#/$defs/CandlePayloadExtractionV0"
+        },
+        {
+          "properties": {
+            "endpoint_id": {
+              "const": "hl-ws-mainnet-public"
+            },
+            "envelope_shape": {
+              "enum": [
+                "WS_DATA_CANDLE",
+                "WS_DATA_CANDLE_ARRAY"
+              ]
+            },
+            "operation_type": {
+              "const": "candle"
+            }
+          }
+        }
+      ]
     },
     "ws_extraction_hash": {
-      "pattern": "^[0-9a-f]{64}$",
+      "pattern": "^[0-9a-f]{64}(?![\\s\\S])",
       "title": "Ws Extraction Hash",
       "type": "string"
     },
@@ -669,7 +706,7 @@
       "type": "integer"
     },
     "ws_source_event_id": {
-      "pattern": "^[0-9a-f]{64}$",
+      "pattern": "^[0-9a-f]{64}(?![\\s\\S])",
       "title": "Ws Source Event Id",
       "type": "string"
     }

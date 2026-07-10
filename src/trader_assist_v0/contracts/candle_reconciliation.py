@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import hmac
+import json
 import re
 from collections.abc import Mapping, Set
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Literal, Self, cast
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
+from pydantic.config import ExtraValues
 
 from .candles import (
     CandleEnvelopeShapeV0,
@@ -33,6 +35,7 @@ A6_CANONICAL_NONNEGATIVE_INTEGER_STRING_PATTERN = r"^(0|[1-9][0-9]*)$"
 _A6_CANONICAL_NONNEGATIVE_INTEGER_STRING_RE = re.compile(
     A6_CANONICAL_NONNEGATIVE_INTEGER_STRING_PATTERN
 )
+_A6_CANONICAL_JSON_INTEGER_RE = re.compile(r"(?:0|-[1-9][0-9]*|[1-9][0-9]*)\Z")
 _A6_INTEGER_WIRE_FIELDS = frozenset(
     {
         "open_time_ms",
@@ -311,6 +314,70 @@ def _validate_report_wire(value: Any) -> None:
         _validate_comparison_wire(comparison)
 
 
+def _a6_object_from_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError(f"duplicate A6 JSON object key: {key}")
+        value[key] = item
+    return value
+
+
+def _a6_parse_json_integer(token: str) -> int:
+    if token == "-0":
+        raise ValueError("A6 JSON integers must not use -0")
+    if _A6_CANONICAL_JSON_INTEGER_RE.fullmatch(token) is None:
+        raise ValueError("A6 JSON integer token is not canonical")
+    return int(token)
+
+
+def _a6_reject_json_float(token: str) -> None:
+    raise ValueError(f"A6 JSON numbers must use integer tokens, not {token}")
+
+
+def _a6_reject_json_constant(token: str) -> None:
+    raise ValueError(f"A6 JSON non-finite constant is prohibited: {token}")
+
+
+def _decode_canonical_a6_json(json_data: str | bytes | bytearray) -> Any:
+    if isinstance(json_data, str):
+        text = json_data
+        try:
+            raw_bytes = text.encode("utf-8", errors="strict")
+        except UnicodeEncodeError as exc:
+            raise ValueError("A6 JSON text must be valid UTF-8") from exc
+    elif isinstance(json_data, bytes | bytearray):
+        raw_bytes = bytes(json_data)
+        try:
+            text = raw_bytes.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise ValueError("A6 JSON bytes must be strict UTF-8") from exc
+    else:
+        raise TypeError("A6 raw JSON input must be str, bytes, or bytearray")
+
+    if raw_bytes.startswith(b"\xef\xbb\xbf") or text.startswith("\ufeff"):
+        raise ValueError("A6 JSON must not contain a UTF-8 BOM")
+
+    try:
+        decoded = json.loads(
+            text,
+            object_pairs_hook=_a6_object_from_pairs,
+            parse_int=_a6_parse_json_integer,
+            parse_float=_a6_reject_json_float,
+            parse_constant=_a6_reject_json_constant,
+        )
+    except json.JSONDecodeError as exc:
+        raise ValueError("A6 JSON must contain exactly one complete JSON value") from exc
+
+    try:
+        canonical_bytes = canonical_json_bytes(decoded)
+    except (TypeError, UnicodeEncodeError, ValueError) as exc:
+        raise ValueError("A6 JSON value cannot be canonically encoded") from exc
+    if raw_bytes != canonical_bytes:
+        raise ValueError("A6 JSON bytes must equal canonical_json_bytes(decoded_value)")
+    return decoded
+
+
 class _A6AuthorityModel(StrictModel):
     model_config = ConfigDict(
         revalidate_instances="always",
@@ -319,7 +386,15 @@ class _A6AuthorityModel(StrictModel):
 
     @model_validator(mode="before")
     @classmethod
-    def validate_canonical_authority_input(cls, value: Any) -> Any:
+    def validate_canonical_authority_input(
+        cls,
+        value: Any,
+        info: ValidationInfo,
+    ) -> Any:
+        if info.mode != "python":
+            raise ValueError(
+                "A6 inherited/core JSON and string validation paths are unsupported"
+            )
         if isinstance(value, BaseModel):
             if type(value) is not cls:
                 raise ValueError(f"expected exact {cls.__name__} authority object")
@@ -331,6 +406,27 @@ class _A6AuthorityModel(StrictModel):
             )
         _validate_wire_for_model(cls, value)
         return value
+
+    @classmethod
+    def model_validate_json(
+        cls,
+        json_data: str | bytes | bytearray,
+        *,
+        strict: bool | None = None,
+        extra: ExtraValues | None = None,
+        context: Any | None = None,
+        by_alias: bool | None = None,
+        by_name: bool | None = None,
+    ) -> Self:
+        decoded = _decode_canonical_a6_json(json_data)
+        return cls.model_validate(
+            decoded,
+            strict=strict,
+            extra=extra,
+            context=context,
+            by_alias=by_alias,
+            by_name=by_name,
+        )
 
     def model_copy(
         self,
