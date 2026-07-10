@@ -4,11 +4,19 @@ import hmac
 import json
 import re
 from collections.abc import Mapping, Set
+from contextvars import ContextVar
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any, Literal, Self, cast
+from typing import Annotated, Any, Literal, Self, cast
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    WrapValidator,
+    model_validator,
+)
 from pydantic.config import ExtraValues
 
 from .candles import (
@@ -34,6 +42,11 @@ A6_CANONICAL_NONNEGATIVE_INTEGER_STRING_PATTERN = r"^(0|[1-9][0-9]*)$"
 
 _A6_CANONICAL_NONNEGATIVE_INTEGER_STRING_RE = re.compile(
     A6_CANONICAL_NONNEGATIVE_INTEGER_STRING_PATTERN
+)
+_A6_TRUSTED_JSON_MODE_SENTINEL = object()
+_A6_JSON_MODE_GATE: ContextVar[object | None] = ContextVar(
+    "_A6_JSON_MODE_GATE",
+    default=None,
 )
 _A6_CANONICAL_JSON_INTEGER_RE = re.compile(r"(?:0|-[1-9][0-9]*|[1-9][0-9]*)\Z")
 _A6_INTEGER_WIRE_FIELDS = frozenset(
@@ -161,6 +174,44 @@ _A6_REPORT_FIELDS = frozenset(
         "reconciliation_hash",
     }
 )
+
+
+def _trusted_json_extracted_candle(
+    value: Any,
+    handler: Any,
+    info: ValidationInfo,
+) -> Any:
+    if (
+        info.mode == "json"
+        and _A6_JSON_MODE_GATE.get() is _A6_TRUSTED_JSON_MODE_SENTINEL
+        and type(value) is ExtractedCandleV0
+    ):
+        return value
+    return handler(value)
+
+
+def _trusted_json_candle_extraction(
+    value: Any,
+    handler: Any,
+    info: ValidationInfo,
+) -> Any:
+    if (
+        info.mode == "json"
+        and _A6_JSON_MODE_GATE.get() is _A6_TRUSTED_JSON_MODE_SENTINEL
+        and type(value) is CandlePayloadExtractionV0
+    ):
+        return value
+    return handler(value)
+
+
+_A6ExtractedCandleV0 = Annotated[
+    ExtractedCandleV0,
+    WrapValidator(_trusted_json_extracted_candle),
+]
+_A6CandlePayloadExtractionV0 = Annotated[
+    CandlePayloadExtractionV0,
+    WrapValidator(_trusted_json_candle_extraction),
+]
 
 CANDLE_CROSS_SOURCE_COMPARABLE_FIELDS = (
     "close_time_ms",
@@ -339,7 +390,9 @@ def _a6_reject_json_constant(token: str) -> None:
     raise ValueError(f"A6 JSON non-finite constant is prohibited: {token}")
 
 
-def _decode_canonical_a6_json(json_data: str | bytes | bytearray) -> Any:
+def _approved_canonical_a6_json_bytes(
+    json_data: str | bytes | bytearray,
+) -> bytes:
     if isinstance(json_data, str):
         text = json_data
         try:
@@ -375,7 +428,32 @@ def _decode_canonical_a6_json(json_data: str | bytes | bytearray) -> Any:
         raise ValueError("A6 JSON value cannot be canonically encoded") from exc
     if raw_bytes != canonical_bytes:
         raise ValueError("A6 JSON bytes must equal canonical_json_bytes(decoded_value)")
-    return decoded
+    return raw_bytes
+
+
+def _restore_trusted_json_mode_values(
+    model_type: type[BaseModel],
+    value: Any,
+) -> dict[str, Any]:
+    mapping = cast(dict[str, Any], value)
+    restored = dict(mapping)
+    if model_type is CandleCrossSourceComparisonItemV0:
+        for candle_field in ("ws_candle", "info_candle"):
+            candle = mapping[candle_field]
+            if candle is not None:
+                restored[candle_field] = ExtractedCandleV0.model_validate_json(
+                    canonical_json_bytes(candle)
+                )
+        restored["field_differences"] = tuple(mapping["field_differences"])
+    elif model_type is CandleCrossSourceReconciliationV0:
+        restored["ws_extraction"] = CandlePayloadExtractionV0.model_validate_json(
+            canonical_json_bytes(mapping["ws_extraction"])
+        )
+        restored["info_extraction"] = CandlePayloadExtractionV0.model_validate_json(
+            canonical_json_bytes(mapping["info_extraction"])
+        )
+        restored["comparisons"] = tuple(mapping["comparisons"])
+    return restored
 
 
 class _A6AuthorityModel(StrictModel):
@@ -391,7 +469,11 @@ class _A6AuthorityModel(StrictModel):
         value: Any,
         info: ValidationInfo,
     ) -> Any:
-        if info.mode != "python":
+        trusted_json_mode = (
+            info.mode == "json"
+            and _A6_JSON_MODE_GATE.get() is _A6_TRUSTED_JSON_MODE_SENTINEL
+        )
+        if info.mode != "python" and not trusted_json_mode:
             raise ValueError(
                 "A6 inherited/core JSON and string validation paths are unsupported"
             )
@@ -405,6 +487,8 @@ class _A6AuthorityModel(StrictModel):
                 round_trip=True,
             )
         _validate_wire_for_model(cls, value)
+        if trusted_json_mode:
+            return _restore_trusted_json_mode_values(cls, value)
         return value
 
     @classmethod
@@ -418,15 +502,22 @@ class _A6AuthorityModel(StrictModel):
         by_alias: bool | None = None,
         by_name: bool | None = None,
     ) -> Self:
-        decoded = _decode_canonical_a6_json(json_data)
-        return cls.model_validate(
-            decoded,
-            strict=strict,
-            extra=extra,
-            context=context,
-            by_alias=by_alias,
-            by_name=by_name,
-        )
+        canonical_bytes = _approved_canonical_a6_json_bytes(json_data)
+        token = _A6_JSON_MODE_GATE.set(_A6_TRUSTED_JSON_MODE_SENTINEL)
+        try:
+            return cast(
+                Self,
+                cls.__pydantic_validator__.validate_json(
+                    canonical_bytes,
+                    strict=strict,
+                    extra=extra,
+                    context=context,
+                    by_alias=by_alias,
+                    by_name=by_name,
+                ),
+            )
+        finally:
+            _A6_JSON_MODE_GATE.reset(token)
 
     def model_copy(
         self,
@@ -692,9 +783,9 @@ class CandleCrossSourceComparisonItemV0(_A6AuthorityModel):
     candle_interval: Literal["1m", "3m", "5m", "15m", "1h"]
     open_time_ms: int = Field(ge=0)
     status: CandleCrossSourceComparisonStatusV0
-    ws_candle: ExtractedCandleV0 | None
+    ws_candle: _A6ExtractedCandleV0 | None
     ws_authority: CandleCrossSourceInputAuthorityV0 | None
-    info_candle: ExtractedCandleV0 | None
+    info_candle: _A6ExtractedCandleV0 | None
     info_authority: CandleCrossSourceInputAuthorityV0 | None
     field_differences: tuple[CandleCrossSourceFieldDifferenceV0, ...]
 
@@ -916,8 +1007,8 @@ class CandleCrossSourceReconciliationV0(_A6AuthorityModel):
     source_id: Literal["hyperliquid-public-mainnet"]
     coin: Literal["BTC", "ETH"]
     candle_interval: Literal["1m", "3m", "5m", "15m", "1h"]
-    ws_extraction: CandlePayloadExtractionV0
-    info_extraction: CandlePayloadExtractionV0
+    ws_extraction: _A6CandlePayloadExtractionV0
+    info_extraction: _A6CandlePayloadExtractionV0
     ws_source_event_id: Sha256Hex
     ws_extraction_hash: Sha256Hex
     info_source_event_id: Sha256Hex

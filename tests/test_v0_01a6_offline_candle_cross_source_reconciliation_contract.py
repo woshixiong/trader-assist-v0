@@ -389,16 +389,42 @@ def test_canonical_wire_rejection_is_identical_across_every_public_validation_pa
                 validate()
 
 
-def test_every_a6_authority_class_accepts_only_its_canonical_raw_json_entrypoint() -> None:
-    report = _reconcile(
+@pytest.mark.parametrize("strict", (None, False, True))
+@pytest.mark.parametrize("json_input_kind", ("str", "bytes", "bytearray"))
+@pytest.mark.parametrize(
+    "validation_kwargs",
+    (
+        {},
+        {"context": {"a6_raw_boundary": True}},
+        {"extra": "forbid"},
+        {"by_alias": True, "by_name": False},
+        {"by_alias": False, "by_name": True},
+        {"by_alias": True, "by_name": True},
+    ),
+    ids=(
+        "defaults",
+        "caller-context",
+        "extra-forbid",
+        "by-alias",
+        "by-name",
+        "by-alias-and-name",
+    ),
+)
+def test_every_a6_authority_class_preserves_native_json_parameter_semantics(
+    strict: bool | None,
+    json_input_kind: str,
+    validation_kwargs: dict[str, Any],
+) -> None:
+    conflict_report = _reconcile(
         (_candle(open_time_ms=1000),),
         (_candle(open_time_ms=1000, trade_count=8),),
     )
-    comparison = report.comparisons[0]
+    comparison = conflict_report.comparisons[0]
     ws_authority = comparison.ws_authority
     assert ws_authority is not None
     difference = comparison.field_differences[0]
-    authorities = (report, comparison, ws_authority, difference)
+    empty_report = _reconcile((), ())
+    authorities = (ws_authority, difference, comparison, empty_report)
 
     assert inspect.signature(CandleCrossSourceReconciliationV0.model_validate_json) == (
         inspect.signature(BaseModel.model_validate_json)
@@ -406,18 +432,18 @@ def test_every_a6_authority_class_accepts_only_its_canonical_raw_json_entrypoint
     for authority in authorities:
         authority_type = type(authority)
         canonical = canonical_json_bytes(authority)
-        assert authority_type.model_validate_json(canonical) == authority
-        assert authority_type.model_validate_json(bytearray(canonical)) == authority
-        assert (
-            authority_type.model_validate_json(
-                canonical.decode("utf-8"),
-                extra="forbid",
-                context={"a6_raw_boundary": True},
-                by_alias=True,
-                by_name=True,
-            )
-            == authority
-        )
+        json_input: str | bytes | bytearray
+        if json_input_kind == "str":
+            json_input = canonical.decode("utf-8")
+        elif json_input_kind == "bytes":
+            json_input = canonical
+        else:
+            json_input = bytearray(canonical)
+        assert authority_type.model_validate_json(
+            json_input,
+            strict=strict,
+            **validation_kwargs,
+        ) == authority
 
 
 def test_a6_raw_json_entrypoint_rejects_noncanonical_tokens_and_bytes() -> None:
@@ -521,7 +547,10 @@ def test_a6_raw_json_entrypoint_rejects_noncanonical_tokens_and_bytes() -> None:
             CandleCrossSourceReconciliationV0.model_validate_json(attacked)
 
 
-def test_inherited_core_json_and_string_paths_fail_closed_in_non_python_mode() -> None:
+@pytest.mark.parametrize("strict", (None, True))
+def test_inherited_core_json_and_string_paths_fail_closed_in_non_python_mode(
+    strict: bool | None,
+) -> None:
     report = _reconcile(
         (_candle(open_time_ms=1000),),
         (_candle(open_time_ms=1000, trade_count=8),),
@@ -539,17 +568,28 @@ def test_inherited_core_json_and_string_paths_fail_closed_in_non_python_mode() -
             lambda: BaseModel.model_validate_json.__func__(
                 CandleCrossSourceReconciliationV0,
                 canonical,
+                strict=strict,
             ),
         ),
-        ("TypeAdapter.validate_json", lambda: adapter.validate_json(canonical)),
-        ("__pydantic_validator__.validate_json", lambda: class_validator.validate_json(canonical)),
-        ("SchemaValidator.validate_json", lambda: schema_validator.validate_json(canonical)),
+        (
+            "TypeAdapter.validate_json",
+            lambda: adapter.validate_json(canonical, strict=strict),
+        ),
+        (
+            "__pydantic_validator__.validate_json",
+            lambda: class_validator.validate_json(canonical, strict=strict),
+        ),
+        (
+            "SchemaValidator.validate_json",
+            lambda: schema_validator.validate_json(canonical, strict=strict),
+        ),
     )
     string_paths = (
         (
             "model_validate_strings",
             lambda: CandleCrossSourceReconciliationV0.model_validate_strings(
-                copy.deepcopy(payload)
+                copy.deepcopy(payload),
+                strict=strict,
             ),
         ),
         (
@@ -557,12 +597,26 @@ def test_inherited_core_json_and_string_paths_fail_closed_in_non_python_mode() -
             lambda: BaseModel.model_validate_strings.__func__(
                 CandleCrossSourceReconciliationV0,
                 copy.deepcopy(payload),
+                strict=strict,
             ),
         ),
-        ("TypeAdapter.validate_strings", lambda: adapter.validate_strings(copy.deepcopy(payload))),
+        (
+            "TypeAdapter.validate_strings",
+            lambda: adapter.validate_strings(copy.deepcopy(payload), strict=strict),
+        ),
         (
             "__pydantic_validator__.validate_strings",
-            lambda: class_validator.validate_strings(copy.deepcopy(payload)),
+            lambda: class_validator.validate_strings(
+                copy.deepcopy(payload),
+                strict=strict,
+            ),
+        ),
+        (
+            "SchemaValidator.validate_strings",
+            lambda: schema_validator.validate_strings(
+                copy.deepcopy(payload),
+                strict=strict,
+            ),
         ),
     )
     for _path_name, validate in (*json_paths, *string_paths):
@@ -570,7 +624,10 @@ def test_inherited_core_json_and_string_paths_fail_closed_in_non_python_mode() -
             validate()
 
 
-def test_all_core_partial_json_modes_fail_closed_for_complete_and_partial_material() -> None:
+@pytest.mark.parametrize("strict", (None, True))
+def test_all_core_partial_json_modes_fail_closed_for_complete_and_partial_material(
+    strict: bool | None,
+) -> None:
     report = _reconcile(
         (_candle(open_time_ms=1000),),
         (_candle(open_time_ms=1000, trade_count=8),),
@@ -600,18 +657,89 @@ def test_all_core_partial_json_modes_fail_closed_for_complete_and_partial_materi
             with pytest.raises(ValidationError, match=expected_message):
                 adapter.validate_json(
                     material,
+                    strict=strict,
                     experimental_allow_partial=cast(Any, partial_mode),
                 )
             with pytest.raises(ValidationError, match=expected_message):
                 class_validator.validate_json(
                     material,
+                    strict=strict,
                     allow_partial=partial_mode,
                 )
             with pytest.raises(ValidationError, match=expected_message):
                 schema_validator.validate_json(
                     material,
+                    strict=strict,
                     allow_partial=partial_mode,
                 )
+
+
+@pytest.mark.parametrize(
+    "trusted_outcome",
+    ("success", "validation-error", "repeated-nested-success"),
+)
+def test_private_json_gate_resets_after_every_trusted_scope(
+    trusted_outcome: str,
+) -> None:
+    report = _reconcile(
+        (_candle(open_time_ms=1000),),
+        (_candle(open_time_ms=1000, trade_count=8),),
+    )
+    canonical = canonical_json_bytes(report)
+
+    if trusted_outcome == "success":
+        assert CandleCrossSourceReconciliationV0.model_validate_json(
+            canonical,
+            strict=True,
+        ) == report
+    elif trusted_outcome == "validation-error":
+        attacked = _wire(report)
+        attacked["comparisons"][0]["status"] = "INVALID"
+        with pytest.raises(ValidationError):
+            CandleCrossSourceReconciliationV0.model_validate_json(
+                canonical_json_bytes(attacked),
+                strict=True,
+            )
+    else:
+        for _ in range(3):
+            assert CandleCrossSourceReconciliationV0.model_validate_json(
+                canonical,
+                strict=True,
+            ) == report
+
+    with pytest.raises(ValidationError, match="unsupported"):
+        CandleCrossSourceReconciliationV0.__pydantic_validator__.validate_json(
+            canonical,
+            strict=True,
+        )
+
+
+@pytest.mark.parametrize(
+    "forged_context",
+    (
+        {"a6_raw_boundary": True},
+        {"_A6_JSON_MODE_GATE": "trusted"},
+        {"trusted_json_mode": object()},
+    ),
+    ids=("legacy-public-looking", "private-name-looking", "identity-looking"),
+)
+def test_caller_context_cannot_authorize_private_json_gate(
+    forged_context: dict[str, Any],
+) -> None:
+    report = _reconcile((), ())
+    canonical = canonical_json_bytes(report)
+
+    assert CandleCrossSourceReconciliationV0.model_validate_json(
+        canonical,
+        strict=True,
+        context=forged_context,
+    ) == report
+    with pytest.raises(ValidationError, match="unsupported"):
+        CandleCrossSourceReconciliationV0.__pydantic_validator__.validate_json(
+            canonical,
+            strict=True,
+            context=forged_context,
+        )
 
 
 def test_a6_schema_and_runtime_require_every_serialized_authority_field() -> None:

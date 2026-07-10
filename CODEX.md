@@ -41,10 +41,11 @@ A6 accepts only independently revalidated exact A5 WebSocket and Info candle ext
 - derive comparisons, source authority, counts, identity, and the report hash only from those two exact extractions through one deterministic contract-layer authority;
 - reconstruct the complete logical-key union during every report validation and reject coherently rehashed omissions, injections, substitutions, or membership changes;
 - emit only `MATCH`, `CONFLICT`, `WS_ONLY`, and `INFO_ONLY` with exact counts and a domain-separated report hash covering both complete extractions;
-- support `AuthorityClass.model_validate_json(...)` as the sole A6 raw JSON authority entrypoint and require its input bytes to equal `canonical_json_bytes(authority)` exactly;
-- reject duplicate object keys at every depth, `-0`, float/exponent/non-finite tokens, non-UTF-8/BOM input, alternate encodings, truncation, trailing material, and every other noncanonical raw representation before Pydantic validation;
-- support decoded Python `model_validate`, base-class `model_validate`, `TypeAdapter.validate_python`, and core `validate_python` paths as authentication of the current decoded representation only, without claiming raw-wire provenance;
-- fail closed on inherited/core JSON, string, and partial-validation paths; they are not alternative raw authority entrypoints;
+- use `AuthorityClass.model_validate_json(...)` as the sole A6 raw JSON boundary: its canonical precheck runs before Pydantic and requires input bytes to equal `canonical_json_bytes(authority)` exactly;
+- pass only those already-approved canonical bytes through a private scoped JSON-mode validation gate, preserving native Pydantic JSON semantics for `strict=None`, `strict=False`, and `strict=True`;
+- never let caller-supplied context authorize the private JSON-mode gate, and reject duplicate object keys at every depth, `-0`, float/exponent/non-finite tokens, non-UTF-8/BOM input, alternate encodings, truncation, trailing material, and every other noncanonical raw representation before Pydantic validation;
+- support decoded Python `model_validate`, base-class `model_validate`, `TypeAdapter.validate_python`, and core `validate_python` paths only as authentication of the current decoded representation, without claiming raw-wire provenance;
+- keep inherited/core JSON, all string-validation, and all partial-validation paths fail closed; they are not alternative raw authority boundaries;
 - keep generated Schema root WS/Info extraction roles, comparison role/status, required embedded A5 fields, integer-difference value kinds, and portable absolute-end patterns in parity with runtime;
 - keep Schema validation structural and JSON-Schema-expressible only; runtime remains authoritative for hashes, exact A5 authority, membership, ordering, counts, differences, and complete logical-key union proof;
 - allow empty/empty inputs without sentinel/default evidence;
