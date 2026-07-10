@@ -18,7 +18,9 @@ _WS_ENDPOINT = "hl-ws-mainnet-public"
 _WS_OPERATION = "candle"
 _INFO_ENDPOINT = "hl-info-mainnet-public"
 _INFO_OPERATION = "candleSnapshot"
-_CANDLE_FIELDS = frozenset({"t", "T", "s", "i", "o", "c", "h", "l", "v", "n"})
+_CANDLE_FIELDS = frozenset(
+    {"t", "T", "s", "i", "o", "c", "h", "l", "v", "n"}
+)
 
 
 class CandlePayloadExtractionError(ValueError):
@@ -26,14 +28,20 @@ class CandlePayloadExtractionError(ValueError):
 
 
 def _reject_constant(value: str) -> None:
-    raise CandlePayloadExtractionError(f"non-finite JSON number is forbidden: {value}")
+    raise CandlePayloadExtractionError(
+        f"non-finite JSON number is forbidden: {value}"
+    )
 
 
-def _object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+def _object_without_duplicate_keys(
+    pairs: list[tuple[str, Any]],
+) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in result:
-            raise CandlePayloadExtractionError(f"duplicate JSON object key: {key}")
+            raise CandlePayloadExtractionError(
+                f"duplicate JSON object key: {key}"
+            )
         result[key] = value
     return result
 
@@ -44,7 +52,9 @@ def _decode_json(payload: bytes) -> Any:
     try:
         text = payload.decode("utf-8", errors="strict")
     except UnicodeDecodeError as exc:
-        raise CandlePayloadExtractionError("payload is not valid UTF-8") from exc
+        raise CandlePayloadExtractionError(
+            "payload is not valid UTF-8"
+        ) from exc
     try:
         return json.loads(
             text,
@@ -56,30 +66,45 @@ def _decode_json(payload: bytes) -> Any:
     except CandlePayloadExtractionError:
         raise
     except (json.JSONDecodeError, ValueError, TypeError) as exc:
-        raise CandlePayloadExtractionError("payload is not valid strict JSON") from exc
+        raise CandlePayloadExtractionError(
+            "payload is not valid strict JSON"
+        ) from exc
 
 
 def _exact_nonnegative_integer(value: Any, field_name: str) -> int:
     if type(value) is not int:
-        raise CandlePayloadExtractionError(f"{field_name} must be an exact JSON integer")
+        raise CandlePayloadExtractionError(
+            f"{field_name} must be an exact JSON integer"
+        )
     if value < 0:
-        raise CandlePayloadExtractionError(f"{field_name} must be nonnegative")
+        raise CandlePayloadExtractionError(
+            f"{field_name} must be nonnegative"
+        )
     return value
 
 
-def _exact_decimal(value: Any, field_name: str, *, positive: bool) -> Decimal:
+def _exact_decimal(
+    value: Any,
+    field_name: str,
+    *,
+    positive: bool,
+) -> Decimal:
     if type(value) is int:
         decimal_value = Decimal(value)
     elif type(value) is Decimal:
         decimal_value = value
     else:
-        raise CandlePayloadExtractionError(f"{field_name} must be an exact JSON number")
+        raise CandlePayloadExtractionError(
+            f"{field_name} must be an exact JSON number"
+        )
     if not decimal_value.is_finite():
         raise CandlePayloadExtractionError(f"{field_name} must be finite")
     if positive and decimal_value <= 0:
         raise CandlePayloadExtractionError(f"{field_name} must be positive")
     if not positive and decimal_value < 0:
-        raise CandlePayloadExtractionError(f"{field_name} must be nonnegative")
+        raise CandlePayloadExtractionError(
+            f"{field_name} must be nonnegative"
+        )
     decimal_to_canonical_string(decimal_value)
     return decimal_value
 
@@ -91,21 +116,28 @@ def _extract_candle(
     expected_interval: str,
 ) -> ExtractedCandleV0:
     if type(value) is not dict:
-        raise CandlePayloadExtractionError("each candle must be a JSON object")
+        raise CandlePayloadExtractionError(
+            "each candle must be a JSON object"
+        )
     keys = frozenset(value)
     if keys != _CANDLE_FIELDS:
         missing = sorted(_CANDLE_FIELDS - keys)
         extra = sorted(keys - _CANDLE_FIELDS)
         raise CandlePayloadExtractionError(
-            f"candle fields must match frozen authority; missing={missing}; extra={extra}"
+            "candle fields must match frozen authority; "
+            f"missing={missing}; extra={extra}"
         )
 
     coin = value["s"]
     interval = value["i"]
     if type(coin) is not str or coin != expected_coin:
-        raise CandlePayloadExtractionError("candle coin does not match RawEvent authority")
+        raise CandlePayloadExtractionError(
+            "candle coin does not match RawEvent authority"
+        )
     if type(interval) is not str or interval != expected_interval:
-        raise CandlePayloadExtractionError("candle interval does not match RawEvent authority")
+        raise CandlePayloadExtractionError(
+            "candle interval does not match RawEvent authority"
+        )
 
     open_time_ms = _exact_nonnegative_integer(value["t"], "t")
     close_time_ms = _exact_nonnegative_integer(value["T"], "T")
@@ -143,34 +175,59 @@ def extract_candle_payload(
     payload: bytes,
 ) -> CandlePayloadExtractionV0:
     if type(raw_event) is not RawEventV0:
-        raise TypeError("raw_event must be an exact RawEventV0 authority object")
+        raise TypeError(
+            "raw_event must be an exact RawEventV0 authority object"
+        )
     if type(payload) is not bytes:
         raise TypeError("payload must be exact bytes supplied by the caller")
     exact_event = RawEventV0.model_validate(raw_event)
 
     if exact_event.content_type != "application/json":
-        raise CandlePayloadExtractionError("content_type must be application/json")
+        raise CandlePayloadExtractionError(
+            "content_type must be application/json"
+        )
     if exact_event.payload_encoding != "utf-8":
         raise CandlePayloadExtractionError("payload_encoding must be utf-8")
     if len(payload) != exact_event.payload_size_bytes:
-        raise CandlePayloadExtractionError("payload size does not match RawEvent authority")
+        raise CandlePayloadExtractionError(
+            "payload size does not match RawEvent authority"
+        )
     digest = hashlib.sha256(payload).hexdigest()
     if digest != exact_event.payload_sha256:
-        raise CandlePayloadExtractionError("payload hash does not match RawEvent authority")
+        raise CandlePayloadExtractionError(
+            "payload hash does not match RawEvent authority"
+        )
     if exact_event.coin is None or exact_event.candle_interval is None:
-        raise CandlePayloadExtractionError("candle extraction requires coin and interval authority")
+        raise CandlePayloadExtractionError(
+            "candle extraction requires coin and interval authority"
+        )
 
     parsed = _decode_json(payload)
     envelope_shape: CandleEnvelopeShapeV0
     candle_values: list[Any]
 
-    if exact_event.endpoint_id == _WS_ENDPOINT and exact_event.operation_type == _WS_OPERATION:
-        if exact_event.capture_mode is not RawCaptureModeV0.WS_TEXT_UTF8_APPLICATION_PAYLOAD:
-            raise CandlePayloadExtractionError("WebSocket candle capture mode mismatch")
-        if type(parsed) is not dict or frozenset(parsed) != frozenset({"channel", "data"}):
-            raise CandlePayloadExtractionError("WebSocket candle payload has invalid envelope")
+    if (
+        exact_event.endpoint_id == _WS_ENDPOINT
+        and exact_event.operation_type == _WS_OPERATION
+    ):
+        if (
+            exact_event.capture_mode
+            is not RawCaptureModeV0.WS_TEXT_UTF8_APPLICATION_PAYLOAD
+        ):
+            raise CandlePayloadExtractionError(
+                "WebSocket candle capture mode mismatch"
+            )
+        if (
+            type(parsed) is not dict
+            or frozenset(parsed) != frozenset({"channel", "data"})
+        ):
+            raise CandlePayloadExtractionError(
+                "WebSocket candle payload has invalid envelope"
+            )
         if parsed["channel"] != "candle":
-            raise CandlePayloadExtractionError("WebSocket candle channel mismatch")
+            raise CandlePayloadExtractionError(
+                "WebSocket candle channel mismatch"
+            )
         data = parsed["data"]
         if type(data) is dict:
             envelope_shape = CandleEnvelopeShapeV0.WS_DATA_CANDLE
@@ -179,16 +236,27 @@ def extract_candle_payload(
             envelope_shape = CandleEnvelopeShapeV0.WS_DATA_CANDLE_ARRAY
             candle_values = data
         else:
-            raise CandlePayloadExtractionError("WebSocket candle data must be an object or array")
-    elif exact_event.endpoint_id == _INFO_ENDPOINT and exact_event.operation_type == _INFO_OPERATION:
+            raise CandlePayloadExtractionError(
+                "WebSocket candle data must be an object or array"
+            )
+    elif (
+        exact_event.endpoint_id == _INFO_ENDPOINT
+        and exact_event.operation_type == _INFO_OPERATION
+    ):
         if exact_event.capture_mode is not RawCaptureModeV0.HTTP_RESPONSE_BODY:
-            raise CandlePayloadExtractionError("Info candle capture mode mismatch")
+            raise CandlePayloadExtractionError(
+                "Info candle capture mode mismatch"
+            )
         if type(parsed) is not list:
-            raise CandlePayloadExtractionError("Info candleSnapshot payload must be an array")
+            raise CandlePayloadExtractionError(
+                "Info candleSnapshot payload must be an array"
+            )
         envelope_shape = CandleEnvelopeShapeV0.INFO_CANDLE_ARRAY
         candle_values = parsed
     else:
-        raise CandlePayloadExtractionError("RawEvent selection is not a supported candle source")
+        raise CandlePayloadExtractionError(
+            "RawEvent selection is not a supported candle source"
+        )
 
     candles = tuple(
         _extract_candle(
@@ -200,7 +268,9 @@ def extract_candle_payload(
     )
     logical_keys = [candle.candle_logical_key for candle in candles]
     if len(logical_keys) != len(set(logical_keys)):
-        raise CandlePayloadExtractionError("duplicate candle logical key in one payload")
+        raise CandlePayloadExtractionError(
+            "duplicate candle logical key in one payload"
+        )
 
     return CandlePayloadExtractionV0.bind(
         source_event_id=exact_event.source_event_id,
