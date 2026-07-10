@@ -9,7 +9,11 @@ from .common import canonical_json_bytes, sha256_hex
 SOURCE_CATALOG_VERSION: Final = "hyperliquid-public-mainnet.0.1.0"
 SOURCE_ID: Final = "hyperliquid-public-mainnet"
 OFFICIALLY_VERIFIED_DATE: Final = "2026-07-07"
-RATE_LIMIT_STATUS: Final = "UNRESOLVED_OFFICIAL_LIMIT"
+RateLimitStatus = Literal[
+    "UNRESOLVED_OFFICIAL_LIMIT",
+    "OFFICIAL_NUMERIC_LIMIT_RESOLVED",
+]
+RATE_LIMIT_STATUS: Final[RateLimitStatus] = "UNRESOLVED_OFFICIAL_LIMIT"
 RATE_LIMIT_OFFICIAL_SOURCE_TITLE: Final = "Rate limits and user limits"
 RATE_LIMIT_OFFICIAL_SOURCE_LOCATION: Final = (
     "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/"
@@ -24,6 +28,7 @@ DOCUMENTED_CANDLE_INTERVALS: Final[tuple[str, ...]] = (
 
 A1_CONTRACT_ID: Final = "V0-01A1-SCOPE-FREEZE"
 A3_CONTRACT_ID: Final = "V0-01A3-PUBLIC-READONLY-TRANSPORT-PREFLIGHT-CONTRACT"
+A4_CONTRACT_ID: Final = "V0-01A4-OFFICIAL-RATE-LIMIT-AUTHORITY-FREEZE"
 PUBLIC_READ_ONLY_ENVIRONMENT: Final = "mainnet public read-only"
 PUBLIC_READ_ONLY_OPERATION_CLASS: Final = "public read-only observation only"
 CANDLE_WS_ACCEPTED_ENVELOPE_SHAPES: Final[tuple[str, ...]] = ("data:Candle", "data:Candle[]")
@@ -96,6 +101,13 @@ A3_PREFLIGHT_KILL_SWITCH_BYPASS_MARKERS: Final[tuple[str, ...]] = (
     "kill_switch_bypass",
     "kill_switch_override",
     "override",
+)
+RATE_LIMIT_ALLOWED_STATUSES: Final[tuple[RateLimitStatus, ...]] = (
+    "UNRESOLVED_OFFICIAL_LIMIT",
+    "OFFICIAL_NUMERIC_LIMIT_RESOLVED",
+)
+RATE_LIMIT_UNREADABLE_OFFICIAL_SOURCE_NOTE: Final = (
+    "official rate-limit page was not machine-readable during A4 preflight"
 )
 FIXTURE_ALLOWED_PROVENANCE: Final[tuple[str, ...]] = (
     "SYNTHETIC_DOCUMENTATION_DERIVED",
@@ -405,15 +417,108 @@ def validate_candle_websocket_envelope_shape(envelope_shape: str) -> str:
     return envelope_shape
 
 
+def _official_rate_limit_source_matches(title: str, location: str, source_kind: str) -> bool:
+    return (
+        source_kind == "official"
+        and title == RATE_LIMIT_OFFICIAL_SOURCE_TITLE
+        and location == RATE_LIMIT_OFFICIAL_SOURCE_LOCATION
+    )
+
+
+def rate_limit_authority_document() -> dict[str, object]:
+    return validate_official_rate_limit_authority(
+        ambiguous_fields=(RATE_LIMIT_UNREADABLE_OFFICIAL_SOURCE_NOTE,),
+    )
+
+
+def validate_official_rate_limit_authority(
+    *,
+    status: RateLimitStatus = RATE_LIMIT_STATUS,
+    official_source_title: str = RATE_LIMIT_OFFICIAL_SOURCE_TITLE,
+    official_source_location: str = RATE_LIMIT_OFFICIAL_SOURCE_LOCATION,
+    officially_verified_date: str = OFFICIALLY_VERIFIED_DATE,
+    source_kind: str = "official",
+    official_source_readable: bool = False,
+    numeric_limit_fields: tuple[str, ...] = (),
+    limit_units: tuple[str, ...] = (),
+    operation_scope: tuple[str, ...] = (),
+    ambiguous_fields: tuple[str, ...] = (),
+    runtime_enabled: bool = False,
+    live_transport_requested: bool = False,
+) -> dict[str, object]:
+    if status not in RATE_LIMIT_ALLOWED_STATUSES:
+        raise ValueError("unsupported rate-limit status")
+    if runtime_enabled or live_transport_requested:
+        raise ValueError("rate-limit authority contract does not enable live runtime")
+
+    source_matches = _official_rate_limit_source_matches(
+        official_source_title,
+        official_source_location,
+        source_kind,
+    )
+    if not source_matches:
+        raise ValueError("rate-limit authority must use the frozen official source")
+
+    has_numeric_material = bool(numeric_limit_fields or limit_units or operation_scope)
+
+    if status == "UNRESOLVED_OFFICIAL_LIMIT":
+        if has_numeric_material:
+            raise ValueError("numeric rate-limit material is prohibited while unresolved")
+        return {
+            "task_id": A4_CONTRACT_ID,
+            "status": status,
+            "official_source_title": official_source_title,
+            "official_source_location": official_source_location,
+            "officially_verified_date": officially_verified_date,
+            "source_kind": source_kind,
+            "official_source_readable": official_source_readable,
+            "numeric_limits_resolved": False,
+            "numeric_limit_fields": (),
+            "limit_units": (),
+            "operation_scope": (),
+            "ambiguous_fields": ambiguous_fields,
+            "live_transport_authorized": False,
+        }
+
+    if not official_source_readable:
+        raise ValueError("official rate-limit source must be readable before resolving")
+    if ambiguous_fields:
+        raise ValueError("ambiguous rate-limit fields block resolved authority")
+    if not officially_verified_date:
+        raise ValueError("official verification date is required")
+    if not numeric_limit_fields:
+        raise ValueError("resolved rate-limit authority requires numeric field names")
+    if not limit_units:
+        raise ValueError("resolved rate-limit authority requires limit units")
+    if not operation_scope:
+        raise ValueError("resolved rate-limit authority requires operation scope")
+
+    return {
+        "task_id": A4_CONTRACT_ID,
+        "status": status,
+        "official_source_title": official_source_title,
+        "official_source_location": official_source_location,
+        "officially_verified_date": officially_verified_date,
+        "source_kind": source_kind,
+        "official_source_readable": official_source_readable,
+        "numeric_limits_resolved": True,
+        "numeric_limit_fields": numeric_limit_fields,
+        "limit_units": limit_units,
+        "operation_scope": operation_scope,
+        "ambiguous_fields": (),
+        "live_transport_authorized": False,
+    }
+
+
 def rate_limit_entry_gate() -> dict[str, object]:
-    numeric_limits_resolved = RATE_LIMIT_STATUS != "UNRESOLVED_OFFICIAL_LIMIT"
+    numeric_limits_resolved = RATE_LIMIT_STATUS == "OFFICIAL_NUMERIC_LIMIT_RESOLVED"
     return {
         "task_id": A1_CONTRACT_ID,
         "status": RATE_LIMIT_STATUS,
         "official_source_title": RATE_LIMIT_OFFICIAL_SOURCE_TITLE,
         "official_source_location": RATE_LIMIT_OFFICIAL_SOURCE_LOCATION,
         "numeric_limits_resolved": numeric_limits_resolved,
-        "live_transport_authorized": numeric_limits_resolved,
+        "live_transport_authorized": False,
     }
 
 
@@ -422,6 +527,7 @@ def assert_rate_limit_allows_live_transport() -> None:
         raise ValueError(
             "official numeric rate limit is unresolved; live transport remains blocked"
         )
+    raise ValueError("live transport requires a later runtime task")
 
 
 def _reject_prohibited_transport_text(*values: str) -> None:
