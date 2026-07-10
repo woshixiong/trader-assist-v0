@@ -41,7 +41,7 @@ A0, A1, A2, A3, and A4 do not parse raw payload fields. `source_event_time`, `so
 
 - `l2Book`: `FULL_SNAPSHOT_NOT_DELTA`.
 - `trades`: batched stream, no documented source sequence.
-- `bbo`: change-only stream, no documented source timestamp.
+- `bbo`: change-only stream; timestamp availability is `FIELD_TIME` in milliseconds; no documented source sequence.
 - `activeAssetCtx`: current observation, no documented source timestamp.
 - `allMids`: current map observation, no documented source timestamp.
 - `candle`: mutable current bar; logical key is coin, interval, and open time.
@@ -161,6 +161,10 @@ A1/A2/A3/A4/A5 reject private endpoints, user/account endpoints, wallet/signing 
 ## A1 fixture admission policy
 
 Allowed fixtures are synthetic documentation-derived fixtures, minimal redacted examples, and fixtures with explicit provenance and no operational secrets. Forbidden fixtures include raw operational payloads, real market/account logs, private/user/account data, wallet addresses, API keys, signatures, nonces, credentials, databases, caches, and unredacted observations. A5 adds no payload fixture.
+
+## A1-to-A2 gate
+
+A1 completion did not authorize A2 automatically. A2 could only be considered after A1 PR merge, external exact-head review PASS, the explicit rate-limit entry gate, the frozen public source envelope contract, and a new exact-head project-control lease. This historical authority chain remains part of the completed A1/A2 governance record and is not weakened by A5.
 
 ## A5 next gate
 
