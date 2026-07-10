@@ -9,6 +9,7 @@ from typing import Any, cast
 
 import pytest
 from pydantic import ValidationError
+
 from trader_assist_v0.contracts.candles import (
     A5_CONTRACT_ID,
     CANDLE_EXTRACTION_HASH_VERSION,
