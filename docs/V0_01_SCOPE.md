@@ -109,7 +109,9 @@ Both inputs must have identical source, coin, and candle interval identities. Ea
 - exact field equality without tolerance or normalization;
 - typed per-item source authorities, exact field differences, status counts, and a domain-separated reconciliation hash;
 - `AuthorityClass.model_validate_json(...)` as the sole supported A6 raw JSON boundary, with a pre-Pydantic canonical check that accepts only exact `canonical_json_bytes(authority)` representation;
-- one-shot call-local Pydantic JSON-mode validation of the already-approved canonical bytes, preserving native Pydantic JSON-mode semantics for `strict=None`, `strict=False`, and `strict=True`, without any persistent caller-settable capability that can authorize core JSON validation;
+- one-shot isolated Pydantic JSON-mode validation of the already-approved canonical bytes, preserving native Pydantic JSON-mode semantics for `strict=None`, `strict=False`, and `strict=True`, without any persistent caller-settable capability that can authorize core JSON validation;
+- call-local isolation that prevents the permissive copied schema, validator, walker, or closures from escaping through successful return values, validation exceptions, traceback frames, context, or cause;
+- sanitized one-shot failure conversion built only from neutral non-executable error data after the original exception graph, validator, schema, and sensitive frames have been cleared and detached;
 - pre-Pydantic rejection of duplicate keys at every nesting level, `-0`, noncanonical numeric tokens, invalid UTF-8, BOM, alternate encodings, truncation, trailing material, reordered keys, alternate escapes, and other noncanonical raw forms;
 - decoded Python validation through class/base `model_validate`, `TypeAdapter.validate_python`, and core `validate_python`, which authenticates only the current decoded representation and does not prove raw-wire provenance;
 - intentional fail-closed behavior for inherited/core JSON, all string-validation paths, and all partial-validation paths;

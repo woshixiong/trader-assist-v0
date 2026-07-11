@@ -42,7 +42,9 @@ A6 accepts only independently revalidated exact A5 WebSocket and Info candle ext
 - reconstruct the complete logical-key union during every report validation and reject coherently rehashed omissions, injections, substitutions, or membership changes;
 - emit only `MATCH`, `CONFLICT`, `WS_ONLY`, and `INFO_ONLY` with exact counts and a domain-separated report hash covering both complete extractions;
 - use `AuthorityClass.model_validate_json(...)` as the sole A6 raw JSON boundary: its canonical precheck runs before Pydantic and requires input bytes to equal `canonical_json_bytes(authority)` exactly;
-- validate only those already-approved canonical bytes with a one-shot call-local Pydantic JSON-mode validator, preserving native Pydantic JSON semantics for `strict=None`, `strict=False`, and `strict=True`;
+- validate only those already-approved canonical bytes with a one-shot isolated Pydantic JSON-mode validator, preserving native Pydantic JSON semantics for `strict=None`, `strict=False`, and `strict=True`;
+- keep the permissive copied schema, validator, walker, and closures inside the isolated call on both success and failure: none may escape through a return value, exception, traceback frame, context, or cause;
+- convert one-shot validation failures to new sanitized errors built only from neutral non-executable data after clearing and detaching the original exception graph, validator, schema, and sensitive frames;
 - expose no persistent caller-settable capability that can authorize class/core JSON validation, and reject duplicate object keys at every depth, `-0`, float/exponent/non-finite tokens, non-UTF-8/BOM input, alternate encodings, truncation, trailing material, and every other noncanonical raw representation before Pydantic validation;
 - support decoded Python `model_validate`, base-class `model_validate`, `TypeAdapter.validate_python`, and core `validate_python` paths only as authentication of the current decoded representation, without claiming raw-wire provenance;
 - keep inherited/core JSON, all string-validation, and all partial-validation paths fail closed; they are not alternative raw authority boundaries;

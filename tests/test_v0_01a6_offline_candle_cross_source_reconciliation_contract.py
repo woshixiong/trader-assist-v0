@@ -8,6 +8,7 @@ from decimal import Decimal
 from functools import partial
 from itertools import product
 from pathlib import Path
+from types import ModuleType, TracebackType
 from typing import Any, cast
 
 import pytest
@@ -203,6 +204,168 @@ def _semantic_equivalent_raw_json_materials(
     for name, material in materials:
         assert json.loads(material) == payload, name
     return materials
+
+
+def _looks_like_pydantic_core_schema(value: dict[Any, Any]) -> bool:
+    schema_type = value.get("type")
+    return isinstance(schema_type, str) and schema_type in {
+        "definitions",
+        "definition-ref",
+        "function-before",
+        "function-wrap",
+        "model",
+        "model-fields",
+        "typed-dict",
+    } and any(key in value for key in ("schema", "function", "fields", "ref"))
+
+
+def _bounded_escaping_graph(root: BaseException) -> dict[str, Any]:
+    max_depth = 16
+    max_items = 8192
+    stack: list[tuple[Any, int]] = [(root, 0)]
+    seen: set[int] = set()
+    schema_validators: list[SchemaValidator] = []
+    core_schemas: list[dict[Any, Any]] = []
+    functions: list[Any] = []
+    partials: list[partial[Any]] = []
+    validation_objects: list[Any] = []
+    exceptions: list[BaseException] = []
+    limit_reached = False
+
+    while stack:
+        value, depth = stack.pop()
+        if id(value) in seen:
+            continue
+        if len(seen) >= max_items:
+            limit_reached = True
+            break
+        seen.add(id(value))
+        if depth > max_depth:
+            continue
+
+        if isinstance(value, type | ModuleType):
+            continue
+        if isinstance(value, SchemaValidator):
+            schema_validators.append(value)
+            validation_objects.append(value)
+            continue
+        if inspect.isfunction(value):
+            functions.append(value)
+            if value.__defaults__ is not None:
+                stack.append((value.__defaults__, depth + 1))
+            if value.__kwdefaults__ is not None:
+                stack.append((value.__kwdefaults__, depth + 1))
+            if value.__closure__ is not None:
+                for cell in value.__closure__[:64]:
+                    try:
+                        stack.append((cell.cell_contents, depth + 1))
+                    except ValueError:
+                        pass
+            continue
+        if isinstance(value, partial):
+            partials.append(value)
+            stack.extend(
+                (
+                    (value.func, depth + 1),
+                    (value.args, depth + 1),
+                    (value.keywords, depth + 1),
+                )
+            )
+            continue
+        if isinstance(value, TracebackType):
+            stack.append((dict(value.tb_frame.f_locals), depth + 1))
+            if value.tb_next is not None:
+                stack.append((value.tb_next, depth + 1))
+            continue
+        if isinstance(value, BaseException):
+            exceptions.append(value)
+            stack.append((value.args, depth + 1))
+            if value.__traceback__ is not None:
+                stack.append((value.__traceback__, depth + 1))
+            if value.__context__ is not None:
+                stack.append((value.__context__, depth + 1))
+            if value.__cause__ is not None:
+                stack.append((value.__cause__, depth + 1))
+            if isinstance(value, BaseExceptionGroup):
+                stack.append((value.exceptions, depth + 1))
+            continue
+        if isinstance(value, dict):
+            if _looks_like_pydantic_core_schema(value):
+                core_schemas.append(value)
+            for index, (key, item) in enumerate(value.items()):
+                if index >= 256:
+                    break
+                stack.append((key, depth + 1))
+                stack.append((item, depth + 1))
+            continue
+        if isinstance(value, list | tuple | set | frozenset):
+            for index, item in enumerate(value):
+                if index >= 256:
+                    break
+                stack.append((item, depth + 1))
+            continue
+
+        type_attributes = vars(type(value))
+        if "validate_json" in type_attributes or "validate_strings" in type_attributes:
+            validation_objects.append(value)
+
+    return {
+        "core_schemas": tuple(core_schemas),
+        "exceptions": tuple(exceptions),
+        "functions": tuple(functions),
+        "limit_reached": limit_reached,
+        "partials": tuple(partials),
+        "schema_validators": tuple(schema_validators),
+        "validation_objects": tuple(validation_objects),
+        "visited_count": len(seen),
+    }
+
+
+def _authority_attack_suites(
+    report: CandleCrossSourceReconciliationV0,
+) -> tuple[tuple[str, bytes, tuple[bytes, ...]], ...]:
+    comparison = report.comparisons[0]
+    authority = comparison.ws_authority
+    assert authority is not None
+    models: tuple[tuple[str, BaseModel, bytes], ...] = (
+        ("input-authority", authority, b'"side":"WS"'),
+        (
+            "field-difference",
+            comparison.field_differences[0],
+            b'"field_name":"trade_count"',
+        ),
+        ("comparison", comparison, b'"status":"CONFLICT"'),
+        ("report", report, b'"match_count":0'),
+    )
+    suites: list[tuple[str, bytes, tuple[bytes, ...]]] = []
+    for name, model, duplicate_field in models:
+        canonical = canonical_json_bytes(model)
+        assert canonical.count(duplicate_field) == 1
+        duplicate = canonical.replace(
+            duplicate_field,
+            duplicate_field + b"," + duplicate_field,
+            1,
+        )
+        reordered = json.dumps(
+            dict(reversed(list(json.loads(canonical).items()))),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        whitespace = canonical.replace(b":", b": ", 1)
+        assert json.loads(duplicate) == json.loads(canonical)
+        assert json.loads(reordered) == json.loads(canonical)
+        assert json.loads(whitespace) == json.loads(canonical)
+        attacks = (duplicate, reordered, whitespace)
+        if name == "report":
+            attacks += tuple(
+                material
+                for material_name, material in _semantic_equivalent_raw_json_materials(
+                    report
+                )
+                if material_name != "canonical complete JSON"
+            )
+        suites.append((name, canonical, attacks))
+    return tuple(suites)
 
 
 def _validate_runtime_json(value: dict[str, Any]) -> CandleCrossSourceReconciliationV0:
@@ -487,6 +650,10 @@ def test_every_a6_authority_class_preserves_native_json_parameter_semantics(
     )
     for authority in authorities:
         authority_type = type(authority)
+        validator_identity = id(authority_type.__pydantic_validator__)
+        schema_identity = id(authority_type.__pydantic_core_schema__)
+        module_keys = frozenset(vars(module))
+        class_keys = frozenset(vars(authority_type))
         canonical = canonical_json_bytes(authority)
         json_input: str | bytes | bytearray
         if json_input_kind == "str":
@@ -500,6 +667,10 @@ def test_every_a6_authority_class_preserves_native_json_parameter_semantics(
             strict=strict,
             **validation_kwargs,
         ) == authority
+        assert id(authority_type.__pydantic_validator__) == validator_identity
+        assert id(authority_type.__pydantic_core_schema__) == schema_identity
+        assert frozenset(vars(module)) == module_keys
+        assert frozenset(vars(authority_type)) == class_keys
 
 
 @pytest.mark.parametrize("strict", (None, False, True))
@@ -844,6 +1015,159 @@ def test_module_reflection_exposes_no_persistent_json_authorization_capability()
     }
     assert authorization_names == set()
     assert "ContextVar" not in inspect.getsource(module)
+
+
+@pytest.mark.parametrize(
+    "authority_kind",
+    ("input-authority", "field-difference", "comparison", "report"),
+)
+@pytest.mark.parametrize("strict", (None, False, True))
+def test_semantic_failure_exposes_no_traceback_validation_capability(
+    authority_kind: str,
+    strict: bool | None,
+) -> None:
+    report = _reconcile(
+        (_candle(open_time_ms=1000),),
+        (_candle(open_time_ms=1000, trade_count=8),),
+    )
+    comparison = report.comparisons[0]
+    ws_authority = comparison.ws_authority
+    assert ws_authority is not None
+
+    if authority_kind == "input-authority":
+        authority_type: type[BaseModel] = CandleCrossSourceInputAuthorityV0
+        attacked = cast(dict[str, Any], ws_authority.model_dump(mode="json"))
+        attacked["side"] = "INVALID"
+    elif authority_kind == "field-difference":
+        authority_type = CandleCrossSourceFieldDifferenceV0
+        attacked = cast(
+            dict[str, Any], comparison.field_differences[0].model_dump(mode="json")
+        )
+        attacked["field_name"] = "INVALID"
+    elif authority_kind == "comparison":
+        authority_type = CandleCrossSourceComparisonItemV0
+        attacked = cast(dict[str, Any], comparison.model_dump(mode="json"))
+        attacked["status"] = "INVALID"
+    else:
+        authority_type = CandleCrossSourceReconciliationV0
+        attacked = _wire(report)
+        attacked["match_count"] += 1
+        attacked = _rehash(attacked)
+        material = copy.deepcopy(attacked)
+        supplied_hash = material.pop("reconciliation_hash")
+        assert supplied_hash == (
+            compute_candle_cross_source_reconciliation_hash_from_payload(material)
+        )
+
+    canonical_but_semantically_invalid = canonical_json_bytes(attacked)
+    assert json.loads(canonical_but_semantically_invalid) == attacked
+    validator_identity = id(authority_type.__pydantic_validator__)
+    schema_identity = id(authority_type.__pydantic_core_schema__)
+    module_keys = frozenset(vars(module))
+    class_keys = frozenset(vars(authority_type))
+    with pytest.raises(ValidationError) as caught:
+        authority_type.model_validate_json(
+            canonical_but_semantically_invalid,
+            strict=strict,
+        )
+
+    escaped = caught.value
+    assert escaped.__context__ is None
+    assert escaped.__cause__ is None
+    assert not isinstance(escaped, BaseExceptionGroup)
+    errors = escaped.errors(include_url=False)
+    assert errors
+    assert all(error["type"] == "a6_sanitized_validation" for error in errors)
+    assert all(error["input"] is None for error in errors)
+    assert all("ctx" not in error for error in errors)
+
+    graph = _bounded_escaping_graph(escaped)
+    assert graph["limit_reached"] is False
+    assert 0 < graph["visited_count"] <= 8192
+    assert graph["exceptions"] == (escaped,)
+
+    forbidden_callable_tokens = (
+        "call_validator",
+        "call_schema",
+        "call_local_a6_before",
+        "call_local_nested_wrap",
+        "replace_call_local_nodes",
+        "isolated_runner",
+        "sensitive_inner",
+        "sensitive_function",
+        "validator_factory",
+        "schema_walker",
+    )
+    leaked_functions = tuple(
+        function
+        for function in graph["functions"]
+        if any(
+            token in function.__qualname__ for token in forbidden_callable_tokens
+        )
+    )
+    leaked_partials = tuple(
+        value
+        for value in graph["partials"]
+        if any(
+            token in getattr(value.func, "__qualname__", "")
+            for token in forbidden_callable_tokens
+        )
+    )
+
+    candidate_validators = list(graph["schema_validators"])
+    candidate_validators.extend(
+        SchemaValidator(copy.deepcopy(schema)) for schema in graph["core_schemas"]
+    )
+    accepted_attacks: list[tuple[str, bool | str | None, str]] = []
+    for candidate in candidate_validators:
+        for suite_name, canonical, attacks in _authority_attack_suites(report):
+            for strict in (None, False, True):
+                for attack in attacks:
+                    try:
+                        candidate.validate_json(attack, strict=strict)
+                    except Exception:
+                        pass
+                    else:
+                        accepted_attacks.append((suite_name, strict, "complete"))
+                for partial_mode in (True, "on", "trailing-strings"):
+                    for partial_material in (
+                        canonical[:-1],
+                        canonical + b"garbage",
+                        canonical + b'"trailing',
+                        canonical + b"{}",
+                    ):
+                        try:
+                            candidate.validate_json(
+                                partial_material,
+                                strict=strict,
+                                allow_partial=partial_mode,
+                            )
+                        except Exception:
+                            pass
+                        else:
+                            accepted_attacks.append(
+                                (suite_name, strict, str(partial_mode))
+                            )
+                try:
+                    candidate.validate_strings(
+                        cast(dict[str, Any], json.loads(canonical)),
+                        strict=strict,
+                    )
+                except Exception:
+                    pass
+                else:
+                    accepted_attacks.append((suite_name, strict, "strings"))
+
+    assert accepted_attacks == []
+    assert candidate_validators == []
+    assert graph["validation_objects"] == ()
+    assert graph["core_schemas"] == ()
+    assert leaked_functions == ()
+    assert leaked_partials == ()
+    assert id(authority_type.__pydantic_validator__) == validator_identity
+    assert id(authority_type.__pydantic_core_schema__) == schema_identity
+    assert frozenset(vars(module)) == module_keys
+    assert frozenset(vars(authority_type)) == class_keys
 
 
 @pytest.mark.parametrize(

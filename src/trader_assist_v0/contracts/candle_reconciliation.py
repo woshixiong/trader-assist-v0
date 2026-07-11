@@ -3,6 +3,7 @@ from __future__ import annotations
 import hmac
 import json
 import re
+import traceback
 from collections.abc import Mapping, Set
 from copy import deepcopy
 from decimal import Decimal
@@ -13,12 +14,13 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    ValidationError,
     ValidationInfo,
     WrapValidator,
     model_validator,
 )
 from pydantic.config import ExtraValues
-from pydantic_core import SchemaValidator
+from pydantic_core import PydanticCustomError, SchemaValidator
 
 from .candles import (
     CandleEnvelopeShapeV0,
@@ -481,134 +483,258 @@ class _A6AuthorityModel(StrictModel):
         by_name: bool | None = None,
     ) -> Self:
         canonical_bytes = _approved_canonical_a6_json_bytes(json_data)
-        expected_a6_nodes: dict[type[BaseModel], tuple[type[BaseModel], ...]] = {
-            CandleCrossSourceInputAuthorityV0: (
-                CandleCrossSourceInputAuthorityV0,
-            ),
-            CandleCrossSourceFieldDifferenceV0: (
-                CandleCrossSourceFieldDifferenceV0,
-            ),
-            CandleCrossSourceComparisonItemV0: (
-                CandleCrossSourceComparisonItemV0,
-                CandleCrossSourceFieldDifferenceV0,
-                CandleCrossSourceInputAuthorityV0,
-            ),
-            CandleCrossSourceReconciliationV0: (
-                CandleCrossSourceReconciliationV0,
-                CandleCrossSourceComparisonItemV0,
-                CandleCrossSourceFieldDifferenceV0,
-                CandleCrossSourceInputAuthorityV0,
-            ),
-        }
-        expected_nested_nodes: dict[
-            type[BaseModel], tuple[type[BaseModel], ...]
-        ] = {
-            CandleCrossSourceInputAuthorityV0: (),
-            CandleCrossSourceFieldDifferenceV0: (),
-            CandleCrossSourceComparisonItemV0: (
-                ExtractedCandleV0,
-                ExtractedCandleV0,
-            ),
-            CandleCrossSourceReconciliationV0: (
-                CandlePayloadExtractionV0,
-                CandlePayloadExtractionV0,
-                ExtractedCandleV0,
-                ExtractedCandleV0,
-            ),
-        }
-        if cls not in expected_a6_nodes:
-            raise ValueError("unsupported A6 authority model class")
 
-        call_schema = deepcopy(cls.__pydantic_core_schema__)
-        replaced_a6_nodes: list[type[BaseModel]] = []
-        replaced_nested_nodes: list[type[BaseModel]] = []
-        persistent_before_function = (
-            _A6AuthorityModel.validate_canonical_authority_input.__func__
-        )
+        def isolated_runner() -> tuple[Any, ...]:
+            def sensitive_inner() -> BaseModel:
+                expected_a6_nodes: dict[
+                    type[BaseModel], tuple[type[BaseModel], ...]
+                ] = {
+                    CandleCrossSourceInputAuthorityV0: (
+                        CandleCrossSourceInputAuthorityV0,
+                    ),
+                    CandleCrossSourceFieldDifferenceV0: (
+                        CandleCrossSourceFieldDifferenceV0,
+                    ),
+                    CandleCrossSourceComparisonItemV0: (
+                        CandleCrossSourceComparisonItemV0,
+                        CandleCrossSourceFieldDifferenceV0,
+                        CandleCrossSourceInputAuthorityV0,
+                    ),
+                    CandleCrossSourceReconciliationV0: (
+                        CandleCrossSourceReconciliationV0,
+                        CandleCrossSourceComparisonItemV0,
+                        CandleCrossSourceFieldDifferenceV0,
+                        CandleCrossSourceInputAuthorityV0,
+                    ),
+                }
+                expected_nested_nodes: dict[
+                    type[BaseModel], tuple[type[BaseModel], ...]
+                ] = {
+                    CandleCrossSourceInputAuthorityV0: (),
+                    CandleCrossSourceFieldDifferenceV0: (),
+                    CandleCrossSourceComparisonItemV0: (
+                        ExtractedCandleV0,
+                        ExtractedCandleV0,
+                    ),
+                    CandleCrossSourceReconciliationV0: (
+                        CandlePayloadExtractionV0,
+                        CandlePayloadExtractionV0,
+                        ExtractedCandleV0,
+                        ExtractedCandleV0,
+                    ),
+                }
+                if cls not in expected_a6_nodes:
+                    raise ValueError("unsupported A6 authority model class")
 
-        def call_local_a6_before(
-            model_type: type[BaseModel],
-        ) -> Any:
-            def validate(value: Any, info: ValidationInfo) -> Any:
-                if info.mode != "json":
-                    raise ValueError("call-local A6 validator requires JSON mode")
-                _validate_wire_for_model(model_type, value)
-                return _restore_call_local_json_values(model_type, value)
+                call_schema = deepcopy(cls.__pydantic_core_schema__)
+                replaced_a6_nodes: list[type[BaseModel]] = []
+                replaced_nested_nodes: list[type[BaseModel]] = []
+                persistent_before_function = (
+                    _A6AuthorityModel.validate_canonical_authority_input.__func__
+                )
 
-            return validate
+                def call_local_a6_before(
+                    model_type: type[BaseModel],
+                ) -> Any:
+                    def validate(value: Any, info: ValidationInfo) -> Any:
+                        if info.mode != "json":
+                            raise ValueError("call-local A6 validator requires JSON mode")
+                        _validate_wire_for_model(model_type, value)
+                        return _restore_call_local_json_values(model_type, value)
 
-        def call_local_nested_wrap(
-            model_type: type[BaseModel],
-        ) -> Any:
-            def validate(value: Any, _handler: Any, info: ValidationInfo) -> Any:
-                if info.mode != "json" or type(value) is not model_type:
+                    return validate
+
+                def call_local_nested_wrap(
+                    model_type: type[BaseModel],
+                ) -> Any:
+                    def validate(value: Any, _handler: Any, info: ValidationInfo) -> Any:
+                        if info.mode != "json" or type(value) is not model_type:
+                            raise ValueError(
+                                "call-local nested authority requires exact "
+                                "JSON-restored authority"
+                            )
+                        return value
+
+                    return validate
+
+                def replace_call_local_nodes(value: Any) -> None:
+                    if isinstance(value, dict):
+                        function = value.get("function")
+                        if isinstance(function, dict):
+                            callable_value = function.get("function")
+                            callable_function = getattr(
+                                callable_value, "__func__", callable_value
+                            )
+                            if callable_function is persistent_before_function:
+                                if value.get("type") != "function-before" or function.get(
+                                    "type"
+                                ) != "with-info":
+                                    raise ValueError(
+                                        "unexpected A6 before-validator schema shape"
+                                    )
+                                model_type = getattr(callable_value, "__self__", None)
+                                if model_type not in expected_a6_nodes[cls]:
+                                    raise ValueError(
+                                        "unexpected A6 authority schema node"
+                                    )
+                                function["function"] = call_local_a6_before(model_type)
+                                replaced_a6_nodes.append(model_type)
+                            elif callable_value is _persistent_json_extracted_candle:
+                                if value.get("type") != "function-wrap" or function.get(
+                                    "type"
+                                ) != "with-info":
+                                    raise ValueError(
+                                        "unexpected A5 candle wrapper schema shape"
+                                    )
+                                function["function"] = call_local_nested_wrap(
+                                    ExtractedCandleV0
+                                )
+                                replaced_nested_nodes.append(ExtractedCandleV0)
+                            elif callable_value is _persistent_json_candle_extraction:
+                                if value.get("type") != "function-wrap" or function.get(
+                                    "type"
+                                ) != "with-info":
+                                    raise ValueError(
+                                        "unexpected A5 extraction wrapper schema shape"
+                                    )
+                                function["function"] = call_local_nested_wrap(
+                                    CandlePayloadExtractionV0
+                                )
+                                replaced_nested_nodes.append(
+                                    CandlePayloadExtractionV0
+                                )
+                        for item in value.values():
+                            replace_call_local_nodes(item)
+                    elif isinstance(value, list | tuple):
+                        for item in value:
+                            replace_call_local_nodes(item)
+
+                replace_call_local_nodes(call_schema)
+                if sorted(item.__name__ for item in replaced_a6_nodes) != sorted(
+                    item.__name__ for item in expected_a6_nodes[cls]
+                ):
                     raise ValueError(
-                        "call-local nested authority requires exact JSON-restored authority"
+                        "unexpected A6 before-validator identity or count"
                     )
-                return value
+                if sorted(item.__name__ for item in replaced_nested_nodes) != sorted(
+                    item.__name__ for item in expected_nested_nodes[cls]
+                ):
+                    raise ValueError(
+                        "unexpected nested authority wrapper identity or count"
+                    )
 
-            return validate
+                call_validator = SchemaValidator(call_schema)
+                return cast(
+                    Self,
+                    call_validator.validate_json(
+                        canonical_bytes,
+                        strict=strict,
+                        extra=extra,
+                        context=context,
+                        by_alias=by_alias,
+                        by_name=by_name,
+                    ),
+                )
 
-        def replace_call_local_nodes(value: Any) -> None:
-            if isinstance(value, dict):
-                function = value.get("function")
-                if isinstance(function, dict):
-                    callable_value = function.get("function")
-                    callable_function = getattr(callable_value, "__func__", callable_value)
-                    if callable_function is persistent_before_function:
-                        if value.get("type") != "function-before" or function.get(
-                            "type"
-                        ) != "with-info":
-                            raise ValueError("unexpected A6 before-validator schema shape")
-                        model_type = getattr(callable_value, "__self__", None)
-                        if model_type not in expected_a6_nodes[cls]:
-                            raise ValueError("unexpected A6 authority schema node")
-                        function["function"] = call_local_a6_before(model_type)
-                        replaced_a6_nodes.append(model_type)
-                    elif callable_value is _persistent_json_extracted_candle:
-                        if value.get("type") != "function-wrap" or function.get(
-                            "type"
-                        ) != "with-info":
-                            raise ValueError("unexpected A5 candle wrapper schema shape")
-                        function["function"] = call_local_nested_wrap(ExtractedCandleV0)
-                        replaced_nested_nodes.append(ExtractedCandleV0)
-                    elif callable_value is _persistent_json_candle_extraction:
-                        if value.get("type") != "function-wrap" or function.get(
-                            "type"
-                        ) != "with-info":
-                            raise ValueError("unexpected A5 extraction wrapper schema shape")
-                        function["function"] = call_local_nested_wrap(
-                            CandlePayloadExtractionV0
+            sensitive_function = sensitive_inner
+            del sensitive_inner
+            try:
+                validated_model: BaseModel = sensitive_function()
+            except Exception as original_error:
+                neutral_errors: tuple[
+                    tuple[tuple[str | int, ...], str, str], ...
+                ] = ()
+                if isinstance(original_error, ValidationError):
+                    neutral_errors = tuple(
+                        (
+                            tuple(
+                                item
+                                if isinstance(item, str | int)
+                                else str(item)
+                                for item in error.get("loc", ())[:64]
+                            ),
+                            str(error.get("msg", "validation failed"))[:2000],
+                            str(error.get("type", "validation_error"))[:200],
                         )
-                        replaced_nested_nodes.append(CandlePayloadExtractionV0)
-                for item in value.values():
-                    replace_call_local_nodes(item)
-            elif isinstance(value, list | tuple):
-                for item in value:
-                    replace_call_local_nodes(item)
+                        for error in original_error.errors(
+                            include_url=False,
+                            include_context=False,
+                            include_input=False,
+                        )[:256]
+                    )
+                    neutral_outcome: tuple[Any, ...] = (
+                        "validation_error",
+                        str(original_error.title)[:200],
+                        neutral_errors,
+                    )
+                else:
+                    neutral_outcome = (
+                        "internal_error",
+                        "isolated A6 JSON validation failed internally "
+                        f"({type(original_error).__name__})",
+                    )
 
-        replace_call_local_nodes(call_schema)
-        if sorted(item.__name__ for item in replaced_a6_nodes) != sorted(
-            item.__name__ for item in expected_a6_nodes[cls]
-        ):
-            raise ValueError("unexpected A6 before-validator identity or count")
-        if sorted(item.__name__ for item in replaced_nested_nodes) != sorted(
-            item.__name__ for item in expected_nested_nodes[cls]
-        ):
-            raise ValueError("unexpected nested authority wrapper identity or count")
+                exception_stack: list[BaseException] = [original_error]
+                seen_exceptions: set[int] = set()
+                while exception_stack:
+                    current_error = exception_stack.pop()
+                    if id(current_error) in seen_exceptions:
+                        continue
+                    seen_exceptions.add(id(current_error))
+                    if current_error.__context__ is not None:
+                        exception_stack.append(current_error.__context__)
+                    if current_error.__cause__ is not None:
+                        exception_stack.append(current_error.__cause__)
+                    if isinstance(current_error, BaseExceptionGroup):
+                        exception_stack.extend(current_error.exceptions)
+                    original_traceback = current_error.__traceback__
+                    if original_traceback is not None:
+                        traceback.clear_frames(original_traceback)
+                    current_error.__traceback__ = None
+                    current_error.__context__ = None
+                    current_error.__cause__ = None
 
-        call_validator = SchemaValidator(call_schema)
-        return cast(
-            Self,
-            call_validator.validate_json(
-                canonical_bytes,
-                strict=strict,
-                extra=extra,
-                context=context,
-                by_alias=by_alias,
-                by_name=by_name,
-            ),
+                del (
+                    current_error,
+                    exception_stack,
+                    neutral_errors,
+                    original_error,
+                    original_traceback,
+                    seen_exceptions,
+                    sensitive_function,
+                )
+                return neutral_outcome
+            return ("success", validated_model)
+
+        outcome = isolated_runner()
+        if outcome[0] == "success":
+            validated_model = cast(Self, outcome[1])
+            del isolated_runner, outcome
+            return validated_model
+
+        safe_outcome_kind = cast(str, outcome[0])
+        safe_error_title_or_message = cast(str, outcome[1])
+        safe_line_errors = cast(
+            tuple[tuple[tuple[str | int, ...], str, str], ...],
+            outcome[2] if safe_outcome_kind == "validation_error" else (),
         )
+        del isolated_runner, outcome
+        if safe_outcome_kind == "validation_error":
+            raise ValidationError.from_exception_data(
+                safe_error_title_or_message,
+                [
+                    {
+                        "type": PydanticCustomError(
+                            "a6_sanitized_validation",
+                            f"{safe_message} (category: {safe_category})",
+                        ),
+                        "loc": safe_location,
+                        "input": None,
+                    }
+                    for safe_location, safe_message, safe_category in safe_line_errors
+                ],
+            ) from None
+        raise RuntimeError(safe_error_title_or_message) from None
 
     def model_copy(
         self,
