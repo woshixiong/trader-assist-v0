@@ -1,0 +1,736 @@
+{
+  "$comment": "Portable structural validation for the A6 reconciliation report. This artifact enforces JSON-Schema-expressible authority constraints only, including complete serialized A5 field presence, root WebSocket/Info extraction roles, integer field-difference value kinds, and portable absolute-end string patterns. Complete A6 authority validation requires CandleCrossSourceReconciliationV0 runtime semantic validation for hashes, exact A5 authority, membership, ordering, counts, differences, and complete logical-key union proof. Schema validation alone does not authenticate an A6 reconciliation report.",
+  "$defs": {
+    "CandleCrossSourceAuthoritySideV0": {
+      "enum": [
+        "WS",
+        "INFO"
+      ],
+      "title": "CandleCrossSourceAuthoritySideV0",
+      "type": "string"
+    },
+    "CandleCrossSourceComparableFieldV0": {
+      "enum": [
+        "close_time_ms",
+        "open_price",
+        "high_price",
+        "low_price",
+        "close_price",
+        "volume_base",
+        "trade_count"
+      ],
+      "type": "string"
+    },
+    "CandleCrossSourceComparableValueV0": {
+      "maxLength": 80,
+      "pattern": "^(?:0|[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]+|-(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*))(?![\\s\\S])",
+      "type": "string"
+    },
+    "CandleCrossSourceComparisonItemV0": {
+      "additionalProperties": false,
+      "description": "A6 comparison item with JSON-Schema-enforced source presence and difference cardinality for MATCH, CONFLICT, WS_ONLY, and INFO_ONLY.",
+      "oneOf": [
+        {
+          "properties": {
+            "field_differences": {
+              "maxItems": 0
+            },
+            "info_authority": {
+              "not": {
+                "type": "null"
+              }
+            },
+            "info_candle": {
+              "not": {
+                "type": "null"
+              }
+            },
+            "status": {
+              "const": "MATCH"
+            },
+            "ws_authority": {
+              "not": {
+                "type": "null"
+              }
+            },
+            "ws_candle": {
+              "not": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "field_differences": {
+              "minItems": 1
+            },
+            "info_authority": {
+              "not": {
+                "type": "null"
+              }
+            },
+            "info_candle": {
+              "not": {
+                "type": "null"
+              }
+            },
+            "status": {
+              "const": "CONFLICT"
+            },
+            "ws_authority": {
+              "not": {
+                "type": "null"
+              }
+            },
+            "ws_candle": {
+              "not": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "field_differences": {
+              "maxItems": 0
+            },
+            "info_authority": {
+              "type": "null"
+            },
+            "info_candle": {
+              "type": "null"
+            },
+            "status": {
+              "const": "WS_ONLY"
+            },
+            "ws_authority": {
+              "not": {
+                "type": "null"
+              }
+            },
+            "ws_candle": {
+              "not": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "field_differences": {
+              "maxItems": 0
+            },
+            "info_authority": {
+              "not": {
+                "type": "null"
+              }
+            },
+            "info_candle": {
+              "not": {
+                "type": "null"
+              }
+            },
+            "status": {
+              "const": "INFO_ONLY"
+            },
+            "ws_authority": {
+              "type": "null"
+            },
+            "ws_candle": {
+              "type": "null"
+            }
+          }
+        }
+      ],
+      "properties": {
+        "candle_interval": {
+          "enum": [
+            "1m",
+            "3m",
+            "5m",
+            "15m",
+            "1h"
+          ],
+          "title": "Candle Interval",
+          "type": "string"
+        },
+        "candle_logical_key": {
+          "pattern": "^[0-9a-f]{64}(?![\\s\\S])",
+          "title": "Candle Logical Key",
+          "type": "string"
+        },
+        "coin": {
+          "enum": [
+            "BTC",
+            "ETH"
+          ],
+          "title": "Coin",
+          "type": "string"
+        },
+        "field_differences": {
+          "items": {
+            "$ref": "#/$defs/CandleCrossSourceFieldDifferenceV0"
+          },
+          "title": "Field Differences",
+          "type": "array"
+        },
+        "info_authority": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CandleCrossSourceInputAuthorityV0"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "info_candle": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExtractedCandleV0"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "open_time_ms": {
+          "minimum": 0,
+          "title": "Open Time Ms",
+          "type": "integer"
+        },
+        "source_id": {
+          "const": "hyperliquid-public-mainnet",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/CandleCrossSourceComparisonStatusV0"
+        },
+        "ws_authority": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CandleCrossSourceInputAuthorityV0"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ws_candle": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExtractedCandleV0"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "candle_logical_key",
+        "source_id",
+        "coin",
+        "candle_interval",
+        "open_time_ms",
+        "status",
+        "ws_candle",
+        "ws_authority",
+        "info_candle",
+        "info_authority",
+        "field_differences"
+      ],
+      "title": "CandleCrossSourceComparisonItemV0",
+      "type": "object"
+    },
+    "CandleCrossSourceComparisonStatusV0": {
+      "enum": [
+        "MATCH",
+        "CONFLICT",
+        "WS_ONLY",
+        "INFO_ONLY"
+      ],
+      "title": "CandleCrossSourceComparisonStatusV0",
+      "type": "string"
+    },
+    "CandleCrossSourceFieldDifferenceV0": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "field_name": {
+                "enum": [
+                  "close_time_ms",
+                  "trade_count"
+                ]
+              }
+            },
+            "required": [
+              "field_name"
+            ]
+          },
+          "then": {
+            "properties": {
+              "info_value": {
+                "pattern": "^(0|[1-9][0-9]*)(?![\\s\\S])",
+                "type": "string"
+              },
+              "ws_value": {
+                "pattern": "^(0|[1-9][0-9]*)(?![\\s\\S])",
+                "type": "string"
+              }
+            }
+          }
+        }
+      ],
+      "description": "A6 exact field difference. close_time_ms and trade_count values use canonical nonnegative ASCII integer strings; other comparable values use canonical finite decimal strings.",
+      "properties": {
+        "field_name": {
+          "$ref": "#/$defs/CandleCrossSourceComparableFieldV0"
+        },
+        "info_value": {
+          "$ref": "#/$defs/CandleCrossSourceComparableValueV0"
+        },
+        "ws_value": {
+          "$ref": "#/$defs/CandleCrossSourceComparableValueV0"
+        }
+      },
+      "required": [
+        "field_name",
+        "ws_value",
+        "info_value"
+      ],
+      "title": "CandleCrossSourceFieldDifferenceV0",
+      "type": "object"
+    },
+    "CandleCrossSourceInputAuthorityV0": {
+      "additionalProperties": false,
+      "description": "A6 input authority with a JSON-Schema-enforced WS or Info endpoint, operation, and envelope role.",
+      "oneOf": [
+        {
+          "properties": {
+            "endpoint_id": {
+              "const": "hl-ws-mainnet-public"
+            },
+            "envelope_shape": {
+              "enum": [
+                "WS_DATA_CANDLE",
+                "WS_DATA_CANDLE_ARRAY"
+              ]
+            },
+            "operation_type": {
+              "const": "candle"
+            },
+            "side": {
+              "const": "WS"
+            }
+          }
+        },
+        {
+          "properties": {
+            "endpoint_id": {
+              "const": "hl-info-mainnet-public"
+            },
+            "envelope_shape": {
+              "const": "INFO_CANDLE_ARRAY"
+            },
+            "operation_type": {
+              "const": "candleSnapshot"
+            },
+            "side": {
+              "const": "INFO"
+            }
+          }
+        }
+      ],
+      "properties": {
+        "endpoint_id": {
+          "enum": [
+            "hl-ws-mainnet-public",
+            "hl-info-mainnet-public"
+          ],
+          "title": "Endpoint Id",
+          "type": "string"
+        },
+        "envelope_shape": {
+          "$ref": "#/$defs/CandleEnvelopeShapeV0"
+        },
+        "extraction_hash": {
+          "pattern": "^[0-9a-f]{64}(?![\\s\\S])",
+          "title": "Extraction Hash",
+          "type": "string"
+        },
+        "operation_type": {
+          "enum": [
+            "candle",
+            "candleSnapshot"
+          ],
+          "title": "Operation Type",
+          "type": "string"
+        },
+        "side": {
+          "$ref": "#/$defs/CandleCrossSourceAuthoritySideV0"
+        },
+        "source_event_id": {
+          "pattern": "^[0-9a-f]{64}(?![\\s\\S])",
+          "title": "Source Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "side",
+        "source_event_id",
+        "extraction_hash",
+        "endpoint_id",
+        "operation_type",
+        "envelope_shape"
+      ],
+      "title": "CandleCrossSourceInputAuthorityV0",
+      "type": "object"
+    },
+    "CandleEnvelopeShapeV0": {
+      "enum": [
+        "WS_DATA_CANDLE",
+        "WS_DATA_CANDLE_ARRAY",
+        "INFO_CANDLE_ARRAY"
+      ],
+      "title": "CandleEnvelopeShapeV0",
+      "type": "string"
+    },
+    "CandlePayloadExtractionV0": {
+      "additionalProperties": false,
+      "description": "Complete embedded A5 extraction authority. Every serialized authority field is required at the A6 boundary; runtime independently revalidates hashes, candle logical keys, duplicates, and the frozen source role.",
+      "properties": {
+        "candle_interval": {
+          "enum": [
+            "1m",
+            "3m",
+            "5m",
+            "15m",
+            "1h"
+          ],
+          "title": "Candle Interval",
+          "type": "string"
+        },
+        "candles": {
+          "items": {
+            "$ref": "#/$defs/ExtractedCandleV0"
+          },
+          "title": "Candles",
+          "type": "array"
+        },
+        "coin": {
+          "enum": [
+            "BTC",
+            "ETH"
+          ],
+          "title": "Coin",
+          "type": "string"
+        },
+        "contract_id": {
+          "const": "V0-01A5-OFFLINE-CANDLE-PAYLOAD-EXTRACTION-CONTRACT",
+          "title": "Contract Id",
+          "type": "string"
+        },
+        "endpoint_id": {
+          "enum": [
+            "hl-ws-mainnet-public",
+            "hl-info-mainnet-public"
+          ],
+          "title": "Endpoint Id",
+          "type": "string"
+        },
+        "envelope_shape": {
+          "$ref": "#/$defs/CandleEnvelopeShapeV0"
+        },
+        "extraction_hash": {
+          "pattern": "^[0-9a-f]{64}(?![\\s\\S])",
+          "title": "Extraction Hash",
+          "type": "string"
+        },
+        "extraction_version": {
+          "const": "trader-assist-v0/candle-payload-extraction/v1",
+          "title": "Extraction Version",
+          "type": "string"
+        },
+        "operation_type": {
+          "enum": [
+            "candle",
+            "candleSnapshot"
+          ],
+          "title": "Operation Type",
+          "type": "string"
+        },
+        "payload_sha256": {
+          "pattern": "^[0-9a-f]{64}(?![\\s\\S])",
+          "title": "Payload Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "0.1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_event_id": {
+          "pattern": "^[0-9a-f]{64}(?![\\s\\S])",
+          "title": "Source Event Id",
+          "type": "string"
+        },
+        "source_id": {
+          "const": "hyperliquid-public-mainnet",
+          "title": "Source Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "contract_id",
+        "extraction_version",
+        "source_id",
+        "source_event_id",
+        "payload_sha256",
+        "endpoint_id",
+        "operation_type",
+        "coin",
+        "candle_interval",
+        "envelope_shape",
+        "candles",
+        "extraction_hash"
+      ],
+      "title": "CandlePayloadExtractionV0",
+      "type": "object"
+    },
+    "ExtractedCandleV0": {
+      "additionalProperties": false,
+      "description": "Complete embedded A5 candle authority. Runtime validation is required to prove logical-key and extraction membership authority.",
+      "properties": {
+        "candle_logical_key": {
+          "pattern": "^[0-9a-f]{64}(?![\\s\\S])",
+          "title": "Candle Logical Key",
+          "type": "string"
+        },
+        "close_price": {
+          "maxLength": 80,
+          "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)(?![\\s\\S])",
+          "title": "Close Price",
+          "type": "string"
+        },
+        "close_time_ms": {
+          "minimum": 0,
+          "title": "Close Time Ms",
+          "type": "integer"
+        },
+        "high_price": {
+          "maxLength": 80,
+          "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)(?![\\s\\S])",
+          "title": "High Price",
+          "type": "string"
+        },
+        "low_price": {
+          "maxLength": 80,
+          "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)(?![\\s\\S])",
+          "title": "Low Price",
+          "type": "string"
+        },
+        "open_price": {
+          "maxLength": 80,
+          "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)(?![\\s\\S])",
+          "title": "Open Price",
+          "type": "string"
+        },
+        "open_time_ms": {
+          "minimum": 0,
+          "title": "Open Time Ms",
+          "type": "integer"
+        },
+        "trade_count": {
+          "minimum": 0,
+          "title": "Trade Count",
+          "type": "integer"
+        },
+        "volume_base": {
+          "maxLength": 80,
+          "pattern": "^(?:0|[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]+)(?![\\s\\S])",
+          "title": "Volume Base",
+          "type": "string"
+        }
+      },
+      "required": [
+        "candle_logical_key",
+        "open_time_ms",
+        "close_time_ms",
+        "open_price",
+        "high_price",
+        "low_price",
+        "close_price",
+        "volume_base",
+        "trade_count"
+      ],
+      "title": "ExtractedCandleV0",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Portable structural validation for the A6 reconciliation report. This artifact enforces JSON-Schema-expressible authority constraints only, including complete serialized A5 field presence, root WebSocket/Info extraction roles, integer field-difference value kinds, and portable absolute-end string patterns. Complete A6 authority validation requires CandleCrossSourceReconciliationV0 runtime semantic validation for hashes, exact A5 authority, membership, ordering, counts, differences, and complete logical-key union proof. Schema validation alone does not authenticate an A6 reconciliation report.",
+  "properties": {
+    "candle_interval": {
+      "enum": [
+        "1m",
+        "3m",
+        "5m",
+        "15m",
+        "1h"
+      ],
+      "title": "Candle Interval",
+      "type": "string"
+    },
+    "coin": {
+      "enum": [
+        "BTC",
+        "ETH"
+      ],
+      "title": "Coin",
+      "type": "string"
+    },
+    "comparisons": {
+      "items": {
+        "$ref": "#/$defs/CandleCrossSourceComparisonItemV0"
+      },
+      "title": "Comparisons",
+      "type": "array"
+    },
+    "conflict_count": {
+      "minimum": 0,
+      "title": "Conflict Count",
+      "type": "integer"
+    },
+    "contract_id": {
+      "const": "V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT",
+      "title": "Contract Id",
+      "type": "string"
+    },
+    "hash_version": {
+      "const": "trader-assist-v0/candle-cross-source-reconciliation/v1",
+      "title": "Hash Version",
+      "type": "string"
+    },
+    "info_extraction": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/CandlePayloadExtractionV0"
+        },
+        {
+          "properties": {
+            "endpoint_id": {
+              "const": "hl-info-mainnet-public"
+            },
+            "envelope_shape": {
+              "const": "INFO_CANDLE_ARRAY"
+            },
+            "operation_type": {
+              "const": "candleSnapshot"
+            }
+          }
+        }
+      ]
+    },
+    "info_extraction_hash": {
+      "pattern": "^[0-9a-f]{64}(?![\\s\\S])",
+      "title": "Info Extraction Hash",
+      "type": "string"
+    },
+    "info_only_count": {
+      "minimum": 0,
+      "title": "Info Only Count",
+      "type": "integer"
+    },
+    "info_source_event_id": {
+      "pattern": "^[0-9a-f]{64}(?![\\s\\S])",
+      "title": "Info Source Event Id",
+      "type": "string"
+    },
+    "match_count": {
+      "minimum": 0,
+      "title": "Match Count",
+      "type": "integer"
+    },
+    "reconciliation_hash": {
+      "pattern": "^[0-9a-f]{64}(?![\\s\\S])",
+      "title": "Reconciliation Hash",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "0.1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_id": {
+      "const": "hyperliquid-public-mainnet",
+      "title": "Source Id",
+      "type": "string"
+    },
+    "ws_extraction": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/CandlePayloadExtractionV0"
+        },
+        {
+          "properties": {
+            "endpoint_id": {
+              "const": "hl-ws-mainnet-public"
+            },
+            "envelope_shape": {
+              "enum": [
+                "WS_DATA_CANDLE",
+                "WS_DATA_CANDLE_ARRAY"
+              ]
+            },
+            "operation_type": {
+              "const": "candle"
+            }
+          }
+        }
+      ]
+    },
+    "ws_extraction_hash": {
+      "pattern": "^[0-9a-f]{64}(?![\\s\\S])",
+      "title": "Ws Extraction Hash",
+      "type": "string"
+    },
+    "ws_only_count": {
+      "minimum": 0,
+      "title": "Ws Only Count",
+      "type": "integer"
+    },
+    "ws_source_event_id": {
+      "pattern": "^[0-9a-f]{64}(?![\\s\\S])",
+      "title": "Ws Source Event Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "contract_id",
+    "hash_version",
+    "source_id",
+    "coin",
+    "candle_interval",
+    "ws_extraction",
+    "info_extraction",
+    "ws_source_event_id",
+    "ws_extraction_hash",
+    "info_source_event_id",
+    "info_extraction_hash",
+    "comparisons",
+    "match_count",
+    "conflict_count",
+    "ws_only_count",
+    "info_only_count",
+    "reconciliation_hash"
+  ],
+  "title": "CandleCrossSourceReconciliationV0",
+  "type": "object"
+}

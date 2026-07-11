@@ -100,12 +100,36 @@ A5 supports only `hl-ws-mainnet-public/candle` and `hl-info-mainnet-public/candl
 
 A5 does not read `payload_ref`, open files, connect to endpoints, execute REST requests, write Bronze or manifests, emit `NormalizedEventV0`, enter Silver, decide candle finality, order revisions, reconcile WebSocket and Info observations, detect gaps, backfill, generate health, strategy, AI, risk, dashboard, or execution output.
 
+## A6 offline cross-source reconciliation insertion point
+
+```text
+exact A5 WebSocket extraction + exact A5 Info extraction
+  -> strict current-representation checks before any coercive conversion
+  -> independent exact-class A5 authority, logical-key and extraction-hash revalidation
+  -> frozen endpoint / operation / envelope role validation
+  -> identical source / coin / candle-interval identity gate
+  -> one contract-layer derivation authority builds the complete logical-key union
+  -> deterministic (open_time_ms, candle_logical_key) ordering
+  -> exact comparable-field equality in frozen field order
+  -> MATCH / CONFLICT / WS_ONLY / INFO_ONLY items
+  -> exact status counts
+  -> embed both complete A5 extraction authorities and matching scalar authority
+  -> domain-separated CandleCrossSourceReconciliationV0 hash over all authority
+  -> runtime reconstructs and requires the same exact complete union
+```
+
+A6 binds each item to its logical identity, nullable WS/Info candle and extraction authorities, and exact ordered differences. The report also embeds both complete A5 extraction authorities, and its scalar source-event and extraction-hash fields must match them. `bind()` accepts only those two exact extractions; the data layer calls the same derivation authority. Every accepted report independently revalidates the embedded A5 authorities and reconstructs comparisons, membership, ordering, differences, and counts from their exact logical-key union before checking the final hash. Identity inconsistency fails closed. Empty/empty inputs yield an empty comparison tuple and four zero counts.
+
+The portable A6 JSON Schema validates structure, mandatory serialized fields for both embedded A5 authorities, JSON types and patterns, frozen WS/Info role pairings, status/source-presence constraints, and canonical ASCII nonnegative integer strings for close-time and trade-count differences. Schema validation alone does not authenticate an A6 report; runtime semantic validation remains mandatory for A5/A6 hash recomputation, exact A5 authority, extraction membership, dynamic counts, uniqueness, canonical item and difference ordering, cross-item identity, exact difference authority, and complete-union proof.
+
+A6 applies no tolerance, normalization, source priority, latest-wins rule, revision ordering, finality inference, or canonical winner selection. It emits no `NormalizedEventV0`, writes no Silver or other persistence, and adds no network, health, gap, backfill, strategy, AI, risk, dashboard, credential, or execution capability.
+
 Current authority state:
 
 ```text
 RATE_LIMIT_STATUS: UNRESOLVED_OFFICIAL_LIMIT
 LIVE_TRANSPORT_AUTHORIZED: FALSE
-ACTIVE_IMPLEMENTATION_SLICE: V0-01A5-OFFLINE-CANDLE-PAYLOAD-EXTRACTION-CONTRACT
+ACTIVE_IMPLEMENTATION_SLICE: V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT
 ACTIVE_IMPLEMENTATION_WRITE_LEASE: BOUNDED
 ```
 
@@ -132,9 +156,9 @@ data: Candle[]
 
 These tokens describe public envelope policy and payload shape. They are not runtime subscription, connection, or transport-recovery code.
 
-## A1/A2/A3/A4/A5 rate-limit authority
+## A1/A2/A3/A4/A5/A6 rate-limit authority
 
-`RATE_LIMIT_STATUS` remains `UNRESOLVED_OFFICIAL_LIMIT`. While present, the gate blocks live public transport, polling, reconnect, backfill, and health runtime. A5 is offline and does not weaken or bypass this gate.
+`RATE_LIMIT_STATUS` remains `UNRESOLVED_OFFICIAL_LIMIT`. While present, the gate blocks live public transport, polling, reconnect, backfill, and health runtime. A5 and A6 are offline and do not weaken or bypass this gate.
 
 Only the frozen official Hyperliquid rate-limit source identity may supply authority metadata. Even a resolved metadata candidate does not by itself authorize live transport.
 
@@ -168,4 +192,4 @@ An unfinalized segment, missing/invalid checkpoint, tail deletion, corrupt evide
 
 ## Next gate
 
-A5 completion does not authorize live public transport, health, reconnect, backfill, revision reconciliation, normalized events, Silver, strategy, AI recommendation, risk sizing, dashboard, Testnet/Mainnet execution, or exchange writes. Each later slice requires a separate exact-head scope freeze, explicit write lease, CI success, external independent review, and finalization authorization.
+A6 completion does not authorize live public transport, health, reconnect, backfill, finality inference, revision ordering, canonical winner selection, normalized events, Silver, strategy, AI recommendation, risk sizing, dashboard, Testnet/Mainnet execution, exchange writes, or A7. Each later slice requires a separate exact-head scope freeze, explicit write lease, CI success, external independent review, and finalization authorization.
