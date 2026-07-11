@@ -4,7 +4,16 @@ Trader Assist V0 is an isolated ETH/Hyperliquid experiment lane for reliable dat
 
 ## Current stage
 
-`V0-01A6 / OFFLINE_CANDLE_CROSS_SOURCE_RECONCILIATION_CONTRACT — ACTIVE DRAFT`
+```text
+LAST_COMPLETED_SLICE: V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT
+LAST_MERGED_PR: #11
+ACTIVE_IMPLEMENTATION_SLICE: NONE
+ACTIVE_IMPLEMENTATION_WRITE_LEASE: NONE
+A7_SCOPE_FROZEN: NO
+A7_IMPLEMENTATION_AUTHORIZED: NO
+RATE_LIMIT_STATUS: UNRESOLVED_OFFICIAL_LIMIT
+LIVE_TRANSPORT_AUTHORIZED: FALSE
+```
 
 A0 completed the versioned public-source catalog, exact raw fixture/application-payload authority, local content-addressed immutable Bronze storage, append-only hash-linked manifests, and deterministic offline replay.
 
@@ -18,7 +27,9 @@ A4 froze the official-only rate-limit authority contract. `RATE_LIMIT_STATUS` re
 
 A5 is a bounded offline-only extraction slice. It accepts an exact `RawEventV0` plus caller-supplied exact matching candle payload bytes and produces a typed, domain-separated `CandlePayloadExtractionV0`. It does not read `payload_ref`, connect to any endpoint, write Bronze, emit `NormalizedEventV0`, enter Silver, reconcile revisions, or infer candle finality.
 
-A6 is a bounded offline-only reconciliation slice. It embeds independently revalidated exact A5 WebSocket and Info candle extraction authorities, reconstructs their complete union by the A5 candle logical key through one deterministic derivation authority, and emits only `MATCH`, `CONFLICT`, `WS_ONLY`, and `INFO_ONLY` evidence. Its portable JSON Schema validates structure, mandatory serialized A5 authority fields, role/status constraints, and canonical integer difference value kinds; complete hashes, exact A5 authority, membership, ordering, counts, differences, and complete-union proof still require A6 runtime semantic validation. It applies no tolerance or source priority and does not select a canonical winner, order revisions, infer finality, emit `NormalizedEventV0`, or persist Silver data.
+A6 completed the bounded offline-only reconciliation slice and was merged via PR #11. It embeds independently revalidated exact A5 WebSocket and Info candle extraction authorities, reconstructs their complete union by the A5 candle logical key through one deterministic derivation authority, and emits only `MATCH`, `CONFLICT`, `WS_ONLY`, and `INFO_ONLY` evidence. Its portable JSON Schema validates structure, mandatory serialized A5 authority fields, role/status constraints, and canonical integer difference value kinds; complete hashes, exact A5 authority, membership, ordering, counts, differences, and complete-union proof still require A6 runtime semantic validation. It applies no tolerance or source priority and does not select a canonical winner, order revisions, infer finality, emit `NormalizedEventV0`, or persist Silver data.
+
+The next step is read-only A7 scope-freeze planning only. No A7 implementation scope or write lease is authorized.
 
 `mainnet public read-only` remains only a source identity and environment label. It is not Mainnet execution enablement.
 
