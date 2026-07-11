@@ -28,14 +28,24 @@ A4 froze the official-only rate-limit authority contract required before any fut
 
 A5 added a bounded offline-only typed extraction contract. It consumes an exact `RawEventV0` and caller-supplied exact matching candle payload bytes and emits a deterministic, domain-separated `CandlePayloadExtractionV0`. It does not read `payload_ref`, connect to endpoints, write Bronze, emit `NormalizedEventV0`, enter Silver, reconcile revisions, or infer finality.
 
-## Active slice
+`V0-01A6 / OFFLINE_CANDLE_CROSS_SOURCE_RECONCILIATION_CONTRACT`
+
+A6 completed an offline-only pairwise reconciliation contract and was merged via PR #11. It consumes exact independently revalidated A5 WebSocket and Info candle extractions, compares the union of A5 logical candle keys, and emits a deterministic hash-bound report. It does not parse payloads, read `payload_ref`, connect to endpoints, write Bronze, emit `NormalizedEventV0`, enter Silver, order revisions, infer finality, select a canonical winner, or generate health, strategy, AI, risk, dashboard, or execution output.
+
+## Active implementation state
 
 ```text
-ACTIVE_IMPLEMENTATION_SLICE: V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT
-ACTIVE_IMPLEMENTATION_WRITE_LEASE: BOUNDED
+LAST_COMPLETED_SLICE: V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT
+LAST_MERGED_PR: #11
+ACTIVE_IMPLEMENTATION_SLICE: NONE
+ACTIVE_IMPLEMENTATION_WRITE_LEASE: NONE
+A7_SCOPE_FROZEN: NO
+A7_IMPLEMENTATION_AUTHORIZED: NO
+RATE_LIMIT_STATUS: UNRESOLVED_OFFICIAL_LIMIT
+LIVE_TRANSPORT_AUTHORIZED: FALSE
 ```
 
-A6 is an offline-only pairwise reconciliation contract. It consumes exact independently revalidated A5 WebSocket and Info candle extractions, compares the union of A5 logical candle keys, and emits a deterministic hash-bound report. It does not parse payloads, read `payload_ref`, connect to endpoints, write Bronze, emit `NormalizedEventV0`, enter Silver, order revisions, infer finality, select a canonical winner, or generate health, strategy, AI, risk, dashboard, or execution output.
+There is no active implementation slice or write lease. The next stage may be selected only by a later independent exact-main A7 scope freeze; this document does not define or authorize A7 implementation scope.
 
 ## Fixed A0 authority versions
 

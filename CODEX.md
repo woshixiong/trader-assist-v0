@@ -3,33 +3,27 @@
 ## Repository state
 
 ```text
-LAST_COMPLETED_SLICE: V0-01A5-OFFLINE-CANDLE-PAYLOAD-EXTRACTION-CONTRACT
-ACTIVE_IMPLEMENTATION_SLICE: V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT
-ACTIVE_IMPLEMENTATION_WRITE_LEASE: BOUNDED
+LAST_COMPLETED_SLICE: V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT
+LAST_MERGED_PR: #11
+ACTIVE_IMPLEMENTATION_SLICE: NONE
+ACTIVE_IMPLEMENTATION_WRITE_LEASE: NONE
+A7_SCOPE_FROZEN: NO
+A7_IMPLEMENTATION_AUTHORIZED: NO
 RATE_LIMIT_STATUS: UNRESOLVED_OFFICIAL_LIMIT
 LIVE_TRANSPORT_AUTHORIZED: FALSE
 ```
 
-## Current bounded task
+## Current bounded implementation task
 
-`V0-01A6 — OFFLINE_CANDLE_CROSS_SOURCE_RECONCILIATION_CONTRACT`
+`NONE`
 
-A6 accepts only independently revalidated exact A5 WebSocket and Info candle extraction authorities. It creates a deterministic typed pairwise comparison report over the union of A5 logical candle keys. It is not a collector, transport, Bronze writer, normalizer, Silver task, finality or revision engine, strategy task, or execution path.
+A6 is the last completed slice and was merged via PR #11. There is no active bounded implementation task or implementation write lease. Do not modify repository files without a new exact write lease and file allowlist. Codex must not choose, name, or implement A7 scope; the next gate is independent read-only A7 scope-freeze planning.
 
 ## Allowed files
 
-- `README.md`;
-- `CODEX.md`;
-- `docs/V0_01_SCOPE.md`;
-- `docs/architecture/V0_01_DATA_PLANE.md`;
-- `src/trader_assist_v0/contracts/candle_reconciliation.py`;
-- `src/trader_assist_v0/contracts/__init__.py`;
-- `src/trader_assist_v0/data/candle_reconciler.py`;
-- `scripts/export_schemas.py`;
-- `schemas/v0/CandleCrossSourceReconciliationV0.schema.json`;
-- `tests/test_v0_01a6_offline_candle_cross_source_reconciliation_contract.py`.
+- None. A future bounded implementation task must provide its own exact write lease and file allowlist.
 
-## Required behavior
+## Last completed A6 behavior
 
 - require exact `CandlePayloadExtractionV0` inputs with frozen WS and Info roles;
 - independently revalidate both A5 extraction hashes, nested candle authorities, endpoint, operation, and envelope shape;
@@ -67,19 +61,6 @@ A6 accepts only independently revalidated exact A5 WebSocket and Info candle ext
 - raw operational payloads, logs, caches, databases, source archives, private/user/account data, secrets, or unredacted live observations in Git;
 - modifications to `woshixiong/trade-os`.
 
-## Required checks
+## Future bounded-task checks
 
-```text
-python -m compileall -q src scripts tests
-python scripts/export_schemas.py
-python scripts/export_schemas.py --check
-python scripts/scan_secrets.py .
-ruff check .
-mypy src scripts
-pytest -q tests/test_v0_01a6_offline_candle_cross_source_reconciliation_contract.py
-pytest -q tests/test_v0_01a5_candle_payload_extractor_contract.py
-pytest -q
-git diff --check
-```
-
-The PR must remain Draft until exact-head CI succeeds and external independent review passes. Mark Ready and merge require separate project-control authorization. Never report a check as passed unless it was executed and observed.
+Every future slice requires an independent exact-main scope freeze, explicit write lease and file allowlist, applicable local checks, exact-head CI, external independent review, and separate finalization authorization. Never report a check as passed unless it was executed and observed.

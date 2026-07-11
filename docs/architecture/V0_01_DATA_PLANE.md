@@ -127,10 +127,14 @@ A6 applies no tolerance, normalization, source priority, latest-wins rule, revis
 Current authority state:
 
 ```text
+LAST_COMPLETED_SLICE: V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT
+LAST_MERGED_PR: #11
+ACTIVE_IMPLEMENTATION_SLICE: NONE
+ACTIVE_IMPLEMENTATION_WRITE_LEASE: NONE
+A7_SCOPE_FROZEN: NO
+A7_IMPLEMENTATION_AUTHORIZED: NO
 RATE_LIMIT_STATUS: UNRESOLVED_OFFICIAL_LIMIT
 LIVE_TRANSPORT_AUTHORIZED: FALSE
-ACTIVE_IMPLEMENTATION_SLICE: V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT
-ACTIVE_IMPLEMENTATION_WRITE_LEASE: BOUNDED
 ```
 
 ## Identity separation
@@ -192,4 +196,4 @@ An unfinalized segment, missing/invalid checkpoint, tail deletion, corrupt evide
 
 ## Next gate
 
-A6 completion does not authorize live public transport, health, reconnect, backfill, finality inference, revision ordering, canonical winner selection, normalized events, Silver, strategy, AI recommendation, risk sizing, dashboard, Testnet/Mainnet execution, exchange writes, or A7. Each later slice requires a separate exact-head scope freeze, explicit write lease, CI success, external independent review, and finalization authorization.
+A6 completion does not authorize live public transport, health, reconnect, backfill, finality inference, revision ordering, canonical winner selection, normalized events, Silver, strategy, AI recommendation, risk sizing, dashboard, Testnet/Mainnet execution, exchange writes, or A7 implementation. The next gate is an independent read-only A7 scope freeze. Every future slice still requires a separate exact-main scope freeze, explicit write lease and file allowlist, applicable CI success, external independent review, and separate finalization authorization.
