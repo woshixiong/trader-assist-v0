@@ -56,7 +56,7 @@ A3 is not a runtime collector, not an HTTP client, not a WebSocket client, not a
 
 ## A4 official rate-limit authority — completed
 
-A4 froze the official-only rate-limit authority contract required before any future public read-only live transport runtime. A4 preflight could not read and independently cite unambiguous official numeric values. Therefore A4 keeps the current authority unresolved and encodes no numeric limit values.
+A4 froze the official-only rate-limit authority contract required before any future public read-only live transport runtime. FLP1B0A re-read the current official pages and amended A4 with a versioned, deterministic `OfficialRateLimitAuthorityV0`. It records exact source-bound numeric facts without treating incomplete operational semantics as resolved transition authority.
 
 Recognized status states:
 
@@ -70,19 +70,30 @@ Current frozen status:
 ```text
 RATE_LIMIT_STATUS: UNRESOLVED_OFFICIAL_LIMIT
 LIVE_TRANSPORT_AUTHORIZED: FALSE
+TRANSITION_ELIGIBLE: FALSE
+ACCOUNT_READONLY_RUNTIME_AUTHORIZED: FALSE
+TESTNET_EXECUTION_AUTHORIZED: FALSE
+MAINNET_EXECUTION_AUTHORIZED: FALSE
+FLP1_IMPLEMENTATION_AUTHORIZED: FALSE
 ```
 
-The only accepted authority identity is:
+The accepted official source identities are:
 
 ```text
 source_kind: official
 official_source_title: Rate limits and user limits
 official_source_location: https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/rate-limits-and-user-limits
+supporting_source_title: Info endpoint
+supporting_source_location: https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint
 ```
 
-A future resolved candidate must include the official source title/location, verification date, source kind `official`, proof the source was readable, numeric field names, limit units, operation scope, and no ambiguous fields.
+The rate-limit page was retrieved at `2026-07-12T04:24:40Z`, with official last-updated marker `2026-04-28T02:43:32.166Z` and HTML evidence SHA-256 `fdaf15ab3ede2056f24673a579684457e6f2eb75bc6626b657c22f47a132895e`. The Info page was retrieved at `2026-07-12T04:24:41Z`, with marker `2026-06-11T08:02:46.893Z` and HTML evidence SHA-256 `db7daffd672132ab651de4398fa7ce47d4bf24797b92d983233f80e4c56ed760`.
 
-A4 rejects third-party, community, remembered, inferred, blog, forum, Discord, StackOverflow, or model-memory authority metadata in unresolved and resolved states. Even complete resolved metadata does not authorize live transport in A4.
+The 27 frozen facts cover the documented aggregate REST/IP budget; exchange, Info, explorer and response-item weights; WebSocket connections, subscriptions, users, messages and inflight posts; EVM JSON-RPC; address volume allowance, initial buffer, limited fallback, cancel and open-order formulas; high-congestion maker-share multiplier; and IP/address batch accounting. Every fact binds exact transport, endpoint class, operation allowlist, scope, value/unit, applicable window, response divisor/formula, sources, and a domain-separated fact hash.
+
+The mandatory unresolved fields are burst semantics, window algorithm, window alignment, partial response-bucket rounding, HTTP 429 behavior, error body, response headers, `Retry-After`, exact older-block weighting, and the high-congestion trigger. A future resolved candidate requires exact official resolution of every mandatory field and a separate bounded authorization; recomputing hashes or omitting unknowns cannot make this authority transition-eligible.
+
+A4 rejects third-party, community, remembered, inferred, blog, forum, Discord, StackOverflow, or model-memory authority metadata, as well as stale/altered sources, duplicate or conflicting facts, source mismatch, injected facts, omitted unknowns, subclass/model construction/copy bypasses, and coherently rehashed alterations. Even a later complete resolved authority would not by itself authorize live transport.
 
 ## A1 candle WebSocket envelope contract
 
@@ -137,7 +148,7 @@ A5 produces `CandlePayloadExtractionV0` with domain-separated logical candle key
 
 ## A1/A2/A3/A4/A5 rate-limit entry gate
 
-Numeric limits remain `UNRESOLVED_OFFICIAL_LIMIT`; no remembered, inferred, third-party, community, blog, StackOverflow, Discord, or model-memory value is substituted.
+Documented numeric facts are frozen, but the authority remains `UNRESOLVED_OFFICIAL_LIMIT` because mandatory operational semantics remain unknown. No remembered, inferred, third-party, community, blog, StackOverflow, Discord, or model-memory value is substituted.
 
 When numeric limits are unresolved, live polling, WebSocket reconnect, backfill, health runtime, and any public transport runtime remain prohibited. A5 is offline and does not weaken this gate.
 

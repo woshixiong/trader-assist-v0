@@ -1,0 +1,394 @@
+{
+  "$defs": {
+    "OfficialRateLimitFactV0": {
+      "additionalProperties": false,
+      "properties": {
+        "category": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Category",
+          "type": "string"
+        },
+        "endpoint_class": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Endpoint Class",
+          "type": "string"
+        },
+        "fact_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Fact Hash",
+          "type": "string"
+        },
+        "fact_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Fact Id",
+          "type": "string"
+        },
+        "formula": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Formula"
+        },
+        "numeric_value": {
+          "minimum": 0,
+          "title": "Numeric Value",
+          "type": "integer"
+        },
+        "operation_allowlist": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Operation Allowlist",
+          "type": "array"
+        },
+        "response_divisor_unit": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Response Divisor Unit"
+        },
+        "response_divisor_value": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Response Divisor Value"
+        },
+        "scope_kind": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Scope Kind",
+          "type": "string"
+        },
+        "source_bindings": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Source Bindings",
+          "type": "array"
+        },
+        "transport": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Transport",
+          "type": "string"
+        },
+        "value_unit": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Value Unit",
+          "type": "string"
+        },
+        "window_unit": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Window Unit"
+        },
+        "window_value": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Window Value"
+        }
+      },
+      "required": [
+        "fact_id",
+        "category",
+        "transport",
+        "endpoint_class",
+        "operation_allowlist",
+        "scope_kind",
+        "numeric_value",
+        "value_unit",
+        "source_bindings",
+        "fact_hash"
+      ],
+      "title": "OfficialRateLimitFactV0",
+      "type": "object"
+    },
+    "OfficialRateLimitSourceV0": {
+      "additionalProperties": false,
+      "properties": {
+        "canonical_location": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Canonical Location",
+          "type": "string"
+        },
+        "content_length_bytes": {
+          "exclusiveMinimum": 0,
+          "title": "Content Length Bytes",
+          "type": "integer"
+        },
+        "content_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "evidence_identity": {
+          "pattern": "^html-sha256:[0-9a-f]{64}$",
+          "title": "Evidence Identity",
+          "type": "string"
+        },
+        "kind": {
+          "const": "OFFICIAL_HYPERLIQUID_DOCUMENTATION",
+          "title": "Kind",
+          "type": "string"
+        },
+        "publication_or_last_updated_marker": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Publication Or Last Updated Marker",
+          "type": "string"
+        },
+        "retrieved_at": {
+          "pattern": "^2026-07-12T04:24:4[01]Z$",
+          "title": "Retrieved At",
+          "type": "string"
+        },
+        "source_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Hash",
+          "type": "string"
+        },
+        "source_id": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Source Id",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "kind",
+        "title",
+        "canonical_location",
+        "retrieved_at",
+        "publication_or_last_updated_marker",
+        "evidence_identity",
+        "content_sha256",
+        "content_length_bytes",
+        "source_hash"
+      ],
+      "title": "OfficialRateLimitSourceV0",
+      "type": "object"
+    },
+    "OfficialRateLimitUnknownV0": {
+      "additionalProperties": false,
+      "properties": {
+        "affected_endpoint_class": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Affected Endpoint Class",
+          "type": "string"
+        },
+        "affected_operations": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Affected Operations",
+          "type": "array"
+        },
+        "blocking": {
+          "const": true,
+          "title": "Blocking",
+          "type": "boolean"
+        },
+        "evidence": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Evidence",
+          "type": "string"
+        },
+        "field_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Field Id",
+          "type": "string"
+        },
+        "mandatory": {
+          "const": true,
+          "title": "Mandatory",
+          "type": "boolean"
+        },
+        "reason": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "resolution_requirement": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Resolution Requirement",
+          "type": "string"
+        }
+      },
+      "required": [
+        "field_id",
+        "affected_endpoint_class",
+        "affected_operations",
+        "mandatory",
+        "blocking",
+        "reason",
+        "evidence",
+        "resolution_requirement"
+      ],
+      "title": "OfficialRateLimitUnknownV0",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "account_readonly_runtime_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Account Readonly Runtime Authorized",
+      "type": "boolean"
+    },
+    "authority_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Authority Hash",
+      "type": "string"
+    },
+    "authority_version": {
+      "const": "trader-assist-v0/official-rate-limit-authority/v1",
+      "default": "trader-assist-v0/official-rate-limit-authority/v1",
+      "title": "Authority Version",
+      "type": "string"
+    },
+    "conflict_state": {
+      "const": "NO_CONFLICT_DETECTED",
+      "default": "NO_CONFLICT_DETECTED",
+      "title": "Conflict State",
+      "type": "string"
+    },
+    "documented_facts": {
+      "items": {
+        "$ref": "#/$defs/OfficialRateLimitFactV0"
+      },
+      "title": "Documented Facts",
+      "type": "array"
+    },
+    "flp1_implementation_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Flp1 Implementation Authorized",
+      "type": "boolean"
+    },
+    "live_transport_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Live Transport Authorized",
+      "type": "boolean"
+    },
+    "mainnet_execution_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Mainnet Execution Authorized",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "0.1.0",
+      "default": "0.1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "sources": {
+      "items": {
+        "$ref": "#/$defs/OfficialRateLimitSourceV0"
+      },
+      "title": "Sources",
+      "type": "array"
+    },
+    "status": {
+      "const": "UNRESOLVED_OFFICIAL_LIMIT",
+      "default": "UNRESOLVED_OFFICIAL_LIMIT",
+      "title": "Status",
+      "type": "string"
+    },
+    "supersession_state": {
+      "const": "NO_SUPERSESSION_DETECTED",
+      "default": "NO_SUPERSESSION_DETECTED",
+      "title": "Supersession State",
+      "type": "string"
+    },
+    "testnet_execution_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Testnet Execution Authorized",
+      "type": "boolean"
+    },
+    "transition_eligible": {
+      "const": false,
+      "default": false,
+      "title": "Transition Eligible",
+      "type": "boolean"
+    },
+    "unresolved_fields": {
+      "items": {
+        "$ref": "#/$defs/OfficialRateLimitUnknownV0"
+      },
+      "title": "Unresolved Fields",
+      "type": "array"
+    }
+  },
+  "required": [
+    "sources",
+    "documented_facts",
+    "unresolved_fields",
+    "authority_hash"
+  ],
+  "title": "OfficialRateLimitAuthorityV0",
+  "type": "object"
+}
