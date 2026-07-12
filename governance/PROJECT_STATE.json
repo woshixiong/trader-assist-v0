@@ -1,0 +1,30 @@
+{
+  "schema_version": "1.0.0",
+  "project": "Trader Assist V0",
+  "repository": "woshixiong/trader-assist-v0",
+  "program": "V0-FAST-LAUNCH",
+  "state_kind": "SAFE_STOP_SNAPSHOT",
+  "state_base_sha": "c507e2fc1bad6aca175cf833e5bcca63224c3e5f",
+  "last_completed_implementation": "V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT",
+  "last_completed_implementation_pr": 11,
+  "last_policy_state_pr": 12,
+  "active_milestone": "V0-FLP0-PILOT-AND-LONG-TERM-ROADMAP-AUTHORITY-FREEZE",
+  "active_task_id": "V0-FLP0-PILOT-AND-LONG-TERM-ROADMAP-AUTHORITY-FREEZE",
+  "active_write_lease": {
+    "status": "NONE",
+    "last_lease_type": "BOUNDED_POLICY_GOVERNANCE_AND_MACHINE_STATE_ONLY",
+    "last_governance_level": "G2"
+  },
+  "first_release_frozen": true,
+  "long_term_roadmap_frozen": true,
+  "strategy_lifecycle_frozen": true,
+  "data_lifecycle_frozen": true,
+  "learning_loop_frozen": true,
+  "live_transport_authorized": false,
+  "account_readonly_runtime_authorized": false,
+  "testnet_execution_authorized": false,
+  "mainnet_execution_authorized": false,
+  "flp1_implementation_authorized": false,
+  "rate_limit_status": "UNRESOLVED_OFFICIAL_LIMIT",
+  "next_gate": "V0-FLP1-OPERATOR-ASSIST-PILOT-SCOPE-FREEZE"
+}
