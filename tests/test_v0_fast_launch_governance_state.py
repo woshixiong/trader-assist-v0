@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 from typing import Any
 
+import jsonschema
+import pytest
 from jsonschema import Draft202012Validator
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -151,6 +154,523 @@ def test_governance_and_rotation_policy_are_frozen() -> None:
     assert rotation["required"] is True
     assert rotation["next_window_permission"] == "STRICT_READ_ONLY"
     assert rotation["post_merge_next_gate"] == NEXT_GATE
+
+
+Mutation = tuple[str, tuple[str | int, ...], Any]
+
+R1_REQUIRED_CONTROLS = (
+    "DEDICATED_LIMITED_CAPITAL_SUBACCOUNT",
+    "DEDICATED_API_WALLET",
+    "SECRET_ISOLATION",
+    "OFFICIAL_SDK_SIGNING",
+    "NONCE_AUTHORITY",
+    "IMMUTABLE_ORDER_INTENT",
+    "ORDER_INTENT_HASH",
+    "CLOID_IDEMPOTENCY",
+    "EXPIRES_AFTER",
+    "PRE_SUBMIT_REVALIDATION",
+    "ALO_POST_ONLY",
+    "BOUNDED_SLIPPAGE_IOC",
+    "SUBMIT_CANCEL",
+    "PARTIAL_FILL_HANDLING",
+    "ACTUAL_FILLED_POSITION_SIZING",
+    "MANDATORY_AUTOMATIC_STOP",
+    "FIXED_MULTI_STAGE_AUTOMATIC_TP",
+    "REDUCE_ONLY_PROTECTION",
+    "EXCHANGE_STATE_PROTECTION_VERIFICATION",
+    "POSITION_UNPROTECTED_EMERGENCY_PATH",
+    "KILL_SWITCH",
+    "DEAD_MAN_PROTECTION",
+    "AUDIT",
+    "TESTNET",
+    "SHADOW",
+    "SMALL_CAPITAL_MAINNET_CANARY",
+    "SEPARATE_MAINNET_AUTHORIZATION",
+)
+
+
+def _case(mutation: Mutation, case_id: str) -> Any:
+    return pytest.param(mutation, id=case_id)
+
+
+def _program_mutation_cases() -> list[Any]:
+    cases = [
+        _case(
+            ("set", ("signal_speed_policy", "classes", "FAST", "all_valid_signals_alerted"), False),
+            "signals-fast-alert-disabled",
+        ),
+        _case(
+            ("set", ("signal_speed_policy", "classes", "FAST", "short_expiry"), False),
+            "signals-fast-short-expiry-disabled",
+        ),
+        _case(
+            ("set", ("signal_speed_policy", "classes", "FAST", "execution_optional"), False),
+            "signals-fast-optional-disabled",
+        ),
+        _case(
+            (
+                "set",
+                ("signal_speed_policy", "classes", "FAST", "max_entry_boundary_required"),
+                False,
+            ),
+            "signals-fast-max-entry-disabled",
+        ),
+        _case(
+            ("set", ("signal_speed_policy", "classes", "FAST", "do_not_chase_required"), False),
+            "signals-fast-do-not-chase-disabled",
+        ),
+        _case(
+            (
+                "set",
+                ("signal_speed_policy", "classes", "FAST", "human_actionability_recorded"),
+                False,
+            ),
+            "signals-fast-actionability-disabled",
+        ),
+        _case(
+            (
+                "set",
+                ("signal_speed_policy", "classes", "FAST", "missed_execution_is_strategy_failure"),
+                True,
+            ),
+            "signals-fast-missed-becomes-failure",
+        ),
+        _case(
+            (
+                "set",
+                ("signal_speed_policy", "classes", "STANDARD", "all_valid_signals_alerted"),
+                False,
+            ),
+            "signals-standard-alert-disabled",
+        ),
+        _case(
+            ("set", ("signal_speed_policy", "classes", "STANDARD", "longer_expiry"), False),
+            "signals-standard-longer-expiry-disabled",
+        ),
+        _case(
+            (
+                "set",
+                ("signal_speed_policy", "classes", "STANDARD", "human_check_and_order_expected"),
+                False,
+            ),
+            "signals-standard-human-check-disabled",
+        ),
+        _case(
+            (
+                "set",
+                (
+                    "signal_speed_policy",
+                    "classes",
+                    "STANDARD",
+                    "accepted_signal_execution_expected",
+                ),
+                False,
+            ),
+            "signals-standard-accepted-execution-disabled",
+        ),
+        _case(
+            (
+                "remove_value",
+                ("signal_speed_policy", "required_patterns"),
+                "LIQUIDITY_SWEEP_RECLAIM_FAST",
+            ),
+            "signals-pattern-deleted",
+        ),
+        _case(
+            (
+                "replace_value",
+                ("signal_speed_policy", "required_patterns"),
+                ("LIQUIDITY_SWEEP_RECLAIM_FAST", "HOSTILE_PATTERN"),
+            ),
+            "signals-pattern-replaced",
+        ),
+        _case(
+            ("append", ("signal_speed_policy", "required_patterns"), "HOSTILE_PATTERN"),
+            "signals-pattern-added",
+        ),
+        _case(
+            ("remove_value", ("signal_speed_policy", "lifecycle"), "PREPARE"),
+            "signals-lifecycle-stage-deleted",
+        ),
+        _case(
+            ("swap", ("signal_speed_policy", "lifecycle"), (0, 1)), "signals-lifecycle-reordered"
+        ),
+        _case(
+            (
+                "remove_value",
+                ("strategy_lifecycle", "manifest_required_fields"),
+                "strategy_version",
+            ),
+            "strategy-manifest-field-deleted",
+        ),
+        _case(
+            (
+                "replace_value",
+                ("strategy_lifecycle", "manifest_required_fields"),
+                ("strategy_version", "strategy_name"),
+            ),
+            "strategy-manifest-field-renamed",
+        ),
+        _case(
+            ("swap", ("strategy_lifecycle", "promotion_pipeline"), (1, 2)),
+            "strategy-promotion-pipeline-reordered",
+        ),
+        _case(
+            ("remove_value", ("strategy_lifecycle", "promotion_pipeline"), "INDEPENDENT_REVIEW"),
+            "strategy-independent-review-deleted",
+        ),
+        _case(
+            ("set", ("strategy_lifecycle", "disable_policy", "delete_history"), True),
+            "strategy-disabled-history-deletable",
+        ),
+        _case(
+            ("set", ("strategy_lifecycle", "disable_policy", "delete_records"), True),
+            "strategy-disabled-version-explanation-deletable",
+        ),
+        _case(
+            ("set", ("strategy_lifecycle", "disable_policy", "delete_replay_capability"), True),
+            "strategy-disabled-replay-deletable",
+        ),
+        _case(
+            ("append", ("strategy_lifecycle", "first_release"), "COMPLEX_DYNAMIC_HOT_LOADING"),
+            "strategy-complex-hot-loading-enabled",
+        ),
+        _case(
+            (
+                "remove_value",
+                ("strategy_lifecycle", "deferred_strategies"),
+                "AUTOMATIC_REGIME_ROUTER",
+            ),
+            "strategy-deferred-route-item-deleted",
+        ),
+        _case(
+            ("set", ("data_product_lifecycle", "strategy_raw_exchange_json_dependency"), "ALLOWED"),
+            "data-raw-exchange-json-allowed",
+        ),
+        _case(
+            ("remove_value", ("data_product_lifecycle", "pipeline"), "VALIDATION"),
+            "data-pipeline-stage-deleted",
+        ),
+        _case(("swap", ("data_product_lifecycle", "pipeline"), (2, 3)), "data-pipeline-reordered"),
+        _case(
+            (
+                "remove_value",
+                ("data_product_lifecycle", "manifest_required_fields"),
+                "replay_format",
+            ),
+            "data-manifest-field-deleted",
+        ),
+        _case(
+            ("set", ("data_product_lifecycle", "strategy_dependency_declaration_required"), False),
+            "data-dependency-declaration-disabled",
+        ),
+        _case(
+            ("set", ("data_product_lifecycle", "new_data_auto_affects_existing_strategy"), True),
+            "data-new-product-auto-affects-old-strategy",
+        ),
+        _case(
+            (
+                "remove_value",
+                ("data_product_lifecycle", "decommission_gates"),
+                "HISTORICAL_DECODER_RETAINED",
+            ),
+            "data-historical-decoder-gate-deleted",
+        ),
+        _case(
+            ("remove_value", ("data_product_lifecycle", "decommission_gates"), "REPLAY_RETAINED"),
+            "data-replay-gate-deleted",
+        ),
+        _case(
+            (
+                "remove_value",
+                ("data_product_lifecycle", "decommission_gates"),
+                "MIGRATION_COMPLETED",
+            ),
+            "data-migration-gate-deleted",
+        ),
+        _case(
+            ("set", ("data_product_lifecycle", "first_release_scope"), "ALL_DATA_PRODUCTS"),
+            "data-r0-scope-expanded",
+        ),
+        _case(
+            ("set", ("learning_loop", "online_learning"), "ALLOWED"),
+            "learning-online-learning-allowed",
+        ),
+        _case(
+            ("set", ("learning_loop", "automatic_production_rule_mutation"), "ALLOWED"),
+            "learning-automatic-production-mutation-allowed",
+        ),
+        _case(
+            ("remove_value", ("learning_loop", "pipeline"), "DEVIATION_ANALYSIS"),
+            "learning-pipeline-stage-deleted",
+        ),
+        _case(("swap", ("learning_loop", "pipeline"), (5, 6)), "learning-pipeline-reordered"),
+        _case(
+            ("remove_value", ("learning_loop", "metrics"), "MATCHING_CONFIDENCE"),
+            "learning-measurement-deleted",
+        ),
+        _case(
+            ("remove_value", ("learning_loop", "issue_categories"), "RISK"),
+            "learning-category-deleted",
+        ),
+        _case(
+            ("append", ("learning_loop", "issue_categories"), "UNAUTHORIZED_CATEGORY"),
+            "learning-category-added",
+        ),
+        _case(("append", ("learning_loop", "severity_levels"), "P4"), "learning-severity-added"),
+        _case(
+            ("remove_value", ("learning_loop", "improvement_pipeline"), "REPLAY"),
+            "learning-improvement-stage-deleted",
+        ),
+        _case(
+            ("swap", ("learning_loop", "improvement_pipeline"), (3, 4)),
+            "learning-improvement-pipeline-reordered",
+        ),
+        _case(("set", ("first_release", "primary_asset"), "BTC"), "release-r0-asset-changed"),
+        _case(
+            ("set", ("first_release", "active_strategy_count"), 2),
+            "release-r0-strategy-count-changed",
+        ),
+        _case(
+            ("set", ("first_release", "active_strategy"), "HOSTILE-v1"),
+            "release-r0-strategy-changed",
+        ),
+        _case(
+            ("set", ("first_release", "execution_mode"), "AUTOMATED"),
+            "release-r0-manual-execution-changed",
+        ),
+        _case(
+            ("set", ("first_release", "ai_role"), "TRADING_AUTHORITY"), "release-r0-ai-role-changed"
+        ),
+        _case(
+            ("set", ("first_release", "automatic_exchange_write"), "ALLOWED"),
+            "release-r0-exchange-write-enabled",
+        ),
+        _case(
+            ("set", ("first_release", "all_valid_signals_visible"), False),
+            "release-r0-all-signal-visibility-disabled",
+        ),
+        _case(("set", ("releases", "R0", "scope"), "FL4"), "release-r0-vertical-scope-changed"),
+        _case(
+            ("set", ("releases", "R0", "execution"), "AUTOMATED"), "release-r0-manual-only-disabled"
+        ),
+        _case(
+            ("set", ("releases", "R1", "autonomous_entry"), "ALLOWED"),
+            "release-r1-autonomous-entry-allowed",
+        ),
+        _case(
+            ("set", ("releases", "R1", "human_confirmation_required"), False),
+            "release-r1-human-confirmation-disabled",
+        ),
+        _case(
+            ("set", ("governance_levels", "flp1_minimum"), "G0"),
+            "governance-flp1-minimum-lowered-g0",
+        ),
+        _case(
+            ("set", ("governance_levels", "flp1_minimum"), "G1"),
+            "governance-flp1-minimum-lowered-g1",
+        ),
+        _case(
+            ("remove_key", ("governance_levels", "fl4_requirement"), None),
+            "governance-fl4-execution-security-review-deleted",
+        ),
+        _case(
+            (
+                "remove_value",
+                ("development_route", "pre_launch_main_prs"),
+                "V0-FLP1-DECISION-TO-OUTCOME-OPERATOR-ASSIST-PILOT",
+            ),
+            "route-two-pr-plan-deleted",
+        ),
+        _case(
+            ("set", ("development_route", "flp1_is_vertical_pilot_pr"), False),
+            "route-vertical-pilot-disabled",
+        ),
+        _case(
+            (
+                "set",
+                ("development_route", "full_independent_review_only_for_final_merge_candidate"),
+                False,
+            ),
+            "route-final-independent-review-disabled",
+        ),
+        _case(
+            ("set", ("development_route", "only_blocker_prevents_merge"), False),
+            "route-only-blocker-prevents-merge-disabled",
+        ),
+        _case(
+            ("set", ("review_finalization_policy", "review_permission"), "BOUNDED_WRITE"),
+            "finalization-reviewer-permission-changed",
+        ),
+        _case(
+            ("set", ("review_finalization_policy", "exact_head_ci_required"), False),
+            "finalization-exact-head-ci-disabled",
+        ),
+        _case(
+            ("set", ("review_finalization_policy", "mark_ready_prohibited"), False),
+            "finalization-mark-ready-prohibition-disabled",
+        ),
+        _case(
+            ("set", ("review_finalization_policy", "merge_prohibited"), False),
+            "finalization-merge-prohibition-disabled",
+        ),
+        _case(
+            (
+                "add_property",
+                ("review_finalization_policy",),
+                ("separate_project_control_authorization_required", False),
+            ),
+            "finalization-separate-authorization-bypass-added",
+        ),
+        _case(
+            ("set", ("recursive_rotation", "required"), False),
+            "rotation-recursive-required-disabled",
+        ),
+        _case(
+            ("remove_value", ("recursive_rotation", "handoff_required_fields"), "STOP_CONDITIONS"),
+            "rotation-handoff-field-deleted",
+        ),
+        _case(
+            ("set", ("recursive_rotation", "post_merge_next_gate"), "V0-FLP1-IMPLEMENTATION"),
+            "rotation-next-gate-replaced",
+        ),
+        _case(
+            ("remove_key", ("recursive_rotation", "verification_warning"), None),
+            "rotation-verification-warning-deleted",
+        ),
+        _case(
+            ("remove_value", ("deferred_capabilities",), "AUTONOMOUS_ENTRY"),
+            "deferred-autonomous-entry-deleted",
+        ),
+        _case(
+            ("remove_value", ("deferred_capabilities",), "ONLINE_LEARNING"),
+            "deferred-online-learning-deleted",
+        ),
+        _case(
+            ("remove_value", ("deferred_capabilities",), "AUTOMATIC_PRODUCTION_PARAMETER_MUTATION"),
+            "deferred-automatic-mutation-deleted",
+        ),
+        _case(
+            ("remove_value", ("deferred_capabilities",), "MULTI_STRATEGY_PRODUCTION_ROUTING"),
+            "deferred-multi-strategy-routing-deleted",
+        ),
+        _case(
+            ("remove_value", ("deferred_capabilities",), "MULTI_ASSET_PRODUCTION_ROUTING"),
+            "deferred-multi-asset-routing-deleted",
+        ),
+    ]
+    for severity in ("P0", "P1", "P2", "P3"):
+        cases.append(
+            _case(
+                ("remove_value", ("learning_loop", "severity_levels"), severity),
+                f"learning-severity-{severity.lower()}-deleted",
+            )
+        )
+    for control in R1_REQUIRED_CONTROLS:
+        cases.append(
+            _case(
+                ("remove_value", ("releases", "R1", "required_controls"), control),
+                f"release-r1-control-{control.lower().replace('_', '-')}-deleted",
+            )
+        )
+    closed_objects = {
+        "root": (),
+        "authority": ("authority",),
+        "first-release": ("first_release",),
+        "signal-policy": ("signal_speed_policy",),
+        "signal-classes": ("signal_speed_policy", "classes"),
+        "signal-fast": ("signal_speed_policy", "classes", "FAST"),
+        "signal-standard": ("signal_speed_policy", "classes", "STANDARD"),
+        "strategy": ("strategy_lifecycle",),
+        "strategy-disable-policy": ("strategy_lifecycle", "disable_policy"),
+        "data-product": ("data_product_lifecycle",),
+        "learning-loop": ("learning_loop",),
+        "milestones": ("capability_milestones",),
+        "releases": ("releases",),
+        "release-r0": ("releases", "R0"),
+        "release-r1": ("releases", "R1"),
+        "governance": ("governance_levels",),
+        "development-route": ("development_route",),
+        "finalization": ("review_finalization_policy",),
+        "rotation": ("recursive_rotation",),
+    }
+    for name, object_path in closed_objects.items():
+        cases.append(
+            _case(
+                ("add_property", object_path, ("unexpected_authority", True)),
+                f"closed-object-{name}-rejects-unexpected-property",
+            )
+        )
+    return cases
+
+
+def _descend(document: Any, path: tuple[str | int, ...]) -> Any:
+    current = document
+    for part in path:
+        current = current[part]
+    return current
+
+
+def _apply_mutation(document: dict[str, Any], mutation: Mutation) -> None:
+    operation, path, value = mutation
+    if operation == "set":
+        parent = _descend(document, path[:-1])
+        parent[path[-1]] = value
+    elif operation == "remove_key":
+        parent = _descend(document, path[:-1])
+        del parent[path[-1]]
+    elif operation == "remove_value":
+        target = _descend(document, path)
+        target.remove(value)
+    elif operation == "replace_value":
+        target = _descend(document, path)
+        old, new = value
+        target[target.index(old)] = new
+    elif operation == "append":
+        target = _descend(document, path)
+        target.append(value)
+    elif operation == "swap":
+        target = _descend(document, path)
+        left, right = value
+        target[left], target[right] = target[right], target[left]
+    elif operation == "add_property":
+        target = _descend(document, path)
+        key, added = value
+        target[key] = added
+    else:  # pragma: no cover - mutation table is static
+        raise AssertionError(f"unknown mutation operation: {operation}")
+
+
+@pytest.mark.parametrize("mutation", _program_mutation_cases())
+def test_schema_rejects_hostile_program_mutation(mutation: Mutation) -> None:
+    schema = _load_json(SCHEMA_PATH)
+    hostile = copy.deepcopy(_load_json(PROGRAM_PATH))
+    _apply_mutation(hostile, mutation)
+
+    with pytest.raises(jsonschema.ValidationError):
+        Draft202012Validator(schema).validate(hostile)
+
+
+@pytest.mark.parametrize(
+    ("object_path", "case_id"),
+    (
+        ((), "root"),
+        (("active_write_lease",), "active-write-lease"),
+    ),
+    ids=lambda value: value if isinstance(value, str) else None,
+)
+def test_project_state_schema_rejects_unexpected_properties(
+    object_path: tuple[str, ...],
+    case_id: str,
+) -> None:
+    del case_id
+    schema = _load_json(SCHEMA_PATH)["$defs"]["ProjectState"]
+    hostile = copy.deepcopy(_load_json(STATE_PATH))
+    target = _descend(hostile, object_path)
+    target["unexpected_authority"] = True
+
+    with pytest.raises(jsonschema.ValidationError):
+        Draft202012Validator(schema).validate(hostile)
 
 
 def test_updated_documents_agree_and_remove_ambiguous_state_wording() -> None:
