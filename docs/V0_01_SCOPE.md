@@ -32,20 +32,28 @@ A5 added a bounded offline-only typed extraction contract. It consumes an exact 
 
 A6 completed an offline-only pairwise reconciliation contract and was merged via PR #11. It consumes exact independently revalidated A5 WebSocket and Info candle extractions, compares the union of A5 logical candle keys, and emits a deterministic hash-bound report. It does not parse payloads, read `payload_ref`, connect to endpoints, write Bronze, emit `NormalizedEventV0`, enter Silver, order revisions, infer finality, select a canonical winner, or generate health, strategy, AI, risk, dashboard, or execution output.
 
-## Active implementation state
+## Active program state
 
 ```text
-LAST_COMPLETED_SLICE: V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT
-LAST_MERGED_PR: #11
-ACTIVE_IMPLEMENTATION_SLICE: NONE
-ACTIVE_IMPLEMENTATION_WRITE_LEASE: NONE
-A7_SCOPE_FROZEN: NO
-A7_IMPLEMENTATION_AUTHORIZED: NO
+PROGRAM: V0-FAST-LAUNCH
+STATE_BASE_SHA: c507e2fc1bad6aca175cf833e5bcca63224c3e5f
+LAST_COMPLETED_IMPLEMENTATION: V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT
+LAST_COMPLETED_IMPLEMENTATION_PR: 11
+LAST_POLICY_STATE_PR: 12
+ACTIVE_IMPLEMENTATION: NONE
+ACTIVE_WRITE_LEASE: NONE
+FIRST_RELEASE_FROZEN: TRUE
+LONG_TERM_ROADMAP_FROZEN: TRUE
 RATE_LIMIT_STATUS: UNRESOLVED_OFFICIAL_LIMIT
 LIVE_TRANSPORT_AUTHORIZED: FALSE
+ACCOUNT_READONLY_RUNTIME_AUTHORIZED: FALSE
+TESTNET_EXECUTION_AUTHORIZED: FALSE
+MAINNET_EXECUTION_AUTHORIZED: FALSE
+FLP1_IMPLEMENTATION_AUTHORIZED: FALSE
+NEXT_GATE: V0-FLP1-OPERATOR-ASSIST-PILOT-SCOPE-FREEZE
 ```
 
-There is no active implementation slice or write lease. The next stage may be selected only by a later independent exact-main A7 scope freeze; this document does not define or authorize A7 implementation scope.
+There is no active implementation slice or runtime write lease. The prior generic A7-only next step is superseded by the explicit Fast Launch program. No FLP1 implementation is authorized by this document.
 
 ## Fixed A0 authority versions
 
@@ -175,6 +183,14 @@ The root-wide authority is held for the complete writer lifetime. Different segm
 
 **R4B-FD**: Descriptor state is tracked via `_FdState`. Process-global poison gate blocks new writers when close outcome is uncertain. Descriptor is not invalidated before `os.close`.
 
+## V0-R0 Fast Launch boundary
+
+R0 is the ETH-only Operator Assist Pilot with one active strategy, `ETH-LDAR-v0.1`. The target pipeline covers trusted data, deterministic `LONG`/`SHORT`/`WAIT`, deterministic risk sizing, a TradePlan, FAST/STANDARD signal cards, human decision capture, manual Hyperliquid execution, read-only order/fill matching, replay, and versioned findings.
+
+Every valid FAST and STANDARD signal is visible. FAST is optional and not automatically a strategy failure when the operator cannot act before expiry. STANDARD is expected to be human-actionable. Strategy and data products use independent versioned manifests and explicit dependencies. Online learning and automatic production mutation are prohibited.
+
+The capability roadmap remains FL1 trusted data, FL2 signal and risk, FL3 human review, and FL4 human-confirmed execution. R1/FL4 require separate G4 execution and security review. Autonomous entry remains prohibited.
+
 ## Authority
 
-TraderOS remains authoritative for cross-project architecture and production governance. Public market-data definitions never authorize exchange writes. Completion of A6 does not authorize live transport, health, backfill, finality inference, revision ordering, canonical winner selection, normalized events, Silver, strategy, AI, risk, dashboard, execution, or A7. Every later slice requires a separate exact-head scope freeze, write lease, CI run, external independent review, and finalization authorization.
+TraderOS remains authoritative for cross-project architecture and production governance. Public market-data definitions never authorize exchange writes. Completion of A6 and this governance freeze do not authorize live transport, health, backfill, finality inference, revision ordering, canonical winner selection, normalized events, Silver, strategy runtime, AI runtime, risk runtime, dashboard runtime, account observation runtime, Testnet/Mainnet execution, or exchange writes. The next gate is `V0-FLP1-OPERATOR-ASSIST-PILOT-SCOPE-FREEZE`; every later slice requires a separate exact-head scope freeze, write lease, CI run, external independent review, and finalization authorization.

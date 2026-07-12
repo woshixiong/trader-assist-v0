@@ -124,17 +124,23 @@ The portable A6 JSON Schema validates structure, mandatory serialized fields for
 
 A6 applies no tolerance, normalization, source priority, latest-wins rule, revision ordering, finality inference, or canonical winner selection. It emits no `NormalizedEventV0`, writes no Silver or other persistence, and adds no network, health, gap, backfill, strategy, AI, risk, dashboard, credential, or execution capability.
 
-Current authority state:
+## Current authority state
 
 ```text
-LAST_COMPLETED_SLICE: V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT
-LAST_MERGED_PR: #11
-ACTIVE_IMPLEMENTATION_SLICE: NONE
-ACTIVE_IMPLEMENTATION_WRITE_LEASE: NONE
-A7_SCOPE_FROZEN: NO
-A7_IMPLEMENTATION_AUTHORIZED: NO
+PROGRAM: V0-FAST-LAUNCH
+STATE_BASE_SHA: c507e2fc1bad6aca175cf833e5bcca63224c3e5f
+LAST_COMPLETED_IMPLEMENTATION: V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT
+LAST_COMPLETED_IMPLEMENTATION_PR: 11
+LAST_POLICY_STATE_PR: 12
+ACTIVE_IMPLEMENTATION: NONE
+ACTIVE_WRITE_LEASE: NONE
 RATE_LIMIT_STATUS: UNRESOLVED_OFFICIAL_LIMIT
 LIVE_TRANSPORT_AUTHORIZED: FALSE
+ACCOUNT_READONLY_RUNTIME_AUTHORIZED: FALSE
+TESTNET_EXECUTION_AUTHORIZED: FALSE
+MAINNET_EXECUTION_AUTHORIZED: FALSE
+FLP1_IMPLEMENTATION_AUTHORIZED: FALSE
+NEXT_GATE: V0-FLP1-OPERATOR-ASSIST-PILOT-SCOPE-FREEZE
 ```
 
 ## Identity separation
@@ -194,6 +200,35 @@ Replay performs no networking and requires a valid completion checkpoint. It ver
 
 An unfinalized segment, missing/invalid checkpoint, tail deletion, corrupt evidence, conflicting authority, unexpected tree entry, or orphan payload yields `FAIL`. A zero-entry segment passes only with an explicit completed zero-entry checkpoint.
 
+## Fast Launch target data plane
+
+```text
+Source Adapter
+-> Raw Observation
+-> Validation
+-> Normalized Data Product
+-> Feature Provider
+-> StrategyInput
+-> ETH-LDAR-v0.1
+-> LONG / SHORT / WAIT
+-> deterministic risk sizing
+-> TradePlan
+-> FAST / STANDARD signal card
+-> Human Decision
+-> manual exchange action
+-> read-only account/order/fill observation
+-> plan/outcome matching
+-> replay and learning findings
+```
+
+A strategy must never consume raw exchange JSON directly. Every normalized data product and strategy has a versioned manifest; dependencies are explicit, and new data cannot silently affect an existing strategy.
+
+R0 requires ETH 5m and 15m candles, mark/mid reference, ETH OI, Funding, timestamps, freshness, gap/conflict state, heartbeat, reconnect, bounded backoff, and replay-compatible records. These are frozen product requirements, not current live runtime authority.
+
+Read-only account/order/fill observation is also a future R0 requirement, but `ACCOUNT_READONLY_RUNTIME_AUTHORIZED` remains false. FLP1 scope freeze must separately define identity, privacy, matching confidence, failure states, and CSV/XLSX fallback authority before implementation.
+
+R0 ends at system assistance and manual exchange execution. R1 may add human-confirmed execution only through a separately reviewed G4 gateway with immutable OrderIntent, idempotency, expiry, revalidation, fill-aware protection, kill switch, dead-man protection, audit, Testnet, shadow, and limited-capital canary gates. Autonomous entry remains prohibited.
+
 ## Next gate
 
-A6 completion does not authorize live public transport, health, reconnect, backfill, finality inference, revision ordering, canonical winner selection, normalized events, Silver, strategy, AI recommendation, risk sizing, dashboard, Testnet/Mainnet execution, exchange writes, or A7 implementation. The next gate is an independent read-only A7 scope freeze. Every future slice still requires a separate exact-main scope freeze, explicit write lease and file allowlist, applicable CI success, external independent review, and separate finalization authorization.
+A6 completion and the FLP0 authority freeze do not authorize live public transport, health, reconnect, backfill, finality inference, revision ordering, canonical winner selection, normalized events, Silver, strategy runtime, AI recommendation runtime, risk runtime, dashboard runtime, account observation runtime, Testnet/Mainnet execution, or exchange writes. The next gate is `V0-FLP1-OPERATOR-ASSIST-PILOT-SCOPE-FREEZE`. Every future slice still requires a separate exact-main scope freeze, explicit write lease and file allowlist, applicable CI success, external independent review, and separate finalization authorization.

@@ -1,0 +1,2182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woshixiong.github.io/trader-assist-v0/schemas/governance/V0FastLaunchProgram.schema.json",
+  "title": "V0FastLaunchProgram",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "program_id",
+    "project",
+    "repository",
+    "governance_level",
+    "task_id",
+    "state_base_sha",
+    "authority",
+    "first_release",
+    "signal_speed_policy",
+    "strategy_lifecycle",
+    "data_product_lifecycle",
+    "learning_loop",
+    "capability_milestones",
+    "releases",
+    "governance_levels",
+    "development_route",
+    "review_finalization_policy",
+    "recursive_rotation",
+    "deferred_capabilities"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0.0"
+    },
+    "program_id": {
+      "type": "string",
+      "const": "V0-FAST-LAUNCH"
+    },
+    "project": {
+      "type": "string",
+      "const": "Trader Assist V0"
+    },
+    "repository": {
+      "type": "string",
+      "const": "woshixiong/trader-assist-v0"
+    },
+    "governance_level": {
+      "type": "string",
+      "const": "G2"
+    },
+    "task_id": {
+      "type": "string",
+      "const": "V0-FLP0-PILOT-AND-LONG-TERM-ROADMAP-AUTHORITY-FREEZE"
+    },
+    "state_base_sha": {
+      "type": "string",
+      "const": "c507e2fc1bad6aca175cf833e5bcca63224c3e5f"
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "last_completed_implementation",
+        "last_completed_implementation_pr",
+        "last_policy_state_pr",
+        "rate_limit_status",
+        "live_transport_authorized",
+        "account_readonly_runtime_authorized",
+        "testnet_execution_authorized",
+        "mainnet_execution_authorized",
+        "flp1_implementation_authorized"
+      ],
+      "properties": {
+        "last_completed_implementation": {
+          "type": "string",
+          "const": "V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT"
+        },
+        "last_completed_implementation_pr": {
+          "type": "integer",
+          "const": 11
+        },
+        "last_policy_state_pr": {
+          "type": "integer",
+          "const": 12
+        },
+        "rate_limit_status": {
+          "type": "string",
+          "const": "UNRESOLVED_OFFICIAL_LIMIT"
+        },
+        "live_transport_authorized": {
+          "type": "boolean",
+          "const": false
+        },
+        "account_readonly_runtime_authorized": {
+          "type": "boolean",
+          "const": false
+        },
+        "testnet_execution_authorized": {
+          "type": "boolean",
+          "const": false
+        },
+        "mainnet_execution_authorized": {
+          "type": "boolean",
+          "const": false
+        },
+        "flp1_implementation_authorized": {
+          "type": "boolean",
+          "const": false
+        }
+      }
+    },
+    "first_release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "release_id",
+        "milestone",
+        "primary_asset",
+        "active_strategy_count",
+        "active_strategy",
+        "execution_mode",
+        "automatic_exchange_write",
+        "ai_role",
+        "all_valid_signals_visible",
+        "post_launch_learning_loop",
+        "decision_flow",
+        "required_capabilities",
+        "forbidden_capabilities"
+      ],
+      "properties": {
+        "release_id": {
+          "type": "string",
+          "const": "V0-R0"
+        },
+        "milestone": {
+          "type": "string",
+          "const": "V0-FLP1-DECISION-TO-OUTCOME-OPERATOR-ASSIST-PILOT"
+        },
+        "primary_asset": {
+          "type": "string",
+          "const": "ETH"
+        },
+        "active_strategy_count": {
+          "type": "integer",
+          "const": 1
+        },
+        "active_strategy": {
+          "type": "string",
+          "const": "ETH-LDAR-v0.1"
+        },
+        "execution_mode": {
+          "type": "string",
+          "const": "MANUAL_EXECUTION_WITH_SYSTEM_ASSISTANCE"
+        },
+        "automatic_exchange_write": {
+          "type": "string",
+          "const": "PROHIBITED"
+        },
+        "ai_role": {
+          "type": "string",
+          "const": "EXPLANATION_AND_CHECKLIST_ONLY"
+        },
+        "all_valid_signals_visible": {
+          "type": "boolean",
+          "const": true
+        },
+        "post_launch_learning_loop": {
+          "type": "string",
+          "const": "MANDATORY"
+        },
+        "decision_flow": {
+          "type": "array",
+          "minItems": 13,
+          "maxItems": 13,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "type": "string",
+              "const": "REALTIME_PUBLIC_READONLY_DATA"
+            },
+            {
+              "type": "string",
+              "const": "DATA_QUALITY_STATE"
+            },
+            {
+              "type": "string",
+              "const": "ETH-LDAR-v0.1"
+            },
+            {
+              "type": "string",
+              "const": "LONG_SHORT_WAIT"
+            },
+            {
+              "type": "string",
+              "const": "DETERMINISTIC_RISK_SIZING"
+            },
+            {
+              "type": "string",
+              "const": "TRADE_PLAN"
+            },
+            {
+              "type": "string",
+              "const": "FAST_OR_STANDARD_SIGNAL_CARD"
+            },
+            {
+              "type": "string",
+              "const": "TAKEN_SKIPPED_REJECTED"
+            },
+            {
+              "type": "string",
+              "const": "MANUAL_HYPERLIQUID_EXECUTION"
+            },
+            {
+              "type": "string",
+              "const": "READONLY_ORDER_FILL_OBSERVATION"
+            },
+            {
+              "type": "string",
+              "const": "PLAN_OUTCOME_MATCHING"
+            },
+            {
+              "type": "string",
+              "const": "REPLAY"
+            },
+            {
+              "type": "string",
+              "const": "FINDINGS_AND_ITERATION"
+            }
+          ],
+          "items": false
+        },
+        "required_capabilities": {
+          "type": "array",
+          "minItems": 36,
+          "maxItems": 36,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "type": "string",
+              "const": "ETH_5M_CANDLE"
+            },
+            {
+              "type": "string",
+              "const": "ETH_15M_CANDLE"
+            },
+            {
+              "type": "string",
+              "const": "MARK_MID_REFERENCE"
+            },
+            {
+              "type": "string",
+              "const": "ETH_OI"
+            },
+            {
+              "type": "string",
+              "const": "FUNDING"
+            },
+            {
+              "type": "string",
+              "const": "TIMESTAMPS"
+            },
+            {
+              "type": "string",
+              "const": "FRESHNESS"
+            },
+            {
+              "type": "string",
+              "const": "GAP_CONFLICT"
+            },
+            {
+              "type": "string",
+              "const": "HEARTBEAT"
+            },
+            {
+              "type": "string",
+              "const": "RECONNECT"
+            },
+            {
+              "type": "string",
+              "const": "BOUNDED_BACKOFF"
+            },
+            {
+              "type": "string",
+              "const": "REPLAY"
+            },
+            {
+              "type": "string",
+              "const": "WATCH"
+            },
+            {
+              "type": "string",
+              "const": "PREPARE"
+            },
+            {
+              "type": "string",
+              "const": "TRIGGERED_FAST"
+            },
+            {
+              "type": "string",
+              "const": "TRIGGERED_STANDARD"
+            },
+            {
+              "type": "string",
+              "const": "EXPIRED"
+            },
+            {
+              "type": "string",
+              "const": "LONG_SHORT_WAIT"
+            },
+            {
+              "type": "string",
+              "const": "ENTRY_ZONE"
+            },
+            {
+              "type": "string",
+              "const": "MAX_ENTRY_BOUNDARY"
+            },
+            {
+              "type": "string",
+              "const": "INVALIDATION"
+            },
+            {
+              "type": "string",
+              "const": "FIXED_STOP"
+            },
+            {
+              "type": "string",
+              "const": "TP1"
+            },
+            {
+              "type": "string",
+              "const": "TP2"
+            },
+            {
+              "type": "string",
+              "const": "EXACT_SIZE"
+            },
+            {
+              "type": "string",
+              "const": "NOTIONAL"
+            },
+            {
+              "type": "string",
+              "const": "RISK_AMOUNT"
+            },
+            {
+              "type": "string",
+              "const": "RISK_PERCENT"
+            },
+            {
+              "type": "string",
+              "const": "EXPIRY"
+            },
+            {
+              "type": "string",
+              "const": "COMPACT_SIGNAL_CARD"
+            },
+            {
+              "type": "string",
+              "const": "COPY_CONTROLS"
+            },
+            {
+              "type": "string",
+              "const": "TAKEN_SKIPPED_REJECTED"
+            },
+            {
+              "type": "string",
+              "const": "READONLY_ACCOUNT_ORDER_FILL_OBSERVATION"
+            },
+            {
+              "type": "string",
+              "const": "AUTOMATIC_SYSTEM_RECORDS"
+            },
+            {
+              "type": "string",
+              "const": "CSV_XLSX_FALLBACK_IMPORT"
+            },
+            {
+              "type": "string",
+              "const": "MINIMAL_PILOT_REVIEW"
+            }
+          ],
+          "items": false
+        },
+        "forbidden_capabilities": {
+          "type": "array",
+          "minItems": 15,
+          "maxItems": 15,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "type": "string",
+              "const": "API_WALLET"
+            },
+            {
+              "type": "string",
+              "const": "PRIVATE_KEY"
+            },
+            {
+              "type": "string",
+              "const": "SIGNING"
+            },
+            {
+              "type": "string",
+              "const": "NONCE"
+            },
+            {
+              "type": "string",
+              "const": "EXCHANGE_WRITE"
+            },
+            {
+              "type": "string",
+              "const": "AUTOMATIC_ENTRY"
+            },
+            {
+              "type": "string",
+              "const": "AUTOMATIC_CANCEL"
+            },
+            {
+              "type": "string",
+              "const": "AUTOMATIC_SL_TP_SUBMISSION"
+            },
+            {
+              "type": "string",
+              "const": "FUND_TRANSFER"
+            },
+            {
+              "type": "string",
+              "const": "WITHDRAWAL"
+            },
+            {
+              "type": "string",
+              "const": "MULTIPLE_ACTIVE_STRATEGIES"
+            },
+            {
+              "type": "string",
+              "const": "MULTIPLE_ACTIVE_ASSETS"
+            },
+            {
+              "type": "string",
+              "const": "AUTOMATIC_STRATEGY_ROUTING"
+            },
+            {
+              "type": "string",
+              "const": "ONLINE_LEARNING"
+            },
+            {
+              "type": "string",
+              "const": "AUTOMATIC_PRODUCTION_PARAMETER_MUTATION"
+            }
+          ],
+          "items": false
+        }
+      }
+    },
+    "signal_speed_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "strategy_id",
+        "speed_classes_are_not_strategies",
+        "lifecycle",
+        "classes",
+        "required_patterns"
+      ],
+      "properties": {
+        "strategy_id": {
+          "type": "string",
+          "const": "ETH-LDAR-v0.1"
+        },
+        "speed_classes_are_not_strategies": {
+          "type": "boolean",
+          "const": true
+        },
+        "lifecycle": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "type": "string",
+              "const": "WATCH"
+            },
+            {
+              "type": "string",
+              "const": "PREPARE"
+            },
+            {
+              "type": "string",
+              "const": "TRIGGERED_FAST_OR_TRIGGERED_STANDARD"
+            },
+            {
+              "type": "string",
+              "const": "EXECUTED_SKIPPED_OR_EXPIRED"
+            }
+          ],
+          "items": false
+        },
+        "classes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "FAST",
+            "STANDARD"
+          ],
+          "properties": {
+            "FAST": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "all_valid_signals_alerted",
+                "label",
+                "short_expiry",
+                "max_entry_boundary_required",
+                "do_not_chase_required",
+                "execution_optional",
+                "missed_execution_is_strategy_failure",
+                "human_actionability_recorded"
+              ],
+              "properties": {
+                "all_valid_signals_alerted": {
+                  "type": "boolean",
+                  "const": true
+                },
+                "label": {
+                  "type": "string",
+                  "const": "FAST / OPTIONAL"
+                },
+                "short_expiry": {
+                  "type": "boolean",
+                  "const": true
+                },
+                "max_entry_boundary_required": {
+                  "type": "boolean",
+                  "const": true
+                },
+                "do_not_chase_required": {
+                  "type": "boolean",
+                  "const": true
+                },
+                "execution_optional": {
+                  "type": "boolean",
+                  "const": true
+                },
+                "missed_execution_is_strategy_failure": {
+                  "type": "boolean",
+                  "const": false
+                },
+                "human_actionability_recorded": {
+                  "type": "boolean",
+                  "const": true
+                }
+              }
+            },
+            "STANDARD": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "all_valid_signals_alerted",
+                "label",
+                "longer_expiry",
+                "human_check_and_order_expected",
+                "accepted_signal_execution_expected"
+              ],
+              "properties": {
+                "all_valid_signals_alerted": {
+                  "type": "boolean",
+                  "const": true
+                },
+                "label": {
+                  "type": "string",
+                  "const": "STANDARD"
+                },
+                "longer_expiry": {
+                  "type": "boolean",
+                  "const": true
+                },
+                "human_check_and_order_expected": {
+                  "type": "boolean",
+                  "const": true
+                },
+                "accepted_signal_execution_expected": {
+                  "type": "boolean",
+                  "const": true
+                }
+              }
+            }
+          }
+        },
+        "required_patterns": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "type": "string",
+              "const": "LIQUIDITY_SWEEP_RECLAIM_FAST"
+            },
+            {
+              "type": "string",
+              "const": "LIQUIDITY_SWEEP_PULLBACK_STANDARD"
+            }
+          ],
+          "items": false
+        }
+      }
+    },
+    "strategy_lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "platform_and_strategy_independent",
+        "manifest_name",
+        "manifest_required_fields",
+        "promotion_pipeline",
+        "disable_policy",
+        "first_release",
+        "deferred_strategies"
+      ],
+      "properties": {
+        "platform_and_strategy_independent": {
+          "type": "boolean",
+          "const": true
+        },
+        "manifest_name": {
+          "type": "string",
+          "const": "StrategyManifest"
+        },
+        "manifest_required_fields": {
+          "type": "array",
+          "minItems": 12,
+          "maxItems": 12,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "type": "string",
+              "const": "strategy_id"
+            },
+            {
+              "type": "string",
+              "const": "strategy_version"
+            },
+            {
+              "type": "string",
+              "const": "supported_assets"
+            },
+            {
+              "type": "string",
+              "const": "supported_timeframes"
+            },
+            {
+              "type": "string",
+              "const": "required_data_products"
+            },
+            {
+              "type": "string",
+              "const": "optional_data_products"
+            },
+            {
+              "type": "string",
+              "const": "minimum_lookback"
+            },
+            {
+              "type": "string",
+              "const": "configuration_schema"
+            },
+            {
+              "type": "string",
+              "const": "signal_output_version"
+            },
+            {
+              "type": "string",
+              "const": "risk_profile"
+            },
+            {
+              "type": "string",
+              "const": "replay_compatible"
+            },
+            {
+              "type": "string",
+              "const": "enabled"
+            }
+          ],
+          "items": false
+        },
+        "promotion_pipeline": {
+          "type": "array",
+          "minItems": 7,
+          "maxItems": 7,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "type": "string",
+              "const": "INDEPENDENT_DEVELOPMENT"
+            },
+            {
+              "type": "string",
+              "const": "DETERMINISTIC_TESTS"
+            },
+            {
+              "type": "string",
+              "const": "REPLAY"
+            },
+            {
+              "type": "string",
+              "const": "SHADOW"
+            },
+            {
+              "type": "string",
+              "const": "INDEPENDENT_REVIEW"
+            },
+            {
+              "type": "string",
+              "const": "REGISTRY"
+            },
+            {
+              "type": "string",
+              "const": "CONFIG_ENABLE"
+            }
+          ],
+          "items": false
+        },
+        "disable_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "delete_history",
+            "delete_records",
+            "delete_replay_capability"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "const": false
+            },
+            "delete_history": {
+              "type": "boolean",
+              "const": false
+            },
+            "delete_records": {
+              "type": "boolean",
+              "const": false
+            },
+            "delete_replay_capability": {
+              "type": "boolean",
+              "const": false
+            }
+          }
+        },
+        "first_release": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "type": "string",
+              "const": "STABLE_INTERFACE"
+            },
+            {
+              "type": "string",
+              "const": "REGISTRY"
+            },
+            {
+              "type": "string",
+              "const": "ENABLE_DISABLE"
+            }
+          ],
+          "items": false
+        },
+        "deferred_strategies": {
+          "type": "array",
+          "minItems": 12,
+          "maxItems": 12,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "type": "string",
+              "const": "BRK-AR"
+            },
+            {
+              "type": "string",
+              "const": "TRD-PB"
+            },
+            {
+              "type": "string",
+              "const": "BAL-RV"
+            },
+            {
+              "type": "string",
+              "const": "LQS-FR_OR_ETH-LDAR_FAMILY"
+            },
+            {
+              "type": "string",
+              "const": "MACRO-RP"
+            },
+            {
+              "type": "string",
+              "const": "ETHBTC_RELATIVE_STRENGTH"
+            },
+            {
+              "type": "string",
+              "const": "LIQUIDATION_CASCADE"
+            },
+            {
+              "type": "string",
+              "const": "TURTLE_CROSS_DAY_TREND"
+            },
+            {
+              "type": "string",
+              "const": "GRID_MARKET_MAKING"
+            },
+            {
+              "type": "string",
+              "const": "CROSS_VENUE_ARBITRAGE"
+            },
+            {
+              "type": "string",
+              "const": "AUTOMATIC_REGIME_ROUTER"
+            },
+            {
+              "type": "string",
+              "const": "AI_DISCRETIONARY_STRATEGY"
+            }
+          ],
+          "items": false
+        }
+      }
+    },
+    "data_product_lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "strategy_raw_exchange_json_dependency",
+        "pipeline",
+        "manifest_name",
+        "manifest_required_fields",
+        "strategy_dependency_declaration_required",
+        "new_data_auto_affects_existing_strategy",
+        "decommission_gates",
+        "first_release_scope"
+      ],
+      "properties": {
+        "strategy_raw_exchange_json_dependency": {
+          "type": "string",
+          "const": "PROHIBITED"
+        },
+        "pipeline": {
+          "type": "array",
+          "minItems": 6,
+          "maxItems": 6,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "type": "string",
+              "const": "SOURCE_ADAPTER"
+            },
+            {
+              "type": "string",
+              "const": "RAW_OBSERVATION"
+            },
+            {
+              "type": "string",
+              "const": "VALIDATION"
+            },
+            {
+              "type": "string",
+              "const": "NORMALIZED_DATA_PRODUCT"
+            },
+            {
+              "type": "string",
+              "const": "FEATURE_PROVIDER"
+            },
+            {
+              "type": "string",
+              "const": "STRATEGY_INPUT"
+            }
+          ],
+          "items": false
+        },
+        "manifest_name": {
+          "type": "string",
+          "const": "DataProductManifest"
+        },
+        "manifest_required_fields": {
+          "type": "array",
+          "minItems": 11,
+          "maxItems": 11,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "type": "string",
+              "const": "data_product_id"
+            },
+            {
+              "type": "string",
+              "const": "version"
+            },
+            {
+              "type": "string",
+              "const": "semantic_definition"
+            },
+            {
+              "type": "string",
+              "const": "source_adapter"
+            },
+            {
+              "type": "string",
+              "const": "asset"
+            },
+            {
+              "type": "string",
+              "const": "timeframe"
+            },
+            {
+              "type": "string",
+              "const": "freshness_rule"
+            },
+            {
+              "type": "string",
+              "const": "quality_states"
+            },
+            {
+              "type": "string",
+              "const": "replay_format"
+            },
+            {
+              "type": "string",
+              "const": "retention_policy"
+            },
+            {
+              "type": "string",
+              "const": "enabled"
+            }
+          ],
+          "items": false
+        },
+        "strategy_dependency_declaration_required": {
+          "type": "boolean",
+          "const": true
+        },
+        "new_data_auto_affects_existing_strategy": {
+          "type": "boolean",
+          "const": false
+        },
+        "decommission_gates": {
+          "type": "array",
+          "minItems": 6,
+          "maxItems": 6,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "type": "string",
+              "const": "NO_ACTIVE_STRATEGY_DEPENDENCY"
+            },
+            {
+              "type": "string",
+              "const": "NO_RISK_DEPENDENCY"
+            },
+            {
+              "type": "string",
+              "const": "NO_SYSTEM_STATE_DEPENDENCY"
+            },
+            {
+              "type": "string",
+              "const": "HISTORICAL_DECODER_RETAINED"
+            },
+            {
+              "type": "string",
+              "const": "REPLAY_RETAINED"
+            },
+            {
+              "type": "string",
+              "const": "MIGRATION_COMPLETED"
+            }
+          ],
+          "items": false
+        },
+        "first_release_scope": {
+          "type": "string",
+          "const": "ONLY_ETH_LDAR_REQUIRED_DATA_PRODUCTS"
+        }
+      }
+    },
+    "learning_loop": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pipeline",
+        "metrics",
+        "issue_categories",
+        "severity_levels",
+        "online_learning",
+        "automatic_production_rule_mutation",
+        "improvement_pipeline"
+      ],
+      "properties": {
+        "pipeline": {
+          "type": "array",
+          "minItems": 9,
+          "maxItems": 9,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "type": "string",
+              "const": "DATA_SNAPSHOT"
+            },
+            {
+              "type": "string",
+              "const": "SIGNAL"
+            },
+            {
+              "type": "string",
+              "const": "TRADE_PLAN"
+            },
+            {
+              "type": "string",
+              "const": "HUMAN_DECISION"
+            },
+            {
+              "type": "string",
+              "const": "ACTUAL_ORDER_FILL_OBSERVATION"
+            },
+            {
+              "type": "string",
+              "const": "OUTCOME"
+            },
+            {
+              "type": "string",
+              "const": "DEVIATION_ANALYSIS"
+            },
+            {
+              "type": "string",
+              "const": "FINDING"
+            },
+            {
+              "type": "string",
+              "const": "VERSIONED_IMPROVEMENT"
+            }
+          ],
+          "items": false
+        },
+        "metrics": {
+          "type": "array",
+          "minItems": 21,
+          "maxItems": 21,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "type": "string",
+              "const": "DATA_STALE"
+            },
+            {
+              "type": "string",
+              "const": "DISCONNECT_RECONNECT"
+            },
+            {
+              "type": "string",
+              "const": "GAPS_CONFLICTS"
+            },
+            {
+              "type": "string",
+              "const": "SIGNAL_LATENCY"
+            },
+            {
+              "type": "string",
+              "const": "ALERT_LATENCY"
+            },
+            {
+              "type": "string",
+              "const": "FAST_STANDARD_COUNT"
+            },
+            {
+              "type": "string",
+              "const": "FAST_EXECUTION_RATE"
+            },
+            {
+              "type": "string",
+              "const": "FAST_EXPIRED_BEFORE_ACTION_RATE"
+            },
+            {
+              "type": "string",
+              "const": "STANDARD_EXECUTION_RATE"
+            },
+            {
+              "type": "string",
+              "const": "TAKEN_SKIPPED_REJECTED"
+            },
+            {
+              "type": "string",
+              "const": "DECISION_LATENCY"
+            },
+            {
+              "type": "string",
+              "const": "PLANNED_VS_ACTUAL_ENTRY"
+            },
+            {
+              "type": "string",
+              "const": "PLANNED_VS_ACTUAL_SIZE"
+            },
+            {
+              "type": "string",
+              "const": "FEES"
+            },
+            {
+              "type": "string",
+              "const": "REALIZED_PNL"
+            },
+            {
+              "type": "string",
+              "const": "MATCHING_CONFIDENCE"
+            },
+            {
+              "type": "string",
+              "const": "SYSTEM_INCIDENTS"
+            },
+            {
+              "type": "string",
+              "const": "MFE_MAE"
+            },
+            {
+              "type": "string",
+              "const": "R_MULTIPLE"
+            },
+            {
+              "type": "string",
+              "const": "ENTRY_LATENESS"
+            },
+            {
+              "type": "string",
+              "const": "WAIT_QUALITY"
+            }
+          ],
+          "items": false
+        },
+        "issue_categories": {
+          "type": "array",
+          "minItems": 10,
+          "maxItems": 10,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "type": "string",
+              "const": "DATA"
+            },
+            {
+              "type": "string",
+              "const": "STRATEGY"
+            },
+            {
+              "type": "string",
+              "const": "RISK"
+            },
+            {
+              "type": "string",
+              "const": "AI_EXPLANATION"
+            },
+            {
+              "type": "string",
+              "const": "UI"
+            },
+            {
+              "type": "string",
+              "const": "HUMAN_DECISION"
+            },
+            {
+              "type": "string",
+              "const": "MANUAL_EXECUTION"
+            },
+            {
+              "type": "string",
+              "const": "ACCOUNT_OBSERVATION"
+            },
+            {
+              "type": "string",
+              "const": "SYSTEM_RUNTIME"
+            },
+            {
+              "type": "string",
+              "const": "DEPLOYMENT"
+            }
+          ],
+          "items": false
+        },
+        "severity_levels": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "type": "string",
+              "const": "P0"
+            },
+            {
+              "type": "string",
+              "const": "P1"
+            },
+            {
+              "type": "string",
+              "const": "P2"
+            },
+            {
+              "type": "string",
+              "const": "P3"
+            }
+          ],
+          "items": false
+        },
+        "online_learning": {
+          "type": "string",
+          "const": "PROHIBITED"
+        },
+        "automatic_production_rule_mutation": {
+          "type": "string",
+          "const": "PROHIBITED"
+        },
+        "improvement_pipeline": {
+          "type": "array",
+          "minItems": 8,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "type": "string",
+              "const": "FINDING"
+            },
+            {
+              "type": "string",
+              "const": "HYPOTHESIS"
+            },
+            {
+              "type": "string",
+              "const": "NEW_VERSION"
+            },
+            {
+              "type": "string",
+              "const": "TESTS"
+            },
+            {
+              "type": "string",
+              "const": "REPLAY"
+            },
+            {
+              "type": "string",
+              "const": "SHADOW"
+            },
+            {
+              "type": "string",
+              "const": "REVIEW"
+            },
+            {
+              "type": "string",
+              "const": "RELEASE"
+            }
+          ],
+          "items": false
+        }
+      }
+    },
+    "capability_milestones": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "FL1",
+        "FL2",
+        "FL3",
+        "FL4"
+      ],
+      "properties": {
+        "FL1": {
+          "type": "string",
+          "const": "TRUSTED_DATA_RUNTIME"
+        },
+        "FL2": {
+          "type": "string",
+          "const": "SIGNAL_AND_RISK_ENGINE"
+        },
+        "FL3": {
+          "type": "string",
+          "const": "HUMAN_REVIEW_SURFACE"
+        },
+        "FL4": {
+          "type": "string",
+          "const": "HUMAN_CONFIRMED_EXECUTION"
+        }
+      }
+    },
+    "releases": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "R0",
+        "R1"
+      ],
+      "properties": {
+        "R0": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "scope",
+            "execution"
+          ],
+          "properties": {
+            "scope": {
+              "type": "string",
+              "const": "MINIMUM_VERTICAL_SUBSET_OF_FL1_FL2_FL3"
+            },
+            "execution": {
+              "type": "string",
+              "const": "MANUAL_ONLY"
+            }
+          }
+        },
+        "R1": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "scope",
+            "required_controls",
+            "autonomous_entry",
+            "human_confirmation_required"
+          ],
+          "properties": {
+            "scope": {
+              "type": "string",
+              "const": "HUMAN_CONFIRMED_AUTOMATED_EXECUTION"
+            },
+            "required_controls": {
+              "type": "array",
+              "minItems": 27,
+              "maxItems": 27,
+              "uniqueItems": true,
+              "prefixItems": [
+                {
+                  "type": "string",
+                  "const": "DEDICATED_LIMITED_CAPITAL_SUBACCOUNT"
+                },
+                {
+                  "type": "string",
+                  "const": "DEDICATED_API_WALLET"
+                },
+                {
+                  "type": "string",
+                  "const": "SECRET_ISOLATION"
+                },
+                {
+                  "type": "string",
+                  "const": "OFFICIAL_SDK_SIGNING"
+                },
+                {
+                  "type": "string",
+                  "const": "NONCE_AUTHORITY"
+                },
+                {
+                  "type": "string",
+                  "const": "IMMUTABLE_ORDER_INTENT"
+                },
+                {
+                  "type": "string",
+                  "const": "ORDER_INTENT_HASH"
+                },
+                {
+                  "type": "string",
+                  "const": "CLOID_IDEMPOTENCY"
+                },
+                {
+                  "type": "string",
+                  "const": "EXPIRES_AFTER"
+                },
+                {
+                  "type": "string",
+                  "const": "PRE_SUBMIT_REVALIDATION"
+                },
+                {
+                  "type": "string",
+                  "const": "ALO_POST_ONLY"
+                },
+                {
+                  "type": "string",
+                  "const": "BOUNDED_SLIPPAGE_IOC"
+                },
+                {
+                  "type": "string",
+                  "const": "SUBMIT_CANCEL"
+                },
+                {
+                  "type": "string",
+                  "const": "PARTIAL_FILL_HANDLING"
+                },
+                {
+                  "type": "string",
+                  "const": "ACTUAL_FILLED_POSITION_SIZING"
+                },
+                {
+                  "type": "string",
+                  "const": "MANDATORY_AUTOMATIC_STOP"
+                },
+                {
+                  "type": "string",
+                  "const": "FIXED_MULTI_STAGE_AUTOMATIC_TP"
+                },
+                {
+                  "type": "string",
+                  "const": "REDUCE_ONLY_PROTECTION"
+                },
+                {
+                  "type": "string",
+                  "const": "EXCHANGE_STATE_PROTECTION_VERIFICATION"
+                },
+                {
+                  "type": "string",
+                  "const": "POSITION_UNPROTECTED_EMERGENCY_PATH"
+                },
+                {
+                  "type": "string",
+                  "const": "KILL_SWITCH"
+                },
+                {
+                  "type": "string",
+                  "const": "DEAD_MAN_PROTECTION"
+                },
+                {
+                  "type": "string",
+                  "const": "AUDIT"
+                },
+                {
+                  "type": "string",
+                  "const": "TESTNET"
+                },
+                {
+                  "type": "string",
+                  "const": "SHADOW"
+                },
+                {
+                  "type": "string",
+                  "const": "SMALL_CAPITAL_MAINNET_CANARY"
+                },
+                {
+                  "type": "string",
+                  "const": "SEPARATE_MAINNET_AUTHORIZATION"
+                }
+              ],
+              "items": false
+            },
+            "autonomous_entry": {
+              "type": "string",
+              "const": "PROHIBITED"
+            },
+            "human_confirmation_required": {
+              "type": "boolean",
+              "const": true
+            }
+          }
+        }
+      }
+    },
+    "governance_levels": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "G0",
+        "G1",
+        "G2",
+        "G3",
+        "G4",
+        "flp1_minimum",
+        "fl4_requirement"
+      ],
+      "properties": {
+        "G0": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "type": "string",
+              "const": "NONCRITICAL_DOCUMENTATION"
+            },
+            {
+              "type": "string",
+              "const": "PRESENTATION"
+            }
+          ],
+          "items": false
+        },
+        "G1": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "type": "string",
+              "const": "METRICS"
+            },
+            {
+              "type": "string",
+              "const": "AI_EXPLANATION"
+            },
+            {
+              "type": "string",
+              "const": "BACKTEST_PRESENTATION"
+            }
+          ],
+          "items": false
+        },
+        "G2": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "type": "string",
+              "const": "LIVE_PUBLIC_DATA"
+            },
+            {
+              "type": "string",
+              "const": "CANONICAL_MARKET_STATE"
+            },
+            {
+              "type": "string",
+              "const": "STRATEGY"
+            }
+          ],
+          "items": false
+        },
+        "G3": {
+          "type": "array",
+          "minItems": 5,
+          "maxItems": 5,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "type": "string",
+              "const": "RISK_CALCULATION"
+            },
+            {
+              "type": "string",
+              "const": "TRADE_PLAN"
+            },
+            {
+              "type": "string",
+              "const": "HUMAN_DECISION"
+            },
+            {
+              "type": "string",
+              "const": "ACCOUNT_ORDER_FILL_OBSERVATION"
+            },
+            {
+              "type": "string",
+              "const": "PLAN_OUTCOME_MATCHING"
+            }
+          ],
+          "items": false
+        },
+        "G4": {
+          "type": "array",
+          "minItems": 6,
+          "maxItems": 6,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "type": "string",
+              "const": "CREDENTIALS"
+            },
+            {
+              "type": "string",
+              "const": "SIGNING"
+            },
+            {
+              "type": "string",
+              "const": "NONCE"
+            },
+            {
+              "type": "string",
+              "const": "EXCHANGE_WRITE"
+            },
+            {
+              "type": "string",
+              "const": "SL_TP"
+            },
+            {
+              "type": "string",
+              "const": "ACTUAL_POSITION_MUTATION"
+            }
+          ],
+          "items": false
+        },
+        "flp1_minimum": {
+          "type": "string",
+          "const": "G3"
+        },
+        "fl4_requirement": {
+          "type": "string",
+          "const": "SEPARATE_G4_EXECUTION_AND_SECURITY_REVIEW"
+        }
+      }
+    },
+    "development_route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pre_launch_main_prs",
+        "flp1_is_vertical_pilot_pr",
+        "bounded_repairs_in_same_execution_window",
+        "bounded_repairs_same_scope_required",
+        "bounded_repairs_original_pr_required",
+        "full_independent_review_only_for_final_merge_candidate",
+        "finding_classes",
+        "only_blocker_prevents_merge"
+      ],
+      "properties": {
+        "pre_launch_main_prs": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "type": "string",
+              "const": "V0-FLP0-PILOT-AND-LONG-TERM-ROADMAP-AUTHORITY-FREEZE"
+            },
+            {
+              "type": "string",
+              "const": "V0-FLP1-DECISION-TO-OUTCOME-OPERATOR-ASSIST-PILOT"
+            }
+          ],
+          "items": false
+        },
+        "flp1_is_vertical_pilot_pr": {
+          "type": "boolean",
+          "const": true
+        },
+        "bounded_repairs_in_same_execution_window": {
+          "type": "boolean",
+          "const": true
+        },
+        "bounded_repairs_same_scope_required": {
+          "type": "boolean",
+          "const": true
+        },
+        "bounded_repairs_original_pr_required": {
+          "type": "boolean",
+          "const": true
+        },
+        "full_independent_review_only_for_final_merge_candidate": {
+          "type": "boolean",
+          "const": true
+        },
+        "finding_classes": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "type": "string",
+              "const": "BLOCKER"
+            },
+            {
+              "type": "string",
+              "const": "FOLLOW_UP"
+            }
+          ],
+          "items": false
+        },
+        "only_blocker_prevents_merge": {
+          "type": "boolean",
+          "const": true
+        }
+      }
+    },
+    "review_finalization_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "draft_pr_required",
+        "external_independent_review_required",
+        "review_permission",
+        "mark_ready_prohibited",
+        "merge_prohibited",
+        "exact_head_ci_required",
+        "exact_head_review_required",
+        "writer_reviewer_separation_required",
+        "finalization_separate_task_required",
+        "separate_project_control_finalization_authorization_required",
+        "pre_finalization_base_head_state_reverification_required",
+        "unresolved_blocker_prevents_merge"
+      ],
+      "properties": {
+        "draft_pr_required": {
+          "type": "boolean",
+          "const": true
+        },
+        "external_independent_review_required": {
+          "type": "boolean",
+          "const": true
+        },
+        "review_permission": {
+          "type": "string",
+          "const": "STRICT_READ_ONLY"
+        },
+        "mark_ready_prohibited": {
+          "type": "boolean",
+          "const": true
+        },
+        "merge_prohibited": {
+          "type": "boolean",
+          "const": true
+        },
+        "exact_head_ci_required": {
+          "type": "boolean",
+          "const": true
+        },
+        "exact_head_review_required": {
+          "type": "boolean",
+          "const": true
+        },
+        "writer_reviewer_separation_required": {
+          "type": "boolean",
+          "const": true
+        },
+        "finalization_separate_task_required": {
+          "type": "boolean",
+          "const": true
+        },
+        "separate_project_control_finalization_authorization_required": {
+          "type": "boolean",
+          "const": true
+        },
+        "pre_finalization_base_head_state_reverification_required": {
+          "type": "boolean",
+          "const": true
+        },
+        "unresolved_blocker_prevents_merge": {
+          "type": "boolean",
+          "const": true
+        }
+      }
+    },
+    "recursive_rotation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "required",
+        "next_window_role",
+        "next_window_permission",
+        "post_merge_next_gate",
+        "handoff_required_fields",
+        "rotation_triggers",
+        "required_rotation_output",
+        "current_safe_stop_point_required",
+        "complete_handoff_prompt_required",
+        "recursive_window_rotation_requirement",
+        "verification_warning"
+      ],
+      "properties": {
+        "required": {
+          "type": "boolean",
+          "const": true
+        },
+        "next_window_role": {
+          "type": "string",
+          "const": "V0 Fast Launch FLP0 external independent Reviewer"
+        },
+        "next_window_permission": {
+          "type": "string",
+          "const": "STRICT_READ_ONLY"
+        },
+        "post_merge_next_gate": {
+          "type": "string",
+          "const": "V0-FLP1-OPERATOR-ASSIST-PILOT-SCOPE-FREEZE"
+        },
+        "handoff_required_fields": {
+          "type": "array",
+          "minItems": 16,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "type": "string",
+              "const": "CURRENT_WINDOW_ROLE"
+            },
+            {
+              "type": "string",
+              "const": "REPOSITORY"
+            },
+            {
+              "type": "string",
+              "const": "EXACT_GITHUB_SHA"
+            },
+            {
+              "type": "string",
+              "const": "PR"
+            },
+            {
+              "type": "string",
+              "const": "BRANCH"
+            },
+            {
+              "type": "string",
+              "const": "PERMISSION"
+            },
+            {
+              "type": "string",
+              "const": "GOVERNANCE_LEVEL"
+            },
+            {
+              "type": "string",
+              "const": "WRITE_LEASE"
+            },
+            {
+              "type": "string",
+              "const": "CURRENT_CI"
+            },
+            {
+              "type": "string",
+              "const": "COMPLETED_WORK"
+            },
+            {
+              "type": "string",
+              "const": "NEXT_ACTION"
+            },
+            {
+              "type": "string",
+              "const": "STOP_CONDITIONS"
+            },
+            {
+              "type": "string",
+              "const": "COMPLETE_ROTATION_POLICY"
+            },
+            {
+              "type": "string",
+              "const": "ROTATION_TRIGGERS"
+            },
+            {
+              "type": "string",
+              "const": "REQUIRED_ROTATION_OUTPUT"
+            },
+            {
+              "type": "string",
+              "const": "RECURSIVE_WINDOW_ROTATION_REQUIREMENT"
+            }
+          ],
+          "items": false
+        },
+        "rotation_triggers": {
+          "type": "array",
+          "minItems": 14,
+          "maxItems": 14,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "type": "string",
+              "const": "PR_MERGED"
+            },
+            {
+              "type": "string",
+              "const": "ISSUE_OR_EPIC_COMPLETED"
+            },
+            {
+              "type": "string",
+              "const": "STAGE_ENDS_BEFORE_NEW_STAGE"
+            },
+            {
+              "type": "string",
+              "const": "REVIEW_PLUS_REPAIR_EXCEEDS_TWO_ROUNDS"
+            },
+            {
+              "type": "string",
+              "const": "HEAD_DRIFT"
+            },
+            {
+              "type": "string",
+              "const": "WRITER_COLLISION"
+            },
+            {
+              "type": "string",
+              "const": "WRITE_LEASE_REVOKED_OR_PERMISSION_CHANGED"
+            },
+            {
+              "type": "string",
+              "const": "MULTIPLE_PRS_STAGES_OR_STALE_STATES"
+            },
+            {
+              "type": "string",
+              "const": "USER_REPEATEDLY_REQUESTS_PROJECT_STATUS"
+            },
+            {
+              "type": "string",
+              "const": "CONTEXT_LENGTH_RISKS_STALE_FACT_CONTAMINATION"
+            },
+            {
+              "type": "string",
+              "const": "OLD_HEAD_CI_OR_PR_STATE_REUSE_RISK"
+            },
+            {
+              "type": "string",
+              "const": "PROJECT_SWITCH_BETWEEN_TRADER_ASSIST_V0_AND_TRADE_OS"
+            },
+            {
+              "type": "string",
+              "const": "USER_EXPLICITLY_REQUESTS_NEW_WINDOW"
+            },
+            {
+              "type": "string",
+              "const": "MULTIPLE_EXECUTION_REVIEW_REPAIR_OR_FINALIZATION_PROMPTS"
+            }
+          ],
+          "items": false
+        },
+        "required_rotation_output": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "type": "string",
+              "const": "WINDOW_ROTATION_REQUIRED"
+            },
+            {
+              "type": "string",
+              "const": "REASON"
+            },
+            {
+              "type": "string",
+              "const": "CURRENT_SAFE_STOP_POINT"
+            },
+            {
+              "type": "string",
+              "const": "NEXT_WINDOW_HANDOFF_PROMPT"
+            }
+          ],
+          "items": false
+        },
+        "current_safe_stop_point_required": {
+          "type": "boolean",
+          "const": true
+        },
+        "complete_handoff_prompt_required": {
+          "type": "boolean",
+          "const": true
+        },
+        "recursive_window_rotation_requirement": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "future_handoffs_must_include_complete_rotation_policy",
+            "future_handoffs_must_include_all_rotation_triggers",
+            "future_handoffs_must_include_required_rotation_output",
+            "future_handoffs_must_include_recursive_requirement_itself",
+            "receiving_window_must_propagate_requirement",
+            "applies_to_every_later_handoff",
+            "one_time_summary_or_non_propagating_simplification_prohibited"
+          ],
+          "properties": {
+            "future_handoffs_must_include_complete_rotation_policy": {
+              "type": "boolean",
+              "const": true
+            },
+            "future_handoffs_must_include_all_rotation_triggers": {
+              "type": "boolean",
+              "const": true
+            },
+            "future_handoffs_must_include_required_rotation_output": {
+              "type": "boolean",
+              "const": true
+            },
+            "future_handoffs_must_include_recursive_requirement_itself": {
+              "type": "boolean",
+              "const": true
+            },
+            "receiving_window_must_propagate_requirement": {
+              "type": "boolean",
+              "const": true
+            },
+            "applies_to_every_later_handoff": {
+              "type": "boolean",
+              "const": true
+            },
+            "one_time_summary_or_non_propagating_simplification_prohibited": {
+              "type": "boolean",
+              "const": true
+            }
+          }
+        },
+        "verification_warning": {
+          "type": "string",
+          "const": "A handoff never substitutes for current GitHub verification."
+        }
+      }
+    },
+    "deferred_capabilities": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 6,
+      "uniqueItems": true,
+      "prefixItems": [
+        {
+          "type": "string",
+          "const": "COMPLEX_DYNAMIC_HOT_LOAD_PLUGIN_MARKET"
+        },
+        {
+          "type": "string",
+          "const": "MULTI_STRATEGY_PRODUCTION_ROUTING"
+        },
+        {
+          "type": "string",
+          "const": "MULTI_ASSET_PRODUCTION_ROUTING"
+        },
+        {
+          "type": "string",
+          "const": "AUTONOMOUS_ENTRY"
+        },
+        {
+          "type": "string",
+          "const": "ONLINE_LEARNING"
+        },
+        {
+          "type": "string",
+          "const": "AUTOMATIC_PRODUCTION_PARAMETER_MUTATION"
+        }
+      ],
+      "items": false
+    }
+  },
+  "$defs": {
+    "ProjectState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "project",
+        "repository",
+        "program",
+        "state_kind",
+        "state_base_sha",
+        "last_completed_implementation",
+        "last_completed_implementation_pr",
+        "last_policy_state_pr",
+        "active_milestone",
+        "active_task_id",
+        "active_write_lease",
+        "first_release_frozen",
+        "long_term_roadmap_frozen",
+        "strategy_lifecycle_frozen",
+        "data_lifecycle_frozen",
+        "learning_loop_frozen",
+        "live_transport_authorized",
+        "account_readonly_runtime_authorized",
+        "testnet_execution_authorized",
+        "mainnet_execution_authorized",
+        "flp1_implementation_authorized",
+        "rate_limit_status",
+        "next_gate"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "1.0.0"
+        },
+        "project": {
+          "type": "string",
+          "const": "Trader Assist V0"
+        },
+        "repository": {
+          "type": "string",
+          "const": "woshixiong/trader-assist-v0"
+        },
+        "program": {
+          "type": "string",
+          "const": "V0-FAST-LAUNCH"
+        },
+        "state_kind": {
+          "type": "string",
+          "const": "SAFE_STOP_SNAPSHOT"
+        },
+        "state_base_sha": {
+          "type": "string",
+          "const": "c507e2fc1bad6aca175cf833e5bcca63224c3e5f"
+        },
+        "last_completed_implementation": {
+          "type": "string",
+          "const": "V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT"
+        },
+        "last_completed_implementation_pr": {
+          "type": "integer",
+          "const": 11
+        },
+        "last_policy_state_pr": {
+          "type": "integer",
+          "const": 12
+        },
+        "active_milestone": {
+          "type": "string",
+          "const": "V0-FLP0-PILOT-AND-LONG-TERM-ROADMAP-AUTHORITY-FREEZE"
+        },
+        "active_task_id": {
+          "type": "string",
+          "const": "V0-FLP0-PILOT-AND-LONG-TERM-ROADMAP-AUTHORITY-FREEZE"
+        },
+        "active_write_lease": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "last_lease_type",
+            "last_governance_level"
+          ],
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "NONE"
+            },
+            "last_lease_type": {
+              "type": "string",
+              "const": "BOUNDED_POLICY_GOVERNANCE_AND_MACHINE_STATE_ONLY"
+            },
+            "last_governance_level": {
+              "type": "string",
+              "const": "G2"
+            }
+          }
+        },
+        "first_release_frozen": {
+          "type": "boolean",
+          "const": true
+        },
+        "long_term_roadmap_frozen": {
+          "type": "boolean",
+          "const": true
+        },
+        "strategy_lifecycle_frozen": {
+          "type": "boolean",
+          "const": true
+        },
+        "data_lifecycle_frozen": {
+          "type": "boolean",
+          "const": true
+        },
+        "learning_loop_frozen": {
+          "type": "boolean",
+          "const": true
+        },
+        "live_transport_authorized": {
+          "type": "boolean",
+          "const": false
+        },
+        "account_readonly_runtime_authorized": {
+          "type": "boolean",
+          "const": false
+        },
+        "testnet_execution_authorized": {
+          "type": "boolean",
+          "const": false
+        },
+        "mainnet_execution_authorized": {
+          "type": "boolean",
+          "const": false
+        },
+        "flp1_implementation_authorized": {
+          "type": "boolean",
+          "const": false
+        },
+        "rate_limit_status": {
+          "type": "string",
+          "const": "UNRESOLVED_OFFICIAL_LIMIT"
+        },
+        "next_gate": {
+          "type": "string",
+          "const": "V0-FLP1-OPERATOR-ASSIST-PILOT-SCOPE-FREEZE"
+        }
+      }
+    }
+  }
+}

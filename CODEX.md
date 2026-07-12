@@ -3,25 +3,34 @@
 ## Repository state
 
 ```text
-LAST_COMPLETED_SLICE: V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT
-LAST_MERGED_PR: #11
-ACTIVE_IMPLEMENTATION_SLICE: NONE
-ACTIVE_IMPLEMENTATION_WRITE_LEASE: NONE
-A7_SCOPE_FROZEN: NO
-A7_IMPLEMENTATION_AUTHORIZED: NO
+PROGRAM: V0-FAST-LAUNCH
+TASK_ID: V0-FLP0-PILOT-AND-LONG-TERM-ROADMAP-AUTHORITY-FREEZE
+STATE_BASE_SHA: c507e2fc1bad6aca175cf833e5bcca63224c3e5f
+LAST_COMPLETED_IMPLEMENTATION: V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT
+LAST_COMPLETED_IMPLEMENTATION_PR: 11
+LAST_POLICY_STATE_PR: 12
+ACTIVE_IMPLEMENTATION: NONE
+ACTIVE_WRITE_LEASE: NONE
 RATE_LIMIT_STATUS: UNRESOLVED_OFFICIAL_LIMIT
 LIVE_TRANSPORT_AUTHORIZED: FALSE
+ACCOUNT_READONLY_RUNTIME_AUTHORIZED: FALSE
+TESTNET_EXECUTION_AUTHORIZED: FALSE
+MAINNET_EXECUTION_AUTHORIZED: FALSE
+FLP1_IMPLEMENTATION_AUTHORIZED: FALSE
+NEXT_GATE: V0-FLP1-OPERATOR-ASSIST-PILOT-SCOPE-FREEZE
 ```
 
 ## Current bounded implementation task
 
 `NONE`
 
-A6 is the last completed slice and was merged via PR #11. There is no active bounded implementation task or implementation write lease. Do not modify repository files without a new exact write lease and file allowlist. Codex must not choose, name, or implement A7 scope; the next gate is independent read-only A7 scope-freeze planning.
+A6 is the last completed implementation and was merged via PR #11. PR #12 is the last policy-state PR before this Fast Launch authority freeze. There is no active implementation task or implementation write lease. Do not modify repository files without a new exact write lease and file allowlist.
+
+The prior generic A7-only gate is superseded by `V0-FLP1-OPERATOR-ASSIST-PILOT-SCOPE-FREEZE`. This file does not authorize FLP1 implementation, live transport, account observation runtime, Testnet, Mainnet, or exchange writes.
 
 ## Allowed files
 
-- None. A future bounded implementation task must provide its own exact write lease and file allowlist.
+- None. A future bounded implementation or repair task must provide its own exact write lease and file allowlist.
 
 ## Last completed A6 behavior
 
@@ -47,19 +56,28 @@ A6 is the last completed slice and was merged via PR #11. There is no active bou
 - allow empty/empty inputs without sentinel/default evidence;
 - keep tolerance, source priority, latest-wins, finality, revisions, canonical winner, normalization, and Silver promotion out of scope.
 
+## Fast Launch frozen authority
+
+`V0-R0` is the ETH-only `V0-FLP1-DECISION-TO-OUTCOME-OPERATOR-ASSIST-PILOT` with one active strategy, `ETH-LDAR-v0.1`.
+
+FAST and STANDARD are signal-speed classes of that one strategy. Every valid signal is visible. FAST is optional, short-lived, maximum-entry-bounded, and marked `DO NOT CHASE`. STANDARD permits normal human review and expected execution after acceptance. Execution remains manual. AI is explanation and checklist only.
+
+The long-term capability sequence remains FL1 trusted data, FL2 signal and risk, FL3 human review, and FL4 human-confirmed execution. R1 and FL4 require separate G4 implementation, security review, Testnet, shadow, limited-capital canary, and Mainnet authorization. Autonomous entry remains prohibited.
+
 ## Forbidden
 
-- modifications to A5 contracts/extractor, source catalog code/documentation, `events.py`, `ingress.py`, `bronze.py`, or `replay.py`;
-- modifications to existing tests, existing schemas, fixtures, dependencies, lockfiles, `pyproject.toml`, or CI workflows;
+- modifications to A5 contracts/extractor, source catalog code/documentation, `events.py`, `ingress.py`, `bronze.py`, or `replay.py` without a later exact lease;
+- modifications to existing runtime tests, existing V0 schemas, fixtures, dependencies, lockfiles, `pyproject.toml`, or CI workflows without a later exact lease;
 - HTTP or WebSocket clients, sockets, DNS, async runtime, event loop, live endpoint connection, polling, reconnect, heartbeat, health, backfill, REST request execution, or soak runtime;
 - payload parsing or reading payload bytes from `payload_ref` or any filesystem path;
 - Bronze or manifest writes, database or cloud storage;
 - numeric rate-limit values or a transition away from `UNRESOLVED_OFFICIAL_LIMIT`;
 - credentials, account addresses, wallets, signing, nonces, exchange writes, order mutation, Testnet/Mainnet execution configuration;
 - tolerance, latest-wins, revision ordering, finality inference, source priority, or canonical winner selection;
-- `NormalizedEventV0` emission, Silver normalization/persistence, strategy candidates, AI recommendations, risk sizing, dashboards, or later V0 slices;
+- `NormalizedEventV0` emission, Silver normalization/persistence, strategy runtime, AI recommendation runtime, risk runtime, dashboards, or later V0 runtime slices;
 - raw operational payloads, logs, caches, databases, source archives, private/user/account data, secrets, or unredacted live observations in Git;
-- modifications to `woshixiong/trade-os`.
+- modifications to `woshixiong/trade-os`;
+- Mark Ready, merge, branch deletion, or later-phase execution without separate authorization.
 
 ## Future bounded-task checks
 

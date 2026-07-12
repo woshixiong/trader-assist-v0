@@ -308,7 +308,7 @@ Every handoff must include this warning:
 
 ```text
 This handoff is not a substitute for current GitHub verification.
-Before any action, verify current GitHub state, exact base/head SHA, PR state, draft/merged status, changed files, and CI.
+Before any action, verify current GitHub state, exact base/head SHA, PR state, draft/merged status, changed files, active write lease, and CI.
 ```
 
 ## 10. Standard project-control output
@@ -349,4 +349,45 @@ Codex = necessary repository write / tests / CI / bounded repair
 Trae = local environment / IDE / terminal configuration
 External Review = strict read-only / exact-head / no writer provenance
 Finalization = explicit authorization / expected-head guarded merge
+```
+
+## 12. Fast Launch governance overlay
+
+The pre-launch Fast Launch route is intentionally compressed to two main PRs:
+
+```text
+PR A: V0-FLP0-PILOT-AND-LONG-TERM-ROADMAP-AUTHORITY-FREEZE
+PR B: V0-FLP1-DECISION-TO-OUTCOME-OPERATOR-ASSIST-PILOT
+```
+
+PR B is one bounded end-to-end vertical Pilot PR rather than an indefinitely fragmented A7/A8/A9 sequence. Scope-bounded repairs may remain in the same Pilot execution window. Only the final merge candidate receives the full independent review.
+
+Review findings are classified as `BLOCKER` or `FOLLOW_UP`. Only `BLOCKER` prevents merge.
+
+Fast Launch governance levels are:
+
+- G0: noncritical documentation and presentation;
+- G1: metrics, AI explanation, and backtest presentation;
+- G2: live public data, Canonical Market State, and strategy;
+- G3: risk, TradePlan, human decision, account/order/fill observation, and matching;
+- G4: credentials, signing, nonce, exchange write, SL/TP, and actual position mutation.
+
+FLP1 is at least G3. FL4 requires a separate G4 execution implementation and independent security review.
+
+Current safe stop:
+
+```text
+PROGRAM: V0-FAST-LAUNCH
+LAST_COMPLETED_IMPLEMENTATION_PR: 11
+LAST_POLICY_STATE_PR: 12
+ACTIVE_WRITE_LEASE: NONE
+RATE_LIMIT_STATUS: UNRESOLVED_OFFICIAL_LIMIT
+LIVE_TRANSPORT_AUTHORIZED: FALSE
+ACCOUNT_READONLY_RUNTIME_AUTHORIZED: FALSE
+TESTNET_EXECUTION_AUTHORIZED: FALSE
+MAINNET_EXECUTION_AUTHORIZED: FALSE
+FLP1_IMPLEMENTATION_AUTHORIZED: FALSE
+NEXT_WINDOW_ROLE: V0 Fast Launch FLP0 external independent Reviewer
+NEXT_WINDOW_PERMISSION: STRICT_READ_ONLY
+POST_MERGE_NEXT_GATE: V0-FLP1-OPERATOR-ASSIST-PILOT-SCOPE-FREEZE
 ```

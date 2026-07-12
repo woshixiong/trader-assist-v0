@@ -1,0 +1,464 @@
+{
+  "schema_version": "1.0.0",
+  "program_id": "V0-FAST-LAUNCH",
+  "project": "Trader Assist V0",
+  "repository": "woshixiong/trader-assist-v0",
+  "governance_level": "G2",
+  "task_id": "V0-FLP0-PILOT-AND-LONG-TERM-ROADMAP-AUTHORITY-FREEZE",
+  "state_base_sha": "c507e2fc1bad6aca175cf833e5bcca63224c3e5f",
+  "authority": {
+    "last_completed_implementation": "V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT",
+    "last_completed_implementation_pr": 11,
+    "last_policy_state_pr": 12,
+    "rate_limit_status": "UNRESOLVED_OFFICIAL_LIMIT",
+    "live_transport_authorized": false,
+    "account_readonly_runtime_authorized": false,
+    "testnet_execution_authorized": false,
+    "mainnet_execution_authorized": false,
+    "flp1_implementation_authorized": false
+  },
+  "first_release": {
+    "release_id": "V0-R0",
+    "milestone": "V0-FLP1-DECISION-TO-OUTCOME-OPERATOR-ASSIST-PILOT",
+    "primary_asset": "ETH",
+    "active_strategy_count": 1,
+    "active_strategy": "ETH-LDAR-v0.1",
+    "execution_mode": "MANUAL_EXECUTION_WITH_SYSTEM_ASSISTANCE",
+    "automatic_exchange_write": "PROHIBITED",
+    "ai_role": "EXPLANATION_AND_CHECKLIST_ONLY",
+    "all_valid_signals_visible": true,
+    "post_launch_learning_loop": "MANDATORY",
+    "decision_flow": [
+      "REALTIME_PUBLIC_READONLY_DATA",
+      "DATA_QUALITY_STATE",
+      "ETH-LDAR-v0.1",
+      "LONG_SHORT_WAIT",
+      "DETERMINISTIC_RISK_SIZING",
+      "TRADE_PLAN",
+      "FAST_OR_STANDARD_SIGNAL_CARD",
+      "TAKEN_SKIPPED_REJECTED",
+      "MANUAL_HYPERLIQUID_EXECUTION",
+      "READONLY_ORDER_FILL_OBSERVATION",
+      "PLAN_OUTCOME_MATCHING",
+      "REPLAY",
+      "FINDINGS_AND_ITERATION"
+    ],
+    "required_capabilities": [
+      "ETH_5M_CANDLE",
+      "ETH_15M_CANDLE",
+      "MARK_MID_REFERENCE",
+      "ETH_OI",
+      "FUNDING",
+      "TIMESTAMPS",
+      "FRESHNESS",
+      "GAP_CONFLICT",
+      "HEARTBEAT",
+      "RECONNECT",
+      "BOUNDED_BACKOFF",
+      "REPLAY",
+      "WATCH",
+      "PREPARE",
+      "TRIGGERED_FAST",
+      "TRIGGERED_STANDARD",
+      "EXPIRED",
+      "LONG_SHORT_WAIT",
+      "ENTRY_ZONE",
+      "MAX_ENTRY_BOUNDARY",
+      "INVALIDATION",
+      "FIXED_STOP",
+      "TP1",
+      "TP2",
+      "EXACT_SIZE",
+      "NOTIONAL",
+      "RISK_AMOUNT",
+      "RISK_PERCENT",
+      "EXPIRY",
+      "COMPACT_SIGNAL_CARD",
+      "COPY_CONTROLS",
+      "TAKEN_SKIPPED_REJECTED",
+      "READONLY_ACCOUNT_ORDER_FILL_OBSERVATION",
+      "AUTOMATIC_SYSTEM_RECORDS",
+      "CSV_XLSX_FALLBACK_IMPORT",
+      "MINIMAL_PILOT_REVIEW"
+    ],
+    "forbidden_capabilities": [
+      "API_WALLET",
+      "PRIVATE_KEY",
+      "SIGNING",
+      "NONCE",
+      "EXCHANGE_WRITE",
+      "AUTOMATIC_ENTRY",
+      "AUTOMATIC_CANCEL",
+      "AUTOMATIC_SL_TP_SUBMISSION",
+      "FUND_TRANSFER",
+      "WITHDRAWAL",
+      "MULTIPLE_ACTIVE_STRATEGIES",
+      "MULTIPLE_ACTIVE_ASSETS",
+      "AUTOMATIC_STRATEGY_ROUTING",
+      "ONLINE_LEARNING",
+      "AUTOMATIC_PRODUCTION_PARAMETER_MUTATION"
+    ]
+  },
+  "signal_speed_policy": {
+    "strategy_id": "ETH-LDAR-v0.1",
+    "speed_classes_are_not_strategies": true,
+    "lifecycle": [
+      "WATCH",
+      "PREPARE",
+      "TRIGGERED_FAST_OR_TRIGGERED_STANDARD",
+      "EXECUTED_SKIPPED_OR_EXPIRED"
+    ],
+    "classes": {
+      "FAST": {
+        "all_valid_signals_alerted": true,
+        "label": "FAST / OPTIONAL",
+        "short_expiry": true,
+        "max_entry_boundary_required": true,
+        "do_not_chase_required": true,
+        "execution_optional": true,
+        "missed_execution_is_strategy_failure": false,
+        "human_actionability_recorded": true
+      },
+      "STANDARD": {
+        "all_valid_signals_alerted": true,
+        "label": "STANDARD",
+        "longer_expiry": true,
+        "human_check_and_order_expected": true,
+        "accepted_signal_execution_expected": true
+      }
+    },
+    "required_patterns": [
+      "LIQUIDITY_SWEEP_RECLAIM_FAST",
+      "LIQUIDITY_SWEEP_PULLBACK_STANDARD"
+    ]
+  },
+  "strategy_lifecycle": {
+    "platform_and_strategy_independent": true,
+    "manifest_name": "StrategyManifest",
+    "manifest_required_fields": [
+      "strategy_id",
+      "strategy_version",
+      "supported_assets",
+      "supported_timeframes",
+      "required_data_products",
+      "optional_data_products",
+      "minimum_lookback",
+      "configuration_schema",
+      "signal_output_version",
+      "risk_profile",
+      "replay_compatible",
+      "enabled"
+    ],
+    "promotion_pipeline": [
+      "INDEPENDENT_DEVELOPMENT",
+      "DETERMINISTIC_TESTS",
+      "REPLAY",
+      "SHADOW",
+      "INDEPENDENT_REVIEW",
+      "REGISTRY",
+      "CONFIG_ENABLE"
+    ],
+    "disable_policy": {
+      "enabled": false,
+      "delete_history": false,
+      "delete_records": false,
+      "delete_replay_capability": false
+    },
+    "first_release": [
+      "STABLE_INTERFACE",
+      "REGISTRY",
+      "ENABLE_DISABLE"
+    ],
+    "deferred_strategies": [
+      "BRK-AR",
+      "TRD-PB",
+      "BAL-RV",
+      "LQS-FR_OR_ETH-LDAR_FAMILY",
+      "MACRO-RP",
+      "ETHBTC_RELATIVE_STRENGTH",
+      "LIQUIDATION_CASCADE",
+      "TURTLE_CROSS_DAY_TREND",
+      "GRID_MARKET_MAKING",
+      "CROSS_VENUE_ARBITRAGE",
+      "AUTOMATIC_REGIME_ROUTER",
+      "AI_DISCRETIONARY_STRATEGY"
+    ]
+  },
+  "data_product_lifecycle": {
+    "strategy_raw_exchange_json_dependency": "PROHIBITED",
+    "pipeline": [
+      "SOURCE_ADAPTER",
+      "RAW_OBSERVATION",
+      "VALIDATION",
+      "NORMALIZED_DATA_PRODUCT",
+      "FEATURE_PROVIDER",
+      "STRATEGY_INPUT"
+    ],
+    "manifest_name": "DataProductManifest",
+    "manifest_required_fields": [
+      "data_product_id",
+      "version",
+      "semantic_definition",
+      "source_adapter",
+      "asset",
+      "timeframe",
+      "freshness_rule",
+      "quality_states",
+      "replay_format",
+      "retention_policy",
+      "enabled"
+    ],
+    "strategy_dependency_declaration_required": true,
+    "new_data_auto_affects_existing_strategy": false,
+    "decommission_gates": [
+      "NO_ACTIVE_STRATEGY_DEPENDENCY",
+      "NO_RISK_DEPENDENCY",
+      "NO_SYSTEM_STATE_DEPENDENCY",
+      "HISTORICAL_DECODER_RETAINED",
+      "REPLAY_RETAINED",
+      "MIGRATION_COMPLETED"
+    ],
+    "first_release_scope": "ONLY_ETH_LDAR_REQUIRED_DATA_PRODUCTS"
+  },
+  "learning_loop": {
+    "pipeline": [
+      "DATA_SNAPSHOT",
+      "SIGNAL",
+      "TRADE_PLAN",
+      "HUMAN_DECISION",
+      "ACTUAL_ORDER_FILL_OBSERVATION",
+      "OUTCOME",
+      "DEVIATION_ANALYSIS",
+      "FINDING",
+      "VERSIONED_IMPROVEMENT"
+    ],
+    "metrics": [
+      "DATA_STALE",
+      "DISCONNECT_RECONNECT",
+      "GAPS_CONFLICTS",
+      "SIGNAL_LATENCY",
+      "ALERT_LATENCY",
+      "FAST_STANDARD_COUNT",
+      "FAST_EXECUTION_RATE",
+      "FAST_EXPIRED_BEFORE_ACTION_RATE",
+      "STANDARD_EXECUTION_RATE",
+      "TAKEN_SKIPPED_REJECTED",
+      "DECISION_LATENCY",
+      "PLANNED_VS_ACTUAL_ENTRY",
+      "PLANNED_VS_ACTUAL_SIZE",
+      "FEES",
+      "REALIZED_PNL",
+      "MATCHING_CONFIDENCE",
+      "SYSTEM_INCIDENTS",
+      "MFE_MAE",
+      "R_MULTIPLE",
+      "ENTRY_LATENESS",
+      "WAIT_QUALITY"
+    ],
+    "issue_categories": [
+      "DATA",
+      "STRATEGY",
+      "RISK",
+      "AI_EXPLANATION",
+      "UI",
+      "HUMAN_DECISION",
+      "MANUAL_EXECUTION",
+      "ACCOUNT_OBSERVATION",
+      "SYSTEM_RUNTIME",
+      "DEPLOYMENT"
+    ],
+    "severity_levels": [
+      "P0",
+      "P1",
+      "P2",
+      "P3"
+    ],
+    "online_learning": "PROHIBITED",
+    "automatic_production_rule_mutation": "PROHIBITED",
+    "improvement_pipeline": [
+      "FINDING",
+      "HYPOTHESIS",
+      "NEW_VERSION",
+      "TESTS",
+      "REPLAY",
+      "SHADOW",
+      "REVIEW",
+      "RELEASE"
+    ]
+  },
+  "capability_milestones": {
+    "FL1": "TRUSTED_DATA_RUNTIME",
+    "FL2": "SIGNAL_AND_RISK_ENGINE",
+    "FL3": "HUMAN_REVIEW_SURFACE",
+    "FL4": "HUMAN_CONFIRMED_EXECUTION"
+  },
+  "releases": {
+    "R0": {
+      "scope": "MINIMUM_VERTICAL_SUBSET_OF_FL1_FL2_FL3",
+      "execution": "MANUAL_ONLY"
+    },
+    "R1": {
+      "scope": "HUMAN_CONFIRMED_AUTOMATED_EXECUTION",
+      "required_controls": [
+        "DEDICATED_LIMITED_CAPITAL_SUBACCOUNT",
+        "DEDICATED_API_WALLET",
+        "SECRET_ISOLATION",
+        "OFFICIAL_SDK_SIGNING",
+        "NONCE_AUTHORITY",
+        "IMMUTABLE_ORDER_INTENT",
+        "ORDER_INTENT_HASH",
+        "CLOID_IDEMPOTENCY",
+        "EXPIRES_AFTER",
+        "PRE_SUBMIT_REVALIDATION",
+        "ALO_POST_ONLY",
+        "BOUNDED_SLIPPAGE_IOC",
+        "SUBMIT_CANCEL",
+        "PARTIAL_FILL_HANDLING",
+        "ACTUAL_FILLED_POSITION_SIZING",
+        "MANDATORY_AUTOMATIC_STOP",
+        "FIXED_MULTI_STAGE_AUTOMATIC_TP",
+        "REDUCE_ONLY_PROTECTION",
+        "EXCHANGE_STATE_PROTECTION_VERIFICATION",
+        "POSITION_UNPROTECTED_EMERGENCY_PATH",
+        "KILL_SWITCH",
+        "DEAD_MAN_PROTECTION",
+        "AUDIT",
+        "TESTNET",
+        "SHADOW",
+        "SMALL_CAPITAL_MAINNET_CANARY",
+        "SEPARATE_MAINNET_AUTHORIZATION"
+      ],
+      "autonomous_entry": "PROHIBITED",
+      "human_confirmation_required": true
+    }
+  },
+  "governance_levels": {
+    "G0": [
+      "NONCRITICAL_DOCUMENTATION",
+      "PRESENTATION"
+    ],
+    "G1": [
+      "METRICS",
+      "AI_EXPLANATION",
+      "BACKTEST_PRESENTATION"
+    ],
+    "G2": [
+      "LIVE_PUBLIC_DATA",
+      "CANONICAL_MARKET_STATE",
+      "STRATEGY"
+    ],
+    "G3": [
+      "RISK_CALCULATION",
+      "TRADE_PLAN",
+      "HUMAN_DECISION",
+      "ACCOUNT_ORDER_FILL_OBSERVATION",
+      "PLAN_OUTCOME_MATCHING"
+    ],
+    "G4": [
+      "CREDENTIALS",
+      "SIGNING",
+      "NONCE",
+      "EXCHANGE_WRITE",
+      "SL_TP",
+      "ACTUAL_POSITION_MUTATION"
+    ],
+    "flp1_minimum": "G3",
+    "fl4_requirement": "SEPARATE_G4_EXECUTION_AND_SECURITY_REVIEW"
+  },
+  "development_route": {
+    "pre_launch_main_prs": [
+      "V0-FLP0-PILOT-AND-LONG-TERM-ROADMAP-AUTHORITY-FREEZE",
+      "V0-FLP1-DECISION-TO-OUTCOME-OPERATOR-ASSIST-PILOT"
+    ],
+    "flp1_is_vertical_pilot_pr": true,
+    "bounded_repairs_in_same_execution_window": true,
+    "bounded_repairs_same_scope_required": true,
+    "bounded_repairs_original_pr_required": true,
+    "full_independent_review_only_for_final_merge_candidate": true,
+    "finding_classes": [
+      "BLOCKER",
+      "FOLLOW_UP"
+    ],
+    "only_blocker_prevents_merge": true
+  },
+  "review_finalization_policy": {
+    "draft_pr_required": true,
+    "external_independent_review_required": true,
+    "review_permission": "STRICT_READ_ONLY",
+    "mark_ready_prohibited": true,
+    "merge_prohibited": true,
+    "exact_head_ci_required": true,
+    "exact_head_review_required": true,
+    "writer_reviewer_separation_required": true,
+    "finalization_separate_task_required": true,
+    "separate_project_control_finalization_authorization_required": true,
+    "pre_finalization_base_head_state_reverification_required": true,
+    "unresolved_blocker_prevents_merge": true
+  },
+  "recursive_rotation": {
+    "required": true,
+    "next_window_role": "V0 Fast Launch FLP0 external independent Reviewer",
+    "next_window_permission": "STRICT_READ_ONLY",
+    "post_merge_next_gate": "V0-FLP1-OPERATOR-ASSIST-PILOT-SCOPE-FREEZE",
+    "handoff_required_fields": [
+      "CURRENT_WINDOW_ROLE",
+      "REPOSITORY",
+      "EXACT_GITHUB_SHA",
+      "PR",
+      "BRANCH",
+      "PERMISSION",
+      "GOVERNANCE_LEVEL",
+      "WRITE_LEASE",
+      "CURRENT_CI",
+      "COMPLETED_WORK",
+      "NEXT_ACTION",
+      "STOP_CONDITIONS",
+      "COMPLETE_ROTATION_POLICY",
+      "ROTATION_TRIGGERS",
+      "REQUIRED_ROTATION_OUTPUT",
+      "RECURSIVE_WINDOW_ROTATION_REQUIREMENT"
+    ],
+    "rotation_triggers": [
+      "PR_MERGED",
+      "ISSUE_OR_EPIC_COMPLETED",
+      "STAGE_ENDS_BEFORE_NEW_STAGE",
+      "REVIEW_PLUS_REPAIR_EXCEEDS_TWO_ROUNDS",
+      "HEAD_DRIFT",
+      "WRITER_COLLISION",
+      "WRITE_LEASE_REVOKED_OR_PERMISSION_CHANGED",
+      "MULTIPLE_PRS_STAGES_OR_STALE_STATES",
+      "USER_REPEATEDLY_REQUESTS_PROJECT_STATUS",
+      "CONTEXT_LENGTH_RISKS_STALE_FACT_CONTAMINATION",
+      "OLD_HEAD_CI_OR_PR_STATE_REUSE_RISK",
+      "PROJECT_SWITCH_BETWEEN_TRADER_ASSIST_V0_AND_TRADE_OS",
+      "USER_EXPLICITLY_REQUESTS_NEW_WINDOW",
+      "MULTIPLE_EXECUTION_REVIEW_REPAIR_OR_FINALIZATION_PROMPTS"
+    ],
+    "required_rotation_output": [
+      "WINDOW_ROTATION_REQUIRED",
+      "REASON",
+      "CURRENT_SAFE_STOP_POINT",
+      "NEXT_WINDOW_HANDOFF_PROMPT"
+    ],
+    "current_safe_stop_point_required": true,
+    "complete_handoff_prompt_required": true,
+    "recursive_window_rotation_requirement": {
+      "future_handoffs_must_include_complete_rotation_policy": true,
+      "future_handoffs_must_include_all_rotation_triggers": true,
+      "future_handoffs_must_include_required_rotation_output": true,
+      "future_handoffs_must_include_recursive_requirement_itself": true,
+      "receiving_window_must_propagate_requirement": true,
+      "applies_to_every_later_handoff": true,
+      "one_time_summary_or_non_propagating_simplification_prohibited": true
+    },
+    "verification_warning": "A handoff never substitutes for current GitHub verification."
+  },
+  "deferred_capabilities": [
+    "COMPLEX_DYNAMIC_HOT_LOAD_PLUGIN_MARKET",
+    "MULTI_STRATEGY_PRODUCTION_ROUTING",
+    "MULTI_ASSET_PRODUCTION_ROUTING",
+    "AUTONOMOUS_ENTRY",
+    "ONLINE_LEARNING",
+    "AUTOMATIC_PRODUCTION_PARAMETER_MUTATION"
+  ]
+}
