@@ -759,7 +759,8 @@ def _expected_authority_payload() -> dict[str, Any]:
 
 
 EXPECTED_AUTHORITY = _expected_authority_payload()
-EXPECTED_AUTHORITY_HASH = EXPECTED_AUTHORITY["authority_hash"]
+EXPECTED_AUTHORITY_HASH = "da230b79c2ae6e1acae99236601c96dec7c4dd4c5f84d9e83aec7dbb57888369"
+STALE_AUTHORITY_HASH = "f6450a7a81246751c4de74de466af5fcaab7265c45950036fb5d7a9db9377715"
 
 
 def _actual_dict() -> dict[str, Any]:
@@ -823,6 +824,20 @@ def test_test_owned_matrices_match_complete_executable_authority() -> None:
     assert actual["unresolved_fields"] == EXPECTED_UNKNOWN_PAYLOADS
     assert {key: actual[key] for key in EXPECTED_GATES} == EXPECTED_GATES
     assert actual == EXPECTED_AUTHORITY
+
+
+def test_scope_document_and_executable_gate_share_exact_authority_hash() -> None:
+    root = Path(__file__).resolve().parents[1]
+    scope_text = (root / "docs/V0_01_SCOPE.md").read_text(encoding="utf-8")
+    hash_lines = [
+        line
+        for line in scope_text.splitlines()
+        if line.startswith("OFFICIAL_RATE_LIMIT_AUTHORITY_HASH:")
+    ]
+    assert hash_lines == [f"OFFICIAL_RATE_LIMIT_AUTHORITY_HASH: {EXPECTED_AUTHORITY_HASH}"]
+    assert STALE_AUTHORITY_HASH not in scope_text
+    assert rate_limit_entry_gate()["authority_hash"] == EXPECTED_AUTHORITY_HASH
+    assert SOURCE_CATALOG_HASH == EXPECTED_SOURCE_CATALOG_HASH
 
 
 def test_current_source_reconciliation_is_frozen_exactly() -> None:
