@@ -6,10 +6,8 @@ from typing import Final, Literal
 
 from .common import canonical_json_bytes, sha256_hex
 from .rate_limits import (
-    build_official_rate_limit_authority,
-)
-from .rate_limits import (
-    validate_official_rate_limit_authority as validate_rate_limit_authority_model,
+    _authenticate_official_rate_limit_authority_mapping,
+    _build_official_rate_limit_authority_mapping,
 )
 
 SOURCE_CATALOG_VERSION: Final = "hyperliquid-public-mainnet.0.1.0"
@@ -432,37 +430,41 @@ def _official_rate_limit_source_matches(title: str, location: str, source_kind: 
 
 
 def rate_limit_authority_document() -> dict[str, object]:
-    authority = validate_rate_limit_authority_model(build_official_rate_limit_authority())
-    primary_source = authority.sources[0]
+    authority = _build_official_rate_limit_authority_mapping()
+    authentication = _authenticate_official_rate_limit_authority_mapping(authority)
+    sources = authority["sources"]
+    facts = authority["documented_facts"]
+    unknowns = authority["unresolved_fields"]
+    if type(sources) is not list or type(facts) is not list or type(unknowns) is not list:
+        raise AssertionError("authenticated authority collections changed type")
+    primary_source = sources[0]
+    if type(primary_source) is not dict:
+        raise AssertionError("authenticated authority source changed type")
     return {
         "task_id": A4_CONTRACT_ID,
-        "status": authority.status,
-        "official_source_title": primary_source.title,
-        "official_source_location": primary_source.canonical_location,
+        "status": authority["status"],
+        "official_source_title": primary_source["title"],
+        "official_source_location": primary_source["canonical_location"],
         "officially_verified_date": OFFICIALLY_VERIFIED_DATE,
         "source_kind": "official",
         "official_source_readable": True,
         "numeric_limits_resolved": False,
-        "numeric_limit_fields": tuple(fact.fact_id for fact in authority.documented_facts),
+        "numeric_limit_fields": tuple(fact["fact_id"] for fact in facts),
         "limit_units": tuple(
-            dict.fromkeys(fact.value_unit for fact in authority.documented_facts)
+            dict.fromkeys(fact["value_unit"] for fact in facts)
         ),
         "operation_scope": tuple(
             operation
-            for fact in authority.documented_facts
-            for operation in fact.operation_allowlist
+            for fact in facts
+            for operation in fact["operation_allowlist"]
         ),
-        "ambiguous_fields": tuple(item.field_id for item in authority.unresolved_fields),
-        "sources": tuple(source.model_dump(mode="python") for source in authority.sources),
-        "documented_facts": tuple(
-            fact.model_dump(mode="python") for fact in authority.documented_facts
-        ),
-        "unresolved_fields": tuple(
-            item.model_dump(mode="python") for item in authority.unresolved_fields
-        ),
-        "authority_hash": authority.authority_hash,
-        "transition_eligible": authority.transition_eligible,
-        "live_transport_authorized": authority.live_transport_authorized,
+        "ambiguous_fields": tuple(item["field_id"] for item in unknowns),
+        "sources": tuple(sources),
+        "documented_facts": tuple(facts),
+        "unresolved_fields": tuple(unknowns),
+        "authority_hash": authentication.authority_hash,
+        "transition_eligible": authentication.transition_eligible,
+        "live_transport_authorized": authentication.live_transport_authorized,
     }
 
 
@@ -498,7 +500,9 @@ def validate_official_rate_limit_authority(
     if not source_matches:
         raise ValueError("rate-limit authority must use the frozen official source")
 
-    authority = validate_rate_limit_authority_model(build_official_rate_limit_authority())
+    authority = _authenticate_official_rate_limit_authority_mapping(
+        _build_official_rate_limit_authority_mapping()
+    )
 
     if status == "OFFICIAL_NUMERIC_LIMIT_RESOLVED":
         raise ValueError("mandatory unknown fields block resolved rate-limit authority")
@@ -517,7 +521,9 @@ def validate_official_rate_limit_authority(
 
 
 def rate_limit_entry_gate() -> dict[str, object]:
-    authority = validate_rate_limit_authority_model(build_official_rate_limit_authority())
+    authority = _authenticate_official_rate_limit_authority_mapping(
+        _build_official_rate_limit_authority_mapping()
+    )
     numeric_limits_resolved = RATE_LIMIT_STATUS == "OFFICIAL_NUMERIC_LIMIT_RESOLVED"
     return {
         "task_id": A1_CONTRACT_ID,
@@ -532,7 +538,9 @@ def rate_limit_entry_gate() -> dict[str, object]:
 
 
 def assert_rate_limit_allows_live_transport() -> None:
-    validate_rate_limit_authority_model(build_official_rate_limit_authority())
+    _authenticate_official_rate_limit_authority_mapping(
+        _build_official_rate_limit_authority_mapping()
+    )
     if RATE_LIMIT_STATUS == "UNRESOLVED_OFFICIAL_LIMIT":
         raise ValueError(
             "official numeric rate limit is unresolved; live transport remains blocked"
@@ -608,7 +616,9 @@ def validate_public_readonly_transport_preflight(
     config_keys: tuple[str, ...] = (),
     config_values: tuple[str, ...] = (),
 ) -> dict[str, object]:
-    validate_rate_limit_authority_model(build_official_rate_limit_authority())
+    _authenticate_official_rate_limit_authority_mapping(
+        _build_official_rate_limit_authority_mapping()
+    )
     if runtime_enabled:
         if RATE_LIMIT_STATUS == "UNRESOLVED_OFFICIAL_LIMIT":
             raise ValueError("official numeric rate limit unresolved; live runtime blocked")

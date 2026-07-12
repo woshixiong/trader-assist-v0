@@ -3,6 +3,7 @@ from __future__ import annotations
 import hmac
 import json
 from collections.abc import Mapping, Set
+from dataclasses import dataclass
 from typing import Any, Literal, Self, cast
 
 from pydantic import (
@@ -29,7 +30,24 @@ OFFICIAL_RATE_LIMIT_AUTHORITY_HASH_VERSION = (
 OFFICIAL_RATE_LIMIT_STATUS = "UNRESOLVED_OFFICIAL_LIMIT"
 
 
+@dataclass(frozen=True, slots=True)
+class OfficialRateLimitAuthenticationResult:
+    canonical_json: bytes
+    authority_hash: str
+    source_ids: tuple[str, ...]
+    fact_ids: tuple[str, ...]
+    unknown_ids: tuple[str, ...]
+    transition_eligible: Literal[False]
+    live_transport_authorized: Literal[False]
+    account_readonly_runtime_authorized: Literal[False]
+    testnet_execution_authorized: Literal[False]
+    mainnet_execution_authorized: Literal[False]
+    flp1_implementation_authorized: Literal[False]
+
+
 class _RateLimitAuthorityModel(BaseModel):
+    """Untrusted structural container; authentication is a separate raw-material step."""
+
     model_config = ConfigDict(
         extra="forbid",
         frozen=True,
@@ -222,9 +240,6 @@ class OfficialRateLimitSourceV0(_RateLimitAuthorityModel):
     def validate_source(self) -> Self:
         if type(self) is not OfficialRateLimitSourceV0:
             raise ValueError("expected exact OfficialRateLimitSourceV0 authority object")
-        expected = _SOURCE_SPEC_BY_ID.get(self.source_id)
-        if expected is None or _source_payload(self) != expected:
-            raise ValueError("unofficial, stale, altered, or mismatched rate-limit source")
         evidence_bytes = canonical_json_bytes(_source_evidence_material(self))
         expected_evidence_hash = sha256_hex(
             OFFICIAL_RATE_LIMIT_OBSERVATION_HASH_VERSION.encode("utf-8") + b"\0" + evidence_bytes
@@ -233,9 +248,12 @@ class OfficialRateLimitSourceV0(_RateLimitAuthorityModel):
             raise ValueError("evidence length does not match structured observation")
         if not hmac.compare_digest(self.evidence_hash, expected_evidence_hash):
             raise ValueError("evidence hash does not match structured observation")
-        expected_hash = _hash_material(OFFICIAL_RATE_LIMIT_SOURCE_HASH_VERSION, expected)
+        expected_hash = _hash_material(
+            OFFICIAL_RATE_LIMIT_SOURCE_HASH_VERSION,
+            _source_hash_material(self),
+        )
         if not hmac.compare_digest(self.source_hash, expected_hash):
-            raise ValueError("source_hash does not match frozen official source")
+            raise ValueError("source_hash does not match the structural source container")
         return self
 
 
@@ -268,12 +286,12 @@ class OfficialRateLimitFactV0(_RateLimitAuthorityModel):
             raise ValueError("duplicate operation in rate-limit fact")
         if len(set(self.source_bindings)) != len(self.source_bindings):
             raise ValueError("duplicate source binding in rate-limit fact")
-        expected = _FACT_SPEC_BY_ID.get(self.fact_id)
-        if expected is None or _fact_payload(self) != expected:
-            raise ValueError("altered, conflicting, or source-mismatched rate-limit fact")
-        expected_hash = _hash_material(OFFICIAL_RATE_LIMIT_FACT_HASH_VERSION, expected)
+        expected_hash = _hash_material(
+            OFFICIAL_RATE_LIMIT_FACT_HASH_VERSION,
+            _fact_payload(self),
+        )
         if not hmac.compare_digest(self.fact_hash, expected_hash):
-            raise ValueError("fact_hash does not match frozen official fact")
+            raise ValueError("fact_hash does not match the structural fact container")
         return self
 
 
@@ -293,9 +311,6 @@ class OfficialRateLimitUnknownV0(_RateLimitAuthorityModel):
             raise ValueError("expected exact OfficialRateLimitUnknownV0 authority object")
         if self.mandatory is not True or self.blocking is not True:
             raise ValueError("rate-limit unknowns must be exact mandatory blocking truths")
-        expected = _UNKNOWN_SPEC_BY_ID.get(self.field_id)
-        if expected is None or _unknown_payload(self) != expected:
-            raise ValueError("mandatory rate-limit unknown was altered or invented")
         return self
 
 
@@ -332,15 +347,16 @@ class OfficialRateLimitAuthorityV0(_RateLimitAuthorityModel):
         )
         if any(type(value) is not bool or value is not False for value in gates):
             raise ValueError("all rate-limit authority gates must be exact false")
-        expected_sources = official_rate_limit_sources()
-        expected_facts = official_rate_limit_facts()
-        expected_unknowns = official_rate_limit_unknowns()
-        if self.sources != expected_sources:
-            raise ValueError("official rate-limit sources are incomplete or altered")
-        if self.documented_facts != expected_facts:
-            raise ValueError("documented rate-limit facts are incomplete, duplicate, or altered")
-        if self.unresolved_fields != expected_unknowns:
-            raise ValueError("mandatory rate-limit unknowns are incomplete or altered")
+        if len({item.source_id for item in self.sources}) != len(self.sources):
+            raise ValueError("duplicate source identifier")
+        if len({item.fact_id for item in self.documented_facts}) != len(
+            self.documented_facts
+        ):
+            raise ValueError("duplicate fact identifier")
+        if len({item.field_id for item in self.unresolved_fields}) != len(
+            self.unresolved_fields
+        ):
+            raise ValueError("duplicate unknown identifier")
         if not self.unresolved_fields or not all(
             item.mandatory and item.blocking for item in self.unresolved_fields
         ):
@@ -355,9 +371,15 @@ def _hash_material(domain: str, payload: Mapping[str, object]) -> str:
     return sha256_hex(domain.encode("utf-8") + b"\0" + canonical_json_bytes(payload))
 
 
-def _source_payload(source: OfficialRateLimitSourceV0) -> dict[str, object]:
-    payload = BaseModel.model_dump(source, mode="python", round_trip=True)
-    payload.pop("source_hash")
+def _source_hash_material(
+    source: OfficialRateLimitSourceV0 | Mapping[str, object],
+) -> dict[str, object]:
+    if isinstance(source, OfficialRateLimitSourceV0):
+        payload = BaseModel.model_dump(source, mode="python", round_trip=True)
+    else:
+        payload = dict(source)
+    payload.pop("source_hash", None)
+    payload.pop("retrieval_observations_utc", None)
     return payload
 
 
@@ -386,10 +408,6 @@ def _fact_payload(fact: OfficialRateLimitFactV0) -> dict[str, object]:
     payload = BaseModel.model_dump(fact, mode="python", round_trip=True)
     payload.pop("fact_hash")
     return payload
-
-
-def _unknown_payload(unknown: OfficialRateLimitUnknownV0) -> dict[str, object]:
-    return BaseModel.model_dump(unknown, mode="python", round_trip=True)
 
 
 RATE_LIMIT_PAGE_SOURCE_ID = "hyperliquid-rate-limits-and-user-limits"
@@ -742,9 +760,6 @@ _FACT_SPECS: tuple[dict[str, object], ...] = (
         formula="n requests for n orders or cancels",
     ),
 )
-_FACT_SPEC_BY_ID = {str(item["fact_id"]): item for item in _FACT_SPECS}
-
-
 def _unknown(field_id: str, reason: str, requirement: str) -> dict[str, object]:
     return {
         "field_id": field_id,
@@ -812,9 +827,6 @@ _UNKNOWN_SPECS: tuple[dict[str, object], ...] = (
         "An official source must define high-congestion state transitions.",
     ),
 )
-_UNKNOWN_SPEC_BY_ID = {str(item["field_id"]): item for item in _UNKNOWN_SPECS}
-
-
 def _source(
     *,
     source_id: str,
@@ -864,10 +876,10 @@ _SOURCE_SPECS: tuple[dict[str, object], ...] = (
             "rate-limits-and-user-limits"
         ),
         retrieval_observations_utc=(
-            "2026-07-12T07:49:50Z",
-            "2026-07-12T07:49:51Z",
+            "2026-07-12T11:46:08Z",
+            "2026-07-12T11:46:09Z",
         ),
-        publication_or_last_updated_marker="2026-04-28T02:43:32.166Z",
+        publication_or_last_updated_marker=None,
         semantic_locator="Rate limits and user limits / complete page body",
         bound_fact_ids=_RATE_FACT_IDS,
         bound_unknown_ids=_RATE_UNKNOWN_IDS,
@@ -911,8 +923,8 @@ _SOURCE_SPECS: tuple[dict[str, object], ...] = (
         canonical_location=(
             "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint"
         ),
-        retrieval_observations_utc=("2026-07-12T07:50:44Z",),
-        publication_or_last_updated_marker="2026-06-11T08:02:46.893Z",
+        retrieval_observations_utc=("2026-07-12T11:49:21Z",),
+        publication_or_last_updated_marker=None,
         semantic_locator="Info endpoint / operation request-body identities",
         bound_fact_ids=_INFO_FACT_IDS,
         bound_unknown_ids=(),
@@ -926,15 +938,15 @@ _SOURCE_SPECS: tuple[dict[str, object], ...] = (
         ),
     ),
 )
-_SOURCE_SPEC_BY_ID = {str(item["source_id"]): item for item in _SOURCE_SPECS}
-
-
 def official_rate_limit_sources() -> tuple[OfficialRateLimitSourceV0, ...]:
     return tuple(
         OfficialRateLimitSourceV0.model_validate(
             {
                 **spec,
-                "source_hash": _hash_material(OFFICIAL_RATE_LIMIT_SOURCE_HASH_VERSION, spec),
+                "source_hash": _hash_material(
+                    OFFICIAL_RATE_LIMIT_SOURCE_HASH_VERSION,
+                    _source_hash_material(spec),
+                ),
             }
         )
         for spec in _SOURCE_SPECS
@@ -963,8 +975,25 @@ def compute_official_rate_limit_authority_hash(
     if type(authority) is not OfficialRateLimitAuthorityV0:
         raise ValueError("expected exact OfficialRateLimitAuthorityV0 authority object")
     payload = BaseModel.model_dump(authority, mode="python", round_trip=True)
-    payload.pop("authority_hash")
-    return _hash_material(OFFICIAL_RATE_LIMIT_AUTHORITY_HASH_VERSION, payload)
+    return _hash_material(
+        OFFICIAL_RATE_LIMIT_AUTHORITY_HASH_VERSION,
+        _authority_hash_material(payload),
+    )
+
+
+def _authority_hash_material(values: Mapping[str, object]) -> dict[str, object]:
+    payload = dict(values)
+    payload.pop("authority_hash", None)
+    sources = []
+    for source in cast(tuple[object, ...] | list[object], payload["sources"]):
+        if isinstance(source, BaseModel):
+            source_payload = BaseModel.model_dump(source, mode="python", round_trip=True)
+        else:
+            source_payload = dict(cast(Mapping[str, object], source))
+        source_payload.pop("retrieval_observations_utc", None)
+        sources.append(source_payload)
+    payload["sources"] = sources
+    return payload
 
 
 def _authority_hash_from_values(values: Mapping[str, object]) -> str:
@@ -982,7 +1011,270 @@ def _authority_hash_from_values(values: Mapping[str, object]) -> str:
         "mainnet_execution_authorized": False,
         "flp1_implementation_authorized": False,
     }
-    return _hash_material(OFFICIAL_RATE_LIMIT_AUTHORITY_HASH_VERSION, payload)
+    return _hash_material(
+        OFFICIAL_RATE_LIMIT_AUTHORITY_HASH_VERSION,
+        _authority_hash_material(payload),
+    )
+
+
+def _to_exact_json_primitives(value: object) -> object:
+    if type(value) is dict:
+        return {
+            cast(str, key): _to_exact_json_primitives(item)
+            for key, item in cast(dict[object, object], value).items()
+        }
+    if type(value) is tuple:
+        return [_to_exact_json_primitives(item) for item in cast(tuple[object, ...], value)]
+    if type(value) in (str, int, bool) or value is None:
+        return value
+    raise TypeError("official rate-limit specification is not an exact JSON primitive")
+
+
+def _build_official_rate_limit_authority_mapping() -> dict[str, object]:
+    sources: list[object] = []
+    for spec in _SOURCE_SPECS:
+        source = cast(dict[str, object], _to_exact_json_primitives(spec))
+        source["source_hash"] = _hash_material(
+            OFFICIAL_RATE_LIMIT_SOURCE_HASH_VERSION,
+            _source_hash_material(source),
+        )
+        sources.append(source)
+    facts: list[object] = []
+    for spec in _FACT_SPECS:
+        fact = cast(dict[str, object], _to_exact_json_primitives(spec))
+        fact["fact_hash"] = _hash_material(OFFICIAL_RATE_LIMIT_FACT_HASH_VERSION, fact)
+        facts.append(fact)
+    unknowns = [
+        cast(dict[str, object], _to_exact_json_primitives(spec))
+        for spec in _UNKNOWN_SPECS
+    ]
+    authority: dict[str, object] = {
+        "schema_version": OFFICIAL_RATE_LIMIT_SCHEMA_VERSION,
+        "authority_version": OFFICIAL_RATE_LIMIT_AUTHORITY_VERSION,
+        "status": OFFICIAL_RATE_LIMIT_STATUS,
+        "sources": sources,
+        "documented_facts": facts,
+        "unresolved_fields": unknowns,
+        "conflict_state": "NO_CONFLICT_DETECTED",
+        "supersession_state": "NO_SUPERSESSION_DETECTED",
+        "transition_eligible": False,
+        "live_transport_authorized": False,
+        "account_readonly_runtime_authorized": False,
+        "testnet_execution_authorized": False,
+        "mainnet_execution_authorized": False,
+        "flp1_implementation_authorized": False,
+    }
+    authority["authority_hash"] = _hash_material(
+        OFFICIAL_RATE_LIMIT_AUTHORITY_HASH_VERSION,
+        _authority_hash_material(authority),
+    )
+    return authority
+
+
+def _assert_exact_json_primitive_tree(value: object, path: str = "$") -> None:
+    if type(value) is dict:
+        for key, item in cast(dict[object, object], value).items():
+            if type(key) is not str:
+                raise TypeError(f"{path} contains a non-exact-string object key")
+            _assert_exact_json_primitive_tree(item, f"{path}.{key}")
+        return
+    if type(value) is list:
+        for index, item in enumerate(cast(list[object], value)):
+            _assert_exact_json_primitive_tree(item, f"{path}[{index}]")
+        return
+    if type(value) in (str, int, bool) or value is None:
+        return
+    raise TypeError(f"{path} contains a non-exact JSON primitive")
+
+
+def _assert_expected_tree(actual: object, expected: object, path: str = "$") -> None:
+    if type(actual) is not type(expected):
+        raise ValueError(f"{path} has the wrong exact JSON type")
+    if type(expected) is dict:
+        actual_dict = cast(dict[str, object], actual)
+        expected_dict = cast(dict[str, object], expected)
+        if set(actual_dict) != set(expected_dict):
+            raise ValueError(f"{path} has missing or extra fields")
+        for key, expected_item in expected_dict.items():
+            _assert_expected_tree(actual_dict[key], expected_item, f"{path}.{key}")
+        return
+    if type(expected) is list:
+        actual_list = cast(list[object], actual)
+        expected_list = cast(list[object], expected)
+        if len(actual_list) != len(expected_list):
+            raise ValueError(f"{path} has the wrong membership count")
+        for index, expected_item in enumerate(expected_list):
+            _assert_expected_tree(actual_list[index], expected_item, f"{path}[{index}]")
+        return
+    if actual != expected:
+        raise ValueError(f"{path} does not match the frozen official authority")
+
+
+def _require_unique_identity_and_semantics(
+    items: list[object], id_field: str, excluded_fields: tuple[str, ...]
+) -> None:
+    identifiers: list[str] = []
+    signatures: list[bytes] = []
+    for raw_item in items:
+        item = cast(dict[str, object], raw_item)
+        identifiers.append(cast(str, item[id_field]))
+        signatures.append(
+            canonical_json_bytes(
+                {
+                    key: value
+                    for key, value in item.items()
+                    if key not in excluded_fields
+                }
+            )
+        )
+    if len(set(identifiers)) != len(identifiers):
+        raise ValueError(f"duplicate {id_field}")
+    if len(set(signatures)) != len(signatures):
+        raise ValueError(f"semantic alias in {id_field} collection")
+
+
+def _require_exact_object_fields(
+    items: list[object], expected_items: list[object], collection_name: str
+) -> None:
+    if not expected_items or type(expected_items[0]) is not dict:
+        raise AssertionError("frozen authority collection has no object template")
+    expected_fields = set(cast(dict[str, object], expected_items[0]))
+    for index, item in enumerate(items):
+        if type(item) is not dict:
+            raise TypeError(f"{collection_name}[{index}] must be an exact built-in dict")
+        if set(cast(dict[str, object], item)) != expected_fields:
+            raise ValueError(f"{collection_name}[{index}] has missing or extra fields")
+
+
+def _authenticate_official_rate_limit_authority_mapping(
+    raw_mapping: object,
+) -> OfficialRateLimitAuthenticationResult:
+    if type(raw_mapping) is not dict:
+        raise TypeError("authority authentication requires an exact built-in dict")
+    _assert_exact_json_primitive_tree(raw_mapping)
+    authority = cast(dict[str, object], raw_mapping)
+    expected = _build_official_rate_limit_authority_mapping()
+    if set(authority) != set(expected):
+        raise ValueError("authority root has missing or extra fields")
+
+    sources = cast(list[object], authority["sources"])
+    facts = cast(list[object], authority["documented_facts"])
+    unknowns = cast(list[object], authority["unresolved_fields"])
+    if type(sources) is not list or type(facts) is not list or type(unknowns) is not list:
+        raise ValueError("authority collections must be exact built-in lists")
+    _require_exact_object_fields(
+        sources, cast(list[object], expected["sources"]), "sources"
+    )
+    _require_exact_object_fields(
+        facts, cast(list[object], expected["documented_facts"]), "documented_facts"
+    )
+    _require_exact_object_fields(
+        unknowns, cast(list[object], expected["unresolved_fields"]), "unresolved_fields"
+    )
+    _require_unique_identity_and_semantics(
+        sources,
+        "source_id",
+        ("source_id", "source_hash", "retrieval_observations_utc"),
+    )
+    _require_unique_identity_and_semantics(facts, "fact_id", ("fact_id", "fact_hash"))
+    _require_unique_identity_and_semantics(unknowns, "field_id", ("field_id",))
+
+    for source_raw in sources:
+        source = cast(dict[str, object], source_raw)
+        canonical_location = source.get("canonical_location")
+        if type(canonical_location) is not str:
+            raise TypeError("official source location must be an exact string")
+        if "?" in canonical_location or "#" in canonical_location:
+            raise ValueError("official source location must not contain query or fragment")
+        evidence_bytes = canonical_json_bytes(_source_evidence_material(source))
+        if source.get("evidence_length_bytes") != len(evidence_bytes):
+            raise ValueError("source evidence length mismatch")
+        evidence_hash = sha256_hex(
+            OFFICIAL_RATE_LIMIT_OBSERVATION_HASH_VERSION.encode("utf-8")
+            + b"\0"
+            + evidence_bytes
+        )
+        if not hmac.compare_digest(cast(str, source.get("evidence_hash")), evidence_hash):
+            raise ValueError("source evidence hash mismatch")
+        source_hash = _hash_material(
+            OFFICIAL_RATE_LIMIT_SOURCE_HASH_VERSION,
+            _source_hash_material(source),
+        )
+        if not hmac.compare_digest(cast(str, source.get("source_hash")), source_hash):
+            raise ValueError("source hash mismatch")
+    for fact_raw in facts:
+        fact = cast(dict[str, object], fact_raw)
+        fact_material = dict(fact)
+        supplied_hash = cast(str, fact_material.pop("fact_hash", ""))
+        fact_hash = _hash_material(OFFICIAL_RATE_LIMIT_FACT_HASH_VERSION, fact_material)
+        if not hmac.compare_digest(supplied_hash, fact_hash):
+            raise ValueError("fact hash mismatch")
+    authority_hash = _hash_material(
+        OFFICIAL_RATE_LIMIT_AUTHORITY_HASH_VERSION,
+        _authority_hash_material(authority),
+    )
+    if not hmac.compare_digest(cast(str, authority.get("authority_hash")), authority_hash):
+        raise ValueError("authority hash mismatch")
+
+    _assert_expected_tree(authority, expected)
+    gate_fields = (
+        "transition_eligible",
+        "live_transport_authorized",
+        "account_readonly_runtime_authorized",
+        "testnet_execution_authorized",
+        "mainnet_execution_authorized",
+        "flp1_implementation_authorized",
+    )
+    if any(
+        type(authority[field]) is not bool or authority[field] is not False
+        for field in gate_fields
+    ):
+        raise ValueError("all authority gates must be exact false")
+    return OfficialRateLimitAuthenticationResult(
+        canonical_json=canonical_json_bytes(authority),
+        authority_hash=authority_hash,
+        source_ids=tuple(cast(str, cast(dict[str, object], item)["source_id"]) for item in sources),
+        fact_ids=tuple(cast(str, cast(dict[str, object], item)["fact_id"]) for item in facts),
+        unknown_ids=tuple(
+            cast(str, cast(dict[str, object], item)["field_id"])
+            for item in unknowns
+        ),
+        transition_eligible=False,
+        live_transport_authorized=False,
+        account_readonly_runtime_authorized=False,
+        testnet_execution_authorized=False,
+        mainnet_execution_authorized=False,
+        flp1_implementation_authorized=False,
+    )
+
+
+def authenticate_official_rate_limit_authority_json(
+    raw_json: str | bytes,
+) -> OfficialRateLimitAuthenticationResult:
+    if type(raw_json) is bytes:
+        raw_text = raw_json.decode("utf-8", errors="strict")
+    elif type(raw_json) is str:
+        raw_text = raw_json
+    else:
+        raise TypeError("raw authority must be an exact str or exact bytes")
+
+    def reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate JSON object key: {key}")
+            result[key] = value
+        return result
+
+    def reject_non_finite(token: str) -> None:
+        raise ValueError(f"non-finite JSON number is prohibited: {token}")
+
+    decoded = json.loads(
+        raw_text,
+        object_pairs_hook=reject_duplicate_keys,
+        parse_constant=reject_non_finite,
+    )
+    return _authenticate_official_rate_limit_authority_mapping(decoded)
 
 
 def build_official_rate_limit_authority() -> OfficialRateLimitAuthorityV0:
@@ -1007,6 +1299,6 @@ def official_rate_limit_authority() -> OfficialRateLimitAuthorityV0:
 
 
 def validate_official_rate_limit_authority(
-    authority: OfficialRateLimitAuthorityV0,
-) -> OfficialRateLimitAuthorityV0:
-    return OfficialRateLimitAuthorityV0.model_validate(authority)
+    authority: object,
+) -> OfficialRateLimitAuthenticationResult:
+    return _authenticate_official_rate_limit_authority_mapping(authority)

@@ -88,8 +88,9 @@ A6_SCHEMA_BOUNDARY_DESCRIPTION = (
 OFFICIAL_RATE_LIMIT_SCHEMA_BOUNDARY_DESCRIPTION = (
     "Schema validation proves serialized structure only. It does not authenticate "
     "official sources, exact fact or unknown membership, ordering, duplicate/conflict "
-    "rules, semantic evidence, hashes, or transition authority. Executable "
-    "OfficialRateLimitAuthorityV0 validation is required."
+    "rules, semantic evidence, hashes, or transition authority. Pydantic models are "
+    "untrusted structural containers; authority requires raw-material reauthentication "
+    "with authenticate_official_rate_limit_authority_json at every consumer boundary."
 )
 
 

@@ -4,18 +4,25 @@ import ast
 import copy
 import hashlib
 import json
+import warnings
+from decimal import Decimal
+from enum import Enum, IntEnum
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, NamedTuple
 
 import pytest
 from jsonschema import Draft202012Validator
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from trader_assist_v0.contracts.rate_limits import (
+    OfficialRateLimitAuthenticationResult,
     OfficialRateLimitAuthorityV0,
     OfficialRateLimitFactV0,
     OfficialRateLimitSourceV0,
     OfficialRateLimitUnknownV0,
+    _authenticate_official_rate_limit_authority_mapping,
+    authenticate_official_rate_limit_authority_json,
     build_official_rate_limit_authority,
     validate_official_rate_limit_authority,
 )
@@ -659,7 +666,7 @@ def _source_payload(
     title: str,
     location: str,
     retrievals: tuple[str, ...],
-    marker: str,
+    marker: str | None,
     locator: str,
     fact_ids: tuple[str, ...],
     unknown_ids: tuple[str, ...],
@@ -696,7 +703,9 @@ def _source_payload(
         OBSERVATION_HASH_DOMAIN.encode() + b"\0" + evidence_bytes
     ).hexdigest()
     payload["evidence_length_bytes"] = len(evidence_bytes)
-    payload["source_hash"] = _hash(SOURCE_HASH_DOMAIN, payload)
+    source_material = dict(payload)
+    source_material.pop("retrieval_observations_utc")
+    payload["source_hash"] = _hash(SOURCE_HASH_DOMAIN, source_material)
     return payload
 
 
@@ -710,8 +719,8 @@ EXPECTED_SOURCES = (
         source_id=RATE,
         title="Rate limits and user limits",
         location="https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/rate-limits-and-user-limits",
-        retrievals=("2026-07-12T07:49:50Z", "2026-07-12T07:49:51Z"),
-        marker="2026-04-28T02:43:32.166Z",
+        retrievals=("2026-07-12T11:46:08Z", "2026-07-12T11:46:09Z"),
+        marker=None,
         locator="Rate limits and user limits / complete page body",
         fact_ids=ALL_FACT_IDS,
         unknown_ids=ALL_UNKNOWN_IDS,
@@ -721,8 +730,8 @@ EXPECTED_SOURCES = (
         source_id=INFO,
         title="Info endpoint",
         location="https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint",
-        retrievals=("2026-07-12T07:50:44Z",),
-        marker="2026-06-11T08:02:46.893Z",
+        retrievals=("2026-07-12T11:49:21Z",),
+        marker=None,
         locator="Info endpoint / operation request-body identities",
         fact_ids=INFO_FACT_IDS,
         unknown_ids=(),
@@ -742,7 +751,10 @@ def _expected_authority_payload() -> dict[str, Any]:
         "conflict_state": "NO_CONFLICT_DETECTED",
         "supersession_state": "NO_SUPERSESSION_DETECTED",
     }
-    payload["authority_hash"] = _hash(AUTHORITY_HASH_DOMAIN, payload)
+    hash_material = copy.deepcopy(payload)
+    for source in hash_material["sources"]:
+        source.pop("retrieval_observations_utc")
+    payload["authority_hash"] = _hash(AUTHORITY_HASH_DOMAIN, hash_material)
     return payload
 
 
@@ -756,6 +768,18 @@ def _actual_dict() -> dict[str, Any]:
     )
 
 
+def _raw_mapping() -> dict[str, Any]:
+    return json.loads(json.dumps(_actual_dict()))
+
+
+def _rehash_authority(data: dict[str, Any]) -> None:
+    material = copy.deepcopy(data)
+    material.pop("authority_hash", None)
+    for source in material["sources"]:
+        source.pop("retrieval_observations_utc", None)
+    data["authority_hash"] = _hash(AUTHORITY_HASH_DOMAIN, material)
+
+
 def _fact_index(fact_id: str) -> int:
     return ALL_FACT_IDS.index(fact_id)
 
@@ -764,6 +788,32 @@ def _coherently_rehash_fact(fact: dict[str, Any]) -> None:
     payload = dict(fact)
     payload.pop("fact_hash")
     fact["fact_hash"] = _hash(FACT_HASH_DOMAIN, payload)
+
+
+def _coherently_rehash_source(source: dict[str, Any]) -> None:
+    evidence_material = {
+        key: source[key]
+        for key in (
+            "source_id",
+            "kind",
+            "title",
+            "canonical_location",
+            "publication_or_last_updated_marker",
+            "semantic_locator",
+            "bound_fact_ids",
+            "bound_unknown_ids",
+            "semantic_observation",
+        )
+    }
+    evidence = _canonical(evidence_material)
+    source["evidence_hash"] = hashlib.sha256(
+        OBSERVATION_HASH_DOMAIN.encode() + b"\0" + evidence
+    ).hexdigest()
+    source["evidence_length_bytes"] = len(evidence)
+    material = dict(source)
+    material.pop("source_hash", None)
+    material.pop("retrieval_observations_utc")
+    source["source_hash"] = _hash(SOURCE_HASH_DOMAIN, material)
 
 
 def test_test_owned_matrices_match_complete_executable_authority() -> None:
@@ -780,9 +830,10 @@ def test_current_source_reconciliation_is_frozen_exactly() -> None:
     assert len(EXPECTED_FACTS) == 27
     assert len(EXPECTED_UNKNOWNS) == 10
     assert EXPECTED_SOURCES[0]["retrieval_observations_utc"] == (
-        "2026-07-12T07:49:50Z",
-        "2026-07-12T07:49:51Z",
+        "2026-07-12T11:46:08Z",
+        "2026-07-12T11:46:09Z",
     )
+    assert all(source["publication_or_last_updated_marker"] is None for source in EXPECTED_SOURCES)
     by_id = {row.fact_id: row for row in EXPECTED_FACTS}
     assert by_id["ip.websocket.connections"].numeric_value == 10
     assert by_id["ip.websocket.new-connections"].numeric_value == 30
@@ -857,45 +908,58 @@ def test_structured_observation_hash_and_length_are_independently_recomputable()
 def test_every_semantic_fact_mutation_is_rejected_even_when_rehashed(
     fact_id: str, field: str, replacement: Any
 ) -> None:
-    data = _actual_dict()
+    data = _raw_mapping()
     fact = data["documented_facts"][_fact_index(fact_id)]
     fact[field] = replacement
     _coherently_rehash_fact(fact)
-    with pytest.raises(ValidationError):
-        OfficialRateLimitAuthorityV0.model_validate(data)
+    _rehash_authority(data)
+    try:
+        candidate = OfficialRateLimitAuthorityV0.model_validate_json(json.dumps(data))
+    except ValidationError:
+        candidate = None
+    if candidate is not None:
+        assert isinstance(candidate, BaseModel)
+        with pytest.raises(TypeError):
+            validate_official_rate_limit_authority(candidate)
+    with pytest.raises(ValueError):
+        authenticate_official_rate_limit_authority_json(json.dumps(data))
 
 
 @pytest.mark.parametrize("member", ["sources", "documented_facts", "unresolved_fields"])
 def test_membership_omission_duplication_and_reordering_fail(member: str) -> None:
     for operation in ("omit", "duplicate", "reorder"):
-        data = _actual_dict()
+        data = _raw_mapping()
         values = data[member]
         if operation == "omit":
             data[member] = values[1:]
         elif operation == "duplicate":
-            data[member] = (*values, values[0])
+            data[member] = [*values, values[0]]
         else:
-            data[member] = tuple(reversed(values))
-        with pytest.raises(ValidationError):
-            OfficialRateLimitAuthorityV0.model_validate(data)
+            data[member] = list(reversed(values))
+        _rehash_authority(data)
+        with pytest.raises(ValueError):
+            _authenticate_official_rate_limit_authority_mapping(data)
 
 
 def test_semantic_duplicate_new_id_and_no_30_minute_planning_attack_fail() -> None:
-    data = _actual_dict()
+    data = _raw_mapping()
     duplicate = copy.deepcopy(data["documented_facts"][0])
     duplicate["fact_id"] = "invented.semantic-duplicate"
     _coherently_rehash_fact(duplicate)
-    data["documented_facts"] += (duplicate,)
-    with pytest.raises(ValidationError):
-        OfficialRateLimitAuthorityV0.model_validate(data)
+    data["documented_facts"].append(duplicate)
+    _rehash_authority(data)
+    with pytest.raises(ValueError):
+        _authenticate_official_rate_limit_authority_mapping(data)
 
-    data = _actual_dict()
+    data = _raw_mapping()
     index = _fact_index("ip.websocket.new-connections")
     data["documented_facts"] = (
         data["documented_facts"][:index] + data["documented_facts"][index + 1 :]
     )
-    with pytest.raises(ValidationError):
-        OfficialRateLimitAuthorityV0.model_validate(data)
+    data["documented_facts"] = list(data["documented_facts"])
+    _rehash_authority(data)
+    with pytest.raises(ValueError):
+        _authenticate_official_rate_limit_authority_mapping(data)
 
 
 @pytest.mark.parametrize(
@@ -1002,7 +1066,7 @@ def test_native_json_types_validate_but_extra_fields_do_not() -> None:
 def test_exact_instance_tampering_construct_copy_subclass_and_unicode_fail() -> None:
     authority = build_official_rate_limit_authority()
     object.__setattr__(authority, "status", "OFFICIAL_NUMERIC_LIMIT_RESOLVED")
-    with pytest.raises(ValidationError):
+    with pytest.raises(TypeError):
         validate_official_rate_limit_authority(authority)
     with pytest.raises(TypeError):
         OfficialRateLimitAuthorityV0.model_construct(**_actual_dict())
@@ -1024,13 +1088,12 @@ def test_exact_instance_tampering_construct_copy_subclass_and_unicode_fail() -> 
 def test_independent_hash_oracle_and_coherent_rehash_attack() -> None:
     actual = _actual_dict()
     assert actual["authority_hash"] == EXPECTED_AUTHORITY_HASH
-    data = _actual_dict()
+    data = _raw_mapping()
     data["unresolved_fields"] = data["unresolved_fields"][1:]
-    material = dict(data)
-    material.pop("authority_hash")
-    data["authority_hash"] = _hash(AUTHORITY_HASH_DOMAIN, material)
-    with pytest.raises(ValidationError):
-        OfficialRateLimitAuthorityV0.model_validate(data)
+    _rehash_authority(data)
+    assert OfficialRateLimitAuthorityV0.model_validate_json(json.dumps(data))
+    with pytest.raises(ValueError):
+        _authenticate_official_rate_limit_authority_mapping(data)
 
 
 def test_schema_is_complete_structural_only_and_counterfeit_needs_executable_rejection() -> None:
@@ -1047,8 +1110,257 @@ def test_schema_is_complete_structural_only_and_counterfeit_needs_executable_rej
     counterfeit["sources"][0]["title"] = "Counterfeit official title"
     validator = Draft202012Validator(schema)
     validator.validate(counterfeit)
-    with pytest.raises(ValidationError):
-        OfficialRateLimitAuthorityV0.model_validate_json(json.dumps(counterfeit))
+    _coherently_rehash_source(counterfeit["sources"][0])
+    _rehash_authority(counterfeit)
+    assert OfficialRateLimitAuthorityV0.model_validate_json(json.dumps(counterfeit))
+    with pytest.raises(ValueError):
+        authenticate_official_rate_limit_authority_json(json.dumps(counterfeit))
+
+
+def test_raw_json_authentication_returns_immutable_non_pydantic_result() -> None:
+    raw = json.dumps(_raw_mapping(), ensure_ascii=False, separators=(",", ":"))
+    result = authenticate_official_rate_limit_authority_json(raw)
+    assert type(result) is OfficialRateLimitAuthenticationResult
+    assert not isinstance(result, BaseModel)
+    assert result.authority_hash == EXPECTED_AUTHORITY_HASH
+    assert result.source_ids == (RATE, INFO)
+    assert len(result.fact_ids) == 27
+    assert len(result.unknown_ids) == 10
+    assert result.canonical_json == _canonical(_raw_mapping())
+    with pytest.raises((AttributeError, TypeError)):
+        result.authority_hash = "0" * 64  # type: ignore[misc]
+    with pytest.raises(TypeError):
+        validate_official_rate_limit_authority(result)
+
+
+@pytest.mark.parametrize(
+    "needle,duplicate",
+    [
+        ('"schema_version":"0.1.0"', '"schema_version":"counterfeit"'),
+        ('"source_id":"hyperliquid-rate-limits-and-user-limits"', '"source_id":"alias"'),
+        ('"fact_id":"ip.rest.aggregate-weight"', '"fact_id":"alias"'),
+        ('"field_id":"burst-semantics"', '"field_id":"alias"'),
+        ('"authority_hash":', '"authority_hash":"' + "0" * 64 + '","ignored":'),
+        ('"transition_eligible":false', '"transition_eligible":true'),
+    ],
+)
+@pytest.mark.parametrize("duplicate_first", [False, True])
+def test_raw_json_duplicate_keys_are_rejected_at_every_depth(
+    needle: str, duplicate: str, duplicate_first: bool
+) -> None:
+    raw = json.dumps(_raw_mapping(), ensure_ascii=False, separators=(",", ":"))
+    if needle == '"authority_hash":':
+        marker = needle + '"' + EXPECTED_AUTHORITY_HASH + '"'
+        duplicate_pair = duplicate + '"' + EXPECTED_AUTHORITY_HASH + '"'
+    else:
+        marker = needle
+        duplicate_pair = duplicate
+    replacement = (
+        duplicate_pair + "," + marker
+        if duplicate_first
+        else marker + "," + duplicate_pair
+    )
+    attacked = raw.replace(marker, replacement, 1)
+    with pytest.raises(ValueError, match="duplicate JSON object key"):
+        authenticate_official_rate_limit_authority_json(attacked)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b'\xff',
+        '{"value":NaN}',
+        '{"value":Infinity}',
+        '{"value":-Infinity}',
+    ],
+)
+def test_raw_json_invalid_utf8_and_non_finite_numbers_fail(raw: str | bytes) -> None:
+    with pytest.raises((UnicodeDecodeError, ValueError)):
+        authenticate_official_rate_limit_authority_json(raw)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        bytearray(b"{}"),
+        memoryview(b"{}"),
+        _raw_mapping(),
+        build_official_rate_limit_authority(),
+    ],
+)
+def test_raw_json_authenticator_rejects_predecoded_and_non_exact_inputs(value: object) -> None:
+    with pytest.raises(TypeError):
+        authenticate_official_rate_limit_authority_json(value)  # type: ignore[arg-type]
+
+
+class _BytesSubclass(bytes):
+    pass
+
+
+class _RawStringSubclass(str):
+    pass
+
+
+@pytest.mark.parametrize("value", [_RawStringSubclass("{}"), _BytesSubclass(b"{}")])
+def test_raw_json_authenticator_rejects_text_and_bytes_subclasses(value: object) -> None:
+    with pytest.raises(TypeError):
+        authenticate_official_rate_limit_authority_json(value)  # type: ignore[arg-type]
+
+
+class _DictSubclass(dict[str, Any]):
+    pass
+
+
+class _ListSubclass(list[Any]):
+    pass
+
+
+class _StringSubclass(str):
+    pass
+
+
+class _IntegerSubclass(int):
+    pass
+
+
+class _NumberEnum(Enum):
+    VALUE = 1200
+
+
+class _NumberIntEnum(IntEnum):
+    VALUE = 1200
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        "1200",
+        1200.0,
+        True,
+        Decimal("1200"),
+        _IntegerSubclass(1200),
+        _NumberEnum.VALUE,
+        _NumberIntEnum.VALUE,
+    ],
+)
+def test_mapping_authenticator_rejects_numeric_coercion_and_exotic_scalars(
+    replacement: object,
+) -> None:
+    data = _raw_mapping()
+    data["documented_facts"][0]["numeric_value"] = replacement
+    with pytest.raises((TypeError, ValueError)):
+        _authenticate_official_rate_limit_authority_mapping(data)
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        lambda data: _DictSubclass(data),
+        lambda data: MappingProxyType(data),
+        lambda data: {**data, "sources": tuple(data["sources"])},
+        lambda data: {**data, "sources": _ListSubclass(data["sources"])},
+        lambda data: {
+            **data,
+            "sources": [_DictSubclass(data["sources"][0]), *data["sources"][1:]],
+        },
+        lambda data: {**data, "status": _StringSubclass(data["status"])},
+    ],
+)
+def test_mapping_authenticator_requires_exact_builtin_container_tree(mutator: Any) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        _authenticate_official_rate_limit_authority_mapping(mutator(_raw_mapping()))
+
+
+def test_mapping_authenticator_rejects_omission_extra_query_alias_and_models() -> None:
+    mutations = []
+    omitted = _raw_mapping()
+    omitted.pop("conflict_state")
+    mutations.append(omitted)
+    extra = _raw_mapping()
+    extra["extra"] = False
+    mutations.append(extra)
+    query = _raw_mapping()
+    query["sources"][0]["canonical_location"] += "?counterfeit=1"
+    mutations.append(query)
+    fragment = _raw_mapping()
+    fragment["sources"][0]["canonical_location"] += "#counterfeit"
+    mutations.append(fragment)
+    alias = _raw_mapping()
+    duplicate = copy.deepcopy(alias["documented_facts"][0])
+    duplicate["fact_id"] = "semantic.alias"
+    _coherently_rehash_fact(duplicate)
+    alias["documented_facts"].append(duplicate)
+    _rehash_authority(alias)
+    mutations.append(alias)
+    for candidate in mutations:
+        with pytest.raises(ValueError):
+            _authenticate_official_rate_limit_authority_mapping(candidate)
+    with pytest.raises(TypeError):
+        _authenticate_official_rate_limit_authority_mapping(
+            build_official_rate_limit_authority()
+        )
+
+
+def test_retrieval_metadata_is_excluded_from_source_and_authority_hash_domains() -> None:
+    data = _raw_mapping()
+    original_source_hash = data["sources"][0]["source_hash"]
+    original_authority_hash = data["authority_hash"]
+    data["sources"][0]["retrieval_observations_utc"] = ["2099-01-01T00:00:00Z"]
+    material = dict(data["sources"][0])
+    material.pop("source_hash")
+    material.pop("retrieval_observations_utc")
+    assert _hash(SOURCE_HASH_DOMAIN, material) == original_source_hash
+    _rehash_authority(data)
+    assert data["authority_hash"] == original_authority_hash
+    with pytest.raises(ValueError):
+        _authenticate_official_rate_limit_authority_mapping(data)
+
+
+def test_low_level_pydantic_counterfeits_cannot_cross_authentication_boundary() -> None:
+    raw = json.dumps(_raw_mapping(), separators=(",", ":"))
+    ordinary = build_official_rate_limit_authority()
+
+    def unbound_deprecated_copy() -> BaseModel:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            return BaseModel.copy(ordinary)
+
+    factories = [
+        lambda: TypeAdapter(OfficialRateLimitAuthorityV0).validate_json(raw),
+        lambda: OfficialRateLimitAuthorityV0.__pydantic_validator__.validate_json(raw),
+        lambda: BaseModel.model_validate_json.__func__(OfficialRateLimitAuthorityV0, raw),
+        lambda: BaseModel.model_construct.__func__(
+            OfficialRateLimitAuthorityV0, **_actual_dict()
+        ),
+        lambda: BaseModel.model_copy(ordinary),
+        unbound_deprecated_copy,
+    ]
+    candidates = []
+    for factory in factories:
+        try:
+            candidates.append(factory())
+        except ValidationError:
+            pass
+    assert candidates
+    for candidate in candidates:
+        assert isinstance(candidate, BaseModel)
+        with pytest.raises(TypeError):
+            validate_official_rate_limit_authority(candidate)
+        with pytest.raises(TypeError):
+            _authenticate_official_rate_limit_authority_mapping(candidate)
+
+    nested = _raw_mapping()
+    nested["sources"][0] = ordinary.sources[0]
+    with pytest.raises(TypeError):
+        _authenticate_official_rate_limit_authority_mapping(nested)
+
+
+def test_private_mapping_authenticator_is_not_exported_from_package_root() -> None:
+    import trader_assist_v0.contracts as contracts
+
+    assert not hasattr(contracts, "_authenticate_official_rate_limit_authority_mapping")
+    assert contracts.authenticate_official_rate_limit_authority_json
+    assert contracts.OfficialRateLimitAuthenticationResult
 
 
 def test_source_catalog_hash_and_all_gates_remain_fail_closed() -> None:
