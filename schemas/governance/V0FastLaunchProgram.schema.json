@@ -1608,6 +1608,8 @@
         "pre_launch_main_prs",
         "flp1_is_vertical_pilot_pr",
         "bounded_repairs_in_same_execution_window",
+        "bounded_repairs_same_scope_required",
+        "bounded_repairs_original_pr_required",
         "full_independent_review_only_for_final_merge_candidate",
         "finding_classes",
         "only_blocker_prevents_merge"
@@ -1635,6 +1637,14 @@
           "const": true
         },
         "bounded_repairs_in_same_execution_window": {
+          "type": "boolean",
+          "const": true
+        },
+        "bounded_repairs_same_scope_required": {
+          "type": "boolean",
+          "const": true
+        },
+        "bounded_repairs_original_pr_required": {
           "type": "boolean",
           "const": true
         },
@@ -1674,7 +1684,13 @@
         "review_permission",
         "mark_ready_prohibited",
         "merge_prohibited",
-        "exact_head_ci_required"
+        "exact_head_ci_required",
+        "exact_head_review_required",
+        "writer_reviewer_separation_required",
+        "finalization_separate_task_required",
+        "separate_project_control_finalization_authorization_required",
+        "pre_finalization_base_head_state_reverification_required",
+        "unresolved_blocker_prevents_merge"
       ],
       "properties": {
         "draft_pr_required": {
@@ -1700,6 +1716,30 @@
         "exact_head_ci_required": {
           "type": "boolean",
           "const": true
+        },
+        "exact_head_review_required": {
+          "type": "boolean",
+          "const": true
+        },
+        "writer_reviewer_separation_required": {
+          "type": "boolean",
+          "const": true
+        },
+        "finalization_separate_task_required": {
+          "type": "boolean",
+          "const": true
+        },
+        "separate_project_control_finalization_authorization_required": {
+          "type": "boolean",
+          "const": true
+        },
+        "pre_finalization_base_head_state_reverification_required": {
+          "type": "boolean",
+          "const": true
+        },
+        "unresolved_blocker_prevents_merge": {
+          "type": "boolean",
+          "const": true
         }
       }
     },
@@ -1712,6 +1752,11 @@
         "next_window_permission",
         "post_merge_next_gate",
         "handoff_required_fields",
+        "rotation_triggers",
+        "required_rotation_output",
+        "current_safe_stop_point_required",
+        "complete_handoff_prompt_required",
+        "recursive_window_rotation_requirement",
         "verification_warning"
       ],
       "properties": {
@@ -1803,6 +1848,147 @@
             }
           ],
           "items": false
+        },
+        "rotation_triggers": {
+          "type": "array",
+          "minItems": 14,
+          "maxItems": 14,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "type": "string",
+              "const": "PR_MERGED"
+            },
+            {
+              "type": "string",
+              "const": "ISSUE_OR_EPIC_COMPLETED"
+            },
+            {
+              "type": "string",
+              "const": "STAGE_ENDS_BEFORE_NEW_STAGE"
+            },
+            {
+              "type": "string",
+              "const": "REVIEW_PLUS_REPAIR_EXCEEDS_TWO_ROUNDS"
+            },
+            {
+              "type": "string",
+              "const": "HEAD_DRIFT"
+            },
+            {
+              "type": "string",
+              "const": "WRITER_COLLISION"
+            },
+            {
+              "type": "string",
+              "const": "WRITE_LEASE_REVOKED_OR_PERMISSION_CHANGED"
+            },
+            {
+              "type": "string",
+              "const": "MULTIPLE_PRS_STAGES_OR_STALE_STATES"
+            },
+            {
+              "type": "string",
+              "const": "USER_REPEATEDLY_REQUESTS_PROJECT_STATUS"
+            },
+            {
+              "type": "string",
+              "const": "CONTEXT_LENGTH_RISKS_STALE_FACT_CONTAMINATION"
+            },
+            {
+              "type": "string",
+              "const": "OLD_HEAD_CI_OR_PR_STATE_REUSE_RISK"
+            },
+            {
+              "type": "string",
+              "const": "PROJECT_SWITCH_BETWEEN_TRADER_ASSIST_V0_AND_TRADE_OS"
+            },
+            {
+              "type": "string",
+              "const": "USER_EXPLICITLY_REQUESTS_NEW_WINDOW"
+            },
+            {
+              "type": "string",
+              "const": "MULTIPLE_EXECUTION_REVIEW_REPAIR_OR_FINALIZATION_PROMPTS"
+            }
+          ],
+          "items": false
+        },
+        "required_rotation_output": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "type": "string",
+              "const": "WINDOW_ROTATION_REQUIRED"
+            },
+            {
+              "type": "string",
+              "const": "REASON"
+            },
+            {
+              "type": "string",
+              "const": "CURRENT_SAFE_STOP_POINT"
+            },
+            {
+              "type": "string",
+              "const": "NEXT_WINDOW_HANDOFF_PROMPT"
+            }
+          ],
+          "items": false
+        },
+        "current_safe_stop_point_required": {
+          "type": "boolean",
+          "const": true
+        },
+        "complete_handoff_prompt_required": {
+          "type": "boolean",
+          "const": true
+        },
+        "recursive_window_rotation_requirement": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "future_handoffs_must_include_complete_rotation_policy",
+            "future_handoffs_must_include_all_rotation_triggers",
+            "future_handoffs_must_include_required_rotation_output",
+            "future_handoffs_must_include_recursive_requirement_itself",
+            "receiving_window_must_propagate_requirement",
+            "applies_to_every_later_handoff",
+            "one_time_summary_or_non_propagating_simplification_prohibited"
+          ],
+          "properties": {
+            "future_handoffs_must_include_complete_rotation_policy": {
+              "type": "boolean",
+              "const": true
+            },
+            "future_handoffs_must_include_all_rotation_triggers": {
+              "type": "boolean",
+              "const": true
+            },
+            "future_handoffs_must_include_required_rotation_output": {
+              "type": "boolean",
+              "const": true
+            },
+            "future_handoffs_must_include_recursive_requirement_itself": {
+              "type": "boolean",
+              "const": true
+            },
+            "receiving_window_must_propagate_requirement": {
+              "type": "boolean",
+              "const": true
+            },
+            "applies_to_every_later_handoff": {
+              "type": "boolean",
+              "const": true
+            },
+            "one_time_summary_or_non_propagating_simplification_prohibited": {
+              "type": "boolean",
+              "const": true
+            }
+          }
         },
         "verification_warning": {
           "type": "string",

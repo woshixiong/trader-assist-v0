@@ -372,6 +372,8 @@
     ],
     "flp1_is_vertical_pilot_pr": true,
     "bounded_repairs_in_same_execution_window": true,
+    "bounded_repairs_same_scope_required": true,
+    "bounded_repairs_original_pr_required": true,
     "full_independent_review_only_for_final_merge_candidate": true,
     "finding_classes": [
       "BLOCKER",
@@ -385,7 +387,13 @@
     "review_permission": "STRICT_READ_ONLY",
     "mark_ready_prohibited": true,
     "merge_prohibited": true,
-    "exact_head_ci_required": true
+    "exact_head_ci_required": true,
+    "exact_head_review_required": true,
+    "writer_reviewer_separation_required": true,
+    "finalization_separate_task_required": true,
+    "separate_project_control_finalization_authorization_required": true,
+    "pre_finalization_base_head_state_reverification_required": true,
+    "unresolved_blocker_prevents_merge": true
   },
   "recursive_rotation": {
     "required": true,
@@ -410,6 +418,39 @@
       "REQUIRED_ROTATION_OUTPUT",
       "RECURSIVE_WINDOW_ROTATION_REQUIREMENT"
     ],
+    "rotation_triggers": [
+      "PR_MERGED",
+      "ISSUE_OR_EPIC_COMPLETED",
+      "STAGE_ENDS_BEFORE_NEW_STAGE",
+      "REVIEW_PLUS_REPAIR_EXCEEDS_TWO_ROUNDS",
+      "HEAD_DRIFT",
+      "WRITER_COLLISION",
+      "WRITE_LEASE_REVOKED_OR_PERMISSION_CHANGED",
+      "MULTIPLE_PRS_STAGES_OR_STALE_STATES",
+      "USER_REPEATEDLY_REQUESTS_PROJECT_STATUS",
+      "CONTEXT_LENGTH_RISKS_STALE_FACT_CONTAMINATION",
+      "OLD_HEAD_CI_OR_PR_STATE_REUSE_RISK",
+      "PROJECT_SWITCH_BETWEEN_TRADER_ASSIST_V0_AND_TRADE_OS",
+      "USER_EXPLICITLY_REQUESTS_NEW_WINDOW",
+      "MULTIPLE_EXECUTION_REVIEW_REPAIR_OR_FINALIZATION_PROMPTS"
+    ],
+    "required_rotation_output": [
+      "WINDOW_ROTATION_REQUIRED",
+      "REASON",
+      "CURRENT_SAFE_STOP_POINT",
+      "NEXT_WINDOW_HANDOFF_PROMPT"
+    ],
+    "current_safe_stop_point_required": true,
+    "complete_handoff_prompt_required": true,
+    "recursive_window_rotation_requirement": {
+      "future_handoffs_must_include_complete_rotation_policy": true,
+      "future_handoffs_must_include_all_rotation_triggers": true,
+      "future_handoffs_must_include_required_rotation_output": true,
+      "future_handoffs_must_include_recursive_requirement_itself": true,
+      "receiving_window_must_propagate_requirement": true,
+      "applies_to_every_later_handoff": true,
+      "one_time_summary_or_non_propagating_simplification_prohibited": true
+    },
     "verification_warning": "A handoff never substitutes for current GitHub verification."
   },
   "deferred_capabilities": [

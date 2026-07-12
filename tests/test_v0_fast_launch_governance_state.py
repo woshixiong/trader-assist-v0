@@ -148,12 +148,23 @@ def test_governance_and_rotation_policy_are_frozen() -> None:
     assert levels["fl4_requirement"] == "SEPARATE_G4_EXECUTION_AND_SECURITY_REVIEW"
     assert route["finding_classes"] == ["BLOCKER", "FOLLOW_UP"]
     assert route["only_blocker_prevents_merge"] is True
+    assert route["bounded_repairs_same_scope_required"] is True
+    assert route["bounded_repairs_original_pr_required"] is True
     assert review["external_independent_review_required"] is True
     assert review["mark_ready_prohibited"] is True
     assert review["merge_prohibited"] is True
+    assert review["exact_head_review_required"] is True
+    assert review["writer_reviewer_separation_required"] is True
+    assert review["finalization_separate_task_required"] is True
+    assert review["separate_project_control_finalization_authorization_required"] is True
+    assert review["pre_finalization_base_head_state_reverification_required"] is True
+    assert review["unresolved_blocker_prevents_merge"] is True
     assert rotation["required"] is True
     assert rotation["next_window_permission"] == "STRICT_READ_ONLY"
     assert rotation["post_merge_next_gate"] == NEXT_GATE
+    assert rotation["current_safe_stop_point_required"] is True
+    assert rotation["complete_handoff_prompt_required"] is True
+    assert all(rotation["recursive_window_rotation_requirement"].values())
 
 
 Mutation = tuple[str, tuple[str | int, ...], Any]
@@ -186,6 +197,59 @@ R1_REQUIRED_CONTROLS = (
     "SHADOW",
     "SMALL_CAPITAL_MAINNET_CANARY",
     "SEPARATE_MAINNET_AUTHORIZATION",
+)
+
+R2_FINALIZATION_FIELDS = (
+    "exact_head_review_required",
+    "writer_reviewer_separation_required",
+    "finalization_separate_task_required",
+    "separate_project_control_finalization_authorization_required",
+    "pre_finalization_base_head_state_reverification_required",
+    "unresolved_blocker_prevents_merge",
+)
+
+R2_REPAIR_ROUTE_FIELDS = (
+    "bounded_repairs_same_scope_required",
+    "bounded_repairs_original_pr_required",
+)
+
+R2_ROTATION_TRIGGERS = (
+    "PR_MERGED",
+    "ISSUE_OR_EPIC_COMPLETED",
+    "STAGE_ENDS_BEFORE_NEW_STAGE",
+    "REVIEW_PLUS_REPAIR_EXCEEDS_TWO_ROUNDS",
+    "HEAD_DRIFT",
+    "WRITER_COLLISION",
+    "WRITE_LEASE_REVOKED_OR_PERMISSION_CHANGED",
+    "MULTIPLE_PRS_STAGES_OR_STALE_STATES",
+    "USER_REPEATEDLY_REQUESTS_PROJECT_STATUS",
+    "CONTEXT_LENGTH_RISKS_STALE_FACT_CONTAMINATION",
+    "OLD_HEAD_CI_OR_PR_STATE_REUSE_RISK",
+    "PROJECT_SWITCH_BETWEEN_TRADER_ASSIST_V0_AND_TRADE_OS",
+    "USER_EXPLICITLY_REQUESTS_NEW_WINDOW",
+    "MULTIPLE_EXECUTION_REVIEW_REPAIR_OR_FINALIZATION_PROMPTS",
+)
+
+R2_REQUIRED_ROTATION_OUTPUT = (
+    "WINDOW_ROTATION_REQUIRED",
+    "REASON",
+    "CURRENT_SAFE_STOP_POINT",
+    "NEXT_WINDOW_HANDOFF_PROMPT",
+)
+
+R2_ROTATION_FLAGS = (
+    "current_safe_stop_point_required",
+    "complete_handoff_prompt_required",
+)
+
+R2_RECURSIVE_REQUIREMENT_FIELDS = (
+    "future_handoffs_must_include_complete_rotation_policy",
+    "future_handoffs_must_include_all_rotation_triggers",
+    "future_handoffs_must_include_required_rotation_output",
+    "future_handoffs_must_include_recursive_requirement_itself",
+    "receiving_window_must_propagate_requirement",
+    "applies_to_every_later_handoff",
+    "one_time_summary_or_non_propagating_simplification_prohibited",
 )
 
 
@@ -573,6 +637,161 @@ def _program_mutation_cases() -> list[Any]:
                 f"release-r1-control-{control.lower().replace('_', '-')}-deleted",
             )
         )
+    for field in R2_FINALIZATION_FIELDS:
+        case_name = field.removesuffix("_required").replace("_", "-")
+        cases.extend(
+            (
+                _case(
+                    ("remove_key", ("review_finalization_policy", field), None),
+                    f"r2-finalization-{case_name}-deleted",
+                ),
+                _case(
+                    ("set", ("review_finalization_policy", field), False),
+                    f"r2-finalization-{case_name}-false",
+                ),
+            )
+        )
+    for field in R2_REPAIR_ROUTE_FIELDS:
+        case_name = field.removesuffix("_required").replace("_", "-")
+        cases.extend(
+            (
+                _case(
+                    ("remove_key", ("development_route", field), None),
+                    f"r2-route-{case_name}-deleted",
+                ),
+                _case(
+                    ("set", ("development_route", field), False),
+                    f"r2-route-{case_name}-false",
+                ),
+            )
+        )
+    for trigger in R2_ROTATION_TRIGGERS:
+        cases.append(
+            _case(
+                ("remove_value", ("recursive_rotation", "rotation_triggers"), trigger),
+                f"r2-rotation-trigger-{trigger.lower().replace('_', '-')}-deleted",
+            )
+        )
+    cases.extend(
+        (
+            _case(
+                (
+                    "replace_value",
+                    ("recursive_rotation", "rotation_triggers"),
+                    ("HEAD_DRIFT", "UNAUTHORIZED_TRIGGER"),
+                ),
+                "r2-rotation-trigger-replaced",
+            ),
+            _case(
+                ("append", ("recursive_rotation", "rotation_triggers"), "UNAUTHORIZED_TRIGGER"),
+                "r2-rotation-trigger-added",
+            ),
+            _case(
+                ("swap", ("recursive_rotation", "rotation_triggers"), (0, 1)),
+                "r2-rotation-triggers-reordered",
+            ),
+            _case(
+                ("set", ("recursive_rotation", "rotation_triggers"), ["PR_MERGED"]),
+                "r2-rotation-triggers-replaced-with-short-open-list",
+            ),
+        )
+    )
+    for output_field in R2_REQUIRED_ROTATION_OUTPUT:
+        cases.append(
+            _case(
+                (
+                    "remove_value",
+                    ("recursive_rotation", "required_rotation_output"),
+                    output_field,
+                ),
+                f"r2-rotation-output-{output_field.lower().replace('_', '-')}-deleted",
+            )
+        )
+    cases.extend(
+        (
+            _case(
+                (
+                    "replace_value",
+                    ("recursive_rotation", "required_rotation_output"),
+                    ("REASON", "UNAUTHORIZED_OUTPUT"),
+                ),
+                "r2-rotation-output-replaced",
+            ),
+            _case(
+                (
+                    "append",
+                    ("recursive_rotation", "required_rotation_output"),
+                    "UNAUTHORIZED_OUTPUT",
+                ),
+                "r2-rotation-output-added",
+            ),
+            _case(
+                ("swap", ("recursive_rotation", "required_rotation_output"), (0, 1)),
+                "r2-rotation-output-reordered",
+            ),
+        )
+    )
+    for field in R2_ROTATION_FLAGS:
+        case_name = field.removesuffix("_required").replace("_", "-")
+        cases.extend(
+            (
+                _case(
+                    ("remove_key", ("recursive_rotation", field), None),
+                    f"r2-rotation-{case_name}-deleted",
+                ),
+                _case(
+                    ("set", ("recursive_rotation", field), False),
+                    f"r2-rotation-{case_name}-false",
+                ),
+            )
+        )
+    cases.append(
+        _case(
+            ("remove_key", ("recursive_rotation", "recursive_window_rotation_requirement"), None),
+            "r2-recursive-requirement-object-deleted",
+        )
+    )
+    for field in R2_RECURSIVE_REQUIREMENT_FIELDS:
+        case_name = field.replace("_", "-")
+        path = ("recursive_rotation", "recursive_window_rotation_requirement", field)
+        cases.extend(
+            (
+                _case(("remove_key", path, None), f"r2-recursive-{case_name}-deleted"),
+                _case(("set", path, False), f"r2-recursive-{case_name}-false"),
+            )
+        )
+    cases.extend(
+        (
+            _case(
+                (
+                    "add_property",
+                    ("recursive_rotation", "recursive_window_rotation_requirement"),
+                    ("unexpected_authority", True),
+                ),
+                "r2-recursive-unexpected-property-added",
+            ),
+            _case(
+                (
+                    "set",
+                    ("recursive_rotation", "recursive_window_rotation_requirement"),
+                    "Future handoffs should probably propagate this policy.",
+                ),
+                "r2-recursive-object-replaced-with-prose",
+            ),
+            _case(
+                (
+                    "set",
+                    (
+                        "recursive_rotation",
+                        "recursive_window_rotation_requirement",
+                        "one_time_summary_or_non_propagating_simplification_prohibited",
+                    ),
+                    False,
+                ),
+                "r2-recursive-one-time-summary-allowed",
+            ),
+        )
+    )
     closed_objects = {
         "root": (),
         "authority": ("authority",),
@@ -593,6 +812,10 @@ def _program_mutation_cases() -> list[Any]:
         "development-route": ("development_route",),
         "finalization": ("review_finalization_policy",),
         "rotation": ("recursive_rotation",),
+        "recursive-requirement": (
+            "recursive_rotation",
+            "recursive_window_rotation_requirement",
+        ),
     }
     for name, object_path in closed_objects.items():
         cases.append(
@@ -641,14 +864,25 @@ def _apply_mutation(document: dict[str, Any], mutation: Mutation) -> None:
         raise AssertionError(f"unknown mutation operation: {operation}")
 
 
+def _expected_validation_path(mutation: Mutation) -> tuple[str | int, ...]:
+    operation, path, _ = mutation
+    if operation == "remove_key":
+        return path[:-1]
+    return path
+
+
 @pytest.mark.parametrize("mutation", _program_mutation_cases())
 def test_schema_rejects_hostile_program_mutation(mutation: Mutation) -> None:
     schema = _load_json(SCHEMA_PATH)
     hostile = copy.deepcopy(_load_json(PROGRAM_PATH))
     _apply_mutation(hostile, mutation)
 
-    with pytest.raises(jsonschema.ValidationError):
+    with pytest.raises(jsonschema.ValidationError) as exc_info:
         Draft202012Validator(schema).validate(hostile)
+
+    expected_path = _expected_validation_path(mutation)
+    actual_path = tuple(exc_info.value.absolute_path)
+    assert actual_path[: len(expected_path)] == expected_path
 
 
 @pytest.mark.parametrize(
