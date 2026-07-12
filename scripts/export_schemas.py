@@ -18,6 +18,7 @@ from trader_assist_v0.contracts import (
     HumanReviewDecisionV0,
     InstrumentPrecisionContractV0,
     NormalizedEventV0,
+    OfficialRateLimitAuthorityV0,
     OrderPackageV0,
     PromotionRecordV0,
     ProposalV0,
@@ -47,6 +48,7 @@ MODELS: tuple[type[BaseModel], ...] = (
     BronzeReplayReportV0,
     CandlePayloadExtractionV0,
     CandleCrossSourceReconciliationV0,
+    OfficialRateLimitAuthorityV0,
     RequiredFeedContractV0,
     InstrumentPrecisionContractV0,
     NormalizedEventV0,
@@ -82,6 +84,13 @@ A6_SCHEMA_BOUNDARY_DESCRIPTION = (
     "validation for hashes, exact A5 authority, membership, ordering, counts, differences, "
     "and complete logical-key union proof. Schema validation alone does not authenticate "
     "an A6 reconciliation report."
+)
+OFFICIAL_RATE_LIMIT_SCHEMA_BOUNDARY_DESCRIPTION = (
+    "Schema validation proves serialized structure only. It does not authenticate "
+    "official sources, exact fact or unknown membership, ordering, duplicate/conflict "
+    "rules, semantic evidence, hashes, or transition authority. Pydantic models are "
+    "untrusted structural containers; authority requires raw-material reauthentication "
+    "with authenticate_official_rate_limit_authority_json at every consumer boundary."
 )
 
 
@@ -390,11 +399,33 @@ def _a6_authority_schema(schema: dict[str, Any]) -> dict[str, Any]:
     return schema
 
 
+def _official_rate_limit_authority_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    def require_complete_serialization(value: Any) -> None:
+        if isinstance(value, dict):
+            value.pop("default", None)
+            properties = value.get("properties")
+            if isinstance(properties, dict):
+                value["additionalProperties"] = False
+                value["required"] = list(properties)
+            for item in value.values():
+                require_complete_serialization(item)
+        elif isinstance(value, list):
+            for item in value:
+                require_complete_serialization(item)
+
+    require_complete_serialization(schema)
+    schema["$comment"] = OFFICIAL_RATE_LIMIT_SCHEMA_BOUNDARY_DESCRIPTION
+    schema["description"] = OFFICIAL_RATE_LIMIT_SCHEMA_BOUNDARY_DESCRIPTION
+    return schema
+
+
 def render(model: type[BaseModel]) -> str:
     schema = _portable_schema(model.model_json_schema())
     if model is CandleCrossSourceReconciliationV0:
         schema = _a6_authority_schema(schema)
         schema = _portable_a6_absolute_end_patterns(schema)
+    if model is OfficialRateLimitAuthorityV0:
+        schema = _official_rate_limit_authority_schema(schema)
     if model in COMPACT_MODELS:
         return json.dumps(
             schema,

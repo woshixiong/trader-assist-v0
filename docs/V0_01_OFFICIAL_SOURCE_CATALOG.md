@@ -56,7 +56,7 @@ A3 is not a runtime collector, not an HTTP client, not a WebSocket client, not a
 
 ## A4 official rate-limit authority — completed
 
-A4 froze the official-only rate-limit authority contract required before any future public read-only live transport runtime. A4 preflight could not read and independently cite unambiguous official numeric values. Therefore A4 keeps the current authority unresolved and encodes no numeric limit values.
+A4 froze the official-only rate-limit authority contract required before any future public read-only live transport runtime. FLP1B0A re-read the current official pages and amended A4 with a versioned, deterministic `OfficialRateLimitAuthorityV0`. It records exact source-bound numeric facts without treating incomplete operational semantics as resolved transition authority.
 
 Recognized status states:
 
@@ -69,20 +69,41 @@ Current frozen status:
 
 ```text
 RATE_LIMIT_STATUS: UNRESOLVED_OFFICIAL_LIMIT
+CONFLICT_STATE: OFFICIAL_SOURCE_VARIANT_CONFLICT_DETECTED
+SUPERSESSION_STATE: EFFECTIVE_VARIANT_UNDETERMINED
 LIVE_TRANSPORT_AUTHORIZED: FALSE
+TRANSITION_ELIGIBLE: FALSE
+ACCOUNT_READONLY_RUNTIME_AUTHORIZED: FALSE
+TESTNET_EXECUTION_AUTHORIZED: FALSE
+MAINNET_EXECUTION_AUTHORIZED: FALSE
+FLP1_IMPLEMENTATION_AUTHORIZED: FALSE
 ```
 
-The only accepted authority identity is:
+The accepted official source identities are:
 
 ```text
 source_kind: official
 official_source_title: Rate limits and user limits
 official_source_location: https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/rate-limits-and-user-limits
+supporting_source_title: Info endpoint
+supporting_source_location: https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint
 ```
 
-A future resolved candidate must include the official source title/location, verification date, source kind `official`, proof the source was readable, numeric field names, limit units, operation scope, and no ambiguous fields.
+The query-free rate-limit page was freshly retrieved at `2026-07-12T14:34:55Z` and, with no-cache/no-store headers, at `2026-07-12T14:35:06Z`. Both reads returned HTTP 200 and the same Variant A body semantics. The supporting query-free Info page returned HTTP 200 at `2026-07-12T14:35:14Z` and confirmed operation identities without resolving the primary-page conflict. External R3 review had already confirmed a conflicting Variant B at the same canonical location. No independently confirmable version, effective marker, or supersession statement selects either variant. The public UI exposed only relative observations, so `publication_or_last_updated_marker` remains `None`; retrieval times are observation metadata, and the legacy source-catalog verification date remains `2026-07-07`.
 
-A4 rejects third-party, community, remembered, inferred, blog, forum, Discord, StackOverflow, or model-memory authority metadata in unresolved and resolved states. Even complete resolved metadata does not authorize live transport in A4.
+The repository does not preserve or claim to authenticate complete remote GitBook HTML. Each source instead carries a reproducible evidence hash and byte length over canonical structured observation material stored in the contract: source identity, independently confirmable marker or `None`, semantic locator, bound fact IDs, bound unknown IDs, and normalized semantic observations. Fresh retrieval UTC is kept as frozen observation metadata but is excluded from evidence, source, and authority hash material. Remote wrapper, script, content length, tracking URL, or wrapper-byte changes do not by themselves establish official semantic drift.
+
+The 25 conflict-safe common-subset facts cover the documented aggregate REST/IP budget; exchange, Info, explorer and response-item weights; WebSocket subscriptions, users, messages and inflight posts; EVM JSON-RPC; address volume allowance, initial buffer, limited fallback, cancel and open-order formulas; the common 2x maker-share percentage multiplier; and IP/address batch accounting. Every fact binds exact transport, endpoint class, operation allowlist, scope, value/unit, applicable window, response divisor/formula, sources, and a domain-separated fact hash.
+
+Neither 10 nor 100 simultaneous WebSocket connections is an authenticated fact, and no 30-per-minute connection fact is retained. The maker-share fact is only `2 × maker share percentage`; it contains no reference period or computation/update cadence. The authority records `OFFICIAL_SOURCE_VARIANT_CONFLICT_DETECTED` and `EFFECTIVE_VARIANT_UNDETERMINED` rather than selecting either observed variant.
+
+The 14 mandatory unresolved fields retain the original ten—burst semantics, window algorithm, window alignment, partial response-bucket rounding, HTTP 429 behavior, error body, response headers, `Retry-After`, exact older-block weighting, and the high-congestion trigger—and add simultaneous WebSocket connection limit, new-connection/reconnection rate, maker-share reference period, and maker-share computation/update cadence. Every item is mandatory and blocking. A future candidate requires explicit official resolution or supersession plus separate bounded authorization.
+
+A4 rejects third-party, community, remembered, inferred, blog, forum, Discord, StackOverflow, or model-memory authority metadata, as well as stale/altered sources, duplicate or conflicting facts, source mismatch, injected facts, omitted unknowns, and coherently rehashed alterations. Even a later complete resolved authority would not by itself authorize live transport.
+
+`OfficialRateLimitAuthorityV0` and its nested Pydantic models are untrusted structural, serialization, and Schema containers. Builders and helpers return candidates, not authenticated authority, and low-level Pydantic APIs may construct counterfeit instances. Final authenticity never follows from Python instance identity. The sole public authority input is `authenticate_official_rate_limit_authority_json` with exact raw `str` or `bytes`; there is no public mapping-validation alias. Strict UTF-8 decoding, duplicate-key rejection at every depth, exact primitive typing, exact membership/order, semantic checks, and all hashes are reauthenticated. Every production consumer continues to follow private primitive builder → private mapping authenticator → immutable non-Pydantic authentication result. `rate_limit_authority_document` and `rate_limit_entry_gate` expose `conflict_state` and `supersession_state`. `validate_public_readonly_transport_preflight` reauthenticates the authority and returns `rate_limit_status = UNRESOLVED_OFFICIAL_LIMIT` with `live_transport_authorized = false`, but does not currently return those two structured state fields. `assert_rate_limit_allows_live_transport` reauthenticates the authority and raises a fail-closed unresolved-limit exception rather than returning a structured state payload.
+
+The authentication result records what one authentication call proved; it is not an unforgeable capability, is never accepted again as authority input, and persisted or cross-process material must be reauthenticated from raw JSON. The private mapping path cannot recover duplicate keys already lost by an external parser and therefore is not a wire boundary. The generated JSON Schema remains structural only: a schema-valid counterfeit may exist and must be rejected by both authentication boundaries.
 
 ## A1 candle WebSocket envelope contract
 
@@ -137,7 +158,7 @@ A5 produces `CandlePayloadExtractionV0` with domain-separated logical candle key
 
 ## A1/A2/A3/A4/A5 rate-limit entry gate
 
-Numeric limits remain `UNRESOLVED_OFFICIAL_LIMIT`; no remembered, inferred, third-party, community, blog, StackOverflow, Discord, or model-memory value is substituted.
+Documented numeric facts are frozen, but the authority remains `UNRESOLVED_OFFICIAL_LIMIT` because mandatory operational semantics remain unknown. No remembered, inferred, third-party, community, blog, StackOverflow, Discord, or model-memory value is substituted.
 
 When numeric limits are unresolved, live polling, WebSocket reconnect, backfill, health runtime, and any public transport runtime remain prohibited. A5 is offline and does not weaken this gate.
 

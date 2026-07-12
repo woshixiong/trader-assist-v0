@@ -22,7 +22,7 @@ A3 froze a pure public read-only transport preflight contract for a future colle
 
 `V0-01A4 / OFFICIAL_RATE_LIMIT_AUTHORITY_FREEZE`
 
-A4 froze the official-only rate-limit authority contract required before any future public read-only live transport runtime. `RATE_LIMIT_STATUS` remains `UNRESOLVED_OFFICIAL_LIMIT`, no numeric limit values are encoded, only the frozen official source identity is accepted, and live transport remains unauthorized.
+A4 froze the official-only rate-limit authority contract required before any future public read-only live transport runtime. FLP1B0A now records two exact official source identities, 25 conflict-safe common-subset facts, 14 mandatory unresolved semantics, and domain-separated deterministic hashes. The root states are `OFFICIAL_SOURCE_VARIANT_CONFLICT_DETECTED` and `EFFECTIVE_VARIANT_UNDETERMINED`. `OfficialRateLimitAuthorityV0` is an untrusted structural Pydantic container; only raw-material reauthentication at each consumer boundary establishes authenticity. `RATE_LIMIT_STATUS` remains `UNRESOLVED_OFFICIAL_LIMIT`, and live transport remains unauthorized.
 
 `V0-01A5 / OFFLINE_CANDLE_PAYLOAD_EXTRACTION_CONTRACT`
 
@@ -83,6 +83,9 @@ ENVIRONMENT: mainnet public read-only
 OPERATION_CLASS: public read-only observation only
 RATE_LIMIT_STATUS: UNRESOLVED_OFFICIAL_LIMIT
 RATE_LIMIT_ALLOWED_STATUSES: UNRESOLVED_OFFICIAL_LIMIT, OFFICIAL_NUMERIC_LIMIT_RESOLVED
+OFFICIAL_RATE_LIMIT_SCHEMA_VERSION: 0.1.0
+OFFICIAL_RATE_LIMIT_AUTHORITY_VERSION: trader-assist-v0/official-rate-limit-authority/v1
+OFFICIAL_RATE_LIMIT_AUTHORITY_HASH: 0e327e566589d8030ff00d4d009eb4b6827679ab508133d66840b2c245dc53df
 CANDLE_WS_ENVELOPE_SHAPES: data:Candle, data:Candle[]
 CAPTURE_MODES: WS_TEXT_UTF8_APPLICATION_PAYLOAD, HTTP_RESPONSE_BODY
 ALLOWED_COINS: BTC, ETH
@@ -159,7 +162,15 @@ A5 must not modify `events.py`, `source_catalog.py`, `ingress.py`, `bronze.py`, 
 
 ## Rate-limit entry gate
 
-Official numeric rate limits remain `UNRESOLVED_OFFICIAL_LIMIT`. While unresolved, live polling, WebSocket reconnect, backfill, health runtime, or any public transport runtime remains prohibited. Third-party, remembered, inferred, community, blog, StackOverflow, Discord, or model-memory rate-limit material is not authority.
+Official numeric rate limits remain `UNRESOLVED_OFFICIAL_LIMIT`. The authority records only the conflict-safe common subset for REST/IP weights, response-item divisors, non-disputed WebSocket and EVM limits, address limits, generic 2x maker-share percentage multiplier, and batch accounting. Fourteen mandatory unknowns include the original ten plus the disputed simultaneous connection limit, new-connection/reconnection rate, maker-share reference period, and maker-share computation/update cadence.
+
+R3 fresh reads of the query-free canonical primary page returned HTTP 200 at `2026-07-12T14:34:55Z` and `2026-07-12T14:35:06Z`; the second used no-cache/no-store headers and both matched Variant A. The supporting Info page returned HTTP 200 at `2026-07-12T14:35:14Z` and did not resolve the primary conflict. R3 external review had confirmed Variant B at the same canonical location. With no independently confirmable version, effective marker, or supersession statement, neither variant is selected: `CONFLICT_STATE` is `OFFICIAL_SOURCE_VARIANT_CONFLICT_DETECTED` and `SUPERSESSION_STATE` is `EFFECTIVE_VARIANT_UNDETERMINED`. Relative UI timestamps are not authority, so the marker remains `None`.
+
+Source evidence hashes authenticate only the canonical structured observation material stored in `rate_limits.py`: source identity, semantic locator, bound fact/unknown IDs, independently confirmable marker or `None`, and normalized semantic observations. Retrieval UTC is excluded from evidence, source, and authority hashes. The hashes do not authenticate complete remote GitBook HTML bytes; wrapper-byte changes alone do not establish semantic drift.
+
+The sole public authority input, `authenticate_official_rate_limit_authority_json`, accepts only exact raw `str` or `bytes`, rejects duplicate keys before information can be lost, requires exact built-in JSON primitive types and exact frozen membership/order, reconstructs every hash, and returns an immutable non-Pydantic result containing conflict and supersession state. The former public mapping alias is removed. Internally, consumers authenticate only repository-owned exact primitives through the private builder and mapping authenticator. That private path cannot recover duplicate keys or provenance already lost by an external parser. Pydantic models, builders, Schema-valid objects, TypeAdapter/core results, and authentication-result identity are never authority.
+
+While unresolved, live polling, WebSocket reconnect, backfill, health runtime, or any public transport runtime remains prohibited. `LIVE_TRANSPORT_AUTHORIZED`, `ACCOUNT_READONLY_RUNTIME_AUTHORIZED`, `TESTNET_EXECUTION_AUTHORIZED`, `MAINNET_EXECUTION_AUTHORIZED`, and `FLP1_IMPLEMENTATION_AUTHORIZED` all remain false. Third-party, remembered, inferred, community, blog, StackOverflow, Discord, or model-memory rate-limit material is not authority.
 
 ## A1/A3 read-only transport checks
 

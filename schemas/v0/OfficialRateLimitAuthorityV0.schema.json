@@ -1,0 +1,422 @@
+{
+  "$comment": "Schema validation proves serialized structure only. It does not authenticate official sources, exact fact or unknown membership, ordering, duplicate/conflict rules, semantic evidence, hashes, or transition authority. Pydantic models are untrusted structural containers; authority requires raw-material reauthentication with authenticate_official_rate_limit_authority_json at every consumer boundary.",
+  "$defs": {
+    "OfficialRateLimitFactV0": {
+      "additionalProperties": false,
+      "properties": {
+        "category": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Category",
+          "type": "string"
+        },
+        "endpoint_class": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Endpoint Class",
+          "type": "string"
+        },
+        "fact_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Fact Hash",
+          "type": "string"
+        },
+        "fact_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Fact Id",
+          "type": "string"
+        },
+        "formula": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Formula"
+        },
+        "numeric_value": {
+          "minimum": 0,
+          "title": "Numeric Value",
+          "type": "integer"
+        },
+        "operation_allowlist": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Operation Allowlist",
+          "type": "array"
+        },
+        "response_divisor_unit": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Response Divisor Unit"
+        },
+        "response_divisor_value": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Response Divisor Value"
+        },
+        "scope_kind": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Scope Kind",
+          "type": "string"
+        },
+        "source_bindings": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Source Bindings",
+          "type": "array"
+        },
+        "transport": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Transport",
+          "type": "string"
+        },
+        "value_unit": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Value Unit",
+          "type": "string"
+        },
+        "window_unit": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Window Unit"
+        },
+        "window_value": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Window Value"
+        }
+      },
+      "required": [
+        "fact_id",
+        "category",
+        "transport",
+        "endpoint_class",
+        "operation_allowlist",
+        "scope_kind",
+        "numeric_value",
+        "value_unit",
+        "window_value",
+        "window_unit",
+        "response_divisor_value",
+        "response_divisor_unit",
+        "formula",
+        "source_bindings",
+        "fact_hash"
+      ],
+      "title": "OfficialRateLimitFactV0",
+      "type": "object"
+    },
+    "OfficialRateLimitSourceV0": {
+      "additionalProperties": false,
+      "properties": {
+        "bound_fact_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Bound Fact Ids",
+          "type": "array"
+        },
+        "bound_unknown_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Bound Unknown Ids",
+          "type": "array"
+        },
+        "canonical_location": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Canonical Location",
+          "type": "string"
+        },
+        "evidence_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Hash",
+          "type": "string"
+        },
+        "evidence_length_bytes": {
+          "exclusiveMinimum": 0,
+          "title": "Evidence Length Bytes",
+          "type": "integer"
+        },
+        "kind": {
+          "const": "OFFICIAL_HYPERLIQUID_DOCUMENTATION",
+          "title": "Kind",
+          "type": "string"
+        },
+        "publication_or_last_updated_marker": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Publication Or Last Updated Marker"
+        },
+        "retrieval_observations_utc": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Retrieval Observations Utc",
+          "type": "array"
+        },
+        "semantic_locator": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Semantic Locator",
+          "type": "string"
+        },
+        "semantic_observation": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Semantic Observation",
+          "type": "array"
+        },
+        "source_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Hash",
+          "type": "string"
+        },
+        "source_id": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Source Id",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "kind",
+        "title",
+        "canonical_location",
+        "retrieval_observations_utc",
+        "publication_or_last_updated_marker",
+        "semantic_locator",
+        "bound_fact_ids",
+        "bound_unknown_ids",
+        "semantic_observation",
+        "evidence_hash",
+        "evidence_length_bytes",
+        "source_hash"
+      ],
+      "title": "OfficialRateLimitSourceV0",
+      "type": "object"
+    },
+    "OfficialRateLimitUnknownV0": {
+      "additionalProperties": false,
+      "properties": {
+        "affected_endpoint_class": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Affected Endpoint Class",
+          "type": "string"
+        },
+        "affected_operations": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Affected Operations",
+          "type": "array"
+        },
+        "blocking": {
+          "title": "Blocking",
+          "type": "boolean"
+        },
+        "evidence": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Evidence",
+          "type": "string"
+        },
+        "field_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Field Id",
+          "type": "string"
+        },
+        "mandatory": {
+          "title": "Mandatory",
+          "type": "boolean"
+        },
+        "reason": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "resolution_requirement": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Resolution Requirement",
+          "type": "string"
+        }
+      },
+      "required": [
+        "field_id",
+        "affected_endpoint_class",
+        "affected_operations",
+        "mandatory",
+        "blocking",
+        "reason",
+        "evidence",
+        "resolution_requirement"
+      ],
+      "title": "OfficialRateLimitUnknownV0",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Schema validation proves serialized structure only. It does not authenticate official sources, exact fact or unknown membership, ordering, duplicate/conflict rules, semantic evidence, hashes, or transition authority. Pydantic models are untrusted structural containers; authority requires raw-material reauthentication with authenticate_official_rate_limit_authority_json at every consumer boundary.",
+  "properties": {
+    "account_readonly_runtime_authorized": {
+      "title": "Account Readonly Runtime Authorized",
+      "type": "boolean"
+    },
+    "authority_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Authority Hash",
+      "type": "string"
+    },
+    "authority_version": {
+      "const": "trader-assist-v0/official-rate-limit-authority/v1",
+      "title": "Authority Version",
+      "type": "string"
+    },
+    "conflict_state": {
+      "const": "OFFICIAL_SOURCE_VARIANT_CONFLICT_DETECTED",
+      "title": "Conflict State",
+      "type": "string"
+    },
+    "documented_facts": {
+      "items": {
+        "$ref": "#/$defs/OfficialRateLimitFactV0"
+      },
+      "title": "Documented Facts",
+      "type": "array"
+    },
+    "flp1_implementation_authorized": {
+      "title": "Flp1 Implementation Authorized",
+      "type": "boolean"
+    },
+    "live_transport_authorized": {
+      "title": "Live Transport Authorized",
+      "type": "boolean"
+    },
+    "mainnet_execution_authorized": {
+      "title": "Mainnet Execution Authorized",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "0.1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "sources": {
+      "items": {
+        "$ref": "#/$defs/OfficialRateLimitSourceV0"
+      },
+      "title": "Sources",
+      "type": "array"
+    },
+    "status": {
+      "const": "UNRESOLVED_OFFICIAL_LIMIT",
+      "title": "Status",
+      "type": "string"
+    },
+    "supersession_state": {
+      "const": "EFFECTIVE_VARIANT_UNDETERMINED",
+      "title": "Supersession State",
+      "type": "string"
+    },
+    "testnet_execution_authorized": {
+      "title": "Testnet Execution Authorized",
+      "type": "boolean"
+    },
+    "transition_eligible": {
+      "title": "Transition Eligible",
+      "type": "boolean"
+    },
+    "unresolved_fields": {
+      "items": {
+        "$ref": "#/$defs/OfficialRateLimitUnknownV0"
+      },
+      "title": "Unresolved Fields",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "authority_version",
+    "status",
+    "sources",
+    "documented_facts",
+    "unresolved_fields",
+    "conflict_state",
+    "supersession_state",
+    "transition_eligible",
+    "live_transport_authorized",
+    "account_readonly_runtime_authorized",
+    "testnet_execution_authorized",
+    "mainnet_execution_authorized",
+    "flp1_implementation_authorized",
+    "authority_hash"
+  ],
+  "title": "OfficialRateLimitAuthorityV0",
+  "type": "object"
+}

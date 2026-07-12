@@ -7,6 +7,7 @@ import pytest
 
 from trader_assist_v0.contracts.source_catalog import (
     A4_CONTRACT_ID,
+    OFFICIALLY_VERIFIED_DATE,
     RATE_LIMIT_ALLOWED_STATUSES,
     RATE_LIMIT_OFFICIAL_SOURCE_LOCATION,
     RATE_LIMIT_OFFICIAL_SOURCE_TITLE,
@@ -32,11 +33,11 @@ def test_a4_current_rate_limit_authority_remains_unresolved_fail_closed() -> Non
     assert document["official_source_title"] == RATE_LIMIT_OFFICIAL_SOURCE_TITLE
     assert document["official_source_location"] == RATE_LIMIT_OFFICIAL_SOURCE_LOCATION
     assert document["source_kind"] == "official"
-    assert document["official_source_readable"] is False
+    assert document["official_source_readable"] is True
     assert document["numeric_limits_resolved"] is False
-    assert document["numeric_limit_fields"] == ()
-    assert document["limit_units"] == ()
-    assert document["operation_scope"] == ()
+    assert document["numeric_limit_fields"]
+    assert document["limit_units"]
+    assert document["operation_scope"]
     assert document["ambiguous_fields"]
     assert document["live_transport_authorized"] is False
 
@@ -119,7 +120,7 @@ def test_a4_rate_limit_authority_never_enables_runtime(kwargs: dict[str, bool]) 
                 "limit_units": ("documented_unit",),
                 "operation_scope": ("public_info",),
             },
-            "readable",
+            "mandatory unknown",
         ),
         (
             {
@@ -130,7 +131,7 @@ def test_a4_rate_limit_authority_never_enables_runtime(kwargs: dict[str, bool]) 
                 "operation_scope": ("public_info",),
                 "ambiguous_fields": ("missing unit",),
             },
-            "ambiguous",
+            "mandatory unknown",
         ),
         (
             {
@@ -139,7 +140,7 @@ def test_a4_rate_limit_authority_never_enables_runtime(kwargs: dict[str, bool]) 
                 "limit_units": ("documented_unit",),
                 "operation_scope": ("public_info",),
             },
-            "numeric field names",
+            "mandatory unknown",
         ),
         (
             {
@@ -148,7 +149,7 @@ def test_a4_rate_limit_authority_never_enables_runtime(kwargs: dict[str, bool]) 
                 "numeric_limit_fields": ("request_budget",),
                 "operation_scope": ("public_info",),
             },
-            "limit units",
+            "mandatory unknown",
         ),
         (
             {
@@ -157,7 +158,7 @@ def test_a4_rate_limit_authority_never_enables_runtime(kwargs: dict[str, bool]) 
                 "numeric_limit_fields": ("request_budget",),
                 "limit_units": ("documented_unit",),
             },
-            "operation scope",
+            "mandatory unknown",
         ),
     ],
 )
@@ -169,26 +170,30 @@ def test_a4_rejects_unofficial_ambiguous_or_incomplete_rate_limit_authority(
         validate_official_rate_limit_authority(**kwargs)
 
 
-def test_a4_resolved_candidate_requires_complete_official_metadata_but_no_runtime() -> None:
-    candidate = validate_official_rate_limit_authority(
-        status="OFFICIAL_NUMERIC_LIMIT_RESOLVED",
-        official_source_readable=True,
-        numeric_limit_fields=("request_budget",),
-        limit_units=("documented_unit",),
-        operation_scope=("public_info",),
-    )
+def test_a4_resolved_candidate_is_blocked_by_mandatory_unknowns() -> None:
+    with pytest.raises(ValueError, match="mandatory unknown"):
+        validate_official_rate_limit_authority(
+            status="OFFICIAL_NUMERIC_LIMIT_RESOLVED",
+            official_source_readable=True,
+            numeric_limit_fields=("request_budget",),
+            limit_units=("documented_unit",),
+            operation_scope=("public_info",),
+        )
 
-    assert candidate["task_id"] == A4_CONTRACT_ID
-    assert candidate["status"] == "OFFICIAL_NUMERIC_LIMIT_RESOLVED"
-    assert candidate["official_source_title"] == RATE_LIMIT_OFFICIAL_SOURCE_TITLE
-    assert candidate["official_source_location"] == RATE_LIMIT_OFFICIAL_SOURCE_LOCATION
-    assert candidate["official_source_readable"] is True
-    assert candidate["numeric_limits_resolved"] is True
-    assert candidate["numeric_limit_fields"] == ("request_budget",)
-    assert candidate["limit_units"] == ("documented_unit",)
-    assert candidate["operation_scope"] == ("public_info",)
-    assert candidate["ambiguous_fields"] == ()
-    assert candidate["live_transport_authorized"] is False
+
+def test_a4_legacy_verification_date_accepts_only_exact_catalog_date() -> None:
+    assert OFFICIALLY_VERIFIED_DATE == "2026-07-07"
+    assert (
+        validate_official_rate_limit_authority(officially_verified_date="2026-07-07")["status"]
+        == "UNRESOLVED_OFFICIAL_LIMIT"
+    )
+    for value in ("2026-07-06", "2026-07-08", "07-07-2026", "conflict"):
+        with pytest.raises(ValueError, match="frozen catalog date"):
+            validate_official_rate_limit_authority(officially_verified_date=value)
+    with pytest.raises(TypeError, match="exact string"):
+        validate_official_rate_limit_authority(  # type: ignore[arg-type]
+            officially_verified_date=20260707
+        )
 
 
 def test_a4_authority_document_does_not_mutate_source_catalog_hash_input() -> None:
