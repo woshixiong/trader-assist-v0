@@ -7,6 +7,7 @@ import pytest
 
 from trader_assist_v0.contracts.source_catalog import (
     A4_CONTRACT_ID,
+    OFFICIALLY_VERIFIED_DATE,
     RATE_LIMIT_ALLOWED_STATUSES,
     RATE_LIMIT_OFFICIAL_SOURCE_LOCATION,
     RATE_LIMIT_OFFICIAL_SOURCE_TITLE,
@@ -177,6 +178,21 @@ def test_a4_resolved_candidate_is_blocked_by_mandatory_unknowns() -> None:
             numeric_limit_fields=("request_budget",),
             limit_units=("documented_unit",),
             operation_scope=("public_info",),
+        )
+
+
+def test_a4_legacy_verification_date_accepts_only_exact_catalog_date() -> None:
+    assert OFFICIALLY_VERIFIED_DATE == "2026-07-07"
+    assert (
+        validate_official_rate_limit_authority(officially_verified_date="2026-07-07")["status"]
+        == "UNRESOLVED_OFFICIAL_LIMIT"
+    )
+    for value in ("2026-07-06", "2026-07-08", "07-07-2026", "conflict"):
+        with pytest.raises(ValueError, match="frozen catalog date"):
+            validate_official_rate_limit_authority(officially_verified_date=value)
+    with pytest.raises(TypeError, match="exact string"):
+        validate_official_rate_limit_authority(  # type: ignore[arg-type]
+            officially_verified_date=20260707
         )
 
 

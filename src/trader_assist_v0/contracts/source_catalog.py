@@ -481,6 +481,10 @@ def validate_official_rate_limit_authority(
     runtime_enabled: bool = False,
     live_transport_requested: bool = False,
 ) -> dict[str, object]:
+    if type(officially_verified_date) is not str:
+        raise TypeError("officially_verified_date must be an exact string")
+    if officially_verified_date != OFFICIALLY_VERIFIED_DATE:
+        raise ValueError("officially_verified_date must match the frozen catalog date")
     if status not in RATE_LIMIT_ALLOWED_STATUSES:
         raise ValueError("unsupported rate-limit status")
     if runtime_enabled or live_transport_requested:

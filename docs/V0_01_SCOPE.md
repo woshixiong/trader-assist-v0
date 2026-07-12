@@ -85,7 +85,7 @@ RATE_LIMIT_STATUS: UNRESOLVED_OFFICIAL_LIMIT
 RATE_LIMIT_ALLOWED_STATUSES: UNRESOLVED_OFFICIAL_LIMIT, OFFICIAL_NUMERIC_LIMIT_RESOLVED
 OFFICIAL_RATE_LIMIT_SCHEMA_VERSION: 0.1.0
 OFFICIAL_RATE_LIMIT_AUTHORITY_VERSION: trader-assist-v0/official-rate-limit-authority/v1
-OFFICIAL_RATE_LIMIT_AUTHORITY_HASH: d4cfaeaa4c53b2588201ed76059bba6cb51a5582d422a398b9b71b559db8a636
+OFFICIAL_RATE_LIMIT_AUTHORITY_HASH: f6450a7a81246751c4de74de466af5fcaab7265c45950036fb5d7a9db9377715
 CANDLE_WS_ENVELOPE_SHAPES: data:Candle, data:Candle[]
 CAPTURE_MODES: WS_TEXT_UTF8_APPLICATION_PAYLOAD, HTTP_RESPONSE_BODY
 ALLOWED_COINS: BTC, ETH
@@ -163,6 +163,10 @@ A5 must not modify `events.py`, `source_catalog.py`, `ingress.py`, `bronze.py`, 
 ## Rate-limit entry gate
 
 Official numeric rate limits remain `UNRESOLVED_OFFICIAL_LIMIT`. The amended authority records only exact official facts for REST/IP weights, response-item divisors, WebSocket and EVM limits, address limits, and batch accounting. It does not infer burst handling, fixed/sliding/token-bucket behavior, window alignment, partial response-bucket rounding, HTTP 429 behavior, error bodies or headers, `Retry-After`, the older-block weight formula, or the high-congestion trigger. Those ten mandatory unknowns block transition eligibility.
+
+R1 independently read the query-free canonical rate-limit page twice at `2026-07-12T07:49:50Z` and `2026-07-12T07:49:51Z`, with the second request using no-cache headers. The normalized official body semantics matched: 10 simultaneous WebSocket connections, 30 new connections per minute, and the documented previous-day maker-share / once-per-UTC-date wording remain frozen. Retrieval timestamps are observation metadata, not publication times.
+
+Source evidence hashes authenticate only the canonical structured observation material stored in `rate_limits.py`: source identity, semantic locator, bound fact/unknown IDs, official marker, and normalized semantic observations. They do not authenticate complete remote GitBook HTML bytes; wrapper-byte changes alone do not establish semantic drift. The generated JSON Schema proves serialized structure only and cannot authenticate source identity, exact membership/ordering, conflicts, evidence, hashes, or transition authority; executable `OfficialRateLimitAuthorityV0` validation remains required.
 
 While unresolved, live polling, WebSocket reconnect, backfill, health runtime, or any public transport runtime remains prohibited. `LIVE_TRANSPORT_AUTHORIZED`, `ACCOUNT_READONLY_RUNTIME_AUTHORIZED`, `TESTNET_EXECUTION_AUTHORIZED`, `MAINNET_EXECUTION_AUTHORIZED`, and `FLP1_IMPLEMENTATION_AUTHORIZED` all remain false. Third-party, remembered, inferred, community, blog, StackOverflow, Discord, or model-memory rate-limit material is not authority.
 

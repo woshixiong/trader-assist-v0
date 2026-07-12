@@ -87,13 +87,19 @@ supporting_source_title: Info endpoint
 supporting_source_location: https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint
 ```
 
-The rate-limit page was retrieved at `2026-07-12T04:24:40Z`, with official last-updated marker `2026-04-28T02:43:32.166Z` and HTML evidence SHA-256 `fdaf15ab3ede2056f24673a579684457e6f2eb75bc6626b657c22f47a132895e`. The Info page was retrieved at `2026-07-12T04:24:41Z`, with marker `2026-06-11T08:02:46.893Z` and HTML evidence SHA-256 `db7daffd672132ab651de4398fa7ce47d4bf24797b92d983233f80e4c56ed760`.
+The query-free rate-limit page was independently retrieved at `2026-07-12T07:49:50Z` and, with no-cache headers, at `2026-07-12T07:49:51Z`. Both reads returned the same normalized body semantics and official last-updated marker `2026-04-28T02:43:32.166Z`. The supporting Info page was retrieved at `2026-07-12T07:50:44Z` with marker `2026-06-11T08:02:46.893Z`. These retrieval times are observation metadata; the legacy source-catalog verification date remains separately frozen at `2026-07-07`.
+
+The repository does not preserve or claim to authenticate complete remote GitBook HTML. Each source instead carries a reproducible evidence hash and byte length over the same canonical structured observation material stored in the contract: source identity, official marker, semantic locator, bound fact IDs, bound unknown IDs, and normalized semantic observations. Remote wrapper, script, or tracking-byte changes do not by themselves establish official semantic drift.
 
 The 27 frozen facts cover the documented aggregate REST/IP budget; exchange, Info, explorer and response-item weights; WebSocket connections, subscriptions, users, messages and inflight posts; EVM JSON-RPC; address volume allowance, initial buffer, limited fallback, cancel and open-order formulas; high-congestion maker-share multiplier; and IP/address batch accounting. Every fact binds exact transport, endpoint class, operation allowlist, scope, value/unit, applicable window, response divisor/formula, sources, and a domain-separated fact hash.
+
+The current reconciled WebSocket facts are exactly 10 simultaneous connections and 30 new connections per minute. The current maker-share fact retains the official previous-day reference and once-per-UTC-date computation wording. These values came from the two matching current official reads, not prior planning or tests.
 
 The mandatory unresolved fields are burst semantics, window algorithm, window alignment, partial response-bucket rounding, HTTP 429 behavior, error body, response headers, `Retry-After`, exact older-block weighting, and the high-congestion trigger. A future resolved candidate requires exact official resolution of every mandatory field and a separate bounded authorization; recomputing hashes or omitting unknowns cannot make this authority transition-eligible.
 
 A4 rejects third-party, community, remembered, inferred, blog, forum, Discord, StackOverflow, or model-memory authority metadata, as well as stale/altered sources, duplicate or conflicting facts, source mismatch, injected facts, omitted unknowns, subclass/model construction/copy bypasses, and coherently rehashed alterations. Even a later complete resolved authority would not by itself authorize live transport.
+
+All Python and JSON validation entry points are permanently strict and forbid extras; string-validation, attribute extraction, model construction, and model copying cannot act as alternate authority paths. The generated JSON Schema requires every serialized root and nested field and forbids additional properties, but it remains structural only. Schema validity does not authenticate official sources, exact fact/unknown membership or ordering, duplicate/conflict rules, semantic evidence, hashes, or transition authority; executable `OfficialRateLimitAuthorityV0` validation is mandatory.
 
 ## A1 candle WebSocket envelope contract
 
