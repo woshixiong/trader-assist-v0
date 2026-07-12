@@ -1,0 +1,193 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woshixiong.github.io/trader-assist-v0/schemas/governance/V0FastLaunchProgram.schema.json",
+  "title": "V0FastLaunchProgram",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "program_id",
+    "project",
+    "repository",
+    "governance_level",
+    "task_id",
+    "state_base_sha",
+    "authority",
+    "first_release",
+    "signal_speed_policy",
+    "strategy_lifecycle",
+    "data_product_lifecycle",
+    "learning_loop",
+    "capability_milestones",
+    "releases",
+    "governance_levels",
+    "development_route",
+    "review_finalization_policy",
+    "recursive_rotation",
+    "deferred_capabilities"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "program_id": {"const": "V0-FAST-LAUNCH"},
+    "project": {"const": "Trader Assist V0"},
+    "repository": {"const": "woshixiong/trader-assist-v0"},
+    "governance_level": {"const": "G2"},
+    "task_id": {"const": "V0-FLP0-PILOT-AND-LONG-TERM-ROADMAP-AUTHORITY-FREEZE"},
+    "state_base_sha": {"const": "c507e2fc1bad6aca175cf833e5bcca63224c3e5f"},
+    "authority": {
+      "type": "object",
+      "required": [
+        "last_completed_implementation",
+        "last_completed_implementation_pr",
+        "last_policy_state_pr",
+        "rate_limit_status",
+        "live_transport_authorized",
+        "account_readonly_runtime_authorized",
+        "testnet_execution_authorized",
+        "mainnet_execution_authorized",
+        "flp1_implementation_authorized"
+      ],
+      "properties": {
+        "last_completed_implementation": {"const": "V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT"},
+        "last_completed_implementation_pr": {"const": 11},
+        "last_policy_state_pr": {"const": 12},
+        "rate_limit_status": {"const": "UNRESOLVED_OFFICIAL_LIMIT"},
+        "live_transport_authorized": {"const": false},
+        "account_readonly_runtime_authorized": {"const": false},
+        "testnet_execution_authorized": {"const": false},
+        "mainnet_execution_authorized": {"const": false},
+        "flp1_implementation_authorized": {"const": false}
+      },
+      "additionalProperties": false
+    },
+    "first_release": {
+      "type": "object",
+      "required": [
+        "release_id",
+        "milestone",
+        "primary_asset",
+        "active_strategy_count",
+        "active_strategy",
+        "execution_mode",
+        "automatic_exchange_write",
+        "ai_role",
+        "all_valid_signals_visible",
+        "post_launch_learning_loop",
+        "decision_flow",
+        "required_capabilities",
+        "forbidden_capabilities"
+      ],
+      "properties": {
+        "release_id": {"const": "V0-R0"},
+        "milestone": {"const": "V0-FLP1-DECISION-TO-OUTCOME-OPERATOR-ASSIST-PILOT"},
+        "primary_asset": {"const": "ETH"},
+        "active_strategy_count": {"const": 1},
+        "active_strategy": {"const": "ETH-LDAR-v0.1"},
+        "execution_mode": {"const": "MANUAL_EXECUTION_WITH_SYSTEM_ASSISTANCE"},
+        "automatic_exchange_write": {"const": "PROHIBITED"},
+        "ai_role": {"const": "EXPLANATION_AND_CHECKLIST_ONLY"},
+        "all_valid_signals_visible": {"const": true},
+        "post_launch_learning_loop": {"const": "MANDATORY"},
+        "decision_flow": {"$ref": "#/$defs/nonEmptyStringArray"},
+        "required_capabilities": {"$ref": "#/$defs/nonEmptyStringArray"},
+        "forbidden_capabilities": {"$ref": "#/$defs/nonEmptyStringArray"}
+      },
+      "additionalProperties": false
+    },
+    "signal_speed_policy": {"$ref": "#/$defs/nonEmptyObject"},
+    "strategy_lifecycle": {"$ref": "#/$defs/nonEmptyObject"},
+    "data_product_lifecycle": {"$ref": "#/$defs/nonEmptyObject"},
+    "learning_loop": {"$ref": "#/$defs/nonEmptyObject"},
+    "capability_milestones": {
+      "type": "object",
+      "required": ["FL1", "FL2", "FL3", "FL4"],
+      "properties": {
+        "FL1": {"const": "TRUSTED_DATA_RUNTIME"},
+        "FL2": {"const": "SIGNAL_AND_RISK_ENGINE"},
+        "FL3": {"const": "HUMAN_REVIEW_SURFACE"},
+        "FL4": {"const": "HUMAN_CONFIRMED_EXECUTION"}
+      },
+      "additionalProperties": false
+    },
+    "releases": {"$ref": "#/$defs/nonEmptyObject"},
+    "governance_levels": {"$ref": "#/$defs/nonEmptyObject"},
+    "development_route": {"$ref": "#/$defs/nonEmptyObject"},
+    "review_finalization_policy": {"$ref": "#/$defs/nonEmptyObject"},
+    "recursive_rotation": {"$ref": "#/$defs/nonEmptyObject"},
+    "deferred_capabilities": {"$ref": "#/$defs/nonEmptyStringArray"}
+  },
+  "$defs": {
+    "nonEmptyStringArray": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "nonEmptyObject": {"type": "object", "minProperties": 1},
+    "ProjectState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "project",
+        "repository",
+        "program",
+        "state_kind",
+        "state_base_sha",
+        "last_completed_implementation",
+        "last_completed_implementation_pr",
+        "last_policy_state_pr",
+        "active_milestone",
+        "active_task_id",
+        "active_write_lease",
+        "first_release_frozen",
+        "long_term_roadmap_frozen",
+        "strategy_lifecycle_frozen",
+        "data_lifecycle_frozen",
+        "learning_loop_frozen",
+        "live_transport_authorized",
+        "account_readonly_runtime_authorized",
+        "testnet_execution_authorized",
+        "mainnet_execution_authorized",
+        "flp1_implementation_authorized",
+        "rate_limit_status",
+        "next_gate"
+      ],
+      "properties": {
+        "schema_version": {"const": "1.0.0"},
+        "project": {"const": "Trader Assist V0"},
+        "repository": {"const": "woshixiong/trader-assist-v0"},
+        "program": {"const": "V0-FAST-LAUNCH"},
+        "state_kind": {"const": "SAFE_STOP_SNAPSHOT"},
+        "state_base_sha": {"const": "c507e2fc1bad6aca175cf833e5bcca63224c3e5f"},
+        "last_completed_implementation": {"const": "V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT"},
+        "last_completed_implementation_pr": {"const": 11},
+        "last_policy_state_pr": {"const": 12},
+        "active_milestone": {"const": "V0-FLP0-PILOT-AND-LONG-TERM-ROADMAP-AUTHORITY-FREEZE"},
+        "active_task_id": {"const": "V0-FLP0-PILOT-AND-LONG-TERM-ROADMAP-AUTHORITY-FREEZE"},
+        "active_write_lease": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "last_lease_type", "last_governance_level"],
+          "properties": {
+            "status": {"const": "NONE"},
+            "last_lease_type": {"const": "BOUNDED_POLICY_GOVERNANCE_AND_MACHINE_STATE_ONLY"},
+            "last_governance_level": {"const": "G2"}
+          }
+        },
+        "first_release_frozen": {"const": true},
+        "long_term_roadmap_frozen": {"const": true},
+        "strategy_lifecycle_frozen": {"const": true},
+        "data_lifecycle_frozen": {"const": true},
+        "learning_loop_frozen": {"const": true},
+        "live_transport_authorized": {"const": false},
+        "account_readonly_runtime_authorized": {"const": false},
+        "testnet_execution_authorized": {"const": false},
+        "mainnet_execution_authorized": {"const": false},
+        "flp1_implementation_authorized": {"const": false},
+        "rate_limit_status": {"const": "UNRESOLVED_OFFICIAL_LIMIT"},
+        "next_gate": {"const": "V0-FLP1-OPERATOR-ASSIST-PILOT-SCOPE-FREEZE"}
+      }
+    }
+  }
+}
