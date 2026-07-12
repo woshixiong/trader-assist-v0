@@ -86,7 +86,6 @@ from .rate_limits import (
     official_rate_limit_facts,
     official_rate_limit_sources,
     official_rate_limit_unknowns,
-    validate_official_rate_limit_authority,
 )
 from .strategy import (
     CandidateKindV0,
@@ -186,7 +185,6 @@ __all__ = [
     "validate_execution_permit_bindings",
     "validate_execution_promotion_authority",
     "validate_human_decision_binding",
-    "validate_official_rate_limit_authority",
     "validate_promotion_chain",
     "validate_promotion_transition",
 ]

@@ -32,11 +32,15 @@ OFFICIAL_RATE_LIMIT_STATUS = "UNRESOLVED_OFFICIAL_LIMIT"
 
 @dataclass(frozen=True, slots=True)
 class OfficialRateLimitAuthenticationResult:
+    """Immutable proof of one authentication call, not a reusable capability."""
+
     canonical_json: bytes
     authority_hash: str
     source_ids: tuple[str, ...]
     fact_ids: tuple[str, ...]
     unknown_ids: tuple[str, ...]
+    conflict_state: Literal["OFFICIAL_SOURCE_VARIANT_CONFLICT_DETECTED"]
+    supersession_state: Literal["EFFECTIVE_VARIANT_UNDETERMINED"]
     transition_eligible: Literal[False]
     live_transport_authorized: Literal[False]
     account_readonly_runtime_authorized: Literal[False]
@@ -323,8 +327,12 @@ class OfficialRateLimitAuthorityV0(_RateLimitAuthorityModel):
     sources: tuple[OfficialRateLimitSourceV0, ...]
     documented_facts: tuple[OfficialRateLimitFactV0, ...]
     unresolved_fields: tuple[OfficialRateLimitUnknownV0, ...]
-    conflict_state: Literal["NO_CONFLICT_DETECTED"] = "NO_CONFLICT_DETECTED"
-    supersession_state: Literal["NO_SUPERSESSION_DETECTED"] = "NO_SUPERSESSION_DETECTED"
+    conflict_state: Literal["OFFICIAL_SOURCE_VARIANT_CONFLICT_DETECTED"] = (
+        "OFFICIAL_SOURCE_VARIANT_CONFLICT_DETECTED"
+    )
+    supersession_state: Literal["EFFECTIVE_VARIANT_UNDETERMINED"] = (
+        "EFFECTIVE_VARIANT_UNDETERMINED"
+    )
     transition_eligible: StrictBool = False
     live_transport_authorized: StrictBool = False
     account_readonly_runtime_authorized: StrictBool = False
@@ -571,27 +579,6 @@ _FACT_SPECS: tuple[dict[str, object], ...] = (
         divisor=(1, "block"),
     ),
     _fact(
-        "ip.websocket.connections",
-        "IP",
-        "WEBSOCKET",
-        "all websocket connections",
-        ("connect",),
-        "per IP address",
-        10,
-        "simultaneous connections",
-    ),
-    _fact(
-        "ip.websocket.new-connections",
-        "IP",
-        "WEBSOCKET",
-        "all websocket connections",
-        ("connect",),
-        "per IP address",
-        30,
-        "new connections",
-        window=(1, "minute"),
-    ),
-    _fact(
         "ip.websocket.subscriptions",
         "IP",
         "WEBSOCKET",
@@ -735,8 +722,7 @@ _FACT_SPECS: tuple[dict[str, object], ...] = (
         ("all actions",),
         "per address during high congestion",
         2,
-        "multiplier of previous-day maker share percentage",
-        window=(1, "UTC date"),
+        "multiplier of maker share percentage",
     ),
     _fact(
         "batch.ip-count",
@@ -760,15 +746,23 @@ _FACT_SPECS: tuple[dict[str, object], ...] = (
         formula="n requests for n orders or cancels",
     ),
 )
-def _unknown(field_id: str, reason: str, requirement: str) -> dict[str, object]:
+def _unknown(
+    field_id: str,
+    reason: str,
+    requirement: str,
+    *,
+    affected_endpoint_class: str = "all documented rate-limited endpoints",
+    affected_operations: tuple[str, ...] = ("*",),
+    evidence: str = "The frozen official sources do not explicitly specify this semantic.",
+) -> dict[str, object]:
     return {
         "field_id": field_id,
-        "affected_endpoint_class": "all documented rate-limited endpoints",
-        "affected_operations": ("*",),
+        "affected_endpoint_class": affected_endpoint_class,
+        "affected_operations": affected_operations,
         "mandatory": True,
         "blocking": True,
         "reason": reason,
-        "evidence": "The frozen official sources do not explicitly specify this semantic.",
+        "evidence": evidence,
         "resolution_requirement": requirement,
     }
 
@@ -826,6 +820,59 @@ _UNKNOWN_SPECS: tuple[dict[str, object], ...] = (
         "The activation and deactivation semantics for high congestion are not documented.",
         "An official source must define high-congestion state transitions.",
     ),
+    _unknown(
+        "websocket-simultaneous-connection-limit",
+        "Canonical official page variants conflict on the simultaneous WebSocket "
+        "connection limit: one states 10 and another states 100.",
+        "An official explicit version, effective marker, or supersession statement must "
+        "resolve the simultaneous WebSocket connection limit.",
+        affected_endpoint_class="WebSocket connection establishment",
+        affected_operations=("connect",),
+        evidence=(
+            "Observed canonical official variants state maximums of 10 and 100 "
+            "simultaneous WebSocket connections, with no independently confirmable "
+            "effective-variant marker."
+        ),
+    ),
+    _unknown(
+        "websocket-new-connection-or-reconnection-rate",
+        "Canonical official page variants conflict on whether a new-connection or "
+        "reconnection rate is documented.",
+        "An official explicit version, effective marker, or supersession statement must "
+        "resolve the new-connection and reconnection rate.",
+        affected_endpoint_class="WebSocket connection establishment and reconnection",
+        affected_operations=("connect", "reconnect"),
+        evidence=(
+            "One observed canonical official variant states 30 new WebSocket connections "
+            "per minute; another has no documented new-connection or reconnection rate."
+        ),
+    ),
+    _unknown(
+        "maker-share-reference-period",
+        "Canonical official page variants conflict on the reference period for the "
+        "high-congestion maker-share percentage.",
+        "An official explicit version, effective marker, or supersession statement must "
+        "resolve the maker-share reference period.",
+        affected_endpoint_class="high-congestion address block-space limit",
+        affected_operations=("all actions",),
+        evidence=(
+            "One observed canonical official variant refers to previous-day maker share; "
+            "another gives no documented maker-share reference period."
+        ),
+    ),
+    _unknown(
+        "maker-share-computation-or-update-cadence",
+        "Canonical official page variants conflict on whether a maker-share computation "
+        "or update cadence is documented.",
+        "An official explicit version, effective marker, or supersession statement must "
+        "resolve the maker-share computation or update cadence.",
+        affected_endpoint_class="high-congestion address block-space limit",
+        affected_operations=("all actions",),
+        evidence=(
+            "One observed canonical official variant states maker share is computed once "
+            "per UTC date; another gives no documented computation or update cadence."
+        ),
+    ),
 )
 def _source(
     *,
@@ -876,8 +923,8 @@ _SOURCE_SPECS: tuple[dict[str, object], ...] = (
             "rate-limits-and-user-limits"
         ),
         retrieval_observations_utc=(
-            "2026-07-12T11:46:08Z",
-            "2026-07-12T11:46:09Z",
+            "2026-07-12T14:34:55Z",
+            "2026-07-12T14:35:06Z",
         ),
         publication_or_last_updated_marker=None,
         semantic_locator="Rate limits and user limits / complete page body",
@@ -893,9 +940,8 @@ _SOURCE_SPECS: tuple[dict[str, object], ...] = (
             "candleSnapshot adds weight per 60 response items.",
             "Explorer requests weigh 40; blockList adds 1 per block, while the exact "
             "additional weight for older uncached blocks is not specified.",
-            "The per-IP WebSocket limits are 10 simultaneous connections, 30 new "
-            "connections per minute, 1000 subscriptions, and 10 unique users across "
-            "user-specific subscriptions.",
+            "The common-subset per-IP WebSocket limits are 1000 subscriptions and 10 "
+            "unique users across user-specific subscriptions.",
             "Across all WebSocket connections, at most 2000 messages may be sent per "
             "minute and 100 post messages may be simultaneously inflight.",
             "rpc.hyperliquid.xyz/evm permits 100 EVM JSON-RPC requests per minute per IP.",
@@ -908,13 +954,20 @@ _SOURCE_SPECS: tuple[dict[str, object], ...] = (
             "Open-order allowance starts at 1000, adds 1 per 5M USDC volume, and is "
             "capped at 5000; reduce-only or trigger orders are rejected at the stated "
             "1000-other-open-order threshold.",
-            "During high congestion, block-space use is limited to 2x the previous-day "
-            "maker-share percentage, and maker share is computed once per UTC date.",
+            "Across observed canonical variants, the common high-congestion semantic is "
+            "a 2x multiplier of maker-share percentage.",
             "A batch of n orders or cancels counts as one IP-based request and n "
             "address-based requests.",
             "Burst, window implementation/alignment, partial divisor rounding, "
             "rate-limit HTTP/error/header/Retry-After behavior, exact older-block "
             "weighting, and high-congestion activation remain unspecified.",
+            "Observed canonical primary-page variants conflict on simultaneous WebSocket "
+            "connections, the new-connection or reconnection rate, the maker-share "
+            "reference period, and the maker-share computation or update cadence.",
+            "No independently confirmable effective marker or supersession statement "
+            "determines which observed canonical variant is effective.",
+            "Only common-subset semantics are documented facts; all disputed semantics "
+            "are mandatory blocking unknowns.",
         ),
     ),
     _source(
@@ -923,7 +976,7 @@ _SOURCE_SPECS: tuple[dict[str, object], ...] = (
         canonical_location=(
             "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint"
         ),
-        retrieval_observations_utc=("2026-07-12T11:49:21Z",),
+        retrieval_observations_utc=("2026-07-12T14:35:14Z",),
         publication_or_last_updated_marker=None,
         semantic_locator="Info endpoint / operation request-body identities",
         bound_fact_ids=_INFO_FACT_IDS,
@@ -935,6 +988,8 @@ _SOURCE_SPECS: tuple[dict[str, object], ...] = (
             "candleSnapshot, and the response-weighted history operation identities.",
             "This supporting source binds operation identity and does not independently "
             "define the numeric rate-limit weights.",
+            "This supporting source does not resolve the observed canonical primary-page "
+            "variant conflict or determine an effective variant.",
         ),
     ),
 )
@@ -1002,8 +1057,8 @@ def _authority_hash_from_values(values: Mapping[str, object]) -> str:
         "authority_version": OFFICIAL_RATE_LIMIT_AUTHORITY_VERSION,
         "status": OFFICIAL_RATE_LIMIT_STATUS,
         **values,
-        "conflict_state": "NO_CONFLICT_DETECTED",
-        "supersession_state": "NO_SUPERSESSION_DETECTED",
+        "conflict_state": "OFFICIAL_SOURCE_VARIANT_CONFLICT_DETECTED",
+        "supersession_state": "EFFECTIVE_VARIANT_UNDETERMINED",
         "transition_eligible": False,
         "live_transport_authorized": False,
         "account_readonly_runtime_authorized": False,
@@ -1031,6 +1086,8 @@ def _to_exact_json_primitives(value: object) -> object:
 
 
 def _build_official_rate_limit_authority_mapping() -> dict[str, object]:
+    """Build exact repository-owned primitives for the private consumer boundary."""
+
     sources: list[object] = []
     for spec in _SOURCE_SPECS:
         source = cast(dict[str, object], _to_exact_json_primitives(spec))
@@ -1055,8 +1112,8 @@ def _build_official_rate_limit_authority_mapping() -> dict[str, object]:
         "sources": sources,
         "documented_facts": facts,
         "unresolved_fields": unknowns,
-        "conflict_state": "NO_CONFLICT_DETECTED",
-        "supersession_state": "NO_SUPERSESSION_DETECTED",
+        "conflict_state": "OFFICIAL_SOURCE_VARIANT_CONFLICT_DETECTED",
+        "supersession_state": "EFFECTIVE_VARIANT_UNDETERMINED",
         "transition_eligible": False,
         "live_transport_authorized": False,
         "account_readonly_runtime_authorized": False,
@@ -1149,6 +1206,8 @@ def _require_exact_object_fields(
 def _authenticate_official_rate_limit_authority_mapping(
     raw_mapping: object,
 ) -> OfficialRateLimitAuthenticationResult:
+    """Authenticate exact owned primitives; external-parser provenance is unrecoverable."""
+
     if type(raw_mapping) is not dict:
         raise TypeError("authority authentication requires an exact built-in dict")
     _assert_exact_json_primitive_tree(raw_mapping)
@@ -1239,6 +1298,8 @@ def _authenticate_official_rate_limit_authority_mapping(
             cast(str, cast(dict[str, object], item)["field_id"])
             for item in unknowns
         ),
+        conflict_state="OFFICIAL_SOURCE_VARIANT_CONFLICT_DETECTED",
+        supersession_state="EFFECTIVE_VARIANT_UNDETERMINED",
         transition_eligible=False,
         live_transport_authorized=False,
         account_readonly_runtime_authorized=False,
@@ -1251,6 +1312,8 @@ def _authenticate_official_rate_limit_authority_mapping(
 def authenticate_official_rate_limit_authority_json(
     raw_json: str | bytes,
 ) -> OfficialRateLimitAuthenticationResult:
+    """Authenticate exact raw JSON through the sole public authority-input boundary."""
+
     if type(raw_json) is bytes:
         raw_text = raw_json.decode("utf-8", errors="strict")
     elif type(raw_json) is str:
@@ -1278,6 +1341,8 @@ def authenticate_official_rate_limit_authority_json(
 
 
 def build_official_rate_limit_authority() -> OfficialRateLimitAuthorityV0:
+    """Build an untrusted structural candidate, not authenticated authority."""
+
     sources = official_rate_limit_sources()
     facts = official_rate_limit_facts()
     unknowns = official_rate_limit_unknowns()
@@ -1295,10 +1360,6 @@ def build_official_rate_limit_authority() -> OfficialRateLimitAuthorityV0:
 
 
 def official_rate_limit_authority() -> OfficialRateLimitAuthorityV0:
+    """Return an untrusted structural candidate for serialization and Schema use."""
+
     return build_official_rate_limit_authority()
-
-
-def validate_official_rate_limit_authority(
-    authority: object,
-) -> OfficialRateLimitAuthenticationResult:
-    return _authenticate_official_rate_limit_authority_mapping(authority)

@@ -463,6 +463,8 @@ def rate_limit_authority_document() -> dict[str, object]:
         "documented_facts": tuple(facts),
         "unresolved_fields": tuple(unknowns),
         "authority_hash": authentication.authority_hash,
+        "conflict_state": authentication.conflict_state,
+        "supersession_state": authentication.supersession_state,
         "transition_eligible": authentication.transition_eligible,
         "live_transport_authorized": authentication.live_transport_authorized,
     }
@@ -532,6 +534,8 @@ def rate_limit_entry_gate() -> dict[str, object]:
         "official_source_location": RATE_LIMIT_OFFICIAL_SOURCE_LOCATION,
         "numeric_limits_resolved": numeric_limits_resolved,
         "authority_hash": authority.authority_hash,
+        "conflict_state": authority.conflict_state,
+        "supersession_state": authority.supersession_state,
         "transition_eligible": authority.transition_eligible,
         "live_transport_authorized": False,
     }

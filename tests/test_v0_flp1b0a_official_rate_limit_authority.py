@@ -4,7 +4,10 @@ import ast
 import copy
 import hashlib
 import json
+import pickle
 import warnings
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum, IntEnum
 from pathlib import Path
@@ -24,7 +27,6 @@ from trader_assist_v0.contracts.rate_limits import (
     _authenticate_official_rate_limit_authority_mapping,
     authenticate_official_rate_limit_authority_json,
     build_official_rate_limit_authority,
-    validate_official_rate_limit_authority,
 )
 from trader_assist_v0.contracts.source_catalog import (
     RATE_LIMIT_STATUS,
@@ -226,38 +228,6 @@ EXPECTED_FACTS: tuple[FactRow, ...] = (
         None,
         1,
         "block",
-        None,
-        RATE_ONLY,
-    ),
-    FactRow(
-        "ip.websocket.connections",
-        "IP",
-        "WEBSOCKET",
-        "all websocket connections",
-        ("connect",),
-        "per IP address",
-        10,
-        "simultaneous connections",
-        None,
-        None,
-        None,
-        None,
-        None,
-        RATE_ONLY,
-    ),
-    FactRow(
-        "ip.websocket.new-connections",
-        "IP",
-        "WEBSOCKET",
-        "all websocket connections",
-        ("connect",),
-        "per IP address",
-        30,
-        "new connections",
-        1,
-        "minute",
-        None,
-        None,
         None,
         RATE_ONLY,
     ),
@@ -477,9 +447,9 @@ EXPECTED_FACTS: tuple[FactRow, ...] = (
         ("all actions",),
         "per address during high congestion",
         2,
-        "multiplier of previous-day maker share percentage",
-        1,
-        "UTC date",
+        "multiplier of maker share percentage",
+        None,
+        None,
         None,
         None,
         None,
@@ -524,6 +494,9 @@ class UnknownRow(NamedTuple):
     field_id: str
     reason: str
     resolution_requirement: str
+    affected_endpoint_class: str = "all documented rate-limited endpoints"
+    affected_operations: tuple[str, ...] = ("*",)
+    evidence: str = "The frozen official sources do not explicitly specify this semantic."
 
 
 EXPECTED_UNKNOWNS: tuple[UnknownRow, ...] = (
@@ -579,6 +552,50 @@ EXPECTED_UNKNOWNS: tuple[UnknownRow, ...] = (
         "The activation and deactivation semantics for high congestion are not documented.",
         "An official source must define high-congestion state transitions.",
     ),
+    UnknownRow(
+        "websocket-simultaneous-connection-limit",
+        "Canonical official page variants conflict on the simultaneous WebSocket "
+        "connection limit: one states 10 and another states 100.",
+        "An official explicit version, effective marker, or supersession statement must "
+        "resolve the simultaneous WebSocket connection limit.",
+        "WebSocket connection establishment",
+        ("connect",),
+        "Observed canonical official variants state maximums of 10 and 100 simultaneous "
+        "WebSocket connections, with no independently confirmable effective-variant marker.",
+    ),
+    UnknownRow(
+        "websocket-new-connection-or-reconnection-rate",
+        "Canonical official page variants conflict on whether a new-connection or "
+        "reconnection rate is documented.",
+        "An official explicit version, effective marker, or supersession statement must "
+        "resolve the new-connection and reconnection rate.",
+        "WebSocket connection establishment and reconnection",
+        ("connect", "reconnect"),
+        "One observed canonical official variant states 30 new WebSocket connections per "
+        "minute; another has no documented new-connection or reconnection rate.",
+    ),
+    UnknownRow(
+        "maker-share-reference-period",
+        "Canonical official page variants conflict on the reference period for the "
+        "high-congestion maker-share percentage.",
+        "An official explicit version, effective marker, or supersession statement must "
+        "resolve the maker-share reference period.",
+        "high-congestion address block-space limit",
+        ("all actions",),
+        "One observed canonical official variant refers to previous-day maker share; "
+        "another gives no documented maker-share reference period.",
+    ),
+    UnknownRow(
+        "maker-share-computation-or-update-cadence",
+        "Canonical official page variants conflict on whether a maker-share computation "
+        "or update cadence is documented.",
+        "An official explicit version, effective marker, or supersession statement must "
+        "resolve the maker-share computation or update cadence.",
+        "high-congestion address block-space limit",
+        ("all actions",),
+        "One observed canonical official variant states maker share is computed once per "
+        "UTC date; another gives no documented computation or update cadence.",
+    ),
 )
 
 EXPECTED_GATES = {
@@ -601,9 +618,8 @@ RATE_OBSERVATION = (
     "candleSnapshot adds weight per 60 response items.",
     "Explorer requests weigh 40; blockList adds 1 per block, while the exact "
     "additional weight for older uncached blocks is not specified.",
-    "The per-IP WebSocket limits are 10 simultaneous connections, 30 new "
-    "connections per minute, 1000 subscriptions, and 10 unique users across "
-    "user-specific subscriptions.",
+    "The common-subset per-IP WebSocket limits are 1000 subscriptions and 10 "
+    "unique users across user-specific subscriptions.",
     "Across all WebSocket connections, at most 2000 messages may be sent per "
     "minute and 100 post messages may be simultaneously inflight.",
     "rpc.hyperliquid.xyz/evm permits 100 EVM JSON-RPC requests per minute per IP.",
@@ -616,12 +632,19 @@ RATE_OBSERVATION = (
     "Open-order allowance starts at 1000, adds 1 per 5M USDC volume, and is "
     "capped at 5000; reduce-only or trigger orders are rejected at the stated "
     "1000-other-open-order threshold.",
-    "During high congestion, block-space use is limited to 2x the previous-day "
-    "maker-share percentage, and maker share is computed once per UTC date.",
+    "Across observed canonical variants, the common high-congestion semantic is "
+    "a 2x multiplier of maker-share percentage.",
     "A batch of n orders or cancels counts as one IP-based request and n address-based requests.",
     "Burst, window implementation/alignment, partial divisor rounding, "
     "rate-limit HTTP/error/header/Retry-After behavior, exact older-block "
     "weighting, and high-congestion activation remain unspecified.",
+    "Observed canonical primary-page variants conflict on simultaneous WebSocket "
+    "connections, the new-connection or reconnection rate, the maker-share "
+    "reference period, and the maker-share computation or update cadence.",
+    "No independently confirmable effective marker or supersession statement "
+    "determines which observed canonical variant is effective.",
+    "Only common-subset semantics are documented facts; all disputed semantics "
+    "are mandatory blocking unknowns.",
 )
 INFO_OBSERVATION = (
     "Info operations are selected by the POST /info request-body type.",
@@ -630,6 +653,8 @@ INFO_OBSERVATION = (
     "candleSnapshot, and the response-weighted history operation identities.",
     "This supporting source binds operation identity and does not independently "
     "define the numeric rate-limit weights.",
+    "This supporting source does not resolve the observed canonical primary-page "
+    "variant conflict or determine an effective variant.",
 )
 
 
@@ -650,12 +675,12 @@ def _fact_payload(row: FactRow) -> dict[str, Any]:
 def _unknown_payload(row: UnknownRow) -> dict[str, Any]:
     return {
         "field_id": row.field_id,
-        "affected_endpoint_class": "all documented rate-limited endpoints",
-        "affected_operations": ("*",),
+        "affected_endpoint_class": row.affected_endpoint_class,
+        "affected_operations": row.affected_operations,
         "mandatory": True,
         "blocking": True,
         "reason": row.reason,
-        "evidence": "The frozen official sources do not explicitly specify this semantic.",
+        "evidence": row.evidence,
         "resolution_requirement": row.resolution_requirement,
     }
 
@@ -719,7 +744,7 @@ EXPECTED_SOURCES = (
         source_id=RATE,
         title="Rate limits and user limits",
         location="https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/rate-limits-and-user-limits",
-        retrievals=("2026-07-12T11:46:08Z", "2026-07-12T11:46:09Z"),
+        retrievals=("2026-07-12T14:34:55Z", "2026-07-12T14:35:06Z"),
         marker=None,
         locator="Rate limits and user limits / complete page body",
         fact_ids=ALL_FACT_IDS,
@@ -730,7 +755,7 @@ EXPECTED_SOURCES = (
         source_id=INFO,
         title="Info endpoint",
         location="https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint",
-        retrievals=("2026-07-12T11:49:21Z",),
+        retrievals=("2026-07-12T14:35:14Z",),
         marker=None,
         locator="Info endpoint / operation request-body identities",
         fact_ids=INFO_FACT_IDS,
@@ -748,8 +773,8 @@ def _expected_authority_payload() -> dict[str, Any]:
         "sources": EXPECTED_SOURCES,
         "documented_facts": EXPECTED_FACT_PAYLOADS,
         "unresolved_fields": EXPECTED_UNKNOWN_PAYLOADS,
-        "conflict_state": "NO_CONFLICT_DETECTED",
-        "supersession_state": "NO_SUPERSESSION_DETECTED",
+        "conflict_state": "OFFICIAL_SOURCE_VARIANT_CONFLICT_DETECTED",
+        "supersession_state": "EFFECTIVE_VARIANT_UNDETERMINED",
     }
     hash_material = copy.deepcopy(payload)
     for source in hash_material["sources"]:
@@ -759,8 +784,8 @@ def _expected_authority_payload() -> dict[str, Any]:
 
 
 EXPECTED_AUTHORITY = _expected_authority_payload()
-EXPECTED_AUTHORITY_HASH = "da230b79c2ae6e1acae99236601c96dec7c4dd4c5f84d9e83aec7dbb57888369"
-STALE_AUTHORITY_HASH = "f6450a7a81246751c4de74de466af5fcaab7265c45950036fb5d7a9db9377715"
+EXPECTED_AUTHORITY_HASH = "0e327e566589d8030ff00d4d009eb4b6827679ab508133d66840b2c245dc53df"
+STALE_AUTHORITY_HASH = "da230b79c2ae6e1acae99236601c96dec7c4dd4c5f84d9e83aec7dbb57888369"
 
 
 def _actual_dict() -> dict[str, Any]:
@@ -823,6 +848,7 @@ def test_test_owned_matrices_match_complete_executable_authority() -> None:
     assert actual["documented_facts"] == EXPECTED_FACT_PAYLOADS
     assert actual["unresolved_fields"] == EXPECTED_UNKNOWN_PAYLOADS
     assert {key: actual[key] for key in EXPECTED_GATES} == EXPECTED_GATES
+    assert EXPECTED_AUTHORITY["authority_hash"] == EXPECTED_AUTHORITY_HASH
     assert actual == EXPECTED_AUTHORITY
 
 
@@ -842,21 +868,45 @@ def test_scope_document_and_executable_gate_share_exact_authority_hash() -> None
 
 def test_current_source_reconciliation_is_frozen_exactly() -> None:
     assert len(EXPECTED_SOURCES) == 2
-    assert len(EXPECTED_FACTS) == 27
-    assert len(EXPECTED_UNKNOWNS) == 10
+    assert len(EXPECTED_FACTS) == 25
+    assert len(EXPECTED_UNKNOWNS) == 14
     assert EXPECTED_SOURCES[0]["retrieval_observations_utc"] == (
-        "2026-07-12T11:46:08Z",
-        "2026-07-12T11:46:09Z",
+        "2026-07-12T14:34:55Z",
+        "2026-07-12T14:35:06Z",
     )
     assert all(source["publication_or_last_updated_marker"] is None for source in EXPECTED_SOURCES)
     by_id = {row.fact_id: row for row in EXPECTED_FACTS}
-    assert by_id["ip.websocket.connections"].numeric_value == 10
-    assert by_id["ip.websocket.new-connections"].numeric_value == 30
-    assert by_id["ip.websocket.new-connections"].window_value == 1
-    assert by_id["ip.websocket.new-connections"].window_unit == "minute"
+    assert "ip.websocket.connections" not in by_id
+    assert "ip.websocket.new-connections" not in by_id
     maker = by_id["address.high-congestion-maker-share"]
-    assert maker.value_unit == "multiplier of previous-day maker share percentage"
-    assert (maker.window_value, maker.window_unit) == (1, "UTC date")
+    assert maker.value_unit == "multiplier of maker share percentage"
+    assert (maker.window_value, maker.window_unit) == (None, None)
+    assert tuple(row.field_id for row in EXPECTED_UNKNOWNS[-4:]) == (
+        "websocket-simultaneous-connection-limit",
+        "websocket-new-connection-or-reconnection-rate",
+        "maker-share-reference-period",
+        "maker-share-computation-or-update-cadence",
+    )
+    assert all(item["mandatory"] and item["blocking"] for item in EXPECTED_UNKNOWN_PAYLOADS[-4:])
+    assert EXPECTED_AUTHORITY["conflict_state"] == "OFFICIAL_SOURCE_VARIANT_CONFLICT_DETECTED"
+    assert EXPECTED_AUTHORITY["supersession_state"] == "EFFECTIVE_VARIANT_UNDETERMINED"
+
+
+@pytest.mark.parametrize(
+    "field,stale_value",
+    [
+        ("conflict_state", "NO_CONFLICT_DETECTED"),
+        ("supersession_state", "NO_SUPERSESSION_DETECTED"),
+    ],
+)
+def test_old_conflict_and_supersession_states_are_rejected(
+    field: str, stale_value: str
+) -> None:
+    data = _raw_mapping()
+    data[field] = stale_value
+    _rehash_authority(data)
+    with pytest.raises(ValueError):
+        _authenticate_official_rate_limit_authority_mapping(data)
 
 
 def test_structured_observation_hash_and_length_are_independently_recomputable() -> None:
@@ -907,16 +957,20 @@ def test_structured_observation_hash_and_length_are_independently_recomputable()
         ),
         ("ip.rest.aggregate-weight", "window_value", 2),
         ("ip.rest.aggregate-weight", "window_unit", "seconds"),
-        ("ip.websocket.connections", "window_value", 1),
-        ("ip.websocket.connections", "window_unit", "minute"),
+        ("ip.websocket.subscriptions", "window_value", 1),
+        ("ip.websocket.subscriptions", "window_unit", "minute"),
         ("ip.info.response-item-divisor", "response_divisor_value", 21),
         ("ip.info.response-item-divisor", "response_divisor_unit", "rows"),
-        ("ip.websocket.connections", "response_divisor_value", 1),
+        ("ip.websocket.subscriptions", "response_divisor_value", 1),
         ("ip.exchange.batch-weight", "formula", "1 + floor(batch_length / 39)"),
-        ("ip.websocket.connections", "formula", "invented"),
+        ("ip.websocket.subscriptions", "formula", "invented"),
         ("ip.rest.aggregate-weight", "source_bindings", RATE_INFO),
-        ("ip.websocket.connections", "numeric_value", 100),
-        ("address.high-congestion-maker-share", "value_unit", "multiplier of maker share"),
+        ("ip.websocket.subscriptions", "numeric_value", 100),
+        (
+            "address.high-congestion-maker-share",
+            "value_unit",
+            "multiplier of previous-day maker share percentage",
+        ),
         ("address.high-congestion-maker-share", "window_unit", "day"),
     ],
 )
@@ -935,7 +989,7 @@ def test_every_semantic_fact_mutation_is_rejected_even_when_rehashed(
     if candidate is not None:
         assert isinstance(candidate, BaseModel)
         with pytest.raises(TypeError):
-            validate_official_rate_limit_authority(candidate)
+            _authenticate_official_rate_limit_authority_mapping(candidate)
     with pytest.raises(ValueError):
         authenticate_official_rate_limit_authority_json(json.dumps(data))
 
@@ -954,9 +1008,11 @@ def test_membership_omission_duplication_and_reordering_fail(member: str) -> Non
         _rehash_authority(data)
         with pytest.raises(ValueError):
             _authenticate_official_rate_limit_authority_mapping(data)
+        with pytest.raises(ValueError):
+            authenticate_official_rate_limit_authority_json(json.dumps(data))
 
 
-def test_semantic_duplicate_new_id_and_no_30_minute_planning_attack_fail() -> None:
+def test_semantic_duplicate_and_removed_websocket_fact_injections_fail() -> None:
     data = _raw_mapping()
     duplicate = copy.deepcopy(data["documented_facts"][0])
     duplicate["fact_id"] = "invented.semantic-duplicate"
@@ -966,15 +1022,34 @@ def test_semantic_duplicate_new_id_and_no_30_minute_planning_attack_fail() -> No
     with pytest.raises(ValueError):
         _authenticate_official_rate_limit_authority_mapping(data)
 
-    data = _raw_mapping()
-    index = _fact_index("ip.websocket.new-connections")
-    data["documented_facts"] = (
-        data["documented_facts"][:index] + data["documented_facts"][index + 1 :]
+    attacks = (
+        ("ip.websocket.connections", 10, "simultaneous connections", None, None),
+        ("ip.websocket.connections", 100, "simultaneous connections", None, None),
+        ("ip.websocket.new-connections", 30, "new connections", 1, "minute"),
     )
-    data["documented_facts"] = list(data["documented_facts"])
-    _rehash_authority(data)
-    with pytest.raises(ValueError):
-        _authenticate_official_rate_limit_authority_mapping(data)
+    for fact_id, value, unit, window_value, window_unit in attacks:
+        injected: dict[str, Any] = {
+            "fact_id": fact_id,
+            "category": "IP",
+            "transport": "WEBSOCKET",
+            "endpoint_class": "all websocket connections",
+            "operation_allowlist": ["connect"],
+            "scope_kind": "per IP address",
+            "numeric_value": value,
+            "value_unit": unit,
+            "window_value": window_value,
+            "window_unit": window_unit,
+            "response_divisor_value": None,
+            "response_divisor_unit": None,
+            "formula": None,
+            "source_bindings": [RATE],
+        }
+        injected["fact_hash"] = _hash(FACT_HASH_DOMAIN, injected)
+        data = _raw_mapping()
+        data["documented_facts"].append(injected)
+        _rehash_authority(data)
+        with pytest.raises(ValueError):
+            _authenticate_official_rate_limit_authority_mapping(data)
 
 
 @pytest.mark.parametrize(
@@ -1082,7 +1157,7 @@ def test_exact_instance_tampering_construct_copy_subclass_and_unicode_fail() -> 
     authority = build_official_rate_limit_authority()
     object.__setattr__(authority, "status", "OFFICIAL_NUMERIC_LIMIT_RESOLVED")
     with pytest.raises(TypeError):
-        validate_official_rate_limit_authority(authority)
+        _authenticate_official_rate_limit_authority_mapping(authority)
     with pytest.raises(TypeError):
         OfficialRateLimitAuthorityV0.model_construct(**_actual_dict())
     with pytest.raises(TypeError):
@@ -1115,6 +1190,12 @@ def test_schema_is_complete_structural_only_and_counterfeit_needs_executable_rej
     root = Path(__file__).resolve().parents[1]
     schema = json.loads((root / "schemas/v0/OfficialRateLimitAuthorityV0.schema.json").read_text())
     assert "Schema validation proves serialized structure only" in schema["$comment"]
+    assert schema["properties"]["conflict_state"]["const"] == (
+        "OFFICIAL_SOURCE_VARIANT_CONFLICT_DETECTED"
+    )
+    assert schema["properties"]["supersession_state"]["const"] == (
+        "EFFECTIVE_VARIANT_UNDETERMINED"
+    )
     for candidate in (schema, *schema["$defs"].values()):
         if "properties" in candidate:
             assert candidate["additionalProperties"] is False
@@ -1130,6 +1211,8 @@ def test_schema_is_complete_structural_only_and_counterfeit_needs_executable_rej
     assert OfficialRateLimitAuthorityV0.model_validate_json(json.dumps(counterfeit))
     with pytest.raises(ValueError):
         authenticate_official_rate_limit_authority_json(json.dumps(counterfeit))
+    with pytest.raises(ValueError):
+        _authenticate_official_rate_limit_authority_mapping(counterfeit)
 
 
 def test_raw_json_authentication_returns_immutable_non_pydantic_result() -> None:
@@ -1139,13 +1222,17 @@ def test_raw_json_authentication_returns_immutable_non_pydantic_result() -> None
     assert not isinstance(result, BaseModel)
     assert result.authority_hash == EXPECTED_AUTHORITY_HASH
     assert result.source_ids == (RATE, INFO)
-    assert len(result.fact_ids) == 27
-    assert len(result.unknown_ids) == 10
+    assert len(result.fact_ids) == 25
+    assert len(result.unknown_ids) == 14
+    assert result.conflict_state == "OFFICIAL_SOURCE_VARIANT_CONFLICT_DETECTED"
+    assert result.supersession_state == "EFFECTIVE_VARIANT_UNDETERMINED"
     assert result.canonical_json == _canonical(_raw_mapping())
     with pytest.raises((AttributeError, TypeError)):
         result.authority_hash = "0" * 64  # type: ignore[misc]
     with pytest.raises(TypeError):
-        validate_official_rate_limit_authority(result)
+        authenticate_official_rate_limit_authority_json(result)  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        _authenticate_official_rate_limit_authority_mapping(result)
 
 
 @pytest.mark.parametrize(
@@ -1246,6 +1333,29 @@ class _NumberIntEnum(IntEnum):
     VALUE = 1200
 
 
+@dataclass(frozen=True)
+class _DataclassAttack:
+    value: object
+
+
+class _NamedTupleAttack(NamedTuple):
+    value: object
+
+
+class _GeneralMapping(Mapping[str, object]):
+    def __init__(self, value: dict[str, object]) -> None:
+        self._value = value
+
+    def __getitem__(self, key: str) -> object:
+        return self._value[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._value)
+
+    def __len__(self) -> int:
+        return len(self._value)
+
+
 @pytest.mark.parametrize(
     "replacement",
     [
@@ -1267,11 +1377,47 @@ def test_mapping_authenticator_rejects_numeric_coercion_and_exotic_scalars(
         _authenticate_official_rate_limit_authority_mapping(data)
 
 
+@pytest.mark.parametrize("replacement", ["1200", 1200.0, True])
+def test_raw_json_authenticator_rejects_numeric_coercion_tokens(
+    replacement: object,
+) -> None:
+    data = _raw_mapping()
+    data["documented_facts"][0]["numeric_value"] = replacement
+    with pytest.raises((TypeError, ValueError)):
+        authenticate_official_rate_limit_authority_json(json.dumps(data))
+
+
+def test_raw_json_authenticator_rejects_extras_missing_and_hash_alterations() -> None:
+    candidates = []
+    root_extra = _raw_mapping()
+    root_extra["extra"] = False
+    candidates.append(root_extra)
+    nested_extra = _raw_mapping()
+    nested_extra["sources"][0]["extra"] = False
+    candidates.append(nested_extra)
+    missing = _raw_mapping()
+    missing.pop("conflict_state")
+    candidates.append(missing)
+    authority_hash = _raw_mapping()
+    authority_hash["authority_hash"] = "0" * 64
+    candidates.append(authority_hash)
+    source_hash = _raw_mapping()
+    source_hash["sources"][0]["source_hash"] = "0" * 64
+    candidates.append(source_hash)
+    fact_hash = _raw_mapping()
+    fact_hash["documented_facts"][0]["fact_hash"] = "0" * 64
+    candidates.append(fact_hash)
+    for candidate in candidates:
+        with pytest.raises(ValueError):
+            authenticate_official_rate_limit_authority_json(json.dumps(candidate))
+
+
 @pytest.mark.parametrize(
     "mutator",
     [
         lambda data: _DictSubclass(data),
         lambda data: MappingProxyType(data),
+        lambda data: _GeneralMapping(data),
         lambda data: {**data, "sources": tuple(data["sources"])},
         lambda data: {**data, "sources": _ListSubclass(data["sources"])},
         lambda data: {
@@ -1360,8 +1506,6 @@ def test_low_level_pydantic_counterfeits_cannot_cross_authentication_boundary() 
     for candidate in candidates:
         assert isinstance(candidate, BaseModel)
         with pytest.raises(TypeError):
-            validate_official_rate_limit_authority(candidate)
-        with pytest.raises(TypeError):
             _authenticate_official_rate_limit_authority_mapping(candidate)
 
     nested = _raw_mapping()
@@ -1370,10 +1514,38 @@ def test_low_level_pydantic_counterfeits_cannot_cross_authentication_boundary() 
         _authenticate_official_rate_limit_authority_mapping(nested)
 
 
+def test_copy_pickle_dataclass_namedtuple_and_custom_objects_are_not_authority() -> None:
+    model = build_official_rate_limit_authority()
+    result = authenticate_official_rate_limit_authority_json(
+        json.dumps(_raw_mapping(), separators=(",", ":"))
+    )
+    direct_objects = (
+        copy.copy(model),
+        copy.deepcopy(model),
+        copy.copy(result),
+        copy.deepcopy(result),
+        _DataclassAttack(_raw_mapping()),
+        _NamedTupleAttack(_raw_mapping()),
+        _GeneralMapping(_raw_mapping()),
+    )
+    reconstructed = tuple(
+        pickle.loads(pickle.dumps(value)) for value in (model, result, _DataclassAttack(1))
+    )
+    for candidate in (*direct_objects, *reconstructed):
+        with pytest.raises(TypeError):
+            authenticate_official_rate_limit_authority_json(candidate)  # type: ignore[arg-type]
+        with pytest.raises(TypeError):
+            _authenticate_official_rate_limit_authority_mapping(candidate)
+
+
 def test_private_mapping_authenticator_is_not_exported_from_package_root() -> None:
     import trader_assist_v0.contracts as contracts
+    import trader_assist_v0.contracts.rate_limits as rate_limits_module
 
     assert not hasattr(contracts, "_authenticate_official_rate_limit_authority_mapping")
+    assert not hasattr(contracts, "_build_official_rate_limit_authority_mapping")
+    assert not hasattr(contracts, "validate_official_rate_limit_authority")
+    assert not hasattr(rate_limits_module, "validate_official_rate_limit_authority")
     assert contracts.authenticate_official_rate_limit_authority_json
     assert contracts.OfficialRateLimitAuthenticationResult
 
@@ -1383,9 +1555,14 @@ def test_source_catalog_hash_and_all_gates_remain_fail_closed() -> None:
     assert RATE_LIMIT_STATUS == "UNRESOLVED_OFFICIAL_LIMIT"
     document = rate_limit_authority_document()
     assert document["authority_hash"] == EXPECTED_AUTHORITY_HASH
-    assert len(document["documented_facts"]) == 27
-    assert len(document["unresolved_fields"]) == 10
+    assert len(document["documented_facts"]) == 25
+    assert len(document["unresolved_fields"]) == 14
+    assert document["conflict_state"] == "OFFICIAL_SOURCE_VARIANT_CONFLICT_DETECTED"
+    assert document["supersession_state"] == "EFFECTIVE_VARIANT_UNDETERMINED"
     gate = rate_limit_entry_gate()
+    assert gate["authority_hash"] == EXPECTED_AUTHORITY_HASH
+    assert gate["conflict_state"] == "OFFICIAL_SOURCE_VARIANT_CONFLICT_DETECTED"
+    assert gate["supersession_state"] == "EFFECTIVE_VARIANT_UNDETERMINED"
     assert gate["transition_eligible"] is False
     assert gate["live_transport_authorized"] is False
     with pytest.raises(ValueError, match="unresolved"):

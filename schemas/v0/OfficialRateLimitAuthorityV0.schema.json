@@ -339,7 +339,7 @@
       "type": "string"
     },
     "conflict_state": {
-      "const": "NO_CONFLICT_DETECTED",
+      "const": "OFFICIAL_SOURCE_VARIANT_CONFLICT_DETECTED",
       "title": "Conflict State",
       "type": "string"
     },
@@ -380,7 +380,7 @@
       "type": "string"
     },
     "supersession_state": {
-      "const": "NO_SUPERSESSION_DETECTED",
+      "const": "EFFECTIVE_VARIANT_UNDETERMINED",
       "title": "Supersession State",
       "type": "string"
     },
