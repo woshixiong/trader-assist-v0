@@ -9,6 +9,7 @@ description = "Contract-first Trader Assist V0 bootstrap"
 requires-python = ">=3.12"
 dependencies = [
   "pydantic==2.13.4",
+  "websockets==16.1",
 ]
 
 [project.optional-dependencies]

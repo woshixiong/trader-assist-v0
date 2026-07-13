@@ -4,33 +4,55 @@
 
 ```text
 PROGRAM: V0-FAST-LAUNCH
-TASK_ID: V0-FLP0-PILOT-AND-LONG-TERM-ROADMAP-AUTHORITY-FREEZE
-STATE_BASE_SHA: c507e2fc1bad6aca175cf833e5bcca63224c3e5f
+PRODUCT_BASELINE_ID: TA-PRODUCT-BASELINE-2026-07-14-R1
+TASK_ID: V0-T2-R1-EXTERNAL-REVIEW-BLOCKER-REPAIR
+MAIN_BASE_SHA: 16963297e0ce27ed3919f52e1e536ff730f5a5b9
+BASE_PROVENANCE: origin/main merge of PR #16
 LAST_COMPLETED_IMPLEMENTATION: V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT
 LAST_COMPLETED_IMPLEMENTATION_PR: 11
-LAST_POLICY_STATE_PR: 12
-ACTIVE_IMPLEMENTATION: NONE
-ACTIVE_WRITE_LEASE: NONE
+LAST_POLICY_STATE_PR: 15
+ORIGINAL_T2_IMPLEMENTATION: COMPLETED_IN_DRAFT_PR_17
+ORIGINAL_T2_WRITE_LEASE: COMPLETED
+REPAIR_WRITE_LEASE: CONSUMED_BY_REPAIR_COMMIT_PENDING_PROJECT_CONTROL_ACCEPTANCE
+ACTIVE_IMPLEMENTATION_AFTER_REPAIR_COMMIT: NONE
+ACTIVE_WRITE_LEASE_AFTER_REPAIR_COMMIT: NONE
+PR17_STATE: DRAFT_PENDING_INDEPENDENT_EXACT_HEAD_REREVIEW
 RATE_LIMIT_STATUS: UNRESOLVED_OFFICIAL_LIMIT
 LIVE_TRANSPORT_AUTHORIZED: FALSE
 ACCOUNT_READONLY_RUNTIME_AUTHORIZED: FALSE
 TESTNET_EXECUTION_AUTHORIZED: FALSE
 MAINNET_EXECUTION_AUTHORIZED: FALSE
 FLP1_IMPLEMENTATION_AUTHORIZED: FALSE
-NEXT_GATE: V0-FLP1-OPERATOR-ASSIST-PILOT-SCOPE-FREEZE
+NEXT_IMPLEMENTATION_GATE_AFTER_PR17_FINALIZATION: V0-FLP1-DECISION-TO-OUTCOME-OPERATOR-ASSIST-PILOT
 ```
 
 ## Current bounded implementation task
 
-`NONE`
+`V0-T2-R1-EXTERNAL-REVIEW-BLOCKER-REPAIR`
 
-A6 is the last completed implementation and was merged via PR #11. PR #12 is the last policy-state PR before this Fast Launch authority freeze. There is no active implementation task or implementation write lease. Do not modify repository files without a new exact write lease and file allowlist.
+A6 remains the last completed offline evidence implementation. T1 remains the
+historical Capture contract/schema authority and describes prior implementation
+state; it does not redefine the current product baseline. The original T2 writer
+and lease are complete. This bounded repair consumes
+`V0-T2-R1-EXTERNAL-REVIEW-BLOCKER-REPAIR-WRITE-LEASE-1`; after its commit there
+is no active implementation writer. PR #17 remains Draft pending independent
+exact-head re-review.
 
-The prior generic A7-only gate is superseded by `V0-FLP1-OPERATOR-ASSIST-PILOT-SCOPE-FREEZE`. This file does not authorize FLP1 implementation, live transport, account observation runtime, Testnet, Mainnet, or exchange writes.
+First Launch remains the user-confirmed ETH Operator Assist product. T2 is only
+its default-off public Capture component; no First Launch capability is removed,
+downgraded, or deferred. A controlled Capture launch still requires a later
+explicit operation with separate project-control approval and one external
+single-use permit. After PR #17 finalization, the next implementation gate is
+the single vertical `V0-FLP1-DECISION-TO-OUTCOME-OPERATOR-ASSIST-PILOT`; no
+separate planning, readiness, or post-merge state-sync PR is required.
 
 ## Allowed files
 
-- None. A future bounded implementation or repair task must provide its own exact write lease and file allowlist.
+- `CODEX.md`
+- `docs/V0_FLP0_CAPTURE_NOW_AUTHORITY.md`
+- `src/trader_assist_v0/data/ingress.py`
+- `src/trader_assist_v0/runtime/eth_public_capture.py`
+- `tests/test_v0_t2_eth_public_capture_runtime.py`
 
 ## Last completed A6 behavior
 
@@ -66,11 +88,14 @@ The long-term capability sequence remains FL1 trusted data, FL2 signal and risk,
 
 ## Forbidden
 
-- modifications to A5 contracts/extractor, source catalog code/documentation, `events.py`, `ingress.py`, `bronze.py`, or `replay.py` without a later exact lease;
-- modifications to existing runtime tests, existing V0 schemas, fixtures, dependencies, lockfiles, `pyproject.toml`, or CI workflows without a later exact lease;
-- HTTP or WebSocket clients, sockets, DNS, async runtime, event loop, live endpoint connection, polling, reconnect, heartbeat, health, backfill, REST request execution, or soak runtime;
-- payload parsing or reading payload bytes from `payload_ref` or any filesystem path;
-- Bronze or manifest writes, database or cloud storage;
+- modifications outside the exact repair allowlist above;
+- real endpoint connection, DNS, socket creation, or a real permit during implementation;
+- HTTP, Info `candleSnapshot`, polling, automatic reconnect/retry/restart,
+  backfill, proxy use, or library-managed WebSocket Ping keepalive;
+- payload inspection beyond strict greeting/channel/coin/interval routing, or
+  reading market payload bytes back from `payload_ref`;
+- database or cloud storage; T2 may call the existing RawEvent, Bronze,
+  manifest, checkpoint, and deterministic replay APIs for accepted raw bytes;
 - numeric rate-limit values or a transition away from `UNRESOLVED_OFFICIAL_LIMIT`;
 - credentials, account addresses, wallets, signing, nonces, exchange writes, order mutation, Testnet/Mainnet execution configuration;
 - tolerance, latest-wins, revision ordering, finality inference, source priority, or canonical winner selection;
@@ -79,6 +104,10 @@ The long-term capability sequence remains FL1 trusted data, FL2 signal and risk,
 - modifications to `woshixiong/trade-os`;
 - Mark Ready, merge, branch deletion, or later-phase execution without separate authorization.
 
-## Future bounded-task checks
+## Next implementation gate
 
-Every future slice requires an independent exact-main scope freeze, explicit write lease and file allowlist, applicable local checks, exact-head CI, external independent review, and separate finalization authorization. Never report a check as passed unless it was executed and observed.
+After PR #17 finalization, proceed directly to the single bounded vertical
+`V0-FLP1-DECISION-TO-OUTCOME-OPERATOR-ASSIST-PILOT` under its own implementation
+authority. No separate planning, readiness, or post-merge state-sync PR is
+required. Exact-head CI, independent review, and finalization authority remain
+mandatory; never report a check as passed unless it was executed and observed.
