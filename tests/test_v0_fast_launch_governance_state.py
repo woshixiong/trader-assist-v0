@@ -19,6 +19,7 @@ AUTHORITY_HASH = "0e327e566589d8030ff00d4d009eb4b6827679ab508133d66840b2c245dc53
 SOURCE_CATALOG_HASH = "0ca27f650f399f8fa481ad9421eab4183c1c13812c71dfa8daaf878719bd99b7"
 
 EXPECTED_CHANGED_FILES = {
+    ".github/workflows/ci.yml",
     "README.md",
     "docs/V0_01_SCOPE.md",
     "docs/V0_FAST_LAUNCH_PROGRAM.md",
@@ -202,8 +203,42 @@ def test_docs_share_capture_now_semantics() -> None:
 
 
 def test_exact_changed_file_scope_and_forbidden_boundaries() -> None:
-    tracked_result = subprocess.run(
-        ["git", "diff", "--name-only", "--diff-filter=ACMRT", "HEAD"],
+    try:
+        committed_result = subprocess.run(
+            [
+                "git",
+                "diff",
+                "--name-only",
+                "--diff-filter=ACMRT",
+                f"{BASE_SHA}...HEAD",
+                "--",
+            ],
+            cwd=ROOT,
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise AssertionError(
+            f"cannot compare BASE_SHA to HEAD: {exc.stderr.strip()}"
+        ) from exc
+    unstaged_result = subprocess.run(
+        ["git", "diff", "--name-only", "--diff-filter=ACMRT", "HEAD", "--"],
+        cwd=ROOT,
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    staged_result = subprocess.run(
+        [
+            "git",
+            "diff",
+            "--cached",
+            "--name-only",
+            "--diff-filter=ACMRT",
+            "HEAD",
+            "--",
+        ],
         cwd=ROOT,
         check=True,
         text=True,
@@ -219,7 +254,9 @@ def test_exact_changed_file_scope_and_forbidden_boundaries() -> None:
     changed = {
         line
         for line in (
-            *tracked_result.stdout.splitlines(),
+            *committed_result.stdout.splitlines(),
+            *unstaged_result.stdout.splitlines(),
+            *staged_result.stdout.splitlines(),
             *untracked_result.stdout.splitlines(),
         )
         if line
@@ -227,4 +264,6 @@ def test_exact_changed_file_scope_and_forbidden_boundaries() -> None:
     assert changed == EXPECTED_CHANGED_FILES
     assert not (changed & FORBIDDEN_FILES)
     assert not any(path.startswith("src/trader_assist_v0/data/") for path in changed)
-    assert not any(path.startswith(".github/workflows/") for path in changed)
+    assert {
+        path for path in changed if path.startswith(".github/workflows/")
+    } == {".github/workflows/ci.yml"}
