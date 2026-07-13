@@ -80,6 +80,12 @@ ordered, unique, non-empty evidence-reference tuple. They are shadow-only,
 non-executable, never exchange-submittable, and expose no free-text authority
 channel.
 
+Signal, Plan, and Shadow machine evidence references must resolve to exactly
+one earlier `MarketPathEvidenceV0` record version in manifest order. Missing,
+ambiguous, future, or differently typed Capture records cannot serve as machine
+evidence. Validators treat references as opaque IDs; they do not parse strings
+as JSON, natural language, order parameters, permits, or execution authority.
+
 `HumanObservationV0.observation_text` is an operator note only. No graph,
 ledger, replay, lifecycle, or runtime-control validator reads it, or any other
 bounded display text, as Plan, Shadow, order, execution, sizing, or permit
@@ -111,6 +117,13 @@ matching kill and before resume; it resolves that kill exactly once. Capture
 record IDs cannot masquerade as runtime scopes, permits, integrity references,
 or kill states.
 
+Permit references are globally single-use. Each integrity reference has one
+completion event and one owning runtime scope. Each kill-state record ID has
+one owning scope and cannot be re-engaged or resumed after global resolution.
+Resume requires the unresolved kill and integrity completion owned by its own
+scope. Independent scopes remain valid only with distinct kill, integrity, and
+permit authority.
+
 Kill state always fails closed and remains runtime unauthorized. Killed state
 has no resume references; blocked state has no permit or runtime event and may
 refer only to an earlier completed integrity check; permitted state requires a
@@ -129,15 +142,27 @@ grant no runtime or execution authority.
 Manifest entries bind observation slot, writer epoch, writer authority, record
 ID/hash, duplicate classification, previous hash, and entry hash. Entry indexes
 start at zero and are contiguous; the hash chain, writer epoch, and writer
-authority are constant. The unique manifest record set exactly equals the
-provided unique record set. First slot use is `UNIQUE`; the same slot and same
-record ID/hash is `EXACT_DUPLICATE`; the same slot with a different identity is
-`CONFLICTING_DUPLICATE`. A record cannot change slots to evade duplicate
-classification. Correctly classified conflicts remain diagnostic ledger facts
-and force replay `FAIL`; no validator chooses a latest value.
+authority are constant. Aggregate identity is the exact version key
+`(record_id, record_hash)`. The unique manifest version set exactly equals the
+provided unique version set. Identical version keys cannot be duplicated in the
+records tuple, while the same record ID with different hashes is representable.
+First slot/version use is `UNIQUE`; the same slot and version key is
+`EXACT_DUPLICATE`; the same slot with a different version key is
+`CONFLICTING_DUPLICATE`. All versions of one record ID must retain the original
+slot, so neither an exact version nor a same-ID conflict can evade detection by
+changing slots.
 
-Checkpoints bind genesis root, terminal hash/index, manifest and unique-record
-counts, writer epoch/authority, and finalized integrity-only state. Advance
+Manifest chronology and positions use version keys. Every ID-only graph
+reference passes one resolver: zero versions is missing, one is exact, and more
+than one is ambiguous. No validator silently chooses one hash version. A
+correctly classified same-ID/different-hash conflict is a valid diagnostic
+manifest fact, but ambiguous graph references fail and the conflict forces
+replay `FAIL`; no validator chooses a latest value.
+
+Checkpoints bind genesis root, terminal hash/index, manifest and unique-version
+counts, writer epoch/authority, and finalized integrity-only state. Exact
+duplicate manifest entries do not increase `record_count`; conflicting versions
+do. Advance
 validation accepts an exact duplicate checkpoint or an append-only manifest
 extension with the old chain as an exact prefix and the same root. Truncation,
 rollback, count regression, and history rewrite fail closed.
@@ -150,18 +175,32 @@ and chain integrity, valid checkpoint binding, zero missing references, and zero
 conflicting duplicates. Reports contain no PnL, profitability, win rate, Sharpe,
 MFE/MAE, R multiple, winner, outcome, or promotion authority.
 
+An ambiguous same-ID graph reference does not masquerade as missing evidence:
+zero-version references increment `missing_reference_count`, while multi-version
+ambiguity makes graph/chain integrity fail. A correctly classified conflict can
+therefore produce a deterministic, externally revalidated `FAIL` report without
+making manifest or checkpoint validation choose a version.
+
 ## Exact PR Scope Gate
 
 Normal pytest validates a frozen static 18-file contract and does not read Git
 history. The explicit PR CLI reads committed, staged, and unstaged
 `--name-status -z --no-renames` byte streams and requires the frozen committed
-map of four additions and fourteen modifications. A separate
-`--find-renames --find-copies-harder --diff-filter=RC` pass rejects every rename
-or copy and reports source and destination. Untracked files, deletion, type
-change, unmerged, unknown, broken, non-UTF-8, truncated or malformed NUL data,
-status mismatch, and unexpected paths all fail closed. Tabs and newlines remain
-path bytes rather than record delimiters. The CLI performs no fetch, network, or
-GitHub API call and accepts only an explicit 40-character base SHA.
+map of four additions and fourteen modifications. Scope authority is exact
+changed path/status authority, not Git copy provenance. With `--no-renames`, a
+rename deterministically appears as source `D` plus destination `A`; deletion
+and the missing/unexpected/status mismatch therefore fail without similarity
+thresholds or `renameLimit` behavior.
+
+Copying content from an unchanged source into an authorized A/M target adds no
+changed path and is not file-scope expansion; that target remains fully subject
+to content review and its exact frozen status. Copying into an unauthorized
+target fails as an unexpected `A`. No semantic-copy or provenance-copy
+detection is claimed. Untracked files, deletion, type change, unmerged, unknown,
+broken, non-UTF-8, truncated or malformed NUL data, status mismatch, and
+unexpected paths all fail closed. Tabs and newlines remain path bytes rather
+than record delimiters. The CLI performs no fetch, network, or GitHub API call
+and accepts only an explicit 40-character base SHA.
 
 ## Local Safety and Endpoint Allowlist
 
