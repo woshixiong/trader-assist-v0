@@ -5,12 +5,14 @@ import json
 import re
 import subprocess
 import sys
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
 from jsonschema import Draft202012Validator
+from jsonschema.exceptions import ValidationError
 
 ROOT = Path(__file__).resolve().parents[1]
 PROGRAM_PATH = ROOT / "governance" / "V0_FAST_LAUNCH_PROGRAM.json"
@@ -25,6 +27,18 @@ NEXT_GATE = "V0-FLP1B0B-FIRST-LAUNCH-CRITICAL-PATH-AND-ETH-MINIMUM-VALIDATION-RE
 AUTHORITY_HASH = "0e327e566589d8030ff00d4d009eb4b6827679ab508133d66840b2c245dc53df"
 SOURCE_CATALOG_HASH = "0ca27f650f399f8fa481ad9421eab4183c1c13812c71dfa8daaf878719bd99b7"
 COMMIT_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
+FUTURE_R1_OBJECT_NAMES = (
+    "signal_speed_policy",
+    "strategy_lifecycle",
+    "data_product_lifecycle",
+    "learning_loop",
+)
+FUTURE_R1_MARKERS = {
+    "release_id": "V0-R1",
+    "release_scope": "ETH_OPERATOR_ASSIST",
+    "status": "FUTURE_NOT_IMPLEMENTED_NOT_AUTHORIZED",
+    "active_in_r0": False,
+}
 
 EXPECTED_CHANGED_FILES = {
     "README.md",
@@ -136,6 +150,7 @@ def test_r0_r1_and_deferred_g4_migration() -> None:
         "trade_plan_authorized",
         "account_runtime_authorized",
         "exchange_execution_authorized",
+        "runtime_started",
     ):
         assert r0[gate] is False
     assert "ETH-LDAR-v0.1" not in r0.values()
@@ -165,6 +180,118 @@ def test_r0_r1_and_deferred_g4_migration() -> None:
     assert "OFFICIAL_SDK_SIGNING" in deferred["required_controls"]
     assert "SEPARATE_MAINNET_AUTHORIZATION" in deferred["required_controls"]
     assert "required_controls" not in r1
+
+
+def test_root_policy_objects_are_explicitly_future_r1_bound() -> None:
+    program = _load_json(PROGRAM_PATH)
+
+    for object_name in FUTURE_R1_OBJECT_NAMES:
+        assert set(FUTURE_R1_MARKERS).issubset(program[object_name])
+        for field, expected in FUTURE_R1_MARKERS.items():
+            assert program[object_name][field] == expected
+
+    signal_speed_policy = program["signal_speed_policy"]
+    assert signal_speed_policy["strategy_id"] == "ETH-LDAR-v0.1"
+    assert set(signal_speed_policy["classes"]) == {"FAST", "STANDARD"}
+
+    strategy_lifecycle = program["strategy_lifecycle"]
+    assert "first_release" not in strategy_lifecycle
+    assert strategy_lifecycle["future_r1_minimum_requirements"] == [
+        "STABLE_INTERFACE",
+        "REGISTRY",
+        "ENABLE_DISABLE",
+    ]
+    assert "REGISTRY" in strategy_lifecycle["promotion_pipeline"]
+
+    data_product_lifecycle = program["data_product_lifecycle"]
+    assert "first_release_scope" not in data_product_lifecycle
+    assert data_product_lifecycle["future_r1_required_data_product_scope"] == (
+        "ONLY_ETH_LDAR_REQUIRED_DATA_PRODUCTS"
+    )
+
+    learning_loop = program["learning_loop"]
+    for value in ("SIGNAL", "TRADE_PLAN", "ACTUAL_ORDER_FILL_OBSERVATION"):
+        assert value in learning_loop["pipeline"]
+
+
+@pytest.mark.parametrize(
+    "object_name, field",
+    [
+        (object_name, field)
+        for object_name in FUTURE_R1_OBJECT_NAMES
+        for field in FUTURE_R1_MARKERS
+    ],
+)
+def test_schema_rejects_missing_future_r1_markers(
+    object_name: str,
+    field: str,
+) -> None:
+    schema = _load_json(SCHEMA_PATH)
+    candidate = deepcopy(_load_json(PROGRAM_PATH))
+    del candidate[object_name][field]
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(candidate)
+
+
+@pytest.mark.parametrize(
+    "object_name, field, wrong_value",
+    [
+        (object_name, "release_id", "V0-R0")
+        for object_name in FUTURE_R1_OBJECT_NAMES
+    ]
+    + [
+        (object_name, "release_scope", "CAPTURE_ONLY")
+        for object_name in FUTURE_R1_OBJECT_NAMES
+    ]
+    + [
+        (object_name, "status", "IMPLEMENTED")
+        for object_name in FUTURE_R1_OBJECT_NAMES
+    ]
+    + [
+        (object_name, "active_in_r0", True)
+        for object_name in FUTURE_R1_OBJECT_NAMES
+    ],
+)
+def test_schema_rejects_invalid_future_r1_marker_values(
+    object_name: str,
+    field: str,
+    wrong_value: str | bool,
+) -> None:
+    schema = _load_json(SCHEMA_PATH)
+    candidate = deepcopy(_load_json(PROGRAM_PATH))
+    candidate[object_name][field] = wrong_value
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(candidate)
+
+
+@pytest.mark.parametrize(
+    "object_name, obsolete_key, obsolete_value",
+    (
+        (
+            "strategy_lifecycle",
+            "first_release",
+            ["STABLE_INTERFACE", "REGISTRY", "ENABLE_DISABLE"],
+        ),
+        (
+            "data_product_lifecycle",
+            "first_release_scope",
+            "ONLY_ETH_LDAR_REQUIRED_DATA_PRODUCTS",
+        ),
+    ),
+)
+def test_schema_rejects_reintroduced_obsolete_future_r1_keys(
+    object_name: str,
+    obsolete_key: str,
+    obsolete_value: str | list[str],
+) -> None:
+    schema = _load_json(SCHEMA_PATH)
+    candidate = deepcopy(_load_json(PROGRAM_PATH))
+    candidate[object_name][obsolete_key] = obsolete_value
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(candidate)
 
 
 def test_rate_limit_authority_immutability_and_false_gates() -> None:

@@ -309,6 +309,10 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "release_id",
+        "release_scope",
+        "status",
+        "active_in_r0",
         "strategy_id",
         "speed_classes_are_not_strategies",
         "lifecycle",
@@ -316,6 +320,22 @@
         "required_patterns"
       ],
       "properties": {
+        "release_id": {
+          "type": "string",
+          "const": "V0-R1"
+        },
+        "release_scope": {
+          "type": "string",
+          "const": "ETH_OPERATOR_ASSIST"
+        },
+        "status": {
+          "type": "string",
+          "const": "FUTURE_NOT_IMPLEMENTED_NOT_AUTHORIZED"
+        },
+        "active_in_r0": {
+          "type": "boolean",
+          "const": false
+        },
         "strategy_id": {
           "type": "string",
           "const": "ETH-LDAR-v0.1"
@@ -463,15 +483,35 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "release_id",
+        "release_scope",
+        "status",
+        "active_in_r0",
         "platform_and_strategy_independent",
         "manifest_name",
         "manifest_required_fields",
         "promotion_pipeline",
         "disable_policy",
-        "first_release",
+        "future_r1_minimum_requirements",
         "deferred_strategies"
       ],
       "properties": {
+        "release_id": {
+          "type": "string",
+          "const": "V0-R1"
+        },
+        "release_scope": {
+          "type": "string",
+          "const": "ETH_OPERATOR_ASSIST"
+        },
+        "status": {
+          "type": "string",
+          "const": "FUTURE_NOT_IMPLEMENTED_NOT_AUTHORIZED"
+        },
+        "active_in_r0": {
+          "type": "boolean",
+          "const": false
+        },
         "platform_and_strategy_independent": {
           "type": "boolean",
           "const": true
@@ -602,7 +642,7 @@
             }
           }
         },
-        "first_release": {
+        "future_r1_minimum_requirements": {
           "type": "array",
           "minItems": 3,
           "maxItems": 3,
@@ -686,6 +726,10 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "release_id",
+        "release_scope",
+        "status",
+        "active_in_r0",
         "strategy_raw_exchange_json_dependency",
         "pipeline",
         "manifest_name",
@@ -693,9 +737,25 @@
         "strategy_dependency_declaration_required",
         "new_data_auto_affects_existing_strategy",
         "decommission_gates",
-        "first_release_scope"
+        "future_r1_required_data_product_scope"
       ],
       "properties": {
+        "release_id": {
+          "type": "string",
+          "const": "V0-R1"
+        },
+        "release_scope": {
+          "type": "string",
+          "const": "ETH_OPERATOR_ASSIST"
+        },
+        "status": {
+          "type": "string",
+          "const": "FUTURE_NOT_IMPLEMENTED_NOT_AUTHORIZED"
+        },
+        "active_in_r0": {
+          "type": "boolean",
+          "const": false
+        },
         "strategy_raw_exchange_json_dependency": {
           "type": "string",
           "const": "PROHIBITED"
@@ -831,7 +891,7 @@
           ],
           "items": false
         },
-        "first_release_scope": {
+        "future_r1_required_data_product_scope": {
           "type": "string",
           "const": "ONLY_ETH_LDAR_REQUIRED_DATA_PRODUCTS"
         }
@@ -841,6 +901,10 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "release_id",
+        "release_scope",
+        "status",
+        "active_in_r0",
         "pipeline",
         "metrics",
         "issue_categories",
@@ -850,6 +914,22 @@
         "improvement_pipeline"
       ],
       "properties": {
+        "release_id": {
+          "type": "string",
+          "const": "V0-R1"
+        },
+        "release_scope": {
+          "type": "string",
+          "const": "ETH_OPERATOR_ASSIST"
+        },
+        "status": {
+          "type": "string",
+          "const": "FUTURE_NOT_IMPLEMENTED_NOT_AUTHORIZED"
+        },
+        "active_in_r0": {
+          "type": "boolean",
+          "const": false
+        },
         "pipeline": {
           "type": "array",
           "minItems": 9,

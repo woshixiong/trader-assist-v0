@@ -61,6 +61,10 @@
     ]
   },
   "signal_speed_policy": {
+    "release_id": "V0-R1",
+    "release_scope": "ETH_OPERATOR_ASSIST",
+    "status": "FUTURE_NOT_IMPLEMENTED_NOT_AUTHORIZED",
+    "active_in_r0": false,
     "strategy_id": "ETH-LDAR-v0.1",
     "speed_classes_are_not_strategies": true,
     "lifecycle": [
@@ -94,6 +98,10 @@
     ]
   },
   "strategy_lifecycle": {
+    "release_id": "V0-R1",
+    "release_scope": "ETH_OPERATOR_ASSIST",
+    "status": "FUTURE_NOT_IMPLEMENTED_NOT_AUTHORIZED",
+    "active_in_r0": false,
     "platform_and_strategy_independent": true,
     "manifest_name": "StrategyManifest",
     "manifest_required_fields": [
@@ -125,7 +133,7 @@
       "delete_records": false,
       "delete_replay_capability": false
     },
-    "first_release": [
+    "future_r1_minimum_requirements": [
       "STABLE_INTERFACE",
       "REGISTRY",
       "ENABLE_DISABLE"
@@ -146,6 +154,10 @@
     ]
   },
   "data_product_lifecycle": {
+    "release_id": "V0-R1",
+    "release_scope": "ETH_OPERATOR_ASSIST",
+    "status": "FUTURE_NOT_IMPLEMENTED_NOT_AUTHORIZED",
+    "active_in_r0": false,
     "strategy_raw_exchange_json_dependency": "PROHIBITED",
     "pipeline": [
       "SOURCE_ADAPTER",
@@ -179,9 +191,13 @@
       "REPLAY_RETAINED",
       "MIGRATION_COMPLETED"
     ],
-    "first_release_scope": "ONLY_ETH_LDAR_REQUIRED_DATA_PRODUCTS"
+    "future_r1_required_data_product_scope": "ONLY_ETH_LDAR_REQUIRED_DATA_PRODUCTS"
   },
   "learning_loop": {
+    "release_id": "V0-R1",
+    "release_scope": "ETH_OPERATOR_ASSIST",
+    "status": "FUTURE_NOT_IMPLEMENTED_NOT_AUTHORIZED",
+    "active_in_r0": false,
     "pipeline": [
       "DATA_SNAPSHOT",
       "SIGNAL",
