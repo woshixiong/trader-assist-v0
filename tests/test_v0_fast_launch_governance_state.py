@@ -5,9 +5,11 @@ import json
 import re
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import pytest
 from jsonschema import Draft202012Validator
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,6 +43,27 @@ EXPECTED_CHANGED_FILES = {
     "schemas/v0/CaptureRecordV0.schema.json",
     "tests/test_v0_flp1b0b_capture_now_authority.py",
     "tests/test_v0_fast_launch_governance_state.py",
+}
+
+EXPECTED_COMMITTED_STATUS_MAP = {
+    ".github/workflows/ci.yml": "M",
+    "README.md": "M",
+    "docs/V0_01_SCOPE.md": "M",
+    "docs/V0_FAST_LAUNCH_PROGRAM.md": "M",
+    "docs/V0_FLP0_CAPTURE_NOW_AUTHORITY.md": "A",
+    "docs/architecture/V0_01_DATA_PLANE.md": "M",
+    "docs/architecture/AUTHORITY_BOUNDARY.md": "M",
+    "docs/architecture/STRATEGY_AND_DATA_LIFECYCLE.md": "M",
+    "docs/architecture/PILOT_LEARNING_LOOP.md": "M",
+    "governance/V0_FAST_LAUNCH_PROGRAM.json": "M",
+    "governance/PROJECT_STATE.json": "M",
+    "schemas/governance/V0FastLaunchProgram.schema.json": "M",
+    "src/trader_assist_v0/contracts/capture.py": "A",
+    "src/trader_assist_v0/contracts/__init__.py": "M",
+    "scripts/export_schemas.py": "M",
+    "schemas/v0/CaptureRecordV0.schema.json": "A",
+    "tests/test_v0_flp1b0b_capture_now_authority.py": "A",
+    "tests/test_v0_fast_launch_governance_state.py": "M",
 }
 
 FORBIDDEN_FILES = {
@@ -229,7 +252,146 @@ def test_exact_changed_file_scope_and_forbidden_boundaries() -> None:
         "tests/test_v0_fast_launch_governance_state.py",
         "tests/test_v0_flp1b0b_capture_now_authority.py",
     }
+    assert set(EXPECTED_COMMITTED_STATUS_MAP) == changed
+    assert tuple(EXPECTED_COMMITTED_STATUS_MAP.values()).count("A") == 4
+    assert tuple(EXPECTED_COMMITTED_STATUS_MAP.values()).count("M") == 14
     assert not _scope_boundary_errors(changed)
+
+
+def _synthetic_scope_snapshot(
+    *,
+    committed: dict[str, str] | None = None,
+    staged: dict[str, str] | None = None,
+    unstaged: dict[str, str] | None = None,
+    untracked: tuple[str, ...] = (),
+    rename_copies: tuple[tuple[str, str, str, str], ...] = (),
+    malformed_records: tuple[str, ...] = (),
+) -> _ScopeSnapshot:
+    return _ScopeSnapshot(
+        committed=dict(EXPECTED_COMMITTED_STATUS_MAP if committed is None else committed),
+        staged={} if staged is None else staged,
+        unstaged={} if unstaged is None else unstaged,
+        untracked=untracked,
+        rename_copies=rename_copies,
+        malformed_records=malformed_records,
+    )
+
+
+def test_scope_parser_is_nul_safe_and_preserves_tab_and_newline_paths() -> None:
+    parsed = _parse_stable_status_stream(
+        b"M\0tab\tpath.py\0A\0line\nbreak.py\0",
+        "attack",
+    )
+    assert parsed == {"tab\tpath.py": "M", "line\nbreak.py": "A"}
+    assert _parse_untracked_stream(b"tab\tpath.py\0line\nbreak.py\0", "attack") == (
+        "tab\tpath.py",
+        "line\nbreak.py",
+    )
+
+
+@pytest.mark.parametrize(
+    "raw, message",
+    (
+        (b"M\0truncated", "truncated"),
+        (b"M\0", "malformed"),
+        (b"Q\0path.py\0", "unknown status"),
+        (b"M\0bad-\xff.py\0", "non-UTF-8"),
+        (b"R100\0old.py\0new.py\0", "rename/copy"),
+    ),
+)
+def test_scope_parser_rejects_malformed_unknown_and_non_utf8_streams(
+    raw: bytes,
+    message: str,
+) -> None:
+    with pytest.raises(_ScopeParseError, match=message):
+        _parse_stable_status_stream(raw, "attack")
+    with pytest.raises(_ScopeParseError, match="truncated"):
+        _parse_rename_copy_stream(b"R100\0old.py\0", "attack")
+
+
+@pytest.mark.parametrize("range_name", ("committed", "staged", "unstaged"))
+def test_scope_gate_rejects_deletion_in_every_status_map(range_name: str) -> None:
+    maps = {
+        "committed": dict(EXPECTED_COMMITTED_STATUS_MAP),
+        "staged": {},
+        "unstaged": {},
+    }
+    maps[range_name]["README.md"] = "D"
+    snapshot = _synthetic_scope_snapshot(
+        committed=maps["committed"],
+        staged=maps["staged"],
+        unstaged=maps["unstaged"],
+    )
+    findings = _scope_snapshot_findings(snapshot)
+    assert (range_name, "D", "README.md") in findings["prohibited_statuses"]
+
+
+def test_scope_gate_rejects_forbidden_deletion_and_untracked_paths() -> None:
+    snapshot = _synthetic_scope_snapshot(
+        unstaged={"src/trader_assist_v0/contracts/common.py": "D"},
+        untracked=("unexpected\nfile.py",),
+    )
+    findings = _scope_snapshot_findings(snapshot)
+    assert findings["unexpected_paths"] == [
+        "src/trader_assist_v0/contracts/common.py",
+        "unexpected\nfile.py",
+    ]
+    assert findings["prohibited_statuses"] == [
+        ("unstaged", "D", "src/trader_assist_v0/contracts/common.py")
+    ]
+    assert findings["boundary_errors"]
+
+
+@pytest.mark.parametrize("status", ("T", "U", "X", "B"))
+def test_scope_gate_rejects_type_unmerged_unknown_and_broken_statuses(status: str) -> None:
+    snapshot = _synthetic_scope_snapshot(unstaged={"README.md": status})
+    assert _scope_snapshot_findings(snapshot)["prohibited_statuses"] == [
+        ("unstaged", status, "README.md")
+    ]
+
+
+def test_scope_rename_copy_detector_reports_both_directions_and_copy() -> None:
+    records = _parse_rename_copy_stream(
+        b"R100\0README.md\0renamed.md\0R090\0renamed.md\0README.md\0"
+        b"C075\0README.md\0copy.md\0",
+        "committed",
+    )
+    assert records == (
+        ("R", "README.md", "renamed.md"),
+        ("R", "renamed.md", "README.md"),
+        ("C", "README.md", "copy.md"),
+    )
+    snapshot = _synthetic_scope_snapshot(
+        rename_copies=tuple(("committed", *record) for record in records)
+    )
+    assert len(_scope_snapshot_findings(snapshot)["rename_copies"]) == 3
+
+
+def test_scope_gate_rejects_status_mismatch_and_cli_prints_full_maps(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    committed = dict(EXPECTED_COMMITTED_STATUS_MAP)
+    committed["docs/V0_FLP0_CAPTURE_NOW_AUTHORITY.md"] = "M"
+    snapshot = _synthetic_scope_snapshot(
+        committed=committed,
+        malformed_records=("unstaged: malformed status/path record",),
+    )
+    monkeypatch.setattr(sys.modules[__name__], "_collect_pr_scope_snapshot", lambda _sha: snapshot)
+    assert _check_pr_scope(BASE_SHA) == 1
+    stderr = capsys.readouterr().err
+    for label in (
+        "missing paths",
+        "unexpected paths",
+        "prohibited statuses",
+        "rename/copy records",
+        "malformed records",
+        "actual committed map",
+        "actual staged map",
+        "actual unstaged map",
+        "actual untracked map",
+    ):
+        assert label in stderr
 
 
 def _scope_boundary_errors(changed: set[str]) -> list[str]:
@@ -257,53 +419,258 @@ def _scope_boundary_errors(changed: set[str]) -> list[str]:
     return errors
 
 
-def _run_git_paths(arguments: list[str]) -> set[str]:
+@dataclass(frozen=True)
+class _ScopeSnapshot:
+    committed: dict[str, str]
+    staged: dict[str, str]
+    unstaged: dict[str, str]
+    untracked: tuple[str, ...]
+    rename_copies: tuple[tuple[str, str, str, str], ...]
+    malformed_records: tuple[str, ...]
+
+
+class _ScopeParseError(ValueError):
+    pass
+
+
+def _nul_tokens(raw: bytes, context: str) -> list[bytes]:
+    if type(raw) is not bytes:
+        raise TypeError(f"{context} output must be exact bytes")
+    if not raw:
+        return []
+    if not raw.endswith(b"\0"):
+        raise _ScopeParseError(f"{context}: truncated NUL stream")
+    return raw[:-1].split(b"\0")
+
+
+def _decode_git_path(raw: bytes, context: str) -> str:
+    if not raw:
+        raise _ScopeParseError(f"{context}: empty path")
+    try:
+        return raw.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise _ScopeParseError(f"{context}: non-UTF-8 path") from exc
+
+
+def _parse_stable_status_stream(raw: bytes, context: str) -> dict[str, str]:
+    tokens = _nul_tokens(raw, context)
+    if tokens and re.fullmatch(rb"[RC](?:[0-9]{1,3})?", tokens[0]):
+        raise _ScopeParseError(f"{context}: rename/copy in --no-renames stream")
+    if len(tokens) % 2:
+        raise _ScopeParseError(f"{context}: malformed status/path record")
+    status_map: dict[str, str] = {}
+    for offset in range(0, len(tokens), 2):
+        try:
+            status = tokens[offset].decode("ascii", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise _ScopeParseError(f"{context}: non-ASCII status") from exc
+        if len(status) != 1 or status not in "ACDMRTUXB":
+            raise _ScopeParseError(f"{context}: unknown status {status!r}")
+        if status in {"R", "C"}:
+            raise _ScopeParseError(f"{context}: rename/copy in --no-renames stream")
+        path = _decode_git_path(tokens[offset + 1], context)
+        if path in status_map:
+            raise _ScopeParseError(f"{context}: duplicate path record {path!r}")
+        status_map[path] = status
+    return status_map
+
+
+def _parse_rename_copy_stream(
+    raw: bytes,
+    context: str,
+) -> tuple[tuple[str, str, str], ...]:
+    tokens = _nul_tokens(raw, context)
+    records: list[tuple[str, str, str]] = []
+    offset = 0
+    while offset < len(tokens):
+        try:
+            status_token = tokens[offset].decode("ascii", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise _ScopeParseError(f"{context}: non-ASCII rename/copy status") from exc
+        if not re.fullmatch(r"[RC](?:[0-9]{1,3})?", status_token):
+            raise _ScopeParseError(f"{context}: unknown rename/copy status {status_token!r}")
+        if status_token[1:] and int(status_token[1:]) > 100:
+            raise _ScopeParseError(f"{context}: invalid rename/copy score")
+        if offset + 2 >= len(tokens):
+            raise _ScopeParseError(f"{context}: truncated rename/copy record")
+        source = _decode_git_path(tokens[offset + 1], context)
+        destination = _decode_git_path(tokens[offset + 2], context)
+        records.append((status_token[0], source, destination))
+        offset += 3
+    return tuple(records)
+
+
+def _parse_untracked_stream(raw: bytes, context: str) -> tuple[str, ...]:
+    paths = tuple(_decode_git_path(token, context) for token in _nul_tokens(raw, context))
+    if len(set(paths)) != len(paths):
+        raise _ScopeParseError(f"{context}: duplicate untracked path")
+    return paths
+
+
+def _run_git_bytes(arguments: list[str]) -> bytes:
     result = subprocess.run(
         ["git", *arguments],
         cwd=ROOT,
-        text=True,
         capture_output=True,
     )
     if result.returncode:
-        detail = result.stderr.strip() or result.stdout.strip()
+        detail_bytes = result.stderr.strip() or result.stdout.strip()
+        detail = detail_bytes.decode("utf-8", errors="backslashreplace")
         raise RuntimeError(f"git {' '.join(arguments)} failed: {detail}")
-    return {line for line in result.stdout.splitlines() if line}
+    return result.stdout
 
 
-def _collect_pr_scope_paths(base_sha: str) -> set[str]:
+def _collect_pr_scope_snapshot(base_sha: str) -> _ScopeSnapshot:
     if not COMMIT_SHA_PATTERN.fullmatch(base_sha):
         raise ValueError("--check-pr-scope requires a 40-character commit SHA")
-    return set().union(
-        _run_git_paths(
-            ["diff", "--name-only", "--diff-filter=ACMRT", f"{base_sha}...HEAD", "--"]
-        ),
-        _run_git_paths(["diff", "--name-only", "--diff-filter=ACMRT", "HEAD", "--"]),
-        _run_git_paths(
-            ["diff", "--cached", "--name-only", "--diff-filter=ACMRT", "HEAD", "--"]
-        ),
-        _run_git_paths(["ls-files", "--others", "--exclude-standard"]),
+
+    stable_arguments = {
+        "committed": [
+            "diff",
+            "--name-status",
+            "-z",
+            "--no-renames",
+            "--diff-filter=ACDMRTUXB",
+            f"{base_sha}...HEAD",
+            "--",
+        ],
+        "staged": [
+            "diff",
+            "--cached",
+            "--name-status",
+            "-z",
+            "--no-renames",
+            "--diff-filter=ACDMRTUXB",
+            "HEAD",
+            "--",
+        ],
+        "unstaged": [
+            "diff",
+            "--name-status",
+            "-z",
+            "--no-renames",
+            "--diff-filter=ACDMRTUXB",
+            "HEAD",
+            "--",
+        ],
+    }
+    range_arguments = {
+        "committed": [f"{base_sha}...HEAD"],
+        "staged": ["--cached", "HEAD"],
+        "unstaged": ["HEAD"],
+    }
+    status_maps: dict[str, dict[str, str]] = {}
+    malformed: list[str] = []
+    rename_copies: list[tuple[str, str, str, str]] = []
+    for range_name, arguments in stable_arguments.items():
+        raw = _run_git_bytes(arguments)
+        try:
+            status_maps[range_name] = _parse_stable_status_stream(raw, range_name)
+        except _ScopeParseError as exc:
+            malformed.append(str(exc))
+            status_maps[range_name] = {}
+    for range_name, range_args in range_arguments.items():
+        raw = _run_git_bytes(
+            [
+                "diff",
+                "--name-status",
+                "-z",
+                "--find-renames",
+                "--find-copies-harder",
+                "--diff-filter=RC",
+                *range_args,
+                "--",
+            ]
+        )
+        try:
+            rename_copies.extend(
+                (range_name, status, source, destination)
+                for status, source, destination in _parse_rename_copy_stream(raw, range_name)
+            )
+        except _ScopeParseError as exc:
+            malformed.append(str(exc))
+    untracked_raw = _run_git_bytes(["ls-files", "-z", "--others", "--exclude-standard"])
+    try:
+        untracked = _parse_untracked_stream(untracked_raw, "untracked")
+    except _ScopeParseError as exc:
+        malformed.append(str(exc))
+        untracked = ()
+    return _ScopeSnapshot(
+        committed=status_maps["committed"],
+        staged=status_maps["staged"],
+        unstaged=status_maps["unstaged"],
+        untracked=untracked,
+        rename_copies=tuple(rename_copies),
+        malformed_records=tuple(malformed),
     )
+
+
+def _scope_snapshot_findings(snapshot: _ScopeSnapshot) -> dict[str, Any]:
+    actual_paths = (
+        set(snapshot.committed)
+        | set(snapshot.staged)
+        | set(snapshot.unstaged)
+        | set(snapshot.untracked)
+    )
+    prohibited_statuses = sorted(
+        (range_name, status, path)
+        for range_name, status_map in (
+            ("committed", snapshot.committed),
+            ("staged", snapshot.staged),
+            ("unstaged", snapshot.unstaged),
+        )
+        for path, status in status_map.items()
+        if status not in {"A", "M"}
+    )
+    status_mismatches = sorted(
+        (path, EXPECTED_COMMITTED_STATUS_MAP[path], snapshot.committed.get(path))
+        for path in EXPECTED_CHANGED_FILES
+        if snapshot.committed.get(path) != EXPECTED_COMMITTED_STATUS_MAP[path]
+    )
+    return {
+        "missing_paths": sorted(EXPECTED_CHANGED_FILES - actual_paths),
+        "unexpected_paths": sorted(actual_paths - EXPECTED_CHANGED_FILES),
+        "prohibited_statuses": prohibited_statuses,
+        "status_mismatches": status_mismatches,
+        "rename_copies": list(snapshot.rename_copies),
+        "malformed_records": list(snapshot.malformed_records),
+        "boundary_errors": _scope_boundary_errors(actual_paths),
+    }
 
 
 def _check_pr_scope(base_sha: str) -> int:
     try:
-        changed = _collect_pr_scope_paths(base_sha)
+        snapshot = _collect_pr_scope_snapshot(base_sha)
     except (RuntimeError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
+        print("missing paths: <unavailable>", file=sys.stderr)
+        print("unexpected paths: <unavailable>", file=sys.stderr)
+        print("prohibited statuses: <unavailable>", file=sys.stderr)
+        print("rename/copy records: <unavailable>", file=sys.stderr)
+        print("malformed records: <unavailable>", file=sys.stderr)
+        print("actual committed map: <unavailable>", file=sys.stderr)
+        print("actual staged map: <unavailable>", file=sys.stderr)
+        print("actual unstaged map: <unavailable>", file=sys.stderr)
+        print("actual untracked map: <unavailable>", file=sys.stderr)
         return 2
 
-    missing = sorted(EXPECTED_CHANGED_FILES - changed)
-    unexpected = sorted(changed - EXPECTED_CHANGED_FILES)
-    boundary_errors = _scope_boundary_errors(changed)
-    if missing or unexpected or boundary_errors:
-        print(f"missing files: {missing}", file=sys.stderr)
-        print(f"unexpected files: {unexpected}", file=sys.stderr)
-        print(f"actual files: {sorted(changed)}", file=sys.stderr)
-        for error in boundary_errors:
+    findings = _scope_snapshot_findings(snapshot)
+    if any(findings.values()):
+        print(f"missing paths: {findings['missing_paths']}", file=sys.stderr)
+        print(f"unexpected paths: {findings['unexpected_paths']}", file=sys.stderr)
+        print(f"prohibited statuses: {findings['prohibited_statuses']}", file=sys.stderr)
+        print(f"status mismatches: {findings['status_mismatches']}", file=sys.stderr)
+        print(f"rename/copy records: {findings['rename_copies']}", file=sys.stderr)
+        print(f"malformed records: {findings['malformed_records']}", file=sys.stderr)
+        print(f"actual committed map: {sorted(snapshot.committed.items())}", file=sys.stderr)
+        print(f"actual staged map: {sorted(snapshot.staged.items())}", file=sys.stderr)
+        print(f"actual unstaged map: {sorted(snapshot.unstaged.items())}", file=sys.stderr)
+        print(f"actual untracked map: {sorted(snapshot.untracked)}", file=sys.stderr)
+        for error in findings["boundary_errors"]:
             print(f"boundary error: {error}", file=sys.stderr)
         return 1
 
-    print(f"PR scope check passed: {len(changed)} files")
+    print(f"PR scope check passed: {len(snapshot.committed)} files (4 A, 14 M)")
     return 0
 
 

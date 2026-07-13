@@ -69,28 +69,99 @@ Mainnet unauthorized.
 all 15 Capture objects, including manifest, checkpoint, replay, local safety,
 and endpoint allowlist contracts.
 
-Capture plans are minimal non-executable evidence. They are not TradePlans and
-cannot carry size, notional, leverage, risk, authoritative entry, stop, take
-profit, order type, submit, execute, or permit fields. `WAIT` allows zero or one
+Capture plans are structured non-executable evidence references. They contain
+an ordered, unique, non-empty `evidence_refs` tuple and no free-text summary.
+They are not TradePlans and cannot carry size, notional, leverage, risk,
+authoritative entry, stop, take profit, order type, submit, execute, permit,
+metadata, dictionary, or JSON-blob fields. `WAIT` allows zero or one
 non-actionable CapturePlan and zero ShadowOrderIntent records. Shadow intents
-are shadow-only, non-executable, and never exchange-submittable.
+contain only the fixed `NON_EXECUTABLE_MARKET_PATH_HYPOTHESIS` kind and an
+ordered, unique, non-empty evidence-reference tuple. They are shadow-only,
+non-executable, never exchange-submittable, and expose no free-text authority
+channel.
 
-Market-path evidence freezes finalized append-only windows and ordered,
-non-overlapping missing ranges. Later data must be appended as a new record. It
-does not adjudicate PnL, MFE, MAE, R multiple, winners, or outcomes.
+`HumanObservationV0.observation_text` is an operator note only. No graph,
+ledger, replay, lifecycle, or runtime-control validator reads it, or any other
+bounded display text, as Plan, Shadow, order, execution, sizing, or permit
+authority.
 
-Lifecycle events and runtime-control events have different `record_type`,
-different hash domains, different legal event kinds, and different validators.
-Lifecycle events cannot carry start permits, connection, kill, resume, or
-recovery authority. Runtime-control events cannot masquerade as signal, plan,
-shadow, human observation, or market-path evidence.
+Market-path evidence is grouped by `market_path_series_ref` in manifest order.
+One series keeps one source identity; its normal chain starts at sequence zero,
+increments by exactly one, and never overlaps, moves backward, or extends a
+previous finalized window. Corrections and supersessions must target an earlier
+record in the same series, source, sequence, and exact window. New market data
+requires a new sequence record. Missing ranges remain ordered, unique, and
+non-overlapping. Market-path evidence does not adjudicate PnL, MFE, MAE,
+R multiple, winners, or outcomes.
 
-Kill state fails closed. Resume requires a new single-use permit reference, an
-integrity-check reference, and an append-only runtime-control event reference.
+Lifecycle events and runtime-control events have different `record_type`, hash
+domains, legal event kinds, and validators. Lifecycle subjects are limited to
+Signal, Plan, Shadow, HumanObservation, and MarketPath records. Created events
+have no correction, supersession, or references; corrected and superseded
+events carry exactly their matching earlier same-type target; window-finalized
+events apply only to MarketPath. Lifecycle events cannot carry start permits,
+connection, kill, resume, or recovery authority.
 
-Manifest entries, checkpoints, and replay reports freeze Capture-plane integrity
-contracts only. They perform no I/O. Replay reports do not contain PnL, win
-rate, Sharpe, MFE/MAE, or promotion judgment.
+Runtime-control events form per-`runtime_scope_ref` chains in manifest order.
+Start carries only one single-use permit, kill carries only a real earlier kill
+state, integrity completion carries only its integrity reference, and resume
+carries permit, integrity, and current unresolved kill references. Permits are
+single-use across start and resume. Resume requires an integrity event after the
+matching kill and before resume; it resolves that kill exactly once. Capture
+record IDs cannot masquerade as runtime scopes, permits, integrity references,
+or kill states.
+
+Kill state always fails closed and remains runtime unauthorized. Killed state
+has no resume references; blocked state has no permit or runtime event and may
+refer only to an earlier completed integrity check; permitted state requires a
+matching earlier valid resume event, its new single-use permit, and integrity
+reference.
+
+## Pure Ledger Validation
+
+`validate_capture_record_graph`, `validate_capture_manifest_chain`,
+`validate_capture_checkpoint`, `validate_capture_checkpoint_advance`,
+`build_capture_replay_report`, and `validate_capture_replay_report` are pure
+in-memory contract functions. They accept exact tuples and exact concrete
+Capture models, keep no mutable global state, perform no I/O or networking, and
+grant no runtime or execution authority.
+
+Manifest entries bind observation slot, writer epoch, writer authority, record
+ID/hash, duplicate classification, previous hash, and entry hash. Entry indexes
+start at zero and are contiguous; the hash chain, writer epoch, and writer
+authority are constant. The unique manifest record set exactly equals the
+provided unique record set. First slot use is `UNIQUE`; the same slot and same
+record ID/hash is `EXACT_DUPLICATE`; the same slot with a different identity is
+`CONFLICTING_DUPLICATE`. A record cannot change slots to evade duplicate
+classification. Correctly classified conflicts remain diagnostic ledger facts
+and force replay `FAIL`; no validator chooses a latest value.
+
+Checkpoints bind genesis root, terminal hash/index, manifest and unique-record
+counts, writer epoch/authority, and finalized integrity-only state. Advance
+validation accepts an exact duplicate checkpoint or an append-only manifest
+extension with the old chain as an exact prefix and the same root. Truncation,
+rollback, count regression, and history rewrite fail closed.
+
+Replay reports are built deterministically from records, manifest, and
+checkpoint. Public direct `bind` is prohibited. Consumers must call
+`validate_capture_replay_report`, which rebuilds and compares every field even
+when a supplied report has an internally valid hash. `PASS` requires valid graph
+and chain integrity, valid checkpoint binding, zero missing references, and zero
+conflicting duplicates. Reports contain no PnL, profitability, win rate, Sharpe,
+MFE/MAE, R multiple, winner, outcome, or promotion authority.
+
+## Exact PR Scope Gate
+
+Normal pytest validates a frozen static 18-file contract and does not read Git
+history. The explicit PR CLI reads committed, staged, and unstaged
+`--name-status -z --no-renames` byte streams and requires the frozen committed
+map of four additions and fourteen modifications. A separate
+`--find-renames --find-copies-harder --diff-filter=RC` pass rejects every rename
+or copy and reports source and destination. Untracked files, deletion, type
+change, unmerged, unknown, broken, non-UTF-8, truncated or malformed NUL data,
+status mismatch, and unexpected paths all fail closed. Tabs and newlines remain
+path bytes rather than record delimiters. The CLI performs no fetch, network, or
+GitHub API call and accepts only an explicit 40-character base SHA.
 
 ## Local Safety and Endpoint Allowlist
 

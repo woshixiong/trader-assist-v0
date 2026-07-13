@@ -244,6 +244,8 @@ class _HashBoundCaptureModel(_CaptureAuthorityModel):
 
 
 class _CaptureRecordModel(_CaptureAuthorityModel):
+    record_id_excluded_fields: ClassVar[frozenset[str]] = frozenset()
+
     record_id: Sha256Hex
     record_hash: Sha256Hex
 
@@ -255,9 +257,14 @@ class _CaptureRecordModel(_CaptureAuthorityModel):
         record_type = payload.get("record_type")
         if type(record_type) is not str:
             raise ValueError("record_type must be bound before record identity")
+        record_id_payload = {
+            key: value
+            for key, value in payload.items()
+            if key not in type(self).record_id_excluded_fields
+        }
         expected_id = _hash_material(
             f"{CAPTURE_CONTRACT_VERSION}/record-id/{record_type}",
-            payload,
+            record_id_payload,
         )
         if not hmac.compare_digest(actual_id, expected_id):
             raise ValueError("record_id does not match Capture authority")
@@ -279,7 +286,15 @@ class _CaptureRecordModel(_CaptureAuthorityModel):
             record_type = cls.model_fields["record_type"].default
         if type(record_type) is not str:
             raise ValueError("record_type is required before binding")
-        record_id = _hash_material(f"{CAPTURE_CONTRACT_VERSION}/record-id/{record_type}", material)
+        record_id_material = {
+            key: value
+            for key, value in material.items()
+            if key not in cls.record_id_excluded_fields
+        }
+        record_id = _hash_material(
+            f"{CAPTURE_CONTRACT_VERSION}/record-id/{record_type}",
+            record_id_material,
+        )
         record_hash = _hash_material(
             f"{CAPTURE_CONTRACT_VERSION}/record-hash/{record_type}",
             {**material, "record_id": record_id},
@@ -307,6 +322,10 @@ class ProducerIdentityV0(_HashBoundCaptureModel):
 
 
 class SignalCaptureV0(_CaptureRecordModel):
+    record_id_excluded_fields: ClassVar[frozenset[str]] = frozenset(
+        {"plan_record_refs", "shadow_intent_refs"}
+    )
+
     record_type: Literal["SIGNAL_CAPTURE"] = "SIGNAL_CAPTURE"
     schema_version: Literal["0.1.0"] = CAPTURE_SCHEMA_VERSION
     contract_version: Literal["trader-assist-v0/capture-now-authority/v1"] = (
@@ -351,7 +370,7 @@ class CapturePlanV0(_CaptureRecordModel):
     actionable: Literal[False] = False
     executable: Literal[False] = False
     exchange_submission_authorized: Literal[False] = False
-    minimal_evidence_summary: BoundedText
+    evidence_refs: tuple[RefId, ...] = Field(min_length=1)
     non_actionable_plan_label: Literal["CAPTURE_ONLY_NOT_TRADE_PLAN"] = (
         "CAPTURE_ONLY_NOT_TRADE_PLAN"
     )
@@ -362,6 +381,7 @@ class CapturePlanV0(_CaptureRecordModel):
     def validate_plan(self) -> Self:
         if self.producer_identity.identity_domain != "SIGNAL_PLAN_SHADOW_PRODUCER":
             raise ValueError("plans require producer_identity")
+        _ordered_unique(self.evidence_refs, "evidence_refs")
         return self
 
 
@@ -375,10 +395,13 @@ class ShadowOrderIntentV0(_CaptureRecordModel):
     environment: Literal["READ_ONLY"] = CAPTURE_ENVIRONMENT
     producer_identity: ProducerIdentityV0
     plan_record_ref: RefId
+    hypothesis_kind: Literal["NON_EXECUTABLE_MARKET_PATH_HYPOTHESIS"] = (
+        "NON_EXECUTABLE_MARKET_PATH_HYPOTHESIS"
+    )
+    evidence_refs: tuple[RefId, ...] = Field(min_length=1)
     shadow_only: Literal[True] = True
     executable: Literal[False] = False
     exchange_submission_authorized: Literal[False] = False
-    intent_summary: BoundedText
     correction_of_record_id: RefId | None = None
     supersedes_record_id: RefId | None = None
 
@@ -386,6 +409,7 @@ class ShadowOrderIntentV0(_CaptureRecordModel):
     def validate_shadow(self) -> Self:
         if self.producer_identity.identity_domain != "SIGNAL_PLAN_SHADOW_PRODUCER":
             raise ValueError("shadow intents require producer_identity")
+        _ordered_unique(self.evidence_refs, "evidence_refs")
         return self
 
 
@@ -423,6 +447,7 @@ class MarketPathEvidenceV0(_CaptureRecordModel):
     environment: Literal["READ_ONLY"] = CAPTURE_ENVIRONMENT
     source_identity: ProducerIdentityV0
     source_record_refs: tuple[RefId, ...] = Field(min_length=1)
+    market_path_series_ref: RefId
     window_start_ms: StrictInt = Field(ge=0)
     window_end_ms: StrictInt = Field(ge=0)
     finalized_append_only_window: Literal[True] = True
@@ -468,6 +493,13 @@ class CaptureLifecycleEventV0(_CaptureRecordModel):
         "CAPTURE_WINDOW_FINALIZED",
     ]
     subject_record_ref: RefId
+    subject_record_type: Literal[
+        "SIGNAL_CAPTURE",
+        "CAPTURE_PLAN",
+        "SHADOW_ORDER_INTENT",
+        "HUMAN_OBSERVATION",
+        "MARKET_PATH_EVIDENCE",
+    ]
     reference_record_refs: tuple[RefId, ...] = ()
     transition_authorized: Literal["APPEND_ONLY_CAPTURE_METADATA"] = (
         "APPEND_ONLY_CAPTURE_METADATA"
@@ -480,6 +512,28 @@ class CaptureLifecycleEventV0(_CaptureRecordModel):
         if self.producer_identity.identity_domain != "SIGNAL_PLAN_SHADOW_PRODUCER":
             raise ValueError("lifecycle events require capture producer identity")
         _ordered_unique(self.reference_record_refs, "reference_record_refs")
+        if self.event_kind == "CAPTURE_RECORD_CREATED":
+            if self.correction_of_record_id is not None or self.supersedes_record_id is not None:
+                raise ValueError("created lifecycle events cannot correct or supersede")
+            if self.reference_record_refs:
+                raise ValueError("created lifecycle events cannot carry references")
+        elif self.event_kind == "CAPTURE_RECORD_CORRECTED":
+            if self.correction_of_record_id is None or self.supersedes_record_id is not None:
+                raise ValueError("corrected lifecycle events require only correction target")
+            if self.reference_record_refs != (self.correction_of_record_id,):
+                raise ValueError("corrected lifecycle references must equal correction target")
+        elif self.event_kind == "CAPTURE_RECORD_SUPERSEDED":
+            if self.supersedes_record_id is None or self.correction_of_record_id is not None:
+                raise ValueError("superseded lifecycle events require only supersession target")
+            if self.reference_record_refs != (self.supersedes_record_id,):
+                raise ValueError("superseded lifecycle references must equal supersession target")
+        else:
+            if self.subject_record_type != "MARKET_PATH_EVIDENCE":
+                raise ValueError("window finalization requires market-path subject")
+            if self.correction_of_record_id is not None or self.supersedes_record_id is not None:
+                raise ValueError("window finalization cannot correct or supersede")
+            if self.reference_record_refs:
+                raise ValueError("window finalization cannot carry references")
         return self
 
 
@@ -498,7 +552,7 @@ class RuntimeControlEventV0(_CaptureRecordModel):
         "RESUME_PERMIT_ISSUED",
         "INTEGRITY_CHECK_COMPLETED",
     ]
-    subject_runtime_ref: RefId
+    runtime_scope_ref: RefId
     single_use_permit_ref: RefId | None = None
     integrity_check_ref: RefId | None = None
     kill_state_ref: RefId | None = None
@@ -511,10 +565,24 @@ class RuntimeControlEventV0(_CaptureRecordModel):
     def validate_runtime_control(self) -> Self:
         if self.supervisor_or_runtime_actor_identity.identity_domain != "RUNTIME_CONTROL_ACTOR":
             raise ValueError("runtime control requires supervisor_or_runtime_actor_identity")
-        if self.event_kind == "RESUME_PERMIT_ISSUED" and (
-            self.single_use_permit_ref is None or self.integrity_check_ref is None
-        ):
-            raise ValueError("resume requires permit and integrity references")
+        if self.correction_of_record_id is not None or self.supersedes_record_id is not None:
+            raise ValueError("runtime-control events cannot correct or supersede")
+        refs = (
+            self.single_use_permit_ref,
+            self.integrity_check_ref,
+            self.kill_state_ref,
+        )
+        if self.event_kind == "START_PERMIT_ISSUED":
+            if refs[0] is None or refs[1:] != (None, None):
+                raise ValueError("start permit requires only single_use_permit_ref")
+        elif self.event_kind == "KILL_ENGAGED":
+            if refs[2] is None or refs[:2] != (None, None):
+                raise ValueError("kill requires only kill_state_ref")
+        elif self.event_kind == "INTEGRITY_CHECK_COMPLETED":
+            if refs[1] is None or refs[0] is not None or refs[2] is not None:
+                raise ValueError("integrity event requires only integrity_check_ref")
+        elif any(reference is None for reference in refs):
+            raise ValueError("resume requires permit, integrity, and kill references")
         return self
 
 
@@ -547,10 +615,22 @@ class CaptureKillStateV0(_CaptureRecordModel):
     def validate_kill_state(self) -> Self:
         if self.supervisor_or_runtime_actor_identity.identity_domain != "RUNTIME_CONTROL_ACTOR":
             raise ValueError("kill state requires supervisor_or_runtime_actor_identity")
-        if self.kill_state == "RESUME_PERMITTED_AFTER_INTEGRITY_CHECK" and (
-            self.single_use_permit_ref is None
-            or self.integrity_check_ref is None
-            or self.runtime_control_event_ref is None
+        if self.correction_of_record_id is not None or self.supersedes_record_id is not None:
+            raise ValueError("kill states cannot correct or supersede")
+        refs = (
+            self.single_use_permit_ref,
+            self.integrity_check_ref,
+            self.runtime_control_event_ref,
+        )
+        if self.kill_state == "KILLED_FAIL_CLOSED" and refs != (None, None, None):
+            raise ValueError("killed state cannot carry resume references")
+        if self.kill_state == "RESUME_BLOCKED_PENDING_PERMIT" and (
+            self.single_use_permit_ref is not None
+            or self.runtime_control_event_ref is not None
+        ):
+            raise ValueError("blocked resume may carry only integrity_check_ref")
+        if self.kill_state == "RESUME_PERMITTED_AFTER_INTEGRITY_CHECK" and any(
+            reference is None for reference in refs
         ):
             raise ValueError("resume requires permit, integrity, and runtime-control references")
         return self
@@ -566,11 +646,27 @@ class CaptureManifestEntryV0(_HashBoundCaptureModel):
     )
     plane_id: Literal["CAPTURE_AUTHORITY"] = CAPTURE_PLANE_ID
     entry_index: StrictInt = Field(ge=0)
+    observation_slot_ref: RefId
+    writer_epoch: StrictInt = Field(ge=0)
+    writer_authority_ref: RefId
     record_ref: RefId
     record_hash: Sha256Hex
+    duplicate_classification: Literal[
+        "UNIQUE",
+        "EXACT_DUPLICATE",
+        "CONFLICTING_DUPLICATE",
+    ]
     previous_manifest_entry_hash: Sha256Hex | None
     io_authorized: Literal[False] = False
     manifest_entry_hash: Sha256Hex
+
+    @model_validator(mode="after")
+    def validate_manifest_position(self) -> Self:
+        if self.entry_index == 0 and self.previous_manifest_entry_hash is not None:
+            raise ValueError("genesis manifest entry must not have previous hash")
+        if self.entry_index > 0 and self.previous_manifest_entry_hash is None:
+            raise ValueError("non-genesis manifest entry requires previous hash")
+        return self
 
 
 class CaptureCheckpointV0(_HashBoundCaptureModel):
@@ -583,11 +679,22 @@ class CaptureCheckpointV0(_HashBoundCaptureModel):
     )
     plane_id: Literal["CAPTURE_AUTHORITY"] = CAPTURE_PLANE_ID
     checkpoint_kind: Literal["CAPTURE_INTEGRITY_ONLY"] = "CAPTURE_INTEGRITY_ONLY"
+    manifest_root_hash: Sha256Hex
     terminal_manifest_entry_hash: Sha256Hex
-    record_count: StrictInt = Field(ge=0)
+    terminal_entry_index: StrictInt = Field(ge=0)
+    manifest_entry_count: StrictInt = Field(ge=1)
+    record_count: StrictInt = Field(ge=1)
+    writer_epoch: StrictInt = Field(ge=0)
+    writer_authority_ref: RefId
     finalized: Literal[True] = True
     io_authorized: Literal[False] = False
     checkpoint_hash: Sha256Hex
+
+    @model_validator(mode="after")
+    def validate_checkpoint_position(self) -> Self:
+        if self.terminal_entry_index != self.manifest_entry_count - 1:
+            raise ValueError("terminal_entry_index must equal manifest_entry_count - 1")
+        return self
 
 
 class CaptureReplayReportV0(_HashBoundCaptureModel):
@@ -602,9 +709,24 @@ class CaptureReplayReportV0(_HashBoundCaptureModel):
     checkpoint_hash: Sha256Hex
     replay_status: Literal["PASS", "FAIL"]
     verified_record_count: StrictInt = Field(ge=0)
+    verified_manifest_entry_count: StrictInt = Field(ge=0)
+    exact_duplicate_count: StrictInt = Field(ge=0)
+    conflicting_duplicate_count: StrictInt = Field(ge=0)
+    missing_reference_count: StrictInt = Field(ge=0)
+    chain_integrity: bool
+    checkpoint_integrity: bool
+    deterministic_replay: Literal[True] = True
     performance_adjudication_authorized: Literal[False] = False
     promotion_judgment_authorized: Literal[False] = False
     replay_report_hash: Sha256Hex
+
+    @classmethod
+    def bind(cls, **payload: Any) -> Self:
+        raise TypeError("Capture replay reports must be built from ledger authority")
+
+    @classmethod
+    def _bind_derived(cls, **payload: Any) -> Self:
+        return super().bind(**payload)
 
 
 class CaptureLocalSafetyPolicyV0(_HashBoundCaptureModel):
@@ -725,3 +847,621 @@ class CaptureRecordV0(RootModel[CaptureRecordUnion]):
 
     def model_copy(self, *, update: Mapping[str, Any] | None = None, deep: bool = False) -> Self:
         raise TypeError("CaptureRecordV0 cannot be copied")
+
+
+_CAPTURE_RECORD_TYPES: Final[tuple[type[_CaptureRecordModel], ...]] = (
+    SignalCaptureV0,
+    CapturePlanV0,
+    ShadowOrderIntentV0,
+    HumanObservationV0,
+    MarketPathEvidenceV0,
+    CaptureLifecycleEventV0,
+    RuntimeControlEventV0,
+    CaptureKillStateV0,
+)
+
+
+def _validated_capture_records(
+    records: tuple[CaptureRecordUnion, ...],
+) -> tuple[CaptureRecordUnion, ...]:
+    if type(records) is not tuple:
+        raise TypeError("records must be an exact tuple")
+    validated: list[CaptureRecordUnion] = []
+    record_ids: set[str] = set()
+    for record in records:
+        if type(record) not in _CAPTURE_RECORD_TYPES:
+            raise TypeError("records must contain exact concrete Capture record types")
+        checked = type(record).model_validate(record)
+        if checked.record_id in record_ids:
+            raise ValueError(f"duplicate record ID: {checked.record_id}")
+        record_ids.add(checked.record_id)
+        validated.append(checked)
+    return tuple(validated)
+
+
+def _validated_manifest_entries(
+    manifest: tuple[CaptureManifestEntryV0, ...],
+) -> tuple[CaptureManifestEntryV0, ...]:
+    if type(manifest) is not tuple:
+        raise TypeError("manifest must be an exact tuple")
+    validated: list[CaptureManifestEntryV0] = []
+    for entry in manifest:
+        if type(entry) is not CaptureManifestEntryV0:
+            raise TypeError("manifest must contain exact CaptureManifestEntryV0 objects")
+        validated.append(CaptureManifestEntryV0.model_validate(entry))
+    return tuple(validated)
+
+
+def _validated_checkpoint(checkpoint: CaptureCheckpointV0) -> CaptureCheckpointV0:
+    if type(checkpoint) is not CaptureCheckpointV0:
+        raise TypeError("checkpoint must be an exact CaptureCheckpointV0")
+    return CaptureCheckpointV0.model_validate(checkpoint)
+
+
+def _record_lookup(
+    records: tuple[CaptureRecordUnion, ...],
+) -> dict[str, CaptureRecordUnion]:
+    return {record.record_id: record for record in records}
+
+
+def _manifest_record_order(
+    manifest: tuple[CaptureManifestEntryV0, ...],
+) -> tuple[str, ...]:
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for entry in manifest:
+        if entry.record_ref not in seen:
+            seen.add(entry.record_ref)
+            ordered.append(entry.record_ref)
+    return tuple(ordered)
+
+
+def validate_capture_manifest_chain(
+    records: tuple[CaptureRecordUnion, ...],
+    manifest: tuple[CaptureManifestEntryV0, ...],
+) -> None:
+    checked_records = _validated_capture_records(records)
+    checked_manifest = _validated_manifest_entries(manifest)
+    if not checked_manifest:
+        raise ValueError("Capture manifest chain must not be empty")
+
+    records_by_id = _record_lookup(checked_records)
+    writer_epoch = checked_manifest[0].writer_epoch
+    writer_authority_ref = checked_manifest[0].writer_authority_ref
+    slots: dict[str, tuple[str, str]] = {}
+    record_slots: dict[tuple[str, str], str] = {}
+    manifest_record_refs: set[str] = set()
+
+    for expected_index, entry in enumerate(checked_manifest):
+        if entry.entry_index != expected_index:
+            raise ValueError(f"manifest entry index gap at {expected_index}")
+        expected_previous = (
+            None
+            if expected_index == 0
+            else checked_manifest[expected_index - 1].manifest_entry_hash
+        )
+        if entry.previous_manifest_entry_hash != expected_previous:
+            raise ValueError(f"manifest previous hash mismatch at {expected_index}")
+        if entry.writer_epoch != writer_epoch or entry.writer_authority_ref != writer_authority_ref:
+            raise ValueError(f"manifest writer authority mismatch at {expected_index}")
+
+        record = records_by_id.get(entry.record_ref)
+        if record is None:
+            raise ValueError(f"manifest references missing record: {entry.record_ref}")
+        if entry.record_hash != record.record_hash:
+            raise ValueError(f"manifest record hash mismatch: {entry.record_ref}")
+        manifest_record_refs.add(entry.record_ref)
+
+        record_identity = (entry.record_ref, entry.record_hash)
+        prior_slot = record_slots.get(record_identity)
+        prior_identity = slots.get(entry.observation_slot_ref)
+        if prior_identity is None:
+            expected_classification = "UNIQUE"
+            if prior_slot is not None and prior_slot != entry.observation_slot_ref:
+                raise ValueError(
+                    "record identity cannot evade duplicate detection by changing slot"
+                )
+            slots[entry.observation_slot_ref] = record_identity
+        elif prior_identity == record_identity:
+            expected_classification = "EXACT_DUPLICATE"
+        else:
+            expected_classification = "CONFLICTING_DUPLICATE"
+        if entry.duplicate_classification != expected_classification:
+            raise ValueError(
+                f"duplicate classification mismatch at {expected_index}: "
+                f"expected {expected_classification}"
+            )
+        record_slots.setdefault(record_identity, entry.observation_slot_ref)
+
+    record_ids = set(records_by_id)
+    if manifest_record_refs != record_ids:
+        missing = sorted(record_ids - manifest_record_refs)
+        unexpected = sorted(manifest_record_refs - record_ids)
+        raise ValueError(
+            f"manifest record set mismatch: missing={missing}, unexpected={unexpected}"
+        )
+
+
+def _require_earlier_record(
+    *,
+    reference: str,
+    subject: CaptureRecordUnion,
+    records_by_id: Mapping[str, CaptureRecordUnion],
+    positions: Mapping[str, int],
+    relation: str,
+) -> CaptureRecordUnion:
+    target = records_by_id.get(reference)
+    if target is None:
+        raise ValueError(f"{relation} target does not exist: {reference}")
+    if reference == subject.record_id:
+        raise ValueError(f"{relation} cannot self-reference")
+    if positions[reference] >= positions[subject.record_id]:
+        raise ValueError(f"{relation} target must be earlier in manifest order")
+    return target
+
+
+def _validate_generic_corrections(
+    ordered_records: tuple[CaptureRecordUnion, ...],
+    records_by_id: Mapping[str, CaptureRecordUnion],
+    positions: Mapping[str, int],
+) -> None:
+    for record in ordered_records:
+        if isinstance(record, CaptureLifecycleEventV0):
+            continue
+        correction = record.correction_of_record_id
+        supersession = record.supersedes_record_id
+        if correction is not None and supersession is not None:
+            raise ValueError("correction and supersession cannot both be present")
+        if isinstance(record, RuntimeControlEventV0 | CaptureKillStateV0):
+            if correction is not None or supersession is not None:
+                raise ValueError("runtime control and kill state cannot correct or supersede")
+            continue
+        reference = correction if correction is not None else supersession
+        if reference is None:
+            continue
+        relation = "correction" if correction is not None else "supersession"
+        target = _require_earlier_record(
+            reference=reference,
+            subject=record,
+            records_by_id=records_by_id,
+            positions=positions,
+            relation=relation,
+        )
+        if target.record_type != record.record_type:
+            raise ValueError(f"{relation} target must have the same record_type")
+
+
+def _validate_signal_plan_shadow_graph(
+    ordered_records: tuple[CaptureRecordUnion, ...],
+    records_by_id: Mapping[str, CaptureRecordUnion],
+) -> None:
+    for record in ordered_records:
+        if isinstance(record, SignalCaptureV0):
+            for reference in record.evidence_refs:
+                if reference not in records_by_id:
+                    raise ValueError(f"signal evidence reference does not exist: {reference}")
+            for reference in record.plan_record_refs:
+                plan = records_by_id.get(reference)
+                if type(plan) is not CapturePlanV0:
+                    raise ValueError("signal plan references must point to CapturePlanV0")
+                if (
+                    plan.signal_record_ref != record.record_id
+                    or plan.signal_kind != record.signal_kind
+                ):
+                    raise ValueError("signal and plan references must agree bidirectionally")
+            for reference in record.shadow_intent_refs:
+                shadow = records_by_id.get(reference)
+                if type(shadow) is not ShadowOrderIntentV0:
+                    raise ValueError("signal shadow references must point to ShadowOrderIntentV0")
+                plan = records_by_id.get(shadow.plan_record_ref)
+                if type(plan) is not CapturePlanV0 or plan.signal_record_ref != record.record_id:
+                    raise ValueError("signal and shadow references must agree through a real plan")
+        elif isinstance(record, CapturePlanV0):
+            signal = records_by_id.get(record.signal_record_ref)
+            if type(signal) is not SignalCaptureV0:
+                raise ValueError("plan signal_record_ref must point to SignalCaptureV0")
+            if signal.signal_kind != record.signal_kind:
+                raise ValueError("plan signal_kind must equal its signal")
+            if record.record_id not in signal.plan_record_refs:
+                raise ValueError("signal must contain the plan reverse reference")
+            for reference in record.evidence_refs:
+                if reference not in records_by_id:
+                    raise ValueError(f"plan evidence reference does not exist: {reference}")
+        elif isinstance(record, ShadowOrderIntentV0):
+            plan = records_by_id.get(record.plan_record_ref)
+            if type(plan) is not CapturePlanV0:
+                raise ValueError("shadow plan_record_ref must point to CapturePlanV0")
+            signal = records_by_id.get(plan.signal_record_ref)
+            if type(signal) is not SignalCaptureV0 or signal.signal_kind == "WAIT":
+                raise ValueError("shadow requires a non-WAIT signal through a real plan")
+            if record.record_id not in signal.shadow_intent_refs:
+                raise ValueError("signal must contain the shadow reverse reference")
+            for reference in record.evidence_refs:
+                if reference not in records_by_id:
+                    raise ValueError(f"shadow evidence reference does not exist: {reference}")
+        elif isinstance(record, HumanObservationV0):
+            for reference in record.observed_record_refs:
+                if reference not in records_by_id:
+                    raise ValueError(f"human observation reference does not exist: {reference}")
+
+
+def _validate_lifecycle_graph(
+    ordered_records: tuple[CaptureRecordUnion, ...],
+    records_by_id: Mapping[str, CaptureRecordUnion],
+    positions: Mapping[str, int],
+) -> None:
+    prohibited_subject_types = (
+        CaptureLifecycleEventV0,
+        RuntimeControlEventV0,
+        CaptureKillStateV0,
+    )
+    for event in ordered_records:
+        if not isinstance(event, CaptureLifecycleEventV0):
+            continue
+        subject = _require_earlier_record(
+            reference=event.subject_record_ref,
+            subject=event,
+            records_by_id=records_by_id,
+            positions=positions,
+            relation="lifecycle subject",
+        )
+        if isinstance(subject, prohibited_subject_types):
+            raise ValueError(
+                "lifecycle subject cannot be lifecycle, runtime-control, or kill state"
+            )
+        if subject.record_type != event.subject_record_type:
+            raise ValueError("lifecycle subject_record_type does not match subject")
+        if event.event_kind == "CAPTURE_RECORD_CREATED":
+            if (
+                subject.correction_of_record_id is not None
+                or subject.supersedes_record_id is not None
+            ):
+                raise ValueError("created lifecycle event cannot describe a correction")
+            continue
+        if event.event_kind == "CAPTURE_WINDOW_FINALIZED":
+            if type(subject) is not MarketPathEvidenceV0:
+                raise ValueError("window finalization requires MarketPathEvidenceV0")
+            continue
+        target_ref = (
+            event.correction_of_record_id
+            if event.event_kind == "CAPTURE_RECORD_CORRECTED"
+            else event.supersedes_record_id
+        )
+        assert target_ref is not None
+        target = _require_earlier_record(
+            reference=target_ref,
+            subject=event,
+            records_by_id=records_by_id,
+            positions=positions,
+            relation="lifecycle transition",
+        )
+        if target.record_type != subject.record_type:
+            raise ValueError("lifecycle transition target must match subject type")
+        subject_target = (
+            subject.correction_of_record_id
+            if event.event_kind == "CAPTURE_RECORD_CORRECTED"
+            else subject.supersedes_record_id
+        )
+        if subject_target != target_ref:
+            raise ValueError("lifecycle transition must describe the subject's actual relation")
+
+
+def _validate_market_path_series(
+    ordered_records: tuple[CaptureRecordUnion, ...],
+    records_by_id: Mapping[str, CaptureRecordUnion],
+) -> None:
+    normal_by_series: dict[str, MarketPathEvidenceV0] = {}
+    source_by_series: dict[str, str] = {}
+    for record in ordered_records:
+        if not isinstance(record, MarketPathEvidenceV0):
+            continue
+        series = record.market_path_series_ref
+        source_hash = record.source_identity.identity_hash
+        expected_source = source_by_series.setdefault(series, source_hash)
+        if source_hash != expected_source:
+            raise ValueError("market-path series source identity changed")
+        relation_ref = record.correction_of_record_id or record.supersedes_record_id
+        if relation_ref is not None:
+            target = records_by_id[relation_ref]
+            if type(target) is not MarketPathEvidenceV0:
+                raise ValueError("market-path correction target must be market-path evidence")
+            if (
+                target.market_path_series_ref != series
+                or target.source_identity.identity_hash != source_hash
+                or target.chunk_sequence != record.chunk_sequence
+                or target.window_start_ms != record.window_start_ms
+                or target.window_end_ms != record.window_end_ms
+            ):
+                raise ValueError(
+                    "market-path correction cannot change series, source, sequence, or window"
+                )
+            continue
+        previous = normal_by_series.get(series)
+        if previous is None:
+            if record.chunk_sequence != 0:
+                raise ValueError("market-path series must start at chunk_sequence 0")
+        else:
+            if record.chunk_sequence != previous.chunk_sequence + 1:
+                raise ValueError("market-path normal chunks must increment sequence by one")
+            if record.window_start_ms < previous.window_end_ms:
+                raise ValueError("market-path finalized windows cannot overlap or move backward")
+        normal_by_series[series] = record
+
+
+def _validate_runtime_control_graph(
+    ordered_records: tuple[CaptureRecordUnion, ...],
+    records_by_id: Mapping[str, CaptureRecordUnion],
+    positions: Mapping[str, int],
+) -> None:
+    used_permits: set[str] = set()
+    unresolved_kills: dict[str, tuple[str, int]] = {}
+    integrity_by_scope: dict[str, dict[str, int]] = {}
+    resume_events: dict[str, RuntimeControlEventV0] = {}
+
+    for record in ordered_records:
+        if not isinstance(record, RuntimeControlEventV0):
+            continue
+        if record.runtime_scope_ref in records_by_id:
+            raise ValueError("runtime_scope_ref cannot masquerade as a Capture record")
+        for opaque_ref in (record.single_use_permit_ref, record.integrity_check_ref):
+            if opaque_ref is not None and opaque_ref in records_by_id:
+                raise ValueError("runtime-control opaque references cannot use Capture record IDs")
+        if record.event_kind in {"START_PERMIT_ISSUED", "RESUME_PERMIT_ISSUED"}:
+            assert record.single_use_permit_ref is not None
+            if record.single_use_permit_ref in used_permits:
+                raise ValueError("runtime-control permit reference must be single-use")
+            used_permits.add(record.single_use_permit_ref)
+        if record.event_kind == "KILL_ENGAGED":
+            assert record.kill_state_ref is not None
+            kill = _require_earlier_record(
+                reference=record.kill_state_ref,
+                subject=record,
+                records_by_id=records_by_id,
+                positions=positions,
+                relation="kill",
+            )
+            if type(kill) is not CaptureKillStateV0 or kill.kill_state == (
+                "RESUME_PERMITTED_AFTER_INTEGRITY_CHECK"
+            ):
+                raise ValueError("KILL_ENGAGED must reference an unresolved CaptureKillStateV0")
+            if record.runtime_scope_ref in unresolved_kills:
+                raise ValueError("runtime scope already has an unresolved kill")
+            unresolved_kills[record.runtime_scope_ref] = (
+                kill.record_id,
+                positions[record.record_id],
+            )
+            integrity_by_scope[record.runtime_scope_ref] = {}
+        elif record.event_kind == "INTEGRITY_CHECK_COMPLETED":
+            assert record.integrity_check_ref is not None
+            integrity_by_scope.setdefault(record.runtime_scope_ref, {})[
+                record.integrity_check_ref
+            ] = positions[record.record_id]
+        elif record.event_kind == "RESUME_PERMIT_ISSUED":
+            assert record.kill_state_ref is not None
+            assert record.integrity_check_ref is not None
+            unresolved = unresolved_kills.get(record.runtime_scope_ref)
+            if unresolved is None:
+                raise ValueError("resume requires an unresolved kill in the same runtime scope")
+            kill_ref, kill_event_position = unresolved
+            if record.kill_state_ref != kill_ref:
+                raise ValueError("resume must reference the current unresolved kill")
+            integrity_position = integrity_by_scope.get(record.runtime_scope_ref, {}).get(
+                record.integrity_check_ref
+            )
+            if integrity_position is None or not (
+                kill_event_position < integrity_position < positions[record.record_id]
+            ):
+                raise ValueError("resume integrity check must occur after kill and before resume")
+            resume_events[record.record_id] = record
+            del unresolved_kills[record.runtime_scope_ref]
+
+    integrity_events = {
+        record.integrity_check_ref: record
+        for record in ordered_records
+        if isinstance(record, RuntimeControlEventV0)
+        and record.event_kind == "INTEGRITY_CHECK_COMPLETED"
+        and record.integrity_check_ref is not None
+    }
+    for kill_state in ordered_records:
+        if not isinstance(kill_state, CaptureKillStateV0):
+            continue
+        if kill_state.kill_state == "RESUME_BLOCKED_PENDING_PERMIT":
+            if kill_state.integrity_check_ref is not None:
+                integrity_event = integrity_events.get(kill_state.integrity_check_ref)
+                if (
+                    integrity_event is None
+                    or positions[integrity_event.record_id] >= positions[kill_state.record_id]
+                ):
+                    raise ValueError(
+                        "blocked resume integrity reference must be completed earlier"
+                    )
+        elif kill_state.kill_state == "RESUME_PERMITTED_AFTER_INTEGRITY_CHECK":
+            assert kill_state.runtime_control_event_ref is not None
+            event = resume_events.get(kill_state.runtime_control_event_ref)
+            if event is None or positions[event.record_id] >= positions[kill_state.record_id]:
+                raise ValueError(
+                    "permitted kill state must reference an earlier valid resume event"
+                )
+            if (
+                kill_state.single_use_permit_ref != event.single_use_permit_ref
+                or kill_state.integrity_check_ref != event.integrity_check_ref
+            ):
+                raise ValueError("permitted kill state references must match its resume event")
+
+
+def validate_capture_record_graph(
+    records: tuple[CaptureRecordUnion, ...],
+    manifest: tuple[CaptureManifestEntryV0, ...],
+) -> None:
+    checked_records = _validated_capture_records(records)
+    checked_manifest = _validated_manifest_entries(manifest)
+    validate_capture_manifest_chain(checked_records, checked_manifest)
+    records_by_id = _record_lookup(checked_records)
+    ordered_ids = _manifest_record_order(checked_manifest)
+    ordered_records = tuple(records_by_id[record_id] for record_id in ordered_ids)
+    positions = {
+        record_id: next(
+            entry.entry_index for entry in checked_manifest if entry.record_ref == record_id
+        )
+        for record_id in ordered_ids
+    }
+    _validate_generic_corrections(ordered_records, records_by_id, positions)
+    _validate_signal_plan_shadow_graph(ordered_records, records_by_id)
+    _validate_lifecycle_graph(ordered_records, records_by_id, positions)
+    _validate_market_path_series(ordered_records, records_by_id)
+    _validate_runtime_control_graph(ordered_records, records_by_id, positions)
+
+
+def validate_capture_checkpoint(
+    records: tuple[CaptureRecordUnion, ...],
+    manifest: tuple[CaptureManifestEntryV0, ...],
+    checkpoint: CaptureCheckpointV0,
+) -> None:
+    checked_records = _validated_capture_records(records)
+    checked_manifest = _validated_manifest_entries(manifest)
+    checked_checkpoint = _validated_checkpoint(checkpoint)
+    validate_capture_manifest_chain(checked_records, checked_manifest)
+    expected = {
+        "manifest_root_hash": checked_manifest[0].manifest_entry_hash,
+        "terminal_manifest_entry_hash": checked_manifest[-1].manifest_entry_hash,
+        "terminal_entry_index": checked_manifest[-1].entry_index,
+        "manifest_entry_count": len(checked_manifest),
+        "record_count": len({entry.record_ref for entry in checked_manifest}),
+        "writer_epoch": checked_manifest[0].writer_epoch,
+        "writer_authority_ref": checked_manifest[0].writer_authority_ref,
+    }
+    for field_name, expected_value in expected.items():
+        if object.__getattribute__(checked_checkpoint, field_name) != expected_value:
+            raise ValueError(f"checkpoint {field_name} does not match manifest chain")
+
+
+def validate_capture_checkpoint_advance(
+    old_checkpoint: CaptureCheckpointV0,
+    new_checkpoint: CaptureCheckpointV0,
+    old_manifest: tuple[CaptureManifestEntryV0, ...],
+    new_manifest: tuple[CaptureManifestEntryV0, ...],
+    old_records: tuple[CaptureRecordUnion, ...],
+    new_records: tuple[CaptureRecordUnion, ...],
+) -> None:
+    checked_old_manifest = _validated_manifest_entries(old_manifest)
+    checked_new_manifest = _validated_manifest_entries(new_manifest)
+    checked_old_checkpoint = _validated_checkpoint(old_checkpoint)
+    checked_new_checkpoint = _validated_checkpoint(new_checkpoint)
+    validate_capture_checkpoint(old_records, checked_old_manifest, checked_old_checkpoint)
+    validate_capture_checkpoint(new_records, checked_new_manifest, checked_new_checkpoint)
+    if len(checked_new_manifest) < len(checked_old_manifest):
+        raise ValueError("checkpoint advance cannot truncate manifest history")
+    if checked_new_manifest[: len(checked_old_manifest)] != checked_old_manifest:
+        raise ValueError("checkpoint advance cannot rewrite manifest history")
+    if checked_new_checkpoint.manifest_root_hash != checked_old_checkpoint.manifest_root_hash:
+        raise ValueError("checkpoint advance cannot change ledger root")
+    if len(checked_new_manifest) == len(checked_old_manifest):
+        if checked_new_checkpoint != checked_old_checkpoint:
+            raise ValueError("unchanged manifest requires an exact duplicate checkpoint")
+        return
+    if (
+        checked_new_checkpoint.terminal_entry_index
+        <= checked_old_checkpoint.terminal_entry_index
+        or checked_new_checkpoint.manifest_entry_count
+        <= checked_old_checkpoint.manifest_entry_count
+        or checked_new_checkpoint.record_count < checked_old_checkpoint.record_count
+    ):
+        raise ValueError("checkpoint extension cannot roll back index or counts")
+
+
+def _missing_capture_reference_count(records: tuple[CaptureRecordUnion, ...]) -> int:
+    record_ids = {record.record_id for record in records}
+    references: list[str] = []
+    for record in records:
+        if isinstance(record, SignalCaptureV0):
+            references.extend(record.evidence_refs)
+            references.extend(record.plan_record_refs)
+            references.extend(record.shadow_intent_refs)
+        elif isinstance(record, CapturePlanV0):
+            references.append(record.signal_record_ref)
+            references.extend(record.evidence_refs)
+        elif isinstance(record, ShadowOrderIntentV0):
+            references.append(record.plan_record_ref)
+            references.extend(record.evidence_refs)
+        elif isinstance(record, HumanObservationV0):
+            references.extend(record.observed_record_refs)
+        elif isinstance(record, CaptureLifecycleEventV0):
+            references.append(record.subject_record_ref)
+            references.extend(record.reference_record_refs)
+        elif isinstance(record, RuntimeControlEventV0) and record.kill_state_ref is not None:
+            references.append(record.kill_state_ref)
+        elif (
+            isinstance(record, CaptureKillStateV0)
+            and record.runtime_control_event_ref is not None
+        ):
+            references.append(record.runtime_control_event_ref)
+        if not isinstance(record, CaptureLifecycleEventV0):
+            if record.correction_of_record_id is not None:
+                references.append(record.correction_of_record_id)
+            if record.supersedes_record_id is not None:
+                references.append(record.supersedes_record_id)
+    return sum(reference not in record_ids for reference in references)
+
+
+def build_capture_replay_report(
+    records: tuple[CaptureRecordUnion, ...],
+    manifest: tuple[CaptureManifestEntryV0, ...],
+    checkpoint: CaptureCheckpointV0,
+) -> CaptureReplayReportV0:
+    checked_records = _validated_capture_records(records)
+    checked_manifest = _validated_manifest_entries(manifest)
+    checked_checkpoint = _validated_checkpoint(checkpoint)
+    missing_reference_count = _missing_capture_reference_count(checked_records)
+    chain_integrity = True
+    try:
+        validate_capture_manifest_chain(checked_records, checked_manifest)
+        validate_capture_record_graph(checked_records, checked_manifest)
+    except ValueError:
+        chain_integrity = False
+    checkpoint_integrity = True
+    try:
+        validate_capture_checkpoint(checked_records, checked_manifest, checked_checkpoint)
+    except ValueError:
+        checkpoint_integrity = False
+    exact_duplicate_count = sum(
+        entry.duplicate_classification == "EXACT_DUPLICATE" for entry in checked_manifest
+    )
+    conflicting_duplicate_count = sum(
+        entry.duplicate_classification == "CONFLICTING_DUPLICATE"
+        for entry in checked_manifest
+    )
+    replay_passes = (
+        chain_integrity
+        and checkpoint_integrity
+        and missing_reference_count == 0
+        and conflicting_duplicate_count == 0
+    )
+    return CaptureReplayReportV0._bind_derived(
+        checkpoint_hash=checked_checkpoint.checkpoint_hash,
+        replay_status="PASS" if replay_passes else "FAIL",
+        verified_record_count=len(checked_records) if chain_integrity else 0,
+        verified_manifest_entry_count=len(checked_manifest) if chain_integrity else 0,
+        exact_duplicate_count=exact_duplicate_count,
+        conflicting_duplicate_count=conflicting_duplicate_count,
+        missing_reference_count=missing_reference_count,
+        chain_integrity=chain_integrity,
+        checkpoint_integrity=checkpoint_integrity,
+    )
+
+
+def validate_capture_replay_report(
+    report: CaptureReplayReportV0,
+    records: tuple[CaptureRecordUnion, ...],
+    manifest: tuple[CaptureManifestEntryV0, ...],
+    checkpoint: CaptureCheckpointV0,
+) -> None:
+    if type(report) is not CaptureReplayReportV0:
+        raise TypeError("report must be an exact CaptureReplayReportV0")
+    checked_report = CaptureReplayReportV0.model_validate(report)
+    expected = build_capture_replay_report(records, manifest, checkpoint)
+    if BaseModel.model_dump(checked_report, mode="python", round_trip=True) != BaseModel.model_dump(
+        expected,
+        mode="python",
+        round_trip=True,
+    ):
+        raise ValueError("replay report does not match deterministic ledger replay")

@@ -9,6 +9,7 @@ from jsonschema import Draft202012Validator
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from trader_assist_v0.contracts import (
+    CAPTURE_CONTRACT_VERSION,
     CaptureCheckpointV0,
     CaptureEndpointAllowlistV0,
     CaptureKillStateV0,
@@ -24,8 +25,14 @@ from trader_assist_v0.contracts import (
     RuntimeControlEventV0,
     ShadowOrderIntentV0,
     SignalCaptureV0,
+    build_capture_replay_report,
+    validate_capture_checkpoint,
+    validate_capture_checkpoint_advance,
+    validate_capture_manifest_chain,
+    validate_capture_record_graph,
+    validate_capture_replay_report,
 )
-from trader_assist_v0.contracts.common import canonical_json_bytes
+from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
 
 ROOT = Path(__file__).resolve().parents[1]
 CAPTURE_SCHEMA_PATH = ROOT / "schemas" / "v0" / "CaptureRecordV0.schema.json"
@@ -71,7 +78,7 @@ def _plan(kind: str = "LONG") -> CapturePlanV0:
         producer_identity=_identity("SIGNAL_PLAN_SHADOW_PRODUCER"),
         signal_record_ref=signal.record_id,
         signal_kind=kind,
-        minimal_evidence_summary="capture-only evidence",
+        evidence_refs=("evidence-1",),
     )
 
 
@@ -83,6 +90,133 @@ def _mutated_payload(model: BaseModel, **updates: Any) -> dict[str, Any]:
     payload = BaseModel.model_dump(model, mode="python", round_trip=True)
     payload.update(updates)
     return payload
+
+
+def _rebind_record(model: BaseModel, **updates: Any) -> Any:
+    payload = BaseModel.model_dump(model, mode="python", round_trip=True)
+    payload.pop("record_id")
+    payload.pop("record_hash")
+    payload.update(updates)
+    return type(model).bind(**payload)
+
+
+def _rebind_hash_model(model: BaseModel, **updates: Any) -> Any:
+    payload = BaseModel.model_dump(model, mode="python", round_trip=True)
+    payload.pop(type(model).hash_field)
+    payload.update(updates)
+    return type(model).bind(**payload)
+
+
+def _market(
+    *,
+    series: str = "eth-series-1",
+    sequence: int = 0,
+    start: int = 0,
+    end: int = 10,
+    correction: str | None = None,
+    supersession: str | None = None,
+    source_identity: ProducerIdentityV0 | None = None,
+) -> MarketPathEvidenceV0:
+    return MarketPathEvidenceV0.bind(
+        source_identity=source_identity or _identity("MARKET_PATH_SOURCE"),
+        source_record_refs=(f"raw-{series}-{sequence}",),
+        market_path_series_ref=series,
+        window_start_ms=start,
+        window_end_ms=end,
+        chunk_sequence=sequence,
+        correction_of_record_id=correction,
+        supersedes_record_id=supersession,
+    )
+
+
+def _linked_signal_plan_shadow() -> tuple[
+    MarketPathEvidenceV0,
+    SignalCaptureV0,
+    CapturePlanV0,
+    ShadowOrderIntentV0,
+]:
+    evidence = _market()
+    signal_seed = SignalCaptureV0.bind(
+        producer_identity=_identity("SIGNAL_PLAN_SHADOW_PRODUCER"),
+        signal_kind="LONG",
+        observed_at_utc="2026-07-13T00:00:00Z",
+        evidence_refs=(evidence.record_id,),
+    )
+    plan = CapturePlanV0.bind(
+        producer_identity=_identity("SIGNAL_PLAN_SHADOW_PRODUCER"),
+        signal_record_ref=signal_seed.record_id,
+        signal_kind="LONG",
+        evidence_refs=(evidence.record_id,),
+    )
+    shadow = ShadowOrderIntentV0.bind(
+        producer_identity=_identity("SIGNAL_PLAN_SHADOW_PRODUCER"),
+        plan_record_ref=plan.record_id,
+        evidence_refs=(evidence.record_id,),
+    )
+    signal = SignalCaptureV0.bind(
+        producer_identity=_identity("SIGNAL_PLAN_SHADOW_PRODUCER"),
+        signal_kind="LONG",
+        observed_at_utc="2026-07-13T00:00:00Z",
+        evidence_refs=(evidence.record_id,),
+        plan_record_refs=(plan.record_id,),
+        shadow_intent_refs=(shadow.record_id,),
+    )
+    assert signal.record_id == signal_seed.record_id
+    return evidence, signal, plan, shadow
+
+
+def _manifest(
+    entry_records: tuple[Any, ...],
+    *,
+    slots: tuple[str, ...] | None = None,
+    classifications: tuple[str, ...] | None = None,
+    writer_epoch: int = 7,
+    writer_authority_ref: str = "capture-writer-1",
+) -> tuple[CaptureManifestEntryV0, ...]:
+    if slots is None:
+        slots = tuple(f"slot-{index}" for index in range(len(entry_records)))
+    seen_slots: dict[str, tuple[str, str]] = {}
+    entries: list[CaptureManifestEntryV0] = []
+    for index, (record, slot) in enumerate(zip(entry_records, slots, strict=True)):
+        identity = (record.record_id, record.record_hash)
+        expected = (
+            "UNIQUE"
+            if slot not in seen_slots
+            else "EXACT_DUPLICATE"
+            if seen_slots[slot] == identity
+            else "CONFLICTING_DUPLICATE"
+        )
+        classification = expected if classifications is None else classifications[index]
+        entry = CaptureManifestEntryV0.bind(
+            entry_index=index,
+            observation_slot_ref=slot,
+            writer_epoch=writer_epoch,
+            writer_authority_ref=writer_authority_ref,
+            record_ref=record.record_id,
+            record_hash=record.record_hash,
+            duplicate_classification=classification,
+            previous_manifest_entry_hash=(
+                None if not entries else entries[-1].manifest_entry_hash
+            ),
+        )
+        entries.append(entry)
+        seen_slots.setdefault(slot, identity)
+    return tuple(entries)
+
+
+def _checkpoint(
+    records: tuple[Any, ...],
+    manifest: tuple[CaptureManifestEntryV0, ...],
+) -> CaptureCheckpointV0:
+    return CaptureCheckpointV0.bind(
+        manifest_root_hash=manifest[0].manifest_entry_hash,
+        terminal_manifest_entry_hash=manifest[-1].manifest_entry_hash,
+        terminal_entry_index=manifest[-1].entry_index,
+        manifest_entry_count=len(manifest),
+        record_count=len({record.record_id for record in records}),
+        writer_epoch=manifest[0].writer_epoch,
+        writer_authority_ref=manifest[0].writer_authority_ref,
+    )
 
 
 def test_exports_and_capture_record_schema_defs() -> None:
@@ -122,7 +256,7 @@ def test_signal_plan_shadow_wait_and_non_execution_boundaries() -> None:
     shadow = ShadowOrderIntentV0.bind(
         producer_identity=_identity("SIGNAL_PLAN_SHADOW_PRODUCER"),
         plan_record_ref=plan.record_id,
-        intent_summary="shadow-only observation",
+        evidence_refs=("evidence-1",),
     )
     assert shadow.shadow_only is True
     assert shadow.executable is False
@@ -176,6 +310,7 @@ def test_identity_domains_are_separated() -> None:
     market = MarketPathEvidenceV0.bind(
         source_identity=_identity("MARKET_PATH_SOURCE"),
         source_record_refs=(signal.record_id,),
+        market_path_series_ref="eth-series-1",
         window_start_ms=1,
         window_end_ms=10,
         chunk_sequence=0,
@@ -188,6 +323,7 @@ def test_identity_domains_are_separated() -> None:
         MarketPathEvidenceV0.bind(
             source_identity=_identity("MARKET_PATH_SOURCE"),
             source_record_refs=(signal.record_id,),
+            market_path_series_ref="eth-series-1",
             window_start_ms=1,
             window_end_ms=10,
             chunk_sequence=0,
@@ -201,11 +337,12 @@ def test_lifecycle_runtime_control_and_kill_resume_are_separate() -> None:
         producer_identity=_identity("SIGNAL_PLAN_SHADOW_PRODUCER"),
         event_kind="CAPTURE_RECORD_CREATED",
         subject_record_ref=signal.record_id,
+        subject_record_type="SIGNAL_CAPTURE",
     )
     runtime = RuntimeControlEventV0.bind(
         supervisor_or_runtime_actor_identity=_runtime_identity(),
         event_kind="KILL_ENGAGED",
-        subject_runtime_ref="capture-runtime-1",
+        runtime_scope_ref="capture-runtime-1",
         kill_state_ref="kill-state-1",
     )
     assert lifecycle.record_type != runtime.record_type
@@ -219,7 +356,7 @@ def test_lifecycle_runtime_control_and_kill_resume_are_separate() -> None:
         RuntimeControlEventV0.bind(
             supervisor_or_runtime_actor_identity=_runtime_identity(),
             event_kind="RESUME_PERMIT_ISSUED",
-            subject_runtime_ref="capture-runtime-1",
+            runtime_scope_ref="capture-runtime-1",
         )
 
     killed = CaptureKillStateV0.bind(
@@ -245,25 +382,21 @@ def test_lifecycle_runtime_control_and_kill_resume_are_separate() -> None:
 
 def test_manifest_checkpoint_replay_are_integrity_only() -> None:
     signal = _signal()
-    entry = CaptureManifestEntryV0.bind(
-        entry_index=0,
-        record_ref=signal.record_id,
-        record_hash=signal.record_hash,
-        previous_manifest_entry_hash=None,
-    )
-    checkpoint = CaptureCheckpointV0.bind(
-        terminal_manifest_entry_hash=entry.manifest_entry_hash,
-        record_count=1,
-    )
-    report = CaptureReplayReportV0.bind(
-        checkpoint_hash=checkpoint.checkpoint_hash,
-        replay_status="PASS",
-        verified_record_count=1,
-    )
+    records = (signal,)
+    manifest = _manifest(records)
+    entry = manifest[0]
+    checkpoint = _checkpoint(records, manifest)
+    report = build_capture_replay_report(records, manifest, checkpoint)
     assert entry.io_authorized is False
     assert checkpoint.io_authorized is False
     assert report.performance_adjudication_authorized is False
     assert report.promotion_judgment_authorized is False
+    with pytest.raises(TypeError):
+        CaptureReplayReportV0.bind(
+            checkpoint_hash=checkpoint.checkpoint_hash,
+            replay_status="PASS",
+            verified_record_count=1,
+        )
     with pytest.raises(ValidationError):
         CaptureReplayReportV0.model_validate(_mutated_payload(report, pnl="1"))
 
@@ -337,3 +470,643 @@ def test_canonical_json_duplicate_bypass_and_hash_tampering_are_rejected() -> No
     )
     with pytest.raises(ValidationError):
         SignalCaptureV0.model_validate(stale)
+
+
+def test_capture_schema_is_exact_and_plan_shadow_have_no_text_authority() -> None:
+    schema = json.loads(CAPTURE_SCHEMA_PATH.read_text(encoding="utf-8"))
+    assert set(schema["$defs"]) == set(EXPECTED_OBJECTS)
+    assert len(schema["$defs"]) == 15
+    plan_properties = schema["$defs"]["CapturePlanV0"]["properties"]
+    shadow_properties = schema["$defs"]["ShadowOrderIntentV0"]["properties"]
+    assert "minimal_evidence_summary" not in plan_properties
+    assert "intent_summary" not in shadow_properties
+    assert "evidence_refs" in plan_properties
+    assert "evidence_refs" in shadow_properties
+    assert "hypothesis_kind" in shadow_properties
+    for definition in schema["$defs"].values():
+        if "properties" in definition:
+            assert definition.get("additionalProperties") is False
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    (
+        ("minimal_evidence_summary", "old text"),
+        ("minimalEvidenceSummary", "alias"),
+        ("metadata", {"entry": "1"}),
+        ("parameters", '{"size":"1"}'),
+        ("size", "1"),
+        ("leverage", "2"),
+        ("entry", "1"),
+        ("SL", "1"),
+        ("TP", "2"),
+        ("order", "market"),
+        ("submit", True),
+        ("permit", "permit-1"),
+    ),
+)
+def test_plan_rejects_free_text_aliases_metadata_and_execution_fields(
+    field: str,
+    value: Any,
+) -> None:
+    plan = _plan()
+    with pytest.raises(ValidationError):
+        CapturePlanV0.model_validate(_mutated_payload(plan, **{field: value}))
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    (
+        ("intent_summary", "old text"),
+        ("intentSummary", "alias"),
+        ("metadata", {"order": "market"}),
+        ("parameters", '{"permit":"x"}'),
+        ("size", "1"),
+        ("leverage", "2"),
+        ("entry", "1"),
+        ("SL", "1"),
+        ("TP", "2"),
+        ("order", "market"),
+        ("submit", True),
+        ("permit", "permit-1"),
+    ),
+)
+def test_shadow_rejects_free_text_aliases_metadata_and_execution_fields(
+    field: str,
+    value: Any,
+) -> None:
+    shadow = ShadowOrderIntentV0.bind(
+        producer_identity=_identity("SIGNAL_PLAN_SHADOW_PRODUCER"),
+        plan_record_ref="plan-1",
+        evidence_refs=("evidence-1",),
+    )
+    with pytest.raises(ValidationError):
+        ShadowOrderIntentV0.model_validate(_mutated_payload(shadow, **{field: value}))
+
+
+def test_structured_signal_plan_shadow_graph_and_human_note_boundary() -> None:
+    records = _linked_signal_plan_shadow()
+    human = HumanObservationV0.bind(
+        operator_identity=_identity("HUMAN_OPERATOR"),
+        observed_record_refs=(records[1].record_id,),
+        observation_kind="NOTE",
+        observation_text="size=999 leverage=100 submit now",
+    )
+    all_records = (*records, human)
+    manifest = _manifest(all_records)
+    validate_capture_manifest_chain(all_records, manifest)
+    validate_capture_record_graph(all_records, manifest)
+
+    signal = records[1]
+    broken_signal = _rebind_record(signal, plan_record_refs=())
+    broken_records = (records[0], broken_signal, records[2], records[3], human)
+    with pytest.raises(ValueError):
+        validate_capture_record_graph(broken_records, _manifest(broken_records))
+
+    wait_seed = _signal("WAIT")
+    wait_plan = CapturePlanV0.bind(
+        producer_identity=_identity("SIGNAL_PLAN_SHADOW_PRODUCER"),
+        signal_record_ref=wait_seed.record_id,
+        signal_kind="WAIT",
+        evidence_refs=(records[0].record_id,),
+    )
+    wait_signal = _rebind_record(wait_seed, plan_record_refs=(wait_plan.record_id,))
+    wait_shadow = ShadowOrderIntentV0.bind(
+        producer_identity=_identity("SIGNAL_PLAN_SHADOW_PRODUCER"),
+        plan_record_ref=wait_plan.record_id,
+        evidence_refs=(records[0].record_id,),
+    )
+    attacked = (records[0], wait_signal, wait_plan, wait_shadow)
+    with pytest.raises(ValueError):
+        validate_capture_record_graph(attacked, _manifest(attacked))
+
+    missing_evidence_signal = _rebind_record(signal, evidence_refs=("missing-evidence",))
+    missing_records = (
+        records[0],
+        missing_evidence_signal,
+        records[2],
+        records[3],
+    )
+    with pytest.raises(ValueError, match="evidence reference"):
+        validate_capture_record_graph(missing_records, _manifest(missing_records))
+
+
+def test_aggregate_apis_require_exact_tuples_and_concrete_models() -> None:
+    records = (_signal(),)
+    manifest = _manifest(records)
+    checkpoint = _checkpoint(records, manifest)
+    with pytest.raises(TypeError, match="exact tuple"):
+        validate_capture_manifest_chain(list(records), manifest)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="exact tuple"):
+        validate_capture_manifest_chain(records, list(manifest))  # type: ignore[arg-type]
+
+    class SignalSubclass(SignalCaptureV0):
+        pass
+
+    subclass = BaseModel.model_construct.__func__(
+        SignalSubclass,
+        **BaseModel.model_dump(records[0], mode="python", round_trip=True),
+    )
+    with pytest.raises(TypeError, match="exact concrete"):
+        validate_capture_manifest_chain((subclass,), manifest)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="exact CaptureCheckpointV0"):
+        validate_capture_checkpoint(records, manifest, object())  # type: ignore[arg-type]
+    assert build_capture_replay_report(records, manifest, checkpoint).replay_status == "PASS"
+
+
+def test_manifest_chain_duplicate_semantics_and_fail_closed_attacks() -> None:
+    first = _signal()
+    second = SignalCaptureV0.bind(
+        producer_identity=_identity("SIGNAL_PLAN_SHADOW_PRODUCER"),
+        signal_kind="SHORT",
+        observed_at_utc="2026-07-13T00:01:00Z",
+    )
+    records = (first, second)
+    manifest = _manifest(
+        (first, first, second),
+        slots=("slot-a", "slot-a", "slot-a"),
+    )
+    assert tuple(entry.duplicate_classification for entry in manifest) == (
+        "UNIQUE",
+        "EXACT_DUPLICATE",
+        "CONFLICTING_DUPLICATE",
+    )
+    validate_capture_manifest_chain(records, manifest)
+
+    wrong_classification = list(manifest)
+    wrong_classification[1] = _rebind_hash_model(
+        wrong_classification[1],
+        duplicate_classification="UNIQUE",
+    )
+    with pytest.raises(ValueError, match="classification"):
+        validate_capture_manifest_chain(records, tuple(wrong_classification))
+
+    slot_escape = _manifest((first, first), slots=("slot-a", "slot-b"))
+    with pytest.raises(ValueError, match="changing slot"):
+        validate_capture_manifest_chain((first,), slot_escape)
+    with pytest.raises(ValueError, match="duplicate record ID"):
+        validate_capture_manifest_chain((first, first), _manifest((first,)))
+
+
+def test_manifest_chain_rejects_position_link_writer_record_and_set_attacks() -> None:
+    first, second = _signal(), _signal("SHORT")
+    records = (first, second)
+    manifest = _manifest(records)
+    with pytest.raises(ValidationError):
+        CaptureManifestEntryV0.bind(
+            entry_index=0,
+            observation_slot_ref="slot-0",
+            writer_epoch=7,
+            writer_authority_ref="writer",
+            record_ref=first.record_id,
+            record_hash=first.record_hash,
+            duplicate_classification="UNIQUE",
+            previous_manifest_entry_hash="0" * 64,
+        )
+    with pytest.raises(ValidationError):
+        CaptureManifestEntryV0.bind(
+            entry_index=1,
+            observation_slot_ref="slot-1",
+            writer_epoch=7,
+            writer_authority_ref="writer",
+            record_ref=second.record_id,
+            record_hash=second.record_hash,
+            duplicate_classification="UNIQUE",
+            previous_manifest_entry_hash=None,
+        )
+
+    attacks = (
+        (1, {"entry_index": 2}),
+        (1, {"previous_manifest_entry_hash": "0" * 64}),
+        (1, {"writer_epoch": 8}),
+        (1, {"writer_authority_ref": "other-writer"}),
+        (1, {"record_hash": first.record_hash}),
+    )
+    for index, update in attacks:
+        attacked = list(manifest)
+        attacked[index] = _rebind_hash_model(attacked[index], **update)
+        with pytest.raises(ValueError):
+            validate_capture_manifest_chain(records, tuple(attacked))
+    with pytest.raises(ValueError, match="record set mismatch"):
+        validate_capture_manifest_chain(records, _manifest((first,)))
+
+
+def test_generic_correction_supersession_graph_rejects_invalid_relations() -> None:
+    original = _signal()
+    corrected = SignalCaptureV0.bind(
+        producer_identity=_identity("SIGNAL_PLAN_SHADOW_PRODUCER"),
+        signal_kind="LONG",
+        observed_at_utc="2026-07-13T00:01:00Z",
+        correction_of_record_id=original.record_id,
+    )
+    records = (original, corrected)
+    validate_capture_record_graph(records, _manifest(records))
+
+    missing = _rebind_record(corrected, correction_of_record_id="missing-record")
+    with pytest.raises(ValueError):
+        validate_capture_record_graph((original, missing), _manifest((original, missing)))
+    cross_type_target = _market()
+    cross_type = _rebind_record(corrected, correction_of_record_id=cross_type_target.record_id)
+    attacked = (cross_type_target, original, cross_type)
+    with pytest.raises(ValueError, match="same record_type"):
+        validate_capture_record_graph(attacked, _manifest(attacked))
+    both = _rebind_record(
+        corrected,
+        supersedes_record_id=original.record_id,
+    )
+    with pytest.raises(ValueError, match="cannot both"):
+        validate_capture_record_graph((original, both), _manifest((original, both)))
+    with pytest.raises(ValueError):
+        validate_capture_record_graph((corrected, original), _manifest((corrected, original)))
+
+
+def test_market_path_series_normal_and_correction_rules() -> None:
+    first = _market()
+    second = _market(sequence=1, start=10, end=20)
+    correction = _market(
+        sequence=1,
+        start=10,
+        end=20,
+        correction=second.record_id,
+    )
+    records = (first, second, correction)
+    validate_capture_record_graph(records, _manifest(records))
+
+    attacks = (
+        _market(sequence=2, start=10, end=20),
+        _market(sequence=1, start=9, end=20),
+        _market(
+            sequence=1,
+            start=10,
+            end=21,
+            correction=second.record_id,
+        ),
+        _market(
+            series="other-series",
+            sequence=1,
+            start=10,
+            end=20,
+            correction=second.record_id,
+        ),
+        _market(
+            sequence=1,
+            start=10,
+            end=20,
+            correction=second.record_id,
+            source_identity=ProducerIdentityV0.bind(
+                identity_domain="MARKET_PATH_SOURCE",
+                producer_id="other-source",
+                display_name="other-source",
+            ),
+        ),
+    )
+    for attacked_record in attacks:
+        attacked_records = (first, second, attacked_record)
+        with pytest.raises(ValueError):
+            validate_capture_record_graph(attacked_records, _manifest(attacked_records))
+
+
+def test_checkpoint_validation_and_append_only_advance() -> None:
+    first = _signal()
+    old_records = (first,)
+    old_manifest = _manifest(old_records)
+    old_checkpoint = _checkpoint(old_records, old_manifest)
+    validate_capture_checkpoint(old_records, old_manifest, old_checkpoint)
+    validate_capture_checkpoint_advance(
+        old_checkpoint,
+        old_checkpoint,
+        old_manifest,
+        old_manifest,
+        old_records,
+        old_records,
+    )
+
+    second = _signal("SHORT")
+    new_records = (first, second)
+    new_manifest = _manifest(new_records)
+    new_checkpoint = _checkpoint(new_records, new_manifest)
+    validate_capture_checkpoint_advance(
+        old_checkpoint,
+        new_checkpoint,
+        old_manifest,
+        new_manifest,
+        old_records,
+        new_records,
+    )
+
+    checkpoint_attacks = (
+        {"manifest_root_hash": "0" * 64},
+        {"terminal_manifest_entry_hash": "0" * 64},
+        {"record_count": 99},
+        {"writer_epoch": 8},
+        {"writer_authority_ref": "other-writer"},
+    )
+    for update in checkpoint_attacks:
+        with pytest.raises(ValueError):
+            validate_capture_checkpoint(
+                old_records,
+                old_manifest,
+                _rebind_hash_model(old_checkpoint, **update),
+            )
+    with pytest.raises(ValidationError):
+        _rebind_hash_model(old_checkpoint, manifest_entry_count=2)
+
+    with pytest.raises(ValueError, match="truncate"):
+        validate_capture_checkpoint_advance(
+            new_checkpoint,
+            old_checkpoint,
+            new_manifest,
+            old_manifest,
+            new_records,
+            old_records,
+        )
+    rewritten_manifest = _manifest(new_records, slots=("rewritten", "slot-1"))
+    rewritten_checkpoint = _checkpoint(new_records, rewritten_manifest)
+    with pytest.raises(ValueError, match="rewrite"):
+        validate_capture_checkpoint_advance(
+            old_checkpoint,
+            rewritten_checkpoint,
+            old_manifest,
+            rewritten_manifest,
+            old_records,
+            new_records,
+        )
+
+
+def test_replay_report_is_deterministic_revalidated_and_conflict_fail_closed() -> None:
+    records = (_signal(),)
+    manifest = _manifest(records)
+    checkpoint = _checkpoint(records, manifest)
+    first_report = build_capture_replay_report(records, manifest, checkpoint)
+    second_report = build_capture_replay_report(records, manifest, checkpoint)
+    assert first_report == second_report
+    assert first_report.replay_status == "PASS"
+    assert first_report.deterministic_replay is True
+    validate_capture_replay_report(first_report, records, manifest, checkpoint)
+
+    payload = BaseModel.model_dump(first_report, mode="python", round_trip=True)
+    payload["verified_record_count"] = 99
+    payload.pop("replay_report_hash")
+    domain = f"{CAPTURE_CONTRACT_VERSION}/replay-report".encode()
+    payload["replay_report_hash"] = sha256_hex(domain + b"\0" + canonical_json_bytes(payload))
+    forged = CaptureReplayReportV0.model_validate(payload)
+    with pytest.raises(ValueError, match="deterministic"):
+        validate_capture_replay_report(forged, records, manifest, checkpoint)
+
+    conflicting = _signal("SHORT")
+    conflict_records = (records[0], conflicting)
+    conflict_manifest = _manifest(
+        conflict_records,
+        slots=("same-slot", "same-slot"),
+    )
+    conflict_checkpoint = _checkpoint(conflict_records, conflict_manifest)
+    report = build_capture_replay_report(
+        conflict_records,
+        conflict_manifest,
+        conflict_checkpoint,
+    )
+    assert report.replay_status == "FAIL"
+    assert report.conflicting_duplicate_count == 1
+
+
+def test_lifecycle_event_specific_transitions_and_graph_attacks() -> None:
+    original = _signal()
+    created = CaptureLifecycleEventV0.bind(
+        producer_identity=_identity("SIGNAL_PLAN_SHADOW_PRODUCER"),
+        event_kind="CAPTURE_RECORD_CREATED",
+        subject_record_ref=original.record_id,
+        subject_record_type="SIGNAL_CAPTURE",
+    )
+    corrected = SignalCaptureV0.bind(
+        producer_identity=_identity("SIGNAL_PLAN_SHADOW_PRODUCER"),
+        signal_kind="LONG",
+        observed_at_utc="2026-07-13T00:01:00Z",
+        correction_of_record_id=original.record_id,
+    )
+    corrected_event = CaptureLifecycleEventV0.bind(
+        producer_identity=_identity("SIGNAL_PLAN_SHADOW_PRODUCER"),
+        event_kind="CAPTURE_RECORD_CORRECTED",
+        subject_record_ref=corrected.record_id,
+        subject_record_type="SIGNAL_CAPTURE",
+        reference_record_refs=(original.record_id,),
+        correction_of_record_id=original.record_id,
+    )
+    superseded = SignalCaptureV0.bind(
+        producer_identity=_identity("SIGNAL_PLAN_SHADOW_PRODUCER"),
+        signal_kind="LONG",
+        observed_at_utc="2026-07-13T00:02:00Z",
+        supersedes_record_id=original.record_id,
+    )
+    superseded_event = CaptureLifecycleEventV0.bind(
+        producer_identity=_identity("SIGNAL_PLAN_SHADOW_PRODUCER"),
+        event_kind="CAPTURE_RECORD_SUPERSEDED",
+        subject_record_ref=superseded.record_id,
+        subject_record_type="SIGNAL_CAPTURE",
+        reference_record_refs=(original.record_id,),
+        supersedes_record_id=original.record_id,
+    )
+    market = _market()
+    finalized = CaptureLifecycleEventV0.bind(
+        producer_identity=_identity("SIGNAL_PLAN_SHADOW_PRODUCER"),
+        event_kind="CAPTURE_WINDOW_FINALIZED",
+        subject_record_ref=market.record_id,
+        subject_record_type="MARKET_PATH_EVIDENCE",
+    )
+    records = (
+        original,
+        created,
+        corrected,
+        corrected_event,
+        superseded,
+        superseded_event,
+        market,
+        finalized,
+    )
+    validate_capture_record_graph(records, _manifest(records))
+
+    with pytest.raises(ValidationError):
+        CaptureLifecycleEventV0.bind(
+            producer_identity=_identity("SIGNAL_PLAN_SHADOW_PRODUCER"),
+            event_kind="CAPTURE_RECORD_CORRECTED",
+            subject_record_ref=corrected.record_id,
+            subject_record_type="SIGNAL_CAPTURE",
+            correction_of_record_id=original.record_id,
+        )
+    wrong_type = _rebind_record(created, subject_record_type="CAPTURE_PLAN")
+    attacked = (original, wrong_type)
+    with pytest.raises(ValueError, match="subject_record_type"):
+        validate_capture_record_graph(attacked, _manifest(attacked))
+    runtime_subject = RuntimeControlEventV0.bind(
+        supervisor_or_runtime_actor_identity=_runtime_identity(),
+        event_kind="START_PERMIT_ISSUED",
+        runtime_scope_ref="runtime-subject-scope",
+        single_use_permit_ref="runtime-subject-permit",
+    )
+    lifecycle_for_runtime = _rebind_record(
+        created,
+        subject_record_ref=runtime_subject.record_id,
+    )
+    prohibited_subject_records = (runtime_subject, lifecycle_for_runtime)
+    with pytest.raises(ValueError, match="cannot be lifecycle"):
+        validate_capture_record_graph(
+            prohibited_subject_records,
+            _manifest(prohibited_subject_records),
+        )
+
+
+def _runtime_resume_ledger() -> tuple[tuple[Any, ...], tuple[CaptureManifestEntryV0, ...]]:
+    killed = CaptureKillStateV0.bind(
+        supervisor_or_runtime_actor_identity=_runtime_identity(),
+        kill_state="KILLED_FAIL_CLOSED",
+    )
+    start = RuntimeControlEventV0.bind(
+        supervisor_or_runtime_actor_identity=_runtime_identity(),
+        event_kind="START_PERMIT_ISSUED",
+        runtime_scope_ref="runtime-1",
+        single_use_permit_ref="start-permit-1",
+    )
+    kill = RuntimeControlEventV0.bind(
+        supervisor_or_runtime_actor_identity=_runtime_identity(),
+        event_kind="KILL_ENGAGED",
+        runtime_scope_ref="runtime-1",
+        kill_state_ref=killed.record_id,
+    )
+    integrity = RuntimeControlEventV0.bind(
+        supervisor_or_runtime_actor_identity=_runtime_identity(),
+        event_kind="INTEGRITY_CHECK_COMPLETED",
+        runtime_scope_ref="runtime-1",
+        integrity_check_ref="integrity-1",
+    )
+    resume = RuntimeControlEventV0.bind(
+        supervisor_or_runtime_actor_identity=_runtime_identity(),
+        event_kind="RESUME_PERMIT_ISSUED",
+        runtime_scope_ref="runtime-1",
+        single_use_permit_ref="resume-permit-1",
+        integrity_check_ref="integrity-1",
+        kill_state_ref=killed.record_id,
+    )
+    permitted = CaptureKillStateV0.bind(
+        supervisor_or_runtime_actor_identity=_runtime_identity(),
+        kill_state="RESUME_PERMITTED_AFTER_INTEGRITY_CHECK",
+        single_use_permit_ref="resume-permit-1",
+        integrity_check_ref="integrity-1",
+        runtime_control_event_ref=resume.record_id,
+    )
+    records = (killed, start, kill, integrity, resume, permitted)
+    return records, _manifest(records)
+
+
+def test_runtime_control_kill_resume_chain_and_attacks() -> None:
+    records, manifest = _runtime_resume_ledger()
+    validate_capture_record_graph(records, manifest)
+
+    reused = _rebind_record(records[4], single_use_permit_ref="start-permit-1")
+    attacked = (*records[:4], reused, records[5])
+    with pytest.raises(ValueError, match="single-use"):
+        validate_capture_record_graph(attacked, _manifest(attacked))
+
+    no_kill = (records[0], records[1], records[3], records[4], records[5])
+    with pytest.raises(ValueError, match="unresolved kill"):
+        validate_capture_record_graph(no_kill, _manifest(no_kill))
+
+    stale_state = CaptureKillStateV0.bind(
+        supervisor_or_runtime_actor_identity=ProducerIdentityV0.bind(
+            identity_domain="RUNTIME_CONTROL_ACTOR",
+            producer_id="stale-runtime-actor",
+            display_name="stale-runtime-actor",
+        ),
+        kill_state="KILLED_FAIL_CLOSED",
+    )
+    stale_resume = _rebind_record(records[4], kill_state_ref=stale_state.record_id)
+    stale_records = (stale_state, *records[:4], stale_resume, records[5])
+    with pytest.raises(ValueError, match="current unresolved kill"):
+        validate_capture_record_graph(stale_records, _manifest(stale_records))
+
+    double_resume = RuntimeControlEventV0.bind(
+        supervisor_or_runtime_actor_identity=_runtime_identity(),
+        event_kind="RESUME_PERMIT_ISSUED",
+        runtime_scope_ref="runtime-1",
+        single_use_permit_ref="resume-permit-2",
+        integrity_check_ref="integrity-1",
+        kill_state_ref=records[0].record_id,
+    )
+    doubled = (*records, double_resume)
+    with pytest.raises(ValueError, match="unresolved kill"):
+        validate_capture_record_graph(doubled, _manifest(doubled))
+
+    integrity_before_kill = (
+        records[0],
+        records[1],
+        records[3],
+        records[2],
+        records[4],
+        records[5],
+    )
+    with pytest.raises(ValueError, match="after kill"):
+        validate_capture_record_graph(
+            integrity_before_kill,
+            _manifest(integrity_before_kill),
+        )
+
+    integrity_after_resume = (
+        records[0],
+        records[1],
+        records[2],
+        records[4],
+        records[3],
+        records[5],
+    )
+    with pytest.raises(ValueError, match="after kill"):
+        validate_capture_record_graph(
+            integrity_after_resume,
+            _manifest(integrity_after_resume),
+        )
+
+    cross_domain_kill = _rebind_record(records[2], kill_state_ref=_signal().record_id)
+    cross_records = (_signal(), records[0], records[1], cross_domain_kill)
+    with pytest.raises(ValueError):
+        validate_capture_record_graph(cross_records, _manifest(cross_records))
+
+
+@pytest.mark.parametrize(
+    "kind,fields",
+    (
+        ("START_PERMIT_ISSUED", {}),
+        ("KILL_ENGAGED", {}),
+        ("INTEGRITY_CHECK_COMPLETED", {}),
+        ("RESUME_PERMIT_ISSUED", {"single_use_permit_ref": "permit-only"}),
+    ),
+)
+def test_runtime_control_event_kinds_reject_missing_or_irrelevant_refs(
+    kind: str,
+    fields: dict[str, Any],
+) -> None:
+    with pytest.raises(ValidationError):
+        RuntimeControlEventV0.bind(
+            supervisor_or_runtime_actor_identity=_runtime_identity(),
+            event_kind=kind,
+            runtime_scope_ref="runtime-1",
+            **fields,
+        )
+
+
+def test_kill_state_three_states_reject_invalid_reference_combinations() -> None:
+    with pytest.raises(ValidationError):
+        CaptureKillStateV0.bind(
+            supervisor_or_runtime_actor_identity=_runtime_identity(),
+            kill_state="KILLED_FAIL_CLOSED",
+            integrity_check_ref="integrity-1",
+        )
+    with pytest.raises(ValidationError):
+        CaptureKillStateV0.bind(
+            supervisor_or_runtime_actor_identity=_runtime_identity(),
+            kill_state="RESUME_BLOCKED_PENDING_PERMIT",
+            single_use_permit_ref="permit-1",
+        )
+    with pytest.raises(ValidationError):
+        CaptureKillStateV0.bind(
+            supervisor_or_runtime_actor_identity=_runtime_identity(),
+            kill_state="RESUME_PERMITTED_AFTER_INTEGRITY_CHECK",
+            single_use_permit_ref="permit-1",
+            integrity_check_ref="integrity-1",
+        )

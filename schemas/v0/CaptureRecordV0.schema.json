@@ -33,6 +33,16 @@
           "title": "Io Authorized",
           "type": "boolean"
         },
+        "manifest_entry_count": {
+          "minimum": 1,
+          "title": "Manifest Entry Count",
+          "type": "integer"
+        },
+        "manifest_root_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Manifest Root Hash",
+          "type": "string"
+        },
         "plane_id": {
           "const": "CAPTURE_AUTHORITY",
           "default": "CAPTURE_AUTHORITY",
@@ -40,7 +50,7 @@
           "type": "string"
         },
         "record_count": {
-          "minimum": 0,
+          "minimum": 1,
           "title": "Record Count",
           "type": "integer"
         },
@@ -50,15 +60,36 @@
           "title": "Schema Version",
           "type": "string"
         },
+        "terminal_entry_index": {
+          "minimum": 0,
+          "title": "Terminal Entry Index",
+          "type": "integer"
+        },
         "terminal_manifest_entry_hash": {
           "pattern": "^[0-9a-f]{64}$",
           "title": "Terminal Manifest Entry Hash",
           "type": "string"
+        },
+        "writer_authority_ref": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Writer Authority Ref",
+          "type": "string"
+        },
+        "writer_epoch": {
+          "minimum": 0,
+          "title": "Writer Epoch",
+          "type": "integer"
         }
       },
       "required": [
+        "manifest_root_hash",
         "terminal_manifest_entry_hash",
+        "terminal_entry_index",
+        "manifest_entry_count",
         "record_count",
+        "writer_epoch",
+        "writer_authority_ref",
         "checkpoint_hash"
       ],
       "title": "CaptureCheckpointV0",
@@ -428,6 +459,17 @@
           "title": "Subject Record Ref",
           "type": "string"
         },
+        "subject_record_type": {
+          "enum": [
+            "SIGNAL_CAPTURE",
+            "CAPTURE_PLAN",
+            "SHADOW_ORDER_INTENT",
+            "HUMAN_OBSERVATION",
+            "MARKET_PATH_EVIDENCE"
+          ],
+          "title": "Subject Record Type",
+          "type": "string"
+        },
         "supersedes_record_id": {
           "anyOf": [
             {
@@ -454,7 +496,8 @@
         "record_hash",
         "producer_identity",
         "event_kind",
-        "subject_record_ref"
+        "subject_record_ref",
+        "subject_record_type"
       ],
       "title": "CaptureLifecycleEventV0",
       "type": "object"
@@ -573,6 +616,15 @@
           "title": "Contract Version",
           "type": "string"
         },
+        "duplicate_classification": {
+          "enum": [
+            "UNIQUE",
+            "EXACT_DUPLICATE",
+            "CONFLICTING_DUPLICATE"
+          ],
+          "title": "Duplicate Classification",
+          "type": "string"
+        },
         "entry_index": {
           "minimum": 0,
           "title": "Entry Index",
@@ -587,6 +639,12 @@
         "manifest_entry_hash": {
           "pattern": "^[0-9a-f]{64}$",
           "title": "Manifest Entry Hash",
+          "type": "string"
+        },
+        "observation_slot_ref": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Observation Slot Ref",
           "type": "string"
         },
         "plane_id": {
@@ -623,12 +681,27 @@
           "default": "0.1.0",
           "title": "Schema Version",
           "type": "string"
+        },
+        "writer_authority_ref": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Writer Authority Ref",
+          "type": "string"
+        },
+        "writer_epoch": {
+          "minimum": 0,
+          "title": "Writer Epoch",
+          "type": "integer"
         }
       },
       "required": [
         "entry_index",
+        "observation_slot_ref",
+        "writer_epoch",
+        "writer_authority_ref",
         "record_ref",
         "record_hash",
+        "duplicate_classification",
         "previous_manifest_entry_hash",
         "manifest_entry_hash"
       ],
@@ -670,6 +743,16 @@
           "title": "Environment",
           "type": "string"
         },
+        "evidence_refs": {
+          "items": {
+            "maxLength": 160,
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
         "exchange_submission_authorized": {
           "const": false,
           "default": false,
@@ -681,12 +764,6 @@
           "default": false,
           "title": "Executable",
           "type": "boolean"
-        },
-        "minimal_evidence_summary": {
-          "maxLength": 800,
-          "minLength": 1,
-          "title": "Minimal Evidence Summary",
-          "type": "string"
         },
         "non_actionable_plan_label": {
           "const": "CAPTURE_ONLY_NOT_TRADE_PLAN",
@@ -761,7 +838,7 @@
         "producer_identity",
         "signal_record_ref",
         "signal_kind",
-        "minimal_evidence_summary"
+        "evidence_refs"
       ],
       "title": "CapturePlanV0",
       "type": "object"
@@ -811,16 +888,45 @@
     "CaptureReplayReportV0": {
       "additionalProperties": false,
       "properties": {
+        "chain_integrity": {
+          "title": "Chain Integrity",
+          "type": "boolean"
+        },
         "checkpoint_hash": {
           "pattern": "^[0-9a-f]{64}$",
           "title": "Checkpoint Hash",
           "type": "string"
+        },
+        "checkpoint_integrity": {
+          "title": "Checkpoint Integrity",
+          "type": "boolean"
+        },
+        "conflicting_duplicate_count": {
+          "minimum": 0,
+          "title": "Conflicting Duplicate Count",
+          "type": "integer"
         },
         "contract_version": {
           "const": "trader-assist-v0/capture-now-authority/v1",
           "default": "trader-assist-v0/capture-now-authority/v1",
           "title": "Contract Version",
           "type": "string"
+        },
+        "deterministic_replay": {
+          "const": true,
+          "default": true,
+          "title": "Deterministic Replay",
+          "type": "boolean"
+        },
+        "exact_duplicate_count": {
+          "minimum": 0,
+          "title": "Exact Duplicate Count",
+          "type": "integer"
+        },
+        "missing_reference_count": {
+          "minimum": 0,
+          "title": "Missing Reference Count",
+          "type": "integer"
         },
         "performance_adjudication_authorized": {
           "const": false,
@@ -859,6 +965,11 @@
           "title": "Schema Version",
           "type": "string"
         },
+        "verified_manifest_entry_count": {
+          "minimum": 0,
+          "title": "Verified Manifest Entry Count",
+          "type": "integer"
+        },
         "verified_record_count": {
           "minimum": 0,
           "title": "Verified Record Count",
@@ -869,6 +980,12 @@
         "checkpoint_hash",
         "replay_status",
         "verified_record_count",
+        "verified_manifest_entry_count",
+        "exact_duplicate_count",
+        "conflicting_duplicate_count",
+        "missing_reference_count",
+        "chain_integrity",
+        "checkpoint_integrity",
         "replay_report_hash"
       ],
       "title": "CaptureReplayReportV0",
@@ -1032,6 +1149,12 @@
           "title": "Finalized Append Only Window",
           "type": "boolean"
         },
+        "market_path_series_ref": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Market Path Series Ref",
+          "type": "string"
+        },
         "missing_ranges_ms": {
           "default": [],
           "items": {
@@ -1121,6 +1244,7 @@
         "record_hash",
         "source_identity",
         "source_record_refs",
+        "market_path_series_ref",
         "window_start_ms",
         "window_end_ms",
         "chunk_sequence"
@@ -1281,6 +1405,12 @@
           "title": "Runtime Authorized",
           "type": "boolean"
         },
+        "runtime_scope_ref": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Runtime Scope Ref",
+          "type": "string"
+        },
         "schema_version": {
           "const": "0.1.0",
           "default": "0.1.0",
@@ -1300,12 +1430,6 @@
           ],
           "default": null,
           "title": "Single Use Permit Ref"
-        },
-        "subject_runtime_ref": {
-          "maxLength": 160,
-          "minLength": 1,
-          "title": "Subject Runtime Ref",
-          "type": "string"
         },
         "supersedes_record_id": {
           "anyOf": [
@@ -1330,7 +1454,7 @@
         "record_hash",
         "supervisor_or_runtime_actor_identity",
         "event_kind",
-        "subject_runtime_ref"
+        "runtime_scope_ref"
       ],
       "title": "RuntimeControlEventV0",
       "type": "object"
@@ -1364,6 +1488,16 @@
           "title": "Environment",
           "type": "string"
         },
+        "evidence_refs": {
+          "items": {
+            "maxLength": 160,
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
         "exchange_submission_authorized": {
           "const": false,
           "default": false,
@@ -1376,10 +1510,10 @@
           "title": "Executable",
           "type": "boolean"
         },
-        "intent_summary": {
-          "maxLength": 800,
-          "minLength": 1,
-          "title": "Intent Summary",
+        "hypothesis_kind": {
+          "const": "NON_EXECUTABLE_MARKET_PATH_HYPOTHESIS",
+          "default": "NON_EXECUTABLE_MARKET_PATH_HYPOTHESIS",
+          "title": "Hypothesis Kind",
           "type": "string"
         },
         "plan_record_ref": {
@@ -1445,7 +1579,7 @@
         "record_hash",
         "producer_identity",
         "plan_record_ref",
-        "intent_summary"
+        "evidence_refs"
       ],
       "title": "ShadowOrderIntentV0",
       "type": "object"
