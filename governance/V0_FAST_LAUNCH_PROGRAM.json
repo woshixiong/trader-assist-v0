@@ -9,7 +9,7 @@
   "authority": {
     "last_completed_implementation": "V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT",
     "last_completed_implementation_pr": 11,
-    "last_policy_state_pr": 14,
+    "last_policy_state_pr": 15,
     "rate_limit_status": "UNRESOLVED_OFFICIAL_LIMIT",
     "live_transport_authorized": false,
     "account_readonly_runtime_authorized": false,
@@ -431,13 +431,13 @@
     "separate_project_control_finalization_authorization_required": true,
     "pre_finalization_base_head_state_reverification_required": true,
     "unresolved_blocker_prevents_merge": true,
-    "next_gate": "V0-FLP1B0B-EXTERNAL-INDEPENDENT-REVIEW"
+    "next_gate": "V0-FLP1B0B-FIRST-LAUNCH-CRITICAL-PATH-AND-ETH-MINIMUM-VALIDATION-READONLY-PLANNING"
   },
   "recursive_rotation": {
     "required": true,
-    "next_window_role": "V0 Fast Launch FLP0 external independent Reviewer",
+    "next_window_role": "V0 Fast Launch project-control successor",
     "next_window_permission": "STRICT_READ_ONLY",
-    "post_merge_next_gate": "V0-FLP1B0B-EXTERNAL-INDEPENDENT-REVIEW",
+    "post_merge_next_gate": "V0-FLP1B0B-FIRST-LAUNCH-CRITICAL-PATH-AND-ETH-MINIMUM-VALIDATION-READONLY-PLANNING",
     "handoff_required_fields": [
       "CURRENT_WINDOW_ROLE",
       "REPOSITORY",

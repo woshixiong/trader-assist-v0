@@ -128,11 +128,17 @@ A6 applies no tolerance, normalization, source priority, latest-wins rule, revis
 
 ```text
 PROGRAM: V0-FAST-LAUNCH
-STATE_BASE_SHA: c507e2fc1bad6aca175cf833e5bcca63224c3e5f
+STATE_KIND: SAFE_STOP_SNAPSHOT
+STATE_BASE_SHA: 95e4a9ebaedb028de68d859627a37dfc142c8602
+HISTORICAL_PR15_TASK_ID: V0-FLP1B0B-CAPTURE-NOW-AUTHORITY-AMENDMENT
+HISTORICAL_PR15_BASE_SHA: 78d2d37bfe5a4f3f1d382a2a96e57896ae9676ae
+HISTORICAL_PR15_HEAD: b7c26c019f64ab627dffc3bde4ab5a35071b6fc5
+PR15_MERGE_COMMIT_AND_CURRENT_MAIN: 95e4a9ebaedb028de68d859627a37dfc142c8602
 LAST_COMPLETED_IMPLEMENTATION: V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT
 LAST_COMPLETED_IMPLEMENTATION_PR: 11
-LAST_POLICY_STATE_PR: 12
-ACTIVE_IMPLEMENTATION: NONE
+LAST_POLICY_STATE_PR: 15
+ACTIVE_MILESTONE: V0-R0-CAPTURE-ONLY
+ACTIVE_TASK_ID: NONE
 ACTIVE_WRITE_LEASE: NONE
 RATE_LIMIT_STATUS: UNRESOLVED_OFFICIAL_LIMIT
 LIVE_TRANSPORT_AUTHORIZED: FALSE
@@ -140,7 +146,7 @@ ACCOUNT_READONLY_RUNTIME_AUTHORIZED: FALSE
 TESTNET_EXECUTION_AUTHORIZED: FALSE
 MAINNET_EXECUTION_AUTHORIZED: FALSE
 FLP1_IMPLEMENTATION_AUTHORIZED: FALSE
-NEXT_GATE: V0-FLP1-OPERATOR-ASSIST-PILOT-SCOPE-FREEZE
+NEXT_GATE: V0-FLP1B0B-FIRST-LAUNCH-CRITICAL-PATH-AND-ETH-MINIMUM-VALIDATION-READONLY-PLANNING
 ```
 
 ## Identity separation
@@ -200,7 +206,7 @@ Replay performs no networking and requires a valid completion checkpoint. It ver
 
 An unfinalized segment, missing/invalid checkpoint, tail deletion, corrupt evidence, conflicting authority, unexpected tree entry, or orphan payload yields `FAIL`. A zero-entry segment passes only with an explicit completed zero-entry checkpoint.
 
-## Fast Launch target data plane
+## Future R1 target data plane
 
 ```text
 Source Adapter
@@ -221,13 +227,24 @@ Source Adapter
 -> replay and learning findings
 ```
 
-A strategy must never consume raw exchange JSON directly. Every normalized data product and strategy has a versioned manifest; dependencies are explicit, and new data cannot silently affect an existing strategy.
+A future strategy must never consume raw exchange JSON directly. Every normalized
+data product and strategy has a versioned manifest; dependencies are explicit,
+and new data cannot silently affect an existing strategy.
 
-R0 requires ETH 5m and 15m candles, mark/mid reference, ETH OI, Funding, timestamps, freshness, gap/conflict state, heartbeat, reconnect, bounded backoff, and replay-compatible records. These are frozen product requirements, not current live runtime authority.
+The diagram and ETH 5m/15m, mark/mid, OI, funding, freshness, reconnect, and
+replay requirements are future R1 Operator Assist planning material. They are
+not R0 requirements and authorize no live runtime.
 
-Read-only account/order/fill observation is also a future R0 requirement, but `ACCOUNT_READONLY_RUNTIME_AUTHORIZED` remains false. FLP1 scope freeze must separately define identity, privacy, matching confidence, failure states, and CSV/XLSX fallback authority before implementation.
+Read-only account/order/fill observation, matching confidence, and CSV/XLSX
+fallback are future R1 planning material; `ACCOUNT_READONLY_RUNTIME_AUTHORIZED`
+remains false. R0 has no strategy, signal, risk, TradePlan, FAST/STANDARD,
+manual-execution, or registry requirement.
 
-R0 ends at system assistance and manual exchange execution. R1 may add human-confirmed execution only through a separately reviewed G4 gateway with immutable OrderIntent, idempotency, expiry, revalidation, fill-aware protection, kill switch, dead-man protection, audit, Testnet, shadow, and limited-capital canary gates. Autonomous entry remains prohibited.
+R1 may later end at manual exchange execution. Human-confirmed automated
+execution remains deferred to a separately reviewed G4 gateway with immutable
+OrderIntent, idempotency, expiry, revalidation, fill-aware protection, kill
+switch, dead-man protection, audit, Testnet, shadow, and limited-capital canary
+gates. Autonomous entry remains prohibited.
 
 ## Next gate
 
@@ -236,7 +253,7 @@ public transport, health, reconnect, backfill, finality inference, revision
 ordering, canonical winner selection, normalized events, Silver, strategy
 runtime, AI recommendation runtime, risk runtime, dashboard runtime, account
 observation runtime, Testnet/Mainnet execution, or exchange writes. The next
-gate is `V0-FLP1B0B-EXTERNAL-INDEPENDENT-REVIEW`. Every future slice still
+gate is `V0-FLP1B0B-FIRST-LAUNCH-CRITICAL-PATH-AND-ETH-MINIMUM-VALIDATION-READONLY-PLANNING`. Every future slice still
 requires a separate exact-main scope freeze, explicit write lease and file
 allowlist, applicable CI success, external independent review, and separate
 finalization authorization.

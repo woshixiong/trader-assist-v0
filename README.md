@@ -6,12 +6,17 @@ Trader Assist V0 is an isolated ETH/Hyperliquid experiment lane for reliable dat
 
 ```text
 PROGRAM: V0-FAST-LAUNCH
-TASK_ID: V0-FLP1B0B-CAPTURE-NOW-AUTHORITY-AMENDMENT
-STATE_BASE_SHA: 78d2d37bfe5a4f3f1d382a2a96e57896ae9676ae
+STATE_KIND: SAFE_STOP_SNAPSHOT
+STATE_BASE_SHA: 95e4a9ebaedb028de68d859627a37dfc142c8602
+HISTORICAL_PR15_TASK_ID: V0-FLP1B0B-CAPTURE-NOW-AUTHORITY-AMENDMENT
+HISTORICAL_PR15_BASE_SHA: 78d2d37bfe5a4f3f1d382a2a96e57896ae9676ae
+HISTORICAL_PR15_HEAD: b7c26c019f64ab627dffc3bde4ab5a35071b6fc5
+PR15_MERGE_COMMIT_AND_CURRENT_MAIN: 95e4a9ebaedb028de68d859627a37dfc142c8602
 LAST_COMPLETED_IMPLEMENTATION: V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT
 LAST_COMPLETED_IMPLEMENTATION_PR: 11
-LAST_POLICY_STATE_PR: 14
-ACTIVE_IMPLEMENTATION: NONE
+LAST_POLICY_STATE_PR: 15
+ACTIVE_MILESTONE: V0-R0-CAPTURE-ONLY
+ACTIVE_TASK_ID: NONE
 ACTIVE_WRITE_LEASE: NONE
 FIRST_RELEASE_FROZEN: TRUE
 LONG_TERM_ROADMAP_FROZEN: TRUE
@@ -21,7 +26,7 @@ ACCOUNT_READONLY_RUNTIME_AUTHORIZED: FALSE
 TESTNET_EXECUTION_AUTHORIZED: FALSE
 MAINNET_EXECUTION_AUTHORIZED: FALSE
 FLP1_IMPLEMENTATION_AUTHORIZED: FALSE
-NEXT_GATE: V0-FLP1B0B-EXTERNAL-INDEPENDENT-REVIEW
+NEXT_GATE: V0-FLP1B0B-FIRST-LAUNCH-CRITICAL-PATH-AND-ETH-MINIMUM-VALIDATION-READONLY-PLANNING
 ```
 
 A0 completed the versioned public-source catalog, exact raw fixture/application-payload authority, local content-addressed immutable Bronze storage, append-only hash-linked manifests, and deterministic offline replay.
@@ -52,7 +57,9 @@ This repository still contains no network client, live endpoint connection, cred
 The active first release is Capture-only for ETH. It authorizes Capture
 contracts and generated schema, with `active_strategy_count = 0`; network
 runtime, strategy runtime, signal recommendation, risk sizing, TradePlan,
-account runtime, and exchange execution are all false.
+FAST/STANDARD presentation, account/order/fill observation, manual execution,
+and exchange execution are all false. R0 has no ETH-LDAR, OI/funding strategy,
+or registry requirement.
 
 The former ETH Operator Assist Pilot semantics are preserved as future `V0-R1`:
 ETH-only, ETH-LDAR or a separately approved future ETH strategy,
@@ -73,7 +80,8 @@ FL4 HUMAN_CONFIRMED_EXECUTION
 ```
 
 R0 is Capture-only. R1 may later deliver the Operator Assist subset of FL1
-through FL3 after a separate gate. Human-confirmed automated execution is
+through FL3 after a separate gate; a separately authorized T2 may implement
+ETH public Capture runtime only. Human-confirmed automated execution is
 deferred under `future_human_confirmed_execution`, unassigned to any release, and
 requires a separate G4 implementation, security review, Testnet, shadow,
 limited-capital canary, and Mainnet authorization. Autonomous entry remains
