@@ -1,7 +1,4 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://woshixiong.github.io/trader-assist-v0/schemas/governance/V0FastLaunchProgram.schema.json",
-  "title": "V0FastLaunchProgram",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -24,7 +21,9 @@
     "development_route",
     "review_finalization_policy",
     "recursive_rotation",
-    "deferred_capabilities"
+    "deferred_capabilities",
+    "release_authority",
+    "future_human_confirmed_execution"
   ],
   "properties": {
     "schema_version": {
@@ -49,11 +48,11 @@
     },
     "task_id": {
       "type": "string",
-      "const": "V0-FLP0-PILOT-AND-LONG-TERM-ROADMAP-AUTHORITY-FREEZE"
+      "const": "V0-FLP1B0B-CAPTURE-NOW-AUTHORITY-AMENDMENT"
     },
     "state_base_sha": {
       "type": "string",
-      "const": "c507e2fc1bad6aca175cf833e5bcca63224c3e5f"
+      "const": "78d2d37bfe5a4f3f1d382a2a96e57896ae9676ae"
     },
     "authority": {
       "type": "object",
@@ -67,7 +66,15 @@
         "account_readonly_runtime_authorized",
         "testnet_execution_authorized",
         "mainnet_execution_authorized",
-        "flp1_implementation_authorized"
+        "flp1_implementation_authorized",
+        "conflict_state",
+        "supersession_state",
+        "authority_hash",
+        "source_catalog_hash",
+        "source_count",
+        "fact_count",
+        "unknown_count",
+        "transition_eligible"
       ],
       "properties": {
         "last_completed_implementation": {
@@ -80,7 +87,7 @@
         },
         "last_policy_state_pr": {
           "type": "integer",
-          "const": 12
+          "const": 14
         },
         "rate_limit_status": {
           "type": "string",
@@ -105,6 +112,38 @@
         "flp1_implementation_authorized": {
           "type": "boolean",
           "const": false
+        },
+        "conflict_state": {
+          "type": "string",
+          "const": "OFFICIAL_SOURCE_VARIANT_CONFLICT_DETECTED"
+        },
+        "supersession_state": {
+          "type": "string",
+          "const": "EFFECTIVE_VARIANT_UNDETERMINED"
+        },
+        "authority_hash": {
+          "type": "string",
+          "const": "0e327e566589d8030ff00d4d009eb4b6827679ab508133d66840b2c245dc53df"
+        },
+        "source_catalog_hash": {
+          "type": "string",
+          "const": "0ca27f650f399f8fa481ad9421eab4183c1c13812c71dfa8daaf878719bd99b7"
+        },
+        "source_count": {
+          "type": "integer",
+          "const": 2
+        },
+        "fact_count": {
+          "type": "integer",
+          "const": 25
+        },
+        "unknown_count": {
+          "type": "integer",
+          "const": 14
+        },
+        "transition_eligible": {
+          "type": "boolean",
+          "const": false
         }
       }
     },
@@ -113,17 +152,21 @@
       "additionalProperties": false,
       "required": [
         "release_id",
+        "release_authority",
         "milestone",
         "primary_asset",
         "active_strategy_count",
-        "active_strategy",
-        "execution_mode",
-        "automatic_exchange_write",
-        "ai_role",
-        "all_valid_signals_visible",
-        "post_launch_learning_loop",
-        "decision_flow",
-        "required_capabilities",
+        "capture_contracts_authorized",
+        "network_runtime_authorized",
+        "strategy_runtime_authorized",
+        "signal_recommendation_authorized",
+        "risk_sizing_authorized",
+        "trade_plan_authorized",
+        "account_runtime_authorized",
+        "exchange_execution_authorized",
+        "runtime_started",
+        "scope",
+        "next_runtime_gate",
         "forbidden_capabilities"
       ],
       "properties": {
@@ -131,9 +174,13 @@
           "type": "string",
           "const": "V0-R0"
         },
+        "release_authority": {
+          "type": "string",
+          "const": "CAPTURE_ONLY"
+        },
         "milestone": {
           "type": "string",
-          "const": "V0-FLP1-DECISION-TO-OUTCOME-OPERATOR-ASSIST-PILOT"
+          "const": "V0-FLP1B0B-CAPTURE-NOW-AUTHORITY-AMENDMENT"
         },
         "primary_asset": {
           "type": "string",
@@ -141,245 +188,51 @@
         },
         "active_strategy_count": {
           "type": "integer",
-          "const": 1
+          "const": 0
         },
-        "active_strategy": {
-          "type": "string",
-          "const": "ETH-LDAR-v0.1"
-        },
-        "execution_mode": {
-          "type": "string",
-          "const": "MANUAL_EXECUTION_WITH_SYSTEM_ASSISTANCE"
-        },
-        "automatic_exchange_write": {
-          "type": "string",
-          "const": "PROHIBITED"
-        },
-        "ai_role": {
-          "type": "string",
-          "const": "EXPLANATION_AND_CHECKLIST_ONLY"
-        },
-        "all_valid_signals_visible": {
+        "capture_contracts_authorized": {
           "type": "boolean",
           "const": true
         },
-        "post_launch_learning_loop": {
+        "network_runtime_authorized": {
+          "type": "boolean",
+          "const": false
+        },
+        "strategy_runtime_authorized": {
+          "type": "boolean",
+          "const": false
+        },
+        "signal_recommendation_authorized": {
+          "type": "boolean",
+          "const": false
+        },
+        "risk_sizing_authorized": {
+          "type": "boolean",
+          "const": false
+        },
+        "trade_plan_authorized": {
+          "type": "boolean",
+          "const": false
+        },
+        "account_runtime_authorized": {
+          "type": "boolean",
+          "const": false
+        },
+        "exchange_execution_authorized": {
+          "type": "boolean",
+          "const": false
+        },
+        "runtime_started": {
+          "type": "boolean",
+          "const": false
+        },
+        "scope": {
           "type": "string",
-          "const": "MANDATORY"
+          "const": "CAPTURE_CONTRACT_SCHEMA_GOVERNANCE_ONLY"
         },
-        "decision_flow": {
-          "type": "array",
-          "minItems": 13,
-          "maxItems": 13,
-          "uniqueItems": true,
-          "prefixItems": [
-            {
-              "type": "string",
-              "const": "REALTIME_PUBLIC_READONLY_DATA"
-            },
-            {
-              "type": "string",
-              "const": "DATA_QUALITY_STATE"
-            },
-            {
-              "type": "string",
-              "const": "ETH-LDAR-v0.1"
-            },
-            {
-              "type": "string",
-              "const": "LONG_SHORT_WAIT"
-            },
-            {
-              "type": "string",
-              "const": "DETERMINISTIC_RISK_SIZING"
-            },
-            {
-              "type": "string",
-              "const": "TRADE_PLAN"
-            },
-            {
-              "type": "string",
-              "const": "FAST_OR_STANDARD_SIGNAL_CARD"
-            },
-            {
-              "type": "string",
-              "const": "TAKEN_SKIPPED_REJECTED"
-            },
-            {
-              "type": "string",
-              "const": "MANUAL_HYPERLIQUID_EXECUTION"
-            },
-            {
-              "type": "string",
-              "const": "READONLY_ORDER_FILL_OBSERVATION"
-            },
-            {
-              "type": "string",
-              "const": "PLAN_OUTCOME_MATCHING"
-            },
-            {
-              "type": "string",
-              "const": "REPLAY"
-            },
-            {
-              "type": "string",
-              "const": "FINDINGS_AND_ITERATION"
-            }
-          ],
-          "items": false
-        },
-        "required_capabilities": {
-          "type": "array",
-          "minItems": 36,
-          "maxItems": 36,
-          "uniqueItems": true,
-          "prefixItems": [
-            {
-              "type": "string",
-              "const": "ETH_5M_CANDLE"
-            },
-            {
-              "type": "string",
-              "const": "ETH_15M_CANDLE"
-            },
-            {
-              "type": "string",
-              "const": "MARK_MID_REFERENCE"
-            },
-            {
-              "type": "string",
-              "const": "ETH_OI"
-            },
-            {
-              "type": "string",
-              "const": "FUNDING"
-            },
-            {
-              "type": "string",
-              "const": "TIMESTAMPS"
-            },
-            {
-              "type": "string",
-              "const": "FRESHNESS"
-            },
-            {
-              "type": "string",
-              "const": "GAP_CONFLICT"
-            },
-            {
-              "type": "string",
-              "const": "HEARTBEAT"
-            },
-            {
-              "type": "string",
-              "const": "RECONNECT"
-            },
-            {
-              "type": "string",
-              "const": "BOUNDED_BACKOFF"
-            },
-            {
-              "type": "string",
-              "const": "REPLAY"
-            },
-            {
-              "type": "string",
-              "const": "WATCH"
-            },
-            {
-              "type": "string",
-              "const": "PREPARE"
-            },
-            {
-              "type": "string",
-              "const": "TRIGGERED_FAST"
-            },
-            {
-              "type": "string",
-              "const": "TRIGGERED_STANDARD"
-            },
-            {
-              "type": "string",
-              "const": "EXPIRED"
-            },
-            {
-              "type": "string",
-              "const": "LONG_SHORT_WAIT"
-            },
-            {
-              "type": "string",
-              "const": "ENTRY_ZONE"
-            },
-            {
-              "type": "string",
-              "const": "MAX_ENTRY_BOUNDARY"
-            },
-            {
-              "type": "string",
-              "const": "INVALIDATION"
-            },
-            {
-              "type": "string",
-              "const": "FIXED_STOP"
-            },
-            {
-              "type": "string",
-              "const": "TP1"
-            },
-            {
-              "type": "string",
-              "const": "TP2"
-            },
-            {
-              "type": "string",
-              "const": "EXACT_SIZE"
-            },
-            {
-              "type": "string",
-              "const": "NOTIONAL"
-            },
-            {
-              "type": "string",
-              "const": "RISK_AMOUNT"
-            },
-            {
-              "type": "string",
-              "const": "RISK_PERCENT"
-            },
-            {
-              "type": "string",
-              "const": "EXPIRY"
-            },
-            {
-              "type": "string",
-              "const": "COMPACT_SIGNAL_CARD"
-            },
-            {
-              "type": "string",
-              "const": "COPY_CONTROLS"
-            },
-            {
-              "type": "string",
-              "const": "TAKEN_SKIPPED_REJECTED"
-            },
-            {
-              "type": "string",
-              "const": "READONLY_ACCOUNT_ORDER_FILL_OBSERVATION"
-            },
-            {
-              "type": "string",
-              "const": "AUTOMATIC_SYSTEM_RECORDS"
-            },
-            {
-              "type": "string",
-              "const": "CSV_XLSX_FALLBACK_IMPORT"
-            },
-            {
-              "type": "string",
-              "const": "MINIMAL_PILOT_REVIEW"
-            }
-          ],
-          "items": false
+        "next_runtime_gate": {
+          "type": "string",
+          "const": "SEPARATE_FUTURE_ETH_PUBLIC_CAPTURE_RUNTIME"
         },
         "forbidden_capabilities": {
           "type": "array",
@@ -1301,16 +1154,71 @@
           "additionalProperties": false,
           "required": [
             "scope",
-            "execution"
+            "execution",
+            "release_id",
+            "primary_asset",
+            "active_strategy_count",
+            "capture_contracts_authorized",
+            "network_runtime_authorized",
+            "strategy_runtime_authorized",
+            "signal_recommendation_authorized",
+            "risk_sizing_authorized",
+            "trade_plan_authorized",
+            "account_runtime_authorized",
+            "exchange_execution_authorized"
           ],
           "properties": {
             "scope": {
               "type": "string",
-              "const": "MINIMUM_VERTICAL_SUBSET_OF_FL1_FL2_FL3"
+              "const": "CAPTURE_ONLY"
             },
             "execution": {
               "type": "string",
-              "const": "MANUAL_ONLY"
+              "const": "NONE"
+            },
+            "release_id": {
+              "type": "string",
+              "const": "V0-R0"
+            },
+            "primary_asset": {
+              "type": "string",
+              "const": "ETH"
+            },
+            "active_strategy_count": {
+              "type": "integer",
+              "const": 0
+            },
+            "capture_contracts_authorized": {
+              "type": "boolean",
+              "const": true
+            },
+            "network_runtime_authorized": {
+              "type": "boolean",
+              "const": false
+            },
+            "strategy_runtime_authorized": {
+              "type": "boolean",
+              "const": false
+            },
+            "signal_recommendation_authorized": {
+              "type": "boolean",
+              "const": false
+            },
+            "risk_sizing_authorized": {
+              "type": "boolean",
+              "const": false
+            },
+            "trade_plan_authorized": {
+              "type": "boolean",
+              "const": false
+            },
+            "account_runtime_authorized": {
+              "type": "boolean",
+              "const": false
+            },
+            "exchange_execution_authorized": {
+              "type": "boolean",
+              "const": false
             }
           }
         },
@@ -1318,140 +1226,413 @@
           "type": "object",
           "additionalProperties": false,
           "required": [
+            "release_id",
             "scope",
-            "required_controls",
-            "autonomous_entry",
-            "human_confirmation_required"
+            "status",
+            "primary_asset",
+            "strategy_scope",
+            "signal_outputs",
+            "deterministic_risk",
+            "trade_plan",
+            "presentation",
+            "human_review",
+            "manual_execution",
+            "readonly_account_order_fill_observation",
+            "plan_outcome_matching",
+            "replay_and_learning_loop",
+            "implementation_authorized",
+            "network_runtime_authorized",
+            "account_runtime_authorized",
+            "exchange_execution_authorized",
+            "decision_flow",
+            "required_capabilities",
+            "forbidden_capabilities"
           ],
           "properties": {
+            "release_id": {
+              "type": "string",
+              "const": "V0-R1"
+            },
             "scope": {
               "type": "string",
-              "const": "HUMAN_CONFIRMED_AUTOMATED_EXECUTION"
+              "const": "ETH_OPERATOR_ASSIST"
             },
-            "required_controls": {
+            "status": {
+              "type": "string",
+              "const": "FUTURE_NOT_IMPLEMENTED_NOT_AUTHORIZED"
+            },
+            "primary_asset": {
+              "type": "string",
+              "const": "ETH"
+            },
+            "strategy_scope": {
+              "type": "string",
+              "const": "ETH-only ETH-LDAR or separately approved future ETH strategy"
+            },
+            "signal_outputs": {
               "type": "array",
-              "minItems": 27,
-              "maxItems": 27,
+              "minItems": 3,
+              "maxItems": 3,
               "uniqueItems": true,
               "prefixItems": [
                 {
                   "type": "string",
-                  "const": "DEDICATED_LIMITED_CAPITAL_SUBACCOUNT"
+                  "const": "LONG"
                 },
                 {
                   "type": "string",
-                  "const": "DEDICATED_API_WALLET"
+                  "const": "SHORT"
                 },
                 {
                   "type": "string",
-                  "const": "SECRET_ISOLATION"
-                },
-                {
-                  "type": "string",
-                  "const": "OFFICIAL_SDK_SIGNING"
-                },
-                {
-                  "type": "string",
-                  "const": "NONCE_AUTHORITY"
-                },
-                {
-                  "type": "string",
-                  "const": "IMMUTABLE_ORDER_INTENT"
-                },
-                {
-                  "type": "string",
-                  "const": "ORDER_INTENT_HASH"
-                },
-                {
-                  "type": "string",
-                  "const": "CLOID_IDEMPOTENCY"
-                },
-                {
-                  "type": "string",
-                  "const": "EXPIRES_AFTER"
-                },
-                {
-                  "type": "string",
-                  "const": "PRE_SUBMIT_REVALIDATION"
-                },
-                {
-                  "type": "string",
-                  "const": "ALO_POST_ONLY"
-                },
-                {
-                  "type": "string",
-                  "const": "BOUNDED_SLIPPAGE_IOC"
-                },
-                {
-                  "type": "string",
-                  "const": "SUBMIT_CANCEL"
-                },
-                {
-                  "type": "string",
-                  "const": "PARTIAL_FILL_HANDLING"
-                },
-                {
-                  "type": "string",
-                  "const": "ACTUAL_FILLED_POSITION_SIZING"
-                },
-                {
-                  "type": "string",
-                  "const": "MANDATORY_AUTOMATIC_STOP"
-                },
-                {
-                  "type": "string",
-                  "const": "FIXED_MULTI_STAGE_AUTOMATIC_TP"
-                },
-                {
-                  "type": "string",
-                  "const": "REDUCE_ONLY_PROTECTION"
-                },
-                {
-                  "type": "string",
-                  "const": "EXCHANGE_STATE_PROTECTION_VERIFICATION"
-                },
-                {
-                  "type": "string",
-                  "const": "POSITION_UNPROTECTED_EMERGENCY_PATH"
-                },
-                {
-                  "type": "string",
-                  "const": "KILL_SWITCH"
-                },
-                {
-                  "type": "string",
-                  "const": "DEAD_MAN_PROTECTION"
-                },
-                {
-                  "type": "string",
-                  "const": "AUDIT"
-                },
-                {
-                  "type": "string",
-                  "const": "TESTNET"
-                },
-                {
-                  "type": "string",
-                  "const": "SHADOW"
-                },
-                {
-                  "type": "string",
-                  "const": "SMALL_CAPITAL_MAINNET_CANARY"
-                },
-                {
-                  "type": "string",
-                  "const": "SEPARATE_MAINNET_AUTHORIZATION"
+                  "const": "WAIT"
                 }
               ],
               "items": false
             },
-            "autonomous_entry": {
-              "type": "string",
-              "const": "PROHIBITED"
-            },
-            "human_confirmation_required": {
+            "deterministic_risk": {
               "type": "boolean",
               "const": true
+            },
+            "trade_plan": {
+              "type": "boolean",
+              "const": true
+            },
+            "presentation": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "uniqueItems": true,
+              "prefixItems": [
+                {
+                  "type": "string",
+                  "const": "FAST"
+                },
+                {
+                  "type": "string",
+                  "const": "STANDARD"
+                }
+              ],
+              "items": false
+            },
+            "human_review": {
+              "type": "boolean",
+              "const": true
+            },
+            "manual_execution": {
+              "type": "boolean",
+              "const": true
+            },
+            "readonly_account_order_fill_observation": {
+              "type": "boolean",
+              "const": true
+            },
+            "plan_outcome_matching": {
+              "type": "boolean",
+              "const": true
+            },
+            "replay_and_learning_loop": {
+              "type": "boolean",
+              "const": true
+            },
+            "implementation_authorized": {
+              "type": "boolean",
+              "const": false
+            },
+            "network_runtime_authorized": {
+              "type": "boolean",
+              "const": false
+            },
+            "account_runtime_authorized": {
+              "type": "boolean",
+              "const": false
+            },
+            "exchange_execution_authorized": {
+              "type": "boolean",
+              "const": false
+            },
+            "decision_flow": {
+              "type": "array",
+              "minItems": 13,
+              "maxItems": 13,
+              "uniqueItems": true,
+              "prefixItems": [
+                {
+                  "type": "string",
+                  "const": "REALTIME_PUBLIC_READONLY_DATA"
+                },
+                {
+                  "type": "string",
+                  "const": "DATA_QUALITY_STATE"
+                },
+                {
+                  "type": "string",
+                  "const": "ETH-LDAR-v0.1"
+                },
+                {
+                  "type": "string",
+                  "const": "LONG_SHORT_WAIT"
+                },
+                {
+                  "type": "string",
+                  "const": "DETERMINISTIC_RISK_SIZING"
+                },
+                {
+                  "type": "string",
+                  "const": "TRADE_PLAN"
+                },
+                {
+                  "type": "string",
+                  "const": "FAST_OR_STANDARD_SIGNAL_CARD"
+                },
+                {
+                  "type": "string",
+                  "const": "TAKEN_SKIPPED_REJECTED"
+                },
+                {
+                  "type": "string",
+                  "const": "MANUAL_HYPERLIQUID_EXECUTION"
+                },
+                {
+                  "type": "string",
+                  "const": "READONLY_ORDER_FILL_OBSERVATION"
+                },
+                {
+                  "type": "string",
+                  "const": "PLAN_OUTCOME_MATCHING"
+                },
+                {
+                  "type": "string",
+                  "const": "REPLAY"
+                },
+                {
+                  "type": "string",
+                  "const": "FINDINGS_AND_ITERATION"
+                }
+              ],
+              "items": false
+            },
+            "required_capabilities": {
+              "type": "array",
+              "minItems": 36,
+              "maxItems": 36,
+              "uniqueItems": true,
+              "prefixItems": [
+                {
+                  "type": "string",
+                  "const": "ETH_5M_CANDLE"
+                },
+                {
+                  "type": "string",
+                  "const": "ETH_15M_CANDLE"
+                },
+                {
+                  "type": "string",
+                  "const": "MARK_MID_REFERENCE"
+                },
+                {
+                  "type": "string",
+                  "const": "ETH_OI"
+                },
+                {
+                  "type": "string",
+                  "const": "FUNDING"
+                },
+                {
+                  "type": "string",
+                  "const": "TIMESTAMPS"
+                },
+                {
+                  "type": "string",
+                  "const": "FRESHNESS"
+                },
+                {
+                  "type": "string",
+                  "const": "GAP_CONFLICT"
+                },
+                {
+                  "type": "string",
+                  "const": "HEARTBEAT"
+                },
+                {
+                  "type": "string",
+                  "const": "RECONNECT"
+                },
+                {
+                  "type": "string",
+                  "const": "BOUNDED_BACKOFF"
+                },
+                {
+                  "type": "string",
+                  "const": "REPLAY"
+                },
+                {
+                  "type": "string",
+                  "const": "WATCH"
+                },
+                {
+                  "type": "string",
+                  "const": "PREPARE"
+                },
+                {
+                  "type": "string",
+                  "const": "TRIGGERED_FAST"
+                },
+                {
+                  "type": "string",
+                  "const": "TRIGGERED_STANDARD"
+                },
+                {
+                  "type": "string",
+                  "const": "EXPIRED"
+                },
+                {
+                  "type": "string",
+                  "const": "LONG_SHORT_WAIT"
+                },
+                {
+                  "type": "string",
+                  "const": "ENTRY_ZONE"
+                },
+                {
+                  "type": "string",
+                  "const": "MAX_ENTRY_BOUNDARY"
+                },
+                {
+                  "type": "string",
+                  "const": "INVALIDATION"
+                },
+                {
+                  "type": "string",
+                  "const": "FIXED_STOP"
+                },
+                {
+                  "type": "string",
+                  "const": "TP1"
+                },
+                {
+                  "type": "string",
+                  "const": "TP2"
+                },
+                {
+                  "type": "string",
+                  "const": "EXACT_SIZE"
+                },
+                {
+                  "type": "string",
+                  "const": "NOTIONAL"
+                },
+                {
+                  "type": "string",
+                  "const": "RISK_AMOUNT"
+                },
+                {
+                  "type": "string",
+                  "const": "RISK_PERCENT"
+                },
+                {
+                  "type": "string",
+                  "const": "EXPIRY"
+                },
+                {
+                  "type": "string",
+                  "const": "COMPACT_SIGNAL_CARD"
+                },
+                {
+                  "type": "string",
+                  "const": "COPY_CONTROLS"
+                },
+                {
+                  "type": "string",
+                  "const": "TAKEN_SKIPPED_REJECTED"
+                },
+                {
+                  "type": "string",
+                  "const": "READONLY_ACCOUNT_ORDER_FILL_OBSERVATION"
+                },
+                {
+                  "type": "string",
+                  "const": "AUTOMATIC_SYSTEM_RECORDS"
+                },
+                {
+                  "type": "string",
+                  "const": "CSV_XLSX_FALLBACK_IMPORT"
+                },
+                {
+                  "type": "string",
+                  "const": "MINIMAL_PILOT_REVIEW"
+                }
+              ],
+              "items": false
+            },
+            "forbidden_capabilities": {
+              "type": "array",
+              "minItems": 15,
+              "maxItems": 15,
+              "uniqueItems": true,
+              "prefixItems": [
+                {
+                  "type": "string",
+                  "const": "API_WALLET"
+                },
+                {
+                  "type": "string",
+                  "const": "PRIVATE_KEY"
+                },
+                {
+                  "type": "string",
+                  "const": "SIGNING"
+                },
+                {
+                  "type": "string",
+                  "const": "NONCE"
+                },
+                {
+                  "type": "string",
+                  "const": "EXCHANGE_WRITE"
+                },
+                {
+                  "type": "string",
+                  "const": "AUTOMATIC_ENTRY"
+                },
+                {
+                  "type": "string",
+                  "const": "AUTOMATIC_CANCEL"
+                },
+                {
+                  "type": "string",
+                  "const": "AUTOMATIC_SL_TP_SUBMISSION"
+                },
+                {
+                  "type": "string",
+                  "const": "FUND_TRANSFER"
+                },
+                {
+                  "type": "string",
+                  "const": "WITHDRAWAL"
+                },
+                {
+                  "type": "string",
+                  "const": "MULTIPLE_ACTIVE_STRATEGIES"
+                },
+                {
+                  "type": "string",
+                  "const": "MULTIPLE_ACTIVE_ASSETS"
+                },
+                {
+                  "type": "string",
+                  "const": "AUTOMATIC_STRATEGY_ROUTING"
+                },
+                {
+                  "type": "string",
+                  "const": "ONLINE_LEARNING"
+                },
+                {
+                  "type": "string",
+                  "const": "AUTOMATIC_PRODUCTION_PARAMETER_MUTATION"
+                }
+              ],
+              "items": false
             }
           }
         }
@@ -1612,7 +1793,9 @@
         "bounded_repairs_original_pr_required",
         "full_independent_review_only_for_final_merge_candidate",
         "finding_classes",
-        "only_blocker_prevents_merge"
+        "only_blocker_prevents_merge",
+        "t1_scope",
+        "t2_scope"
       ],
       "properties": {
         "pre_launch_main_prs": {
@@ -1623,18 +1806,18 @@
           "prefixItems": [
             {
               "type": "string",
-              "const": "V0-FLP0-PILOT-AND-LONG-TERM-ROADMAP-AUTHORITY-FREEZE"
+              "const": "V0-FLP1B0B-CAPTURE-NOW-AUTHORITY-AMENDMENT"
             },
             {
               "type": "string",
-              "const": "V0-FLP1-DECISION-TO-OUTCOME-OPERATOR-ASSIST-PILOT"
+              "const": "SEPARATE_FUTURE_ETH_PUBLIC_CAPTURE_RUNTIME"
             }
           ],
           "items": false
         },
         "flp1_is_vertical_pilot_pr": {
           "type": "boolean",
-          "const": true
+          "const": false
         },
         "bounded_repairs_in_same_execution_window": {
           "type": "boolean",
@@ -1672,6 +1855,14 @@
         "only_blocker_prevents_merge": {
           "type": "boolean",
           "const": true
+        },
+        "t1_scope": {
+          "type": "string",
+          "const": "CONTRACT_SCHEMA_GOVERNANCE_ONLY"
+        },
+        "t2_scope": {
+          "type": "string",
+          "const": "SEPARATE_FUTURE_ETH_PUBLIC_CAPTURE_RUNTIME"
         }
       }
     },
@@ -1690,7 +1881,8 @@
         "finalization_separate_task_required",
         "separate_project_control_finalization_authorization_required",
         "pre_finalization_base_head_state_reverification_required",
-        "unresolved_blocker_prevents_merge"
+        "unresolved_blocker_prevents_merge",
+        "next_gate"
       ],
       "properties": {
         "draft_pr_required": {
@@ -1740,6 +1932,10 @@
         "unresolved_blocker_prevents_merge": {
           "type": "boolean",
           "const": true
+        },
+        "next_gate": {
+          "type": "string",
+          "const": "V0-FLP1B0B-EXTERNAL-INDEPENDENT-REVIEW"
         }
       }
     },
@@ -1774,7 +1970,7 @@
         },
         "post_merge_next_gate": {
           "type": "string",
-          "const": "V0-FLP1-OPERATOR-ASSIST-PILOT-SCOPE-FREEZE"
+          "const": "V0-FLP1B0B-EXTERNAL-INDEPENDENT-REVIEW"
         },
         "handoff_required_fields": {
           "type": "array",
@@ -2028,8 +2224,220 @@
         }
       ],
       "items": false
+    },
+    "release_authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "R0",
+        "R1",
+        "FIRST_LAUNCH_PRIMARY_ASSET",
+        "BTC_FIRST_LAUNCH_REQUIREMENT",
+        "BTC_FIRST_LAUNCH_BLOCKER",
+        "T1",
+        "T2"
+      ],
+      "properties": {
+        "R0": {
+          "type": "string",
+          "const": "CAPTURE_ONLY"
+        },
+        "R1": {
+          "type": "string",
+          "const": "ETH_OPERATOR_ASSIST"
+        },
+        "FIRST_LAUNCH_PRIMARY_ASSET": {
+          "type": "string",
+          "const": "ETH"
+        },
+        "BTC_FIRST_LAUNCH_REQUIREMENT": {
+          "type": "string",
+          "const": "NONE"
+        },
+        "BTC_FIRST_LAUNCH_BLOCKER": {
+          "type": "string",
+          "const": "NO"
+        },
+        "T1": {
+          "type": "string",
+          "const": "CONTRACT_SCHEMA_GOVERNANCE_ONLY"
+        },
+        "T2": {
+          "type": "string",
+          "const": "SEPARATE_FUTURE_ETH_PUBLIC_CAPTURE_RUNTIME"
+        }
+      }
+    },
+    "future_human_confirmed_execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assigned_release_id",
+        "release_id_authorized",
+        "status",
+        "autonomous_entry",
+        "human_confirmation_required",
+        "implementation_authorized",
+        "testnet_execution_authorized",
+        "mainnet_execution_authorized",
+        "required_controls"
+      ],
+      "properties": {
+        "assigned_release_id": {
+          "type": "null",
+          "const": null
+        },
+        "release_id_authorized": {
+          "type": "boolean",
+          "const": false
+        },
+        "status": {
+          "type": "string",
+          "const": "DEFERRED_SEPARATE_G4_GATE"
+        },
+        "autonomous_entry": {
+          "type": "string",
+          "const": "PROHIBITED"
+        },
+        "human_confirmation_required": {
+          "type": "boolean",
+          "const": true
+        },
+        "implementation_authorized": {
+          "type": "boolean",
+          "const": false
+        },
+        "testnet_execution_authorized": {
+          "type": "boolean",
+          "const": false
+        },
+        "mainnet_execution_authorized": {
+          "type": "boolean",
+          "const": false
+        },
+        "required_controls": {
+          "type": "array",
+          "minItems": 27,
+          "maxItems": 27,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "type": "string",
+              "const": "DEDICATED_LIMITED_CAPITAL_SUBACCOUNT"
+            },
+            {
+              "type": "string",
+              "const": "DEDICATED_API_WALLET"
+            },
+            {
+              "type": "string",
+              "const": "SECRET_ISOLATION"
+            },
+            {
+              "type": "string",
+              "const": "OFFICIAL_SDK_SIGNING"
+            },
+            {
+              "type": "string",
+              "const": "NONCE_AUTHORITY"
+            },
+            {
+              "type": "string",
+              "const": "IMMUTABLE_ORDER_INTENT"
+            },
+            {
+              "type": "string",
+              "const": "ORDER_INTENT_HASH"
+            },
+            {
+              "type": "string",
+              "const": "CLOID_IDEMPOTENCY"
+            },
+            {
+              "type": "string",
+              "const": "EXPIRES_AFTER"
+            },
+            {
+              "type": "string",
+              "const": "PRE_SUBMIT_REVALIDATION"
+            },
+            {
+              "type": "string",
+              "const": "ALO_POST_ONLY"
+            },
+            {
+              "type": "string",
+              "const": "BOUNDED_SLIPPAGE_IOC"
+            },
+            {
+              "type": "string",
+              "const": "SUBMIT_CANCEL"
+            },
+            {
+              "type": "string",
+              "const": "PARTIAL_FILL_HANDLING"
+            },
+            {
+              "type": "string",
+              "const": "ACTUAL_FILLED_POSITION_SIZING"
+            },
+            {
+              "type": "string",
+              "const": "MANDATORY_AUTOMATIC_STOP"
+            },
+            {
+              "type": "string",
+              "const": "FIXED_MULTI_STAGE_AUTOMATIC_TP"
+            },
+            {
+              "type": "string",
+              "const": "REDUCE_ONLY_PROTECTION"
+            },
+            {
+              "type": "string",
+              "const": "EXCHANGE_STATE_PROTECTION_VERIFICATION"
+            },
+            {
+              "type": "string",
+              "const": "POSITION_UNPROTECTED_EMERGENCY_PATH"
+            },
+            {
+              "type": "string",
+              "const": "KILL_SWITCH"
+            },
+            {
+              "type": "string",
+              "const": "DEAD_MAN_PROTECTION"
+            },
+            {
+              "type": "string",
+              "const": "AUDIT"
+            },
+            {
+              "type": "string",
+              "const": "TESTNET"
+            },
+            {
+              "type": "string",
+              "const": "SHADOW"
+            },
+            {
+              "type": "string",
+              "const": "SMALL_CAPITAL_MAINNET_CANARY"
+            },
+            {
+              "type": "string",
+              "const": "SEPARATE_MAINNET_AUTHORIZATION"
+            }
+          ],
+          "items": false
+        }
+      }
     }
   },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woshixiong.github.io/trader-assist-v0/schemas/governance/V0FastLaunchProgram.schema.json",
+  "title": "V0FastLaunchProgram",
   "$defs": {
     "ProjectState": {
       "type": "object",
@@ -2058,7 +2466,19 @@
         "mainnet_execution_authorized",
         "flp1_implementation_authorized",
         "rate_limit_status",
-        "next_gate"
+        "next_gate",
+        "conflict_state",
+        "supersession_state",
+        "authority_hash",
+        "source_catalog_hash",
+        "source_count",
+        "fact_count",
+        "unknown_count",
+        "transition_eligible",
+        "runtime_started",
+        "t2_runtime_started",
+        "mark_ready_prohibited",
+        "merge_prohibited"
       ],
       "properties": {
         "schema_version": {
@@ -2083,7 +2503,7 @@
         },
         "state_base_sha": {
           "type": "string",
-          "const": "c507e2fc1bad6aca175cf833e5bcca63224c3e5f"
+          "const": "78d2d37bfe5a4f3f1d382a2a96e57896ae9676ae"
         },
         "last_completed_implementation": {
           "type": "string",
@@ -2095,36 +2515,46 @@
         },
         "last_policy_state_pr": {
           "type": "integer",
-          "const": 12
+          "const": 14
         },
         "active_milestone": {
           "type": "string",
-          "const": "V0-FLP0-PILOT-AND-LONG-TERM-ROADMAP-AUTHORITY-FREEZE"
+          "const": "V0-FLP1B0B-CAPTURE-NOW-AUTHORITY-AMENDMENT"
         },
         "active_task_id": {
           "type": "string",
-          "const": "V0-FLP0-PILOT-AND-LONG-TERM-ROADMAP-AUTHORITY-FREEZE"
+          "const": "V0-FLP1B0B-CAPTURE-NOW-AUTHORITY-AMENDMENT"
         },
         "active_write_lease": {
           "type": "object",
           "additionalProperties": false,
           "required": [
             "status",
+            "last_lease_id",
             "last_lease_type",
-            "last_governance_level"
+            "last_governance_level",
+            "final_status"
           ],
           "properties": {
             "status": {
               "type": "string",
               "const": "NONE"
             },
+            "last_lease_id": {
+              "type": "string",
+              "const": "V0-FLP1B0B-T1-IMPLEMENTATION-WRITE-LEASE-1"
+            },
             "last_lease_type": {
               "type": "string",
-              "const": "BOUNDED_POLICY_GOVERNANCE_AND_MACHINE_STATE_ONLY"
+              "const": "BOUNDED_CAPTURE_NOW_CONTRACT_SCHEMA_GOVERNANCE_ONLY"
             },
             "last_governance_level": {
               "type": "string",
               "const": "G2"
+            },
+            "final_status": {
+              "type": "string",
+              "const": "CONSUMED_PENDING_PROJECT_CONTROL_ACCEPTANCE"
             }
           }
         },
@@ -2174,7 +2604,55 @@
         },
         "next_gate": {
           "type": "string",
-          "const": "V0-FLP1-OPERATOR-ASSIST-PILOT-SCOPE-FREEZE"
+          "const": "V0-FLP1B0B-EXTERNAL-INDEPENDENT-REVIEW"
+        },
+        "conflict_state": {
+          "type": "string",
+          "const": "OFFICIAL_SOURCE_VARIANT_CONFLICT_DETECTED"
+        },
+        "supersession_state": {
+          "type": "string",
+          "const": "EFFECTIVE_VARIANT_UNDETERMINED"
+        },
+        "authority_hash": {
+          "type": "string",
+          "const": "0e327e566589d8030ff00d4d009eb4b6827679ab508133d66840b2c245dc53df"
+        },
+        "source_catalog_hash": {
+          "type": "string",
+          "const": "0ca27f650f399f8fa481ad9421eab4183c1c13812c71dfa8daaf878719bd99b7"
+        },
+        "source_count": {
+          "type": "integer",
+          "const": 2
+        },
+        "fact_count": {
+          "type": "integer",
+          "const": 25
+        },
+        "unknown_count": {
+          "type": "integer",
+          "const": 14
+        },
+        "transition_eligible": {
+          "type": "boolean",
+          "const": false
+        },
+        "runtime_started": {
+          "type": "boolean",
+          "const": false
+        },
+        "t2_runtime_started": {
+          "type": "boolean",
+          "const": false
+        },
+        "mark_ready_prohibited": {
+          "type": "boolean",
+          "const": true
+        },
+        "merge_prohibited": {
+          "type": "boolean",
+          "const": true
         }
       }
     }

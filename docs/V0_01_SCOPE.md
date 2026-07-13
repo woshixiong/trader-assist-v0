@@ -204,4 +204,40 @@ The capability roadmap remains FL1 trusted data, FL2 signal and risk, FL3 human 
 
 ## Authority
 
-TraderOS remains authoritative for cross-project architecture and production governance. Public market-data definitions never authorize exchange writes. Completion of A6 and this governance freeze do not authorize live transport, health, backfill, finality inference, revision ordering, canonical winner selection, normalized events, Silver, strategy runtime, AI runtime, risk runtime, dashboard runtime, account observation runtime, Testnet/Mainnet execution, or exchange writes. The next gate is `V0-FLP1-OPERATOR-ASSIST-PILOT-SCOPE-FREEZE`; every later slice requires a separate exact-head scope freeze, write lease, CI run, external independent review, and finalization authorization.
+## Capture Now T1 authority amendment
+
+T1 freezes `R0: CAPTURE_ONLY`, `R1: ETH_OPERATOR_ASSIST`,
+`FIRST_LAUNCH_PRIMARY_ASSET: ETH`, `BTC_FIRST_LAUNCH_REQUIREMENT: NONE`,
+`BTC_FIRST_LAUNCH_BLOCKER: NO`, `T1: CONTRACT_SCHEMA_GOVERNANCE_ONLY`, and
+`T2: SEPARATE_FUTURE_ETH_PUBLIC_CAPTURE_RUNTIME`.
+
+`RAW_PUBLIC_EVIDENCE_PLANE` remains the A0-A6 authority for canonical JSON,
+SHA-256, `RawEventV0` identity, content-addressed evidence, manifest,
+checkpoint, replay, and root-wide single-writer rules. `CAPTURE_AUTHORITY_PLANE`
+is separate Capture-only contract and schema authority. T1 does not connect
+Capture records to RawEvent, Bronze, ingress, replay runtime, normalized events,
+Silver, strategy, AI, risk, dashboard, account observation, Testnet/Mainnet
+execution, or exchange writes.
+
+The active R0 has `release_id = V0-R0`, `primary_asset = ETH`,
+`active_strategy_count = 0`, `capture_contracts_authorized = true`, and false
+network runtime, strategy runtime, signal recommendation, risk sizing,
+TradePlan, account runtime, and exchange execution authority. The former
+Operator Assist semantics are preserved as future R1 and remain not implemented
+and not authorized. The former human-confirmed automated execution controls are
+deferred under `future_human_confirmed_execution` with no assigned release and
+status `DEFERRED_SEPARATE_G4_GATE`.
+
+The A4 authority remains immutable: `RATE_LIMIT_STATUS =
+UNRESOLVED_OFFICIAL_LIMIT`, `CONFLICT_STATE =
+OFFICIAL_SOURCE_VARIANT_CONFLICT_DETECTED`, `SUPERSESSION_STATE =
+EFFECTIVE_VARIANT_UNDETERMINED`, authority hash
+`0e327e566589d8030ff00d4d009eb4b6827679ab508133d66840b2c245dc53df`, source
+catalog hash `0ca27f650f399f8fa481ad9421eab4183c1c13812c71dfa8daaf878719bd99b7`,
+2 sources, 25 conflict-safe documented facts, and 14 mandatory blocking
+unknowns. `transition_eligible`, `live_transport_authorized`,
+`account_readonly_runtime_authorized`, `testnet_execution_authorized`,
+`mainnet_execution_authorized`, and `flp1_implementation_authorized` remain
+false.
+
+TraderOS remains authoritative for cross-project architecture and production governance. Public market-data definitions never authorize exchange writes. Completion of A6 and this governance freeze do not authorize live transport, health, backfill, finality inference, revision ordering, canonical winner selection, normalized events, Silver, strategy runtime, AI runtime, risk runtime, dashboard runtime, account observation runtime, Testnet/Mainnet execution, or exchange writes. The next gate is `V0-FLP1B0B-EXTERNAL-INDEPENDENT-REVIEW`; every later slice requires a separate exact-head scope freeze, write lease, CI run, external independent review, and finalization authorization.

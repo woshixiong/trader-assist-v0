@@ -231,4 +231,40 @@ R0 ends at system assistance and manual exchange execution. R1 may add human-con
 
 ## Next gate
 
-A6 completion and the FLP0 authority freeze do not authorize live public transport, health, reconnect, backfill, finality inference, revision ordering, canonical winner selection, normalized events, Silver, strategy runtime, AI recommendation runtime, risk runtime, dashboard runtime, account observation runtime, Testnet/Mainnet execution, or exchange writes. The next gate is `V0-FLP1-OPERATOR-ASSIST-PILOT-SCOPE-FREEZE`. Every future slice still requires a separate exact-main scope freeze, explicit write lease and file allowlist, applicable CI success, external independent review, and separate finalization authorization.
+A6 completion and the Capture Now T1 authority freeze do not authorize live
+public transport, health, reconnect, backfill, finality inference, revision
+ordering, canonical winner selection, normalized events, Silver, strategy
+runtime, AI recommendation runtime, risk runtime, dashboard runtime, account
+observation runtime, Testnet/Mainnet execution, or exchange writes. The next
+gate is `V0-FLP1B0B-EXTERNAL-INDEPENDENT-REVIEW`. Every future slice still
+requires a separate exact-main scope freeze, explicit write lease and file
+allowlist, applicable CI success, external independent review, and separate
+finalization authorization.
+
+## Capture Now T1 plane split
+
+```text
+RAW_PUBLIC_EVIDENCE_PLANE
+  -> A0-A6 canonical JSON, SHA-256, RawEvent identity, content-addressed evidence,
+     manifest, checkpoint, replay, root-wide single writer
+
+CAPTURE_AUTHORITY_PLANE
+  -> CaptureRecordV0 contract/schema, local safety policy, endpoint allowlist,
+     manifest/checkpoint/replay integrity contracts only
+```
+
+T1 is `CONTRACT_SCHEMA_GOVERNANCE_ONLY`. It reuses A0 canonical JSON, SHA-256, RawEvent identity,
+content-addressed-evidence, manifest, checkpoint, replay, and single-writer
+principles. It does not modify or connect existing RawEvent, Bronze, ingress, or
+replay runtime. R0 is `CAPTURE_ONLY`; R1 is future `ETH_OPERATOR_ASSIST`; T2 is
+`SEPARATE_FUTURE_ETH_PUBLIC_CAPTURE_RUNTIME`.
+
+The Capture endpoint allowlist is contract-only and runtime unauthorized:
+source catalog version `hyperliquid-public-mainnet.0.1.0`, source catalog hash
+`0ca27f650f399f8fa481ad9421eab4183c1c13812c71dfa8daaf878719bd99b7`, source
+`hyperliquid-public-mainnet`, endpoint `hl-ws-mainnet-public`, WebSocket,
+public read-only observation, operation `candle`, coin `ETH`, intervals `5m`
+and `15m`, capture mode `WS_TEXT_UTF8_APPLICATION_PAYLOAD`. It rejects BTC,
+Info HTTP, `candleSnapshot`, `1m`, `3m`, `1h`, other endpoints or operations,
+private/account/exchange surfaces, credentials, reconnect, backfill, and
+`runtime_authorized = true`.

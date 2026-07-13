@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-import copy
+import argparse
 import json
+import re
+import subprocess
+import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import jsonschema
 import pytest
 from jsonschema import Draft202012Validator
 
@@ -14,18 +17,75 @@ PROGRAM_PATH = ROOT / "governance" / "V0_FAST_LAUNCH_PROGRAM.json"
 STATE_PATH = ROOT / "governance" / "PROJECT_STATE.json"
 SCHEMA_PATH = ROOT / "schemas" / "governance" / "V0FastLaunchProgram.schema.json"
 
-BASE_SHA = "c507e2fc1bad6aca175cf833e5bcca63224c3e5f"
-TASK_ID = "V0-FLP0-PILOT-AND-LONG-TERM-ROADMAP-AUTHORITY-FREEZE"
-NEXT_GATE = "V0-FLP1-OPERATOR-ASSIST-PILOT-SCOPE-FREEZE"
+TASK_ID = "V0-FLP1B0B-CAPTURE-NOW-AUTHORITY-AMENDMENT"
+BASE_SHA = "78d2d37bfe5a4f3f1d382a2a96e57896ae9676ae"
+NEXT_GATE = "V0-FLP1B0B-EXTERNAL-INDEPENDENT-REVIEW"
+AUTHORITY_HASH = "0e327e566589d8030ff00d4d009eb4b6827679ab508133d66840b2c245dc53df"
+SOURCE_CATALOG_HASH = "0ca27f650f399f8fa481ad9421eab4183c1c13812c71dfa8daaf878719bd99b7"
+COMMIT_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
 
-UPDATED_DOCS = (
+EXPECTED_CHANGED_FILES = {
+    ".github/workflows/ci.yml",
+    "README.md",
+    "docs/V0_01_SCOPE.md",
+    "docs/V0_FAST_LAUNCH_PROGRAM.md",
+    "docs/V0_FLP0_CAPTURE_NOW_AUTHORITY.md",
+    "docs/architecture/V0_01_DATA_PLANE.md",
+    "docs/architecture/AUTHORITY_BOUNDARY.md",
+    "docs/architecture/STRATEGY_AND_DATA_LIFECYCLE.md",
+    "docs/architecture/PILOT_LEARNING_LOOP.md",
+    "governance/V0_FAST_LAUNCH_PROGRAM.json",
+    "governance/PROJECT_STATE.json",
+    "schemas/governance/V0FastLaunchProgram.schema.json",
+    "src/trader_assist_v0/contracts/capture.py",
+    "src/trader_assist_v0/contracts/__init__.py",
+    "scripts/export_schemas.py",
+    "schemas/v0/CaptureRecordV0.schema.json",
+    "tests/test_v0_flp1b0b_capture_now_authority.py",
+    "tests/test_v0_fast_launch_governance_state.py",
+}
+
+EXPECTED_COMMITTED_STATUS_MAP = {
+    ".github/workflows/ci.yml": "M",
+    "README.md": "M",
+    "docs/V0_01_SCOPE.md": "M",
+    "docs/V0_FAST_LAUNCH_PROGRAM.md": "M",
+    "docs/V0_FLP0_CAPTURE_NOW_AUTHORITY.md": "A",
+    "docs/architecture/V0_01_DATA_PLANE.md": "M",
+    "docs/architecture/AUTHORITY_BOUNDARY.md": "M",
+    "docs/architecture/STRATEGY_AND_DATA_LIFECYCLE.md": "M",
+    "docs/architecture/PILOT_LEARNING_LOOP.md": "M",
+    "governance/V0_FAST_LAUNCH_PROGRAM.json": "M",
+    "governance/PROJECT_STATE.json": "M",
+    "schemas/governance/V0FastLaunchProgram.schema.json": "M",
+    "src/trader_assist_v0/contracts/capture.py": "A",
+    "src/trader_assist_v0/contracts/__init__.py": "M",
+    "scripts/export_schemas.py": "M",
+    "schemas/v0/CaptureRecordV0.schema.json": "A",
+    "tests/test_v0_flp1b0b_capture_now_authority.py": "A",
+    "tests/test_v0_fast_launch_governance_state.py": "M",
+}
+
+FORBIDDEN_FILES = {
+    "CODEX.md",
+    "docs/PROJECT_CONTROL_WORKFLOW.md",
+    "docs/V0_01_OFFICIAL_SOURCE_CATALOG.md",
+    "src/trader_assist_v0/contracts/common.py",
+    "src/trader_assist_v0/contracts/events.py",
+    "src/trader_assist_v0/contracts/source_catalog.py",
+    "src/trader_assist_v0/contracts/rate_limits.py",
+    "pyproject.toml",
+    "requirements-dev.lock",
+    "requirements-runtime.lock",
+}
+
+DOC_PATHS = (
     ROOT / "README.md",
-    ROOT / "CODEX.md",
     ROOT / "docs" / "V0_01_SCOPE.md",
+    ROOT / "docs" / "V0_FAST_LAUNCH_PROGRAM.md",
+    ROOT / "docs" / "V0_FLP0_CAPTURE_NOW_AUTHORITY.md",
     ROOT / "docs" / "architecture" / "V0_01_DATA_PLANE.md",
     ROOT / "docs" / "architecture" / "AUTHORITY_BOUNDARY.md",
-    ROOT / "docs" / "PROJECT_CONTROL_WORKFLOW.md",
-    ROOT / "docs" / "V0_FAST_LAUNCH_PROGRAM.md",
     ROOT / "docs" / "architecture" / "STRATEGY_AND_DATA_LIFECYCLE.md",
     ROOT / "docs" / "architecture" / "PILOT_LEARNING_LOOP.md",
 )
@@ -44,886 +104,544 @@ def test_schema_self_validation_and_instances() -> None:
 
     Draft202012Validator.check_schema(schema)
     Draft202012Validator(schema).validate(program)
-
     state_schema = schema["$defs"]["ProjectState"]
     assert isinstance(state_schema, dict)
     Draft202012Validator.check_schema(state_schema)
     Draft202012Validator(state_schema).validate(state)
 
 
-def test_program_and_project_state_identity_parity() -> None:
+def test_program_state_and_release_authority_parity() -> None:
     program = _load_json(PROGRAM_PATH)
     state = _load_json(STATE_PATH)
 
-    assert program["program_id"] == state["program"] == "V0-FAST-LAUNCH"
-    assert program["project"] == state["project"] == "Trader Assist V0"
-    assert program["repository"] == state["repository"]
-    assert program["state_base_sha"] == state["state_base_sha"] == BASE_SHA
     assert program["task_id"] == state["active_task_id"] == TASK_ID
-    assert "current_head_sha" not in state
-    assert state["state_kind"] == "SAFE_STOP_SNAPSHOT"
+    assert program["state_base_sha"] == state["state_base_sha"] == BASE_SHA
+    assert state["active_write_lease"]["status"] == "NONE"
+    assert state["active_write_lease"]["final_status"] == (
+        "CONSUMED_PENDING_PROJECT_CONTROL_ACCEPTANCE"
+    )
     assert state["next_gate"] == NEXT_GATE
+    assert program["recursive_rotation"]["post_merge_next_gate"] == NEXT_GATE
+
+    release_authority = program["release_authority"]
+    assert release_authority == {
+        "R0": "CAPTURE_ONLY",
+        "R1": "ETH_OPERATOR_ASSIST",
+        "FIRST_LAUNCH_PRIMARY_ASSET": "ETH",
+        "BTC_FIRST_LAUNCH_REQUIREMENT": "NONE",
+        "BTC_FIRST_LAUNCH_BLOCKER": "NO",
+        "T1": "CONTRACT_SCHEMA_GOVERNANCE_ONLY",
+        "T2": "SEPARATE_FUTURE_ETH_PUBLIC_CAPTURE_RUNTIME",
+    }
 
 
-def test_completed_authority_and_false_gates_are_preserved() -> None:
+def test_r0_r1_and_deferred_g4_migration() -> None:
+    program = _load_json(PROGRAM_PATH)
+    r0 = program["first_release"]
+    r1 = program["releases"]["R1"]
+    deferred = program["future_human_confirmed_execution"]
+
+    assert r0["release_id"] == "V0-R0"
+    assert r0["release_authority"] == "CAPTURE_ONLY"
+    assert r0["primary_asset"] == "ETH"
+    assert r0["active_strategy_count"] == 0
+    assert r0["capture_contracts_authorized"] is True
+    for gate in (
+        "network_runtime_authorized",
+        "strategy_runtime_authorized",
+        "signal_recommendation_authorized",
+        "risk_sizing_authorized",
+        "trade_plan_authorized",
+        "account_runtime_authorized",
+        "exchange_execution_authorized",
+    ):
+        assert r0[gate] is False
+
+    assert r1["release_id"] == "V0-R1"
+    assert r1["scope"] == "ETH_OPERATOR_ASSIST"
+    assert r1["status"] == "FUTURE_NOT_IMPLEMENTED_NOT_AUTHORIZED"
+    assert r1["primary_asset"] == "ETH"
+    assert r1["signal_outputs"] == ["LONG", "SHORT", "WAIT"]
+    assert r1["deterministic_risk"] is True
+    assert r1["trade_plan"] is True
+    assert r1["presentation"] == ["FAST", "STANDARD"]
+    assert r1["manual_execution"] is True
+    assert r1["readonly_account_order_fill_observation"] is True
+    assert r1["implementation_authorized"] is False
+    assert r1["exchange_execution_authorized"] is False
+
+    assert deferred["assigned_release_id"] is None
+    assert deferred["release_id_authorized"] is False
+    assert deferred["status"] == "DEFERRED_SEPARATE_G4_GATE"
+    assert deferred["autonomous_entry"] == "PROHIBITED"
+    assert deferred["human_confirmation_required"] is True
+    assert deferred["implementation_authorized"] is False
+    assert deferred["testnet_execution_authorized"] is False
+    assert deferred["mainnet_execution_authorized"] is False
+    assert "OFFICIAL_SDK_SIGNING" in deferred["required_controls"]
+    assert "SEPARATE_MAINNET_AUTHORIZATION" in deferred["required_controls"]
+    assert "required_controls" not in r1
+
+
+def test_rate_limit_authority_immutability_and_false_gates() -> None:
     program = _load_json(PROGRAM_PATH)
     state = _load_json(STATE_PATH)
     authority = program["authority"]
 
-    assert authority["last_completed_implementation_pr"] == 11
-    assert authority["last_policy_state_pr"] == 12
-    assert state["last_completed_implementation_pr"] == 11
-    assert state["last_policy_state_pr"] == 12
-    assert authority["rate_limit_status"] == "UNRESOLVED_OFFICIAL_LIMIT"
-    assert state["rate_limit_status"] == "UNRESOLVED_OFFICIAL_LIMIT"
+    for document in (authority, state):
+        assert document["rate_limit_status"] == "UNRESOLVED_OFFICIAL_LIMIT"
+        assert document["conflict_state"] == "OFFICIAL_SOURCE_VARIANT_CONFLICT_DETECTED"
+        assert document["supersession_state"] == "EFFECTIVE_VARIANT_UNDETERMINED"
+        assert document["authority_hash"] == AUTHORITY_HASH
+        assert document["source_catalog_hash"] == SOURCE_CATALOG_HASH
+        assert document["source_count"] == 2
+        assert document["fact_count"] == 25
+        assert document["unknown_count"] == 14
+        for gate in (
+            "transition_eligible",
+            "live_transport_authorized",
+            "account_readonly_runtime_authorized",
+            "testnet_execution_authorized",
+            "mainnet_execution_authorized",
+            "flp1_implementation_authorized",
+        ):
+            assert document[gate] is False
 
-    false_gates = (
-        "live_transport_authorized",
-        "account_readonly_runtime_authorized",
-        "testnet_execution_authorized",
-        "mainnet_execution_authorized",
-        "flp1_implementation_authorized",
+
+def test_docs_share_capture_now_semantics() -> None:
+    required_tokens = (
+        "CAPTURE_ONLY",
+        "ETH_OPERATOR_ASSIST",
+        "CONTRACT_SCHEMA_GOVERNANCE_ONLY",
+        "SEPARATE_FUTURE_ETH_PUBLIC_CAPTURE_RUNTIME",
     )
-    for gate in false_gates:
-        assert authority[gate] is False
-        assert state[gate] is False
+    for path in DOC_PATHS:
+        text = path.read_text(encoding="utf-8")
+        for token in required_tokens:
+            assert token in text, path
 
-    assert state["active_write_lease"]["status"] == "NONE"
-
-
-def test_first_release_and_signal_speed_policy_are_frozen() -> None:
-    program = _load_json(PROGRAM_PATH)
-    release = program["first_release"]
-    speed = program["signal_speed_policy"]
-
-    assert release["release_id"] == "V0-R0"
-    assert release["primary_asset"] == "ETH"
-    assert release["active_strategy_count"] == 1
-    assert release["active_strategy"] == "ETH-LDAR-v0.1"
-    assert release["all_valid_signals_visible"] is True
-    assert release["automatic_exchange_write"] == "PROHIBITED"
-
-    assert speed["speed_classes_are_not_strategies"] is True
-    assert speed["classes"]["FAST"]["all_valid_signals_alerted"] is True
-    assert speed["classes"]["FAST"]["execution_optional"] is True
-    assert speed["classes"]["FAST"]["missed_execution_is_strategy_failure"] is False
-    assert speed["classes"]["STANDARD"]["all_valid_signals_alerted"] is True
-    assert {
-        "LIQUIDITY_SWEEP_RECLAIM_FAST",
-        "LIQUIDITY_SWEEP_PULLBACK_STANDARD",
-    } <= set(speed["required_patterns"])
+    capture_doc = (ROOT / "docs" / "V0_FLP0_CAPTURE_NOW_AUTHORITY.md").read_text(
+        encoding="utf-8"
+    )
+    assert "RAW_PUBLIC_EVIDENCE_PLANE" in capture_doc
+    assert "CAPTURE_AUTHORITY_PLANE" in capture_doc
+    assert AUTHORITY_HASH in capture_doc
+    assert SOURCE_CATALOG_HASH in capture_doc
 
 
-def test_lifecycles_learning_loop_and_roadmap_are_frozen() -> None:
-    program = _load_json(PROGRAM_PATH)
-    strategy = program["strategy_lifecycle"]
-    data = program["data_product_lifecycle"]
-    learning = program["learning_loop"]
-
-    assert "required_data_products" in strategy["manifest_required_fields"]
-    assert "replay_compatible" in strategy["manifest_required_fields"]
-    assert data["strategy_raw_exchange_json_dependency"] == "PROHIBITED"
-    assert data["new_data_auto_affects_existing_strategy"] is False
-    assert learning["online_learning"] == "PROHIBITED"
-    assert learning["automatic_production_rule_mutation"] == "PROHIBITED"
-
-    assert program["capability_milestones"] == {
-        "FL1": "TRUSTED_DATA_RUNTIME",
-        "FL2": "SIGNAL_AND_RISK_ENGINE",
-        "FL3": "HUMAN_REVIEW_SURFACE",
-        "FL4": "HUMAN_CONFIRMED_EXECUTION",
+def test_exact_changed_file_scope_and_forbidden_boundaries() -> None:
+    changed = EXPECTED_CHANGED_FILES
+    assert len(changed) == 18
+    assert changed == {
+        ".github/workflows/ci.yml",
+        "README.md",
+        "docs/V0_01_SCOPE.md",
+        "docs/V0_FAST_LAUNCH_PROGRAM.md",
+        "docs/V0_FLP0_CAPTURE_NOW_AUTHORITY.md",
+        "docs/architecture/V0_01_DATA_PLANE.md",
+        "docs/architecture/AUTHORITY_BOUNDARY.md",
+        "docs/architecture/STRATEGY_AND_DATA_LIFECYCLE.md",
+        "docs/architecture/PILOT_LEARNING_LOOP.md",
+        "governance/V0_FAST_LAUNCH_PROGRAM.json",
+        "governance/PROJECT_STATE.json",
+        "schemas/governance/V0FastLaunchProgram.schema.json",
+        "schemas/v0/CaptureRecordV0.schema.json",
+        "scripts/export_schemas.py",
+        "src/trader_assist_v0/contracts/__init__.py",
+        "src/trader_assist_v0/contracts/capture.py",
+        "tests/test_v0_fast_launch_governance_state.py",
+        "tests/test_v0_flp1b0b_capture_now_authority.py",
     }
-    assert program["releases"]["R1"]["autonomous_entry"] == "PROHIBITED"
-    assert program["releases"]["R1"]["human_confirmation_required"] is True
+    assert set(EXPECTED_COMMITTED_STATUS_MAP) == changed
+    assert tuple(EXPECTED_COMMITTED_STATUS_MAP.values()).count("A") == 4
+    assert tuple(EXPECTED_COMMITTED_STATUS_MAP.values()).count("M") == 14
+    assert not _scope_boundary_errors(changed)
 
 
-def test_governance_and_rotation_policy_are_frozen() -> None:
-    program = _load_json(PROGRAM_PATH)
-    levels = program["governance_levels"]
-    route = program["development_route"]
-    review = program["review_finalization_policy"]
-    rotation = program["recursive_rotation"]
-
-    assert levels["flp1_minimum"] == "G3"
-    assert levels["fl4_requirement"] == "SEPARATE_G4_EXECUTION_AND_SECURITY_REVIEW"
-    assert route["finding_classes"] == ["BLOCKER", "FOLLOW_UP"]
-    assert route["only_blocker_prevents_merge"] is True
-    assert route["bounded_repairs_same_scope_required"] is True
-    assert route["bounded_repairs_original_pr_required"] is True
-    assert review["external_independent_review_required"] is True
-    assert review["mark_ready_prohibited"] is True
-    assert review["merge_prohibited"] is True
-    assert review["exact_head_review_required"] is True
-    assert review["writer_reviewer_separation_required"] is True
-    assert review["finalization_separate_task_required"] is True
-    assert review["separate_project_control_finalization_authorization_required"] is True
-    assert review["pre_finalization_base_head_state_reverification_required"] is True
-    assert review["unresolved_blocker_prevents_merge"] is True
-    assert rotation["required"] is True
-    assert rotation["next_window_permission"] == "STRICT_READ_ONLY"
-    assert rotation["post_merge_next_gate"] == NEXT_GATE
-    assert rotation["current_safe_stop_point_required"] is True
-    assert rotation["complete_handoff_prompt_required"] is True
-    assert all(rotation["recursive_window_rotation_requirement"].values())
-
-
-Mutation = tuple[str, tuple[str | int, ...], Any]
-
-R1_REQUIRED_CONTROLS = (
-    "DEDICATED_LIMITED_CAPITAL_SUBACCOUNT",
-    "DEDICATED_API_WALLET",
-    "SECRET_ISOLATION",
-    "OFFICIAL_SDK_SIGNING",
-    "NONCE_AUTHORITY",
-    "IMMUTABLE_ORDER_INTENT",
-    "ORDER_INTENT_HASH",
-    "CLOID_IDEMPOTENCY",
-    "EXPIRES_AFTER",
-    "PRE_SUBMIT_REVALIDATION",
-    "ALO_POST_ONLY",
-    "BOUNDED_SLIPPAGE_IOC",
-    "SUBMIT_CANCEL",
-    "PARTIAL_FILL_HANDLING",
-    "ACTUAL_FILLED_POSITION_SIZING",
-    "MANDATORY_AUTOMATIC_STOP",
-    "FIXED_MULTI_STAGE_AUTOMATIC_TP",
-    "REDUCE_ONLY_PROTECTION",
-    "EXCHANGE_STATE_PROTECTION_VERIFICATION",
-    "POSITION_UNPROTECTED_EMERGENCY_PATH",
-    "KILL_SWITCH",
-    "DEAD_MAN_PROTECTION",
-    "AUDIT",
-    "TESTNET",
-    "SHADOW",
-    "SMALL_CAPITAL_MAINNET_CANARY",
-    "SEPARATE_MAINNET_AUTHORIZATION",
-)
-
-R2_FINALIZATION_FIELDS = (
-    "exact_head_review_required",
-    "writer_reviewer_separation_required",
-    "finalization_separate_task_required",
-    "separate_project_control_finalization_authorization_required",
-    "pre_finalization_base_head_state_reverification_required",
-    "unresolved_blocker_prevents_merge",
-)
-
-R2_REPAIR_ROUTE_FIELDS = (
-    "bounded_repairs_same_scope_required",
-    "bounded_repairs_original_pr_required",
-)
-
-R2_ROTATION_TRIGGERS = (
-    "PR_MERGED",
-    "ISSUE_OR_EPIC_COMPLETED",
-    "STAGE_ENDS_BEFORE_NEW_STAGE",
-    "REVIEW_PLUS_REPAIR_EXCEEDS_TWO_ROUNDS",
-    "HEAD_DRIFT",
-    "WRITER_COLLISION",
-    "WRITE_LEASE_REVOKED_OR_PERMISSION_CHANGED",
-    "MULTIPLE_PRS_STAGES_OR_STALE_STATES",
-    "USER_REPEATEDLY_REQUESTS_PROJECT_STATUS",
-    "CONTEXT_LENGTH_RISKS_STALE_FACT_CONTAMINATION",
-    "OLD_HEAD_CI_OR_PR_STATE_REUSE_RISK",
-    "PROJECT_SWITCH_BETWEEN_TRADER_ASSIST_V0_AND_TRADE_OS",
-    "USER_EXPLICITLY_REQUESTS_NEW_WINDOW",
-    "MULTIPLE_EXECUTION_REVIEW_REPAIR_OR_FINALIZATION_PROMPTS",
-)
-
-R2_REQUIRED_ROTATION_OUTPUT = (
-    "WINDOW_ROTATION_REQUIRED",
-    "REASON",
-    "CURRENT_SAFE_STOP_POINT",
-    "NEXT_WINDOW_HANDOFF_PROMPT",
-)
-
-R2_ROTATION_FLAGS = (
-    "current_safe_stop_point_required",
-    "complete_handoff_prompt_required",
-)
-
-R2_RECURSIVE_REQUIREMENT_FIELDS = (
-    "future_handoffs_must_include_complete_rotation_policy",
-    "future_handoffs_must_include_all_rotation_triggers",
-    "future_handoffs_must_include_required_rotation_output",
-    "future_handoffs_must_include_recursive_requirement_itself",
-    "receiving_window_must_propagate_requirement",
-    "applies_to_every_later_handoff",
-    "one_time_summary_or_non_propagating_simplification_prohibited",
-)
-
-
-def _case(mutation: Mutation, case_id: str) -> Any:
-    return pytest.param(mutation, id=case_id)
-
-
-def _program_mutation_cases() -> list[Any]:
-    cases = [
-        _case(
-            ("set", ("signal_speed_policy", "classes", "FAST", "all_valid_signals_alerted"), False),
-            "signals-fast-alert-disabled",
-        ),
-        _case(
-            ("set", ("signal_speed_policy", "classes", "FAST", "short_expiry"), False),
-            "signals-fast-short-expiry-disabled",
-        ),
-        _case(
-            ("set", ("signal_speed_policy", "classes", "FAST", "execution_optional"), False),
-            "signals-fast-optional-disabled",
-        ),
-        _case(
-            (
-                "set",
-                ("signal_speed_policy", "classes", "FAST", "max_entry_boundary_required"),
-                False,
-            ),
-            "signals-fast-max-entry-disabled",
-        ),
-        _case(
-            ("set", ("signal_speed_policy", "classes", "FAST", "do_not_chase_required"), False),
-            "signals-fast-do-not-chase-disabled",
-        ),
-        _case(
-            (
-                "set",
-                ("signal_speed_policy", "classes", "FAST", "human_actionability_recorded"),
-                False,
-            ),
-            "signals-fast-actionability-disabled",
-        ),
-        _case(
-            (
-                "set",
-                ("signal_speed_policy", "classes", "FAST", "missed_execution_is_strategy_failure"),
-                True,
-            ),
-            "signals-fast-missed-becomes-failure",
-        ),
-        _case(
-            (
-                "set",
-                ("signal_speed_policy", "classes", "STANDARD", "all_valid_signals_alerted"),
-                False,
-            ),
-            "signals-standard-alert-disabled",
-        ),
-        _case(
-            ("set", ("signal_speed_policy", "classes", "STANDARD", "longer_expiry"), False),
-            "signals-standard-longer-expiry-disabled",
-        ),
-        _case(
-            (
-                "set",
-                ("signal_speed_policy", "classes", "STANDARD", "human_check_and_order_expected"),
-                False,
-            ),
-            "signals-standard-human-check-disabled",
-        ),
-        _case(
-            (
-                "set",
-                (
-                    "signal_speed_policy",
-                    "classes",
-                    "STANDARD",
-                    "accepted_signal_execution_expected",
-                ),
-                False,
-            ),
-            "signals-standard-accepted-execution-disabled",
-        ),
-        _case(
-            (
-                "remove_value",
-                ("signal_speed_policy", "required_patterns"),
-                "LIQUIDITY_SWEEP_RECLAIM_FAST",
-            ),
-            "signals-pattern-deleted",
-        ),
-        _case(
-            (
-                "replace_value",
-                ("signal_speed_policy", "required_patterns"),
-                ("LIQUIDITY_SWEEP_RECLAIM_FAST", "HOSTILE_PATTERN"),
-            ),
-            "signals-pattern-replaced",
-        ),
-        _case(
-            ("append", ("signal_speed_policy", "required_patterns"), "HOSTILE_PATTERN"),
-            "signals-pattern-added",
-        ),
-        _case(
-            ("remove_value", ("signal_speed_policy", "lifecycle"), "PREPARE"),
-            "signals-lifecycle-stage-deleted",
-        ),
-        _case(
-            ("swap", ("signal_speed_policy", "lifecycle"), (0, 1)), "signals-lifecycle-reordered"
-        ),
-        _case(
-            (
-                "remove_value",
-                ("strategy_lifecycle", "manifest_required_fields"),
-                "strategy_version",
-            ),
-            "strategy-manifest-field-deleted",
-        ),
-        _case(
-            (
-                "replace_value",
-                ("strategy_lifecycle", "manifest_required_fields"),
-                ("strategy_version", "strategy_name"),
-            ),
-            "strategy-manifest-field-renamed",
-        ),
-        _case(
-            ("swap", ("strategy_lifecycle", "promotion_pipeline"), (1, 2)),
-            "strategy-promotion-pipeline-reordered",
-        ),
-        _case(
-            ("remove_value", ("strategy_lifecycle", "promotion_pipeline"), "INDEPENDENT_REVIEW"),
-            "strategy-independent-review-deleted",
-        ),
-        _case(
-            ("set", ("strategy_lifecycle", "disable_policy", "delete_history"), True),
-            "strategy-disabled-history-deletable",
-        ),
-        _case(
-            ("set", ("strategy_lifecycle", "disable_policy", "delete_records"), True),
-            "strategy-disabled-version-explanation-deletable",
-        ),
-        _case(
-            ("set", ("strategy_lifecycle", "disable_policy", "delete_replay_capability"), True),
-            "strategy-disabled-replay-deletable",
-        ),
-        _case(
-            ("append", ("strategy_lifecycle", "first_release"), "COMPLEX_DYNAMIC_HOT_LOADING"),
-            "strategy-complex-hot-loading-enabled",
-        ),
-        _case(
-            (
-                "remove_value",
-                ("strategy_lifecycle", "deferred_strategies"),
-                "AUTOMATIC_REGIME_ROUTER",
-            ),
-            "strategy-deferred-route-item-deleted",
-        ),
-        _case(
-            ("set", ("data_product_lifecycle", "strategy_raw_exchange_json_dependency"), "ALLOWED"),
-            "data-raw-exchange-json-allowed",
-        ),
-        _case(
-            ("remove_value", ("data_product_lifecycle", "pipeline"), "VALIDATION"),
-            "data-pipeline-stage-deleted",
-        ),
-        _case(("swap", ("data_product_lifecycle", "pipeline"), (2, 3)), "data-pipeline-reordered"),
-        _case(
-            (
-                "remove_value",
-                ("data_product_lifecycle", "manifest_required_fields"),
-                "replay_format",
-            ),
-            "data-manifest-field-deleted",
-        ),
-        _case(
-            ("set", ("data_product_lifecycle", "strategy_dependency_declaration_required"), False),
-            "data-dependency-declaration-disabled",
-        ),
-        _case(
-            ("set", ("data_product_lifecycle", "new_data_auto_affects_existing_strategy"), True),
-            "data-new-product-auto-affects-old-strategy",
-        ),
-        _case(
-            (
-                "remove_value",
-                ("data_product_lifecycle", "decommission_gates"),
-                "HISTORICAL_DECODER_RETAINED",
-            ),
-            "data-historical-decoder-gate-deleted",
-        ),
-        _case(
-            ("remove_value", ("data_product_lifecycle", "decommission_gates"), "REPLAY_RETAINED"),
-            "data-replay-gate-deleted",
-        ),
-        _case(
-            (
-                "remove_value",
-                ("data_product_lifecycle", "decommission_gates"),
-                "MIGRATION_COMPLETED",
-            ),
-            "data-migration-gate-deleted",
-        ),
-        _case(
-            ("set", ("data_product_lifecycle", "first_release_scope"), "ALL_DATA_PRODUCTS"),
-            "data-r0-scope-expanded",
-        ),
-        _case(
-            ("set", ("learning_loop", "online_learning"), "ALLOWED"),
-            "learning-online-learning-allowed",
-        ),
-        _case(
-            ("set", ("learning_loop", "automatic_production_rule_mutation"), "ALLOWED"),
-            "learning-automatic-production-mutation-allowed",
-        ),
-        _case(
-            ("remove_value", ("learning_loop", "pipeline"), "DEVIATION_ANALYSIS"),
-            "learning-pipeline-stage-deleted",
-        ),
-        _case(("swap", ("learning_loop", "pipeline"), (5, 6)), "learning-pipeline-reordered"),
-        _case(
-            ("remove_value", ("learning_loop", "metrics"), "MATCHING_CONFIDENCE"),
-            "learning-measurement-deleted",
-        ),
-        _case(
-            ("remove_value", ("learning_loop", "issue_categories"), "RISK"),
-            "learning-category-deleted",
-        ),
-        _case(
-            ("append", ("learning_loop", "issue_categories"), "UNAUTHORIZED_CATEGORY"),
-            "learning-category-added",
-        ),
-        _case(("append", ("learning_loop", "severity_levels"), "P4"), "learning-severity-added"),
-        _case(
-            ("remove_value", ("learning_loop", "improvement_pipeline"), "REPLAY"),
-            "learning-improvement-stage-deleted",
-        ),
-        _case(
-            ("swap", ("learning_loop", "improvement_pipeline"), (3, 4)),
-            "learning-improvement-pipeline-reordered",
-        ),
-        _case(("set", ("first_release", "primary_asset"), "BTC"), "release-r0-asset-changed"),
-        _case(
-            ("set", ("first_release", "active_strategy_count"), 2),
-            "release-r0-strategy-count-changed",
-        ),
-        _case(
-            ("set", ("first_release", "active_strategy"), "HOSTILE-v1"),
-            "release-r0-strategy-changed",
-        ),
-        _case(
-            ("set", ("first_release", "execution_mode"), "AUTOMATED"),
-            "release-r0-manual-execution-changed",
-        ),
-        _case(
-            ("set", ("first_release", "ai_role"), "TRADING_AUTHORITY"), "release-r0-ai-role-changed"
-        ),
-        _case(
-            ("set", ("first_release", "automatic_exchange_write"), "ALLOWED"),
-            "release-r0-exchange-write-enabled",
-        ),
-        _case(
-            ("set", ("first_release", "all_valid_signals_visible"), False),
-            "release-r0-all-signal-visibility-disabled",
-        ),
-        _case(("set", ("releases", "R0", "scope"), "FL4"), "release-r0-vertical-scope-changed"),
-        _case(
-            ("set", ("releases", "R0", "execution"), "AUTOMATED"), "release-r0-manual-only-disabled"
-        ),
-        _case(
-            ("set", ("releases", "R1", "autonomous_entry"), "ALLOWED"),
-            "release-r1-autonomous-entry-allowed",
-        ),
-        _case(
-            ("set", ("releases", "R1", "human_confirmation_required"), False),
-            "release-r1-human-confirmation-disabled",
-        ),
-        _case(
-            ("set", ("governance_levels", "flp1_minimum"), "G0"),
-            "governance-flp1-minimum-lowered-g0",
-        ),
-        _case(
-            ("set", ("governance_levels", "flp1_minimum"), "G1"),
-            "governance-flp1-minimum-lowered-g1",
-        ),
-        _case(
-            ("remove_key", ("governance_levels", "fl4_requirement"), None),
-            "governance-fl4-execution-security-review-deleted",
-        ),
-        _case(
-            (
-                "remove_value",
-                ("development_route", "pre_launch_main_prs"),
-                "V0-FLP1-DECISION-TO-OUTCOME-OPERATOR-ASSIST-PILOT",
-            ),
-            "route-two-pr-plan-deleted",
-        ),
-        _case(
-            ("set", ("development_route", "flp1_is_vertical_pilot_pr"), False),
-            "route-vertical-pilot-disabled",
-        ),
-        _case(
-            (
-                "set",
-                ("development_route", "full_independent_review_only_for_final_merge_candidate"),
-                False,
-            ),
-            "route-final-independent-review-disabled",
-        ),
-        _case(
-            ("set", ("development_route", "only_blocker_prevents_merge"), False),
-            "route-only-blocker-prevents-merge-disabled",
-        ),
-        _case(
-            ("set", ("review_finalization_policy", "review_permission"), "BOUNDED_WRITE"),
-            "finalization-reviewer-permission-changed",
-        ),
-        _case(
-            ("set", ("review_finalization_policy", "exact_head_ci_required"), False),
-            "finalization-exact-head-ci-disabled",
-        ),
-        _case(
-            ("set", ("review_finalization_policy", "mark_ready_prohibited"), False),
-            "finalization-mark-ready-prohibition-disabled",
-        ),
-        _case(
-            ("set", ("review_finalization_policy", "merge_prohibited"), False),
-            "finalization-merge-prohibition-disabled",
-        ),
-        _case(
-            (
-                "add_property",
-                ("review_finalization_policy",),
-                ("separate_project_control_authorization_required", False),
-            ),
-            "finalization-separate-authorization-bypass-added",
-        ),
-        _case(
-            ("set", ("recursive_rotation", "required"), False),
-            "rotation-recursive-required-disabled",
-        ),
-        _case(
-            ("remove_value", ("recursive_rotation", "handoff_required_fields"), "STOP_CONDITIONS"),
-            "rotation-handoff-field-deleted",
-        ),
-        _case(
-            ("set", ("recursive_rotation", "post_merge_next_gate"), "V0-FLP1-IMPLEMENTATION"),
-            "rotation-next-gate-replaced",
-        ),
-        _case(
-            ("remove_key", ("recursive_rotation", "verification_warning"), None),
-            "rotation-verification-warning-deleted",
-        ),
-        _case(
-            ("remove_value", ("deferred_capabilities",), "AUTONOMOUS_ENTRY"),
-            "deferred-autonomous-entry-deleted",
-        ),
-        _case(
-            ("remove_value", ("deferred_capabilities",), "ONLINE_LEARNING"),
-            "deferred-online-learning-deleted",
-        ),
-        _case(
-            ("remove_value", ("deferred_capabilities",), "AUTOMATIC_PRODUCTION_PARAMETER_MUTATION"),
-            "deferred-automatic-mutation-deleted",
-        ),
-        _case(
-            ("remove_value", ("deferred_capabilities",), "MULTI_STRATEGY_PRODUCTION_ROUTING"),
-            "deferred-multi-strategy-routing-deleted",
-        ),
-        _case(
-            ("remove_value", ("deferred_capabilities",), "MULTI_ASSET_PRODUCTION_ROUTING"),
-            "deferred-multi-asset-routing-deleted",
-        ),
-    ]
-    for severity in ("P0", "P1", "P2", "P3"):
-        cases.append(
-            _case(
-                ("remove_value", ("learning_loop", "severity_levels"), severity),
-                f"learning-severity-{severity.lower()}-deleted",
-            )
-        )
-    for control in R1_REQUIRED_CONTROLS:
-        cases.append(
-            _case(
-                ("remove_value", ("releases", "R1", "required_controls"), control),
-                f"release-r1-control-{control.lower().replace('_', '-')}-deleted",
-            )
-        )
-    for field in R2_FINALIZATION_FIELDS:
-        case_name = field.removesuffix("_required").replace("_", "-")
-        cases.extend(
-            (
-                _case(
-                    ("remove_key", ("review_finalization_policy", field), None),
-                    f"r2-finalization-{case_name}-deleted",
-                ),
-                _case(
-                    ("set", ("review_finalization_policy", field), False),
-                    f"r2-finalization-{case_name}-false",
-                ),
-            )
-        )
-    for field in R2_REPAIR_ROUTE_FIELDS:
-        case_name = field.removesuffix("_required").replace("_", "-")
-        cases.extend(
-            (
-                _case(
-                    ("remove_key", ("development_route", field), None),
-                    f"r2-route-{case_name}-deleted",
-                ),
-                _case(
-                    ("set", ("development_route", field), False),
-                    f"r2-route-{case_name}-false",
-                ),
-            )
-        )
-    for trigger in R2_ROTATION_TRIGGERS:
-        cases.append(
-            _case(
-                ("remove_value", ("recursive_rotation", "rotation_triggers"), trigger),
-                f"r2-rotation-trigger-{trigger.lower().replace('_', '-')}-deleted",
-            )
-        )
-    cases.extend(
-        (
-            _case(
-                (
-                    "replace_value",
-                    ("recursive_rotation", "rotation_triggers"),
-                    ("HEAD_DRIFT", "UNAUTHORIZED_TRIGGER"),
-                ),
-                "r2-rotation-trigger-replaced",
-            ),
-            _case(
-                ("append", ("recursive_rotation", "rotation_triggers"), "UNAUTHORIZED_TRIGGER"),
-                "r2-rotation-trigger-added",
-            ),
-            _case(
-                ("swap", ("recursive_rotation", "rotation_triggers"), (0, 1)),
-                "r2-rotation-triggers-reordered",
-            ),
-            _case(
-                ("set", ("recursive_rotation", "rotation_triggers"), ["PR_MERGED"]),
-                "r2-rotation-triggers-replaced-with-short-open-list",
-            ),
-        )
+def _synthetic_scope_snapshot(
+    *,
+    committed: dict[str, str] | None = None,
+    staged: dict[str, str] | None = None,
+    unstaged: dict[str, str] | None = None,
+    untracked: tuple[str, ...] = (),
+    malformed_records: tuple[str, ...] = (),
+) -> _ScopeSnapshot:
+    return _ScopeSnapshot(
+        committed=dict(EXPECTED_COMMITTED_STATUS_MAP if committed is None else committed),
+        staged={} if staged is None else staged,
+        unstaged={} if unstaged is None else unstaged,
+        untracked=untracked,
+        malformed_records=malformed_records,
     )
-    for output_field in R2_REQUIRED_ROTATION_OUTPUT:
-        cases.append(
-            _case(
-                (
-                    "remove_value",
-                    ("recursive_rotation", "required_rotation_output"),
-                    output_field,
-                ),
-                f"r2-rotation-output-{output_field.lower().replace('_', '-')}-deleted",
-            )
-        )
-    cases.extend(
-        (
-            _case(
-                (
-                    "replace_value",
-                    ("recursive_rotation", "required_rotation_output"),
-                    ("REASON", "UNAUTHORIZED_OUTPUT"),
-                ),
-                "r2-rotation-output-replaced",
-            ),
-            _case(
-                (
-                    "append",
-                    ("recursive_rotation", "required_rotation_output"),
-                    "UNAUTHORIZED_OUTPUT",
-                ),
-                "r2-rotation-output-added",
-            ),
-            _case(
-                ("swap", ("recursive_rotation", "required_rotation_output"), (0, 1)),
-                "r2-rotation-output-reordered",
-            ),
-        )
+
+
+def test_scope_parser_is_nul_safe_and_preserves_tab_and_newline_paths() -> None:
+    parsed = _parse_stable_status_stream(
+        b"M\0tab\tpath.py\0A\0line\nbreak.py\0",
+        "attack",
     )
-    for field in R2_ROTATION_FLAGS:
-        case_name = field.removesuffix("_required").replace("_", "-")
-        cases.extend(
-            (
-                _case(
-                    ("remove_key", ("recursive_rotation", field), None),
-                    f"r2-rotation-{case_name}-deleted",
-                ),
-                _case(
-                    ("set", ("recursive_rotation", field), False),
-                    f"r2-rotation-{case_name}-false",
-                ),
-            )
-        )
-    cases.append(
-        _case(
-            ("remove_key", ("recursive_rotation", "recursive_window_rotation_requirement"), None),
-            "r2-recursive-requirement-object-deleted",
-        )
+    assert parsed == {"tab\tpath.py": "M", "line\nbreak.py": "A"}
+    assert _parse_untracked_stream(b"tab\tpath.py\0line\nbreak.py\0", "attack") == (
+        "tab\tpath.py",
+        "line\nbreak.py",
     )
-    for field in R2_RECURSIVE_REQUIREMENT_FIELDS:
-        case_name = field.replace("_", "-")
-        path = ("recursive_rotation", "recursive_window_rotation_requirement", field)
-        cases.extend(
-            (
-                _case(("remove_key", path, None), f"r2-recursive-{case_name}-deleted"),
-                _case(("set", path, False), f"r2-recursive-{case_name}-false"),
-            )
-        )
-    cases.extend(
-        (
-            _case(
-                (
-                    "add_property",
-                    ("recursive_rotation", "recursive_window_rotation_requirement"),
-                    ("unexpected_authority", True),
-                ),
-                "r2-recursive-unexpected-property-added",
-            ),
-            _case(
-                (
-                    "set",
-                    ("recursive_rotation", "recursive_window_rotation_requirement"),
-                    "Future handoffs should probably propagate this policy.",
-                ),
-                "r2-recursive-object-replaced-with-prose",
-            ),
-            _case(
-                (
-                    "set",
-                    (
-                        "recursive_rotation",
-                        "recursive_window_rotation_requirement",
-                        "one_time_summary_or_non_propagating_simplification_prohibited",
-                    ),
-                    False,
-                ),
-                "r2-recursive-one-time-summary-allowed",
-            ),
-        )
-    )
-    closed_objects = {
-        "root": (),
-        "authority": ("authority",),
-        "first-release": ("first_release",),
-        "signal-policy": ("signal_speed_policy",),
-        "signal-classes": ("signal_speed_policy", "classes"),
-        "signal-fast": ("signal_speed_policy", "classes", "FAST"),
-        "signal-standard": ("signal_speed_policy", "classes", "STANDARD"),
-        "strategy": ("strategy_lifecycle",),
-        "strategy-disable-policy": ("strategy_lifecycle", "disable_policy"),
-        "data-product": ("data_product_lifecycle",),
-        "learning-loop": ("learning_loop",),
-        "milestones": ("capability_milestones",),
-        "releases": ("releases",),
-        "release-r0": ("releases", "R0"),
-        "release-r1": ("releases", "R1"),
-        "governance": ("governance_levels",),
-        "development-route": ("development_route",),
-        "finalization": ("review_finalization_policy",),
-        "rotation": ("recursive_rotation",),
-        "recursive-requirement": (
-            "recursive_rotation",
-            "recursive_window_rotation_requirement",
-        ),
-    }
-    for name, object_path in closed_objects.items():
-        cases.append(
-            _case(
-                ("add_property", object_path, ("unexpected_authority", True)),
-                f"closed-object-{name}-rejects-unexpected-property",
-            )
-        )
-    return cases
-
-
-def _descend(document: Any, path: tuple[str | int, ...]) -> Any:
-    current = document
-    for part in path:
-        current = current[part]
-    return current
-
-
-def _apply_mutation(document: dict[str, Any], mutation: Mutation) -> None:
-    operation, path, value = mutation
-    if operation == "set":
-        parent = _descend(document, path[:-1])
-        parent[path[-1]] = value
-    elif operation == "remove_key":
-        parent = _descend(document, path[:-1])
-        del parent[path[-1]]
-    elif operation == "remove_value":
-        target = _descend(document, path)
-        target.remove(value)
-    elif operation == "replace_value":
-        target = _descend(document, path)
-        old, new = value
-        target[target.index(old)] = new
-    elif operation == "append":
-        target = _descend(document, path)
-        target.append(value)
-    elif operation == "swap":
-        target = _descend(document, path)
-        left, right = value
-        target[left], target[right] = target[right], target[left]
-    elif operation == "add_property":
-        target = _descend(document, path)
-        key, added = value
-        target[key] = added
-    else:  # pragma: no cover - mutation table is static
-        raise AssertionError(f"unknown mutation operation: {operation}")
-
-
-def _expected_validation_path(mutation: Mutation) -> tuple[str | int, ...]:
-    operation, path, _ = mutation
-    if operation == "remove_key":
-        return path[:-1]
-    return path
-
-
-@pytest.mark.parametrize("mutation", _program_mutation_cases())
-def test_schema_rejects_hostile_program_mutation(mutation: Mutation) -> None:
-    schema = _load_json(SCHEMA_PATH)
-    hostile = copy.deepcopy(_load_json(PROGRAM_PATH))
-    _apply_mutation(hostile, mutation)
-
-    with pytest.raises(jsonschema.ValidationError) as exc_info:
-        Draft202012Validator(schema).validate(hostile)
-
-    expected_path = _expected_validation_path(mutation)
-    actual_path = tuple(exc_info.value.absolute_path)
-    assert actual_path[: len(expected_path)] == expected_path
 
 
 @pytest.mark.parametrize(
-    ("object_path", "case_id"),
+    "raw, message",
     (
-        ((), "root"),
-        (("active_write_lease",), "active-write-lease"),
+        (b"M\0truncated", "truncated"),
+        (b"M\0", "malformed"),
+        (b"Q\0path.py\0", "unknown status"),
+        (b"M\0bad-\xff.py\0", "non-UTF-8"),
     ),
-    ids=lambda value: value if isinstance(value, str) else None,
 )
-def test_project_state_schema_rejects_unexpected_properties(
-    object_path: tuple[str, ...],
-    case_id: str,
+def test_scope_parser_rejects_malformed_unknown_and_non_utf8_streams(
+    raw: bytes,
+    message: str,
 ) -> None:
-    del case_id
-    schema = _load_json(SCHEMA_PATH)["$defs"]["ProjectState"]
-    hostile = copy.deepcopy(_load_json(STATE_PATH))
-    target = _descend(hostile, object_path)
-    target["unexpected_authority"] = True
-
-    with pytest.raises(jsonschema.ValidationError):
-        Draft202012Validator(schema).validate(hostile)
+    with pytest.raises(_ScopeParseError, match=message):
+        _parse_stable_status_stream(raw, "attack")
 
 
-def test_updated_documents_agree_and_remove_ambiguous_state_wording() -> None:
-    required_markers = (
-        "V0-FAST-LAUNCH",
-        "LAST_COMPLETED_IMPLEMENTATION_PR: 11",
-        "LAST_POLICY_STATE_PR: 12",
+@pytest.mark.parametrize("range_name", ("committed", "staged", "unstaged"))
+def test_scope_gate_rejects_deletion_in_every_status_map(range_name: str) -> None:
+    maps = {
+        "committed": dict(EXPECTED_COMMITTED_STATUS_MAP),
+        "staged": {},
+        "unstaged": {},
+    }
+    maps[range_name]["README.md"] = "D"
+    snapshot = _synthetic_scope_snapshot(
+        committed=maps["committed"],
+        staged=maps["staged"],
+        unstaged=maps["unstaged"],
     )
-    combined = ""
-    for path in UPDATED_DOCS:
-        text = path.read_text(encoding="utf-8")
-        combined += text
-        if path.name in {"README.md", "CODEX.md", "V0_01_SCOPE.md"}:
-            for marker in required_markers:
-                assert marker in text
+    findings = _scope_snapshot_findings(snapshot)
+    assert (range_name, "D", "README.md") in findings["prohibited_statuses"]
 
-    assert "LAST_MERGED_PR" not in combined
-    assert "A7 scope-freeze planning only" not in combined
-    assert "LIVE_TRANSPORT_AUTHORIZED: TRUE" not in combined
-    assert "TESTNET_EXECUTION_AUTHORIZED: TRUE" not in combined
-    assert "MAINNET_EXECUTION_AUTHORIZED: TRUE" not in combined
-    assert "FLP1_IMPLEMENTATION_AUTHORIZED: TRUE" not in combined
+
+def test_scope_gate_rejects_forbidden_deletion_and_untracked_paths() -> None:
+    snapshot = _synthetic_scope_snapshot(
+        unstaged={"src/trader_assist_v0/contracts/common.py": "D"},
+        untracked=("unexpected\nfile.py",),
+    )
+    findings = _scope_snapshot_findings(snapshot)
+    assert findings["unexpected_paths"] == [
+        "src/trader_assist_v0/contracts/common.py",
+        "unexpected\nfile.py",
+    ]
+    assert findings["prohibited_statuses"] == [
+        ("unstaged", "D", "src/trader_assist_v0/contracts/common.py")
+    ]
+    assert findings["boundary_errors"]
+
+
+@pytest.mark.parametrize("status", ("T", "U", "X", "B"))
+def test_scope_gate_rejects_type_unmerged_unknown_and_broken_statuses(status: str) -> None:
+    snapshot = _synthetic_scope_snapshot(unstaged={"README.md": status})
+    assert _scope_snapshot_findings(snapshot)["prohibited_statuses"] == [
+        ("unstaged", status, "README.md")
+    ]
+
+
+def test_scope_gate_rejects_forbidden_to_allowlisted_rename_as_delete_add() -> None:
+    snapshot = _synthetic_scope_snapshot(
+        unstaged={
+            "src/trader_assist_v0/contracts/common.py": "D",
+            "README.md": "A",
+        }
+    )
+    findings = _scope_snapshot_findings(snapshot)
+    assert ("unstaged", "D", "src/trader_assist_v0/contracts/common.py") in findings[
+        "prohibited_statuses"
+    ]
+    assert "src/trader_assist_v0/contracts/common.py" in findings["unexpected_paths"]
+
+
+def test_scope_gate_rejects_allowlisted_to_forbidden_rename_as_delete_add() -> None:
+    snapshot = _synthetic_scope_snapshot(
+        unstaged={"README.md": "D", "forbidden-destination.md": "A"}
+    )
+    findings = _scope_snapshot_findings(snapshot)
+    assert ("unstaged", "D", "README.md") in findings["prohibited_statuses"]
+    assert findings["unexpected_paths"] == ["forbidden-destination.md"]
+
+
+def test_scope_gate_rejects_unauthorized_copy_destination_path() -> None:
+    snapshot = _synthetic_scope_snapshot(
+        unstaged={"unauthorized-copy.py": "A"}
+    )
+    assert _scope_snapshot_findings(snapshot)["unexpected_paths"] == [
+        "unauthorized-copy.py"
+    ]
+
+
+def test_scope_gate_governs_authorized_copy_target_by_exact_expected_status() -> None:
+    assert not any(_scope_snapshot_findings(_synthetic_scope_snapshot()).values())
+    wrong_status = dict(EXPECTED_COMMITTED_STATUS_MAP)
+    wrong_status["docs/V0_FLP0_CAPTURE_NOW_AUTHORITY.md"] = "M"
+    assert _scope_snapshot_findings(
+        _synthetic_scope_snapshot(committed=wrong_status)
+    )["status_mismatches"]
+
+
+def test_scope_gate_rejects_status_mismatch_and_cli_prints_full_maps(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    committed = dict(EXPECTED_COMMITTED_STATUS_MAP)
+    committed["docs/V0_FLP0_CAPTURE_NOW_AUTHORITY.md"] = "M"
+    snapshot = _synthetic_scope_snapshot(
+        committed=committed,
+        malformed_records=("unstaged: malformed status/path record",),
+    )
+    monkeypatch.setattr(sys.modules[__name__], "_collect_pr_scope_snapshot", lambda _sha: snapshot)
+    assert _check_pr_scope(BASE_SHA) == 1
+    stderr = capsys.readouterr().err
+    for label in (
+        "missing paths",
+        "unexpected paths",
+        "prohibited statuses",
+        "malformed records",
+        "actual committed map",
+        "actual staged map",
+        "actual unstaged map",
+        "actual untracked map",
+    ):
+        assert label in stderr
+
+
+def _scope_boundary_errors(changed: set[str]) -> list[str]:
+    errors: list[str] = []
+    forbidden = sorted(changed & FORBIDDEN_FILES)
+    if forbidden:
+        errors.append(f"forbidden files: {', '.join(forbidden)}")
+    data_files = sorted(
+        path for path in changed if path.startswith("src/trader_assist_v0/data/")
+    )
+    if data_files:
+        errors.append(f"data files: {', '.join(data_files)}")
+    dependency_files = sorted(
+        path
+        for path in changed
+        if path in {"pyproject.toml", "requirements-dev.lock", "requirements-runtime.lock"}
+    )
+    if dependency_files:
+        errors.append(f"dependency or lock files: {', '.join(dependency_files)}")
+    workflow_files = {
+        path for path in changed if path.startswith(".github/workflows/")
+    }
+    if workflow_files != {".github/workflows/ci.yml"}:
+        errors.append(f"workflow files: {', '.join(sorted(workflow_files))}")
+    return errors
+
+
+@dataclass(frozen=True)
+class _ScopeSnapshot:
+    committed: dict[str, str]
+    staged: dict[str, str]
+    unstaged: dict[str, str]
+    untracked: tuple[str, ...]
+    malformed_records: tuple[str, ...]
+
+
+class _ScopeParseError(ValueError):
+    pass
+
+
+def _nul_tokens(raw: bytes, context: str) -> list[bytes]:
+    if type(raw) is not bytes:
+        raise TypeError(f"{context} output must be exact bytes")
+    if not raw:
+        return []
+    if not raw.endswith(b"\0"):
+        raise _ScopeParseError(f"{context}: truncated NUL stream")
+    return raw[:-1].split(b"\0")
+
+
+def _decode_git_path(raw: bytes, context: str) -> str:
+    if not raw:
+        raise _ScopeParseError(f"{context}: empty path")
+    try:
+        return raw.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise _ScopeParseError(f"{context}: non-UTF-8 path") from exc
+
+
+def _parse_stable_status_stream(raw: bytes, context: str) -> dict[str, str]:
+    tokens = _nul_tokens(raw, context)
+    if len(tokens) % 2:
+        raise _ScopeParseError(f"{context}: malformed status/path record")
+    status_map: dict[str, str] = {}
+    for offset in range(0, len(tokens), 2):
+        try:
+            status = tokens[offset].decode("ascii", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise _ScopeParseError(f"{context}: non-ASCII status") from exc
+        if len(status) != 1 or status not in "ACDMRTUXB":
+            raise _ScopeParseError(f"{context}: unknown status {status!r}")
+        if status in {"R", "C"}:
+            raise _ScopeParseError(f"{context}: prohibited non-path status {status!r}")
+        path = _decode_git_path(tokens[offset + 1], context)
+        if path in status_map:
+            raise _ScopeParseError(f"{context}: duplicate path record {path!r}")
+        status_map[path] = status
+    return status_map
+
+
+def _parse_untracked_stream(raw: bytes, context: str) -> tuple[str, ...]:
+    paths = tuple(_decode_git_path(token, context) for token in _nul_tokens(raw, context))
+    if len(set(paths)) != len(paths):
+        raise _ScopeParseError(f"{context}: duplicate untracked path")
+    return paths
+
+
+def _run_git_bytes(arguments: list[str]) -> bytes:
+    result = subprocess.run(
+        ["git", *arguments],
+        cwd=ROOT,
+        capture_output=True,
+    )
+    if result.returncode:
+        detail_bytes = result.stderr.strip() or result.stdout.strip()
+        detail = detail_bytes.decode("utf-8", errors="backslashreplace")
+        raise RuntimeError(f"git {' '.join(arguments)} failed: {detail}")
+    return result.stdout
+
+
+def _collect_pr_scope_snapshot(base_sha: str) -> _ScopeSnapshot:
+    if not COMMIT_SHA_PATTERN.fullmatch(base_sha):
+        raise ValueError("--check-pr-scope requires a 40-character commit SHA")
+
+    stable_arguments = {
+        "committed": [
+            "diff",
+            "--name-status",
+            "-z",
+            "--no-renames",
+            "--diff-filter=ACDMRTUXB",
+            f"{base_sha}...HEAD",
+            "--",
+        ],
+        "staged": [
+            "diff",
+            "--cached",
+            "--name-status",
+            "-z",
+            "--no-renames",
+            "--diff-filter=ACDMRTUXB",
+            "HEAD",
+            "--",
+        ],
+        "unstaged": [
+            "diff",
+            "--name-status",
+            "-z",
+            "--no-renames",
+            "--diff-filter=ACDMRTUXB",
+            "HEAD",
+            "--",
+        ],
+    }
+    status_maps: dict[str, dict[str, str]] = {}
+    malformed: list[str] = []
+    for range_name, arguments in stable_arguments.items():
+        raw = _run_git_bytes(arguments)
+        try:
+            status_maps[range_name] = _parse_stable_status_stream(raw, range_name)
+        except _ScopeParseError as exc:
+            malformed.append(str(exc))
+            status_maps[range_name] = {}
+    untracked_raw = _run_git_bytes(["ls-files", "-z", "--others", "--exclude-standard"])
+    try:
+        untracked = _parse_untracked_stream(untracked_raw, "untracked")
+    except _ScopeParseError as exc:
+        malformed.append(str(exc))
+        untracked = ()
+    return _ScopeSnapshot(
+        committed=status_maps["committed"],
+        staged=status_maps["staged"],
+        unstaged=status_maps["unstaged"],
+        untracked=untracked,
+        malformed_records=tuple(malformed),
+    )
+
+
+def _scope_snapshot_findings(snapshot: _ScopeSnapshot) -> dict[str, Any]:
+    actual_paths = (
+        set(snapshot.committed)
+        | set(snapshot.staged)
+        | set(snapshot.unstaged)
+        | set(snapshot.untracked)
+    )
+    prohibited_statuses = sorted(
+        (range_name, status, path)
+        for range_name, status_map in (
+            ("committed", snapshot.committed),
+            ("staged", snapshot.staged),
+            ("unstaged", snapshot.unstaged),
+        )
+        for path, status in status_map.items()
+        if status not in {"A", "M"}
+    )
+    status_mismatches = sorted(
+        (path, EXPECTED_COMMITTED_STATUS_MAP[path], snapshot.committed.get(path))
+        for path in EXPECTED_CHANGED_FILES
+        if snapshot.committed.get(path) != EXPECTED_COMMITTED_STATUS_MAP[path]
+    )
+    return {
+        "missing_paths": sorted(EXPECTED_CHANGED_FILES - actual_paths),
+        "unexpected_paths": sorted(actual_paths - EXPECTED_CHANGED_FILES),
+        "prohibited_statuses": prohibited_statuses,
+        "status_mismatches": status_mismatches,
+        "malformed_records": list(snapshot.malformed_records),
+        "boundary_errors": _scope_boundary_errors(actual_paths),
+    }
+
+
+def _check_pr_scope(base_sha: str) -> int:
+    try:
+        snapshot = _collect_pr_scope_snapshot(base_sha)
+    except (RuntimeError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        print("missing paths: <unavailable>", file=sys.stderr)
+        print("unexpected paths: <unavailable>", file=sys.stderr)
+        print("prohibited statuses: <unavailable>", file=sys.stderr)
+        print("malformed records: <unavailable>", file=sys.stderr)
+        print("actual committed map: <unavailable>", file=sys.stderr)
+        print("actual staged map: <unavailable>", file=sys.stderr)
+        print("actual unstaged map: <unavailable>", file=sys.stderr)
+        print("actual untracked map: <unavailable>", file=sys.stderr)
+        return 2
+
+    findings = _scope_snapshot_findings(snapshot)
+    if any(findings.values()):
+        print(f"missing paths: {findings['missing_paths']}", file=sys.stderr)
+        print(f"unexpected paths: {findings['unexpected_paths']}", file=sys.stderr)
+        print(f"prohibited statuses: {findings['prohibited_statuses']}", file=sys.stderr)
+        print(f"status mismatches: {findings['status_mismatches']}", file=sys.stderr)
+        print(f"malformed records: {findings['malformed_records']}", file=sys.stderr)
+        print(f"actual committed map: {sorted(snapshot.committed.items())}", file=sys.stderr)
+        print(f"actual staged map: {sorted(snapshot.staged.items())}", file=sys.stderr)
+        print(f"actual unstaged map: {sorted(snapshot.unstaged.items())}", file=sys.stderr)
+        print(f"actual untracked map: {sorted(snapshot.untracked)}", file=sys.stderr)
+        for error in findings["boundary_errors"]:
+            print(f"boundary error: {error}", file=sys.stderr)
+        return 1
+
+    print(f"PR scope check passed: {len(snapshot.committed)} files (4 A, 14 M)")
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--check-pr-scope", metavar="BASE_SHA")
+    arguments = parser.parse_args()
+    if arguments.check_pr_scope is None:
+        parser.error("--check-pr-scope BASE_SHA is required")
+    return _check_pr_scope(arguments.check_pr_scope)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

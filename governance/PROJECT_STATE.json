@@ -4,16 +4,18 @@
   "repository": "woshixiong/trader-assist-v0",
   "program": "V0-FAST-LAUNCH",
   "state_kind": "SAFE_STOP_SNAPSHOT",
-  "state_base_sha": "c507e2fc1bad6aca175cf833e5bcca63224c3e5f",
+  "state_base_sha": "78d2d37bfe5a4f3f1d382a2a96e57896ae9676ae",
   "last_completed_implementation": "V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT",
   "last_completed_implementation_pr": 11,
-  "last_policy_state_pr": 12,
-  "active_milestone": "V0-FLP0-PILOT-AND-LONG-TERM-ROADMAP-AUTHORITY-FREEZE",
-  "active_task_id": "V0-FLP0-PILOT-AND-LONG-TERM-ROADMAP-AUTHORITY-FREEZE",
+  "last_policy_state_pr": 14,
+  "active_milestone": "V0-FLP1B0B-CAPTURE-NOW-AUTHORITY-AMENDMENT",
+  "active_task_id": "V0-FLP1B0B-CAPTURE-NOW-AUTHORITY-AMENDMENT",
   "active_write_lease": {
     "status": "NONE",
-    "last_lease_type": "BOUNDED_POLICY_GOVERNANCE_AND_MACHINE_STATE_ONLY",
-    "last_governance_level": "G2"
+    "last_lease_id": "V0-FLP1B0B-T1-IMPLEMENTATION-WRITE-LEASE-1",
+    "last_lease_type": "BOUNDED_CAPTURE_NOW_CONTRACT_SCHEMA_GOVERNANCE_ONLY",
+    "last_governance_level": "G2",
+    "final_status": "CONSUMED_PENDING_PROJECT_CONTROL_ACCEPTANCE"
   },
   "first_release_frozen": true,
   "long_term_roadmap_frozen": true,
@@ -26,5 +28,17 @@
   "mainnet_execution_authorized": false,
   "flp1_implementation_authorized": false,
   "rate_limit_status": "UNRESOLVED_OFFICIAL_LIMIT",
-  "next_gate": "V0-FLP1-OPERATOR-ASSIST-PILOT-SCOPE-FREEZE"
+  "next_gate": "V0-FLP1B0B-EXTERNAL-INDEPENDENT-REVIEW",
+  "conflict_state": "OFFICIAL_SOURCE_VARIANT_CONFLICT_DETECTED",
+  "supersession_state": "EFFECTIVE_VARIANT_UNDETERMINED",
+  "authority_hash": "0e327e566589d8030ff00d4d009eb4b6827679ab508133d66840b2c245dc53df",
+  "source_catalog_hash": "0ca27f650f399f8fa481ad9421eab4183c1c13812c71dfa8daaf878719bd99b7",
+  "source_count": 2,
+  "fact_count": 25,
+  "unknown_count": 14,
+  "transition_eligible": false,
+  "runtime_started": false,
+  "t2_runtime_started": false,
+  "mark_ready_prohibited": true,
+  "merge_prohibited": true
 }
