@@ -4,22 +4,24 @@
 
 ```text
 CURRENT_STATE_KIND: SAFE_STOP_SNAPSHOT
-CURRENT_STATE_BASE_SHA: 95e4a9ebaedb028de68d859627a37dfc142c8602
+CURRENT_MAIN_BASE_SHA: 16963297e0ce27ed3919f52e1e536ff730f5a5b9
 HISTORICAL_PR15_TASK_ID: V0-FLP1B0B-CAPTURE-NOW-AUTHORITY-AMENDMENT
 HISTORICAL_PR15_BASE_SHA: 78d2d37bfe5a4f3f1d382a2a96e57896ae9676ae
 HISTORICAL_PR15_HEAD: b7c26c019f64ab627dffc3bde4ab5a35071b6fc5
-PR15_MERGE_COMMIT_AND_CURRENT_MAIN: 95e4a9ebaedb028de68d859627a37dfc142c8602
+PR15_MERGE_COMMIT: 95e4a9ebaedb028de68d859627a37dfc142c8602
+POST_MERGE_AUTHORITY_SYNC_PR: 16
 LAST_POLICY_STATE_PR: 15
 ACTIVE_MILESTONE: V0-R0-CAPTURE-ONLY
-ACTIVE_TASK_ID: NONE
-ACTIVE_WRITE_LEASE_STATUS: NONE
+ACTIVE_TASK_ID: V0-T2-ETH-PUBLIC-CAPTURE-RUNTIME-CANDIDATE
+ACTIVE_WRITE_LEASE: V0-T2-ETH-PUBLIC-CAPTURE-RUNTIME-WRITE-LEASE-1
 R0: CAPTURE_ONLY
 R1: ETH_OPERATOR_ASSIST
 FIRST_LAUNCH_PRIMARY_ASSET: ETH
 BTC_FIRST_LAUNCH_REQUIREMENT: NONE
 BTC_FIRST_LAUNCH_BLOCKER: NO
 T1: CONTRACT_SCHEMA_GOVERNANCE_ONLY
-T2: SEPARATE_FUTURE_ETH_PUBLIC_CAPTURE_RUNTIME
+T2_HISTORICAL_T1_AUTHORITY: SEPARATE_FUTURE_ETH_PUBLIC_CAPTURE_RUNTIME
+T2_CURRENT_BRANCH_STATUS: DEFAULT_OFF_IMPLEMENTATION_CANDIDATE
 NEXT_GATE: V0-FLP1B0B-FIRST-LAUNCH-CRITICAL-PATH-AND-ETH-MINIMUM-VALIDATION-READONLY-PLANNING
 ```
 
@@ -27,6 +29,17 @@ T1 freezes the Capture Now authority contract, generated JSON Schema, governance
 state, and documentation. It starts no runtime, opens no socket, performs no DNS
 or endpoint connection, writes no database or filesystem evidence, and grants no
 strategy, risk, account, credential, or exchange execution authority.
+
+T1 remains the historical contract/schema authority. T2 is a minimal
+implementation candidate and does not change R0 into a signal product. Its fixed
+ETH 5m/15m public WebSocket runtime is default-off. This implementation task does
+not connect to the endpoint or create a real permit. After merge and separate
+project-control approval, one external durable single-use permit may authorize
+exactly one controlled connection attempt. The application protocol heartbeat is
+allowed only to maintain that existing one connection. Automatic reconnect,
+backfill, and Info HTTP remain prohibited, as do strategy, signal, risk, account,
+credential, and execution capabilities. `PROJECT_STATE.json` remains the
+unchanged historical safe-stop snapshot, including historical PR #16 authority.
 
 ## Plane Boundary
 
@@ -221,7 +234,10 @@ per manual durable single-use non-replayable start permit, no automatic
 reconnect, no automatic backfill, no active probes, and no Info HTTP requests.
 It adds no cooldown, automatic resume, or permit reuse.
 
-`CaptureEndpointAllowlistV0` is ratified contract-only and runtime unauthorized.
+`CaptureEndpointAllowlistV0` remains the T1 ratified contract-only authority; its
+`runtime_authorized` field remains false. T2 does not rewrite that historical
+contract or claim global live-transport authorization. Its separate local
+single-use permit gate is bounded to the fixed candidate runtime.
 It allows only `hyperliquid-public-mainnet` endpoint `hl-ws-mainnet-public`,
 WebSocket public read-only observation, operation `candle`, coin `ETH`,
 intervals `5m` and `15m`, capture mode `WS_TEXT_UTF8_APPLICATION_PAYLOAD`,

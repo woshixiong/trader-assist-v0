@@ -4,13 +4,14 @@
 
 ```text
 PROGRAM: V0-FAST-LAUNCH
-TASK_ID: V0-FLP0-PILOT-AND-LONG-TERM-ROADMAP-AUTHORITY-FREEZE
-STATE_BASE_SHA: c507e2fc1bad6aca175cf833e5bcca63224c3e5f
+TASK_ID: V0-T2-ETH-PUBLIC-CAPTURE-RUNTIME
+MAIN_BASE_SHA: 16963297e0ce27ed3919f52e1e536ff730f5a5b9
+BASE_PROVENANCE: origin/main merge of PR #16
 LAST_COMPLETED_IMPLEMENTATION: V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT
 LAST_COMPLETED_IMPLEMENTATION_PR: 11
-LAST_POLICY_STATE_PR: 12
-ACTIVE_IMPLEMENTATION: NONE
-ACTIVE_WRITE_LEASE: NONE
+LAST_POLICY_STATE_PR: 15
+ACTIVE_IMPLEMENTATION: V0-T2-ETH-PUBLIC-CAPTURE-RUNTIME-CANDIDATE
+ACTIVE_WRITE_LEASE: V0-T2-ETH-PUBLIC-CAPTURE-RUNTIME-WRITE-LEASE-1
 RATE_LIMIT_STATUS: UNRESOLVED_OFFICIAL_LIMIT
 LIVE_TRANSPORT_AUTHORIZED: FALSE
 ACCOUNT_READONLY_RUNTIME_AUTHORIZED: FALSE
@@ -22,15 +23,32 @@ NEXT_GATE: V0-FLP1-OPERATOR-ASSIST-PILOT-SCOPE-FREEZE
 
 ## Current bounded implementation task
 
-`NONE`
+`V0-T2-ETH-PUBLIC-CAPTURE-RUNTIME`
 
-A6 is the last completed implementation and was merged via PR #11. PR #12 is the last policy-state PR before this Fast Launch authority freeze. There is no active implementation task or implementation write lease. Do not modify repository files without a new exact write lease and file allowlist.
+A6 remains the last completed offline evidence implementation. T1 remains the
+historical Capture contract/schema authority. This branch is the bounded T2
+implementation candidate under write lease
+`V0-T2-ETH-PUBLIC-CAPTURE-RUNTIME-WRITE-LEASE-1`, based exactly on
+`16963297e0ce27ed3919f52e1e536ff730f5a5b9`.
 
-The prior generic A7-only gate is superseded by `V0-FLP1-OPERATOR-ASSIST-PILOT-SCOPE-FREEZE`. This file does not authorize FLP1 implementation, live transport, account observation runtime, Testnet, Mainnet, or exchange writes.
+The fixed ETH public Capture runtime remains default-off. Implementation and
+tests make no real endpoint connection and create no real permit. A controlled
+Capture launch requires a later explicit operation with separate project-control
+approval and one externally supplied single-use permit. T2 does not implement an
+AI signal or claim the user-facing First Launch.
 
 ## Allowed files
 
-- None. A future bounded implementation or repair task must provide its own exact write lease and file allowlist.
+- `CODEX.md`
+- `docs/V0_FLP0_CAPTURE_NOW_AUTHORITY.md`
+- `src/trader_assist_v0/data/ingress.py`
+- `src/trader_assist_v0/runtime/__init__.py`
+- `src/trader_assist_v0/runtime/eth_public_capture.py`
+- `scripts/run_eth_public_capture.py`
+- `tests/test_v0_t2_eth_public_capture_runtime.py`
+- `pyproject.toml`
+- `requirements-runtime.lock`
+- `requirements-dev.lock`
 
 ## Last completed A6 behavior
 
@@ -66,9 +84,10 @@ The long-term capability sequence remains FL1 trusted data, FL2 signal and risk,
 
 ## Forbidden
 
-- modifications to A5 contracts/extractor, source catalog code/documentation, `events.py`, `ingress.py`, `bronze.py`, or `replay.py` without a later exact lease;
-- modifications to existing runtime tests, existing V0 schemas, fixtures, dependencies, lockfiles, `pyproject.toml`, or CI workflows without a later exact lease;
-- HTTP or WebSocket clients, sockets, DNS, async runtime, event loop, live endpoint connection, polling, reconnect, heartbeat, health, backfill, REST request execution, or soak runtime;
+- modifications outside the exact T2 allowlist above;
+- real endpoint connection, DNS, socket creation, or a real permit during implementation;
+- HTTP, Info `candleSnapshot`, polling, automatic reconnect/retry/restart,
+  backfill, proxy use, or library-managed WebSocket Ping keepalive;
 - payload parsing or reading payload bytes from `payload_ref` or any filesystem path;
 - Bronze or manifest writes, database or cloud storage;
 - numeric rate-limit values or a transition away from `UNRESOLVED_OFFICIAL_LIMIT`;
