@@ -12,21 +12,36 @@ from trader_assist_v0.contracts import (
     BronzeReplayReportV0,
     CandleCrossSourceReconciliationV0,
     CandlePayloadExtractionV0,
+    CaptureCheckpointV0,
+    CaptureEndpointAllowlistV0,
+    CaptureKillStateV0,
+    CaptureLifecycleEventV0,
+    CaptureLocalSafetyPolicyV0,
+    CaptureManifestEntryV0,
+    CapturePlanV0,
+    CaptureRecordV0,
+    CaptureReplayReportV0,
     DataHealthEventV0,
     EvidenceBundleManifestV0,
     ExecutionPermitV0,
+    HumanObservationV0,
     HumanReviewDecisionV0,
     InstrumentPrecisionContractV0,
+    MarketPathEvidenceV0,
     NormalizedEventV0,
     OfficialRateLimitAuthorityV0,
     OrderPackageV0,
+    ProducerIdentityV0,
     PromotionRecordV0,
     ProposalV0,
     RawEventV0,
     RawManifestCheckpointV0,
     RawManifestEntryV0,
     RequiredFeedContractV0,
+    RuntimeControlEventV0,
     SeedProvenanceEntryV0,
+    ShadowOrderIntentV0,
+    SignalCaptureV0,
     StrategyCandidateV0,
 )
 from trader_assist_v0.contracts.candle_reconciliation import (
@@ -48,6 +63,7 @@ MODELS: tuple[type[BaseModel], ...] = (
     BronzeReplayReportV0,
     CandlePayloadExtractionV0,
     CandleCrossSourceReconciliationV0,
+    CaptureRecordV0,
     OfficialRateLimitAuthorityV0,
     RequiredFeedContractV0,
     InstrumentPrecisionContractV0,
@@ -62,6 +78,23 @@ MODELS: tuple[type[BaseModel], ...] = (
     ExecutionPermitV0,
     EvidenceBundleManifestV0,
     SeedProvenanceEntryV0,
+)
+CAPTURE_SCHEMA_MODELS: tuple[type[BaseModel], ...] = (
+    ProducerIdentityV0,
+    SignalCaptureV0,
+    CapturePlanV0,
+    ShadowOrderIntentV0,
+    HumanObservationV0,
+    MarketPathEvidenceV0,
+    CaptureLifecycleEventV0,
+    RuntimeControlEventV0,
+    CaptureRecordV0,
+    CaptureManifestEntryV0,
+    CaptureCheckpointV0,
+    CaptureReplayReportV0,
+    CaptureLocalSafetyPolicyV0,
+    CaptureEndpointAllowlistV0,
+    CaptureKillStateV0,
 )
 COMPACT_MODELS = frozenset(
     {
@@ -419,11 +452,35 @@ def _official_rate_limit_authority_schema(schema: dict[str, Any]) -> dict[str, A
     return schema
 
 
+def _capture_record_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
+    schema["$comment"] = (
+        "CaptureRecordV0 is a record_type-discriminated Capture-plane tagged union. "
+        "Schema validation is structural only; runtime validation remains required for "
+        "binder-controlled IDs, hashes, ordered references, duplicate/conflict handling, "
+        "and append-only correction or supersession authority."
+    )
+    definitions = schema.setdefault("$defs", {})
+    if not isinstance(definitions, dict):
+        raise ValueError("CaptureRecordV0 schema definitions must be an object")
+    for model in CAPTURE_SCHEMA_MODELS:
+        model_schema = _portable_schema(
+            model.model_json_schema(ref_template="#/$defs/{model}")
+        )
+        nested_definitions = model_schema.pop("$defs", {})
+        if isinstance(nested_definitions, dict):
+            definitions.update(nested_definitions)
+        definitions[model.__name__] = model_schema
+    return schema
+
+
 def render(model: type[BaseModel]) -> str:
     schema = _portable_schema(model.model_json_schema())
     if model is CandleCrossSourceReconciliationV0:
         schema = _a6_authority_schema(schema)
         schema = _portable_a6_absolute_end_patterns(schema)
+    if model is CaptureRecordV0:
+        schema = _capture_record_schema(schema)
     if model is OfficialRateLimitAuthorityV0:
         schema = _official_rate_limit_authority_schema(schema)
     if model in COMPACT_MODELS:

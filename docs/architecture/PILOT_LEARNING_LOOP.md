@@ -41,3 +41,17 @@ replay, shadow evaluation, independent review, and release authorization.
 A missed FAST trade is not automatically a strategy failure. Analysis must
 separate signal validity, operator actionability, human decision, manual
 execution, data quality, and system latency.
+
+## Capture Now T1
+
+Active R0 is `CAPTURE_ONLY` and does not authorize the pilot learning runtime,
+outcome adjudication, PnL, win rate, Sharpe, MFE/MAE, R multiple, promotion
+judgment, strategy runtime, risk sizing, TradePlan, account observation, or
+exchange execution. Those Operator Assist and learning-loop semantics are
+preserved only as future `R1: ETH_OPERATOR_ASSIST` and remain not implemented in
+`T1: CONTRACT_SCHEMA_GOVERNANCE_ONLY`. Runtime capture is
+`T2: SEPARATE_FUTURE_ETH_PUBLIC_CAPTURE_RUNTIME`.
+
+Capture replay reports are integrity reports only. They verify Capture-plane
+manifest/checkpoint/replay contracts and must not become performance or
+promotion evidence.

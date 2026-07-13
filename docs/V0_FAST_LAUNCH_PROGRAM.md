@@ -5,32 +5,47 @@
 ```text
 PROGRAM: V0-FAST-LAUNCH
 RELEASE_ID: V0-R0
-TASK_ID: V0-FLP0-PILOT-AND-LONG-TERM-ROADMAP-AUTHORITY-FREEZE
+TASK_ID: V0-FLP1B0B-CAPTURE-NOW-AUTHORITY-AMENDMENT
 GOVERNANCE_LEVEL: G2
-STATE_BASE_SHA: c507e2fc1bad6aca175cf833e5bcca63224c3e5f
+STATE_BASE_SHA: 78d2d37bfe5a4f3f1d382a2a96e57896ae9676ae
 ```
 
-This document freezes the first Operator Assist Pilot and the unchanged
-long-term Human-Confirmed Automated Execution direction. It is product,
-architecture, governance, and project-state authority only. It does not
-implement or authorize runtime.
+This document now freezes Capture Now T1. It is contract, schema, governance,
+and project-state authority only. It does not implement or authorize runtime.
+
+## Release authority
+
+```text
+R0: CAPTURE_ONLY
+R1: ETH_OPERATOR_ASSIST
+FIRST_LAUNCH_PRIMARY_ASSET: ETH
+BTC_FIRST_LAUNCH_REQUIREMENT: NONE
+BTC_FIRST_LAUNCH_BLOCKER: NO
+T1: CONTRACT_SCHEMA_GOVERNANCE_ONLY
+T2: SEPARATE_FUTURE_ETH_PUBLIC_CAPTURE_RUNTIME
+```
 
 ## First release
 
-The first release uses ETH and one strategy, `ETH-LDAR-v0.1`.
+The active first release is `V0-R0` Capture-only for ETH.
 
 ```text
-EXECUTION_MODE: MANUAL_EXECUTION_WITH_SYSTEM_ASSISTANCE
-AUTOMATIC_EXCHANGE_WRITE: PROHIBITED
-AI_ROLE: EXPLANATION_AND_CHECKLIST_ONLY
-ALL_VALID_SIGNALS_VISIBLE: YES
-POST_LAUNCH_LEARNING_LOOP: MANDATORY
+ACTIVE_STRATEGY_COUNT: 0
+CAPTURE_CONTRACTS_AUTHORIZED: TRUE
+NETWORK_RUNTIME_AUTHORIZED: FALSE
+STRATEGY_RUNTIME_AUTHORIZED: FALSE
+SIGNAL_RECOMMENDATION_AUTHORIZED: FALSE
+RISK_SIZING_AUTHORIZED: FALSE
+TRADE_PLAN_AUTHORIZED: FALSE
+ACCOUNT_RUNTIME_AUTHORIZED: FALSE
+EXCHANGE_EXECUTION_AUTHORIZED: FALSE
 ```
 
-The system target is real-time public read-only data, DataQualityState,
+The system target of real-time public read-only data, DataQualityState,
 deterministic signal and risk, a TradePlan, FAST/STANDARD signal card, human
 decision capture, manual Hyperliquid execution, read-only order/fill observation,
-matching, replay, and versioned findings.
+matching, replay, and versioned findings is preserved as future `V0-R1`
+ETH Operator Assist. It remains not implemented and not authorized in T1.
 
 ## FAST and STANDARD
 
@@ -84,15 +99,16 @@ FL3 HUMAN_REVIEW_SURFACE
 FL4 HUMAN_CONFIRMED_EXECUTION
 ```
 
-R0 is the minimum vertical subset of FL1 through FL3. R1 adds only
-human-confirmed automated execution under a separately reviewed G4 gateway.
-Autonomous entry remains prohibited.
+R0 is Capture-only. R1 may later deliver ETH Operator Assist after a separate
+gate. Human-confirmed automated execution is deferred under
+`future_human_confirmed_execution`, has no assigned release, and requires a
+separately reviewed G4 gateway. Autonomous entry remains prohibited.
 
 ## Development route
 
-Before first launch there are two main PRs: this FLP0 authority freeze and the
-FLP1 end-to-end vertical Operator Assist Pilot. Only `BLOCKER` findings prevent
-merge; other validated findings become `FOLLOW_UP`.
+T1 is bounded to contract, schema, governance, and docs. T2 is a separate future
+ETH public Capture runtime gate. Only `BLOCKER` findings prevent merge; other
+validated findings become `FOLLOW_UP`.
 
 ## Current false gates
 
@@ -103,6 +119,13 @@ ACCOUNT_READONLY_RUNTIME_AUTHORIZED: FALSE
 TESTNET_EXECUTION_AUTHORIZED: FALSE
 MAINNET_EXECUTION_AUTHORIZED: FALSE
 FLP1_IMPLEMENTATION_AUTHORIZED: FALSE
+CONFLICT_STATE: OFFICIAL_SOURCE_VARIANT_CONFLICT_DETECTED
+SUPERSESSION_STATE: EFFECTIVE_VARIANT_UNDETERMINED
+AUTHORITY_HASH: 0e327e566589d8030ff00d4d009eb4b6827679ab508133d66840b2c245dc53df
+SOURCE_CATALOG_HASH: 0ca27f650f399f8fa481ad9421eab4183c1c13812c71dfa8daaf878719bd99b7
+SOURCE_COUNT: 2
+FACT_COUNT: 25
+UNKNOWN_COUNT: 14
 ```
 
 The machine-readable authority is
