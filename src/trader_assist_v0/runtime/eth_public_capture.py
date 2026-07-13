@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -19,6 +20,7 @@ from uuid import uuid4
 
 from websockets.asyncio.client import connect
 
+from trader_assist_v0.contracts.common import canonical_json_bytes
 from trader_assist_v0.contracts.events import ReplayStatusV0
 from trader_assist_v0.data.bronze import BronzeStore, ManifestWriter
 from trader_assist_v0.data.ingress import (
@@ -43,6 +45,8 @@ SUBSCRIBE_15M = (
     '"interval":"15m"}}'
 )
 APPLICATION_PING = '{"method":"ping"}'
+SERVER_GREETING = "Websocket connection established."
+RECEIPT_VERSION = "1.0.0"
 SUBSCRIPTION_IDS: dict[str, str] = {
     "5m": "eth-candle-5m",
     "15m": "eth-candle-15m",
@@ -50,6 +54,9 @@ SUBSCRIPTION_IDS: dict[str, str] = {
 _PERMIT_FIELDS = {"task_id", "permit_id", "expected_git_sha"}
 _PERMIT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$")
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_RECEIPT_DOMAIN = b"trader-assist-v0/t2-permit-receipt/v1"
+_RECEIPT_AUTHORITY_DIRECTORY = "trader-assist-v0"
+_RECEIPT_DIRECTORY = "t2-permit-receipts"
 _NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 _STOP = object()
@@ -105,6 +112,8 @@ class ConsumedStartPermit:
     permit_id: str
     expected_git_sha: str
     consumed_path: Path
+    receipt_path: Path
+    receipt_sha256: str
     ingress_proof: _T2ConsumedPermitProof
 
 
@@ -174,7 +183,7 @@ def _git_output(repo_root: Path, *arguments: str) -> bytes:
     return completed.stdout
 
 
-def _validate_consumed_permit_document(document: dict[str, str], repo_root: Path) -> None:
+def _validate_permit_document(document: dict[str, str]) -> None:
     if document["task_id"] != TASK_ID:
         raise PermitError("start permit task_id does not match the T2 runtime")
     if _PERMIT_ID_RE.fullmatch(document["permit_id"]) is None:
@@ -182,6 +191,10 @@ def _validate_consumed_permit_document(document: dict[str, str], repo_root: Path
     expected_sha = document["expected_git_sha"]
     if _SHA_RE.fullmatch(expected_sha) is None:
         raise PermitError("start permit expected_git_sha is not a lowercase commit SHA")
+
+
+def _validate_repository_state(document: dict[str, str], repo_root: Path) -> None:
+    expected_sha = document["expected_git_sha"]
     head = _git_output(repo_root, "rev-parse", "--verify", "HEAD^{commit}").decode().strip()
     if head != expected_sha:
         raise PermitError("start permit expected_git_sha does not match repository HEAD")
@@ -189,20 +202,219 @@ def _validate_consumed_permit_document(document: dict[str, str], repo_root: Path
         raise PermitError("repository worktree must be clean before T2 Capture")
 
 
+def _git_common_directory(repo_root: Path) -> Path:
+    try:
+        raw = _git_output(repo_root, "rev-parse", "--git-common-dir").decode(
+            "utf-8", errors="strict"
+        ).strip()
+    except UnicodeDecodeError as exc:
+        raise PermitError("Git common-directory authority is not UTF-8") from exc
+    if not raw or "\x00" in raw:
+        raise PermitError("Git common-directory authority is empty or malformed")
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        candidate = repo_root / candidate
+    try:
+        metadata = candidate.lstat()
+    except FileNotFoundError as exc:
+        raise PermitError("Git common directory is missing") from exc
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        raise PermitError("Git common directory must be an exact directory")
+    return candidate.resolve(strict=True)
+
+
+def _open_private_directory(parent_fd: int, name: str) -> int:
+    created = False
+    try:
+        os.mkdir(name, 0o700, dir_fd=parent_fd)
+        created = True
+    except FileExistsError:
+        pass
+    except OSError as exc:
+        raise PermitError("durable permit-receipt directory could not be created") from exc
+
+    try:
+        path_metadata = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except OSError as exc:
+        raise PermitError("durable permit-receipt directory cannot be inspected") from exc
+    if stat.S_ISLNK(path_metadata.st_mode) or not stat.S_ISDIR(path_metadata.st_mode):
+        raise PermitError("durable permit-receipt authority must be an exact directory")
+    try:
+        directory_fd = os.open(name, os.O_RDONLY | _DIRECTORY | _NOFOLLOW, dir_fd=parent_fd)
+    except OSError as exc:
+        raise PermitError("durable permit-receipt directory cannot be opened safely") from exc
+    try:
+        if created:
+            os.fchmod(directory_fd, 0o700)
+        opened = os.fstat(directory_fd)
+        if (opened.st_dev, opened.st_ino) != (
+            path_metadata.st_dev,
+            path_metadata.st_ino,
+        ):
+            raise PermitError("durable permit-receipt directory identity changed")
+        if opened.st_uid != os.geteuid():
+            raise PermitError("durable permit-receipt directory has the wrong owner")
+        if stat.S_IMODE(opened.st_mode) != 0o700:
+            raise PermitError("durable permit-receipt directory mode must be exactly 0700")
+        if created:
+            os.fsync(parent_fd)
+        return directory_fd
+    except BaseException:
+        os.close(directory_fd)
+        raise
+
+
+def _receipt_filename(permit_id: str) -> str:
+    digest = hashlib.sha256(
+        _RECEIPT_DOMAIN + b"\0" + TASK_ID.encode("utf-8") + b"\0" + permit_id.encode("utf-8")
+    ).hexdigest()
+    return f"{digest}.json"
+
+
+def _canonical_receipt_bytes(document: dict[str, str]) -> bytes:
+    return canonical_json_bytes(
+        {
+            "receipt_version": RECEIPT_VERSION,
+            "task_id": TASK_ID,
+            "permit_id": document["permit_id"],
+            "expected_git_sha": document["expected_git_sha"],
+        }
+    )
+
+
+def _write_all(fd: int, payload: bytes) -> None:
+    view = memoryview(payload)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError("short durable receipt write")
+        view = view[written:]
+
+
+def _read_bounded_file(fd: int) -> bytes:
+    chunks: list[bytes] = []
+    size = 0
+    while True:
+        chunk = os.read(fd, 4096)
+        if not chunk:
+            return b"".join(chunks)
+        size += len(chunk)
+        if size > 16 * 1024:
+            raise PermitError("durable permit receipt exceeds its bounded size")
+        chunks.append(chunk)
+
+
+def _reject_existing_receipt(
+    receipt_directory_fd: int,
+    filename: str,
+    expected_bytes: bytes,
+) -> None:
+    try:
+        receipt_fd = os.open(filename, os.O_RDONLY | _NOFOLLOW, dir_fd=receipt_directory_fd)
+    except OSError as exc:
+        raise PermitError("existing durable permit receipt is not a regular file") from exc
+    try:
+        metadata = os.fstat(receipt_fd)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise PermitError("existing durable permit receipt is not a regular file")
+        if metadata.st_uid != os.geteuid():
+            raise PermitError("existing durable permit receipt has the wrong owner")
+        if stat.S_IMODE(metadata.st_mode) != 0o600:
+            raise PermitError("existing durable permit receipt mode must be exactly 0600")
+        existing_bytes = _read_bounded_file(receipt_fd)
+    finally:
+        os.close(receipt_fd)
+    if existing_bytes != expected_bytes:
+        raise PermitError("existing durable permit receipt is malformed or conflicting")
+    raise PermitError("start permit_id has already been consumed in this Git repository family")
+
+
+def _create_durable_receipt(
+    document: dict[str, str],
+    *,
+    repo_root: Path,
+) -> tuple[Path, bytes]:
+    common_directory = _git_common_directory(repo_root)
+    try:
+        common_fd = os.open(common_directory, os.O_RDONLY | _DIRECTORY | _NOFOLLOW)
+    except OSError as exc:
+        raise PermitError("Git common directory cannot be opened safely") from exc
+    authority_fd = -1
+    receipts_fd = -1
+    try:
+        authority_fd = _open_private_directory(common_fd, _RECEIPT_AUTHORITY_DIRECTORY)
+        receipts_fd = _open_private_directory(authority_fd, _RECEIPT_DIRECTORY)
+        filename = _receipt_filename(document["permit_id"])
+        receipt_bytes = _canonical_receipt_bytes(document)
+        try:
+            receipt_fd = os.open(
+                filename,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW,
+                0o600,
+                dir_fd=receipts_fd,
+            )
+        except FileExistsError:
+            _reject_existing_receipt(receipts_fd, filename, receipt_bytes)
+            raise AssertionError("existing receipt rejection must raise") from None
+        except OSError as exc:
+            raise PermitError("durable permit receipt could not be created atomically") from exc
+        receipt_error: BaseException | None = None
+        try:
+            os.fchmod(receipt_fd, 0o600)
+            metadata = os.fstat(receipt_fd)
+            if not stat.S_ISREG(metadata.st_mode):
+                raise PermitError("new durable permit receipt is not a regular file")
+            if metadata.st_uid != os.geteuid():
+                raise PermitError("new durable permit receipt has the wrong owner")
+            if stat.S_IMODE(metadata.st_mode) != 0o600:
+                raise PermitError("new durable permit receipt mode must be exactly 0600")
+            _write_all(receipt_fd, receipt_bytes)
+            os.fsync(receipt_fd)
+        except BaseException as exc:
+            receipt_error = exc
+        finally:
+            try:
+                os.close(receipt_fd)
+            except OSError as exc:
+                if receipt_error is None:
+                    receipt_error = exc
+        try:
+            os.fsync(receipts_fd)
+        except OSError as exc:
+            raise PermitError("durable permit receipt directory could not be fsynced") from exc
+        if receipt_error is not None:
+            if isinstance(receipt_error, PermitError):
+                raise receipt_error
+            if isinstance(receipt_error, OSError):
+                raise PermitError(
+                    "durable permit receipt could not be written durably"
+                ) from receipt_error
+            raise receipt_error
+        receipt_path = (
+            common_directory
+            / _RECEIPT_AUTHORITY_DIRECTORY
+            / _RECEIPT_DIRECTORY
+            / filename
+        )
+        return receipt_path, receipt_bytes
+    finally:
+        if receipts_fd >= 0:
+            os.close(receipts_fd)
+        if authority_fd >= 0:
+            os.close(authority_fd)
+        os.close(common_fd)
+
+
 def consume_start_permit(permit_path: Path, *, repo_root: Path) -> ConsumedStartPermit:
     if _NOFOLLOW == 0 or _DIRECTORY == 0:
         raise PermitError("start permits require O_NOFOLLOW and O_DIRECTORY support")
-    parent = permit_path.parent
+    try:
+        parent = permit_path.parent.resolve(strict=True)
+    except FileNotFoundError as exc:
+        raise PermitError("start permit parent directory is missing") from exc
     name = permit_path.name
     if not name or name in {".", ".."}:
         raise PermitError("start permit path must name one file")
-    try:
-        path_metadata = permit_path.lstat()
-    except FileNotFoundError as exc:
-        raise PermitError("start permit is missing") from exc
-    if stat.S_ISLNK(path_metadata.st_mode) or not stat.S_ISREG(path_metadata.st_mode):
-        raise PermitError("start permit must be an exact regular file, not a symlink")
-
     try:
         parent_fd = os.open(parent, os.O_RDONLY | _DIRECTORY | _NOFOLLOW)
     except OSError as exc:
@@ -210,8 +422,17 @@ def consume_start_permit(permit_path: Path, *, repo_root: Path) -> ConsumedStart
     permit_fd = -1
     try:
         try:
+            path_metadata = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            if stat.S_ISLNK(path_metadata.st_mode) or not stat.S_ISREG(
+                path_metadata.st_mode
+            ):
+                raise PermitError("start permit must be an exact regular file, not a symlink")
             permit_fd = os.open(name, os.O_RDONLY | _NOFOLLOW, dir_fd=parent_fd)
             opened = os.fstat(permit_fd)
+        except PermitError:
+            raise
+        except FileNotFoundError as exc:
+            raise PermitError("start permit is missing") from exc
         except OSError as exc:
             raise PermitError("start permit cannot be opened without following links") from exc
         if not stat.S_ISREG(opened.st_mode):
@@ -223,13 +444,28 @@ def consume_start_permit(permit_path: Path, *, repo_root: Path) -> ConsumedStart
         if opened.st_uid != os.geteuid():
             raise PermitError("start permit must be owned by the effective user")
         document = _read_permit_json(permit_fd)
-        os.close(permit_fd)
-        permit_fd = -1
+        _validate_permit_document(document)
+        receipt_path, receipt_bytes = _create_durable_receipt(document, repo_root=repo_root)
 
         consumed_name = f"{name}.consumed-{secrets.token_hex(16)}"
         try:
+            current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            if (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino):
+                raise PermitError("start permit identity changed before consumption")
             os.rename(name, consumed_name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            consumed_metadata = os.stat(
+                consumed_name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+            if (consumed_metadata.st_dev, consumed_metadata.st_ino) != (
+                opened.st_dev,
+                opened.st_ino,
+            ):
+                raise PermitError("consumed start permit identity does not match")
             os.fsync(parent_fd)
+        except PermitError:
+            raise
         except OSError as exc:
             raise PermitError("start permit could not be atomically consumed") from exc
     finally:
@@ -238,9 +474,12 @@ def consume_start_permit(permit_path: Path, *, repo_root: Path) -> ConsumedStart
         os.close(parent_fd)
 
     consumed_path = parent / consumed_name
-    _validate_consumed_permit_document(document, repo_root)
+    _validate_repository_state(document, repo_root)
+    receipt_sha256 = hashlib.sha256(receipt_bytes).hexdigest()
     proof = _issue_t2_consumed_permit_proof(
         consumed_path=consumed_path,
+        receipt_path=receipt_path,
+        receipt_sha256=receipt_sha256,
         permit_id=document["permit_id"],
     )
     return ConsumedStartPermit(
@@ -248,6 +487,8 @@ def consume_start_permit(permit_path: Path, *, repo_root: Path) -> ConsumedStart
         permit_id=document["permit_id"],
         expected_git_sha=document["expected_git_sha"],
         consumed_path=consumed_path,
+        receipt_path=receipt_path,
+        receipt_sha256=receipt_sha256,
         ingress_proof=proof,
     )
 
@@ -361,6 +602,7 @@ async def _run_connected(
     await websocket.send(SUBSCRIBE_15M)
     acknowledgement_deadline = monotonic() + ACKNOWLEDGEMENT_DEADLINE_SECONDS
     acknowledged: set[str] = set()
+    greeting_seen = False
     while len(acknowledged) != 2:
         try:
             frame = await _receive_before(
@@ -381,10 +623,22 @@ async def _run_connected(
             raise FrameValidationError("binary WebSocket frames are prohibited")
         if type(frame) is not str:
             raise FrameValidationError("WebSocket recv returned an unsupported frame type")
+        if frame == SERVER_GREETING:
+            if greeting_seen:
+                raise AcknowledgementError("duplicate server greeting")
+            greeting_seen = True
+            continue
         try:
             message = _strict_json(frame)
         except (json.JSONDecodeError, ValueError) as exc:
             raise AcknowledgementError("acknowledgement frame is not strict JSON") from exc
+        if type(message) is dict and message.get("channel") == "candle":
+            candle_interval = _validate_candle_message(message)
+            if candle_interval not in acknowledged:
+                raise AcknowledgementError(
+                    "candle arrived before its subscription was acknowledged"
+                )
+            continue
         interval = _validate_acknowledgement(message)
         if interval in acknowledged:
             raise AcknowledgementError("duplicate subscription acknowledgement")

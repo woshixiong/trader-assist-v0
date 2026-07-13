@@ -4,6 +4,7 @@
 
 ```text
 CURRENT_STATE_KIND: SAFE_STOP_SNAPSHOT
+PRODUCT_BASELINE_ID: TA-PRODUCT-BASELINE-2026-07-14-R1
 CURRENT_MAIN_BASE_SHA: 16963297e0ce27ed3919f52e1e536ff730f5a5b9
 HISTORICAL_PR15_TASK_ID: V0-FLP1B0B-CAPTURE-NOW-AUTHORITY-AMENDMENT
 HISTORICAL_PR15_BASE_SHA: 78d2d37bfe5a4f3f1d382a2a96e57896ae9676ae
@@ -12,8 +13,12 @@ PR15_MERGE_COMMIT: 95e4a9ebaedb028de68d859627a37dfc142c8602
 POST_MERGE_AUTHORITY_SYNC_PR: 16
 LAST_POLICY_STATE_PR: 15
 ACTIVE_MILESTONE: V0-R0-CAPTURE-ONLY
-ACTIVE_TASK_ID: V0-T2-ETH-PUBLIC-CAPTURE-RUNTIME-CANDIDATE
-ACTIVE_WRITE_LEASE: V0-T2-ETH-PUBLIC-CAPTURE-RUNTIME-WRITE-LEASE-1
+ORIGINAL_T2_TASK_STATUS: COMPLETED_IN_DRAFT_PR_17
+ORIGINAL_T2_WRITE_LEASE_STATUS: COMPLETED
+REPAIR_WRITE_LEASE_STATUS: CONSUMED_PENDING_PROJECT_CONTROL_ACCEPTANCE
+ACTIVE_TASK_AFTER_REPAIR_COMMIT: NONE
+ACTIVE_WRITE_LEASE_AFTER_REPAIR_COMMIT: NONE
+PR17_STATE: DRAFT_PENDING_INDEPENDENT_EXACT_HEAD_REREVIEW
 R0: CAPTURE_ONLY
 R1: ETH_OPERATOR_ASSIST
 FIRST_LAUNCH_PRIMARY_ASSET: ETH
@@ -22,7 +27,7 @@ BTC_FIRST_LAUNCH_BLOCKER: NO
 T1: CONTRACT_SCHEMA_GOVERNANCE_ONLY
 T2_HISTORICAL_T1_AUTHORITY: SEPARATE_FUTURE_ETH_PUBLIC_CAPTURE_RUNTIME
 T2_CURRENT_BRANCH_STATUS: DEFAULT_OFF_IMPLEMENTATION_CANDIDATE
-NEXT_GATE: V0-FLP1B0B-FIRST-LAUNCH-CRITICAL-PATH-AND-ETH-MINIMUM-VALIDATION-READONLY-PLANNING
+NEXT_IMPLEMENTATION_GATE: V0-FLP1-DECISION-TO-OUTCOME-OPERATOR-ASSIST-PILOT
 ```
 
 T1 freezes the Capture Now authority contract, generated JSON Schema, governance
@@ -30,16 +35,21 @@ state, and documentation. It starts no runtime, opens no socket, performs no DNS
 or endpoint connection, writes no database or filesystem evidence, and grants no
 strategy, risk, account, credential, or exchange execution authority.
 
-T1 remains the historical contract/schema authority. T2 is a minimal
-implementation candidate and does not change R0 into a signal product. Its fixed
-ETH 5m/15m public WebSocket runtime is default-off. This implementation task does
-not connect to the endpoint or create a real permit. After merge and separate
-project-control approval, one external durable single-use permit may authorize
-exactly one controlled connection attempt. The application protocol heartbeat is
-allowed only to maintain that existing one connection. Automatic reconnect,
-backfill, and Info HTTP remain prohibited, as do strategy, signal, risk, account,
-credential, and execution capabilities. `PROJECT_STATE.json` remains the
+T1 remains the historical contract/schema authority and its Capture-only state
+describes prior implementation state; it does not redefine current product
+scope. First Launch remains the user-confirmed ETH Operator Assist product, and
+T2 is only its default-off ETH 5m/15m public Capture component. No First Launch
+capability is removed, downgraded, or deferred. PR #17 does not connect to the
+endpoint or create a real permit during implementation. After finalization and
+separate project-control approval, one external durable single-use permit may
+authorize exactly one controlled connection attempt. The application protocol
+heartbeat is allowed only for that existing connection. Automatic reconnect,
+backfill, and Info HTTP remain prohibited. `PROJECT_STATE.json` remains the
 unchanged historical safe-stop snapshot, including historical PR #16 authority.
+
+After PR #17 finalization, the next implementation gate is the single vertical
+`V0-FLP1-DECISION-TO-OUTCOME-OPERATOR-ASSIST-PILOT`. No separate planning,
+readiness, or post-merge state-sync PR is required.
 
 ## Plane Boundary
 
@@ -51,10 +61,15 @@ manifest, checkpoint, replay, and root-wide single-writer rules.
 reference evidence IDs and hashes, but T1 does not connect it to RawEvent,
 Bronze, ingress, replay runtime, normalized events, Silver, strategy, AI, risk,
 dashboard, account observation, Testnet/Mainnet execution, or exchange writes.
+T2 may call the existing RawEvent, Bronze, manifest, checkpoint, and deterministic
+replay APIs for accepted original bytes. Its strict JSON inspection is limited
+to greeting, channel, coin, and interval routing. Full Candle extraction,
+normalization, Silver, strategy, AI, risk, dashboard, account, and execution
+remain outside PR #17.
 
-## R0 and R1
+## Historical R0 and R1
 
-R0 is `CAPTURE_ONLY`:
+The historical governance state records that R0 is `CAPTURE_ONLY`:
 
 - `release_id = V0-R0`
 - `primary_asset = ETH`
@@ -71,12 +86,13 @@ R0 is `CAPTURE_ONLY`:
   deterministic risk, TradePlan, FAST/STANDARD presentation, account/order/fill
   observation, manual-execution workflow, or registry requirement
 
-R1 preserves the former future ETH Operator Assist semantics: ETH-only,
+The current product baseline preserves the user-confirmed ETH Operator Assist
+semantics: ETH-only,
 ETH-LDAR or separately approved future ETH strategy, `LONG`/`SHORT`/`WAIT`,
 deterministic risk, TradePlan, FAST/STANDARD presentation, human review, manual
 execution, read-only account/order/fill observation, plan/outcome matching,
-replay, and learning loop. In T1 it remains future, not implemented, and not
-authorized.
+replay, and learning loop. T2 does not implement those capabilities, but does
+not remove, downgrade, or defer them from First Launch.
 
 The former human-confirmed automated execution controls are deferred under
 `future_human_confirmed_execution`, with no release assigned, release authority

@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import os
+import re
+import stat
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -29,6 +33,8 @@ A2_CONTRACT_ID = "V0-01A2-NO-NETWORK-PUBLIC-OBSERVATION-INGRESS-CONTRACT"
 A2_COLLECTOR_VERSION = "trader-assist-v0.v0-01a2"
 T2_COLLECTOR_VERSION = "trader-assist-v0.v0-t2-eth-public-capture"
 _T2_PROOF_AUTHORITY = object()
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 
 
 @dataclass(frozen=True)
@@ -38,9 +44,11 @@ class PublicObservationIngressResult:
     manifest_append: ManifestAppendResult | None = None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class _T2ConsumedPermitProof:
     consumed_path: Path
+    receipt_path: Path
+    receipt_sha256: str
     permit_id: str
     _authority: object
 
@@ -48,19 +56,87 @@ class _T2ConsumedPermitProof:
 def _issue_t2_consumed_permit_proof(
     *,
     consumed_path: Path,
+    receipt_path: Path,
+    receipt_sha256: str,
     permit_id: str,
 ) -> _T2ConsumedPermitProof:
-    return _T2ConsumedPermitProof(
-        consumed_path=consumed_path,
-        permit_id=permit_id,
-        _authority=_T2_PROOF_AUTHORITY,
-    )
+    if _NOFOLLOW == 0:
+        raise ValueError("T2 ingress proof issuance requires O_NOFOLLOW support")
+    consumed_metadata = _verified_private_regular_file(consumed_path)
+    receipt_metadata = _verified_private_regular_file(receipt_path)
+    if _SHA256_RE.fullmatch(receipt_sha256) is None:
+        raise ValueError("T2 receipt hash must be lowercase SHA-256")
+    consumed_fd = os.open(consumed_path, os.O_RDONLY | _NOFOLLOW)
+    try:
+        opened = os.fstat(consumed_fd)
+        if (opened.st_dev, opened.st_ino) != (
+            consumed_metadata.st_dev,
+            consumed_metadata.st_ino,
+        ):
+            raise ValueError("T2 consumed permit identity changed during proof issuance")
+    finally:
+        os.close(consumed_fd)
+    receipt_fd = os.open(receipt_path, os.O_RDONLY | _NOFOLLOW)
+    try:
+        opened = os.fstat(receipt_fd)
+        if (opened.st_dev, opened.st_ino) != (
+            receipt_metadata.st_dev,
+            receipt_metadata.st_ino,
+        ):
+            raise ValueError("T2 receipt identity changed during proof issuance")
+        receipt_bytes = _read_bounded_receipt(receipt_fd)
+    finally:
+        os.close(receipt_fd)
+    if hashlib.sha256(receipt_bytes).hexdigest() != receipt_sha256:
+        raise ValueError("T2 receipt hash does not match its exact canonical bytes")
+    if consumed_metadata.st_nlink < 1:
+        raise ValueError("T2 consumed permit is no longer durable")
+
+    proof = object.__new__(_T2ConsumedPermitProof)
+    object.__setattr__(proof, "consumed_path", consumed_path)
+    object.__setattr__(proof, "receipt_path", receipt_path)
+    object.__setattr__(proof, "receipt_sha256", receipt_sha256)
+    object.__setattr__(proof, "permit_id", permit_id)
+    object.__setattr__(proof, "_authority", _T2_PROOF_AUTHORITY)
+    return proof
+
+
+def _verified_private_regular_file(path: Path) -> os.stat_result:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError as exc:
+        raise ValueError("T2 ingress proof authority file is missing") from exc
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise ValueError("T2 ingress proof authority must be an exact regular file")
+    if stat.S_IMODE(metadata.st_mode) != 0o600:
+        raise ValueError("T2 ingress proof authority file mode must be exactly 0600")
+    if metadata.st_uid != os.geteuid():
+        raise ValueError("T2 ingress proof authority file must be owned by the effective user")
+    return metadata
+
+
+def _read_bounded_receipt(fd: int) -> bytes:
+    chunks: list[bytes] = []
+    size = 0
+    while True:
+        chunk = os.read(fd, 4096)
+        if not chunk:
+            return b"".join(chunks)
+        size += len(chunk)
+        if size > 16 * 1024:
+            raise ValueError("T2 receipt exceeds the bounded proof size")
+        chunks.append(chunk)
 
 
 def _validate_t2_consumed_permit_proof(proof: _T2ConsumedPermitProof) -> None:
     if type(proof) is not _T2ConsumedPermitProof or proof._authority is not _T2_PROOF_AUTHORITY:
         raise ValueError("T2 ingress requires an authentic consumed start-permit proof")
-    if not proof.permit_id or not proof.consumed_path.name:
+    if (
+        not proof.permit_id
+        or not proof.consumed_path.name
+        or not proof.receipt_path.name
+        or _SHA256_RE.fullmatch(proof.receipt_sha256) is None
+    ):
         raise ValueError("T2 consumed start-permit proof is incomplete")
 
 
