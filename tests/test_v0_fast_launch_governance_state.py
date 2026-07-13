@@ -5,89 +5,74 @@ import json
 import re
 import subprocess
 import sys
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
 from jsonschema import Draft202012Validator
+from jsonschema.exceptions import ValidationError
 
 ROOT = Path(__file__).resolve().parents[1]
 PROGRAM_PATH = ROOT / "governance" / "V0_FAST_LAUNCH_PROGRAM.json"
 STATE_PATH = ROOT / "governance" / "PROJECT_STATE.json"
 SCHEMA_PATH = ROOT / "schemas" / "governance" / "V0FastLaunchProgram.schema.json"
 
-TASK_ID = "V0-FLP1B0B-CAPTURE-NOW-AUTHORITY-AMENDMENT"
-BASE_SHA = "78d2d37bfe5a4f3f1d382a2a96e57896ae9676ae"
-NEXT_GATE = "V0-FLP1B0B-EXTERNAL-INDEPENDENT-REVIEW"
+PROGRAM_TASK_ID = "V0-FLP1B0B-CAPTURE-NOW-AUTHORITY-AMENDMENT"
+PROGRAM_BASE_SHA = "78d2d37bfe5a4f3f1d382a2a96e57896ae9676ae"
+CURRENT_STATE_BASE_SHA = "95e4a9ebaedb028de68d859627a37dfc142c8602"
+CURRENT_ACTIVE_TASK_ID = "NONE"
+NEXT_GATE = "V0-FLP1B0B-FIRST-LAUNCH-CRITICAL-PATH-AND-ETH-MINIMUM-VALIDATION-READONLY-PLANNING"
 AUTHORITY_HASH = "0e327e566589d8030ff00d4d009eb4b6827679ab508133d66840b2c245dc53df"
 SOURCE_CATALOG_HASH = "0ca27f650f399f8fa481ad9421eab4183c1c13812c71dfa8daaf878719bd99b7"
 COMMIT_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
+FUTURE_R1_OBJECT_NAMES = (
+    "signal_speed_policy",
+    "strategy_lifecycle",
+    "data_product_lifecycle",
+    "learning_loop",
+)
+FUTURE_R1_MARKERS = {
+    "release_id": "V0-R1",
+    "release_scope": "ETH_OPERATOR_ASSIST",
+    "status": "FUTURE_NOT_IMPLEMENTED_NOT_AUTHORIZED",
+    "active_in_r0": False,
+}
 
 EXPECTED_CHANGED_FILES = {
-    ".github/workflows/ci.yml",
     "README.md",
     "docs/V0_01_SCOPE.md",
-    "docs/V0_FAST_LAUNCH_PROGRAM.md",
     "docs/V0_FLP0_CAPTURE_NOW_AUTHORITY.md",
     "docs/architecture/V0_01_DATA_PLANE.md",
     "docs/architecture/AUTHORITY_BOUNDARY.md",
     "docs/architecture/STRATEGY_AND_DATA_LIFECYCLE.md",
-    "docs/architecture/PILOT_LEARNING_LOOP.md",
     "governance/V0_FAST_LAUNCH_PROGRAM.json",
     "governance/PROJECT_STATE.json",
     "schemas/governance/V0FastLaunchProgram.schema.json",
-    "src/trader_assist_v0/contracts/capture.py",
-    "src/trader_assist_v0/contracts/__init__.py",
-    "scripts/export_schemas.py",
-    "schemas/v0/CaptureRecordV0.schema.json",
-    "tests/test_v0_flp1b0b_capture_now_authority.py",
     "tests/test_v0_fast_launch_governance_state.py",
 }
 
 EXPECTED_COMMITTED_STATUS_MAP = {
-    ".github/workflows/ci.yml": "M",
     "README.md": "M",
     "docs/V0_01_SCOPE.md": "M",
-    "docs/V0_FAST_LAUNCH_PROGRAM.md": "M",
-    "docs/V0_FLP0_CAPTURE_NOW_AUTHORITY.md": "A",
+    "docs/V0_FLP0_CAPTURE_NOW_AUTHORITY.md": "M",
     "docs/architecture/V0_01_DATA_PLANE.md": "M",
     "docs/architecture/AUTHORITY_BOUNDARY.md": "M",
     "docs/architecture/STRATEGY_AND_DATA_LIFECYCLE.md": "M",
-    "docs/architecture/PILOT_LEARNING_LOOP.md": "M",
     "governance/V0_FAST_LAUNCH_PROGRAM.json": "M",
     "governance/PROJECT_STATE.json": "M",
     "schemas/governance/V0FastLaunchProgram.schema.json": "M",
-    "src/trader_assist_v0/contracts/capture.py": "A",
-    "src/trader_assist_v0/contracts/__init__.py": "M",
-    "scripts/export_schemas.py": "M",
-    "schemas/v0/CaptureRecordV0.schema.json": "A",
-    "tests/test_v0_flp1b0b_capture_now_authority.py": "A",
     "tests/test_v0_fast_launch_governance_state.py": "M",
-}
-
-FORBIDDEN_FILES = {
-    "CODEX.md",
-    "docs/PROJECT_CONTROL_WORKFLOW.md",
-    "docs/V0_01_OFFICIAL_SOURCE_CATALOG.md",
-    "src/trader_assist_v0/contracts/common.py",
-    "src/trader_assist_v0/contracts/events.py",
-    "src/trader_assist_v0/contracts/source_catalog.py",
-    "src/trader_assist_v0/contracts/rate_limits.py",
-    "pyproject.toml",
-    "requirements-dev.lock",
-    "requirements-runtime.lock",
 }
 
 DOC_PATHS = (
     ROOT / "README.md",
     ROOT / "docs" / "V0_01_SCOPE.md",
-    ROOT / "docs" / "V0_FAST_LAUNCH_PROGRAM.md",
     ROOT / "docs" / "V0_FLP0_CAPTURE_NOW_AUTHORITY.md",
     ROOT / "docs" / "architecture" / "V0_01_DATA_PLANE.md",
     ROOT / "docs" / "architecture" / "AUTHORITY_BOUNDARY.md",
     ROOT / "docs" / "architecture" / "STRATEGY_AND_DATA_LIFECYCLE.md",
-    ROOT / "docs" / "architecture" / "PILOT_LEARNING_LOOP.md",
 )
 
 
@@ -110,18 +95,29 @@ def test_schema_self_validation_and_instances() -> None:
     Draft202012Validator(state_schema).validate(state)
 
 
-def test_program_state_and_release_authority_parity() -> None:
+def test_program_provenance_and_current_state_are_distinct() -> None:
     program = _load_json(PROGRAM_PATH)
     state = _load_json(STATE_PATH)
 
-    assert program["task_id"] == state["active_task_id"] == TASK_ID
-    assert program["state_base_sha"] == state["state_base_sha"] == BASE_SHA
+    assert program["task_id"] == PROGRAM_TASK_ID
+    assert program["state_base_sha"] == PROGRAM_BASE_SHA
+    assert program["first_release"]["milestone"] == PROGRAM_TASK_ID
+    assert state["state_base_sha"] == CURRENT_STATE_BASE_SHA
+    assert state["active_milestone"] == "V0-R0-CAPTURE-ONLY"
+    assert state["active_task_id"] == CURRENT_ACTIVE_TASK_ID
+    assert program["authority"]["last_policy_state_pr"] == 15
+    assert state["last_policy_state_pr"] == 15
     assert state["active_write_lease"]["status"] == "NONE"
-    assert state["active_write_lease"]["final_status"] == (
-        "CONSUMED_PENDING_PROJECT_CONTROL_ACCEPTANCE"
+    assert state["active_write_lease"]["last_lease_id"] == (
+        "V0-FLP1B0B-T1-IMPLEMENTATION-WRITE-LEASE-1"
     )
+    assert state["active_write_lease"]["final_status"] == "ACCEPTED_AND_CLOSED"
     assert state["next_gate"] == NEXT_GATE
+    assert program["review_finalization_policy"]["next_gate"] == NEXT_GATE
     assert program["recursive_rotation"]["post_merge_next_gate"] == NEXT_GATE
+    assert program["recursive_rotation"]["next_window_role"] == (
+        "V0 Fast Launch project-control successor"
+    )
 
     release_authority = program["release_authority"]
     assert release_authority == {
@@ -154,8 +150,11 @@ def test_r0_r1_and_deferred_g4_migration() -> None:
         "trade_plan_authorized",
         "account_runtime_authorized",
         "exchange_execution_authorized",
+        "runtime_started",
     ):
         assert r0[gate] is False
+    assert "ETH-LDAR-v0.1" not in r0.values()
+    assert "registry" not in r0
 
     assert r1["release_id"] == "V0-R1"
     assert r1["scope"] == "ETH_OPERATOR_ASSIST"
@@ -181,6 +180,118 @@ def test_r0_r1_and_deferred_g4_migration() -> None:
     assert "OFFICIAL_SDK_SIGNING" in deferred["required_controls"]
     assert "SEPARATE_MAINNET_AUTHORIZATION" in deferred["required_controls"]
     assert "required_controls" not in r1
+
+
+def test_root_policy_objects_are_explicitly_future_r1_bound() -> None:
+    program = _load_json(PROGRAM_PATH)
+
+    for object_name in FUTURE_R1_OBJECT_NAMES:
+        assert set(FUTURE_R1_MARKERS).issubset(program[object_name])
+        for field, expected in FUTURE_R1_MARKERS.items():
+            assert program[object_name][field] == expected
+
+    signal_speed_policy = program["signal_speed_policy"]
+    assert signal_speed_policy["strategy_id"] == "ETH-LDAR-v0.1"
+    assert set(signal_speed_policy["classes"]) == {"FAST", "STANDARD"}
+
+    strategy_lifecycle = program["strategy_lifecycle"]
+    assert "first_release" not in strategy_lifecycle
+    assert strategy_lifecycle["future_r1_minimum_requirements"] == [
+        "STABLE_INTERFACE",
+        "REGISTRY",
+        "ENABLE_DISABLE",
+    ]
+    assert "REGISTRY" in strategy_lifecycle["promotion_pipeline"]
+
+    data_product_lifecycle = program["data_product_lifecycle"]
+    assert "first_release_scope" not in data_product_lifecycle
+    assert data_product_lifecycle["future_r1_required_data_product_scope"] == (
+        "ONLY_ETH_LDAR_REQUIRED_DATA_PRODUCTS"
+    )
+
+    learning_loop = program["learning_loop"]
+    for value in ("SIGNAL", "TRADE_PLAN", "ACTUAL_ORDER_FILL_OBSERVATION"):
+        assert value in learning_loop["pipeline"]
+
+
+@pytest.mark.parametrize(
+    "object_name, field",
+    [
+        (object_name, field)
+        for object_name in FUTURE_R1_OBJECT_NAMES
+        for field in FUTURE_R1_MARKERS
+    ],
+)
+def test_schema_rejects_missing_future_r1_markers(
+    object_name: str,
+    field: str,
+) -> None:
+    schema = _load_json(SCHEMA_PATH)
+    candidate = deepcopy(_load_json(PROGRAM_PATH))
+    del candidate[object_name][field]
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(candidate)
+
+
+@pytest.mark.parametrize(
+    "object_name, field, wrong_value",
+    [
+        (object_name, "release_id", "V0-R0")
+        for object_name in FUTURE_R1_OBJECT_NAMES
+    ]
+    + [
+        (object_name, "release_scope", "CAPTURE_ONLY")
+        for object_name in FUTURE_R1_OBJECT_NAMES
+    ]
+    + [
+        (object_name, "status", "IMPLEMENTED")
+        for object_name in FUTURE_R1_OBJECT_NAMES
+    ]
+    + [
+        (object_name, "active_in_r0", True)
+        for object_name in FUTURE_R1_OBJECT_NAMES
+    ],
+)
+def test_schema_rejects_invalid_future_r1_marker_values(
+    object_name: str,
+    field: str,
+    wrong_value: str | bool,
+) -> None:
+    schema = _load_json(SCHEMA_PATH)
+    candidate = deepcopy(_load_json(PROGRAM_PATH))
+    candidate[object_name][field] = wrong_value
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(candidate)
+
+
+@pytest.mark.parametrize(
+    "object_name, obsolete_key, obsolete_value",
+    (
+        (
+            "strategy_lifecycle",
+            "first_release",
+            ["STABLE_INTERFACE", "REGISTRY", "ENABLE_DISABLE"],
+        ),
+        (
+            "data_product_lifecycle",
+            "first_release_scope",
+            "ONLY_ETH_LDAR_REQUIRED_DATA_PRODUCTS",
+        ),
+    ),
+)
+def test_schema_rejects_reintroduced_obsolete_future_r1_keys(
+    object_name: str,
+    obsolete_key: str,
+    obsolete_value: str | list[str],
+) -> None:
+    schema = _load_json(SCHEMA_PATH)
+    candidate = deepcopy(_load_json(PROGRAM_PATH))
+    candidate[object_name][obsolete_key] = obsolete_value
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(candidate)
 
 
 def test_rate_limit_authority_immutability_and_false_gates() -> None:
@@ -219,6 +330,8 @@ def test_docs_share_capture_now_semantics() -> None:
         text = path.read_text(encoding="utf-8")
         for token in required_tokens:
             assert token in text, path
+        assert "R0 is the ETH-only Operator Assist Pilot" not in text, path
+        assert "R0 requires ETH 5m and 15m candles" not in text, path
 
     capture_doc = (ROOT / "docs" / "V0_FLP0_CAPTURE_NOW_AUTHORITY.md").read_text(
         encoding="utf-8"
@@ -231,30 +344,21 @@ def test_docs_share_capture_now_semantics() -> None:
 
 def test_exact_changed_file_scope_and_forbidden_boundaries() -> None:
     changed = EXPECTED_CHANGED_FILES
-    assert len(changed) == 18
+    assert len(changed) == 10
     assert changed == {
-        ".github/workflows/ci.yml",
         "README.md",
         "docs/V0_01_SCOPE.md",
-        "docs/V0_FAST_LAUNCH_PROGRAM.md",
         "docs/V0_FLP0_CAPTURE_NOW_AUTHORITY.md",
         "docs/architecture/V0_01_DATA_PLANE.md",
         "docs/architecture/AUTHORITY_BOUNDARY.md",
         "docs/architecture/STRATEGY_AND_DATA_LIFECYCLE.md",
-        "docs/architecture/PILOT_LEARNING_LOOP.md",
         "governance/V0_FAST_LAUNCH_PROGRAM.json",
         "governance/PROJECT_STATE.json",
         "schemas/governance/V0FastLaunchProgram.schema.json",
-        "schemas/v0/CaptureRecordV0.schema.json",
-        "scripts/export_schemas.py",
-        "src/trader_assist_v0/contracts/__init__.py",
-        "src/trader_assist_v0/contracts/capture.py",
         "tests/test_v0_fast_launch_governance_state.py",
-        "tests/test_v0_flp1b0b_capture_now_authority.py",
     }
     assert set(EXPECTED_COMMITTED_STATUS_MAP) == changed
-    assert tuple(EXPECTED_COMMITTED_STATUS_MAP.values()).count("A") == 4
-    assert tuple(EXPECTED_COMMITTED_STATUS_MAP.values()).count("M") == 14
+    assert tuple(EXPECTED_COMMITTED_STATUS_MAP.values()).count("M") == 10
     assert not _scope_boundary_errors(changed)
 
 
@@ -337,8 +441,8 @@ def test_scope_gate_rejects_forbidden_deletion_and_untracked_paths() -> None:
     assert findings["boundary_errors"]
 
 
-@pytest.mark.parametrize("status", ("T", "U", "X", "B"))
-def test_scope_gate_rejects_type_unmerged_unknown_and_broken_statuses(status: str) -> None:
+@pytest.mark.parametrize("status", ("A", "D", "R", "C", "T", "U", "X", "B"))
+def test_scope_gate_rejects_all_non_modify_statuses(status: str) -> None:
     snapshot = _synthetic_scope_snapshot(unstaged={"README.md": status})
     assert _scope_snapshot_findings(snapshot)["prohibited_statuses"] == [
         ("unstaged", status, "README.md")
@@ -377,10 +481,10 @@ def test_scope_gate_rejects_unauthorized_copy_destination_path() -> None:
     ]
 
 
-def test_scope_gate_governs_authorized_copy_target_by_exact_expected_status() -> None:
+def test_scope_gate_governs_allowlisted_path_by_exact_expected_status() -> None:
     assert not any(_scope_snapshot_findings(_synthetic_scope_snapshot()).values())
     wrong_status = dict(EXPECTED_COMMITTED_STATUS_MAP)
-    wrong_status["docs/V0_FLP0_CAPTURE_NOW_AUTHORITY.md"] = "M"
+    wrong_status["docs/V0_FLP0_CAPTURE_NOW_AUTHORITY.md"] = "A"
     assert _scope_snapshot_findings(
         _synthetic_scope_snapshot(committed=wrong_status)
     )["status_mismatches"]
@@ -391,13 +495,13 @@ def test_scope_gate_rejects_status_mismatch_and_cli_prints_full_maps(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     committed = dict(EXPECTED_COMMITTED_STATUS_MAP)
-    committed["docs/V0_FLP0_CAPTURE_NOW_AUTHORITY.md"] = "M"
+    committed["docs/V0_FLP0_CAPTURE_NOW_AUTHORITY.md"] = "A"
     snapshot = _synthetic_scope_snapshot(
         committed=committed,
         malformed_records=("unstaged: malformed status/path record",),
     )
     monkeypatch.setattr(sys.modules[__name__], "_collect_pr_scope_snapshot", lambda _sha: snapshot)
-    assert _check_pr_scope(BASE_SHA) == 1
+    assert _check_pr_scope(CURRENT_STATE_BASE_SHA) == 1
     stderr = capsys.readouterr().err
     for label in (
         "missing paths",
@@ -414,25 +518,13 @@ def test_scope_gate_rejects_status_mismatch_and_cli_prints_full_maps(
 
 def _scope_boundary_errors(changed: set[str]) -> list[str]:
     errors: list[str] = []
-    forbidden = sorted(changed & FORBIDDEN_FILES)
-    if forbidden:
-        errors.append(f"forbidden files: {', '.join(forbidden)}")
-    data_files = sorted(
-        path for path in changed if path.startswith("src/trader_assist_v0/data/")
-    )
-    if data_files:
-        errors.append(f"data files: {', '.join(data_files)}")
-    dependency_files = sorted(
-        path
-        for path in changed
-        if path in {"pyproject.toml", "requirements-dev.lock", "requirements-runtime.lock"}
-    )
-    if dependency_files:
-        errors.append(f"dependency or lock files: {', '.join(dependency_files)}")
+    outside_allowlist = sorted(changed - EXPECTED_CHANGED_FILES)
+    if outside_allowlist:
+        errors.append(f"outside allowlist: {', '.join(outside_allowlist)}")
     workflow_files = {
         path for path in changed if path.startswith(".github/workflows/")
     }
-    if workflow_files != {".github/workflows/ci.yml"}:
+    if workflow_files:
         errors.append(f"workflow files: {', '.join(sorted(workflow_files))}")
     return errors
 
@@ -583,7 +675,7 @@ def _scope_snapshot_findings(snapshot: _ScopeSnapshot) -> dict[str, Any]:
             ("unstaged", snapshot.unstaged),
         )
         for path, status in status_map.items()
-        if status not in {"A", "M"}
+        if status != "M"
     )
     status_mismatches = sorted(
         (path, EXPECTED_COMMITTED_STATUS_MAP[path], snapshot.committed.get(path))
@@ -630,7 +722,7 @@ def _check_pr_scope(base_sha: str) -> int:
             print(f"boundary error: {error}", file=sys.stderr)
         return 1
 
-    print(f"PR scope check passed: {len(snapshot.committed)} files (4 A, 14 M)")
+    print(f"PR scope check passed: {len(snapshot.committed)} files (0 A, 10 M)")
     return 0
 
 

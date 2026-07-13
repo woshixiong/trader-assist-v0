@@ -36,11 +36,17 @@ A6 completed an offline-only pairwise reconciliation contract and was merged via
 
 ```text
 PROGRAM: V0-FAST-LAUNCH
-STATE_BASE_SHA: c507e2fc1bad6aca175cf833e5bcca63224c3e5f
+STATE_KIND: SAFE_STOP_SNAPSHOT
+STATE_BASE_SHA: 95e4a9ebaedb028de68d859627a37dfc142c8602
+HISTORICAL_PR15_TASK_ID: V0-FLP1B0B-CAPTURE-NOW-AUTHORITY-AMENDMENT
+HISTORICAL_PR15_BASE_SHA: 78d2d37bfe5a4f3f1d382a2a96e57896ae9676ae
+HISTORICAL_PR15_HEAD: b7c26c019f64ab627dffc3bde4ab5a35071b6fc5
+PR15_MERGE_COMMIT_AND_CURRENT_MAIN: 95e4a9ebaedb028de68d859627a37dfc142c8602
 LAST_COMPLETED_IMPLEMENTATION: V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT
 LAST_COMPLETED_IMPLEMENTATION_PR: 11
-LAST_POLICY_STATE_PR: 12
-ACTIVE_IMPLEMENTATION: NONE
+LAST_POLICY_STATE_PR: 15
+ACTIVE_MILESTONE: V0-R0-CAPTURE-ONLY
+ACTIVE_TASK_ID: NONE
 ACTIVE_WRITE_LEASE: NONE
 FIRST_RELEASE_FROZEN: TRUE
 LONG_TERM_ROADMAP_FROZEN: TRUE
@@ -50,7 +56,7 @@ ACCOUNT_READONLY_RUNTIME_AUTHORIZED: FALSE
 TESTNET_EXECUTION_AUTHORIZED: FALSE
 MAINNET_EXECUTION_AUTHORIZED: FALSE
 FLP1_IMPLEMENTATION_AUTHORIZED: FALSE
-NEXT_GATE: V0-FLP1-OPERATOR-ASSIST-PILOT-SCOPE-FREEZE
+NEXT_GATE: V0-FLP1B0B-FIRST-LAUNCH-CRITICAL-PATH-AND-ETH-MINIMUM-VALIDATION-READONLY-PLANNING
 ```
 
 There is no active implementation slice or runtime write lease. The prior generic A7-only next step is superseded by the explicit Fast Launch program. No FLP1 implementation is authorized by this document.
@@ -196,11 +202,23 @@ The root-wide authority is held for the complete writer lifetime. Different segm
 
 ## V0-R0 Fast Launch boundary
 
-R0 is the ETH-only Operator Assist Pilot with one active strategy, `ETH-LDAR-v0.1`. The target pipeline covers trusted data, deterministic `LONG`/`SHORT`/`WAIT`, deterministic risk sizing, a TradePlan, FAST/STANDARD signal cards, human decision capture, manual Hyperliquid execution, read-only order/fill matching, replay, and versioned findings.
+R0 is Capture-only contract/schema/governance authority with
+`active_strategy_count = 0`. It has no network runtime, ETH-LDAR, signal or
+`LONG`/`SHORT`/`WAIT` recommendation, OI/funding strategy requirement,
+deterministic risk, TradePlan, FAST/STANDARD presentation, account/order/fill
+observation, manual execution workflow, exchange execution, or registry
+requirement.
 
-Every valid FAST and STANDARD signal is visible. FAST is optional and not automatically a strategy failure when the operator cannot act before expiry. STANDARD is expected to be human-actionable. Strategy and data products use independent versioned manifests and explicit dependencies. Online learning and automatic production mutation are prohibited.
+R1 is the future ETH Operator Assist release. It may include ETH-LDAR or a
+separately approved ETH strategy, signals, deterministic risk, TradePlan,
+FAST/STANDARD, human review, manual execution, read-only account observation,
+matching, registry, replay, and learning records, but remains
+`FUTURE_NOT_IMPLEMENTED_NOT_AUTHORIZED`.
 
-The capability roadmap remains FL1 trusted data, FL2 signal and risk, FL3 human review, and FL4 human-confirmed execution. R1/FL4 require separate G4 execution and security review. Autonomous entry remains prohibited.
+A separately authorized T2 may implement ETH public Capture runtime only. The
+capability roadmap remains future FL1 trusted data, FL2 signal and risk, FL3
+human review, and FL4 human-confirmed execution; R1/FL4 require separate G4
+execution and security review. Autonomous entry remains prohibited.
 
 ## Authority
 
@@ -240,4 +258,4 @@ unknowns. `transition_eligible`, `live_transport_authorized`,
 `mainnet_execution_authorized`, and `flp1_implementation_authorized` remain
 false.
 
-TraderOS remains authoritative for cross-project architecture and production governance. Public market-data definitions never authorize exchange writes. Completion of A6 and this governance freeze do not authorize live transport, health, backfill, finality inference, revision ordering, canonical winner selection, normalized events, Silver, strategy runtime, AI runtime, risk runtime, dashboard runtime, account observation runtime, Testnet/Mainnet execution, or exchange writes. The next gate is `V0-FLP1B0B-EXTERNAL-INDEPENDENT-REVIEW`; every later slice requires a separate exact-head scope freeze, write lease, CI run, external independent review, and finalization authorization.
+TraderOS remains authoritative for cross-project architecture and production governance. Public market-data definitions never authorize exchange writes. Completion of A6 and this governance freeze do not authorize live transport, health, backfill, finality inference, revision ordering, canonical winner selection, normalized events, Silver, strategy runtime, AI runtime, risk runtime, dashboard runtime, account observation runtime, Testnet/Mainnet execution, or exchange writes. The next gate is `V0-FLP1B0B-FIRST-LAUNCH-CRITICAL-PATH-AND-ETH-MINIMUM-VALIDATION-READONLY-PLANNING`; every later slice requires a separate exact-head scope freeze, write lease, CI run, external independent review, and finalization authorization.

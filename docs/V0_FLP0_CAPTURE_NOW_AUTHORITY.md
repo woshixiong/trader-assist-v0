@@ -3,8 +3,16 @@
 ## Authority Snapshot
 
 ```text
-TASK_ID: V0-FLP1B0B-CAPTURE-NOW-AUTHORITY-AMENDMENT
-STATE_BASE_SHA: 78d2d37bfe5a4f3f1d382a2a96e57896ae9676ae
+CURRENT_STATE_KIND: SAFE_STOP_SNAPSHOT
+CURRENT_STATE_BASE_SHA: 95e4a9ebaedb028de68d859627a37dfc142c8602
+HISTORICAL_PR15_TASK_ID: V0-FLP1B0B-CAPTURE-NOW-AUTHORITY-AMENDMENT
+HISTORICAL_PR15_BASE_SHA: 78d2d37bfe5a4f3f1d382a2a96e57896ae9676ae
+HISTORICAL_PR15_HEAD: b7c26c019f64ab627dffc3bde4ab5a35071b6fc5
+PR15_MERGE_COMMIT_AND_CURRENT_MAIN: 95e4a9ebaedb028de68d859627a37dfc142c8602
+LAST_POLICY_STATE_PR: 15
+ACTIVE_MILESTONE: V0-R0-CAPTURE-ONLY
+ACTIVE_TASK_ID: NONE
+ACTIVE_WRITE_LEASE_STATUS: NONE
 R0: CAPTURE_ONLY
 R1: ETH_OPERATOR_ASSIST
 FIRST_LAUNCH_PRIMARY_ASSET: ETH
@@ -12,7 +20,7 @@ BTC_FIRST_LAUNCH_REQUIREMENT: NONE
 BTC_FIRST_LAUNCH_BLOCKER: NO
 T1: CONTRACT_SCHEMA_GOVERNANCE_ONLY
 T2: SEPARATE_FUTURE_ETH_PUBLIC_CAPTURE_RUNTIME
-NEXT_GATE: V0-FLP1B0B-EXTERNAL-INDEPENDENT-REVIEW
+NEXT_GATE: V0-FLP1B0B-FIRST-LAUNCH-CRITICAL-PATH-AND-ETH-MINIMUM-VALIDATION-READONLY-PLANNING
 ```
 
 T1 freezes the Capture Now authority contract, generated JSON Schema, governance
@@ -46,6 +54,9 @@ R0 is `CAPTURE_ONLY`:
 - `trade_plan_authorized = false`
 - `account_runtime_authorized = false`
 - `exchange_execution_authorized = false`
+- no ETH-LDAR, signal recommendation, OI/funding strategy requirement,
+  deterministic risk, TradePlan, FAST/STANDARD presentation, account/order/fill
+  observation, manual-execution workflow, or registry requirement
 
 R1 preserves the former future ETH Operator Assist semantics: ETH-only,
 ETH-LDAR or separately approved future ETH strategy, `LONG`/`SHORT`/`WAIT`,
@@ -183,10 +194,10 @@ making manifest or checkpoint validation choose a version.
 
 ## Exact PR Scope Gate
 
-Normal pytest validates a frozen static 18-file contract and does not read Git
+Normal pytest validates a frozen static 10-file contract and does not read Git
 history. The explicit PR CLI reads committed, staged, and unstaged
 `--name-status -z --no-renames` byte streams and requires the frozen committed
-map of four additions and fourteen modifications. Scope authority is exact
+map of ten modifications and zero additions. Scope authority is exact
 changed path/status authority, not Git copy provenance. With `--no-renames`, a
 rename deterministically appears as source `D` plus destination `A`; deletion
 and the missing/unexpected/status mismatch therefore fail without similarity

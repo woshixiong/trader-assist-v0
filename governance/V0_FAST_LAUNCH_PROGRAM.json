@@ -9,7 +9,7 @@
   "authority": {
     "last_completed_implementation": "V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT",
     "last_completed_implementation_pr": 11,
-    "last_policy_state_pr": 14,
+    "last_policy_state_pr": 15,
     "rate_limit_status": "UNRESOLVED_OFFICIAL_LIMIT",
     "live_transport_authorized": false,
     "account_readonly_runtime_authorized": false,
@@ -61,6 +61,10 @@
     ]
   },
   "signal_speed_policy": {
+    "release_id": "V0-R1",
+    "release_scope": "ETH_OPERATOR_ASSIST",
+    "status": "FUTURE_NOT_IMPLEMENTED_NOT_AUTHORIZED",
+    "active_in_r0": false,
     "strategy_id": "ETH-LDAR-v0.1",
     "speed_classes_are_not_strategies": true,
     "lifecycle": [
@@ -94,6 +98,10 @@
     ]
   },
   "strategy_lifecycle": {
+    "release_id": "V0-R1",
+    "release_scope": "ETH_OPERATOR_ASSIST",
+    "status": "FUTURE_NOT_IMPLEMENTED_NOT_AUTHORIZED",
+    "active_in_r0": false,
     "platform_and_strategy_independent": true,
     "manifest_name": "StrategyManifest",
     "manifest_required_fields": [
@@ -125,7 +133,7 @@
       "delete_records": false,
       "delete_replay_capability": false
     },
-    "first_release": [
+    "future_r1_minimum_requirements": [
       "STABLE_INTERFACE",
       "REGISTRY",
       "ENABLE_DISABLE"
@@ -146,6 +154,10 @@
     ]
   },
   "data_product_lifecycle": {
+    "release_id": "V0-R1",
+    "release_scope": "ETH_OPERATOR_ASSIST",
+    "status": "FUTURE_NOT_IMPLEMENTED_NOT_AUTHORIZED",
+    "active_in_r0": false,
     "strategy_raw_exchange_json_dependency": "PROHIBITED",
     "pipeline": [
       "SOURCE_ADAPTER",
@@ -179,9 +191,13 @@
       "REPLAY_RETAINED",
       "MIGRATION_COMPLETED"
     ],
-    "first_release_scope": "ONLY_ETH_LDAR_REQUIRED_DATA_PRODUCTS"
+    "future_r1_required_data_product_scope": "ONLY_ETH_LDAR_REQUIRED_DATA_PRODUCTS"
   },
   "learning_loop": {
+    "release_id": "V0-R1",
+    "release_scope": "ETH_OPERATOR_ASSIST",
+    "status": "FUTURE_NOT_IMPLEMENTED_NOT_AUTHORIZED",
+    "active_in_r0": false,
     "pipeline": [
       "DATA_SNAPSHOT",
       "SIGNAL",
@@ -431,13 +447,13 @@
     "separate_project_control_finalization_authorization_required": true,
     "pre_finalization_base_head_state_reverification_required": true,
     "unresolved_blocker_prevents_merge": true,
-    "next_gate": "V0-FLP1B0B-EXTERNAL-INDEPENDENT-REVIEW"
+    "next_gate": "V0-FLP1B0B-FIRST-LAUNCH-CRITICAL-PATH-AND-ETH-MINIMUM-VALIDATION-READONLY-PLANNING"
   },
   "recursive_rotation": {
     "required": true,
-    "next_window_role": "V0 Fast Launch FLP0 external independent Reviewer",
+    "next_window_role": "V0 Fast Launch project-control successor",
     "next_window_permission": "STRICT_READ_ONLY",
-    "post_merge_next_gate": "V0-FLP1B0B-EXTERNAL-INDEPENDENT-REVIEW",
+    "post_merge_next_gate": "V0-FLP1B0B-FIRST-LAUNCH-CRITICAL-PATH-AND-ETH-MINIMUM-VALIDATION-READONLY-PLANNING",
     "handoff_required_fields": [
       "CURRENT_WINDOW_ROLE",
       "REPOSITORY",

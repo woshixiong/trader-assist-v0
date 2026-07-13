@@ -87,7 +87,7 @@
         },
         "last_policy_state_pr": {
           "type": "integer",
-          "const": 14
+          "const": 15
         },
         "rate_limit_status": {
           "type": "string",
@@ -309,6 +309,10 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "release_id",
+        "release_scope",
+        "status",
+        "active_in_r0",
         "strategy_id",
         "speed_classes_are_not_strategies",
         "lifecycle",
@@ -316,6 +320,22 @@
         "required_patterns"
       ],
       "properties": {
+        "release_id": {
+          "type": "string",
+          "const": "V0-R1"
+        },
+        "release_scope": {
+          "type": "string",
+          "const": "ETH_OPERATOR_ASSIST"
+        },
+        "status": {
+          "type": "string",
+          "const": "FUTURE_NOT_IMPLEMENTED_NOT_AUTHORIZED"
+        },
+        "active_in_r0": {
+          "type": "boolean",
+          "const": false
+        },
         "strategy_id": {
           "type": "string",
           "const": "ETH-LDAR-v0.1"
@@ -463,15 +483,35 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "release_id",
+        "release_scope",
+        "status",
+        "active_in_r0",
         "platform_and_strategy_independent",
         "manifest_name",
         "manifest_required_fields",
         "promotion_pipeline",
         "disable_policy",
-        "first_release",
+        "future_r1_minimum_requirements",
         "deferred_strategies"
       ],
       "properties": {
+        "release_id": {
+          "type": "string",
+          "const": "V0-R1"
+        },
+        "release_scope": {
+          "type": "string",
+          "const": "ETH_OPERATOR_ASSIST"
+        },
+        "status": {
+          "type": "string",
+          "const": "FUTURE_NOT_IMPLEMENTED_NOT_AUTHORIZED"
+        },
+        "active_in_r0": {
+          "type": "boolean",
+          "const": false
+        },
         "platform_and_strategy_independent": {
           "type": "boolean",
           "const": true
@@ -602,7 +642,7 @@
             }
           }
         },
-        "first_release": {
+        "future_r1_minimum_requirements": {
           "type": "array",
           "minItems": 3,
           "maxItems": 3,
@@ -686,6 +726,10 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "release_id",
+        "release_scope",
+        "status",
+        "active_in_r0",
         "strategy_raw_exchange_json_dependency",
         "pipeline",
         "manifest_name",
@@ -693,9 +737,25 @@
         "strategy_dependency_declaration_required",
         "new_data_auto_affects_existing_strategy",
         "decommission_gates",
-        "first_release_scope"
+        "future_r1_required_data_product_scope"
       ],
       "properties": {
+        "release_id": {
+          "type": "string",
+          "const": "V0-R1"
+        },
+        "release_scope": {
+          "type": "string",
+          "const": "ETH_OPERATOR_ASSIST"
+        },
+        "status": {
+          "type": "string",
+          "const": "FUTURE_NOT_IMPLEMENTED_NOT_AUTHORIZED"
+        },
+        "active_in_r0": {
+          "type": "boolean",
+          "const": false
+        },
         "strategy_raw_exchange_json_dependency": {
           "type": "string",
           "const": "PROHIBITED"
@@ -831,7 +891,7 @@
           ],
           "items": false
         },
-        "first_release_scope": {
+        "future_r1_required_data_product_scope": {
           "type": "string",
           "const": "ONLY_ETH_LDAR_REQUIRED_DATA_PRODUCTS"
         }
@@ -841,6 +901,10 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "release_id",
+        "release_scope",
+        "status",
+        "active_in_r0",
         "pipeline",
         "metrics",
         "issue_categories",
@@ -850,6 +914,22 @@
         "improvement_pipeline"
       ],
       "properties": {
+        "release_id": {
+          "type": "string",
+          "const": "V0-R1"
+        },
+        "release_scope": {
+          "type": "string",
+          "const": "ETH_OPERATOR_ASSIST"
+        },
+        "status": {
+          "type": "string",
+          "const": "FUTURE_NOT_IMPLEMENTED_NOT_AUTHORIZED"
+        },
+        "active_in_r0": {
+          "type": "boolean",
+          "const": false
+        },
         "pipeline": {
           "type": "array",
           "minItems": 9,
@@ -1935,7 +2015,7 @@
         },
         "next_gate": {
           "type": "string",
-          "const": "V0-FLP1B0B-EXTERNAL-INDEPENDENT-REVIEW"
+          "const": "V0-FLP1B0B-FIRST-LAUNCH-CRITICAL-PATH-AND-ETH-MINIMUM-VALIDATION-READONLY-PLANNING"
         }
       }
     },
@@ -1962,7 +2042,7 @@
         },
         "next_window_role": {
           "type": "string",
-          "const": "V0 Fast Launch FLP0 external independent Reviewer"
+          "const": "V0 Fast Launch project-control successor"
         },
         "next_window_permission": {
           "type": "string",
@@ -1970,7 +2050,7 @@
         },
         "post_merge_next_gate": {
           "type": "string",
-          "const": "V0-FLP1B0B-EXTERNAL-INDEPENDENT-REVIEW"
+          "const": "V0-FLP1B0B-FIRST-LAUNCH-CRITICAL-PATH-AND-ETH-MINIMUM-VALIDATION-READONLY-PLANNING"
         },
         "handoff_required_fields": {
           "type": "array",
@@ -2503,7 +2583,7 @@
         },
         "state_base_sha": {
           "type": "string",
-          "const": "78d2d37bfe5a4f3f1d382a2a96e57896ae9676ae"
+          "const": "95e4a9ebaedb028de68d859627a37dfc142c8602"
         },
         "last_completed_implementation": {
           "type": "string",
@@ -2515,15 +2595,15 @@
         },
         "last_policy_state_pr": {
           "type": "integer",
-          "const": 14
+          "const": 15
         },
         "active_milestone": {
           "type": "string",
-          "const": "V0-FLP1B0B-CAPTURE-NOW-AUTHORITY-AMENDMENT"
+          "const": "V0-R0-CAPTURE-ONLY"
         },
         "active_task_id": {
           "type": "string",
-          "const": "V0-FLP1B0B-CAPTURE-NOW-AUTHORITY-AMENDMENT"
+          "const": "NONE"
         },
         "active_write_lease": {
           "type": "object",
@@ -2554,7 +2634,7 @@
             },
             "final_status": {
               "type": "string",
-              "const": "CONSUMED_PENDING_PROJECT_CONTROL_ACCEPTANCE"
+              "const": "ACCEPTED_AND_CLOSED"
             }
           }
         },
@@ -2604,7 +2684,7 @@
         },
         "next_gate": {
           "type": "string",
-          "const": "V0-FLP1B0B-EXTERNAL-INDEPENDENT-REVIEW"
+          "const": "V0-FLP1B0B-FIRST-LAUNCH-CRITICAL-PATH-AND-ETH-MINIMUM-VALIDATION-READONLY-PLANNING"
         },
         "conflict_state": {
           "type": "string",

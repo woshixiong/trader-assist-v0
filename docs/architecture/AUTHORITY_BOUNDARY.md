@@ -8,7 +8,7 @@ Validated source evidence
 -> deterministic risk sizing and TradePlan
 -> AI explanation (advisory)
 -> human decision
--> manual execution in R0
+-> manual execution in future R1
 -> read-only order/fill observation and matching
 -> execution permit (future deterministic service)
 -> execution gateway (future, separately reviewed G4 authority)
@@ -51,7 +51,7 @@ separately approved future ETH strategy. It targets trusted data, deterministic
 `LONG`/`SHORT`/`WAIT`, deterministic risk, an immutable TradePlan,
 FAST/STANDARD signal cards, human decision capture, manual execution,
 read-only matching, replay, and findings. R1 is not implemented and not
-authorized in T1.
+authorized in T1; its status is `FUTURE_NOT_IMPLEMENTED_NOT_AUTHORIZED`.
 
 FAST and STANDARD are speed classes of one strategy. Every valid signal is visible. FAST is optional, short-lived, maximum-entry-bounded, and marked `DO NOT CHASE`. STANDARD is intended for normal human review and execution.
 
@@ -85,6 +85,12 @@ Mandatory data not `LIVE`, invalid correlation, stale or conflicting data, expir
 ## Current authorization
 
 ```text
+CURRENT_STATE_BASE_SHA: 95e4a9ebaedb028de68d859627a37dfc142c8602
+HISTORICAL_PR15_BASE_SHA: 78d2d37bfe5a4f3f1d382a2a96e57896ae9676ae
+HISTORICAL_PR15_HEAD: b7c26c019f64ab627dffc3bde4ab5a35071b6fc5
+PR15_MERGE_COMMIT_AND_CURRENT_MAIN: 95e4a9ebaedb028de68d859627a37dfc142c8602
+ACTIVE_MILESTONE: V0-R0-CAPTURE-ONLY
+ACTIVE_TASK_ID: NONE
 RATE_LIMIT_STATUS: UNRESOLVED_OFFICIAL_LIMIT
 LIVE_TRANSPORT_AUTHORIZED: FALSE
 ACCOUNT_READONLY_RUNTIME_AUTHORIZED: FALSE
@@ -93,4 +99,5 @@ MAINNET_EXECUTION_AUTHORIZED: FALSE
 FLP1_IMPLEMENTATION_AUTHORIZED: FALSE
 CONFLICT_STATE: OFFICIAL_SOURCE_VARIANT_CONFLICT_DETECTED
 SUPERSESSION_STATE: EFFECTIVE_VARIANT_UNDETERMINED
+NEXT_GATE: V0-FLP1B0B-FIRST-LAUNCH-CRITICAL-PATH-AND-ETH-MINIMUM-VALIDATION-READONLY-PLANNING
 ```
