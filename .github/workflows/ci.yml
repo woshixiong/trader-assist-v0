@@ -44,6 +44,14 @@ jobs:
         run: /tmp/trader-assist-v0-venv/bin/ruff check .
       - name: Mypy
         run: /tmp/trader-assist-v0-venv/bin/mypy src scripts
+      - name: T1 exact changed-file scope
+        if: ${{ github.event_name == 'pull_request' && github.head_ref == 'feature/v0-flp1b0b-capture-now-authority-amendment' }}
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          /tmp/trader-assist-v0-venv/bin/python \
+            tests/test_v0_fast_launch_governance_state.py \
+            --check-pr-scope "$PR_BASE_SHA"
       - name: Tests
         run: /tmp/trader-assist-v0-venv/bin/pytest -q
       - name: Diff check

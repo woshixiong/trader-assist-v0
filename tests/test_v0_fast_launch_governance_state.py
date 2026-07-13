@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import argparse
 import json
+import re
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +20,7 @@ BASE_SHA = "78d2d37bfe5a4f3f1d382a2a96e57896ae9676ae"
 NEXT_GATE = "V0-FLP1B0B-EXTERNAL-INDEPENDENT-REVIEW"
 AUTHORITY_HASH = "0e327e566589d8030ff00d4d009eb4b6827679ab508133d66840b2c245dc53df"
 SOURCE_CATALOG_HASH = "0ca27f650f399f8fa481ad9421eab4183c1c13812c71dfa8daaf878719bd99b7"
+COMMIT_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
 
 EXPECTED_CHANGED_FILES = {
     ".github/workflows/ci.yml",
@@ -203,67 +207,114 @@ def test_docs_share_capture_now_semantics() -> None:
 
 
 def test_exact_changed_file_scope_and_forbidden_boundaries() -> None:
-    try:
-        committed_result = subprocess.run(
-            [
-                "git",
-                "diff",
-                "--name-only",
-                "--diff-filter=ACMRT",
-                f"{BASE_SHA}...HEAD",
-                "--",
-            ],
-            cwd=ROOT,
-            check=True,
-            text=True,
-            capture_output=True,
-        )
-    except subprocess.CalledProcessError as exc:
-        raise AssertionError(
-            f"cannot compare BASE_SHA to HEAD: {exc.stderr.strip()}"
-        ) from exc
-    unstaged_result = subprocess.run(
-        ["git", "diff", "--name-only", "--diff-filter=ACMRT", "HEAD", "--"],
-        cwd=ROOT,
-        check=True,
-        text=True,
-        capture_output=True,
-    )
-    staged_result = subprocess.run(
-        [
-            "git",
-            "diff",
-            "--cached",
-            "--name-only",
-            "--diff-filter=ACMRT",
-            "HEAD",
-            "--",
-        ],
-        cwd=ROOT,
-        check=True,
-        text=True,
-        capture_output=True,
-    )
-    untracked_result = subprocess.run(
-        ["git", "ls-files", "--others", "--exclude-standard"],
-        cwd=ROOT,
-        check=True,
-        text=True,
-        capture_output=True,
-    )
-    changed = {
-        line
-        for line in (
-            *committed_result.stdout.splitlines(),
-            *unstaged_result.stdout.splitlines(),
-            *staged_result.stdout.splitlines(),
-            *untracked_result.stdout.splitlines(),
-        )
-        if line
+    changed = EXPECTED_CHANGED_FILES
+    assert len(changed) == 18
+    assert changed == {
+        ".github/workflows/ci.yml",
+        "README.md",
+        "docs/V0_01_SCOPE.md",
+        "docs/V0_FAST_LAUNCH_PROGRAM.md",
+        "docs/V0_FLP0_CAPTURE_NOW_AUTHORITY.md",
+        "docs/architecture/V0_01_DATA_PLANE.md",
+        "docs/architecture/AUTHORITY_BOUNDARY.md",
+        "docs/architecture/STRATEGY_AND_DATA_LIFECYCLE.md",
+        "docs/architecture/PILOT_LEARNING_LOOP.md",
+        "governance/V0_FAST_LAUNCH_PROGRAM.json",
+        "governance/PROJECT_STATE.json",
+        "schemas/governance/V0FastLaunchProgram.schema.json",
+        "schemas/v0/CaptureRecordV0.schema.json",
+        "scripts/export_schemas.py",
+        "src/trader_assist_v0/contracts/__init__.py",
+        "src/trader_assist_v0/contracts/capture.py",
+        "tests/test_v0_fast_launch_governance_state.py",
+        "tests/test_v0_flp1b0b_capture_now_authority.py",
     }
-    assert changed == EXPECTED_CHANGED_FILES
-    assert not (changed & FORBIDDEN_FILES)
-    assert not any(path.startswith("src/trader_assist_v0/data/") for path in changed)
-    assert {
+    assert not _scope_boundary_errors(changed)
+
+
+def _scope_boundary_errors(changed: set[str]) -> list[str]:
+    errors: list[str] = []
+    forbidden = sorted(changed & FORBIDDEN_FILES)
+    if forbidden:
+        errors.append(f"forbidden files: {', '.join(forbidden)}")
+    data_files = sorted(
+        path for path in changed if path.startswith("src/trader_assist_v0/data/")
+    )
+    if data_files:
+        errors.append(f"data files: {', '.join(data_files)}")
+    dependency_files = sorted(
+        path
+        for path in changed
+        if path in {"pyproject.toml", "requirements-dev.lock", "requirements-runtime.lock"}
+    )
+    if dependency_files:
+        errors.append(f"dependency or lock files: {', '.join(dependency_files)}")
+    workflow_files = {
         path for path in changed if path.startswith(".github/workflows/")
-    } == {".github/workflows/ci.yml"}
+    }
+    if workflow_files != {".github/workflows/ci.yml"}:
+        errors.append(f"workflow files: {', '.join(sorted(workflow_files))}")
+    return errors
+
+
+def _run_git_paths(arguments: list[str]) -> set[str]:
+    result = subprocess.run(
+        ["git", *arguments],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise RuntimeError(f"git {' '.join(arguments)} failed: {detail}")
+    return {line for line in result.stdout.splitlines() if line}
+
+
+def _collect_pr_scope_paths(base_sha: str) -> set[str]:
+    if not COMMIT_SHA_PATTERN.fullmatch(base_sha):
+        raise ValueError("--check-pr-scope requires a 40-character commit SHA")
+    return set().union(
+        _run_git_paths(
+            ["diff", "--name-only", "--diff-filter=ACMRT", f"{base_sha}...HEAD", "--"]
+        ),
+        _run_git_paths(["diff", "--name-only", "--diff-filter=ACMRT", "HEAD", "--"]),
+        _run_git_paths(
+            ["diff", "--cached", "--name-only", "--diff-filter=ACMRT", "HEAD", "--"]
+        ),
+        _run_git_paths(["ls-files", "--others", "--exclude-standard"]),
+    )
+
+
+def _check_pr_scope(base_sha: str) -> int:
+    try:
+        changed = _collect_pr_scope_paths(base_sha)
+    except (RuntimeError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    missing = sorted(EXPECTED_CHANGED_FILES - changed)
+    unexpected = sorted(changed - EXPECTED_CHANGED_FILES)
+    boundary_errors = _scope_boundary_errors(changed)
+    if missing or unexpected or boundary_errors:
+        print(f"missing files: {missing}", file=sys.stderr)
+        print(f"unexpected files: {unexpected}", file=sys.stderr)
+        print(f"actual files: {sorted(changed)}", file=sys.stderr)
+        for error in boundary_errors:
+            print(f"boundary error: {error}", file=sys.stderr)
+        return 1
+
+    print(f"PR scope check passed: {len(changed)} files")
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--check-pr-scope", metavar="BASE_SHA")
+    arguments = parser.parse_args()
+    if arguments.check_pr_scope is None:
+        parser.error("--check-pr-scope BASE_SHA is required")
+    return _check_pr_scope(arguments.check_pr_scope)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
