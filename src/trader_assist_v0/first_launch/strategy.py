@@ -1,28 +1,35 @@
 from __future__ import annotations
 
-# The frozen mathematical expressions and canonical plan construction are kept
-# on single lines to make directional rounding relationships directly auditable.
 import hashlib
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from decimal import ROUND_CEILING, ROUND_DOWN, ROUND_FLOOR, Decimal
+from decimal import ROUND_CEILING, ROUND_DOWN, ROUND_FLOOR, Decimal, InvalidOperation
 from enum import StrEnum
 from statistics import median
-from typing import Literal, Protocol
+from typing import Literal
 
-from trader_assist_v0.contracts.common import canonical_json_bytes
+from trader_assist_v0.contracts.common import canonical_json_bytes, decimal_to_canonical_string
 from trader_assist_v0.first_launch.market_data import Candle, DataQualityState
 
 STRATEGY_VERSION: Literal["ETH-LDAR-v0.1"] = "ETH-LDAR-v0.1"
 CONFIGURATION_VERSION: Literal["1"] = "1"
-TRADE_PLAN_VERSION: Literal["1"] = "1"
-TRADE_PLAN_HASH_DOMAIN = "trader-assist-v0/first-launch/trade-plan/v1"
+TRADE_PLAN_VERSION: Literal["2"] = "2"
+TRADE_PLAN_HASH_DOMAIN = "trader-assist-v0/first-launch/trade-plan/v2"
+
+
+class PlanError(ValueError):
+    pass
 
 
 class Side(StrEnum):
     LONG = "LONG"
     SHORT = "SHORT"
+
+
+class SetupFamily(StrEnum):
+    SWEEP_RECLAIM = "SWEEP_RECLAIM"
+    BREAKOUT_RETEST = "BREAKOUT_RETEST"
 
 
 class SignalState(StrEnum):
@@ -38,8 +45,89 @@ class SignalState(StrEnum):
     REJECTED = "REJECTED"
 
 
-class PlanError(ValueError):
-    pass
+def _hash(value: object) -> str:
+    return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
+
+
+def _utc(value: datetime, error: str) -> datetime:
+    if type(value) is not datetime or value.tzinfo is None or value.utcoffset() is None:
+        raise PlanError(error)
+    return value.astimezone(UTC)
+
+
+def _exact_utc(value: datetime, error: str) -> datetime:
+    if type(value) is not datetime or value.tzinfo is not UTC:
+        raise PlanError(error)
+    return value
+
+
+def _guard_decimal_exponent(value: Decimal, error: str) -> None:
+    try:
+        decimal_to_canonical_string(value)
+    except (InvalidOperation, ValueError):
+        raise PlanError(error) from None
+
+
+def _candle_authority(candle: Candle) -> tuple[tuple[str, str, int], int, str]:
+    return candle.identity, candle.open_time_ms, candle.canonical_hash
+
+
+@dataclass(frozen=True)
+class StrategyProvenance:
+    family: SetupFamily
+    side: Side
+    boundary: Decimal
+    atr: Decimal
+    initial_extreme: Decimal
+    setup_trigger_identity: tuple[str, str, int]
+    setup_trigger_open_time_ms: int
+    setup_trigger_canonical_hash: str
+
+    def __post_init__(self) -> None:
+        if type(self.family) is not SetupFamily or type(self.side) is not Side:
+            raise PlanError("PROVENANCE_FAMILY_OR_SIDE_INVALID")
+        if any(
+            type(value) is not Decimal or not value.is_finite() or value <= 0
+            for value in (self.boundary, self.atr, self.initial_extreme)
+        ):
+            raise PlanError("PROVENANCE_DECIMAL_INVALID")
+        identity = self.setup_trigger_identity
+        if (
+            type(identity) is not tuple
+            or len(identity) != 3
+            or identity[0] != "ETH"
+            or identity[1] != "5m"
+            or type(identity[2]) is not int
+            or identity[2] < 0
+            or type(self.setup_trigger_open_time_ms) is not int
+            or self.setup_trigger_open_time_ms < 0
+            or identity[2] != self.setup_trigger_open_time_ms
+            or type(self.setup_trigger_canonical_hash) is not str
+            or re.fullmatch(r"[0-9a-f]{64}", self.setup_trigger_canonical_hash) is None
+        ):
+            raise PlanError("PROVENANCE_TRIGGER_INVALID")
+
+    def payload(self) -> dict[str, object]:
+        return {
+            "family": self.family.value,
+            "side": self.side.value,
+            "boundary": self.boundary,
+            "atr": self.atr,
+            "initial_extreme": self.initial_extreme,
+            "setup_trigger_identity": self.setup_trigger_identity,
+            "setup_trigger_open_time_ms": self.setup_trigger_open_time_ms,
+            "setup_trigger_canonical_hash": self.setup_trigger_canonical_hash,
+        }
+
+    @property
+    def setup_id(self) -> str:
+        return _hash(
+            {
+                "strategy_version": STRATEGY_VERSION,
+                "configuration_version": CONFIGURATION_VERSION,
+                "provenance": self.payload(),
+            }
+        )
 
 
 @dataclass(frozen=True)
@@ -51,38 +139,224 @@ class Signal:
     reason: str
 
 
-class SetupFamily(StrEnum):
-    SWEEP_RECLAIM = "SWEEP_RECLAIM"
-    BREAKOUT_RETEST = "BREAKOUT_RETEST"
-
-
 @dataclass(frozen=True)
 class PreparedSetup:
-    setup_id: str
-    family: SetupFamily
-    side: Side
-    boundary: Decimal
-    atr: Decimal
-    sweep_extreme: Decimal
-    created_open_time_ms: int
+    provenance: StrategyProvenance
     expires_after_open_time_ms: int
+
+    def __post_init__(self) -> None:
+        if type(self.expires_after_open_time_ms) is not int or (
+            self.expires_after_open_time_ms != self.provenance.setup_trigger_open_time_ms + 900_000
+        ):
+            raise PlanError("PREPARED_SETUP_EXPIRY_INVALID")
+
+    @property
+    def setup_id(self) -> str:
+        return self.provenance.setup_id
+
+
+def _geometry(
+    provenance: StrategyProvenance, speed: Literal["FAST", "STANDARD"], material_extreme: Decimal
+) -> tuple[Decimal, Decimal, Decimal, Decimal]:
+    if type(material_extreme) is not Decimal or not material_extreme.is_finite():
+        raise PlanError("MATERIAL_EXTREME_INVALID")
+    boundary, atr, long = provenance.boundary, provenance.atr, provenance.side is Side.LONG
+    if provenance.family is SetupFamily.SWEEP_RECLAIM:
+        low, high = (
+            (
+                (boundary, boundary + Decimal(".15") * atr)
+                if speed == "FAST"
+                else (boundary - Decimal(".05") * atr, boundary + Decimal(".10") * atr)
+            )
+            if long
+            else (
+                (boundary - Decimal(".15") * atr, boundary)
+                if speed == "FAST"
+                else (boundary - Decimal(".10") * atr, boundary + Decimal(".05") * atr)
+            )
+        )
+        chase = (
+            boundary + (Decimal(".25") if speed == "FAST" else Decimal(".20")) * atr
+            if long
+            else boundary - (Decimal(".25") if speed == "FAST" else Decimal(".20")) * atr
+        )
+        stop = (
+            provenance.initial_extreme - Decimal(".10") * atr
+            if long
+            else provenance.initial_extreme + Decimal(".10") * atr
+        )
+    elif speed == "FAST":
+        low, high = (
+            (boundary + Decimal(".10") * atr, boundary + Decimal(".20") * atr)
+            if long
+            else (boundary - Decimal(".20") * atr, boundary - Decimal(".10") * atr)
+        )
+        chase, stop = (
+            (boundary + Decimal(".30") * atr, boundary - Decimal(".25") * atr)
+            if long
+            else (boundary - Decimal(".30") * atr, boundary + Decimal(".25") * atr)
+        )
+    else:
+        low, high = (
+            (boundary - Decimal(".05") * atr, boundary + Decimal(".10") * atr)
+            if long
+            else (boundary - Decimal(".10") * atr, boundary + Decimal(".05") * atr)
+        )
+        chase = boundary + Decimal(".20") * atr if long else boundary - Decimal(".20") * atr
+        stop = (
+            min(boundary - Decimal(".25") * atr, material_extreme - Decimal(".05") * atr)
+            if long
+            else max(boundary + Decimal(".25") * atr, material_extreme + Decimal(".05") * atr)
+        )
+    return low, high, chase, stop
 
 
 @dataclass(frozen=True)
 class StrategyOutput:
-    state: SignalState
-    family: SetupFamily
-    side: Side
-    speed: Literal["FAST", "STANDARD"]
+    provenance: StrategyProvenance
     setup_id: str
-    trigger_open_time_ms: int
-    entry_low: Decimal
-    entry_high: Decimal
-    chase_limit: Decimal
-    stop: Decimal
+    speed: Literal["FAST", "STANDARD"]
+    decision_trigger_identity: tuple[str, str, int]
+    decision_trigger_open_time_ms: int
+    decision_trigger_canonical_hash: str
+    decision_trigger_received_at: datetime
+    material_extreme: Decimal
+    raw_entry_low: Decimal
+    raw_entry_high: Decimal
+    raw_chase_limit: Decimal
+    raw_stop: Decimal
+    created_at: datetime
     expires_at: datetime
-    reason: str
+    reason: Literal["CONFIRMED"] = "CONFIRMED"
     do_not_chase: Literal["DO NOT CHASE"] = "DO NOT CHASE"
+
+    def __post_init__(self) -> None:
+        if self.setup_id != self.provenance.setup_id or self.speed not in {"FAST", "STANDARD"}:
+            raise PlanError("STRATEGY_OUTPUT_AUTHORITY_INVALID")
+        identity = self.decision_trigger_identity
+        if (
+            type(identity) is not tuple
+            or len(identity) != 3
+            or identity[0] != "ETH"
+            or identity[1] != "5m"
+            or type(identity[2]) is not int
+            or identity[2] < 0
+            or type(self.decision_trigger_open_time_ms) is not int
+            or self.decision_trigger_open_time_ms < 0
+            or identity[2] != self.decision_trigger_open_time_ms
+            or type(self.decision_trigger_canonical_hash) is not str
+            or re.fullmatch(r"[0-9a-f]{64}", self.decision_trigger_canonical_hash) is None
+        ):
+            raise PlanError("STRATEGY_OUTPUT_TRIGGER_INVALID")
+        received = _exact_utc(
+            self.decision_trigger_received_at,
+            "STRATEGY_TRIGGER_RECEIVED_AT_INVALID",
+        )
+        created = _exact_utc(self.created_at, "STRATEGY_CREATED_AT_INVALID")
+        expiry = _exact_utc(self.expires_at, "STRATEGY_EXPIRES_AT_INVALID")
+        if (
+            created != received
+            or expiry != created + timedelta(seconds=180 if self.speed == "FAST" else 900)
+        ):
+            raise PlanError("STRATEGY_OUTPUT_EXPIRY_INVALID")
+        if self.reason != "CONFIRMED" or self.do_not_chase != "DO NOT CHASE":
+            raise PlanError("STRATEGY_OUTPUT_FIXED_AUTHORITY_INVALID")
+        if any(
+            type(value) is not Decimal or not value.is_finite() or value <= 0
+            for value in (
+                self.material_extreme,
+                self.raw_entry_low,
+                self.raw_entry_high,
+                self.raw_chase_limit,
+                self.raw_stop,
+            )
+        ):
+            raise PlanError("STRATEGY_OUTPUT_FINANCIAL_INVALID")
+        expected = _geometry(self.provenance, self.speed, self.material_extreme)
+        if (
+            self.raw_entry_low,
+            self.raw_entry_high,
+            self.raw_chase_limit,
+            self.raw_stop,
+        ) != expected:
+            raise PlanError("STRATEGY_OUTPUT_GEOMETRY_INVALID")
+        if self.speed == "FAST":
+            if self.material_extreme != self.provenance.initial_extreme:
+                raise PlanError("STRATEGY_OUTPUT_GEOMETRY_INVALID")
+            if (
+                self.decision_trigger_identity != self.provenance.setup_trigger_identity
+                or self.decision_trigger_open_time_ms != self.provenance.setup_trigger_open_time_ms
+                or self.decision_trigger_canonical_hash
+                != self.provenance.setup_trigger_canonical_hash
+            ):
+                raise PlanError("FAST_TRIGGER_AUTHORITY_INVALID")
+        elif not (
+            self.provenance.setup_trigger_open_time_ms
+            < self.decision_trigger_open_time_ms
+            <= self.provenance.setup_trigger_open_time_ms + 900_000
+        ):
+            raise PlanError("STANDARD_TRIGGER_AUTHORITY_INVALID")
+
+    @property
+    def family(self) -> SetupFamily:
+        return self.provenance.family
+
+    @property
+    def side(self) -> Side:
+        return self.provenance.side
+
+    @property
+    def state(self) -> SignalState:
+        return (
+            SignalState.TRIGGERED_FAST if self.speed == "FAST" else SignalState.TRIGGERED_STANDARD
+        )
+
+
+def _validated_strategy_output(value: StrategyOutput) -> StrategyOutput:
+    if type(value) is not StrategyOutput:
+        raise PlanError("STRATEGY_OUTPUT_AUTHORITY_INVALID")
+    return StrategyOutput(
+        value.provenance,
+        value.setup_id,
+        value.speed,
+        value.decision_trigger_identity,
+        value.decision_trigger_open_time_ms,
+        value.decision_trigger_canonical_hash,
+        value.decision_trigger_received_at,
+        value.material_extreme,
+        value.raw_entry_low,
+        value.raw_entry_high,
+        value.raw_chase_limit,
+        value.raw_stop,
+        value.created_at,
+        value.expires_at,
+        value.reason,
+        value.do_not_chase,
+    )
+
+
+def _output(
+    provenance: StrategyProvenance,
+    speed: Literal["FAST", "STANDARD"],
+    trigger: Candle,
+    material_extreme: Decimal,
+) -> StrategyOutput:
+    identity, time, digest = _candle_authority(trigger)
+    raw = _geometry(provenance, speed, material_extreme)
+    created = trigger.evidence.received_at.astimezone(UTC)
+    return StrategyOutput(
+        provenance,
+        provenance.setup_id,
+        speed,
+        identity,
+        time,
+        digest,
+        created,
+        material_extreme,
+        *raw,
+        created,
+        created + timedelta(seconds=180 if speed == "FAST" else 900),
+    )
 
 
 def lifecycle_state(
@@ -97,86 +371,13 @@ def lifecycle_state(
         return terminal
     if quality is not DataQualityState.READY:
         return SignalState.INVALIDATED
-    if (output.side is Side.LONG and reference <= output.stop) or (
-        output.side is Side.SHORT and reference >= output.stop
+    if (output.side is Side.LONG and reference <= output.raw_stop) or (
+        output.side is Side.SHORT and reference >= output.raw_stop
     ):
         return SignalState.INVALIDATED
-    if now.astimezone(UTC) >= output.expires_at:
+    if _utc(now, "LIFECYCLE_TIME_INVALID") >= output.expires_at:
         return SignalState.EXPIRED
     return output.state
-
-
-def strategy_output(
-    setup: PreparedSetup,
-    *,
-    speed: Literal["FAST", "STANDARD"],
-    trigger: Candle,
-    retest_extreme: Decimal | None = None,
-) -> StrategyOutput:
-    long = setup.side is Side.LONG
-    boundary, atr = setup.boundary, setup.atr
-    if setup.family is SetupFamily.SWEEP_RECLAIM:
-        low, high = (
-            (
-                (boundary, boundary + Decimal("0.15") * atr)
-                if speed == "FAST"
-                else (boundary - Decimal("0.05") * atr, boundary + Decimal("0.10") * atr)
-            )
-            if long
-            else (
-                (boundary - Decimal("0.15") * atr, boundary)
-                if speed == "FAST"
-                else (boundary - Decimal("0.10") * atr, boundary + Decimal("0.05") * atr)
-            )
-        )
-        chase = (
-            boundary + (Decimal("0.25") if speed == "FAST" else Decimal("0.20")) * atr
-            if long
-            else boundary - (Decimal("0.25") if speed == "FAST" else Decimal("0.20")) * atr
-        )
-        stop = (
-            setup.sweep_extreme - Decimal("0.10") * atr
-            if long
-            else setup.sweep_extreme + Decimal("0.10") * atr
-        )
-    elif speed == "FAST":
-        low, high = (
-            (boundary + Decimal("0.10") * atr, boundary + Decimal("0.20") * atr)
-            if long
-            else (boundary - Decimal("0.20") * atr, boundary - Decimal("0.10") * atr)
-        )
-        chase, stop = (
-            (boundary + Decimal("0.30") * atr, boundary - Decimal("0.25") * atr)
-            if long
-            else (boundary - Decimal("0.30") * atr, boundary + Decimal("0.25") * atr)
-        )
-    else:
-        low, high = (
-            (boundary - Decimal("0.05") * atr, boundary + Decimal("0.10") * atr)
-            if long
-            else (boundary - Decimal("0.10") * atr, boundary + Decimal("0.05") * atr)
-        )
-        chase = boundary + Decimal("0.20") * atr if long else boundary - Decimal("0.20") * atr
-        extreme = setup.sweep_extreme if retest_extreme is None else retest_extreme
-        stop = (
-            min(boundary - Decimal("0.25") * atr, extreme - Decimal("0.05") * atr)
-            if long
-            else max(boundary + Decimal("0.25") * atr, extreme + Decimal("0.05") * atr)
-        )
-    return StrategyOutput(
-        SignalState.TRIGGERED_FAST if speed == "FAST" else SignalState.TRIGGERED_STANDARD,
-        setup.family,
-        setup.side,
-        speed,
-        setup.setup_id,
-        trigger.open_time_ms,
-        low,
-        high,
-        chase,
-        stop,
-        trigger.evidence.received_at + timedelta(seconds=180 if speed == "FAST" else 900),
-        "CONFIRMED",
-    )
 
 
 def advance_prepare(
@@ -187,96 +388,77 @@ def advance_prepare(
     intervening_closes: tuple[Decimal, ...] = (),
     already_decided: bool = False,
 ) -> Signal | StrategyOutput:
+    p = setup.provenance
     if quality is not DataQualityState.READY:
-        return Signal(
-            SignalState.INVALIDATED, setup.side, "STANDARD", setup.setup_id, "DATA_NOT_READY"
-        )
+        return Signal(SignalState.INVALIDATED, p.side, "STANDARD", setup.setup_id, "DATA_NOT_READY")
     if already_decided:
         return Signal(
-            SignalState.REJECTED, setup.side, "STANDARD", setup.setup_id, "SETUP_ALREADY_DECIDED"
+            SignalState.REJECTED, p.side, "STANDARD", setup.setup_id, "SETUP_ALREADY_DECIDED"
         )
     if candle.open_time_ms > setup.expires_after_open_time_ms:
         return Signal(
-            SignalState.EXPIRED, setup.side, "STANDARD", setup.setup_id, "PREPARE_WINDOW_EXPIRED"
+            SignalState.EXPIRED, p.side, "STANDARD", setup.setup_id, "PREPARE_WINDOW_EXPIRED"
         )
-    if setup.family is SetupFamily.SWEEP_RECLAIM:
-        if setup.side is Side.LONG:
-            valid = (
-                setup.boundary - Decimal("0.15") * setup.atr
-                <= candle.low
-                <= setup.boundary + Decimal("0.10") * setup.atr
-                and candle.close >= setup.boundary + Decimal("0.05") * setup.atr
-                and candle.low > setup.sweep_extreme
-            )
-            extreme = candle.low
-        else:
-            valid = (
-                setup.boundary - Decimal("0.10") * setup.atr
-                <= candle.high
-                <= setup.boundary + Decimal("0.15") * setup.atr
-                and candle.close <= setup.boundary - Decimal("0.05") * setup.atr
-                and candle.high < setup.sweep_extreme
-            )
-            extreme = candle.high
-    elif setup.side is Side.LONG:
-        valid = (
-            setup.boundary - Decimal("0.15") * setup.atr
-            <= candle.low
-            <= setup.boundary + Decimal("0.10") * setup.atr
-            and candle.close >= setup.boundary + Decimal("0.05") * setup.atr
-            and not any(
-                value < setup.boundary - Decimal("0.20") * setup.atr for value in intervening_closes
+    long = p.side is Side.LONG
+    point = candle.low if long else candle.high
+    within = (
+        p.boundary - Decimal(".15") * p.atr <= point <= p.boundary + Decimal(".10") * p.atr
+        if long
+        else p.boundary - Decimal(".10") * p.atr <= point <= p.boundary + Decimal(".15") * p.atr
+    )
+    closes_ok = True
+    if p.family is SetupFamily.BREAKOUT_RETEST:
+        closes_ok = (
+            not any(value < p.boundary - Decimal(".20") * p.atr for value in intervening_closes)
+            if long
+            else not any(
+                value > p.boundary + Decimal(".20") * p.atr
+                for value in intervening_closes
             )
         )
-        extreme = candle.low
-    else:
-        valid = (
-            setup.boundary - Decimal("0.10") * setup.atr
-            <= candle.high
-            <= setup.boundary + Decimal("0.15") * setup.atr
-            and candle.close <= setup.boundary - Decimal("0.05") * setup.atr
-            and not any(
-                value > setup.boundary + Decimal("0.20") * setup.atr for value in intervening_closes
-            )
+    confirmed = (
+        within
+        and (
+            candle.close >= p.boundary + Decimal(".05") * p.atr
+            if long
+            else candle.close <= p.boundary - Decimal(".05") * p.atr
         )
-        extreme = candle.high
+        and closes_ok
+    )
+    if p.family is SetupFamily.SWEEP_RECLAIM:
+        confirmed = confirmed and (point > p.initial_extreme if long else point < p.initial_extreme)
     return (
-        strategy_output(setup, speed="STANDARD", trigger=candle, retest_extreme=extreme)
-        if valid
-        else Signal(SignalState.PREPARE, setup.side, "STANDARD", setup.setup_id, "AWAITING_RETEST")
+        _output(p, "STANDARD", candle, point)
+        if confirmed
+        else Signal(SignalState.PREPARE, p.side, "STANDARD", setup.setup_id, "AWAITING_RETEST")
     )
 
 
+def _mean(values: list[Decimal]) -> Decimal:
+    return sum(values, Decimal()) / Decimal(len(values))
+
+
 def _features(
-    candles_5m: tuple[Candle, ...], candles_15m: tuple[Candle, ...]
+    c5: tuple[Candle, ...], c15: tuple[Candle, ...]
 ) -> tuple[Decimal, Decimal, Decimal, Decimal, Decimal, bool, bool]:
-    if len(candles_5m) < 27 or len(candles_15m) < 11:
+    if len(c5) < 27 or len(c15) < 11:
         raise PlanError("INSUFFICIENT_LOOKBACK")
-    trigger = candles_5m[-1]
+    trigger = c5[-1]
     if trigger.high == trigger.low:
         raise PlanError("ZERO_RANGE_TRIGGER")
     trs = [
-        max(
-            item.high - item.low,
-            abs(item.high - candles_5m[index - 1].close),
-            abs(item.low - candles_5m[index - 1].close),
-        )
-        for index, item in enumerate(candles_5m[-14:], start=len(candles_5m) - 14)
+        max(item.high - item.low, abs(item.high - c5[i - 1].close), abs(item.low - c5[i - 1].close))
+        for i, item in enumerate(c5[-14:], start=len(c5) - 14)
     ]
-    atr = _mean(trs)
-    prior = candles_5m[-13:-1]
-    prior_high, prior_low = max(item.high for item in prior), min(item.low for item in prior)
-    volume = median([item.volume for item in candles_5m[-21:-1]])
-    closes = [item.close for item in candles_15m]
-    sma_now, sma_old = _mean(closes[-8:]), _mean(closes[-11:-3])
+    closes = [item.close for item in c15]
     return (
-        atr,
-        prior_high,
-        prior_low,
-        volume,
+        _mean(trs),
+        max(item.high for item in c5[-13:-1]),
+        min(item.low for item in c5[-13:-1]),
+        median([item.volume for item in c5[-21:-1]]),
         (trigger.close - trigger.low) / (trigger.high - trigger.low),
-        closes[-1] > sma_now > sma_old,
-        closes[-1] < sma_now < sma_old,
+        closes[-1] > _mean(closes[-8:]) > _mean(closes[-11:-3]),
+        closes[-1] < _mean(closes[-8:]) < _mean(closes[-11:-3]),
     )
 
 
@@ -286,190 +468,83 @@ def evaluate_signal(
     *,
     quality: DataQualityState,
     decided_setup_ids: frozenset[str] = frozenset(),
-) -> Signal | PreparedSetup:
+) -> Signal | PreparedSetup | StrategyOutput:
     if quality is not DataQualityState.READY:
         return Signal(SignalState.WAIT, None, None, None, f"DATA_{quality.value}")
     try:
-        atr, high, low, med_volume, location, long_bias, short_bias = _features(
-            candles_5m, candles_15m
-        )
+        atr, high, low, volume, location, long_bias, short_bias = _features(candles_5m, candles_15m)
     except PlanError as exc:
         return Signal(SignalState.WAIT, None, None, None, str(exc))
-    trigger = candles_5m[-1]
-    body = abs(trigger.close - trigger.open)
-    candidates: tuple[tuple[SetupFamily, Side, Decimal, Decimal, bool, bool], ...] = (
+    t, body = candles_5m[-1], abs(candles_5m[-1].close - candles_5m[-1].open)
+    candidates = (
         (
             SetupFamily.SWEEP_RECLAIM,
             Side.LONG,
             low,
-            trigger.low,
-            trigger.low <= low - Decimal("0.10") * atr
-            and trigger.close >= low
-            and location >= Decimal("0.60")
+            t.low,
+            t.low <= low - Decimal(".10") * atr
+            and t.close >= low
+            and location >= Decimal(".60")
             and not short_bias,
-            trigger.volume >= Decimal("1.50") * med_volume
-            and trigger.close - low >= Decimal("0.10") * atr,
+            t.volume >= Decimal("1.50") * volume and t.close - low >= Decimal(".10") * atr,
         ),
         (
             SetupFamily.SWEEP_RECLAIM,
             Side.SHORT,
             high,
-            trigger.high,
-            trigger.high >= high + Decimal("0.10") * atr
-            and trigger.close <= high
-            and Decimal(1) - location >= Decimal("0.60")
+            t.high,
+            t.high >= high + Decimal(".10") * atr
+            and t.close <= high
+            and Decimal(1) - location >= Decimal(".60")
             and not long_bias,
-            trigger.volume >= Decimal("1.50") * med_volume
-            and high - trigger.close >= Decimal("0.10") * atr,
+            t.volume >= Decimal("1.50") * volume and high - t.close >= Decimal(".10") * atr,
         ),
         (
             SetupFamily.BREAKOUT_RETEST,
             Side.LONG,
             high,
-            trigger.low,
-            trigger.close >= high + Decimal("0.10") * atr
-            and body >= Decimal("0.35") * atr
-            and location >= Decimal("0.70")
-            and trigger.volume >= Decimal("1.20") * med_volume
+            t.low,
+            t.close >= high + Decimal(".10") * atr
+            and body >= Decimal(".35") * atr
+            and location >= Decimal(".70")
+            and t.volume >= Decimal("1.20") * volume
             and long_bias,
-            body >= Decimal("0.50") * atr and trigger.volume >= Decimal("1.50") * med_volume,
+            body >= Decimal(".50") * atr and t.volume >= Decimal("1.50") * volume,
         ),
         (
             SetupFamily.BREAKOUT_RETEST,
             Side.SHORT,
             low,
-            trigger.high,
-            trigger.close <= low - Decimal("0.10") * atr
-            and body >= Decimal("0.35") * atr
-            and Decimal(1) - location >= Decimal("0.70")
-            and trigger.volume >= Decimal("1.20") * med_volume
+            t.high,
+            t.close <= low - Decimal(".10") * atr
+            and body >= Decimal(".35") * atr
+            and Decimal(1) - location >= Decimal(".70")
+            and t.volume >= Decimal("1.20") * volume
             and short_bias,
-            body >= Decimal("0.50") * atr and trigger.volume >= Decimal("1.50") * med_volume,
+            body >= Decimal(".50") * atr and t.volume >= Decimal("1.50") * volume,
         ),
     )
     for family, side, boundary, extreme, matched, fast in candidates:
         if not matched:
             continue
-        setup_id = _hash(
-            [
-                STRATEGY_VERSION,
-                family.value,
-                side.value,
-                str(boundary),
-                str(trigger.open_time_ms),
-                CONFIGURATION_VERSION,
-            ]
+        identity, time, digest = _candle_authority(t)
+        p = StrategyProvenance(family, side, boundary, atr, extreme, identity, time, digest)
+        if p.setup_id in decided_setup_ids:
+            return Signal(SignalState.WAIT, None, None, p.setup_id, "SETUP_ALREADY_DECIDED")
+        return (
+            _output(p, "FAST", t, extreme) if fast else PreparedSetup(p, t.open_time_ms + 900_000)
         )
-        if setup_id in decided_setup_ids:
-            return Signal(SignalState.WAIT, None, None, setup_id, "SETUP_ALREADY_DECIDED")
-        if fast:
-            return Signal(SignalState.TRIGGERED_FAST, side, "FAST", setup_id, family.value)
-        return PreparedSetup(
-            setup_id,
-            family,
-            side,
-            boundary,
-            atr,
-            extreme,
-            trigger.open_time_ms,
-            trigger.open_time_ms + 3 * 300_000,
-        )
-    watch = Decimal("0.25") * atr
-    reference = trigger.close
-    if abs(reference - high) <= watch or abs(reference - low) <= watch:
-        return Signal(SignalState.WATCH, None, None, None, "NEAR_PRIOR_RANGE_BOUNDARY")
-    return Signal(SignalState.WAIT, None, None, None, "NO_ACTIONABLE_CLOSED_CANDLE")
-
-
-def evaluate_closed_candles(
-    candles_5m: tuple[Candle, ...],
-    candles_15m: tuple[Candle, ...],
-    *,
-    quality: DataQualityState,
-) -> Signal:
-    """Closed-candle-only ETH-LDAR trigger classifier; never sizes or executes."""
-    if quality is not DataQualityState.READY:
-        return Signal(SignalState.WAIT, None, None, None, f"DATA_{quality.value}")
-    candles = candles_5m
-    if len(candles) < 27 or len(candles_15m) < 11:
-        return Signal(SignalState.WAIT, None, None, None, "INSUFFICIENT_LOOKBACK")
-    c5 = candles[-1]
-    prior = candles[-13:-1]
-    previous_close = candles[-2].close
-    tr = [
-        max(item.high - item.low, abs(item.high - previous_close), abs(item.low - previous_close))
-        for item in candles[-14:]
-    ]
-    atr = _mean(tr)
-    if atr <= 0 or c5.high == c5.low:
-        return Signal(SignalState.WAIT, None, None, None, "ATR_OR_TRIGGER_INVALID")
-    close15 = [item.close for item in candles_15m]
-    sma_now = _mean(close15[-8:])
-    sma_old = _mean(close15[-11:-3])
-    high, low = max(item.high for item in prior), min(item.low for item in prior)
-    volume = Decimal(str(median([item.volume for item in candles[-21:-1]])))
-    location = (c5.close - c5.low) / (c5.high - c5.low)
-    long_bias = close15[-1] > sma_now > sma_old
-    short_bias = close15[-1] < sma_now < sma_old
-    if (
-        c5.low <= low - Decimal("0.10") * atr
-        and c5.close >= low
-        and location >= Decimal("0.60")
-        and not short_bias
-    ):
-        fast = c5.volume >= Decimal("1.50") * volume and c5.close - low >= Decimal("0.10") * atr
-        speed_long: Literal["FAST", "STANDARD"] = "FAST" if fast else "STANDARD"
-        setup = _hash(
-            [
-                STRATEGY_VERSION,
-                "SWEEP",
-                "LONG",
-                str(low),
-                str(c5.open_time_ms),
-                CONFIGURATION_VERSION,
-            ]
-        )
-        return Signal(
-            SignalState.TRIGGERED_FAST if fast else SignalState.PREPARE,
-            Side.LONG,
-            speed_long,
-            setup,
-            "SWEEP_RECLAIM",
-        )
-    if (
-        c5.high >= high + Decimal("0.10") * atr
-        and c5.close <= high
-        and (Decimal(1) - location) >= Decimal("0.60")
-        and not long_bias
-    ):
-        fast = c5.volume >= Decimal("1.50") * volume and high - c5.close >= Decimal("0.10") * atr
-        speed_short: Literal["FAST", "STANDARD"] = "FAST" if fast else "STANDARD"
-        setup = _hash(
-            [
-                STRATEGY_VERSION,
-                "SWEEP",
-                "SHORT",
-                str(high),
-                str(c5.open_time_ms),
-                CONFIGURATION_VERSION,
-            ]
-        )
-        return Signal(
-            SignalState.TRIGGERED_FAST if fast else SignalState.PREPARE,
-            Side.SHORT,
-            speed_short,
-            setup,
-            "SWEEP_RECLAIM",
-        )
-    return Signal(SignalState.WAIT, None, None, None, "NO_ACTIONABLE_CLOSED_CANDLE")
-
-
-def _mean(values: list[Decimal]) -> Decimal:
-    return sum(values, Decimal()) / Decimal(len(values))
-
-
-def _hash(value: object) -> str:
-    return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
+    return Signal(
+        SignalState.WATCH
+        if min(abs(t.close - high), abs(t.close - low)) <= Decimal(".25") * atr
+        else SignalState.WAIT,
+        None,
+        None,
+        None,
+        "NEAR_PRIOR_RANGE_BOUNDARY"
+        if min(abs(t.close - high), abs(t.close - low)) <= Decimal(".25") * atr
+        else "NO_ACTIONABLE_CLOSED_CANDLE",
+    )
 
 
 def _round_price(value: Decimal, sz_decimals: int, direction: str) -> Decimal:
@@ -479,10 +554,17 @@ def _round_price(value: Decimal, sz_decimals: int, direction: str) -> Decimal:
         raise PlanError("SZ_DECIMALS_PRECISION_INVALID")
     if direction not in {"up", "down"}:
         raise PlanError("PRICE_ROUNDING_DIRECTION_INVALID")
-    places = 6 - sz_decimals
-    quantum = Decimal(1).scaleb(max(value.adjusted() - 4, -places))
-    rounding = ROUND_CEILING if direction == "up" else ROUND_FLOOR
-    return value.quantize(quantum, rounding=rounding)
+    _guard_decimal_exponent(value, "PRICE_PRECISION_INPUT_INVALID")
+    if value == value.to_integral_value():
+        return value
+    try:
+        quantum = Decimal(1).scaleb(max(value.adjusted() - 4, -(6 - sz_decimals)))
+    except (InvalidOperation, ValueError):
+        raise PlanError("PRICE_PRECISION_INPUT_INVALID") from None
+    try:
+        return value.quantize(quantum, rounding=ROUND_CEILING if direction == "up" else ROUND_FLOOR)
+    except InvalidOperation:
+        raise PlanError("PRICE_PRECISION_INPUT_INVALID") from None
 
 
 def round_quantity(raw_quantity: Decimal, sz_decimals: int) -> Decimal:
@@ -490,20 +572,24 @@ def round_quantity(raw_quantity: Decimal, sz_decimals: int) -> Decimal:
         raise PlanError("QUANTITY_PRECISION_INPUT_INVALID")
     if type(sz_decimals) is not int or isinstance(sz_decimals, bool) or not 0 <= sz_decimals <= 18:
         raise PlanError("SZ_DECIMALS_QUANTITY_INVALID")
-    quantity = raw_quantity.quantize(Decimal(1).scaleb(-sz_decimals), rounding=ROUND_DOWN)
-    if quantity <= 0:
+    _guard_decimal_exponent(raw_quantity, "QUANTITY_PRECISION_INPUT_INVALID")
+    try:
+        result = raw_quantity.quantize(
+            Decimal(1).scaleb(-sz_decimals),
+            rounding=ROUND_DOWN,
+        )
+    except (InvalidOperation, ValueError):
+        raise PlanError("QUANTITY_PRECISION_INPUT_INVALID") from None
+    if result <= 0:
         raise PlanError("ZERO_QUANTITY_AFTER_PRECISION")
-    return quantity
+    return result
 
 
 def inward_zone(low: Decimal, high: Decimal, sz_decimals: int) -> tuple[Decimal, Decimal]:
-    rounded_low, rounded_high = (
-        _round_price(low, sz_decimals, "up"),
-        _round_price(high, sz_decimals, "down"),
-    )
-    if rounded_low > rounded_high:
+    result = _round_price(low, sz_decimals, "up"), _round_price(high, sz_decimals, "down")
+    if result[0] > result[1]:
         raise PlanError("ROUNDED_ENTRY_ZONE_EMPTY")
-    return rounded_low, rounded_high
+    return result
 
 
 @dataclass(frozen=True)
@@ -541,67 +627,66 @@ def risk_math(
         side is Side.SHORT and planned_entry >= stop
     ):
         raise PlanError("SIDE_STOP_ORDER_INVALID")
-    adverse_entry = planned_entry * (Decimal("1.0005") if side is Side.LONG else Decimal("0.9995"))
-    adverse_stop = stop * (Decimal("0.9995") if side is Side.LONG else Decimal("1.0005"))
-    price_loss = adverse_entry - adverse_stop if side is Side.LONG else adverse_stop - adverse_entry
-    entry_fee, exit_fee = adverse_entry * Decimal("0.00045"), adverse_stop * Decimal("0.00045")
-    loss = price_loss + entry_fee + exit_fee
-    if price_loss <= 0 or loss <= 0:
-        raise PlanError("NON_POSITIVE_WORST_CASE_LOSS")
-    budget, maximum = account_equity_usd * Decimal("0.0025"), account_equity_usd
-    risk_quantity, notional_quantity = budget / loss, maximum / abs(adverse_entry)
-    quantity = min(risk_quantity, notional_quantity)
-    if quantity <= 0:
-        raise PlanError("NON_POSITIVE_RAW_QUANTITY")
+    adverse_entry = planned_entry * (Decimal("1.0005") if side is Side.LONG else Decimal(".9995"))
+    adverse_stop = stop * (Decimal(".9995") if side is Side.LONG else Decimal("1.0005"))
+    price_loss = abs(adverse_entry - adverse_stop)
+    entry_fee = adverse_entry * Decimal(".00045")
+    exit_fee = adverse_stop * Decimal(".00045")
+    worst_case = price_loss + entry_fee + exit_fee
+    budget = account_equity_usd * Decimal(".0025")
+    maximum = account_equity_usd
+    risk_quantity = budget / worst_case
+    notional_quantity = maximum / abs(adverse_entry)
     return RawRiskMath(
         adverse_entry,
         adverse_stop,
         price_loss,
         entry_fee,
         exit_fee,
-        loss,
+        worst_case,
         budget,
         maximum,
         risk_quantity,
         notional_quantity,
-        quantity,
+        min(risk_quantity, notional_quantity),
     )
 
 
 def size_plan(
     *, side: Side, entry: Decimal, stop: Decimal, equity: Decimal, sz_decimals: int
 ) -> RiskResult:
-    if equity <= 0:
-        raise PlanError("ACCOUNT_EQUITY_REQUIRED")
-    worst_entry = entry * (Decimal("1.0005") if side is Side.LONG else Decimal("0.9995"))
-    worst_stop = stop * (Decimal("0.9995") if side is Side.LONG else Decimal("1.0005"))
-    distance = (worst_entry - worst_stop) if side is Side.LONG else (worst_stop - worst_entry)
-    per_unit = (
-        distance + abs(worst_entry) * Decimal("0.00045") + abs(worst_stop) * Decimal("0.00045")
-    )
-    if per_unit <= 0:
-        raise PlanError("RISK_DISTANCE_INVALID")
-    risk_budget = equity * Decimal("0.0025")
-    raw = min(risk_budget / per_unit, equity / abs(worst_entry))
-    quantity = raw.quantize(Decimal(1).scaleb(-sz_decimals), rounding=ROUND_DOWN)
-    if quantity <= 0:
-        raise PlanError("ZERO_QUANTITY_AFTER_PRECISION")
-    planned_risk = quantity * per_unit
-    if planned_risk > risk_budget:
+    result = risk_math(side=side, planned_entry=entry, stop=stop, account_equity_usd=equity)
+    quantity = round_quantity(result.quantity_raw, sz_decimals)
+    planned_risk = quantity * result.worst_case_loss_per_unit
+    if planned_risk > result.risk_budget_usd:
         raise PlanError("RISK_BUDGET_EXCEEDED")
-    return RiskResult(quantity, quantity * abs(worst_entry), risk_budget, planned_risk)
+    return RiskResult(quantity, quantity * entry, result.risk_budget_usd, planned_risk)
 
 
 @dataclass(frozen=True)
 class TradePlan:
     plan_id: str
+    canonical_hash: str
+    strategy_output: StrategyOutput
+    provenance: StrategyProvenance
     setup_id: str
-    supersedes_plan_id: str | None
+    speed: Literal["FAST", "STANDARD"]
+    decision_trigger_identity: tuple[str, str, int]
+    decision_trigger_open_time_ms: int
+    decision_trigger_canonical_hash: str
+    decision_trigger_received_at: datetime
+    strategy_reason: Literal["CONFIRMED"]
+    strategy_do_not_chase: Literal["DO NOT CHASE"]
+    material_extreme: Decimal
+    raw_entry_low: Decimal
+    raw_entry_high: Decimal
+    raw_chase_limit: Decimal
+    raw_stop: Decimal
     created_at: datetime
     expires_at: datetime
+    supersedes_plan_id: str | None
     symbol: Literal["ETH"]
-    side: Side
-    speed: Literal["FAST", "STANDARD"]
+    reference: Decimal
     entry_low: Decimal
     entry_high: Decimal
     planned_entry: Decimal
@@ -615,11 +700,51 @@ class TradePlan:
     risk_budget: Decimal
     planned_risk: Decimal
     sz_decimals: int
-    canonical_hash: str
-    trade_plan_version: Literal["1"] = TRADE_PLAN_VERSION
+    trade_plan_version: Literal["2"] = TRADE_PLAN_VERSION
     strategy_version: Literal["ETH-LDAR-v0.1"] = STRATEGY_VERSION
     configuration_version: Literal["1"] = CONFIGURATION_VERSION
     do_not_chase: Literal["DO NOT CHASE"] = "DO NOT CHASE"
+
+    @property
+    def side(self) -> Side:
+        return self.provenance.side
+
+    @property
+    def family(self) -> SetupFamily:
+        return self.provenance.family
+
+    def raw_values(self) -> tuple[Decimal, Decimal, Decimal, Decimal]:
+        return self.raw_entry_low, self.raw_entry_high, self.raw_chase_limit, self.raw_stop
+
+    def _strategy_output(self) -> StrategyOutput:
+        provenance = StrategyProvenance(
+            self.provenance.family,
+            self.provenance.side,
+            self.provenance.boundary,
+            self.provenance.atr,
+            self.provenance.initial_extreme,
+            self.provenance.setup_trigger_identity,
+            self.provenance.setup_trigger_open_time_ms,
+            self.provenance.setup_trigger_canonical_hash,
+        )
+        return StrategyOutput(
+            provenance,
+            self.setup_id,
+            self.speed,
+            self.decision_trigger_identity,
+            self.decision_trigger_open_time_ms,
+            self.decision_trigger_canonical_hash,
+            self.decision_trigger_received_at,
+            self.material_extreme,
+            self.raw_entry_low,
+            self.raw_entry_high,
+            self.raw_chase_limit,
+            self.raw_stop,
+            self.created_at,
+            self.expires_at,
+            self.strategy_reason,
+            self.strategy_do_not_chase,
+        )
 
     def __post_init__(self) -> None:
         if (
@@ -630,33 +755,19 @@ class TradePlan:
             or self.do_not_chase != "DO NOT CHASE"
         ):
             raise PlanError("TRADE_PLAN_FIXED_AUTHORITY_INVALID")
-        if type(self.side) is not Side or self.speed not in {"FAST", "STANDARD"}:
-            raise PlanError("TRADE_PLAN_SIDE_OR_SPEED_INVALID")
-        if type(self.sz_decimals) is not int:
-            raise PlanError("TRADE_PLAN_SZ_DECIMALS_INVALID")
-        _round_price(Decimal(1), self.sz_decimals, "up")
-        required_identifiers = (self.setup_id, self.plan_id, self.canonical_hash)
-        if any(
-            type(identifier) is not str or re.fullmatch(r"[0-9a-f]{64}", identifier) is None
-            for identifier in required_identifiers
-        ) or (
-            self.supersedes_plan_id is not None
-            and (
-                type(self.supersedes_plan_id) is not str
-                or re.fullmatch(r"[0-9a-f]{64}", self.supersedes_plan_id) is None
-            )
+        if self.supersedes_plan_id is not None and (
+            type(self.supersedes_plan_id) is not str
+            or re.fullmatch(r"[0-9a-f]{64}", self.supersedes_plan_id) is None
         ):
-            raise PlanError("TRADE_PLAN_IDENTIFIER_INVALID")
-        if self.plan_id != self.canonical_hash:
-            raise PlanError("TRADE_PLAN_IDENTITY_MISMATCH")
-        for timestamp in (self.created_at, self.expires_at):
-            if timestamp.tzinfo is None or timestamp.utcoffset() != timedelta(0):
-                raise PlanError("TRADE_PLAN_TIMESTAMP_NOT_UTC")
-        if self.expires_at != self.created_at + timedelta(
-            seconds=180 if self.speed == "FAST" else 900
-        ):
-            raise PlanError("TRADE_PLAN_EXPIRY_INVALID")
+            raise PlanError("TRADE_PLAN_SUPERSEDES_INVALID")
+        if type(self.strategy_output) is not StrategyOutput:
+            raise PlanError("TRADE_PLAN_STRATEGY_AUTHORITY_INVALID")
+        embedded_output = _validated_strategy_output(self.strategy_output)
+        output = self._strategy_output()
+        if output != embedded_output:
+            raise PlanError("TRADE_PLAN_STRATEGY_CORRESPONDENCE_INVALID")
         financials = (
+            self.reference,
             self.entry_low,
             self.entry_high,
             self.planned_entry,
@@ -675,95 +786,124 @@ class TradePlan:
             for value in financials
         ):
             raise PlanError("TRADE_PLAN_FINANCIAL_INVALID")
-        if not self.entry_low <= self.planned_entry <= self.entry_high:
-            raise PlanError("TRADE_PLAN_ENTRY_ZONE_INVALID")
-        if self.planned_risk > self.risk_budget:
-            raise PlanError("TRADE_PLAN_RISK_BUDGET_EXCEEDED")
-        if self.side is Side.LONG:
-            valid_structure = (
-                self.stop < self.planned_entry <= self.chase_limit
-                and self.planned_entry < self.tp1 < self.tp2
-            )
-        else:
-            valid_structure = (
-                self.chase_limit <= self.planned_entry < self.stop
-                and self.tp2 < self.tp1 < self.planned_entry
-            )
-        if not valid_structure:
-            raise PlanError("TRADE_PLAN_STRUCTURE_INVALID")
-        expected_risk = size_plan(
-            side=self.side,
+        low, high = inward_zone(output.raw_entry_low, output.raw_entry_high, self.sz_decimals)
+        if (self.entry_low, self.entry_high) != (low, high):
+            raise PlanError("TRADE_PLAN_ROUNDED_ZONE_INVALID")
+        direction = "up" if output.side is Side.LONG else "down"
+        expected_entry = _round_price(
+            min(max(self.reference, low), high), self.sz_decimals, direction
+        )
+        expected_chase = _round_price(
+            output.raw_chase_limit,
+            self.sz_decimals,
+            "down" if output.side is Side.LONG else "up",
+        )
+        expected_stop = _round_price(
+            output.raw_stop,
+            self.sz_decimals,
+            "down" if output.side is Side.LONG else "up",
+        )
+        if (self.planned_entry, self.chase_limit, self.stop) != (
+            expected_entry,
+            expected_chase,
+            expected_stop,
+        ):
+            raise PlanError("TRADE_PLAN_ROUNDED_EXECUTION_INVALID")
+        if (output.side is Side.LONG and self.reference > output.raw_chase_limit) or (
+            output.side is Side.SHORT and self.reference < output.raw_chase_limit
+        ):
+            raise PlanError("CHASE_LIMIT_EXCEEDED")
+        distance = abs(self.planned_entry - self.stop)
+        if (
+            not Decimal(".10") * output.provenance.atr
+            <= distance
+            <= Decimal("1.50") * output.provenance.atr
+        ):
+            raise PlanError("STOP_DISTANCE_OUT_OF_RANGE")
+        risk = size_plan(
+            side=output.side,
             entry=self.planned_entry,
             stop=self.stop,
             equity=self.account_equity,
             sz_decimals=self.sz_decimals,
         )
-        if (
-            self.quantity,
-            self.notional,
-            self.risk_budget,
-            self.planned_risk,
-        ) != (
-            expected_risk.quantity,
-            expected_risk.notional,
-            expected_risk.risk_budget,
-            expected_risk.planned_risk,
-        ):
+        if (self.quantity, self.notional, self.risk_budget, self.planned_risk) != (
+            risk.quantity,
+            risk.notional,
+            risk.risk_budget,
+            risk.planned_risk,
+        ) or self.notional < Decimal("10"):
             raise PlanError("TRADE_PLAN_RISK_INCONSISTENT")
-        values = {
-            field: getattr(self, field)
-            for field in (
-                "trade_plan_version",
-                "strategy_version",
-                "configuration_version",
-                "setup_id",
-                "supersedes_plan_id",
-                "created_at",
-                "expires_at",
-                "symbol",
-                "side",
-                "speed",
-                "entry_low",
-                "entry_high",
-                "planned_entry",
-                "chase_limit",
-                "stop",
-                "tp1",
-                "tp2",
-                "quantity",
-                "notional",
-                "account_equity",
-                "risk_budget",
-                "planned_risk",
-                "sz_decimals",
-                "do_not_chase",
+        r_value = abs(self.planned_entry - self.stop)
+        target_direction = "down" if output.side is Side.LONG else "up"
+        expected_targets = (
+            _round_price(
+                self.planned_entry + r_value
+                if output.side is Side.LONG
+                else self.planned_entry - r_value,
+                self.sz_decimals,
+                target_direction,
+            ),
+            _round_price(
+                self.planned_entry + 2 * r_value
+                if output.side is Side.LONG
+                else self.planned_entry - 2 * r_value,
+                self.sz_decimals,
+                target_direction,
+            ),
+        )
+        if (self.tp1, self.tp2) != expected_targets:
+            raise PlanError("TRADE_PLAN_TARGETS_INVALID")
+        if (
+            not all(
+                type(value) is str and re.fullmatch(r"[0-9a-f]{64}", value)
+                for value in (self.plan_id, self.canonical_hash)
             )
-        }
-        if self.plan_id != _trade_plan_digest(
-            _trade_plan_payload(
-                values,
-                created_at=self.created_at,
-                expires_at=self.expires_at,
-                side=self.side,
-            )
+            or self.plan_id != self.canonical_hash
+            or self.plan_id != _trade_digest(self.payload())
         ):
             raise PlanError("TRADE_PLAN_HASH_INVALID")
 
+    def payload(self) -> dict[str, object]:
+        return _trade_plan_payload(self.__dict__)
 
-def _trade_plan_payload(
-    values: dict[str, object], *, created_at: datetime, expires_at: datetime, side: Side
-) -> dict[str, object]:
+
+def _trade_plan_payload(values: dict[str, object]) -> dict[str, object]:
+    provenance = values["provenance"]
+    if type(provenance) is not StrategyProvenance:
+        raise PlanError("TRADE_PLAN_PROVENANCE_INVALID")
+    created_at = values["created_at"]
+    expires_at = values["expires_at"]
+    received_at = values["decision_trigger_received_at"]
+    if (
+        type(created_at) is not datetime
+        or type(expires_at) is not datetime
+        or type(received_at) is not datetime
+    ):
+        raise PlanError("TRADE_PLAN_TIMESTAMP_INVALID")
     return {
         "trade_plan_version": values["trade_plan_version"],
         "strategy_version": values["strategy_version"],
         "configuration_version": values["configuration_version"],
-        "setup_id": values["setup_id"],
-        "supersedes_plan_id": values["supersedes_plan_id"],
-        "created_at": created_at.isoformat(),
-        "expires_at": expires_at.isoformat(),
         "symbol": values["symbol"],
-        "side": side.value,
+        "setup_id": values["setup_id"],
+        "provenance": provenance.payload(),
         "speed": values["speed"],
+        "decision_trigger_identity": values["decision_trigger_identity"],
+        "decision_trigger_open_time_ms": values["decision_trigger_open_time_ms"],
+        "decision_trigger_canonical_hash": values["decision_trigger_canonical_hash"],
+        "decision_trigger_received_at": received_at.isoformat(),
+        "strategy_reason": values["strategy_reason"],
+        "strategy_do_not_chase": values["strategy_do_not_chase"],
+        "material_extreme": values["material_extreme"],
+        "raw_entry_low": values["raw_entry_low"],
+        "raw_entry_high": values["raw_entry_high"],
+        "raw_chase_limit": values["raw_chase_limit"],
+        "raw_stop": values["raw_stop"],
+        "strategy_created_at": created_at.isoformat(),
+        "strategy_expires_at": expires_at.isoformat(),
+        "supersedes_plan_id": values["supersedes_plan_id"],
+        "reference": values["reference"],
         "entry_low": values["entry_low"],
         "entry_high": values["entry_high"],
         "planned_entry": values["planned_entry"],
@@ -781,85 +921,87 @@ def _trade_plan_payload(
     }
 
 
-def _trade_plan_digest(payload: dict[str, object]) -> str:
+def _trade_digest(payload: dict[str, object]) -> str:
     return hashlib.sha256(
-        TRADE_PLAN_HASH_DOMAIN.encode("utf-8") + b"\0" + canonical_json_bytes(payload)
+        TRADE_PLAN_HASH_DOMAIN.encode() + b"\0" + canonical_json_bytes(payload)
     ).hexdigest()
 
 
 def build_plan(
     *,
-    setup_id: str,
-    side: Side,
-    speed: Literal["FAST", "STANDARD"],
-    boundary: Decimal,
-    atr: Decimal,
-    sweep: Decimal,
+    strategy_output: StrategyOutput,
     reference: Decimal,
     equity: Decimal,
     sz_decimals: int,
-    created_at: datetime,
     supersedes_plan_id: str | None = None,
 ) -> TradePlan:
-    if created_at.tzinfo is None or created_at.utcoffset() is None:
-        raise PlanError("CREATED_AT_TIMEZONE_REQUIRED")
-    if atr <= 0:
-        raise PlanError("ATR_INVALID")
-    long = side is Side.LONG
-    if speed == "FAST":
-        low, high = (
-            (boundary, boundary + Decimal("0.15") * atr)
-            if long
-            else (boundary - Decimal("0.15") * atr, boundary)
-        )
-        chase, stop = (
-            (boundary + Decimal("0.25") * atr, sweep - Decimal("0.10") * atr)
-            if long
-            else (boundary - Decimal("0.25") * atr, sweep + Decimal("0.10") * atr)
-        )
-    else:
-        low, high = (
-            (boundary - Decimal("0.05") * atr, boundary + Decimal("0.10") * atr)
-            if long
-            else (boundary - Decimal("0.10") * atr, boundary + Decimal("0.05") * atr)
-        )
-        chase, stop = (
-            (boundary + Decimal("0.20") * atr, sweep - Decimal("0.10") * atr)
-            if long
-            else (boundary - Decimal("0.20") * atr, sweep + Decimal("0.10") * atr)
-        )
-    low = _round_price(low, sz_decimals, "up")
-    high = _round_price(high, sz_decimals, "down")
-    if low > high:
-        raise PlanError("ROUNDED_ENTRY_ZONE_EMPTY")
-    if (long and reference > chase) or (not long and reference < chase):
+    if type(strategy_output) is not StrategyOutput or type(reference) is not Decimal:
+        raise PlanError("BUILD_PLAN_AUTHORITY_INVALID")
+    if not reference.is_finite() or reference <= 0:
+        raise PlanError("BUILD_PLAN_AUTHORITY_INVALID")
+    output = _validated_strategy_output(strategy_output)
+    low, high = inward_zone(output.raw_entry_low, output.raw_entry_high, sz_decimals)
+    if (output.side is Side.LONG and reference > output.raw_chase_limit) or (
+        output.side is Side.SHORT and reference < output.raw_chase_limit
+    ):
         raise PlanError("CHASE_LIMIT_EXCEEDED")
-    entry = min(max(reference, low), high)
-    entry = _round_price(entry, sz_decimals, "up" if long else "down")
-    stop = _round_price(stop, sz_decimals, "down" if long else "up")
-    distance = abs(entry - stop)
-    if distance < Decimal("0.10") * atr or distance > Decimal("1.50") * atr:
-        raise PlanError("STOP_DISTANCE_OUT_OF_RANGE")
-    risk = size_plan(side=side, entry=entry, stop=stop, equity=equity, sz_decimals=sz_decimals)
-    r = abs(entry - stop)
-    tp1 = _round_price(entry + r if long else entry - r, sz_decimals, "down" if long else "up")
-    tp2 = _round_price(
-        entry + 2 * r if long else entry - 2 * r, sz_decimals, "down" if long else "up"
+    direction = "up" if output.side is Side.LONG else "down"
+    entry = _round_price(min(max(reference, low), high), sz_decimals, direction)
+    stop = _round_price(
+        output.raw_stop,
+        sz_decimals,
+        "down" if output.side is Side.LONG else "up",
     )
-    normalized_created_at = created_at.astimezone(UTC)
-    expiry = normalized_created_at + timedelta(seconds=180 if speed == "FAST" else 900)
+    distance = abs(entry - stop)
+    if (
+        not Decimal(".10") * output.provenance.atr
+        <= distance
+        <= Decimal("1.50") * output.provenance.atr
+    ):
+        raise PlanError("STOP_DISTANCE_OUT_OF_RANGE")
+    risk = size_plan(
+        side=output.side, entry=entry, stop=stop, equity=equity, sz_decimals=sz_decimals
+    )
+    if risk.notional < Decimal("10"):
+        raise PlanError("MINIMUM_NOTIONAL_NOT_MET")
+    target_direction = "down" if output.side is Side.LONG else "up"
+    tp1 = _round_price(
+        entry + distance if output.side is Side.LONG else entry - distance,
+        sz_decimals,
+        target_direction,
+    )
+    tp2 = _round_price(
+        entry + 2 * distance if output.side is Side.LONG else entry - 2 * distance,
+        sz_decimals,
+        target_direction,
+    )
     values: dict[str, object] = {
-        "setup_id": setup_id,
+        "strategy_output": output,
+        "provenance": output.provenance,
+        "setup_id": output.setup_id,
+        "speed": output.speed,
+        "decision_trigger_identity": output.decision_trigger_identity,
+        "decision_trigger_open_time_ms": output.decision_trigger_open_time_ms,
+        "decision_trigger_canonical_hash": output.decision_trigger_canonical_hash,
+        "decision_trigger_received_at": output.decision_trigger_received_at,
+        "strategy_reason": output.reason,
+        "strategy_do_not_chase": output.do_not_chase,
+        "material_extreme": output.material_extreme,
+        "raw_entry_low": output.raw_entry_low,
+        "raw_entry_high": output.raw_entry_high,
+        "raw_chase_limit": output.raw_chase_limit,
+        "raw_stop": output.raw_stop,
+        "created_at": output.created_at,
+        "expires_at": output.expires_at,
         "supersedes_plan_id": supersedes_plan_id,
-        "created_at": normalized_created_at,
-        "expires_at": expiry,
         "symbol": "ETH",
-        "side": side,
-        "speed": speed,
+        "reference": reference,
         "entry_low": low,
         "entry_high": high,
         "planned_entry": entry,
-        "chase_limit": _round_price(chase, sz_decimals, "down" if long else "up"),
+        "chase_limit": _round_price(
+            output.raw_chase_limit, sz_decimals, "down" if output.side is Side.LONG else "up"
+        ),
         "stop": stop,
         "tp1": tp1,
         "tp2": tp2,
@@ -874,14 +1016,7 @@ def build_plan(
         "configuration_version": CONFIGURATION_VERSION,
         "do_not_chase": "DO NOT CHASE",
     }
-    digest = _trade_plan_digest(
-        _trade_plan_payload(
-            values,
-            created_at=normalized_created_at,
-            expires_at=expiry,
-            side=side,
-        )
-    )
+    digest = _trade_digest(_trade_plan_payload(values))
     return TradePlan(plan_id=digest, canonical_hash=digest, **values)  # type: ignore[arg-type]
 
 
@@ -894,50 +1029,55 @@ class AIExplanation:
     execution_checklist: tuple[str, ...]
     status: Literal["AVAILABLE", "UNAVAILABLE"]
 
+    def __post_init__(self) -> None:
+        fields = (
+            self.supporting_evidence,
+            self.opposing_evidence,
+            self.missing_or_conflicting_inputs,
+            self.risk_and_expiry_warnings,
+            self.execution_checklist,
+        )
+        if self.status not in {"AVAILABLE", "UNAVAILABLE"} or any(
+            type(field) is not tuple
+            or len(field) > 8
+            or any(type(item) is not str or len(item) > 240 for item in field)
+            for field in fields
+        ):
+            raise PlanError("AI_EXPLANATION_INVALID")
 
-class AIProvider(Protocol):
-    def explain(self, summary: dict[str, str]) -> AIExplanation: ...
 
-
-def fallback_explanation(plan: TradePlan, quality: DataQualityState) -> AIExplanation:
+def fallback_explanation(
+    plan: TradePlan,
+    quality: DataQualityState,
+    *,
+    status: Literal["AVAILABLE", "UNAVAILABLE"] = "AVAILABLE",
+) -> AIExplanation:
     return AIExplanation(
         (f"Deterministic {plan.side.value} {plan.speed} plan",),
         (),
         (() if quality is DataQualityState.READY else (quality.value,)),
         ("DO NOT CHASE", f"Expires {plan.expires_at.isoformat()}"),
         ("Verify manual order details", "Record TAKEN, SKIPPED, or REJECTED"),
-        "AVAILABLE",
+        status,
     )
 
 
 def bounded_explanation(
-    provider: AIProvider | None, plan: TradePlan, quality: DataQualityState
+    value: object | None, plan: TradePlan, quality: DataQualityState
 ) -> AIExplanation:
-    fallback = fallback_explanation(plan, quality)
-    if provider is None:
-        return fallback
+    if value is None:
+        return fallback_explanation(plan, quality)
+    if type(value) is not AIExplanation:
+        return fallback_explanation(plan, quality, status="UNAVAILABLE")
     try:
-        result = provider.explain(
-            {"side": plan.side.value, "speed": plan.speed, "quality": quality.value}
+        AIExplanation(
+            value.supporting_evidence,
+            value.opposing_evidence,
+            value.missing_or_conflicting_inputs,
+            value.risk_and_expiry_warnings,
+            value.execution_checklist,
+            value.status,
         )
-        fields = (
-            result.supporting_evidence,
-            result.opposing_evidence,
-            result.missing_or_conflicting_inputs,
-            result.risk_and_expiry_warnings,
-            result.execution_checklist,
-        )
-        if result.status != "AVAILABLE" or any(
-            len(values) > 8 or any(len(item) > 240 for item in values) for values in fields
-        ):
-            raise ValueError
-        return result
-    except Exception:
-        return AIExplanation(
-            fallback.supporting_evidence,
-            fallback.opposing_evidence,
-            fallback.missing_or_conflicting_inputs,
-            fallback.risk_and_expiry_warnings,
-            fallback.execution_checklist,
-            "UNAVAILABLE",
-        )
+    except (PlanError, AttributeError):
+        return fallback_explanation(plan, quality, status="UNAVAILABLE")
+    return value

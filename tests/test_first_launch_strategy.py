@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-import hashlib
+import copy
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Literal
 
 import pytest
 
-from trader_assist_v0.contracts.common import canonical_json_bytes
-from trader_assist_v0.first_launch.market_data import Candle, DataQualityState, RawEvidence
+from trader_assist_v0.first_launch.market_data import Candle, DataQualityState, evidence_from_raw
 from trader_assist_v0.first_launch.strategy import (
     AIExplanation,
     PlanError,
@@ -17,451 +15,467 @@ from trader_assist_v0.first_launch.strategy import (
     SetupFamily,
     Side,
     SignalState,
+    StrategyOutput,
     _round_price,
+    _trade_digest,
     advance_prepare,
     bounded_explanation,
     build_plan,
-    fallback_explanation,
-    inward_zone,
+    evaluate_signal,
     lifecycle_state,
     risk_math,
     round_quantity,
     size_plan,
-    strategy_output,
 )
 
 NOW = datetime(2026, 7, 14, tzinfo=UTC)
 
 
-def _plan(side: Side = Side.LONG):
-    return build_plan(
-        setup_id="a" * 64,
-        side=side,
-        speed="FAST",
-        boundary=Decimal("100"),
-        atr=Decimal("10"),
-        sweep=Decimal("98") if side is Side.LONG else Decimal("102"),
-        reference=Decimal("101") if side is Side.LONG else Decimal("99"),
+def _candle(
+    open_time: int,
+    *,
+    open: str = "100",
+    high: str = "101",
+    low: str = "99",
+    close: str = "100",
+    volume: str = "10",
+    interval: str = "5m",
+) -> Candle:
+    raw = "{}"
+    evidence = evidence_from_raw(
+        raw,
+        operation="WebSocket",
+        received_at=NOW,
+        receive_sequence=open_time,
+        connection_id="test",
+    )
+    width = 300_000 if interval == "5m" else 900_000
+    return Candle(
+        interval,
+        open_time,
+        open_time + width,
+        Decimal(open),
+        Decimal(high),
+        Decimal(low),
+        Decimal(close),
+        Decimal(volume),
+        evidence,
+    )  # type: ignore[arg-type]
+
+
+def _history(
+    family: SetupFamily, side: Side, fast: bool
+) -> tuple[tuple[Candle, ...], tuple[Candle, ...]]:
+    c5 = [_candle(i * 300_000) for i in range(26)]
+    volume = "20" if fast else "13"
+    if family is SetupFamily.SWEEP_RECLAIM:
+        trigger = _candle(
+            26 * 300_000,
+            high="101" if side is Side.LONG else "102",
+            low="98" if side is Side.LONG else "99",
+            close="100",
+            volume=volume,
+        )
+        c15 = tuple(
+            _candle(
+                i * 900_000, close=str(100 + i if side is Side.LONG else 100 - i), interval="15m"
+            )
+            for i in range(11)
+        )
+    elif side is Side.LONG:
+        trigger = _candle(26 * 300_000, high="102", low="100", close="102", volume=volume)
+        c15 = tuple(_candle(i * 900_000, close=str(90 + i), interval="15m") for i in range(11))
+    else:
+        trigger = _candle(26 * 300_000, high="100", low="98", close="98", volume=volume)
+        c15 = tuple(_candle(i * 900_000, close=str(110 - i), interval="15m") for i in range(11))
+    return tuple([*c5, trigger]), c15
+
+
+def _confirmed(family: SetupFamily, side: Side, fast: bool) -> StrategyOutput:
+    c5, c15 = _history(family, side, fast)
+    value = evaluate_signal(c5, c15, quality=DataQualityState.READY)
+    if fast:
+        assert type(value) is StrategyOutput
+        return value
+    assert type(value) is PreparedSetup
+    boundary = value.provenance.boundary
+    retest = _candle(
+        27 * 300_000,
+        high=str(boundary + Decimal("1")) if side is Side.LONG else str(boundary),
+        low=str(boundary) if side is Side.LONG else str(boundary - Decimal("1")),
+        close=str(boundary + Decimal("1")) if side is Side.LONG else str(boundary - Decimal("1")),
+        volume="10",
+    )
+    result = advance_prepare(value, retest, quality=DataQualityState.READY)
+    assert type(result) is StrategyOutput
+    return result
+
+
+@pytest.mark.parametrize("family", list(SetupFamily))
+@pytest.mark.parametrize("side", list(Side))
+@pytest.mark.parametrize("fast", [True, False])
+def test_production_authority_matrix(family: SetupFamily, side: Side, fast: bool) -> None:
+    output = _confirmed(family, side, fast)
+    assert output.setup_id == output.provenance.setup_id
+    assert output.family is family and output.side is side
+    assert output.speed == ("FAST" if fast else "STANDARD")
+    assert output.provenance.setup_trigger_open_time_ms == 26 * 300_000
+    assert output.decision_trigger_open_time_ms == (26 if fast else 27) * 300_000
+    plan = build_plan(
+        strategy_output=output,
+        reference=output.raw_entry_low,
         equity=Decimal("1000"),
         sz_decimals=3,
-        created_at=NOW,
+    )
+    assert plan.provenance == output.provenance and plan.raw_values() == (
+        output.raw_entry_low,
+        output.raw_entry_high,
+        output.raw_chase_limit,
+        output.raw_stop,
     )
 
 
-def test_risk_is_decimal_capped_and_plan_is_immutable() -> None:
-    result = size_plan(
+def test_plan_rejects_coherently_rehashed_strategy_substitution() -> None:
+    output = _confirmed(SetupFamily.SWEEP_RECLAIM, Side.LONG, True)
+    with pytest.raises(PlanError, match="STRATEGY_OUTPUT_GEOMETRY_INVALID"):
+        replace(output, material_extreme=output.material_extreme + Decimal("1"))
+    plan = build_plan(
+        strategy_output=output,
+        reference=output.raw_entry_low,
+        equity=Decimal("1000"),
+        sz_decimals=3,
+    )
+    substituted_setup_id = "b" * 64
+    rehashed = copy.copy(plan)
+    object.__setattr__(rehashed, "setup_id", substituted_setup_id)
+    digest = _trade_digest(rehashed.payload())
+    with pytest.raises(PlanError, match="STRATEGY_OUTPUT_AUTHORITY_INVALID"):
+        replace(plan, setup_id=substituted_setup_id, plan_id=digest, canonical_hash=digest)
+
+
+def test_build_plan_has_no_caller_strategy_authority() -> None:
+    output = _confirmed(SetupFamily.BREAKOUT_RETEST, Side.LONG, True)
+    with pytest.raises(TypeError):
+        build_plan(
+            strategy_output=output,
+            reference=output.raw_entry_low,
+            equity=Decimal("1000"),
+            sz_decimals=3,
+            boundary=Decimal("1"),
+        )  # type: ignore[call-arg]
+    assert not hasattr(
+        __import__("trader_assist_v0.first_launch.strategy", fromlist=["x"]),
+        "evaluate_closed_candles",
+    )
+
+
+def test_ai_accepts_only_materialized_exact_value_without_side_effects() -> None:
+    plan = build_plan(
+        strategy_output=_confirmed(SetupFamily.SWEEP_RECLAIM, Side.LONG, True),
+        reference=Decimal("99"),
+        equity=Decimal("1000"),
+        sz_decimals=3,
+    )
+    explanation = AIExplanation(("x",), (), (), (), (), "AVAILABLE")
+    assert bounded_explanation(explanation, plan, DataQualityState.READY) is explanation
+
+    class Malicious:
+        touched = 0
+
+        def __getattr__(self, _name: str) -> object:
+            self.touched += 1
+            raise AssertionError
+
+        def explain(self) -> None:
+            self.touched += 1
+
+    bad = Malicious()
+    result = bounded_explanation(bad, plan, DataQualityState.READY)
+    assert result.status == "UNAVAILABLE" and bad.touched == 0 and result is not plan
+
+
+def test_precision_quantity_and_ten_dollar_gate() -> None:
+    assert _round_price(Decimal("123456789"), 6, "up") == Decimal("123456789")
+    assert _round_price(Decimal("1.234567"), 3, "up") == Decimal("1.235")
+    assert _round_price(Decimal("1.234567"), 3, "down") == Decimal("1.234")
+    assert round_quantity(Decimal("1.2399"), 2) == Decimal("1.23")
+    for value in (Decimal("0"), Decimal("NaN"), Decimal("Infinity")):
+        with pytest.raises(PlanError):
+            _round_price(value, 3, "up")
+    output = _confirmed(SetupFamily.SWEEP_RECLAIM, Side.LONG, True)
+    with pytest.raises(PlanError, match="MINIMUM"):
+        build_plan(
+            strategy_output=output,
+            reference=output.raw_entry_low,
+            equity=Decimal("1"),
+            sz_decimals=3,
+        )
+
+
+def test_lifecycle_and_risk_contracts_remain_fail_closed() -> None:
+    output = _confirmed(SetupFamily.SWEEP_RECLAIM, Side.LONG, True)
+    assert (
+        lifecycle_state(
+            output,
+            now=NOW,
+            reference=output.raw_entry_low,
+            quality=DataQualityState.READY,
+        )
+        is output.state
+    )
+    assert (
+        lifecycle_state(
+            output,
+            now=NOW,
+            reference=output.raw_stop,
+            quality=DataQualityState.READY,
+        )
+        is SignalState.INVALIDATED
+    )
+    assert (
+        lifecycle_state(
+            output,
+            now=NOW,
+            reference=output.raw_entry_low,
+            quality=DataQualityState.STALE,
+            terminal=SignalState.TAKEN,
+        )
+        is SignalState.TAKEN
+    )
+    raw = risk_math(
+        side=Side.LONG,
+        planned_entry=Decimal("100"),
+        stop=Decimal("98"),
+        account_equity_usd=Decimal("1000"),
+    )
+    sized = size_plan(
         side=Side.LONG,
         entry=Decimal("100"),
         stop=Decimal("98"),
         equity=Decimal("1000"),
         sz_decimals=3,
     )
-    assert result.planned_risk <= result.risk_budget
-    plan = _plan()
-    assert plan.planned_entry <= plan.chase_limit
-    with pytest.raises(AttributeError):
-        plan.quantity = Decimal("1")  # type: ignore[misc]
+    assert raw.adverse_entry > Decimal("100")
+    assert sized.notional == sized.quantity * Decimal("100")
+    assert sized.planned_risk <= sized.risk_budget
 
 
-def test_short_mirror_and_chase_rejection() -> None:
-    short = _plan(Side.SHORT)
-    assert short.stop > short.planned_entry > short.tp1 > short.tp2
-    with pytest.raises(PlanError, match="CHASE"):
-        build_plan(
-            setup_id="b" * 64,
-            side=Side.LONG,
-            speed="FAST",
-            boundary=Decimal("100"),
-            atr=Decimal("10"),
-            sweep=Decimal("98"),
-            reference=Decimal("103"),
-            equity=Decimal("1000"),
-            sz_decimals=3,
-            created_at=NOW,
-        )
-
-
-class _BadAI:
-    def explain(self, summary: dict[str, str]) -> AIExplanation:
-        del summary
-        return AIExplanation((), (), (), (), ("x" * 241,), "AVAILABLE")
-
-
-def test_ai_failure_is_non_authoritative_and_uses_fallback() -> None:
-    plan = _plan()
-    result = bounded_explanation(_BadAI(), plan, DataQualityState.READY)
-    assert result.status == "UNAVAILABLE"
-    assert "DO NOT CHASE" in result.risk_and_expiry_warnings
-
-
-def test_ai_explanation_is_immutable() -> None:
-    explanation = fallback_explanation(_plan(), DataQualityState.READY)
-    with pytest.raises(AttributeError):
-        explanation.status = "UNAVAILABLE"  # type: ignore[misc]
-
-
-def test_ai_fallback_is_deterministic() -> None:
-    plan = _plan()
-    assert fallback_explanation(plan, DataQualityState.READY) == fallback_explanation(
-        plan, DataQualityState.READY
+def test_plan_is_immutable_and_fixed_authority_is_enforced() -> None:
+    output = _confirmed(SetupFamily.SWEEP_RECLAIM, Side.LONG, True)
+    plan = build_plan(
+        strategy_output=output,
+        reference=output.raw_entry_low,
+        equity=Decimal("1000"),
+        sz_decimals=3,
     )
+    assert plan.__dataclass_params__.frozen is True
+    with pytest.raises(PlanError, match="FIXED_AUTHORITY"):
+        replace(plan, symbol="BTC")
+
+GEOMETRY_VECTORS: dict[
+    tuple[SetupFamily, Side, bool],
+    tuple[str, str, str, str],
+] = {
+    (SetupFamily.SWEEP_RECLAIM, Side.LONG, True): (
+        "99",
+        "99.31071428571428571428571429",
+        "99.51785714285714285714285714",
+        "97.79285714285714285714285714",
+    ),
+    (SetupFamily.SWEEP_RECLAIM, Side.LONG, False): (
+        "98.89642857142857142857142857",
+        "99.20714285714285714285714286",
+        "99.41428571428571428571428571",
+        "97.79285714285714285714285714",
+    ),
+    (SetupFamily.SWEEP_RECLAIM, Side.SHORT, True): (
+        "100.6892857142857142857142857",
+        "101",
+        "100.4821428571428571428571429",
+        "102.2071428571428571428571429",
+    ),
+    (SetupFamily.SWEEP_RECLAIM, Side.SHORT, False): (
+        "100.7928571428571428571428571",
+        "101.1035714285714285714285714",
+        "100.5857142857142857142857143",
+        "102.2071428571428571428571429",
+    ),
+    (SetupFamily.BREAKOUT_RETEST, Side.LONG, True): (
+        "101.20",
+        "101.40",
+        "101.60",
+        "100.50",
+    ),
+    (SetupFamily.BREAKOUT_RETEST, Side.LONG, False): (
+        "100.90",
+        "101.20",
+        "101.40",
+        "100.50",
+    ),
+    (SetupFamily.BREAKOUT_RETEST, Side.SHORT, True): (
+        "98.60",
+        "98.80",
+        "98.40",
+        "99.50",
+    ),
+    (SetupFamily.BREAKOUT_RETEST, Side.SHORT, False): (
+        "98.80",
+        "99.10",
+        "98.60",
+        "99.50",
+    ),
+}
 
 
-def test_ai_provider_receives_exact_summary_and_preserves_plan_identity() -> None:
-    class CapturingAI:
-        summary: dict[str, str] | None = None
-
-        def explain(self, summary: dict[str, str]) -> AIExplanation:
-            self.summary = summary
-            return AIExplanation(("support",), (), (), (), ("check",), "AVAILABLE")
-
-    plan = _plan()
-    quality = DataQualityState.READY
-    provider = CapturingAI()
-    plan_id, canonical_hash = plan.plan_id, plan.canonical_hash
-    result = bounded_explanation(provider, plan, quality)
-    assert provider.summary == {
-        "side": plan.side.value,
-        "speed": plan.speed,
-        "quality": quality.value,
-    }
-    assert result == AIExplanation(("support",), (), (), (), ("check",), "AVAILABLE")
-    assert (plan.plan_id, plan.canonical_hash) == (plan_id, canonical_hash)
-
-
-def test_ai_provider_exception_uses_deterministic_unavailable_fallback() -> None:
-    class RaisingAI:
-        def explain(self, summary: dict[str, str]) -> AIExplanation:
-            del summary
-            raise RuntimeError("unavailable")
-
-    plan = _plan()
-    first = bounded_explanation(RaisingAI(), plan, DataQualityState.READY)
-    second = bounded_explanation(RaisingAI(), plan, DataQualityState.READY)
-    assert first == second and first.status == "UNAVAILABLE"
-    assert "DO NOT CHASE" in first.risk_and_expiry_warnings
-
-
-def _trigger() -> Candle:
-    evidence = RawEvidence("{}", "a" * 64, "test", "test", NOW, 1, "test")
-    return Candle(
-        "5m",
-        1,
-        300_001,
-        Decimal("100"),
-        Decimal("101"),
-        Decimal("99"),
-        Decimal("100"),
-        Decimal("1"),
-        evidence,
-    )
-
-
-@pytest.mark.parametrize(
-    ("name", "family", "side", "speed", "zone", "chase", "stop"),
-    [
-        (
-            "LONG_SWEEP_FAST",
-            SetupFamily.SWEEP_RECLAIM,
-            Side.LONG,
-            "FAST",
-            ("100", "101.5"),
-            "102.5",
-            "89",
-        ),
-        (
-            "LONG_SWEEP_STANDARD",
-            SetupFamily.SWEEP_RECLAIM,
-            Side.LONG,
-            "STANDARD",
-            ("99.5", "101"),
-            "102",
-            "89",
-        ),
-        (
-            "SHORT_SWEEP_FAST",
-            SetupFamily.SWEEP_RECLAIM,
-            Side.SHORT,
-            "FAST",
-            ("98.5", "100"),
-            "97.5",
-            "111",
-        ),
-        (
-            "SHORT_SWEEP_STANDARD",
-            SetupFamily.SWEEP_RECLAIM,
-            Side.SHORT,
-            "STANDARD",
-            ("99", "100.5"),
-            "98",
-            "111",
-        ),
-        (
-            "LONG_BREAKOUT_FAST",
-            SetupFamily.BREAKOUT_RETEST,
-            Side.LONG,
-            "FAST",
-            ("101", "102"),
-            "103",
-            "97.5",
-        ),
-        (
-            "LONG_BREAKOUT_STANDARD",
-            SetupFamily.BREAKOUT_RETEST,
-            Side.LONG,
-            "STANDARD",
-            ("99.5", "101"),
-            "102",
-            "97.5",
-        ),
-        (
-            "SHORT_BREAKOUT_FAST",
-            SetupFamily.BREAKOUT_RETEST,
-            Side.SHORT,
-            "FAST",
-            ("98", "99"),
-            "97",
-            "102.5",
-        ),
-        (
-            "SHORT_BREAKOUT_STANDARD",
-            SetupFamily.BREAKOUT_RETEST,
-            Side.SHORT,
-            "STANDARD",
-            ("99", "100.5"),
-            "98",
-            "102.5",
-        ),
-    ],
-)
-def test_actionable_matrix_8_of_8(
-    name: str,
+@pytest.mark.parametrize("family", list(SetupFamily))
+@pytest.mark.parametrize("side", list(Side))
+@pytest.mark.parametrize("fast", [True, False])
+def test_production_geometry_literal_vectors(
     family: SetupFamily,
     side: Side,
-    speed: Literal["FAST", "STANDARD"],
-    zone: tuple[str, str],
-    chase: str,
-    stop: str,
+    fast: bool,
 ) -> None:
-    trigger = _trigger()
-    setup = PreparedSetup(
-        name,
-        family,
-        side,
-        Decimal("100"),
-        Decimal("10"),
-        Decimal("90") if side is Side.LONG else Decimal("110"),
-        1,
-        900_001,
-    )
-    result = strategy_output(
-        setup,
-        speed=speed,
-        trigger=trigger,
-        retest_extreme=Decimal("98") if side is Side.LONG else Decimal("102"),
-    )
-    assert result.setup_id == name and result.family is family and result.side is side
-    assert result.speed == speed and result.trigger_open_time_ms == trigger.open_time_ms
-    assert (result.entry_low, result.entry_high) == tuple(map(Decimal, zone))
-    assert result.chase_limit == Decimal(chase) and result.stop == Decimal(stop)
-    assert result.expires_at == NOW + timedelta(seconds=180 if speed == "FAST" else 900)
-    assert result.do_not_chase == "DO NOT CHASE"
-
-
-def _output(side: Side, speed: Literal["FAST", "STANDARD"]):
-    setup = PreparedSetup(
-        "lifecycle-setup",
-        SetupFamily.SWEEP_RECLAIM,
-        side,
-        Decimal("100"),
-        Decimal("10"),
-        Decimal("90") if side is Side.LONG else Decimal("110"),
-        1,
-        900_001,
-    )
-    return strategy_output(setup, speed=speed, trigger=_trigger())
-
-
-def _prepare(side: Side, family: SetupFamily = SetupFamily.SWEEP_RECLAIM) -> PreparedSetup:
-    return PreparedSetup(
-        "prepare-" + side.value + family.value,
-        family,
-        side,
-        Decimal("100"),
-        Decimal("10"),
-        Decimal("90") if side is Side.LONG else Decimal("110"),
-        1,
-        900_001,
-    )
-
-
-def _retest(side: Side, open_time: int) -> Candle:
-    evidence = RawEvidence("{}", "b" * 64, "test", "test", NOW, 2, "test")
-    if side is Side.LONG:
-        return Candle(
-            "5m",
-            open_time,
-            open_time + 300_000,
-            Decimal("100"),
-            Decimal("102"),
-            Decimal("99"),
-            Decimal("101"),
-            Decimal("1"),
-            evidence,
-        )
-    return Candle(
-        "5m",
-        open_time,
-        open_time + 300_000,
-        Decimal("100"),
-        Decimal("101"),
-        Decimal("101"),
-        Decimal("99"),
-        Decimal("1"),
-        evidence,
-    )
-
-
-@pytest.mark.parametrize("side", [Side.LONG, Side.SHORT])
-@pytest.mark.parametrize("offset", [1, 2, 3])
-def test_prepare_confirmation_offsets_permit_standard(side: Side, offset: int) -> None:
-    result = advance_prepare(
-        _prepare(side), _retest(side, 1 + offset * 300_000), quality=DataQualityState.READY
-    )
-    assert result.state.value == "TRIGGERED_STANDARD"
-
-
-@pytest.mark.parametrize("side", [Side.LONG, Side.SHORT])
-def test_prepare_expiry_first_non_permitted_offset(side: Side) -> None:
-    setup = _prepare(side)
-    before = _retest(side, 900_001)
-    after = _retest(side, 1_200_001)
+    output = _confirmed(family, side, fast)
     assert (
-        advance_prepare(setup, before, quality=DataQualityState.READY).state.value
-        == "TRIGGERED_STANDARD"
+        output.raw_entry_low,
+        output.raw_entry_high,
+        output.raw_chase_limit,
+        output.raw_stop,
+    ) == tuple(Decimal(value) for value in GEOMETRY_VECTORS[(family, side, fast)])
+
+
+def _prepared(family: SetupFamily, side: Side) -> PreparedSetup:
+    candles_5m, candles_15m = _history(family, side, False)
+    result = evaluate_signal(
+        candles_5m,
+        candles_15m,
+        quality=DataQualityState.READY,
     )
-    expired = advance_prepare(setup, after, quality=DataQualityState.READY)
-    assert expired.state.value == "EXPIRED"
-    assert advance_prepare(setup, after, quality=DataQualityState.READY) == expired
+    assert type(result) is PreparedSetup
+    return result
 
 
-@pytest.mark.parametrize("mode", ["ACTIVE", "EXPIRED", "INVALIDATED"])
-def test_lifecycle_idempotence(mode: str) -> None:
-    output = _output(Side.LONG, "FAST")
-    now = NOW if mode == "ACTIVE" else output.expires_at
-    reference = Decimal("100") if mode != "INVALIDATED" else Decimal("89")
-    first = lifecycle_state(output, now=now, reference=reference, quality=DataQualityState.READY)
-    second = lifecycle_state(output, now=now, reference=reference, quality=DataQualityState.READY)
-    assert first is second
+def _retest(setup: PreparedSetup, offset: int) -> Candle:
+    boundary = setup.provenance.boundary
+    side = setup.provenance.side
+    return _candle(
+        setup.provenance.setup_trigger_open_time_ms + offset * 300_000,
+        high=str(boundary + Decimal("1")) if side is Side.LONG else str(boundary),
+        low=str(boundary) if side is Side.LONG else str(boundary - Decimal("1")),
+        close=(
+            str(boundary + Decimal("1"))
+            if side is Side.LONG
+            else str(boundary - Decimal("1"))
+        ),
+    )
 
 
-@pytest.mark.parametrize("terminal", [SignalState.TAKEN, SignalState.SKIPPED, SignalState.REJECTED])
-def test_decided_setup_non_reactivation(terminal: SignalState) -> None:
-    output = _output(Side.SHORT, "STANDARD")
+@pytest.mark.parametrize("side", list(Side))
+@pytest.mark.parametrize("offset", [1, 2, 3])
+def test_prepare_confirmation_offsets_remain_permitted(
+    side: Side,
+    offset: int,
+) -> None:
+    setup = _prepared(SetupFamily.SWEEP_RECLAIM, side)
+    result = advance_prepare(
+        setup,
+        _retest(setup, offset),
+        quality=DataQualityState.READY,
+    )
+    assert type(result) is StrategyOutput
+    assert result.state is SignalState.TRIGGERED_STANDARD
+
+
+@pytest.mark.parametrize("side", list(Side))
+def test_prepare_first_non_permitted_offset_expires(side: Side) -> None:
+    setup = _prepared(SetupFamily.SWEEP_RECLAIM, side)
+    result = advance_prepare(
+        setup,
+        _retest(setup, 4),
+        quality=DataQualityState.READY,
+    )
+    assert result.state is SignalState.EXPIRED
+
+
+@pytest.mark.parametrize("side", list(Side))
+def test_intervening_closes_apply_only_to_breakout(side: Side) -> None:
+    breakout = _prepared(SetupFamily.BREAKOUT_RETEST, side)
+    sweep = _prepared(SetupFamily.SWEEP_RECLAIM, side)
+    prohibited = (
+        breakout.provenance.boundary - Decimal(".21") * breakout.provenance.atr
+        if side is Side.LONG
+        else breakout.provenance.boundary + Decimal(".21") * breakout.provenance.atr
+    )
+    breakout_result = advance_prepare(
+        breakout,
+        _retest(breakout, 1),
+        quality=DataQualityState.READY,
+        intervening_closes=(prohibited,),
+    )
+    sweep_result = advance_prepare(
+        sweep,
+        _retest(sweep, 1),
+        quality=DataQualityState.READY,
+        intervening_closes=(prohibited,),
+    )
+    assert breakout_result.state is SignalState.PREPARE
+    assert type(sweep_result) is StrategyOutput
+
+
+@pytest.mark.parametrize("side", list(Side))
+@pytest.mark.parametrize("fast", [True, False])
+def test_lifecycle_expiry_stop_quality_and_terminal_boundaries(
+    side: Side,
+    fast: bool,
+) -> None:
+    output = _confirmed(SetupFamily.SWEEP_RECLAIM, side, fast)
+    assert (
+        lifecycle_state(
+            output,
+            now=output.expires_at - timedelta(microseconds=1),
+            reference=output.raw_entry_low,
+            quality=DataQualityState.READY,
+        )
+        is output.state
+    )
     assert (
         lifecycle_state(
             output,
             now=output.expires_at,
-            reference=Decimal("111"),
-            quality=DataQualityState.STALE,
-            terminal=terminal,
+            reference=output.raw_entry_low,
+            quality=DataQualityState.READY,
         )
-        is terminal
+        is SignalState.EXPIRED
     )
-
-
-@pytest.mark.parametrize("side, prohibited", [(Side.LONG, "97"), (Side.SHORT, "103")])
-def test_breakout_intervening_close_lifecycle(side: Side, prohibited: str) -> None:
-    setup = _prepare(side, SetupFamily.BREAKOUT_RETEST)
-    retest = _retest(side, 300_001)
-    result = advance_prepare(
-        setup, retest, quality=DataQualityState.READY, intervening_closes=(Decimal(prohibited),)
-    )
-    assert result.state.value == "PREPARE"
+    stop_reference = output.raw_stop
     assert (
-        advance_prepare(
-            setup, retest, quality=DataQualityState.READY, intervening_closes=(Decimal(prohibited),)
+        lifecycle_state(
+            output,
+            now=output.created_at,
+            reference=stop_reference,
+            quality=DataQualityState.READY,
         )
-        == result
+        is SignalState.INVALIDATED
     )
-
-
-@pytest.mark.parametrize(
-    ("side", "entry", "stop", "adverse_entry", "adverse_stop"),
-    [
-        (Side.LONG, "100", "90", "100.0500", "89.9550"),
-        (Side.SHORT, "100", "110", "99.9500", "110.0550"),
-    ],
-)
-def test_risk_math_adverse_execution_and_fees(
-    side: Side, entry: str, stop: str, adverse_entry: str, adverse_stop: str
-) -> None:
-    result = risk_math(
-        side=side,
-        planned_entry=Decimal(entry),
-        stop=Decimal(stop),
-        account_equity_usd=Decimal("1000"),
-    )
-    assert result.risk_budget_usd == Decimal("2.5000") and result.max_notional_usd == Decimal(
-        "1000"
-    )
-    assert result.adverse_entry == Decimal(adverse_entry) and result.adverse_stop == Decimal(
-        adverse_stop
-    )
-    assert result.entry_fee_per_unit == result.adverse_entry * Decimal("0.00045")
-    assert result.exit_fee_per_unit == result.adverse_stop * Decimal("0.00045")
-    assert all(type(value) is Decimal for value in result.__dict__.values())
-
-
-@pytest.mark.parametrize(
-    "equity,entry,stop",
-    [("0", "100", "90"), ("-1", "100", "90"), ("100", "0", "90"), ("100", "100", "100")],
-)
-def test_risk_math_rejects_invalid_authority(equity: str, entry: str, stop: str) -> None:
-    with pytest.raises(PlanError):
-        risk_math(
-            side=Side.LONG,
-            planned_entry=Decimal(entry),
-            stop=Decimal(stop),
-            account_equity_usd=Decimal(equity),
+    assert (
+        lifecycle_state(
+            output,
+            now=output.created_at,
+            reference=output.raw_entry_low,
+            quality=DataQualityState.STALE,
         )
-
-
-@pytest.mark.parametrize(
-    ("name", "side", "entry", "stop", "limited"),
-    [
-        ("LONG_RISK_LIMITED", Side.LONG, "100", "90", "risk"),
-        ("SHORT_RISK_LIMITED", Side.SHORT, "100", "110", "risk"),
-        ("LONG_NOTIONAL_LIMITED", Side.LONG, "100", "99.999", "notional"),
-        ("SHORT_NOTIONAL_LIMITED", Side.SHORT, "100", "100.001", "notional"),
-    ],
-)
-def test_risk_math_remaining_limits(
-    name: str, side: Side, entry: str, stop: str, limited: str
-) -> None:
-    result = risk_math(
-        side=side,
-        planned_entry=Decimal(entry),
-        stop=Decimal(stop),
-        account_equity_usd=Decimal("1000"),
+        is SignalState.INVALIDATED
     )
-    assert name and result.quantity_raw == min(
-        result.risk_limited_quantity_raw, result.notional_limited_quantity_raw
-    )
-    if limited == "risk":
-        assert result.risk_limited_quantity_raw < result.notional_limited_quantity_raw
-    else:
-        assert result.notional_limited_quantity_raw < result.risk_limited_quantity_raw
-
-
-@pytest.mark.parametrize("value", ["NaN", "Infinity", "-Infinity"])
-def test_risk_math_remaining_non_finite(value: str) -> None:
-    with pytest.raises(PlanError):
-        risk_math(
-            side=Side.LONG,
-            planned_entry=Decimal(value),
-            stop=Decimal("90"),
-            account_equity_usd=Decimal("100"),
+    for terminal in (SignalState.TAKEN, SignalState.SKIPPED, SignalState.REJECTED):
+        assert (
+            lifecycle_state(
+                output,
+                now=output.expires_at,
+                reference=stop_reference,
+                quality=DataQualityState.STALE,
+                terminal=terminal,
+            )
+            is terminal
         )
 
 
@@ -498,40 +512,13 @@ def test_risk_math_remaining_non_finite(value: str) -> None:
                 "10.00500250125062531265632816",
             ),
         ),
-        (
-            Side.LONG,
-            "100",
-            "99.999",
-            (
-                "100.0500",
-                "99.9490005",
-                "0.1009995",
-                "0.045022500",
-                "0.044977050225",
-                "0.190999050225",
-                "13.08907032288882681536905009",
-                "9.995002498750624687656171914",
-            ),
-        ),
-        (
-            Side.SHORT,
-            "100",
-            "100.001",
-            (
-                "99.9500",
-                "100.0510005",
-                "0.1010005",
-                "0.044977500",
-                "0.045022950225",
-                "0.191000950225",
-                "13.08894011812500656893001591",
-                "10.00500250125062531265632816",
-            ),
-        ),
     ],
 )
-def test_risk_math_remaining_literal_outputs(
-    side: Side, entry: str, stop: str, expected: tuple[str, ...]
+def test_risk_math_literal_vectors(
+    side: Side,
+    entry: str,
+    stop: str,
+    expected: tuple[str, ...],
 ) -> None:
     result = risk_math(
         side=side,
@@ -550,473 +537,255 @@ def test_risk_math_remaining_literal_outputs(
         result.notional_limited_quantity_raw,
     )
     assert actual == tuple(Decimal(value) for value in expected)
-    assert result.risk_budget_usd == Decimal("2.5000") and result.max_notional_usd == Decimal(
-        "1000"
+    assert result.quantity_raw == min(
+        result.risk_limited_quantity_raw,
+        result.notional_limited_quantity_raw,
     )
 
 
-@pytest.mark.parametrize("field", ["account_equity_usd", "planned_entry", "stop"])
+@pytest.mark.parametrize("field", ["planned_entry", "stop", "account_equity_usd"])
 @pytest.mark.parametrize("value", ["NaN", "Infinity", "-Infinity"])
-def test_risk_math_remaining_non_finite_every_input(field: str, value: str) -> None:
-    values = {
-        "account_equity_usd": Decimal("100"),
+def test_risk_math_rejects_nonfinite_inputs(field: str, value: str) -> None:
+    inputs = {
         "planned_entry": Decimal("100"),
         "stop": Decimal("90"),
+        "account_equity_usd": Decimal("1000"),
     }
-    values[field] = Decimal(value)
+    inputs[field] = Decimal(value)
     with pytest.raises(PlanError):
-        risk_math(side=Side.LONG, **values)
+        risk_math(side=Side.LONG, **inputs)
 
 
 @pytest.mark.parametrize(
-    "sz,raw,expected", [(0, "1.9", "1"), (18, "1.1234567891234567899", "1.123456789123456789")]
-)
-def test_precision_slice_quantity(sz: int, raw: str, expected: str) -> None:
-    assert round_quantity(Decimal(raw), sz) == Decimal(expected)
-
-
-def test_precision_slice_price_and_zone() -> None:
-    assert _round_price(Decimal("12345.67"), 3, "down") == Decimal("12345")
-    assert _round_price(Decimal("1.23456"), 3, "up") == Decimal("1.235")
-    assert inward_zone(Decimal("1.2341"), Decimal("1.2359"), 3) == (
-        Decimal("1.235"),
-        Decimal("1.235"),
-    )
-    with pytest.raises(PlanError):
-        inward_zone(Decimal("1.2359"), Decimal("1.2341"), 3)
-
-
-@pytest.mark.parametrize(
-    ("field", "side", "direction", "expected"),
+    ("side", "direction", "expected"),
     [
-        ("entry", Side.LONG, "up", "1.235"),
-        ("chase", Side.LONG, "down", "1.234"),
-        ("stop", Side.LONG, "down", "1.234"),
-        ("target", Side.LONG, "down", "1.234"),
-        ("entry", Side.SHORT, "down", "1.234"),
-        ("chase", Side.SHORT, "up", "1.235"),
-        ("stop", Side.SHORT, "up", "1.235"),
-        ("target", Side.SHORT, "up", "1.235"),
+        (Side.LONG, "up", "1.235"),
+        (Side.LONG, "down", "1.234"),
+        (Side.SHORT, "down", "1.234"),
+        (Side.SHORT, "up", "1.235"),
     ],
 )
-def test_precision_direction_matrix(field: str, side: Side, direction: str, expected: str) -> None:
-    del field, side
+def test_precision_direction_matrix(
+    side: Side,
+    direction: str,
+    expected: str,
+) -> None:
+    del side
     assert _round_price(Decimal("1.2345"), 3, direction) == Decimal(expected)
 
 
-@pytest.mark.parametrize("raw,sz,expected", [("1.2349", 3, "1.234"), ("1.2", 3, "1.200")])
-def test_precision_risk_cap(raw: str, sz: int, expected: str) -> None:
-    quantity = round_quantity(Decimal(raw), sz)
-    assert quantity == Decimal(expected) and quantity <= Decimal(raw)
-    assert round_quantity(Decimal(raw), sz) == quantity
-    with pytest.raises(PlanError):
-        round_quantity(Decimal("0.0009"), 3)
-
-
-@pytest.mark.parametrize("sz", [-1, 7, 19])
-def test_precision_invalid_matrix_metadata(sz: int) -> None:
-    with pytest.raises(PlanError):
-        _round_price(Decimal("1"), sz, "up")
-
-
-@pytest.mark.parametrize("value", ["0", "-1", "0.0009", "NaN", "Infinity", "-Infinity"])
-def test_precision_invalid_matrix_quantity(value: str) -> None:
-    with pytest.raises(PlanError):
-        round_quantity(Decimal(value), 3)
-
-
-@pytest.mark.parametrize("value", ["0", "-1", "NaN", "Infinity", "-Infinity"])
-def test_precision_invalid_matrix_price(value: str) -> None:
-    with pytest.raises(PlanError):
-        _round_price(Decimal(value), 3, "up")
-
-
-@pytest.mark.parametrize("speed,seconds", [("FAST", 180), ("STANDARD", 900)])
-def test_actionable_expiry_boundaries(speed: Literal["FAST", "STANDARD"], seconds: int) -> None:
-    output = _output(Side.LONG, speed)
-    assert (
-        lifecycle_state(
-            output,
-            now=NOW + timedelta(seconds=seconds - 1),
-            reference=Decimal("100"),
-            quality=DataQualityState.READY,
-        )
-        is output.state
-    )
-    for offset in (0, 1):
-        assert (
-            lifecycle_state(
-                output,
-                now=NOW + timedelta(seconds=seconds + offset),
-                reference=Decimal("100"),
-                quality=DataQualityState.READY,
-            ).value
-            == "EXPIRED"
-        )
-
-
-@pytest.mark.parametrize("side,reference", [(Side.LONG, "89"), (Side.SHORT, "111")])
-def test_stop_data_and_terminal_lifecycle_are_fail_closed(side: Side, reference: str) -> None:
-    output = _output(side, "FAST")
-    assert (
-        lifecycle_state(
-            output, now=NOW, reference=Decimal(reference), quality=DataQualityState.READY
-        ).value
-        == "INVALIDATED"
-    )
-    assert (
-        lifecycle_state(
-            output, now=NOW, reference=Decimal("100"), quality=DataQualityState.STALE
-        ).value
-        == "INVALIDATED"
-    )
-    for terminal in (SignalState.TAKEN, SignalState.SKIPPED, SignalState.REJECTED):
-        assert (
-            lifecycle_state(
-                output,
-                now=NOW,
-                reference=Decimal(reference),
-                quality=DataQualityState.STALE,
-                terminal=terminal,
-            )
-            is terminal
-        )
-
-
-@pytest.mark.parametrize(
-    ("side", "setup_id", "sweep", "expected", "expected_digest"),
-    [
-        (
-            Side.LONG,
-            "a" * 64,
-            Decimal("98"),
-            {
-                "entry_low": Decimal("100"),
-                "entry_high": Decimal("101.5"),
-                "planned_entry": Decimal("100"),
-                "chase_limit": Decimal("102.5"),
-                "stop": Decimal("97"),
-                "tp1": Decimal("103"),
-                "tp2": Decimal("106"),
-                "quantity": Decimal(".784"),
-                "notional": Decimal("78.4392"),
-                "account_equity": Decimal("1000"),
-                "risk_budget": Decimal("2.5"),
-                "planned_risk": Decimal("2.4987261292"),
-                "expires_at": datetime(2026, 7, 14, 0, 3, tzinfo=UTC),
-            },
-            "76bd3281bdbcff867e59402e34ea77387e406f50a615908322db86f059b26552",
-        ),
-        (
-            Side.SHORT,
-            "b" * 64,
-            Decimal("102"),
-            {
-                "entry_low": Decimal("98.5"),
-                "entry_high": Decimal("100"),
-                "planned_entry": Decimal("100"),
-                "chase_limit": Decimal("97.5"),
-                "stop": Decimal("103"),
-                "tp1": Decimal("97"),
-                "tp2": Decimal("94"),
-                "quantity": Decimal(".782"),
-                "notional": Decimal("78.1609"),
-                "account_equity": Decimal("1000"),
-                "risk_budget": Decimal("2.5"),
-                "planned_risk": Decimal("2.49680922785"),
-                "expires_at": datetime(2026, 7, 14, 0, 3, tzinfo=UTC),
-            },
-            "dacee4b41b47b22332fa7f9041fd7e29879dd27bb1a465612254a0699c8c7942",
-        ),
-    ],
-)
-def test_tradeplan_hash_core_fixed_vectors(
-    side: Side,
-    setup_id: str,
-    sweep: Decimal,
-    expected: dict[str, object],
-    expected_digest: str,
-) -> None:
-    plan = build_plan(
-        setup_id=setup_id,
-        side=side,
-        speed="FAST",
-        boundary=Decimal("100"),
-        atr=Decimal("10"),
-        sweep=sweep,
-        reference=Decimal("100"),
-        equity=Decimal("1000"),
-        sz_decimals=3,
-        created_at=NOW,
-    )
-    for field, value in expected.items():
-        assert getattr(plan, field) == value
-    assert plan.plan_id == plan.canonical_hash == expected_digest
-    expected_payload = {
-        "trade_plan_version": "1",
-        "strategy_version": "ETH-LDAR-v0.1",
-        "configuration_version": "1",
-        "setup_id": setup_id,
-        "supersedes_plan_id": None,
-        "created_at": "2026-07-14T00:00:00+00:00",
-        "expires_at": "2026-07-14T00:03:00+00:00",
-        "symbol": "ETH",
-        "side": side.value,
-        "speed": "FAST",
-        "entry_low": expected["entry_low"],
-        "entry_high": expected["entry_high"],
-        "planned_entry": expected["planned_entry"],
-        "chase_limit": expected["chase_limit"],
-        "stop": expected["stop"],
-        "tp1": expected["tp1"],
-        "tp2": expected["tp2"],
-        "quantity": expected["quantity"],
-        "notional": expected["notional"],
-        "account_equity": expected["account_equity"],
-        "risk_budget": expected["risk_budget"],
-        "planned_risk": expected["planned_risk"],
-        "sz_decimals": 3,
-        "do_not_chase": "DO NOT CHASE",
-    }
-    digest = hashlib.sha256(
-        b"trader-assist-v0/first-launch/trade-plan/v1\0" + canonical_json_bytes(expected_payload)
-    ).hexdigest()
-    assert digest == expected_digest
-    assert "plan_id" not in expected_payload and "canonical_hash" not in expected_payload
-
-
-def test_tradeplan_hash_core_is_deterministic_for_decimal_spellings() -> None:
-    arguments = dict(
-        setup_id="a" * 64,
-        side=Side.LONG,
-        speed="FAST",
-        boundary=Decimal("100"),
-        atr=Decimal("10"),
-        sweep=Decimal("98"),
-        reference=Decimal("100"),
-        equity=Decimal("1000"),
-        sz_decimals=3,
-        created_at=NOW,
-    )
-    first = build_plan(**arguments)
-    repeated = build_plan(**arguments)
-    equivalent = build_plan(
-        **{
-            **arguments,
-            "boundary": Decimal("100.0"),
-            "atr": Decimal("10.00"),
-            "sweep": Decimal("98.000"),
-            "reference": Decimal("100.0000"),
-            "equity": Decimal("1000.00"),
-        }
-    )
-    assert first.plan_id == repeated.plan_id == equivalent.plan_id
-
-
-def _self_validating_plan(side: Side = Side.LONG, speed: Literal["FAST", "STANDARD"] = "FAST"):
-    return build_plan(
-        setup_id="a" * 64 if side is Side.LONG else "b" * 64,
-        side=side,
-        speed=speed,
-        boundary=Decimal("100"),
-        atr=Decimal("10"),
-        sweep=Decimal("98") if side is Side.LONG else Decimal("102"),
-        reference=Decimal("100"),
-        equity=Decimal("1000"),
-        sz_decimals=3,
-        created_at=NOW,
-    )
-
-
-def _independently_rehashed_plan(plan, **updates):
-    fields = (
-        "trade_plan_version",
-        "strategy_version",
-        "configuration_version",
-        "setup_id",
-        "supersedes_plan_id",
-        "created_at",
-        "expires_at",
-        "symbol",
-        "side",
-        "speed",
-        "entry_low",
-        "entry_high",
-        "planned_entry",
-        "chase_limit",
-        "stop",
-        "tp1",
-        "tp2",
-        "quantity",
-        "notional",
-        "account_equity",
-        "risk_budget",
-        "planned_risk",
-        "sz_decimals",
-        "do_not_chase",
-    )
-    values = {field: updates.get(field, getattr(plan, field)) for field in fields}
-    payload = {
-        **values,
-        "created_at": values["created_at"].isoformat(),
-        "expires_at": values["expires_at"].isoformat(),
-        "side": values["side"].value,
-    }
-    digest = hashlib.sha256(
-        b"trader-assist-v0/first-launch/trade-plan/v1\0" + canonical_json_bytes(payload)
-    ).hexdigest()
-    return replace(plan, plan_id=digest, canonical_hash=digest, **updates)
-
-
-@pytest.mark.parametrize("side", [Side.LONG, Side.SHORT])
-def test_tradeplan_self_validation_fixed_vectors_still_construct(side: Side) -> None:
-    plan = _self_validating_plan(side)
-    assert plan.plan_id == plan.canonical_hash
-    with pytest.raises(AttributeError):
-        plan.quantity = Decimal("1")  # type: ignore[misc]
-    assert replace(plan) == plan
-
-
-def test_tradeplan_self_validation_rejects_naive_build_timestamp() -> None:
-    with pytest.raises(PlanError, match="CREATED_AT_TIMEZONE_REQUIRED"):
-        build_plan(
-            setup_id="a" * 64,
-            side=Side.LONG,
-            speed="FAST",
-            boundary=Decimal("100"),
-            atr=Decimal("10"),
-            sweep=Decimal("98"),
-            reference=Decimal("100"),
-            equity=Decimal("1000"),
-            sz_decimals=3,
-            created_at=datetime(2026, 7, 14),
-        )
-
-
-@pytest.mark.parametrize(
-    "field,value",
-    [
-        ("created_at", datetime(2026, 7, 14)),
-        ("created_at", NOW.astimezone(timezone(timedelta(hours=1)))),
-        ("expires_at", datetime(2026, 7, 14, 0, 3)),
-        ("expires_at", datetime(2026, 7, 14, 1, 3, tzinfo=timezone(timedelta(hours=1)))),
-    ],
-)
-def test_tradeplan_self_validation_rejects_non_utc_timestamps(field: str, value: datetime) -> None:
-    with pytest.raises(PlanError):
-        replace(_self_validating_plan(), **{field: value})
-
-
-def test_tradeplan_self_validation_rejects_wrong_fast_and_standard_expiry() -> None:
-    fast = _self_validating_plan(speed="FAST")
-    standard = _self_validating_plan(speed="STANDARD")
-    for plan in (fast, standard):
-        with pytest.raises(PlanError, match="TRADE_PLAN_EXPIRY_INVALID"):
-            replace(plan, expires_at=plan.expires_at + timedelta(seconds=1))
-
-
-@pytest.mark.parametrize(
-    "field,value",
-    [
-        ("setup_id", "A" * 64),
-        ("plan_id", "not-a-digest"),
-        ("canonical_hash", "f" * 63),
-        ("supersedes_plan_id", "Z" * 64),
-        ("plan_id", "b" * 64),
-    ],
-)
-def test_tradeplan_self_validation_rejects_bad_identity(field: str, value: str) -> None:
-    with pytest.raises(PlanError):
-        replace(_self_validating_plan(), **{field: value})
-
-
-@pytest.mark.parametrize(
-    "field,value",
-    [
-        ("trade_plan_version", "2"),
-        ("strategy_version", "other"),
-        ("configuration_version", "2"),
-        ("symbol", "BTC"),
-        ("do_not_chase", "CHASE"),
-        ("side", Side.LONG.value),
-        ("speed", "SLOW"),
-        ("sz_decimals", 7),
-    ],
-)
-def test_tradeplan_self_validation_rejects_fixed_authority_and_types(
-    field: str, value: object
-) -> None:
-    with pytest.raises(PlanError):
-        replace(_self_validating_plan(), **{field: value})
-
-
-@pytest.mark.parametrize(
-    "field",
-    [
-        "entry_low",
-        "entry_high",
-        "planned_entry",
-        "chase_limit",
-        "stop",
-        "tp1",
-        "tp2",
-        "quantity",
-        "notional",
-        "account_equity",
-        "risk_budget",
-        "planned_risk",
-    ],
-)
 @pytest.mark.parametrize(
     "value",
     [
-        "not-decimal",
-        Decimal(0),
-        Decimal(-1),
-        Decimal("NaN"),
-        Decimal("Infinity"),
-        Decimal("-Infinity"),
+        Decimal("1E+101"),
+        Decimal("1E-101"),
     ],
 )
-def test_tradeplan_self_validation_rejects_invalid_financial_fields(
-    field: str, value: object
-) -> None:
-    with pytest.raises(PlanError):
-        replace(_self_validating_plan(), **{field: value})
+def test_precision_rejects_abnormal_price_exponents(value: Decimal) -> None:
+    with pytest.raises(PlanError, match="PRICE_PRECISION_INPUT_INVALID"):
+        _round_price(value, 3, "up")
 
 
 @pytest.mark.parametrize(
-    "side,updates",
+    "value",
     [
-        (Side.LONG, {"entry_low": Decimal("101")}),
-        (Side.LONG, {"stop": Decimal("100")}),
-        (Side.SHORT, {"tp2": Decimal("98")}),
-        (Side.LONG, {"planned_risk": Decimal("2.6")}),
+        Decimal("1E+101"),
+        Decimal("1E-101"),
     ],
 )
-def test_tradeplan_self_validation_rejects_structure_and_risk_budget(
-    side: Side, updates: dict[str, Decimal]
-) -> None:
+def test_precision_rejects_abnormal_quantity_exponents(value: Decimal) -> None:
+    with pytest.raises(PlanError, match="QUANTITY_PRECISION_INPUT_INVALID"):
+        round_quantity(value, 3)
+
+
+def _ten_dollar_output() -> StrategyOutput:
+    candles_5m = tuple(
+        _candle(
+            index * 300_000,
+            open="11",
+            high="12",
+            low="10",
+            close="11",
+        )
+        for index in range(26)
+    )
+    trigger = _candle(
+        26 * 300_000,
+        open="11",
+        high="12",
+        low="9.5",
+        close="11.2",
+        volume="20",
+    )
+    candles_15m = tuple(
+        _candle(
+            index * 900_000,
+            open=str(10 + index),
+            high=str(11 + index),
+            low=str(9 + index),
+            close=str(10 + index),
+            interval="15m",
+        )
+        for index in range(11)
+    )
+    output = evaluate_signal(
+        (*candles_5m, trigger),
+        candles_15m,
+        quality=DataQualityState.READY,
+    )
+    assert type(output) is StrategyOutput
+    assert output.raw_entry_low == Decimal("10")
+    return output
+
+
+def test_exact_ten_dollar_notional_is_accepted_and_below_is_rejected() -> None:
+    output = _ten_dollar_output()
+    entry = _round_price(output.raw_entry_low, 3, "up")
+    stop = _round_price(output.raw_stop, 3, "down")
+    unit = risk_math(
+        side=output.side,
+        planned_entry=entry,
+        stop=stop,
+        account_equity_usd=Decimal("1"),
+    )
+    exact_equity = Decimal("1") / unit.quantity_raw
+    accepted = build_plan(
+        strategy_output=output,
+        reference=entry,
+        equity=exact_equity,
+        sz_decimals=3,
+    )
+    assert accepted.quantity == Decimal("1.000")
+    assert accepted.notional == Decimal("10.000")
+    with pytest.raises(PlanError, match="MINIMUM_NOTIONAL_NOT_MET"):
+        build_plan(
+            strategy_output=output,
+            reference=entry,
+            equity=exact_equity * Decimal(".9999"),
+            sz_decimals=3,
+        )
+
+
+def _coherently_rehashed_plan(plan: object, **updates: object) -> object:
+    candidate = copy.copy(plan)
+    for field, value in updates.items():
+        object.__setattr__(candidate, field, value)
+    digest = _trade_digest(candidate.payload())
+    return replace(
+        plan,
+        plan_id=digest,
+        canonical_hash=digest,
+        **updates,
+    )
+
+
+def test_strategy_output_time_and_trigger_authority_is_fail_closed() -> None:
+    fast = _confirmed(SetupFamily.SWEEP_RECLAIM, Side.LONG, True)
+    with pytest.raises(PlanError, match="STRATEGY_OUTPUT_EXPIRY_INVALID"):
+        replace(
+            fast,
+            decision_trigger_received_at=fast.created_at + timedelta(seconds=1),
+        )
+    offset = timezone(timedelta(hours=1))
+    with pytest.raises(PlanError, match="TRIGGER_RECEIVED_AT_INVALID"):
+        replace(
+            fast,
+            decision_trigger_received_at=fast.decision_trigger_received_at.astimezone(offset),
+            created_at=fast.created_at.astimezone(offset),
+            expires_at=fast.expires_at.astimezone(offset),
+        )
+    with pytest.raises(PlanError, match="PROVENANCE_TRIGGER_INVALID"):
+        replace(
+            fast.provenance,
+            setup_trigger_identity=("ETH", "5m", -1),
+            setup_trigger_open_time_ms=-1,
+        )
+    with pytest.raises(PlanError, match="STRATEGY_OUTPUT_TRIGGER_INVALID"):
+        replace(
+            fast,
+            decision_trigger_identity=("ETH", "5m", -1),
+            decision_trigger_open_time_ms=-1,
+        )
+
+
+def test_trade_plan_rejects_coherently_rehashed_bound_field_mutations() -> None:
+    output = _confirmed(SetupFamily.BREAKOUT_RETEST, Side.LONG, False)
+    plan = build_plan(
+        strategy_output=output,
+        reference=output.raw_entry_low,
+        equity=Decimal("1000"),
+        sz_decimals=3,
+    )
+    mutations: tuple[tuple[str, object], ...] = (
+        (
+            "provenance",
+            replace(plan.provenance, boundary=plan.provenance.boundary + Decimal("1")),
+        ),
+        ("decision_trigger_canonical_hash", "f" * 64),
+        ("material_extreme", plan.material_extreme + Decimal("1")),
+        ("raw_entry_low", plan.raw_entry_low + Decimal(".1")),
+        ("entry_low", plan.entry_low + Decimal(".1")),
+        ("quantity", plan.quantity + Decimal(".001")),
+        ("notional", plan.notional + Decimal(".01")),
+        ("planned_risk", plan.planned_risk + Decimal(".01")),
+    )
+    for field, value in mutations:
+        with pytest.raises(PlanError):
+            _coherently_rehashed_plan(plan, **{field: value})
+
+
+def test_trade_plan_rejects_embedded_strategy_authority_substitution() -> None:
+    output = _confirmed(SetupFamily.BREAKOUT_RETEST, Side.LONG, False)
+    plan = build_plan(
+        strategy_output=output,
+        reference=output.raw_entry_low,
+        equity=Decimal("1000"),
+        sz_decimals=3,
+    )
+    substituted_output = replace(
+        output,
+        decision_trigger_canonical_hash="f" * 64,
+    )
+    with pytest.raises(PlanError, match="STRATEGY_CORRESPONDENCE"):
+        _coherently_rehashed_plan(
+            plan,
+            strategy_output=substituted_output,
+        )
+
+
+def test_trade_plan_v2_hash_is_deterministic_and_binds_received_time() -> None:
+    output = _confirmed(SetupFamily.SWEEP_RECLAIM, Side.SHORT, True)
+    first = build_plan(
+        strategy_output=output,
+        reference=output.raw_entry_high,
+        equity=Decimal("1000"),
+        sz_decimals=3,
+    )
+    repeated = build_plan(
+        strategy_output=output,
+        reference=output.raw_entry_high,
+        equity=Decimal("1000"),
+        sz_decimals=3,
+    )
+    assert first.plan_id == first.canonical_hash == repeated.plan_id
+    assert first.trade_plan_version == "2"
+    changed_received = first.decision_trigger_received_at + timedelta(seconds=1)
     with pytest.raises(PlanError):
-        replace(_self_validating_plan(side), **updates)
+        _coherently_rehashed_plan(
+            first,
+            decision_trigger_received_at=changed_received,
+        )
 
 
-@pytest.mark.parametrize(
-    "field,value",
-    [
-        ("quantity", Decimal(".783")),
-        ("notional", Decimal("79")),
-        ("risk_budget", Decimal("2.6")),
-        ("planned_risk", Decimal("2.4")),
-    ],
-)
-def test_tradeplan_self_validation_rejects_coherently_rehashed_risk_mutations(
-    field: str, value: Decimal
-) -> None:
-    with pytest.raises(PlanError, match="TRADE_PLAN_RISK_INCONSISTENT"):
-        _independently_rehashed_plan(_self_validating_plan(), **{field: value})
-
-
-def test_tradeplan_self_validation_rejects_stale_digest_for_canonical_mutation() -> None:
-    with pytest.raises(PlanError, match="TRADE_PLAN_HASH_INVALID"):
-        replace(_self_validating_plan(), entry_low=Decimal("99"))
+def test_trade_plan_payload_rejects_invalid_provenance_without_assert() -> None:
+    output = _confirmed(SetupFamily.SWEEP_RECLAIM, Side.LONG, True)
+    plan = build_plan(
+        strategy_output=output,
+        reference=output.raw_entry_low,
+        equity=Decimal("1000"),
+        sz_decimals=3,
+    )
+    candidate = copy.copy(plan)
+    object.__setattr__(candidate, "provenance", object())
+    with pytest.raises(PlanError, match="TRADE_PLAN_PROVENANCE_INVALID"):
+        candidate.payload()

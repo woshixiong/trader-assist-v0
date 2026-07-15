@@ -64,7 +64,9 @@ def _strict_object(raw_text: str) -> dict[str, Any]:
     return value
 
 
-def _decimal(value: object, name: str, *, positive: bool = False) -> Decimal:
+def _decimal(
+    value: object, name: str, *, positive: bool = False, non_negative: bool = False
+) -> Decimal:
     if type(value) is not str:
         raise MarketDataError(f"{name} must be a base-10 decimal string")
     if "e" in value.lower() or not value or value.strip() != value:
@@ -73,7 +75,7 @@ def _decimal(value: object, name: str, *, positive: bool = False) -> Decimal:
         result = Decimal(value)
     except InvalidOperation as exc:
         raise MarketDataError(f"{name} is not decimal") from exc
-    if not result.is_finite() or (positive and result <= 0):
+    if not result.is_finite() or (positive and result <= 0) or (non_negative and result < 0):
         raise MarketDataError(f"{name} is outside its allowed range")
     return result
 
@@ -85,7 +87,7 @@ def _integer(value: object, name: str) -> int:
 
 
 def _utc(value: datetime) -> datetime:
-    if value.tzinfo is None or value.utcoffset() is None:
+    if type(value) is not datetime or value.tzinfo is None or value.utcoffset() is None:
         raise MarketDataError("receive timestamps must be timezone-aware")
     return value.astimezone(UTC)
 
@@ -100,6 +102,23 @@ class RawEvidence:
     receive_sequence: int
     connection_id: str
     product_version: str = "ETH-public-normalized-v0.1"
+
+    def __post_init__(self) -> None:
+        if type(self.raw_text) is not str or not self.raw_text:
+            raise MarketDataError("raw evidence must be exact non-empty text")
+        _strict_json(self.raw_text)
+        if (
+            type(self.sha256) is not str
+            or self.sha256
+            != hashlib.sha256(self.raw_text.encode("utf-8", errors="strict")).hexdigest()
+        ):
+            raise MarketDataError("raw evidence hash does not bind its text")
+        for value in (self.source_id, self.operation, self.connection_id, self.product_version):
+            if type(value) is not str or not value or value.strip() != value:
+                raise MarketDataError("evidence identity is incomplete")
+        if type(self.receive_sequence) is not int or self.receive_sequence < 0:
+            raise MarketDataError("receive sequence must be a non-negative integer")
+        object.__setattr__(self, "received_at", _utc(self.received_at))
 
 
 @dataclass(frozen=True)
@@ -174,10 +193,8 @@ def evidence_from_raw(
     connection_id: str,
     source_id: str = "hyperliquid-public-mainnet",
 ) -> RawEvidence:
-    if not raw_text or type(raw_text) is not str:
+    if type(raw_text) is not str or not raw_text:
         raise MarketDataError("raw evidence must be non-empty UTF-8 text")
-    if not operation or not connection_id or receive_sequence < 0:
-        raise MarketDataError("evidence identity is incomplete")
     encoded = raw_text.encode("utf-8", errors="strict")
     _strict_json(raw_text)
     return RawEvidence(
@@ -191,7 +208,26 @@ def evidence_from_raw(
     )
 
 
+def _bound_evidence(raw_text: str, evidence: RawEvidence, operation: str) -> None:
+    if type(raw_text) is not str or type(evidence) is not RawEvidence:
+        raise MarketDataError("raw evidence authority is invalid")
+    # Revalidate direct construction before accepting a lower-level parse path.
+    RawEvidence(
+        evidence.raw_text,
+        evidence.sha256,
+        evidence.source_id,
+        evidence.operation,
+        evidence.received_at,
+        evidence.receive_sequence,
+        evidence.connection_id,
+        evidence.product_version,
+    )
+    if evidence.raw_text != raw_text or evidence.operation != operation:
+        raise MarketDataError("raw text and evidence authority do not match")
+
+
 def candle_from_websocket(raw_text: str, evidence: RawEvidence) -> Candle:
+    _bound_evidence(raw_text, evidence, "WebSocket")
     message = _strict_object(raw_text)
     if message.get("channel") != "candle" or type(message.get("data")) is not dict:
         raise MarketDataError("expected a candle WebSocket envelope")
@@ -223,19 +259,20 @@ def candle_from_websocket(raw_text: str, evidence: RawEvidence) -> Candle:
 
 
 def context_from_websocket(raw_text: str, evidence: RawEvidence) -> ActiveAssetContext:
+    _bound_evidence(raw_text, evidence, "WebSocket")
     message = _strict_object(raw_text)
     if message.get("channel") != "activeAssetCtx" or type(message.get("data")) is not dict:
         raise MarketDataError("expected an activeAssetCtx WebSocket envelope")
     data = message["data"]
     context = data.get("ctx") if type(data.get("ctx")) is dict else data
-    if data.get("coin", ETH) != ETH:
+    if data.get("coin") != ETH:
         raise MarketDataError("asset context is not ETH")
     mid = context.get("midPx")
     source_time = context.get("time")
     return ActiveAssetContext(
         mark_px=_decimal(context.get("markPx"), "markPx", positive=True),
         mid_px=None if mid is None else _decimal(mid, "midPx", positive=True),
-        open_interest=_decimal(context.get("openInterest"), "openInterest"),
+        open_interest=_decimal(context.get("openInterest"), "openInterest", non_negative=True),
         funding=_decimal(context.get("funding"), "funding"),
         source_time_ms=None if source_time is None else _integer(source_time, "context time"),
         evidence=evidence,
@@ -243,6 +280,7 @@ def context_from_websocket(raw_text: str, evidence: RawEvidence) -> ActiveAssetC
 
 
 def metadata_from_info(raw_text: str, evidence: RawEvidence) -> AssetMetadata:
+    _bound_evidence(raw_text, evidence, "metaAndAssetCtxs")
     payload = _strict_json(raw_text)
     if type(payload) is list:
         if not payload or type(payload[0]) is not dict:
@@ -268,9 +306,7 @@ def metadata_from_info(raw_text: str, evidence: RawEvidence) -> AssetMetadata:
 class EthMarketData:
     """Fail-closed normalized data authority for the First Launch strategy."""
 
-    candles: dict[str, dict[int, Candle]] = field(
-        default_factory=lambda: {"5m": {}, "15m": {}}
-    )
+    candles: dict[str, dict[int, Candle]] = field(default_factory=lambda: {"5m": {}, "15m": {}})
     active_context: ActiveAssetContext | None = None
     metadata: AssetMetadata | None = None
     disconnected: bool = True
@@ -447,8 +483,7 @@ class ReconnectController:
         self.healthy_since = _utc(now)
 
     def observe_health(self, now: datetime) -> None:
-        if (
-            self.healthy_since is not None
-            and _utc(now) - self.healthy_since >= timedelta(minutes=5)
+        if self.healthy_since is not None and _utc(now) - self.healthy_since >= timedelta(
+            minutes=5
         ):
             self.attempt_count = 0
