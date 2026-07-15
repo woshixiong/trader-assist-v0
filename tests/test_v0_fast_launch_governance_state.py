@@ -21,9 +21,13 @@ SCHEMA_PATH = ROOT / "schemas" / "governance" / "V0FastLaunchProgram.schema.json
 
 PROGRAM_TASK_ID = "V0-FLP1B0B-CAPTURE-NOW-AUTHORITY-AMENDMENT"
 PROGRAM_BASE_SHA = "78d2d37bfe5a4f3f1d382a2a96e57896ae9676ae"
-CURRENT_STATE_BASE_SHA = "95e4a9ebaedb028de68d859627a37dfc142c8602"
+CURRENT_STATE_BASE_SHA = "8beca954a2d0ba51ea5ceff3c0249308ae46e299"
 CURRENT_ACTIVE_TASK_ID = "NONE"
-NEXT_GATE = "V0-FLP1B0B-FIRST-LAUNCH-CRITICAL-PATH-AND-ETH-MINIMUM-VALIDATION-READONLY-PLANNING"
+COMPLETED_IMPLEMENTATION = "V0-FLP1-DECISION-TO-OUTCOME-OPERATOR-ASSIST-PILOT"
+COMPLETED_IMPLEMENTATION_PR = 19
+LAST_LEASE_ID = "V0-FLP1-PR19-B1B2B5B6-AUTHORITY-SNAPSHOT-REPAIR-WRITE-LEASE-1"
+LAST_LEASE_TYPE = "BOUNDED_PR19_AUTHORITY_SNAPSHOT_REPAIR"
+NEXT_GATE = "NEXT_GATE_UNRESOLVED"
 AUTHORITY_HASH = "0e327e566589d8030ff00d4d009eb4b6827679ab508133d66840b2c245dc53df"
 SOURCE_CATALOG_HASH = "0ca27f650f399f8fa481ad9421eab4183c1c13812c71dfa8daaf878719bd99b7"
 COMMIT_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -105,14 +109,23 @@ def test_program_provenance_and_current_state_are_distinct() -> None:
     assert state["state_base_sha"] == CURRENT_STATE_BASE_SHA
     assert state["active_milestone"] == "V0-R0-CAPTURE-ONLY"
     assert state["active_task_id"] == CURRENT_ACTIVE_TASK_ID
+    assert state["last_completed_implementation"] == COMPLETED_IMPLEMENTATION
+    assert state["last_completed_implementation_pr"] == COMPLETED_IMPLEMENTATION_PR
+    assert program["authority"]["last_completed_implementation"] == COMPLETED_IMPLEMENTATION
+    assert (
+        program["authority"]["last_completed_implementation_pr"]
+        == COMPLETED_IMPLEMENTATION_PR
+    )
     assert program["authority"]["last_policy_state_pr"] == 15
     assert state["last_policy_state_pr"] == 15
     assert state["active_write_lease"]["status"] == "NONE"
-    assert state["active_write_lease"]["last_lease_id"] == (
-        "V0-FLP1B0B-T1-IMPLEMENTATION-WRITE-LEASE-1"
-    )
+    assert state["active_write_lease"]["last_lease_id"] == LAST_LEASE_ID
+    assert state["active_write_lease"]["last_lease_type"] == LAST_LEASE_TYPE
+    assert state["active_write_lease"]["last_lease_id"] != LAST_LEASE_TYPE
+    assert state["active_write_lease"]["last_governance_level"] == "G3"
     assert state["active_write_lease"]["final_status"] == "ACCEPTED_AND_CLOSED"
     assert state["next_gate"] == NEXT_GATE
+    assert program["first_release"]["next_runtime_gate"] == NEXT_GATE
     assert program["review_finalization_policy"]["next_gate"] == NEXT_GATE
     assert program["recursive_rotation"]["post_merge_next_gate"] == NEXT_GATE
     assert program["recursive_rotation"]["next_window_role"] == (
@@ -180,6 +193,53 @@ def test_r0_r1_and_deferred_g4_migration() -> None:
     assert "OFFICIAL_SDK_SIGNING" in deferred["required_controls"]
     assert "SEPARATE_MAINNET_AUTHORIZATION" in deferred["required_controls"]
     assert "required_controls" not in r1
+
+
+def test_schema_rejects_stale_active_pr19_authority_values() -> None:
+    schema = _load_json(SCHEMA_PATH)
+    state_schema = schema["$defs"]["ProjectState"]
+    assert isinstance(state_schema, dict)
+    candidate = deepcopy(_load_json(STATE_PATH))
+    candidate["active_task_id"] = COMPLETED_IMPLEMENTATION
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(state_schema).validate(candidate)
+
+    candidate = deepcopy(_load_json(STATE_PATH))
+    candidate["active_write_lease"]["status"] = "ACTIVE"
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(state_schema).validate(candidate)
+
+
+@pytest.mark.parametrize(
+    "path, stale_value",
+    [
+        (
+            ("authority", "last_completed_implementation"),
+            "V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT",
+        ),
+        (("authority", "last_completed_implementation_pr"), 11),
+        (("first_release", "next_runtime_gate"), "SEPARATE_FUTURE_ETH_PUBLIC_CAPTURE_RUNTIME"),
+        (
+            ("review_finalization_policy", "next_gate"),
+            "V0-FLP1B0B-FIRST-LAUNCH-CRITICAL-PATH-AND-ETH-MINIMUM-VALIDATION-READONLY-PLANNING",
+        ),
+        (
+            ("recursive_rotation", "post_merge_next_gate"),
+            "V0-FLP1B0B-FIRST-LAUNCH-CRITICAL-PATH-AND-ETH-MINIMUM-VALIDATION-READONLY-PLANNING",
+        ),
+    ],
+)
+def test_schema_rejects_stale_program_authority_values(
+    path: tuple[str, str], stale_value: str | int
+) -> None:
+    schema = _load_json(SCHEMA_PATH)
+    candidate = deepcopy(_load_json(PROGRAM_PATH))
+    candidate[path[0]][path[1]] = stale_value
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(candidate)
 
 
 def test_root_policy_objects_are_explicitly_future_r1_bound() -> None:

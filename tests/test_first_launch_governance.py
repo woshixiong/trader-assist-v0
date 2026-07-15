@@ -15,4 +15,8 @@ def test_first_launch_governance_preserves_historical_capture_and_false_runtime_
     assert state["active_product"] == "FIRST_LAUNCH"
     assert state["capture_history"] == "PRESERVED_AS_HISTORY"
     assert state["paused_products"] == ["FULL_V0", "TRADEROS"]
+    assert state["task_id"] == "NONE"
+    assert state["branch"] == "NONE"
+    assert state["write_lease"] == "NONE"
+    assert state["write_lease_status"] == "NONE"
     assert all(value is False for value in state["authorizations"].values())
