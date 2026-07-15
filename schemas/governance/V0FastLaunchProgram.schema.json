@@ -58,6 +58,10 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "fastsafe_control_contract_id",
+        "engineering_track_id",
+        "next_gate",
+        "next_gate_status",
         "last_completed_implementation",
         "last_completed_implementation_pr",
         "last_policy_state_pr",
@@ -77,6 +81,22 @@
         "transition_eligible"
       ],
       "properties": {
+        "fastsafe_control_contract_id": {
+          "type": "string",
+          "const": "FASTSAFE-V1-2026-07"
+        },
+        "engineering_track_id": {
+          "type": "string",
+          "const": "ENGINEERING-AUTOMATION-TRACK-V1-2026-07"
+        },
+        "next_gate": {
+          "type": "string",
+          "const": "V0-FL3-OFFLINE-OPERATOR-REVIEW-SURFACE-AND-SHADOW-JOURNAL"
+        },
+        "next_gate_status": {
+          "type": "string",
+          "const": "USER_APPROVED_PENDING_SEPARATE_IMPLEMENTATION_AUTHORIZATION"
+        },
         "last_completed_implementation": {
           "type": "string",
           "const": "V0-FLP1-DECISION-TO-OUTCOME-OPERATOR-ASSIST-PILOT"
@@ -232,7 +252,7 @@
         },
         "next_runtime_gate": {
           "type": "string",
-          "const": "NEXT_GATE_UNRESOLVED"
+          "const": "V0-FL3-OFFLINE-OPERATOR-REVIEW-SURFACE-AND-SHADOW-JOURNAL"
         },
         "forbidden_capabilities": {
           "type": "array",
@@ -2015,7 +2035,7 @@
         },
         "next_gate": {
           "type": "string",
-          "const": "NEXT_GATE_UNRESOLVED"
+          "const": "V0-FL3-OFFLINE-OPERATOR-REVIEW-SURFACE-AND-SHADOW-JOURNAL"
         }
       }
     },
@@ -2050,7 +2070,7 @@
         },
         "post_merge_next_gate": {
           "type": "string",
-          "const": "NEXT_GATE_UNRESOLVED"
+          "const": "V0-FL3-OFFLINE-OPERATOR-REVIEW-SURFACE-AND-SHADOW-JOURNAL"
         },
         "handoff_required_fields": {
           "type": "array",
@@ -2527,6 +2547,8 @@
         "project",
         "repository",
         "program",
+        "fastsafe_control_contract_id",
+        "engineering_track_id",
         "state_kind",
         "state_base_sha",
         "last_completed_implementation",
@@ -2547,6 +2569,7 @@
         "flp1_implementation_authorized",
         "rate_limit_status",
         "next_gate",
+        "next_gate_status",
         "conflict_state",
         "supersession_state",
         "authority_hash",
@@ -2576,6 +2599,14 @@
         "program": {
           "type": "string",
           "const": "V0-FAST-LAUNCH"
+        },
+        "fastsafe_control_contract_id": {
+          "type": "string",
+          "const": "FASTSAFE-V1-2026-07"
+        },
+        "engineering_track_id": {
+          "type": "string",
+          "const": "ENGINEERING-AUTOMATION-TRACK-V1-2026-07"
         },
         "state_kind": {
           "type": "string",
@@ -2684,7 +2715,11 @@
         },
         "next_gate": {
           "type": "string",
-          "const": "NEXT_GATE_UNRESOLVED"
+          "const": "V0-FL3-OFFLINE-OPERATOR-REVIEW-SURFACE-AND-SHADOW-JOURNAL"
+        },
+        "next_gate_status": {
+          "type": "string",
+          "const": "USER_APPROVED_PENDING_SEPARATE_IMPLEMENTATION_AUTHORIZATION"
         },
         "conflict_state": {
           "type": "string",

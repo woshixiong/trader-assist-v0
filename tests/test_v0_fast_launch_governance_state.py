@@ -27,7 +27,10 @@ COMPLETED_IMPLEMENTATION = "V0-FLP1-DECISION-TO-OUTCOME-OPERATOR-ASSIST-PILOT"
 COMPLETED_IMPLEMENTATION_PR = 19
 LAST_LEASE_ID = "V0-FLP1-PR19-B1B2B5B6-AUTHORITY-SNAPSHOT-REPAIR-WRITE-LEASE-1"
 LAST_LEASE_TYPE = "BOUNDED_PR19_AUTHORITY_SNAPSHOT_REPAIR"
-NEXT_GATE = "NEXT_GATE_UNRESOLVED"
+FASTSAFE_CONTROL_CONTRACT_ID = "FASTSAFE-V1-2026-07"
+ENGINEERING_TRACK_ID = "ENGINEERING-AUTOMATION-TRACK-V1-2026-07"
+NEXT_GATE = "V0-FL3-OFFLINE-OPERATOR-REVIEW-SURFACE-AND-SHADOW-JOURNAL"
+NEXT_GATE_STATUS = "USER_APPROVED_PENDING_SEPARATE_IMPLEMENTATION_AUTHORIZATION"
 AUTHORITY_HASH = "0e327e566589d8030ff00d4d009eb4b6827679ab508133d66840b2c245dc53df"
 SOURCE_CATALOG_HASH = "0ca27f650f399f8fa481ad9421eab4183c1c13812c71dfa8daaf878719bd99b7"
 COMMIT_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -45,29 +48,25 @@ FUTURE_R1_MARKERS = {
 }
 
 EXPECTED_CHANGED_FILES = {
-    "README.md",
-    "docs/V0_01_SCOPE.md",
-    "docs/V0_FLP0_CAPTURE_NOW_AUTHORITY.md",
-    "docs/architecture/V0_01_DATA_PLANE.md",
-    "docs/architecture/AUTHORITY_BOUNDARY.md",
-    "docs/architecture/STRATEGY_AND_DATA_LIFECYCLE.md",
+    "governance/ENGINEERING_AUTOMATION_TRACK_V1.md",
+    "governance/FASTSAFE_V1_MASTER_CONTROL_CONTRACT.md",
     "governance/V0_FAST_LAUNCH_PROGRAM.json",
     "governance/PROJECT_STATE.json",
     "schemas/governance/V0FastLaunchProgram.schema.json",
+    "tests/test_first_launch_governance.py",
     "tests/test_v0_fast_launch_governance_state.py",
+    "tests/test_v0_t2_eth_public_capture_runtime.py",
 }
 
 EXPECTED_COMMITTED_STATUS_MAP = {
-    "README.md": "M",
-    "docs/V0_01_SCOPE.md": "M",
-    "docs/V0_FLP0_CAPTURE_NOW_AUTHORITY.md": "M",
-    "docs/architecture/V0_01_DATA_PLANE.md": "M",
-    "docs/architecture/AUTHORITY_BOUNDARY.md": "M",
-    "docs/architecture/STRATEGY_AND_DATA_LIFECYCLE.md": "M",
+    "governance/ENGINEERING_AUTOMATION_TRACK_V1.md": "A",
+    "governance/FASTSAFE_V1_MASTER_CONTROL_CONTRACT.md": "A",
     "governance/V0_FAST_LAUNCH_PROGRAM.json": "M",
     "governance/PROJECT_STATE.json": "M",
     "schemas/governance/V0FastLaunchProgram.schema.json": "M",
+    "tests/test_first_launch_governance.py": "M",
     "tests/test_v0_fast_launch_governance_state.py": "M",
+    "tests/test_v0_t2_eth_public_capture_runtime.py": "M",
 }
 
 DOC_PATHS = (
@@ -124,7 +123,11 @@ def test_program_provenance_and_current_state_are_distinct() -> None:
     assert state["active_write_lease"]["last_lease_id"] != LAST_LEASE_TYPE
     assert state["active_write_lease"]["last_governance_level"] == "G3"
     assert state["active_write_lease"]["final_status"] == "ACCEPTED_AND_CLOSED"
-    assert state["next_gate"] == NEXT_GATE
+    for document in (program["authority"], state):
+        assert document["fastsafe_control_contract_id"] == FASTSAFE_CONTROL_CONTRACT_ID
+        assert document["engineering_track_id"] == ENGINEERING_TRACK_ID
+        assert document["next_gate"] == NEXT_GATE
+        assert document["next_gate_status"] == NEXT_GATE_STATUS
     assert program["first_release"]["next_runtime_gate"] == NEXT_GATE
     assert program["review_finalization_policy"]["next_gate"] == NEXT_GATE
     assert program["recursive_rotation"]["post_merge_next_gate"] == NEXT_GATE
@@ -404,21 +407,20 @@ def test_docs_share_capture_now_semantics() -> None:
 
 def test_exact_changed_file_scope_and_forbidden_boundaries() -> None:
     changed = EXPECTED_CHANGED_FILES
-    assert len(changed) == 10
+    assert len(changed) == 8
     assert changed == {
-        "README.md",
-        "docs/V0_01_SCOPE.md",
-        "docs/V0_FLP0_CAPTURE_NOW_AUTHORITY.md",
-        "docs/architecture/V0_01_DATA_PLANE.md",
-        "docs/architecture/AUTHORITY_BOUNDARY.md",
-        "docs/architecture/STRATEGY_AND_DATA_LIFECYCLE.md",
+        "governance/ENGINEERING_AUTOMATION_TRACK_V1.md",
+        "governance/FASTSAFE_V1_MASTER_CONTROL_CONTRACT.md",
         "governance/V0_FAST_LAUNCH_PROGRAM.json",
         "governance/PROJECT_STATE.json",
         "schemas/governance/V0FastLaunchProgram.schema.json",
+        "tests/test_first_launch_governance.py",
         "tests/test_v0_fast_launch_governance_state.py",
+        "tests/test_v0_t2_eth_public_capture_runtime.py",
     }
     assert set(EXPECTED_COMMITTED_STATUS_MAP) == changed
-    assert tuple(EXPECTED_COMMITTED_STATUS_MAP.values()).count("M") == 10
+    assert tuple(EXPECTED_COMMITTED_STATUS_MAP.values()).count("A") == 2
+    assert tuple(EXPECTED_COMMITTED_STATUS_MAP.values()).count("M") == 6
     assert not _scope_boundary_errors(changed)
 
 
@@ -475,14 +477,16 @@ def test_scope_gate_rejects_deletion_in_every_status_map(range_name: str) -> Non
         "staged": {},
         "unstaged": {},
     }
-    maps[range_name]["README.md"] = "D"
+    maps[range_name]["governance/PROJECT_STATE.json"] = "D"
     snapshot = _synthetic_scope_snapshot(
         committed=maps["committed"],
         staged=maps["staged"],
         unstaged=maps["unstaged"],
     )
     findings = _scope_snapshot_findings(snapshot)
-    assert (range_name, "D", "README.md") in findings["prohibited_statuses"]
+    assert (range_name, "D", "governance/PROJECT_STATE.json") in findings[
+        "prohibited_statuses"
+    ]
 
 
 def test_scope_gate_rejects_forbidden_deletion_and_untracked_paths() -> None:
@@ -503,9 +507,11 @@ def test_scope_gate_rejects_forbidden_deletion_and_untracked_paths() -> None:
 
 @pytest.mark.parametrize("status", ("A", "D", "R", "C", "T", "U", "X", "B"))
 def test_scope_gate_rejects_all_non_modify_statuses(status: str) -> None:
-    snapshot = _synthetic_scope_snapshot(unstaged={"README.md": status})
+    snapshot = _synthetic_scope_snapshot(
+        unstaged={"governance/PROJECT_STATE.json": status}
+    )
     assert _scope_snapshot_findings(snapshot)["prohibited_statuses"] == [
-        ("unstaged", status, "README.md")
+        ("unstaged", status, "governance/PROJECT_STATE.json")
     ]
 
 
@@ -513,7 +519,7 @@ def test_scope_gate_rejects_forbidden_to_allowlisted_rename_as_delete_add() -> N
     snapshot = _synthetic_scope_snapshot(
         unstaged={
             "src/trader_assist_v0/contracts/common.py": "D",
-            "README.md": "A",
+            "governance/PROJECT_STATE.json": "A",
         }
     )
     findings = _scope_snapshot_findings(snapshot)
@@ -525,10 +531,12 @@ def test_scope_gate_rejects_forbidden_to_allowlisted_rename_as_delete_add() -> N
 
 def test_scope_gate_rejects_allowlisted_to_forbidden_rename_as_delete_add() -> None:
     snapshot = _synthetic_scope_snapshot(
-        unstaged={"README.md": "D", "forbidden-destination.md": "A"}
+        unstaged={"governance/PROJECT_STATE.json": "D", "forbidden-destination.md": "A"}
     )
     findings = _scope_snapshot_findings(snapshot)
-    assert ("unstaged", "D", "README.md") in findings["prohibited_statuses"]
+    assert ("unstaged", "D", "governance/PROJECT_STATE.json") in findings[
+        "prohibited_statuses"
+    ]
     assert findings["unexpected_paths"] == ["forbidden-destination.md"]
 
 
@@ -544,7 +552,7 @@ def test_scope_gate_rejects_unauthorized_copy_destination_path() -> None:
 def test_scope_gate_governs_allowlisted_path_by_exact_expected_status() -> None:
     assert not any(_scope_snapshot_findings(_synthetic_scope_snapshot()).values())
     wrong_status = dict(EXPECTED_COMMITTED_STATUS_MAP)
-    wrong_status["docs/V0_FLP0_CAPTURE_NOW_AUTHORITY.md"] = "A"
+    wrong_status["governance/PROJECT_STATE.json"] = "A"
     assert _scope_snapshot_findings(
         _synthetic_scope_snapshot(committed=wrong_status)
     )["status_mismatches"]
@@ -555,7 +563,7 @@ def test_scope_gate_rejects_status_mismatch_and_cli_prints_full_maps(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     committed = dict(EXPECTED_COMMITTED_STATUS_MAP)
-    committed["docs/V0_FLP0_CAPTURE_NOW_AUTHORITY.md"] = "A"
+    committed["governance/PROJECT_STATE.json"] = "A"
     snapshot = _synthetic_scope_snapshot(
         committed=committed,
         malformed_records=("unstaged: malformed status/path record",),
@@ -735,7 +743,9 @@ def _scope_snapshot_findings(snapshot: _ScopeSnapshot) -> dict[str, Any]:
             ("unstaged", snapshot.unstaged),
         )
         for path, status in status_map.items()
-        if status != "M"
+        if status != (
+            EXPECTED_COMMITTED_STATUS_MAP.get(path) if range_name == "committed" else "M"
+        )
     )
     status_mismatches = sorted(
         (path, EXPECTED_COMMITTED_STATUS_MAP[path], snapshot.committed.get(path))
@@ -782,7 +792,7 @@ def _check_pr_scope(base_sha: str) -> int:
             print(f"boundary error: {error}", file=sys.stderr)
         return 1
 
-    print(f"PR scope check passed: {len(snapshot.committed)} files (0 A, 10 M)")
+    print(f"PR scope check passed: {len(snapshot.committed)} files (2 A, 6 M)")
     return 0
 
 
