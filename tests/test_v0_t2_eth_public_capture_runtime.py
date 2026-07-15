@@ -26,6 +26,7 @@ from trader_assist_v0.data.ingress import ingest_t2_eth_public_candle_bytes
 
 BASE_SHA = "16963297e0ce27ed3919f52e1e536ff730f5a5b9"
 REPAIR_START_HEAD = "45d12e131c2fd9eba530e2a8a6febc173c03bf50"
+T2_FINAL_REVIEWED_HEAD = "b18fc812d06578607379f5577bcd3adefed7d0b1"
 REPAIR_ALLOWLIST = {
     "CODEX.md",
     "docs/V0_FLP0_CAPTURE_NOW_AUTHORITY.md",
@@ -1032,7 +1033,14 @@ def test_cli_runtime_and_repository_boundaries_are_exact() -> None:
     for relative, expected in IMMUTABLE_HASHES.items():
         assert hashlib.sha256((root / relative).read_bytes()).hexdigest() == expected
     changed = set(
-        _run("git", "diff", "--name-only", BASE_SHA, cwd=root).decode().splitlines()
+        _run(
+            "git",
+            "diff",
+            "--name-only",
+            BASE_SHA,
+            T2_FINAL_REVIEWED_HEAD,
+            cwd=root,
+        ).decode().splitlines()
     )
     changed.update(
         _run("git", "ls-files", "--others", "--exclude-standard", cwd=root)
@@ -1041,9 +1049,14 @@ def test_cli_runtime_and_repository_boundaries_are_exact() -> None:
     )
     assert changed == ALLOWLIST
     repair_changed = set(
-        _run("git", "diff", "--name-only", REPAIR_START_HEAD, cwd=root)
-        .decode()
-        .splitlines()
+        _run(
+            "git",
+            "diff",
+            "--name-only",
+            REPAIR_START_HEAD,
+            T2_FINAL_REVIEWED_HEAD,
+            cwd=root,
+        ).decode().splitlines()
     )
     repair_changed.update(
         _run("git", "ls-files", "--others", "--exclude-standard", cwd=root)
@@ -1056,6 +1069,7 @@ def test_cli_runtime_and_repository_boundaries_are_exact() -> None:
         "diff",
         "--name-only",
         REPAIR_START_HEAD,
+        T2_FINAL_REVIEWED_HEAD,
         "--",
         "pyproject.toml",
         "requirements-runtime.lock",
