@@ -7,8 +7,8 @@
   "task_id": "V0-FLP1B0B-CAPTURE-NOW-AUTHORITY-AMENDMENT",
   "state_base_sha": "78d2d37bfe5a4f3f1d382a2a96e57896ae9676ae",
   "authority": {
-    "last_completed_implementation": "V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT",
-    "last_completed_implementation_pr": 11,
+    "last_completed_implementation": "V0-FLP1-DECISION-TO-OUTCOME-OPERATOR-ASSIST-PILOT",
+    "last_completed_implementation_pr": 19,
     "last_policy_state_pr": 15,
     "rate_limit_status": "UNRESOLVED_OFFICIAL_LIMIT",
     "live_transport_authorized": false,
@@ -41,7 +41,7 @@
     "exchange_execution_authorized": false,
     "runtime_started": false,
     "scope": "CAPTURE_CONTRACT_SCHEMA_GOVERNANCE_ONLY",
-    "next_runtime_gate": "SEPARATE_FUTURE_ETH_PUBLIC_CAPTURE_RUNTIME",
+    "next_runtime_gate": "NEXT_GATE_UNRESOLVED",
     "forbidden_capabilities": [
       "API_WALLET",
       "PRIVATE_KEY",
@@ -447,13 +447,13 @@
     "separate_project_control_finalization_authorization_required": true,
     "pre_finalization_base_head_state_reverification_required": true,
     "unresolved_blocker_prevents_merge": true,
-    "next_gate": "V0-FLP1B0B-FIRST-LAUNCH-CRITICAL-PATH-AND-ETH-MINIMUM-VALIDATION-READONLY-PLANNING"
+    "next_gate": "NEXT_GATE_UNRESOLVED"
   },
   "recursive_rotation": {
     "required": true,
     "next_window_role": "V0 Fast Launch project-control successor",
     "next_window_permission": "STRICT_READ_ONLY",
-    "post_merge_next_gate": "V0-FLP1B0B-FIRST-LAUNCH-CRITICAL-PATH-AND-ETH-MINIMUM-VALIDATION-READONLY-PLANNING",
+    "post_merge_next_gate": "NEXT_GATE_UNRESOLVED",
     "handoff_required_fields": [
       "CURRENT_WINDOW_ROLE",
       "REPOSITORY",

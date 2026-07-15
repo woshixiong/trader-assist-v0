@@ -79,11 +79,11 @@
       "properties": {
         "last_completed_implementation": {
           "type": "string",
-          "const": "V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT"
+          "const": "V0-FLP1-DECISION-TO-OUTCOME-OPERATOR-ASSIST-PILOT"
         },
         "last_completed_implementation_pr": {
           "type": "integer",
-          "const": 11
+          "const": 19
         },
         "last_policy_state_pr": {
           "type": "integer",
@@ -232,7 +232,7 @@
         },
         "next_runtime_gate": {
           "type": "string",
-          "const": "SEPARATE_FUTURE_ETH_PUBLIC_CAPTURE_RUNTIME"
+          "const": "NEXT_GATE_UNRESOLVED"
         },
         "forbidden_capabilities": {
           "type": "array",
@@ -2015,7 +2015,7 @@
         },
         "next_gate": {
           "type": "string",
-          "const": "V0-FLP1B0B-FIRST-LAUNCH-CRITICAL-PATH-AND-ETH-MINIMUM-VALIDATION-READONLY-PLANNING"
+          "const": "NEXT_GATE_UNRESOLVED"
         }
       }
     },
@@ -2050,7 +2050,7 @@
         },
         "post_merge_next_gate": {
           "type": "string",
-          "const": "V0-FLP1B0B-FIRST-LAUNCH-CRITICAL-PATH-AND-ETH-MINIMUM-VALIDATION-READONLY-PLANNING"
+          "const": "NEXT_GATE_UNRESOLVED"
         },
         "handoff_required_fields": {
           "type": "array",
@@ -2583,15 +2583,15 @@
         },
         "state_base_sha": {
           "type": "string",
-          "const": "95e4a9ebaedb028de68d859627a37dfc142c8602"
+          "const": "8beca954a2d0ba51ea5ceff3c0249308ae46e299"
         },
         "last_completed_implementation": {
           "type": "string",
-          "const": "V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT"
+          "const": "V0-FLP1-DECISION-TO-OUTCOME-OPERATOR-ASSIST-PILOT"
         },
         "last_completed_implementation_pr": {
           "type": "integer",
-          "const": 11
+          "const": 19
         },
         "last_policy_state_pr": {
           "type": "integer",
@@ -2622,15 +2622,15 @@
             },
             "last_lease_id": {
               "type": "string",
-              "const": "V0-FLP1B0B-T1-IMPLEMENTATION-WRITE-LEASE-1"
+              "const": "V0-FLP1-PR19-B1B2B5B6-AUTHORITY-SNAPSHOT-REPAIR-WRITE-LEASE-1"
             },
             "last_lease_type": {
               "type": "string",
-              "const": "BOUNDED_CAPTURE_NOW_CONTRACT_SCHEMA_GOVERNANCE_ONLY"
+              "const": "BOUNDED_PR19_AUTHORITY_SNAPSHOT_REPAIR"
             },
             "last_governance_level": {
               "type": "string",
-              "const": "G2"
+              "const": "G3"
             },
             "final_status": {
               "type": "string",
@@ -2684,7 +2684,7 @@
         },
         "next_gate": {
           "type": "string",
-          "const": "V0-FLP1B0B-FIRST-LAUNCH-CRITICAL-PATH-AND-ETH-MINIMUM-VALIDATION-READONLY-PLANNING"
+          "const": "NEXT_GATE_UNRESOLVED"
         },
         "conflict_state": {
           "type": "string",

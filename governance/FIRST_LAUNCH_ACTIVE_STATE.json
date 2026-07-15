@@ -1,11 +1,11 @@
 {
   "product_baseline_id": "TA-PRODUCT-BASELINE-2026-07-14-R1",
   "active_product": "FIRST_LAUNCH",
-  "task_id": "V0-FLP1-DECISION-TO-OUTCOME-OPERATOR-ASSIST-PILOT",
+  "task_id": "NONE",
   "delivery_model": "ONE_BRANCH_ONE_DRAFT_PR_ONE_WRITER",
-  "branch": "feature/v0-flp1-decision-to-outcome-operator-assist",
-  "write_lease": "V0-FLP1-DECISION-TO-OUTCOME-OPERATOR-ASSIST-PILOT-WRITE-LEASE-1",
-  "write_lease_status": "ACTIVE",
+  "branch": "NONE",
+  "write_lease": "NONE",
+  "write_lease_status": "NONE",
   "paused_products": ["FULL_V0", "TRADEROS"],
   "authorizations": {
     "runtime": false,
