@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import weakref
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from itertools import pairwise
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from trader_assist_v0.contracts.common import canonical_json_bytes
 
@@ -30,6 +31,29 @@ class DataQualityState(StrEnum):
 
 class MarketDataError(ValueError):
     """An observation cannot become an ETH-LDAR input."""
+
+
+# This registry deliberately binds authority to the object that a reviewed parser
+# issued.  A field hash alone is forgeable by a caller; identity plus the frozen
+# issuance fingerprint rejects constructors, copies, and post-issuance mutation.
+_ISSUED: dict[int, tuple[weakref.ReferenceType[object], str]] = {}
+
+
+def _issue(value: object, fingerprint: str) -> object:
+    key = id(value)
+
+    def _release(reference: weakref.ReferenceType[object]) -> None:
+        current = _ISSUED.get(key)
+        if current is not None and current[0] is reference:
+            del _ISSUED[key]
+
+    _ISSUED[key] = (weakref.ref(value, _release), fingerprint)
+    return cast(Candle, value)
+
+
+def _is_issued(value: object, fingerprint: str) -> bool:
+    issued = _ISSUED.get(id(value))
+    return issued is not None and issued[0]() is value and issued[1] == fingerprint
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -61,7 +85,7 @@ def _strict_object(raw_text: str) -> dict[str, Any]:
     value = _strict_json(raw_text)
     if type(value) is not dict:
         raise MarketDataError("raw evidence must be a JSON object")
-    return value
+    return cast(dict[str, Any], value)
 
 
 def _decimal(
@@ -184,6 +208,152 @@ class DataQuality:
     reason: str
 
 
+@dataclass(frozen=True)
+class StrategySnapshot:
+    """An EthMarketData-issued, immutable input for deterministic strategy evaluation."""
+
+    candles_5m: tuple[Candle, ...]
+    candles_15m: tuple[Candle, ...]
+    evaluated_at: datetime
+    quality: DataQuality
+    active_context: ActiveAssetContext | None
+    metadata: AssetMetadata | None
+
+
+def _evidence_payload(value: RawEvidence) -> dict[str, object]:
+    return {
+        "raw_text": value.raw_text,
+        "sha256": value.sha256,
+        "source_id": value.source_id,
+        "operation": value.operation,
+        "received_at": value.received_at,
+        "receive_sequence": value.receive_sequence,
+        "connection_id": value.connection_id,
+        "product_version": value.product_version,
+    }
+
+
+def _candle_fingerprint(value: Candle) -> str:
+    return hashlib.sha256(
+        canonical_json_bytes(
+            {
+                "interval": value.interval,
+                "open_time_ms": value.open_time_ms,
+                "close_time_ms": value.close_time_ms,
+                "open": value.open,
+                "high": value.high,
+                "low": value.low,
+                "close": value.close,
+                "volume": value.volume,
+                "evidence": _evidence_payload(value.evidence),
+            }
+        )
+    ).hexdigest()
+
+
+def _context_fingerprint(value: ActiveAssetContext) -> str:
+    return hashlib.sha256(
+        canonical_json_bytes(
+            {
+                "mark_px": value.mark_px,
+                "mid_px": value.mid_px,
+                "open_interest": value.open_interest,
+                "funding": value.funding,
+                "source_time_ms": value.source_time_ms,
+                "evidence": _evidence_payload(value.evidence),
+            }
+        )
+    ).hexdigest()
+
+
+def _metadata_fingerprint(value: AssetMetadata) -> str:
+    return hashlib.sha256(
+        canonical_json_bytes(
+            {"sz_decimals": value.sz_decimals, "evidence": _evidence_payload(value.evidence)}
+        )
+    ).hexdigest()
+
+
+def _validated_candle(value: object) -> Candle:
+    try:
+        valid = type(value) is Candle and _is_issued(value, _candle_fingerprint(value))
+    except (AttributeError, TypeError, ValueError):
+        valid = False
+    if not valid:
+        raise MarketDataError("candle is not parser-issued immutable authority")
+    return cast(Candle, value)
+
+
+def _validated_context(value: object) -> ActiveAssetContext:
+    try:
+        valid = type(value) is ActiveAssetContext and _is_issued(value, _context_fingerprint(value))
+    except (AttributeError, TypeError, ValueError):
+        valid = False
+    if not valid:
+        raise MarketDataError("context is not parser-issued immutable authority")
+    return cast(ActiveAssetContext, value)
+
+
+def _validated_metadata(value: object) -> AssetMetadata:
+    try:
+        valid = type(value) is AssetMetadata and _is_issued(value, _metadata_fingerprint(value))
+    except (AttributeError, TypeError, ValueError):
+        valid = False
+    if not valid:
+        raise MarketDataError("metadata is not parser-issued immutable authority")
+    return cast(AssetMetadata, value)
+
+
+def _snapshot_fingerprint(value: StrategySnapshot) -> str:
+    return hashlib.sha256(
+        canonical_json_bytes(
+            {
+                "candles_5m": [_candle_fingerprint(item) for item in value.candles_5m],
+                "candles_15m": [_candle_fingerprint(item) for item in value.candles_15m],
+                "evaluated_at": value.evaluated_at,
+                "quality": {"state": value.quality.state, "reason": value.quality.reason},
+                "active_context": (
+                    None
+                    if value.active_context is None
+                    else _context_fingerprint(value.active_context)
+                ),
+                "metadata": (
+                    None if value.metadata is None else _metadata_fingerprint(value.metadata)
+                ),
+            }
+        )
+    ).hexdigest()
+
+
+def _validated_strategy_snapshot(value: object) -> StrategySnapshot:
+    if type(value) is not StrategySnapshot:
+        raise MarketDataError("strategy snapshot authority is invalid")
+    try:
+        if (
+            type(value.evaluated_at) is not datetime
+            or value.evaluated_at.tzinfo is not UTC
+            or type(value.quality) is not DataQuality
+            or type(value.quality.state) is not DataQualityState
+            or type(value.quality.reason) is not str
+            or tuple(sorted(value.candles_5m, key=lambda candle: candle.open_time_ms))
+            != value.candles_5m
+            or tuple(sorted(value.candles_15m, key=lambda candle: candle.open_time_ms))
+            != value.candles_15m
+        ):
+            raise MarketDataError("strategy snapshot authority is invalid")
+        for candle in (*value.candles_5m, *value.candles_15m):
+            _validated_candle(candle)
+        if value.active_context is not None:
+            _validated_context(value.active_context)
+        if value.metadata is not None:
+            _validated_metadata(value.metadata)
+        if not _is_issued(value, _snapshot_fingerprint(value)):
+            raise MarketDataError("strategy snapshot authority is invalid")
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise MarketDataError("strategy snapshot authority is invalid") from exc
+    return value
+
+
 def evidence_from_raw(
     raw_text: str,
     *,
@@ -255,7 +425,7 @@ def candle_from_websocket(raw_text: str, evidence: RawEvidence) -> Candle:
         raise MarketDataError("candle OHLC range is invalid")
     if candle.volume < 0:
         raise MarketDataError("candle volume is invalid")
-    return candle
+    return _issue(candle, _candle_fingerprint(candle))  # type: ignore[return-value]
 
 
 def context_from_websocket(raw_text: str, evidence: RawEvidence) -> ActiveAssetContext:
@@ -269,7 +439,7 @@ def context_from_websocket(raw_text: str, evidence: RawEvidence) -> ActiveAssetC
         raise MarketDataError("asset context is not ETH")
     mid = context.get("midPx")
     source_time = context.get("time")
-    return ActiveAssetContext(
+    context_value = ActiveAssetContext(
         mark_px=_decimal(context.get("markPx"), "markPx", positive=True),
         mid_px=None if mid is None else _decimal(mid, "midPx", positive=True),
         open_interest=_decimal(context.get("openInterest"), "openInterest", non_negative=True),
@@ -277,6 +447,7 @@ def context_from_websocket(raw_text: str, evidence: RawEvidence) -> ActiveAssetC
         source_time_ms=None if source_time is None else _integer(source_time, "context time"),
         evidence=evidence,
     )
+    return _issue(context_value, _context_fingerprint(context_value))  # type: ignore[return-value]
 
 
 def metadata_from_info(raw_text: str, evidence: RawEvidence) -> AssetMetadata:
@@ -299,7 +470,8 @@ def metadata_from_info(raw_text: str, evidence: RawEvidence) -> AssetMetadata:
     decimals = matches[0].get("szDecimals")
     if type(decimals) is not int or isinstance(decimals, bool) or decimals < 0 or decimals > 18:
         raise MarketDataError("ETH szDecimals is invalid")
-    return AssetMetadata(sz_decimals=decimals, evidence=evidence)
+    metadata_value = AssetMetadata(sz_decimals=decimals, evidence=evidence)
+    return _issue(metadata_value, _metadata_fingerprint(metadata_value))  # type: ignore[return-value]
 
 
 @dataclass
@@ -324,6 +496,7 @@ class EthMarketData:
         self.disconnected = True
 
     def accept_candle(self, candle: Candle) -> Literal["ACCEPTED", "DUPLICATE", "CONFLICT"]:
+        candle = _validated_candle(candle)
         if candle.evidence.received_at.timestamp() * 1000 <= candle.close_time_ms:
             self.invalid_reason = "CANDLE_NOT_CLOSED"
             return "CONFLICT"
@@ -341,19 +514,20 @@ class EthMarketData:
         recovered = tuple(candles)
         if len(recovered) > SNAPSHOT_LIMITS[interval]:
             raise MarketDataError("snapshot exceeds its bounded recovery limit")
-        if any(candle.interval != interval for candle in recovered):
+        if any(_validated_candle(candle).interval != interval for candle in recovered):
             raise MarketDataError("snapshot interval does not match its authority")
         for candle in recovered:
             self.accept_candle(candle)
 
     def accept_context(self, context: ActiveAssetContext) -> None:
+        context = _validated_context(context)
         if context.reference_price is None:
             self.invalid_reason = "REFERENCE_PRICE_INVALID"
             return
         self.active_context = context
 
     def accept_metadata(self, metadata: AssetMetadata) -> None:
-        self.metadata = metadata
+        self.metadata = _validated_metadata(metadata)
 
     def ingest_websocket(
         self,
@@ -453,6 +627,31 @@ class EthMarketData:
         if not self.transitions or self.transitions[-1] != result:
             self.transitions.append(result)
         return result
+
+    def strategy_snapshot(self, evaluated_at: datetime) -> StrategySnapshot:
+        """Freeze the only strategy input that this market authority can issue."""
+        now = _utc(evaluated_at)
+        candles_5m = tuple(
+            self.candles["5m"][key] for key in sorted(self.candles["5m"])
+        )
+        candles_15m = tuple(
+            self.candles["15m"][key] for key in sorted(self.candles["15m"])
+        )
+        for candle in (*candles_5m, *candles_15m):
+            _validated_candle(candle)
+        if self.active_context is not None:
+            _validated_context(self.active_context)
+        if self.metadata is not None:
+            _validated_metadata(self.metadata)
+        snapshot = StrategySnapshot(
+            candles_5m=candles_5m,
+            candles_15m=candles_15m,
+            evaluated_at=now,
+            quality=self.quality(now),
+            active_context=self.active_context,
+            metadata=self.metadata,
+        )
+        return _issue(snapshot, _snapshot_fingerprint(snapshot))  # type: ignore[return-value]
 
 
 @dataclass

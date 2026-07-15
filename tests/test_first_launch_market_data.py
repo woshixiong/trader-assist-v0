@@ -229,11 +229,54 @@ def test_snapshot_bound_and_closed_candle_gate() -> None:
 
     candle = _candle("5m", 0)
     unclosed = replace(candle, close_time_ms=int(NOW.timestamp() * 1000))
-    assert data.accept_candle(unclosed) == "CONFLICT"
+    with pytest.raises(MarketDataError, match="parser-issued"):
+        data.accept_candle(unclosed)
 
-    quality = data.quality(NOW)
-    assert quality.state is DataQualityState.INVALID
-    assert quality.reason == "CANDLE_NOT_CLOSED"
+
+def test_direct_or_modified_normalized_objects_are_not_ingestable() -> None:
+    data = EthMarketData()
+    data.begin_connection()
+    issued = _candle("5m", 0)
+    raw = "{}"
+    evidence = RawEvidence(
+        raw,
+        hashlib.sha256(raw.encode()).hexdigest(),
+        "source",
+        "WebSocket",
+        NOW,
+        1,
+        "connection",
+    )
+    direct = Candle(
+        issued.interval,
+        issued.open_time_ms,
+        issued.close_time_ms,
+        issued.open,
+        issued.high,
+        issued.low,
+        issued.close,
+        issued.volume,
+        evidence,
+    )
+    for candidate in (direct, replace(issued), object.__new__(Candle)):
+        with pytest.raises(MarketDataError, match="parser-issued"):
+            data.accept_candle(candidate)  # type: ignore[arg-type]
+
+    context_raw = (
+        '{"channel":"activeAssetCtx","data":{"coin":"ETH","ctx":'
+        '{"markPx":"1","openInterest":"0","funding":"0"}}}'
+    )
+    issued_context = context_from_websocket(context_raw, _evidence(context_raw))
+    with pytest.raises(MarketDataError, match="parser-issued"):
+        data.accept_context(replace(issued_context))
+
+    metadata_raw = '{"universe":[{"name":"ETH","szDecimals":3}]}'
+    issued_metadata = metadata_from_info(
+        metadata_raw,
+        _evidence(metadata_raw, "metaAndAssetCtxs"),
+    )
+    with pytest.raises(MarketDataError, match="parser-issued"):
+        data.accept_metadata(replace(issued_metadata))
 
 
 def test_primary_ingest_and_reconnect_paths_retain_evidence_validation() -> None:

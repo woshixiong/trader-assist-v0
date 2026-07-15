@@ -1,19 +1,30 @@
 from __future__ import annotations
 
 import copy
+import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
 
-from trader_assist_v0.first_launch.market_data import Candle, DataQualityState, evidence_from_raw
+from trader_assist_v0.first_launch.market_data import (
+    Candle,
+    DataQualityState,
+    EthMarketData,
+    StrategySnapshot,
+    candle_from_websocket,
+    context_from_websocket,
+    evidence_from_raw,
+    metadata_from_info,
+)
 from trader_assist_v0.first_launch.strategy import (
     AIExplanation,
     PlanError,
     PreparedSetup,
     SetupFamily,
     Side,
+    Signal,
     SignalState,
     StrategyOutput,
     _round_price,
@@ -41,32 +52,93 @@ def _candle(
     volume: str = "10",
     interval: str = "5m",
 ) -> Candle:
-    raw = "{}"
+    width = 300_000 if interval == "5m" else 900_000
+    latest_index = 26 if interval == "5m" else 10
+    if open_time < 10_000_000_000:
+        actual_open_time = (
+            int(NOW.timestamp() * 1000) - 1_000 - ((latest_index + 1) * width) + open_time
+        )
+    else:
+        actual_open_time = open_time
+    open_value, high_value, low_value, close_value = map(
+        Decimal, (open, high, low, close)
+    )
+    high_value = max(high_value, open_value, close_value)
+    low_value = min(low_value, open_value, close_value)
+    raw = json.dumps(
+        {
+            "channel": "candle",
+            "data": {
+                "s": "ETH",
+                "i": interval,
+                "t": actual_open_time,
+                "T": actual_open_time + width,
+                "o": str(open_value),
+                "h": str(high_value),
+                "l": str(low_value),
+                "c": str(close_value),
+                "v": volume,
+            },
+        },
+        separators=(",", ":"),
+    )
     evidence = evidence_from_raw(
         raw,
         operation="WebSocket",
-        received_at=NOW,
-        receive_sequence=open_time,
+        received_at=max(
+            NOW,
+            datetime.fromtimestamp((actual_open_time + width + 1_000) / 1_000, tz=UTC),
+        ),
+        receive_sequence=max(0, actual_open_time // width),
         connection_id="test",
     )
-    width = 300_000 if interval == "5m" else 900_000
-    return Candle(
-        interval,
-        open_time,
-        open_time + width,
-        Decimal(open),
-        Decimal(high),
-        Decimal(low),
-        Decimal(close),
-        Decimal(volume),
-        evidence,
-    )  # type: ignore[arg-type]
+    return candle_from_websocket(raw, evidence)
+
+
+def _snapshot(candles_5m: tuple[Candle, ...], candles_15m: tuple[Candle, ...]) -> StrategySnapshot:
+    data = EthMarketData()
+    data.begin_connection()
+    for candle in (*candles_5m, *candles_15m):
+        assert data.accept_candle(candle) == "ACCEPTED"
+    evaluated_at = max(candle.evidence.received_at for candle in (*candles_5m, *candles_15m))
+    context_raw = (
+        '{"channel":"activeAssetCtx","data":{"coin":"ETH","ctx":'
+        '{"markPx":"100","openInterest":"1","funding":"0"}}}'
+    )
+    data.accept_context(
+        context_from_websocket(
+            context_raw,
+            evidence_from_raw(
+                context_raw,
+                operation="WebSocket",
+                received_at=evaluated_at,
+                receive_sequence=90,
+                connection_id="test",
+            ),
+        )
+    )
+    metadata_raw = '{"universe":[{"name":"ETH","szDecimals":3}]}'
+    data.accept_metadata(
+        metadata_from_info(
+            metadata_raw,
+            evidence_from_raw(
+                metadata_raw,
+                operation="metaAndAssetCtxs",
+                received_at=evaluated_at,
+                receive_sequence=91,
+                connection_id="test",
+            ),
+        )
+    )
+    snapshot = data.strategy_snapshot(evaluated_at)
+    assert snapshot.quality.state is DataQualityState.READY
+    return snapshot
 
 
 def _history(
     family: SetupFamily, side: Side, fast: bool
 ) -> tuple[tuple[Candle, ...], tuple[Candle, ...]]:
-    c5 = [_candle(i * 300_000) for i in range(26)]
+    c5 = [_candle(i * 300_000) for i in range(-9, 26)]
     volume = "20" if fast else "13"
     if family is SetupFamily.SWEEP_RECLAIM:
         trigger = _candle(
@@ -80,20 +152,20 @@ def _history(
             _candle(
                 i * 900_000, close=str(100 + i if side is Side.LONG else 100 - i), interval="15m"
             )
-            for i in range(11)
+            for i in range(-9, 11)
         )
     elif side is Side.LONG:
         trigger = _candle(26 * 300_000, high="102", low="100", close="102", volume=volume)
-        c15 = tuple(_candle(i * 900_000, close=str(90 + i), interval="15m") for i in range(11))
+        c15 = tuple(_candle(i * 900_000, close=str(90 + i), interval="15m") for i in range(-9, 11))
     else:
         trigger = _candle(26 * 300_000, high="100", low="98", close="98", volume=volume)
-        c15 = tuple(_candle(i * 900_000, close=str(110 - i), interval="15m") for i in range(11))
+        c15 = tuple(_candle(i * 900_000, close=str(110 - i), interval="15m") for i in range(-9, 11))
     return tuple([*c5, trigger]), c15
 
 
 def _confirmed(family: SetupFamily, side: Side, fast: bool) -> StrategyOutput:
     c5, c15 = _history(family, side, fast)
-    value = evaluate_signal(c5, c15, quality=DataQualityState.READY)
+    value = evaluate_signal(_snapshot(c5, c15))
     if fast:
         assert type(value) is StrategyOutput
         return value
@@ -101,12 +173,13 @@ def _confirmed(family: SetupFamily, side: Side, fast: bool) -> StrategyOutput:
     boundary = value.provenance.boundary
     retest = _candle(
         27 * 300_000,
+        open=str(boundary),
         high=str(boundary + Decimal("1")) if side is Side.LONG else str(boundary),
         low=str(boundary) if side is Side.LONG else str(boundary - Decimal("1")),
         close=str(boundary + Decimal("1")) if side is Side.LONG else str(boundary - Decimal("1")),
         volume="10",
     )
-    result = advance_prepare(value, retest, quality=DataQualityState.READY)
+    result = advance_prepare(value, _snapshot((*c5, retest), c15))
     assert type(result) is StrategyOutput
     return result
 
@@ -119,8 +192,12 @@ def test_production_authority_matrix(family: SetupFamily, side: Side, fast: bool
     assert output.setup_id == output.provenance.setup_id
     assert output.family is family and output.side is side
     assert output.speed == ("FAST" if fast else "STANDARD")
-    assert output.provenance.setup_trigger_open_time_ms == 26 * 300_000
-    assert output.decision_trigger_open_time_ms == (26 if fast else 27) * 300_000
+    assert output.provenance.setup_trigger_open_time_ms == (
+        _history(family, side, fast)[0][-1].open_time_ms
+    )
+    assert output.decision_trigger_open_time_ms == output.provenance.setup_trigger_open_time_ms + (
+        0 if fast else 300_000
+    )
     plan = build_plan(
         strategy_output=output,
         reference=output.raw_entry_low,
@@ -151,6 +228,57 @@ def test_plan_rejects_coherently_rehashed_strategy_substitution() -> None:
     digest = _trade_digest(rehashed.payload())
     with pytest.raises(PlanError, match="STRATEGY_OUTPUT_AUTHORITY_INVALID"):
         replace(plan, setup_id=substituted_setup_id, plan_id=digest, canonical_hash=digest)
+
+
+def test_only_issued_outputs_are_planable_after_copy_or_mutation() -> None:
+    for output in (
+        _confirmed(SetupFamily.SWEEP_RECLAIM, Side.LONG, True),
+        _confirmed(SetupFamily.SWEEP_RECLAIM, Side.LONG, False),
+    ):
+        direct = StrategyOutput(*output.__dict__.values())
+        copied = copy.copy(output)
+        reconstructed = object.__new__(StrategyOutput)
+        for field, value in output.__dict__.items():
+            object.__setattr__(reconstructed, field, value)
+        for forged in (direct, replace(output), copied, reconstructed):
+            with pytest.raises(PlanError, match="STRATEGY_OUTPUT_AUTHORITY_INVALID"):
+                build_plan(
+                    strategy_output=forged,
+                    reference=output.raw_entry_low,
+                    equity=Decimal("1000"),
+                    sz_decimals=3,
+                )
+
+    issued = _confirmed(SetupFamily.BREAKOUT_RETEST, Side.LONG, True)
+    object.__setattr__(issued.provenance, "boundary", issued.provenance.boundary + Decimal("1"))
+    with pytest.raises(PlanError, match="STRATEGY_OUTPUT_AUTHORITY_INVALID"):
+        build_plan(
+            strategy_output=issued,
+            reference=issued.raw_entry_low,
+            equity=Decimal("1000"),
+            sz_decimals=3,
+        )
+
+
+def test_only_market_issued_snapshot_can_drive_strategy_or_prepare() -> None:
+    candles_5m, candles_15m = _history(SetupFamily.SWEEP_RECLAIM, Side.LONG, False)
+    snapshot = _snapshot(candles_5m, candles_15m)
+    direct = StrategySnapshot(*snapshot.__dict__.values())
+    reconstructed = object.__new__(StrategySnapshot)
+    for field, value in snapshot.__dict__.items():
+        object.__setattr__(reconstructed, field, value)
+    for forged in (direct, replace(snapshot), copy.copy(snapshot), reconstructed):
+        with pytest.raises(PlanError, match="STRATEGY_SNAPSHOT_AUTHORITY_INVALID"):
+            evaluate_signal(forged)
+    with pytest.raises(PlanError, match="STRATEGY_SNAPSHOT_AUTHORITY_INVALID"):
+        evaluate_signal(candles_5m)  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        evaluate_signal(snapshot, quality=DataQualityState.READY)  # type: ignore[call-arg]
+
+    prepared = evaluate_signal(snapshot)
+    assert type(prepared) is PreparedSetup
+    with pytest.raises(PlanError, match="PREPARED_SETUP_AUTHORITY_INVALID"):
+        advance_prepare(replace(prepared), snapshot)
 
 
 def test_build_plan_has_no_caller_strategy_authority() -> None:
@@ -346,11 +474,7 @@ def test_production_geometry_literal_vectors(
 
 def _prepared(family: SetupFamily, side: Side) -> PreparedSetup:
     candles_5m, candles_15m = _history(family, side, False)
-    result = evaluate_signal(
-        candles_5m,
-        candles_15m,
-        quality=DataQualityState.READY,
-    )
+    result = evaluate_signal(_snapshot(candles_5m, candles_15m))
     assert type(result) is PreparedSetup
     return result
 
@@ -360,6 +484,7 @@ def _retest(setup: PreparedSetup, offset: int) -> Candle:
     side = setup.provenance.side
     return _candle(
         setup.provenance.setup_trigger_open_time_ms + offset * 300_000,
+        open=str(boundary),
         high=str(boundary + Decimal("1")) if side is Side.LONG else str(boundary),
         low=str(boundary) if side is Side.LONG else str(boundary - Decimal("1")),
         close=(
@@ -370,6 +495,26 @@ def _retest(setup: PreparedSetup, offset: int) -> Candle:
     )
 
 
+def _advance(setup: PreparedSetup, candle: Candle) -> Signal | StrategyOutput:
+    candles_5m, candles_15m = _history(setup.provenance.family, setup.provenance.side, False)
+    fillers = tuple(
+        _candle(setup.provenance.setup_trigger_open_time_ms + offset * 300_000)
+        for offset in range(
+            1,
+            (candle.open_time_ms - setup.provenance.setup_trigger_open_time_ms) // 300_000,
+        )
+    )
+    fresh_15m = (
+        (_candle(candles_15m[-1].open_time_ms + 900_000, interval="15m"),)
+        if candle.close_time_ms - candles_15m[-1].close_time_ms > 990_000
+        else ()
+    )
+    return advance_prepare(
+        setup,
+        _snapshot((*candles_5m, *fillers, candle), (*candles_15m, *fresh_15m)),
+    )
+
+
 @pytest.mark.parametrize("side", list(Side))
 @pytest.mark.parametrize("offset", [1, 2, 3])
 def test_prepare_confirmation_offsets_remain_permitted(
@@ -377,11 +522,7 @@ def test_prepare_confirmation_offsets_remain_permitted(
     offset: int,
 ) -> None:
     setup = _prepared(SetupFamily.SWEEP_RECLAIM, side)
-    result = advance_prepare(
-        setup,
-        _retest(setup, offset),
-        quality=DataQualityState.READY,
-    )
+    result = _advance(setup, _retest(setup, offset))
     assert type(result) is StrategyOutput
     assert result.state is SignalState.TRIGGERED_STANDARD
 
@@ -389,11 +530,7 @@ def test_prepare_confirmation_offsets_remain_permitted(
 @pytest.mark.parametrize("side", list(Side))
 def test_prepare_first_non_permitted_offset_expires(side: Side) -> None:
     setup = _prepared(SetupFamily.SWEEP_RECLAIM, side)
-    result = advance_prepare(
-        setup,
-        _retest(setup, 4),
-        quality=DataQualityState.READY,
-    )
+    result = _advance(setup, _retest(setup, 4))
     assert result.state is SignalState.EXPIRED
 
 
@@ -406,18 +543,17 @@ def test_intervening_closes_apply_only_to_breakout(side: Side) -> None:
         if side is Side.LONG
         else breakout.provenance.boundary + Decimal(".21") * breakout.provenance.atr
     )
+    breakout_retest = _retest(breakout, 2)
+    breakout_candles, breakout_15m = _history(SetupFamily.BREAKOUT_RETEST, side, False)
+    intervening = _candle(
+        breakout.provenance.setup_trigger_open_time_ms + 300_000,
+        close=str(prohibited),
+    )
     breakout_result = advance_prepare(
         breakout,
-        _retest(breakout, 1),
-        quality=DataQualityState.READY,
-        intervening_closes=(prohibited,),
+        _snapshot((*breakout_candles, intervening, breakout_retest), breakout_15m),
     )
-    sweep_result = advance_prepare(
-        sweep,
-        _retest(sweep, 1),
-        quality=DataQualityState.READY,
-        intervening_closes=(prohibited,),
-    )
+    sweep_result = _advance(sweep, _retest(sweep, 1))
     assert breakout_result.state is SignalState.PREPARE
     assert type(sweep_result) is StrategyOutput
 
@@ -607,7 +743,7 @@ def _ten_dollar_output() -> StrategyOutput:
             low="10",
             close="11",
         )
-        for index in range(26)
+        for index in range(-9, 26)
     )
     trigger = _candle(
         26 * 300_000,
@@ -619,20 +755,16 @@ def _ten_dollar_output() -> StrategyOutput:
     )
     candles_15m = tuple(
         _candle(
-            index * 900_000,
-            open=str(10 + index),
-            high=str(11 + index),
-            low=str(9 + index),
-            close=str(10 + index),
+                index * 900_000,
+                open=str(max(1, 10 + index)),
+                high=str(max(2, 11 + index)),
+                low=str(max(1, 9 + index)),
+                close=str(max(1, 10 + index)),
             interval="15m",
         )
-        for index in range(11)
+        for index in range(-9, 11)
     )
-    output = evaluate_signal(
-        (*candles_5m, trigger),
-        candles_15m,
-        quality=DataQualityState.READY,
-    )
+    output = evaluate_signal(_snapshot((*candles_5m, trigger), candles_15m))
     assert type(output) is StrategyOutput
     assert output.raw_entry_low == Decimal("10")
     return output
@@ -746,7 +878,7 @@ def test_trade_plan_rejects_embedded_strategy_authority_substitution() -> None:
         output,
         decision_trigger_canonical_hash="f" * 64,
     )
-    with pytest.raises(PlanError, match="STRATEGY_CORRESPONDENCE"):
+    with pytest.raises(PlanError, match="STRATEGY_OUTPUT_AUTHORITY_INVALID"):
         _coherently_rehashed_plan(
             plan,
             strategy_output=substituted_output,

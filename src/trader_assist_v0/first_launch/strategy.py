@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import weakref
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_CEILING, ROUND_DOWN, ROUND_FLOOR, Decimal, InvalidOperation
@@ -10,7 +11,12 @@ from statistics import median
 from typing import Literal
 
 from trader_assist_v0.contracts.common import canonical_json_bytes, decimal_to_canonical_string
-from trader_assist_v0.first_launch.market_data import Candle, DataQualityState
+from trader_assist_v0.first_launch.market_data import (
+    Candle,
+    DataQualityState,
+    StrategySnapshot,
+    _validated_strategy_snapshot,
+)
 
 STRATEGY_VERSION: Literal["ETH-LDAR-v0.1"] = "ETH-LDAR-v0.1"
 CONFIGURATION_VERSION: Literal["1"] = "1"
@@ -20,6 +26,28 @@ TRADE_PLAN_HASH_DOMAIN = "trader-assist-v0/first-launch/trade-plan/v2"
 
 class PlanError(ValueError):
     pass
+
+
+# Issuance is process-local and deliberately excluded from every strategy and
+# TradePlan canonical payload.  It is a consumption guard, not decision data.
+_ISSUED: dict[int, tuple[weakref.ReferenceType[object], str]] = {}
+
+
+def _issue(value: object, fingerprint: str) -> object:
+    key = id(value)
+
+    def _release(reference: weakref.ReferenceType[object]) -> None:
+        current = _ISSUED.get(key)
+        if current is not None and current[0] is reference:
+            del _ISSUED[key]
+
+    _ISSUED[key] = (weakref.ref(value, _release), fingerprint)
+    return value
+
+
+def _is_issued(value: object, fingerprint: str) -> bool:
+    issued = _ISSUED.get(id(value))
+    return issued is not None and issued[0]() is value and issued[1] == fingerprint
 
 
 class Side(StrEnum):
@@ -312,27 +340,58 @@ class StrategyOutput:
         )
 
 
+def _prepared_fingerprint(value: PreparedSetup) -> str:
+    return _hash(
+        {
+            "provenance": value.provenance.payload(),
+            "expires_after_open_time_ms": value.expires_after_open_time_ms,
+        }
+    )
+
+
+def _output_fingerprint(value: StrategyOutput) -> str:
+    return _hash(
+        {
+            "provenance": value.provenance.payload(),
+            "setup_id": value.setup_id,
+            "speed": value.speed,
+            "decision_trigger_identity": value.decision_trigger_identity,
+            "decision_trigger_open_time_ms": value.decision_trigger_open_time_ms,
+            "decision_trigger_canonical_hash": value.decision_trigger_canonical_hash,
+            "decision_trigger_received_at": value.decision_trigger_received_at,
+            "material_extreme": value.material_extreme,
+            "raw_entry_low": value.raw_entry_low,
+            "raw_entry_high": value.raw_entry_high,
+            "raw_chase_limit": value.raw_chase_limit,
+            "raw_stop": value.raw_stop,
+            "created_at": value.created_at,
+            "expires_at": value.expires_at,
+            "reason": value.reason,
+            "do_not_chase": value.do_not_chase,
+        }
+    )
+
+
+def _validated_prepared_setup(value: object) -> PreparedSetup:
+    if type(value) is not PreparedSetup:
+        raise PlanError("PREPARED_SETUP_AUTHORITY_INVALID")
+    try:
+        if not _is_issued(value, _prepared_fingerprint(value)):
+            raise PlanError("PREPARED_SETUP_AUTHORITY_INVALID")
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise PlanError("PREPARED_SETUP_AUTHORITY_INVALID") from exc
+    return value
+
+
 def _validated_strategy_output(value: StrategyOutput) -> StrategyOutput:
     if type(value) is not StrategyOutput:
         raise PlanError("STRATEGY_OUTPUT_AUTHORITY_INVALID")
-    return StrategyOutput(
-        value.provenance,
-        value.setup_id,
-        value.speed,
-        value.decision_trigger_identity,
-        value.decision_trigger_open_time_ms,
-        value.decision_trigger_canonical_hash,
-        value.decision_trigger_received_at,
-        value.material_extreme,
-        value.raw_entry_low,
-        value.raw_entry_high,
-        value.raw_chase_limit,
-        value.raw_stop,
-        value.created_at,
-        value.expires_at,
-        value.reason,
-        value.do_not_chase,
-    )
+    try:
+        if not _is_issued(value, _output_fingerprint(value)):
+            raise PlanError("STRATEGY_OUTPUT_AUTHORITY_INVALID")
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise PlanError("STRATEGY_OUTPUT_AUTHORITY_INVALID") from exc
+    return value
 
 
 def _output(
@@ -344,7 +403,7 @@ def _output(
     identity, time, digest = _candle_authority(trigger)
     raw = _geometry(provenance, speed, material_extreme)
     created = trigger.evidence.received_at.astimezone(UTC)
-    return StrategyOutput(
+    output = StrategyOutput(
         provenance,
         provenance.setup_id,
         speed,
@@ -357,6 +416,7 @@ def _output(
         created,
         created + timedelta(seconds=180 if speed == "FAST" else 900),
     )
+    return _issue(output, _output_fingerprint(output))  # type: ignore[return-value]
 
 
 def lifecycle_state(
@@ -382,19 +442,25 @@ def lifecycle_state(
 
 def advance_prepare(
     setup: PreparedSetup,
-    candle: Candle,
+    snapshot: StrategySnapshot,
     *,
-    quality: DataQualityState,
-    intervening_closes: tuple[Decimal, ...] = (),
     already_decided: bool = False,
 ) -> Signal | StrategyOutput:
+    setup = _validated_prepared_setup(setup)
+    try:
+        snapshot = _validated_strategy_snapshot(snapshot)
+    except ValueError as exc:
+        raise PlanError("STRATEGY_SNAPSHOT_AUTHORITY_INVALID") from exc
     p = setup.provenance
-    if quality is not DataQualityState.READY:
+    if snapshot.quality.state is not DataQualityState.READY:
         return Signal(SignalState.INVALIDATED, p.side, "STANDARD", setup.setup_id, "DATA_NOT_READY")
     if already_decided:
         return Signal(
             SignalState.REJECTED, p.side, "STANDARD", setup.setup_id, "SETUP_ALREADY_DECIDED"
         )
+    if not snapshot.candles_5m:
+        return Signal(SignalState.INVALIDATED, p.side, "STANDARD", setup.setup_id, "DATA_NOT_READY")
+    candle = snapshot.candles_5m[-1]
     if candle.open_time_ms > setup.expires_after_open_time_ms:
         return Signal(
             SignalState.EXPIRED, p.side, "STANDARD", setup.setup_id, "PREPARE_WINDOW_EXPIRED"
@@ -408,6 +474,11 @@ def advance_prepare(
     )
     closes_ok = True
     if p.family is SetupFamily.BREAKOUT_RETEST:
+        intervening_closes = tuple(
+            item.close
+            for item in snapshot.candles_5m
+            if p.setup_trigger_open_time_ms < item.open_time_ms < candle.open_time_ms
+        )
         closes_ok = (
             not any(value < p.boundary - Decimal(".20") * p.atr for value in intervening_closes)
             if long
@@ -463,14 +534,23 @@ def _features(
 
 
 def evaluate_signal(
-    candles_5m: tuple[Candle, ...],
-    candles_15m: tuple[Candle, ...],
+    snapshot: StrategySnapshot,
     *,
-    quality: DataQualityState,
     decided_setup_ids: frozenset[str] = frozenset(),
 ) -> Signal | PreparedSetup | StrategyOutput:
-    if quality is not DataQualityState.READY:
-        return Signal(SignalState.WAIT, None, None, None, f"DATA_{quality.value}")
+    try:
+        snapshot = _validated_strategy_snapshot(snapshot)
+    except ValueError as exc:
+        raise PlanError("STRATEGY_SNAPSHOT_AUTHORITY_INVALID") from exc
+    if snapshot.quality.state is not DataQualityState.READY:
+        return Signal(
+            SignalState.WAIT,
+            None,
+            None,
+            None,
+            f"DATA_{snapshot.quality.state.value}",
+        )
+    candles_5m, candles_15m = snapshot.candles_5m, snapshot.candles_15m
     try:
         atr, high, low, volume, location, long_bias, short_bias = _features(candles_5m, candles_15m)
     except PlanError as exc:
@@ -531,9 +611,10 @@ def evaluate_signal(
         p = StrategyProvenance(family, side, boundary, atr, extreme, identity, time, digest)
         if p.setup_id in decided_setup_ids:
             return Signal(SignalState.WAIT, None, None, p.setup_id, "SETUP_ALREADY_DECIDED")
-        return (
-            _output(p, "FAST", t, extreme) if fast else PreparedSetup(p, t.open_time_ms + 900_000)
-        )
+        if fast:
+            return _output(p, "FAST", t, extreme)
+        prepared = PreparedSetup(p, t.open_time_ms + 900_000)
+        return _issue(prepared, _prepared_fingerprint(prepared))  # type: ignore[return-value]
     return Signal(
         SignalState.WATCH
         if min(abs(t.close - high), abs(t.close - low)) <= Decimal(".25") * atr
