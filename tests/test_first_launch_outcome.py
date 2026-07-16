@@ -282,3 +282,68 @@ def test_replacement_lock_is_never_removed(tmp_path: Path, monkeypatch: pytest.M
     with pytest.raises(OutcomeError, match="LOCK_IDENTITY_CHANGED"):
         append_outcome(journal, outcome=outcome)
     assert lock.read_text(encoding="utf-8") == "replacement"
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    (
+        ("entry_low", "1"),
+        ("entry_high", "2"),
+        ("planned_entry", "3"),
+        ("chase_limit", "4"),
+        ("stop", "5"),
+        ("tp1", "6"),
+        ("tp2", "7"),
+        ("quantity", "8"),
+        ("notional", "9"),
+        ("planned_risk", "10"),
+        ("account_equity", "11"),
+        ("risk_percent", "12"),
+        ("side", "SHORT"),
+        ("speed", "STANDARD"),
+        ("setup_id", "a" * 64),
+        ("plan_id", "b" * 64),
+        ("plan_canonical_hash", "c" * 64),
+        ("strategy_version", "other"),
+        ("configuration_version", "2"),
+        ("trade_plan_version", "3"),
+        ("decision_trigger_identity", ["ETH", "5m", 1]),
+        ("decision_trigger_open_time_ms", 1),
+        ("created_at", "2026-07-14T00:00:01+00:00"),
+        ("expires_at", "2026-07-14T00:04:00+00:00"),
+    ),
+)
+def test_refreshed_hash_card_field_attacks_fail_complete_semantic_correspondence(
+    tmp_path: Path, field: str, replacement: object
+) -> None:
+    import trader_assist_v0.first_launch.operator_review as review
+    import trader_assist_v0.first_launch.outcome as module
+
+    bundle, _ = _bundle(tmp_path)
+    forged = json.loads(bundle.canonical_json())
+    card = forged["operator_card"]
+    shadow = forged["shadow_order"]
+    decision = forged["decision_record"]
+    assert isinstance(card, dict) and isinstance(shadow, dict) and isinstance(decision, dict)
+    card_payload = card["payload"]
+    assert isinstance(card_payload, dict)
+    card_payload[field] = replacement
+    card_hash = module._digest(module.CARD_HASH_DOMAIN, card_payload)
+    card["card_id"] = card["canonical_hash"] = card_hash
+    shadow["card_id"] = shadow["card_hash"] = card_hash
+    shadow_body = dict(shadow)
+    shadow_body.pop("shadow_order_id")
+    shadow_body.pop("canonical_hash")
+    shadow_hash = module._digest(module.SHADOW_HASH_DOMAIN, shadow_body)
+    shadow["shadow_order_id"] = shadow["canonical_hash"] = shadow_hash
+    decision["card_id"] = decision["card_hash"] = card_hash
+    decision["shadow_order_id"] = decision["shadow_order_hash"] = shadow_hash
+    decision["record_hash"] = review._record_digest(decision)
+    digest = module._digest(
+        module.DECISION_BUNDLE_HASH_DOMAIN,
+        forged,
+        omit=("bundle_id", "canonical_hash"),
+    )
+    forged["bundle_id"] = forged["canonical_hash"] = digest
+    with pytest.raises(OutcomeError, match="^BUNDLE_SEMANTIC_CORRESPONDENCE_INVALID$"):
+        module.DecisionBundleV1(forged)

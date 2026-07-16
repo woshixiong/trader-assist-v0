@@ -418,6 +418,61 @@ def _validate_plan_semantics(plan: dict[str, object]) -> tuple[str, dict[str, De
     return side, values
 
 
+def _expected_card_from_plan(
+    plan: dict[str, object], *, plan_id: str, side: str, values: dict[str, Decimal]
+) -> dict[str, object]:
+    """Reproduce the complete deterministic TradePlan card payload."""
+    provenance = cast(dict[str, object], plan["provenance"])
+    speed = cast(str, plan["speed"])
+    state = "TRIGGERED_FAST" if speed == "FAST" else "TRIGGERED_STANDARD"
+    trigger = _bundle_time(
+        plan["decision_trigger_received_at"], "BUNDLE_SEMANTIC_CORRESPONDENCE_INVALID"
+    )
+    created = _bundle_time(plan["strategy_created_at"], "BUNDLE_SEMANTIC_CORRESPONDENCE_INVALID")
+    expires = _bundle_time(plan["strategy_expires_at"], "BUNDLE_SEMANTIC_CORRESPONDENCE_INVALID")
+    return {
+        "card_version": "1",
+        "card_kind": "TRADE_PLAN",
+        "submission_status": "NOT_SUBMITTED",
+        "manual_execution_required": True,
+        "lifecycle_state": state,
+        "data_quality_state": "READY",
+        "signal_state": state,
+        "symbol": "ETH",
+        "side": side,
+        "speed": speed,
+        "setup_family": provenance["family"],
+        "setup_id": plan["setup_id"],
+        "plan_id": plan_id,
+        "plan_canonical_hash": plan_id,
+        "strategy_version": STRATEGY_VERSION,
+        "configuration_version": CONFIGURATION_VERSION,
+        "trade_plan_version": TRADE_PLAN_VERSION,
+        "decision_trigger_identity": plan["decision_trigger_identity"],
+        "decision_trigger_open_time_ms": plan["decision_trigger_open_time_ms"],
+        "decision_trigger_canonical_hash": plan["decision_trigger_canonical_hash"],
+        "decision_trigger_received_at": trigger.isoformat(),
+        "entry_low": decimal_to_canonical_string(values["entry_low"]),
+        "entry_high": decimal_to_canonical_string(values["entry_high"]),
+        "planned_entry": decimal_to_canonical_string(values["planned_entry"]),
+        "chase_limit": decimal_to_canonical_string(values["chase_limit"]),
+        "stop": decimal_to_canonical_string(values["stop"]),
+        "tp1": decimal_to_canonical_string(values["tp1"]),
+        "tp2": decimal_to_canonical_string(values["tp2"]),
+        "quantity": decimal_to_canonical_string(values["quantity"]),
+        "notional": decimal_to_canonical_string(values["notional"]),
+        "planned_risk": decimal_to_canonical_string(values["planned_risk"]),
+        "account_equity": decimal_to_canonical_string(values["account_equity"]),
+        "risk_percent": decimal_to_canonical_string(
+            values["planned_risk"] / values["account_equity"] * Decimal("100")
+        ),
+        "created_at": created.isoformat(),
+        "expires_at": expires.isoformat(),
+        "do_not_chase": "DO NOT CHASE",
+        "reason": "CONFIRMED",
+    }
+
+
 def _validate_bundle(payload: dict[str, object]) -> None:
     if (
         set(payload) != _BUNDLE_FIELDS
@@ -486,18 +541,9 @@ def _validate_bundle(payload: dict[str, object]) -> None:
     except (OperatorReviewError, TypeError, ValueError) as exc:
         raise OutcomeError("BUNDLE_DECISION_INVALID") from exc
     side, plan_values = _validate_plan_semantics(plan)
-    expected_card = {
-        "symbol": "ETH",
-        "side": side,
-        "speed": plan["speed"],
-        "setup_id": plan["setup_id"],
-        "plan_id": payload["plan_id"],
-        "plan_canonical_hash": payload["plan_hash"],
-        "strategy_version": STRATEGY_VERSION,
-        "configuration_version": CONFIGURATION_VERSION,
-        "trade_plan_version": TRADE_PLAN_VERSION,
-        "planned_risk": decimal_to_canonical_string(plan_values["planned_risk"]),
-    }
+    expected_card = _expected_card_from_plan(
+        plan, plan_id=cast(str, payload["plan_id"]), side=side, values=plan_values
+    )
     manual = cast(dict[str, object], shadow["manual_fields"])
     expected_manual = {
         "symbol": "ETH",
@@ -516,7 +562,7 @@ def _validate_bundle(payload: dict[str, object]) -> None:
             )
         },
     }
-    if any(card_body.get(key) != value for key, value in expected_card.items()) or any(
+    if card_body != expected_card or any(
         manual.get(key) != value for key, value in expected_manual.items()
     ):
         raise OutcomeError("BUNDLE_SEMANTIC_CORRESPONDENCE_INVALID")
