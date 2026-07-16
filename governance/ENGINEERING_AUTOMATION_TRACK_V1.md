@@ -64,9 +64,9 @@ M1 只做无歧义机械操作，脚本运行本身为 **0 Agent Token**。
 
 | 子里程碑 | 内容 | 退出标准 |
 |---|---|---|
-| M1.1 | Snapshot/Evidence/Handoff schemas、fixtures、validation | schema tests 全通过 |
+| M1.1 | Execution Launch Packet schema + Tooling Preflight CLI + validation | schema tests 全通过 |
 | M1.2 | Project Snapshot + Evidence CLI | 在至少两个对象上可重复生成一致结果 |
-| M1.3 | Handoff + Tooling Preflight | 三类角色模板和 preflight fixture 通过 |
+| M1.3 | Handoff Generator and role templates | 三类角色模板通过 |
 | M1.4 | Agent Cost + Retrospective | 自动更新 Engineering Backlog |
 | M1.5 | Hardening、跨平台、错误处理、CI | 连续 2 个产品任务无证据错误/流程回滚 |
 

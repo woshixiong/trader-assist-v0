@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woshixiong.github.io/trader-assist-v0/schemas/control/execution-launch-packet-v1.schema.json",
+  "title": "Execution Launch Packet v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["PACKET_VERSION", "TARGET_ROLE", "PREFLIGHT_STATUS", "EXECUTION_CAPABILITY_REQUIRED", "CANDIDATE_ROUTES", "SELECTED_ROUTE", "SELECTION_REASON", "CODEX_QUOTA_STATE", "ENVIRONMENT_REUSE", "SETUP_REQUIRED", "USER_ACTION", "OBJECT_PREFLIGHT", "TOOLING_FAILURES", "GITHUB_ACTIONS_EVIDENCE_ROUTE", "REVIEWER_ISOLATION", "SIDE_EFFECTS"],
+  "$defs": {
+    "non_empty_text": {"type": "string", "minLength": 1, "maxLength": 500},
+    "route": {"enum": ["DETERMINISTIC_SCRIPT", "CHATGPT", "CODEX", "DEEPSEEK_CLAUDE_CODE", "TRAE", "NONE"]},
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["EXPECTED", "ACTUAL", "MATCH"],
+      "properties": {
+        "EXPECTED": {"type": "string", "maxLength": 500},
+        "ACTUAL": {"type": "string", "maxLength": 500},
+        "MATCH": {"type": "boolean"}
+      }
+    },
+    "git_probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["COMMAND_ARGV", "EXIT_CODE", "STDERR", "SUCCESS"],
+      "properties": {
+        "COMMAND_ARGV": {"type": "array", "minItems": 1, "maxItems": 8, "items": {"type": "string", "minLength": 1, "maxLength": 500}},
+        "EXIT_CODE": {"type": "integer", "minimum": -1, "maximum": 255},
+        "STDERR": {"type": "string", "maxLength": 1000},
+        "SUCCESS": {"type": "boolean"},
+        "VALUE": {"type": "string", "maxLength": 500}
+      },
+      "allOf": [
+        {"if": {"properties": {"SUCCESS": {"const": true}}}, "then": {"required": ["VALUE"]}},
+        {"if": {"properties": {"SUCCESS": {"const": false}}}, "then": {"not": {"required": ["VALUE"]}}}
+      ]
+    }
+  },
+  "properties": {
+    "PACKET_VERSION": {"const": "1.0.0"},
+    "TARGET_ROLE": {"enum": ["WRITER", "REVIEWER", "FINALIZER", "PROJECT_CONTROL"]},
+    "PREFLIGHT_STATUS": {"enum": ["PASS", "TOOLING_UNAVAILABLE", "OBJECT_DRIFT", "ROUTE_UNAVAILABLE"]},
+    "EXECUTION_CAPABILITY_REQUIRED": {"type": "array", "minItems": 1, "maxItems": 12, "items": {"$ref": "#/$defs/non_empty_text"}},
+    "CANDIDATE_ROUTES": {"type": "array", "minItems": 1, "maxItems": 6, "uniqueItems": true, "items": {"$ref": "#/$defs/route"}},
+    "SELECTED_ROUTE": {"$ref": "#/$defs/route"},
+    "SELECTION_REASON": {"$ref": "#/$defs/non_empty_text"},
+    "CODEX_QUOTA_STATE": {"enum": ["GE_30", "LT_30_GE_10", "LT_10", "UNKNOWN"]},
+    "ENVIRONMENT_REUSE": {"type": "array", "minItems": 1, "maxItems": 12, "items": {"$ref": "#/$defs/non_empty_text"}},
+    "SETUP_REQUIRED": {"enum": ["YES", "NO"]},
+    "USER_ACTION": {"$ref": "#/$defs/non_empty_text"},
+    "OBJECT_PREFLIGHT": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ORIGIN", "BRANCH", "HEAD", "WORKTREE_CLEAN", "GIT_PROBES"],
+      "properties": {
+        "ORIGIN": {"$ref": "#/$defs/check"},
+        "BRANCH": {"$ref": "#/$defs/check"},
+        "HEAD": {"$ref": "#/$defs/check"},
+        "WORKTREE_CLEAN": {"type": "boolean"},
+        "GIT_PROBES": {"type": "array", "minItems": 4, "maxItems": 4, "items": {"$ref": "#/$defs/git_probe"}},
+        "ACTIONS_RUN_ID": {"type": "string", "pattern": "^[0-9]{1,20}$"}
+      }
+    },
+    "TOOLING_FAILURES": {
+      "type": "array",
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["COMMAND_ARGV", "EXIT_CODE", "STDERR"],
+        "properties": {
+          "COMMAND_ARGV": {"type": "array", "minItems": 1, "maxItems": 8, "items": {"type": "string", "minLength": 1, "maxLength": 500}},
+          "EXIT_CODE": {"type": "integer", "minimum": -1, "maximum": 255},
+          "STDERR": {"type": "string", "maxLength": 1000}
+        }
+      }
+    },
+    "GITHUB_ACTIONS_EVIDENCE_ROUTE": {"enum": ["NOT_REQUIRED", "CONNECTOR_KNOWN_RUN_ID", "CONNECTOR_RUN_URL", "GH_FALLBACK", "UNAVAILABLE"]},
+    "REVIEWER_ISOLATION": {"enum": ["NOT_APPLICABLE", "REQUIRED_NEW_READ_ONLY_CONTEXT"]},
+    "SIDE_EFFECTS": {"const": "NONE"}
+  },
+  "allOf": [
+    {"if": {"properties": {"SELECTED_ROUTE": {"const": "DETERMINISTIC_SCRIPT"}}}, "then": {"properties": {"CANDIDATE_ROUTES": {"contains": {"const": "DETERMINISTIC_SCRIPT"}}}}},
+    {"if": {"properties": {"SELECTED_ROUTE": {"const": "CHATGPT"}}}, "then": {"properties": {"CANDIDATE_ROUTES": {"contains": {"const": "CHATGPT"}}}}},
+    {"if": {"properties": {"SELECTED_ROUTE": {"const": "CODEX"}}}, "then": {"properties": {"CANDIDATE_ROUTES": {"contains": {"const": "CODEX"}}}}},
+    {"if": {"properties": {"SELECTED_ROUTE": {"const": "DEEPSEEK_CLAUDE_CODE"}}}, "then": {"properties": {"CANDIDATE_ROUTES": {"contains": {"const": "DEEPSEEK_CLAUDE_CODE"}}}}},
+    {"if": {"properties": {"SELECTED_ROUTE": {"const": "TRAE"}}}, "then": {"properties": {"CANDIDATE_ROUTES": {"contains": {"const": "TRAE"}}}}},
+    {"if": {"properties": {"SELECTED_ROUTE": {"const": "NONE"}}}, "then": {"properties": {"CANDIDATE_ROUTES": {"contains": {"const": "NONE"}}, "PREFLIGHT_STATUS": {"const": "ROUTE_UNAVAILABLE"}}}},
+    {"if": {"properties": {"PREFLIGHT_STATUS": {"const": "ROUTE_UNAVAILABLE"}}}, "then": {"properties": {"SELECTED_ROUTE": {"const": "NONE"}}}},
+    {"if": {"properties": {"PREFLIGHT_STATUS": {"const": "PASS"}}}, "then": {"properties": {"SELECTED_ROUTE": {"not": {"const": "NONE"}}}}},
+    {"if": {"properties": {"PREFLIGHT_STATUS": {"const": "TOOLING_UNAVAILABLE"}}}, "then": {"properties": {"TOOLING_FAILURES": {"minItems": 1}}}},
+    {"if": {"properties": {"TOOLING_FAILURES": {"minItems": 1}}}, "then": {"properties": {"PREFLIGHT_STATUS": {"const": "TOOLING_UNAVAILABLE"}}}},
+    {"if": {"properties": {"TARGET_ROLE": {"const": "REVIEWER"}}}, "then": {"properties": {"REVIEWER_ISOLATION": {"const": "REQUIRED_NEW_READ_ONLY_CONTEXT"}}}},
+    {"if": {"properties": {"GITHUB_ACTIONS_EVIDENCE_ROUTE": {"enum": ["CONNECTOR_KNOWN_RUN_ID", "CONNECTOR_RUN_URL"]}}}, "then": {"properties": {"OBJECT_PREFLIGHT": {"required": ["ACTIONS_RUN_ID"]}}}}
+  ]
+}
