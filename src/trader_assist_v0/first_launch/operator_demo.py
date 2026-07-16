@@ -28,6 +28,7 @@ from trader_assist_v0.first_launch.operator_review import (
     read_journal,
     render_terminal,
 )
+from trader_assist_v0.first_launch.outcome import build_decision_bundle
 from trader_assist_v0.first_launch.strategy import (
     PreparedSetup,
     Side,
@@ -202,6 +203,11 @@ def main() -> int:
     parser.add_argument("--decision", choices=tuple(item.value for item in HumanDecision))
     parser.add_argument("--reason", default="deterministic offline demo")
     parser.add_argument("--journal", type=Path)
+    parser.add_argument(
+        "--bundle",
+        type=Path,
+        help="write the canonical offline DecisionBundleV1 after recording the decision",
+    )
     args = parser.parse_args()
     card = _card(args.case)
     print("DEMO | OFFLINE | NOT SUBMITTED")
@@ -229,6 +235,30 @@ def main() -> int:
     if len(records) < 1 or records[-1].record_hash != record.record_hash:
         raise RuntimeError("demo journal readback failed")
     print(f"DECISION {decision.value} JOURNAL {record.record_hash}")
+    if args.bundle is not None:
+        # Recreate the deterministic plan so the persisted bundle carries the
+        # immutable plan payload as well as the independently hashed card.
+        side, fast = {
+            "long-fast": (Side.LONG, True),
+            "short-fast": (Side.SHORT, True),
+            "long-standard": (Side.LONG, False),
+            "short-standard": (Side.SHORT, False),
+        }[args.case]
+        output = _output(side, fast)
+        plan = build_plan(
+            strategy_output=output,
+            reference=output.raw_entry_low,
+            equity=Decimal("1000"),
+            sz_decimals=3,
+        )
+        bundle = build_decision_bundle(
+            card=card,
+            shadow_order=shadow,
+            decision_record=record,
+            plan=plan,
+        )
+        args.bundle.write_bytes(bundle.canonical_json())
+        print(f"DECISION BUNDLE {bundle.canonical_hash}")
     return 0
 
 
