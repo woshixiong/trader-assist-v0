@@ -28,6 +28,8 @@ from trader_assist_v0.first_launch.market_data import (
     evidence_from_raw,
 )
 from trader_assist_v0.first_launch.operator_review import (
+    _CARD_FIELDS,
+    _MANUAL_FIELD_NAMES,
     CARD_HASH_DOMAIN,
     SHADOW_HASH_DOMAIN,
     HumanDecision,
@@ -39,7 +41,16 @@ from trader_assist_v0.first_launch.operator_review import (
     _validated_card,
     _validated_shadow,
 )
-from trader_assist_v0.first_launch.strategy import TRADE_PLAN_HASH_DOMAIN, Side, TradePlan
+from trader_assist_v0.first_launch.strategy import (
+    CONFIGURATION_VERSION,
+    STRATEGY_VERSION,
+    TRADE_PLAN_HASH_DOMAIN,
+    TRADE_PLAN_VERSION,
+    Side,
+    TradePlan,
+    _round_price,
+    size_plan,
+)
 
 DECISION_BUNDLE_VERSION: Literal["1"] = "1"
 MANUAL_EXECUTION_VERSION: Literal["1"] = "1"
@@ -240,6 +251,173 @@ def _plan_payload(plan: TradePlan) -> dict[str, object]:
     return cast(dict[str, object], json.loads(canonical_json_bytes(payload)))
 
 
+def _bundle_time(value: object, error: str) -> datetime:
+    if type(value) is not str:
+        raise OutcomeError(error)
+    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+    return _timestamp(normalized, error)
+
+
+def _validate_plan_semantics(plan: dict[str, object]) -> tuple[str, dict[str, Decimal]]:
+    """Validate every serialised financial value without process-local issuance."""
+    required = {
+        "trade_plan_version",
+        "strategy_version",
+        "configuration_version",
+        "symbol",
+        "setup_id",
+        "provenance",
+        "speed",
+        "decision_trigger_identity",
+        "decision_trigger_open_time_ms",
+        "decision_trigger_canonical_hash",
+        "decision_trigger_received_at",
+        "strategy_reason",
+        "strategy_do_not_chase",
+        "material_extreme",
+        "raw_entry_low",
+        "raw_entry_high",
+        "raw_chase_limit",
+        "raw_stop",
+        "strategy_created_at",
+        "strategy_expires_at",
+        "supersedes_plan_id",
+        "reference",
+        "entry_low",
+        "entry_high",
+        "planned_entry",
+        "chase_limit",
+        "stop",
+        "tp1",
+        "tp2",
+        "quantity",
+        "notional",
+        "account_equity",
+        "risk_budget",
+        "planned_risk",
+        "sz_decimals",
+        "do_not_chase",
+    }
+    if (
+        set(plan) != required
+        or plan.get("symbol") != "ETH"
+        or plan.get("speed") not in {"FAST", "STANDARD"}
+    ):
+        raise OutcomeError("BUNDLE_PLAN_INVALID")
+    if (
+        plan.get("trade_plan_version"),
+        plan.get("strategy_version"),
+        plan.get("configuration_version"),
+    ) != (TRADE_PLAN_VERSION, STRATEGY_VERSION, CONFIGURATION_VERSION):
+        raise OutcomeError("BUNDLE_PLAN_INVALID")
+    provenance = plan.get("provenance")
+    if type(provenance) is not dict or provenance.get("side") not in {"LONG", "SHORT"}:
+        raise OutcomeError("BUNDLE_PLAN_INVALID")
+    side = cast(str, provenance["side"])
+    if (
+        plan.get("setup_id")
+        != hashlib.sha256(
+            canonical_json_bytes(
+                {
+                    "strategy_version": STRATEGY_VERSION,
+                    "configuration_version": CONFIGURATION_VERSION,
+                    "provenance": provenance,
+                }
+            )
+        ).hexdigest()
+    ):
+        raise OutcomeError("BUNDLE_PLAN_INVALID")
+    if (
+        plan.get("strategy_reason") != "CONFIRMED"
+        or plan.get("strategy_do_not_chase") != "DO NOT CHASE"
+        or plan.get("do_not_chase") != "DO NOT CHASE"
+    ):
+        raise OutcomeError("BUNDLE_PLAN_INVALID")
+    values = {
+        name: _decimal(plan.get(name), positive=True, error="BUNDLE_PLAN_INVALID")
+        for name in (
+            "reference",
+            "entry_low",
+            "entry_high",
+            "planned_entry",
+            "chase_limit",
+            "stop",
+            "tp1",
+            "tp2",
+            "quantity",
+            "notional",
+            "account_equity",
+            "risk_budget",
+            "planned_risk",
+            "raw_entry_low",
+            "raw_entry_high",
+            "raw_chase_limit",
+            "raw_stop",
+            "material_extreme",
+        )
+    }
+    if (
+        not values["entry_low"] <= values["planned_entry"] <= values["entry_high"]
+        or values["notional"] != values["quantity"] * values["planned_entry"]
+    ):
+        raise OutcomeError("BUNDLE_PLAN_INVALID")
+    if (
+        side == "LONG"
+        and not values["stop"] < values["planned_entry"] < values["tp1"] < values["tp2"]
+    ) or (
+        side == "SHORT"
+        and not values["tp2"] < values["tp1"] < values["planned_entry"] < values["stop"]
+    ):
+        raise OutcomeError("BUNDLE_PLAN_INVALID")
+    decimals = plan.get("sz_decimals")
+    if type(decimals) is not int or isinstance(decimals, bool) or not 0 <= decimals <= 18:
+        raise OutcomeError("BUNDLE_PLAN_INVALID")
+    try:
+        risk = size_plan(
+            side=Side(side),
+            entry=values["planned_entry"],
+            stop=values["stop"],
+            equity=values["account_equity"],
+            sz_decimals=decimals,
+        )
+    except ValueError as exc:
+        raise OutcomeError("BUNDLE_PLAN_INVALID") from exc
+    if (values["quantity"], values["notional"], values["risk_budget"], values["planned_risk"]) != (
+        risk.quantity,
+        risk.notional,
+        risk.risk_budget,
+        risk.planned_risk,
+    ):
+        raise OutcomeError("BUNDLE_PLAN_INVALID")
+    target = "down" if side == "LONG" else "up"
+    distance = abs(values["planned_entry"] - values["stop"])
+    expected = (
+        _round_price(
+            values["planned_entry"] + distance
+            if side == "LONG"
+            else values["planned_entry"] - distance,
+            decimals,
+            target,
+        ),
+        _round_price(
+            values["planned_entry"] + 2 * distance
+            if side == "LONG"
+            else values["planned_entry"] - 2 * distance,
+            decimals,
+            target,
+        ),
+    )
+    if (values["tp1"], values["tp2"]) != expected:
+        raise OutcomeError("BUNDLE_PLAN_INVALID")
+    created, expiry = (
+        _bundle_time(plan.get("strategy_created_at"), "BUNDLE_PLAN_INVALID"),
+        _bundle_time(plan.get("strategy_expires_at"), "BUNDLE_PLAN_INVALID"),
+    )
+    if expiry <= created:
+        raise OutcomeError("BUNDLE_PLAN_INVALID")
+    return side, values
+
+
 def _validate_bundle(payload: dict[str, object]) -> None:
     if (
         set(payload) != _BUNDLE_FIELDS
@@ -266,8 +444,10 @@ def _validate_bundle(payload: dict[str, object]) -> None:
     ):
         raise OutcomeError("BUNDLE_CARD_INVALID")
     card_body = cast(dict[str, object], card["payload"])
-    if card.get("card_id") != card.get("canonical_hash") or card["card_id"] != _digest(
-        CARD_HASH_DOMAIN, card_body
+    if (
+        set(card_body) != _CARD_FIELDS
+        or card.get("card_id") != card.get("canonical_hash")
+        or card["card_id"] != _digest(CARD_HASH_DOMAIN, card_body)
     ):
         raise OutcomeError("BUNDLE_CARD_INVALID")
     required_shadow = {
@@ -292,6 +472,11 @@ def _validate_bundle(payload: dict[str, object]) -> None:
     shadow_body.pop("canonical_hash")
     if shadow["shadow_order_id"] != _digest(SHADOW_HASH_DOMAIN, shadow_body):
         raise OutcomeError("BUNDLE_SHADOW_INVALID")
+    if (
+        type(shadow.get("manual_fields")) is not dict
+        or set(cast(dict[str, object], shadow["manual_fields"])) != _MANUAL_FIELD_NAMES
+    ):
+        raise OutcomeError("BUNDLE_SHADOW_INVALID")
     try:
         _validate_record(
             decision,
@@ -300,6 +485,41 @@ def _validate_bundle(payload: dict[str, object]) -> None:
         )
     except (OperatorReviewError, TypeError, ValueError) as exc:
         raise OutcomeError("BUNDLE_DECISION_INVALID") from exc
+    side, plan_values = _validate_plan_semantics(plan)
+    expected_card = {
+        "symbol": "ETH",
+        "side": side,
+        "speed": plan["speed"],
+        "setup_id": plan["setup_id"],
+        "plan_id": payload["plan_id"],
+        "plan_canonical_hash": payload["plan_hash"],
+        "strategy_version": STRATEGY_VERSION,
+        "configuration_version": CONFIGURATION_VERSION,
+        "trade_plan_version": TRADE_PLAN_VERSION,
+        "planned_risk": decimal_to_canonical_string(plan_values["planned_risk"]),
+    }
+    manual = cast(dict[str, object], shadow["manual_fields"])
+    expected_manual = {
+        "symbol": "ETH",
+        "side": side,
+        "speed": plan["speed"],
+        **{
+            name: decimal_to_canonical_string(plan_values[name])
+            for name in (
+                "planned_entry",
+                "chase_limit",
+                "stop",
+                "tp1",
+                "tp2",
+                "quantity",
+                "notional",
+            )
+        },
+    }
+    if any(card_body.get(key) != value for key, value in expected_card.items()) or any(
+        manual.get(key) != value for key, value in expected_manual.items()
+    ):
+        raise OutcomeError("BUNDLE_SEMANTIC_CORRESPONDENCE_INVALID")
     if (
         plan.get("symbol") != "ETH"
         or payload.get("plan_id") != payload.get("plan_hash")
@@ -326,7 +546,7 @@ def _validate_bundle(payload: dict[str, object]) -> None:
         or decision.get("plan_id") != payload["plan_id"]
         or decision.get("plan_hash") != payload["plan_hash"]
         or plan.get("setup_id") != payload["setup_id"]
-        or card_body.get("planned_risk") != payload.get("planned_risk")
+        or payload.get("planned_risk") != decimal_to_canonical_string(plan_values["planned_risk"])
     ):
         raise OutcomeError("BUNDLE_CORRESPONDENCE_INVALID")
     _decimal(payload.get("planned_risk"), positive=True, error="BUNDLE_PLANNED_RISK_INVALID")
@@ -616,6 +836,7 @@ _OUTCOME_FIELDS = frozenset(
         "manual_execution_hash",
         "submission_status",
         "manual_execution_required",
+        "derivation",
     }
 )
 
@@ -660,6 +881,26 @@ def _validate_outcome(payload: dict[str, object]) -> None:
         "INSUFFICIENT_EVIDENCE",
     }:
         raise OutcomeError("OUTCOME_PATH_INVALID")
+    derivation = payload.get("derivation")
+    if type(derivation) is not dict or set(derivation) != {
+        "bundle",
+        "manual_execution",
+        "candle_evidence",
+    }:
+        raise OutcomeError("OUTCOME_DERIVATION_INVALID")
+    try:
+        bundle = DecisionBundleV1(cast(dict[str, object], derivation["bundle"]))
+        manual = ManualExecutionImportV1(cast(dict[str, object], derivation["manual_execution"]))
+        candles = read_candle_evidence(
+            canonical_json_bytes(
+                {"candle_evidence_version": "1", "candles": derivation["candle_evidence"]}
+            )
+        )
+        expected = _derive_outcome(bundle=bundle, manual_execution=manual, candles=candles)
+    except (TypeError, ValueError, KeyError) as exc:
+        raise OutcomeError("OUTCOME_DERIVATION_INVALID") from exc
+    if expected != payload:
+        raise OutcomeError("OUTCOME_DERIVATION_MISMATCH")
 
 
 @dataclass(frozen=True)
@@ -683,12 +924,12 @@ class OutcomeRecordV1:
         return cls(_strict_object(raw, "OUTCOME_JSON_INVALID"))
 
 
-def build_outcome(
+def _derive_outcome(
     *,
     bundle: DecisionBundleV1,
     manual_execution: ManualExecutionImportV1,
     candles: tuple[Candle, ...],
-) -> OutcomeRecordV1:
+) -> dict[str, object]:
     """Match a closed manual import and calculate only deterministic offline evidence."""
     bundle.__post_init__()
     manual_execution.__post_init__()
@@ -750,6 +991,17 @@ def build_outcome(
     planned_quantity = _decimal(plan["quantity"], positive=True, error="BUNDLE_PLAN_INVALID")
     card = card_data
     shadow = cast(dict[str, object], bundle.payload["shadow_order"])
+    evidence: list[dict[str, object]] = []
+    for candle in candles:
+        issued = _validated_candle(candle)
+        evidence.append(
+            {
+                "raw_text": issued.evidence.raw_text,
+                "received_at": issued.evidence.received_at.isoformat(),
+                "receive_sequence": issued.evidence.receive_sequence,
+                "connection_id": issued.evidence.connection_id,
+            }
+        )
     payload: dict[str, object] = {
         "outcome_version": OUTCOME_VERSION,
         "outcome_id": "",
@@ -800,11 +1052,28 @@ def build_outcome(
         "manual_execution_hash": manual_execution.payload["canonical_hash"],
         "submission_status": "NOT_SUBMITTED",
         "manual_execution_required": True,
+        "derivation": {
+            "bundle": bundle.payload,
+            "manual_execution": manual_execution.payload,
+            "candle_evidence": evidence,
+        },
     }
     digest = _digest(OUTCOME_HASH_DOMAIN, payload, omit=("outcome_id", "canonical_hash"))
     payload["outcome_id"] = digest
     payload["canonical_hash"] = digest
-    return OutcomeRecordV1(payload)
+    return payload
+
+
+def build_outcome(
+    *,
+    bundle: DecisionBundleV1,
+    manual_execution: ManualExecutionImportV1,
+    candles: tuple[Candle, ...],
+) -> OutcomeRecordV1:
+    """Match a closed manual import and calculate only deterministic offline evidence."""
+    return OutcomeRecordV1(
+        _derive_outcome(bundle=bundle, manual_execution=manual_execution, candles=candles)
+    )
 
 
 def _outcome_journal_records(raw: bytes) -> tuple[dict[str, object], ...]:
@@ -877,6 +1146,15 @@ def append_outcome(journal: str | Path, *, outcome: OutcomeRecordV1) -> OutcomeR
     except OSError as exc:
         raise OutcomeError("OUTCOME_JOURNAL_LOCK_FAILED") from exc
     try:
+        lock_info = os.fstat(lock_fd)
+    except OSError as exc:
+        os.close(lock_fd)
+        raise OutcomeError("OUTCOME_JOURNAL_LOCK_FAILED") from exc
+    if not stat.S_ISREG(lock_info.st_mode):
+        os.close(lock_fd)
+        raise OutcomeError("OUTCOME_JOURNAL_LOCK_INVALID")
+    lock_identity = (lock_info.st_dev, lock_info.st_ino)
+    try:
         try:
             fd = os.open(
                 path, os.O_CREAT | os.O_RDWR | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0), 0o600
@@ -937,9 +1215,15 @@ def append_outcome(journal: str | Path, *, outcome: OutcomeRecordV1) -> OutcomeR
     finally:
         os.close(lock_fd)
         try:
+            current = lock.stat(follow_symlinks=False)
+        except FileNotFoundError:
+            raise OutcomeError("OUTCOME_JOURNAL_LOCK_IDENTITY_CHANGED") from None
+        if not stat.S_ISREG(current.st_mode) or (current.st_dev, current.st_ino) != lock_identity:
+            raise OutcomeError("OUTCOME_JOURNAL_LOCK_IDENTITY_CHANGED")
+        try:
             lock.unlink()
         except FileNotFoundError:
-            pass
+            raise OutcomeError("OUTCOME_JOURNAL_LOCK_IDENTITY_CHANGED") from None
 
 
 def read_candle_evidence(raw: bytes) -> tuple[Candle, ...]:

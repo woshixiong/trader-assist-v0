@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -229,3 +230,55 @@ def test_forged_card_and_non_taken_decision_cannot_close_a_manual_trade(tmp_path
     execution, candles = _import(bundle, Side.SHORT)
     with pytest.raises(OutcomeError, match="SIDE_MISMATCH"):
         build_outcome(bundle=bundle, manual_execution=execution, candles=candles)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "gross_pnl",
+        "net_pnl",
+        "total_fees",
+        "r_multiple",
+        "hypothetical_plan_path",
+        "learning_findings",
+    ],
+)
+def test_refreshed_outcome_hash_cannot_replace_derivable_evidence(
+    tmp_path: Path, field: str
+) -> None:
+    import trader_assist_v0.first_launch.outcome as module
+
+    bundle, _ = _bundle(tmp_path)
+    execution, candles = _import(bundle, Side.LONG)
+    outcome = build_outcome(bundle=bundle, manual_execution=execution, candles=candles)
+    forged = json.loads(outcome.canonical_json())
+    forged[field] = "0" if field != "learning_findings" else []
+    if field == "hypothetical_plan_path":
+        forged[field] = "NO_PLAN_LEVEL_HIT"
+    digest = module._digest(
+        module.OUTCOME_HASH_DOMAIN, forged, omit=("outcome_id", "canonical_hash")
+    )
+    forged["outcome_id"] = forged["canonical_hash"] = digest
+    with pytest.raises(OutcomeError, match="DERIVATION"):
+        module.OutcomeRecordV1(forged)
+
+
+def test_replacement_lock_is_never_removed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import trader_assist_v0.first_launch.outcome as module
+
+    bundle, _ = _bundle(tmp_path)
+    execution, _ = _import(bundle, Side.LONG)
+    outcome = build_outcome(bundle=bundle, manual_execution=execution, candles=())
+    journal = tmp_path / "outcomes.jsonl"
+    lock = journal.with_name(journal.name + ".lock")
+    original_write = module.os.write
+
+    def replace_lock(fd: int, data: bytes) -> int:
+        lock.unlink()
+        lock.write_text("replacement", encoding="utf-8")
+        return original_write(fd, data)
+
+    monkeypatch.setattr(module.os, "write", replace_lock)
+    with pytest.raises(OutcomeError, match="LOCK_IDENTITY_CHANGED"):
+        append_outcome(journal, outcome=outcome)
+    assert lock.read_text(encoding="utf-8") == "replacement"
