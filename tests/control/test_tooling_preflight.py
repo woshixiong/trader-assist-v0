@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -81,6 +82,45 @@ def test_schema_self_validation_and_packet_contract() -> None:
         validate(invalid)
 
 
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda packet: packet.update({"CANDIDATE_ROUTES": ["CHATGPT"]}),
+        lambda packet: packet.update(
+            {"SELECTED_ROUTE": "NONE", "CANDIDATE_ROUTES": ["NONE"], "PREFLIGHT_STATUS": "PASS"}
+        ),
+        lambda packet: packet.update({"PREFLIGHT_STATUS": "TOOLING_UNAVAILABLE"}),
+        lambda packet: packet.update(
+            {
+                "PREFLIGHT_STATUS": "PASS",
+                "TOOLING_FAILURES": [
+                    {"COMMAND_ARGV": ["git", "--version"], "EXIT_CODE": 1, "STDERR": "failed"}
+                ],
+            }
+        ),
+        lambda packet: packet.update(
+            {"TARGET_ROLE": "REVIEWER", "REVIEWER_ISOLATION": "NOT_APPLICABLE"}
+        ),
+        lambda packet: packet.update(
+            {
+                "GITHUB_ACTIONS_EVIDENCE_ROUTE": "CONNECTOR_KNOWN_RUN_ID",
+                "OBJECT_PREFLIGHT": {
+                    key: value
+                    for key, value in packet["OBJECT_PREFLIGHT"].items()
+                    if key != "ACTIONS_RUN_ID"
+                },
+            }
+        ),
+    ],
+)
+def test_cross_field_invariants_reject_invalid_packets(mutate: object) -> None:
+    packet = tooling.build_packet(args(), runner=completed)
+    assert callable(mutate)
+    mutate(packet)
+    with pytest.raises(ValueError):
+        tooling.validate_packet(packet)
+
+
 def test_text_order_json_output_and_equivalence(capsys: pytest.CaptureFixture[str]) -> None:
     packet = tooling.build_packet(args(), runner=completed)
     tooling.main(
@@ -100,6 +140,8 @@ def test_text_order_json_output_and_equivalence(capsys: pytest.CaptureFixture[st
             "--codex-quota-state",
             "GE_30",
             "--deterministic-complete",
+            "--available-route",
+            "DETERMINISTIC_SCRIPT",
         ]
     )
     assert [line.split(":", 1)[0] for line in capsys.readouterr().out.splitlines()] == list(
@@ -122,6 +164,8 @@ def test_text_order_json_output_and_equivalence(capsys: pytest.CaptureFixture[st
             "--codex-quota-state",
             "GE_30",
             "--deterministic-complete",
+            "--available-route",
+            "DETERMINISTIC_SCRIPT",
             "--output",
             "json",
         ]
@@ -168,6 +212,7 @@ def test_routing(
     )
     assert packet["SELECTED_ROUTE"] == selected
     assert selected in packet["CANDIDATE_ROUTES"]
+    validate(packet)
     assert packet["REVIEWER_ISOLATION"] == (
         "REQUIRED_NEW_READ_ONLY_CONTEXT" if role == "REVIEWER" else "NOT_APPLICABLE"
     )
@@ -176,6 +221,19 @@ def test_routing(
 def test_deterministic_route_and_no_unavailable_selection() -> None:
     candidates, selected, _ = tooling.select_route(
         "WRITER", "UNKNOWN", [], True, False, False, False, False, False, False
+    )
+    assert (candidates, selected) == (["NONE"], "NONE")
+    candidates, selected, _ = tooling.select_route(
+        "WRITER",
+        "UNKNOWN",
+        ["DETERMINISTIC_SCRIPT"],
+        True,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
     )
     assert (candidates, selected) == (["DETERMINISTIC_SCRIPT"], "DETERMINISTIC_SCRIPT")
     candidates, selected, _ = tooling.select_route(
@@ -192,11 +250,77 @@ def test_tooling_failures_are_shell_free_bounded_and_sanitized() -> None:
         return completed(argv, **kwargs)
 
     reuse, failures = tooling.tooling_preflight(["python"], "/missing", ROOT, runner=failed)
-    assert reuse and failures[0]["COMMAND_ARGV"] == ["/missing", "--version"]
+    assert reuse and failures[0]["COMMAND_ARGV"] == ["python-path-validation", "/missing"]
     assert failures[0]["EXIT_CODE"] == -1
     code, stderr = tooling.run_readonly(["missing", "--version"], runner=failed)
     assert code == -1 and "very-secret" not in stderr and "[REDACTED]" in stderr
     assert len(stderr) <= 1000
+
+
+def test_secret_styles_are_redacted_before_bounding() -> None:
+    value = (
+        "Authorization: Bearer authorization-value Bearer standalone-value "
+        "token: token-value password=password-value secret: secret-value "
+        "ghp_github-value " + "x" * 2000
+    )
+    sanitized = tooling.sanitize_stderr(value)
+    for secret in (
+        "authorization-value",
+        "standalone-value",
+        "token-value",
+        "password-value",
+        "secret-value",
+        "ghp_github-value",
+    ):
+        assert secret not in sanitized
+    assert "Authorization: Bearer [REDACTED]" in sanitized
+    assert "token: [REDACTED]" in sanitized
+    assert len(sanitized) == 1000
+
+
+@pytest.mark.parametrize("run_id", ["", "\uff11\uff12", "1" * 21, "12a"])
+def test_actions_run_ids_require_ascii_bounded_digits(run_id: str) -> None:
+    assert tooling.action_evidence("o", "r", run_id, None, True, False) == ("UNAVAILABLE", None)
+
+
+def test_git_probe_failures_are_preserved_and_fail_closed() -> None:
+    for marker in ("config", "branch", "rev-parse", "status"):
+
+        def failed_probe(
+            argv: list[str], marker: str = marker, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            assert kwargs["shell"] is False
+            if marker in argv:
+                return subprocess.CompletedProcess(
+                    argv, 1, stdout="hidden", stderr="Bearer probe-secret"
+                )
+            return completed(argv, **kwargs)
+
+        packet = tooling.build_packet(args(), runner=failed_probe)
+        assert packet["PREFLIGHT_STATUS"] == "TOOLING_UNAVAILABLE"
+        probes = packet["OBJECT_PREFLIGHT"]["GIT_PROBES"]
+        failed = next(probe for probe in probes if marker in probe["COMMAND_ARGV"])
+        assert failed["SUCCESS"] is False and "VALUE" not in failed
+        assert failed["STDERR"] == "Bearer [REDACTED]"
+        if marker == "status":
+            assert packet["OBJECT_PREFLIGHT"]["WORKTREE_CLEAN"] is False
+
+
+def test_python_path_boundary_rejects_arbitrary_paths_without_running_them() -> None:
+    seen: list[list[str]] = []
+
+    def recording_runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        seen.append(argv)
+        return completed(argv, **kwargs)
+
+    _, failures = tooling.tooling_preflight(
+        ["python"], "/tmp/not-approved-python", ROOT, recording_runner
+    )
+    assert failures[0]["COMMAND_ARGV"] == ["python-path-validation", "/tmp/not-approved-python"]
+    assert all(argv[0] != "/tmp/not-approved-python" for argv in seen)
+
+    executable, _, failure = tooling.select_python(sys.executable, ROOT)
+    assert executable == str(tooling.lexical_absolute(sys.executable)) and failure is None
 
 
 def test_object_drift_and_actions_routes() -> None:
@@ -228,6 +352,7 @@ def test_no_prohibited_side_effect_commands() -> None:
         "git checkout",
         "git switch",
         "git reset",
+        "git add",
         "git commit",
         "git push",
         "pip install",
