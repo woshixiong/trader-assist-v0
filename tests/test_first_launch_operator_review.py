@@ -238,6 +238,179 @@ def test_journal_reason_lock_symlink_nonregular_and_append_failure(
         read_journal(link)
 
 
+def test_journal_append_path_replacement_after_descriptor_validation_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import trader_assist_v0.first_launch.operator_review as review
+
+    journal = tmp_path / "review.jsonl"
+    replacement = tmp_path / "replacement.jsonl"
+    first = _card(Side.LONG)
+    replacement_card = _card(Side.SHORT)
+    append_decision(
+        journal,
+        card=first,
+        shadow_order=create_shadow_order(first),
+        decision=HumanDecision.TAKEN,
+        timestamp=_plan().created_at,
+        reason="first journal",
+    )
+    append_decision(
+        replacement,
+        card=replacement_card,
+        shadow_order=create_shadow_order(replacement_card),
+        decision=HumanDecision.SKIPPED,
+        timestamp=_plan().created_at,
+        reason="replacement journal",
+    )
+    replacement_bytes = replacement.read_bytes()
+    original_validate = review._validate_journal
+    replaced = False
+
+    def replace_after_validation(raw: bytes):
+        nonlocal replaced
+        records = original_validate(raw)
+        if not replaced:
+            os.replace(replacement, journal)
+            replaced = True
+        return records
+
+    monkeypatch.setattr(review, "_validate_journal", replace_after_validation)
+    next_card = _card(Side.LONG, False)
+    with pytest.raises(OperatorReviewError, match="JOURNAL_IDENTITY_CHANGED"):
+        append_decision(
+            journal,
+            card=next_card,
+            shadow_order=create_shadow_order(next_card),
+            decision=HumanDecision.REJECTED,
+            timestamp=_plan().created_at,
+            reason="must not reach replacement",
+        )
+    assert journal.read_bytes() == replacement_bytes
+    records = read_journal(journal)
+    assert [record.payload["card_id"] for record in records] == [replacement_card.card_id]
+    assert not (tmp_path / "review.jsonl.lock").exists()
+
+
+def test_journal_append_path_replacement_after_write_rolls_back_original_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import trader_assist_v0.first_launch.operator_review as review
+
+    journal = tmp_path / "review.jsonl"
+    replacement = tmp_path / "replacement.jsonl"
+    original_alias = tmp_path / "opened-original.jsonl"
+    first = _card(Side.LONG)
+    replacement_card = _card(Side.SHORT)
+    append_decision(
+        journal,
+        card=first,
+        shadow_order=create_shadow_order(first),
+        decision=HumanDecision.TAKEN,
+        timestamp=_plan().created_at,
+        reason="first journal",
+    )
+    append_decision(
+        replacement,
+        card=replacement_card,
+        shadow_order=create_shadow_order(replacement_card),
+        decision=HumanDecision.SKIPPED,
+        timestamp=_plan().created_at,
+        reason="replacement journal",
+    )
+    original_bytes = journal.read_bytes()
+    replacement_bytes = replacement.read_bytes()
+    os.link(journal, original_alias)
+    original_fsync = review.os.fsync
+    replaced = False
+
+    def replace_after_write(fd: int) -> None:
+        nonlocal replaced
+        original_fsync(fd)
+        if not replaced:
+            os.replace(replacement, journal)
+            replaced = True
+
+    monkeypatch.setattr(review.os, "fsync", replace_after_write)
+    next_card = _card(Side.LONG, False)
+    with pytest.raises(OperatorReviewError, match="JOURNAL_IDENTITY_CHANGED"):
+        append_decision(
+            journal,
+            card=next_card,
+            shadow_order=create_shadow_order(next_card),
+            decision=HumanDecision.REJECTED,
+            timestamp=_plan().created_at,
+            reason="rollback opened original",
+        )
+    assert journal.read_bytes() == replacement_bytes
+    assert original_alias.read_bytes() == original_bytes
+    assert len(read_journal(journal)) == 1
+    assert not (tmp_path / "review.jsonl.lock").exists()
+
+
+def test_journal_partial_write_and_post_write_validation_failures_rollback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import trader_assist_v0.first_launch.operator_review as review
+
+    journal = tmp_path / "review.jsonl"
+    first = _card(Side.LONG)
+    append_decision(
+        journal,
+        card=first,
+        shadow_order=create_shadow_order(first),
+        decision=HumanDecision.TAKEN,
+        timestamp=_plan().created_at,
+        reason="first journal",
+    )
+    before = journal.read_bytes()
+    original_write = review.os.write
+
+    def partial_write(fd: int, value: bytes) -> int:
+        partial = len(value) // 2
+        assert partial
+        original_write(fd, value[:partial])
+        return partial
+
+    partial_card = _card(Side.SHORT)
+    with monkeypatch.context() as patched:
+        patched.setattr(review.os, "write", partial_write)
+        with pytest.raises(OperatorReviewError, match="JOURNAL_APPEND_FAILED"):
+            append_decision(
+                journal,
+                card=partial_card,
+                shadow_order=create_shadow_order(partial_card),
+                decision=HumanDecision.SKIPPED,
+                timestamp=_plan().created_at,
+                reason="partial write",
+            )
+    assert journal.read_bytes() == before
+
+    original_validate = review._validate_journal
+    validation_calls = 0
+
+    def reject_post_write_validation(raw: bytes):
+        nonlocal validation_calls
+        validation_calls += 1
+        if validation_calls == 2:
+            raise OperatorReviewError("forced post-write validation failure")
+        return original_validate(raw)
+
+    validation_card = _card(Side.LONG, False)
+    with monkeypatch.context() as patched:
+        patched.setattr(review, "_validate_journal", reject_post_write_validation)
+        with pytest.raises(OperatorReviewError, match="JOURNAL_APPEND_FAILED"):
+            append_decision(
+                journal,
+                card=validation_card,
+                shadow_order=create_shadow_order(validation_card),
+                decision=HumanDecision.REJECTED,
+                timestamp=_plan().created_at,
+                reason="post-write validation",
+            )
+    assert journal.read_bytes() == before
+
+
 def test_demo_cases_and_package_exports(tmp_path: Path) -> None:
     root = Path(__file__).resolve().parents[1]
     environment = {**os.environ, "PYTHONPATH": str(root / "src")}

@@ -683,6 +683,43 @@ def _acquire_lock(path: Path) -> tuple[int, Path]:
     return fd, lock
 
 
+def _journal_descriptor_identity(fd: int) -> tuple[int, int]:
+    try:
+        info = os.fstat(fd)
+    except OSError as exc:
+        raise OperatorReviewError("JOURNAL_APPEND_FAILED") from exc
+    if not stat.S_ISREG(info.st_mode):
+        raise OperatorReviewError("JOURNAL_TARGET_INVALID")
+    return (info.st_dev, info.st_ino)
+
+
+def _journal_descriptor_bytes(fd: int) -> bytes:
+    try:
+        os.lseek(fd, 0, os.SEEK_SET)
+        chunks: list[bytes] = []
+        while chunk := os.read(fd, 64 * 1024):
+            chunks.append(chunk)
+    except OSError as exc:
+        raise OperatorReviewError("JOURNAL_READ_FAILED") from exc
+    return b"".join(chunks)
+
+
+def _path_matches_descriptor(path: Path, identity: tuple[int, int]) -> bool:
+    try:
+        info = path.stat(follow_symlinks=False)
+    except OSError:
+        return False
+    return stat.S_ISREG(info.st_mode) and (info.st_dev, info.st_ino) == identity
+
+
+def _rollback_journal_descriptor(fd: int, original_size: int) -> None:
+    try:
+        os.ftruncate(fd, original_size)
+        os.fsync(fd)
+    except OSError as exc:
+        raise OperatorReviewError("JOURNAL_APPEND_ROLLBACK_FAILED") from exc
+
+
 def append_decision(
     journal: str | Path,
     *,
@@ -719,64 +756,71 @@ def append_decision(
     path = Path(journal)
     lock_fd, lock = _acquire_lock(path)
     try:
-        old_bytes = _journal_bytes(path)
-        records = _validate_journal(old_bytes)
-        setup_id = cast(str, p["setup_id"])
-        if any(record.payload["setup_id"] == setup_id for record in records):
-            raise OperatorReviewError("JOURNAL_DUPLICATE_SETUP")
-        payload: dict[str, object] = {
-            "journal_version": JOURNAL_VERSION,
-            "sequence": len(records) + 1,
-            "previous_record_hash": records[-1].record_hash if records else "0" * 64,
-            "record_hash": "",
-            "timestamp": timestamp.isoformat(),
-            "reason": reason,
-            "card_id": card.card_id,
-            "card_hash": card.canonical_hash,
-            "setup_id": setup_id,
-            "setup_hash": setup_id,
-            "plan_id": cast(str, p["plan_id"]),
-            "plan_hash": cast(str, p["plan_canonical_hash"]),
-            "shadow_order_id": shadow.shadow_order_id,
-            "shadow_order_hash": shadow.canonical_hash,
-            "decision": decision.value,
-            "signal_state": p["lifecycle_state"],
-            "data_quality_state": p["data_quality_state"],
-            "manual_execution_required": True,
-            "submission_status": SUBMISSION_STATUS,
-        }
-        payload["record_hash"] = _record_digest(payload)
-        record = _validate_record(
-            payload,
-            sequence=len(records) + 1,
-            previous=cast(str, payload["previous_record_hash"]),
-        )
-        encoded = canonical_json_bytes(payload) + b"\n"
-        original_size = len(old_bytes)
         try:
             fd = os.open(
                 path,
-                os.O_CREAT | os.O_WRONLY | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0),
+                os.O_CREAT | os.O_RDWR | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0),
                 0o600,
             )
         except OSError as exc:
             raise OperatorReviewError("JOURNAL_APPEND_FAILED") from exc
         try:
-            written = os.write(fd, encoded)
-            if written != len(encoded):
-                raise OSError("partial journal append")
-            os.fsync(fd)
-        except OSError as exc:
+            identity = _journal_descriptor_identity(fd)
+            old_bytes = _journal_descriptor_bytes(fd)
+            records = _validate_journal(old_bytes)
+            setup_id = cast(str, p["setup_id"])
+            if any(record.payload["setup_id"] == setup_id for record in records):
+                raise OperatorReviewError("JOURNAL_DUPLICATE_SETUP")
+            payload: dict[str, object] = {
+                "journal_version": JOURNAL_VERSION,
+                "sequence": len(records) + 1,
+                "previous_record_hash": records[-1].record_hash if records else "0" * 64,
+                "record_hash": "",
+                "timestamp": timestamp.isoformat(),
+                "reason": reason,
+                "card_id": card.card_id,
+                "card_hash": card.canonical_hash,
+                "setup_id": setup_id,
+                "setup_hash": setup_id,
+                "plan_id": cast(str, p["plan_id"]),
+                "plan_hash": cast(str, p["plan_canonical_hash"]),
+                "shadow_order_id": shadow.shadow_order_id,
+                "shadow_order_hash": shadow.canonical_hash,
+                "decision": decision.value,
+                "signal_state": p["lifecycle_state"],
+                "data_quality_state": p["data_quality_state"],
+                "manual_execution_required": True,
+                "submission_status": SUBMISSION_STATUS,
+            }
+            payload["record_hash"] = _record_digest(payload)
+            record = _validate_record(
+                payload,
+                sequence=len(records) + 1,
+                previous=cast(str, payload["previous_record_hash"]),
+            )
+            encoded = canonical_json_bytes(payload) + b"\n"
+            original_size = len(old_bytes)
+            if not _path_matches_descriptor(path, identity):
+                raise OperatorReviewError("JOURNAL_IDENTITY_CHANGED")
             try:
-                os.ftruncate(fd, original_size)
+                written = os.write(fd, encoded)
+                if written != len(encoded):
+                    raise OSError("partial journal append")
                 os.fsync(fd)
-            except OSError as rollback_exc:
-                raise OperatorReviewError("JOURNAL_APPEND_ROLLBACK_FAILED") from rollback_exc
-            raise OperatorReviewError("JOURNAL_APPEND_FAILED") from exc
+            except OSError as exc:
+                _rollback_journal_descriptor(fd, original_size)
+                raise OperatorReviewError("JOURNAL_APPEND_FAILED") from exc
+            try:
+                _validate_journal(_journal_descriptor_bytes(fd))
+            except OperatorReviewError as exc:
+                _rollback_journal_descriptor(fd, original_size)
+                raise OperatorReviewError("JOURNAL_APPEND_FAILED") from exc
+            if not _path_matches_descriptor(path, identity):
+                _rollback_journal_descriptor(fd, original_size)
+                raise OperatorReviewError("JOURNAL_IDENTITY_CHANGED")
+            return record
         finally:
             os.close(fd)
-        _validate_journal(_journal_bytes(path))
-        return record
     finally:
         os.close(lock_fd)
         try:
