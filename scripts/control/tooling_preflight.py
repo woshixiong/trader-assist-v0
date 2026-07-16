@@ -35,7 +35,7 @@ SAFE_COMMANDS: dict[str, tuple[str, ...]] = {
     "git": ("--version",),
     "gh": ("--version",),
 }
-GITHUB_TOKEN_PATTERN = re.compile(r"\bgh[pousr]_[A-Za-z0-9_]+\b", re.IGNORECASE)
+GITHUB_TOKEN_PATTERN = re.compile(r"\bgh[pousr]_\S+", re.IGNORECASE)
 AUTHORIZATION_BEARER_PATTERN = re.compile(r"(authorization\s*:\s*bearer\s+)\S+", re.IGNORECASE)
 BEARER_PATTERN = re.compile(r"(\bbearer\s+)\S+", re.IGNORECASE)
 SECRET_ASSIGNMENT_PATTERN = re.compile(r"\b(token|password|secret)\b\s*([:=])\s*\S+", re.IGNORECASE)
@@ -151,6 +151,16 @@ def select_python(
         lexical_absolute(repo / "venv" / "bin" / "python"),
     )
     if explicit is not None:
+        raw_path = Path(explicit)
+        if not raw_path.is_absolute() or ".." in raw_path.parts:
+            return (
+                None,
+                "REJECTED_EXECUTABLE:" + explicit,
+                python_path_failure(
+                    raw_path,
+                    "python path must be absolute and must not contain a traversal component",
+                ),
+            )
         candidate = lexical_absolute(explicit)
         if candidate not in approved:
             return (

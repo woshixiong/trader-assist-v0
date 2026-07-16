@@ -278,6 +278,28 @@ def test_secret_styles_are_redacted_before_bounding() -> None:
     assert len(sanitized) == 1000
 
 
+@pytest.mark.parametrize(
+    "token",
+    ["ghp_nonzero-secret", "gho_a-b", "ghu_a.b", "ghs_a/b", "ghr_a=1"],
+)
+def test_github_token_redaction_consumes_complete_non_whitespace_value(token: str) -> None:
+    sanitized = tooling.sanitize_stderr("failure " + token + " trailing")
+    assert token not in sanitized
+    assert token.split("_", 1)[1] not in sanitized
+    assert sanitized == "failure [REDACTED] trailing"
+
+
+def test_multiple_and_long_github_tokens_leave_no_suffixes() -> None:
+    tokens = ("ghp_nonzero-secret", "gho_a-b", "ghu_a.b", "ghs_a/b", "ghr_a=1")
+    value = " ".join(tokens) + " " + "x" * 2000
+    sanitized = tooling.sanitize_stderr(value)
+    for token in tokens:
+        assert token not in sanitized
+        assert token.split("_", 1)[1] not in sanitized
+    assert sanitized.count("[REDACTED]") == len(tokens)
+    assert len(sanitized) == 1000
+
+
 @pytest.mark.parametrize("run_id", ["", "\uff11\uff12", "1" * 21, "12a"])
 def test_actions_run_ids_require_ascii_bounded_digits(run_id: str) -> None:
     assert tooling.action_evidence("o", "r", run_id, None, True, False) == ("UNAVAILABLE", None)
@@ -321,6 +343,28 @@ def test_python_path_boundary_rejects_arbitrary_paths_without_running_them() -> 
 
     executable, _, failure = tooling.select_python(sys.executable, ROOT)
     assert executable == str(tooling.lexical_absolute(sys.executable)) and failure is None
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "../miniforge3/bin/python",
+        "./../miniforge3/bin/python",
+        "python",
+        "/tmp/../miniforge3/bin/python",
+        "/tmp/lookalike-python",
+    ],
+)
+def test_python_path_traversal_and_relative_inputs_never_reach_runner(path: str) -> None:
+    seen: list[list[str]] = []
+
+    def recording_runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        seen.append(argv)
+        return completed(argv, **kwargs)
+
+    _, failures = tooling.tooling_preflight(["python", "pytest"], path, ROOT, recording_runner)
+    assert failures[0]["COMMAND_ARGV"][0] == "python-path-validation"
+    assert all(argv[0] != path for argv in seen)
 
 
 def test_object_drift_and_actions_routes() -> None:
