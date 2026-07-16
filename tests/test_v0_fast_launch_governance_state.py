@@ -21,16 +21,16 @@ SCHEMA_PATH = ROOT / "schemas" / "governance" / "V0FastLaunchProgram.schema.json
 
 PROGRAM_TASK_ID = "V0-FLP1B0B-CAPTURE-NOW-AUTHORITY-AMENDMENT"
 PROGRAM_BASE_SHA = "78d2d37bfe5a4f3f1d382a2a96e57896ae9676ae"
-CURRENT_STATE_BASE_SHA = "8beca954a2d0ba51ea5ceff3c0249308ae46e299"
+CURRENT_STATE_BASE_SHA = "7a71598876e5519aedfecab0bba405b40c75565d"
 CURRENT_ACTIVE_TASK_ID = "NONE"
-COMPLETED_IMPLEMENTATION = "V0-FLP1-DECISION-TO-OUTCOME-OPERATOR-ASSIST-PILOT"
-COMPLETED_IMPLEMENTATION_PR = 19
-LAST_LEASE_ID = "V0-FLP1-PR19-B1B2B5B6-AUTHORITY-SNAPSHOT-REPAIR-WRITE-LEASE-1"
-LAST_LEASE_TYPE = "BOUNDED_PR19_AUTHORITY_SNAPSHOT_REPAIR"
+COMPLETED_IMPLEMENTATION = "V0-FL3-OFFLINE-OPERATOR-REVIEW-SURFACE-AND-SHADOW-JOURNAL"
+COMPLETED_IMPLEMENTATION_PR = 22
+LAST_LEASE_ID = "PR22_FINAL_REPAIR_WRITE_LEASE_ID_UNRESOLVED"
+LAST_LEASE_TYPE = "PR22_FINAL_REPAIR_WRITE_LEASE_TYPE_UNRESOLVED"
 FASTSAFE_CONTROL_CONTRACT_ID = "FASTSAFE-V1-2026-07"
 ENGINEERING_TRACK_ID = "ENGINEERING-AUTOMATION-TRACK-V1-2026-07"
-NEXT_GATE = "V0-FL3-OFFLINE-OPERATOR-REVIEW-SURFACE-AND-SHADOW-JOURNAL"
-NEXT_GATE_STATUS = "USER_APPROVED_PENDING_SEPARATE_IMPLEMENTATION_AUTHORIZATION"
+NEXT_GATE = "NEXT_GATE_UNRESOLVED"
+NEXT_GATE_STATUS = "NEXT_GATE_UNRESOLVED_PENDING_SEPARATE_USER_DECISION"
 AUTHORITY_HASH = "0e327e566589d8030ff00d4d009eb4b6827679ab508133d66840b2c245dc53df"
 SOURCE_CATALOG_HASH = "0ca27f650f399f8fa481ad9421eab4183c1c13812c71dfa8daaf878719bd99b7"
 COMMIT_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -48,23 +48,17 @@ FUTURE_R1_MARKERS = {
 }
 
 EXPECTED_CHANGED_FILES = {
-    "governance/ENGINEERING_AUTOMATION_TRACK_V1.md",
-    "governance/FASTSAFE_V1_MASTER_CONTROL_CONTRACT.md",
     "governance/V0_FAST_LAUNCH_PROGRAM.json",
     "governance/PROJECT_STATE.json",
     "schemas/governance/V0FastLaunchProgram.schema.json",
-    "tests/test_first_launch_governance.py",
     "tests/test_v0_fast_launch_governance_state.py",
     "tests/test_v0_t2_eth_public_capture_runtime.py",
 }
 
 EXPECTED_COMMITTED_STATUS_MAP = {
-    "governance/ENGINEERING_AUTOMATION_TRACK_V1.md": "A",
-    "governance/FASTSAFE_V1_MASTER_CONTROL_CONTRACT.md": "A",
     "governance/V0_FAST_LAUNCH_PROGRAM.json": "M",
     "governance/PROJECT_STATE.json": "M",
     "schemas/governance/V0FastLaunchProgram.schema.json": "M",
-    "tests/test_first_launch_governance.py": "M",
     "tests/test_v0_fast_launch_governance_state.py": "M",
     "tests/test_v0_t2_eth_public_capture_runtime.py": "M",
 }
@@ -198,12 +192,56 @@ def test_r0_r1_and_deferred_g4_migration() -> None:
     assert "required_controls" not in r1
 
 
-def test_schema_rejects_stale_active_pr19_authority_values() -> None:
+def test_schema_rejects_stale_pr19_and_active_authority_values() -> None:
     schema = _load_json(SCHEMA_PATH)
     state_schema = schema["$defs"]["ProjectState"]
     assert isinstance(state_schema, dict)
     candidate = deepcopy(_load_json(STATE_PATH))
     candidate["active_task_id"] = COMPLETED_IMPLEMENTATION
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(state_schema).validate(candidate)
+
+    candidate = deepcopy(_load_json(STATE_PATH))
+    candidate["last_completed_implementation"] = (
+        "V0-FLP1-DECISION-TO-OUTCOME-OPERATOR-ASSIST-PILOT"
+    )
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(state_schema).validate(candidate)
+
+    candidate = deepcopy(_load_json(STATE_PATH))
+    candidate["last_completed_implementation_pr"] = 19
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(state_schema).validate(candidate)
+
+    candidate = deepcopy(_load_json(STATE_PATH))
+    candidate["active_write_lease"]["last_lease_id"] = (
+        "V0-FLP1-PR19-B1B2B5B6-AUTHORITY-SNAPSHOT-REPAIR-WRITE-LEASE-1"
+    )
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(state_schema).validate(candidate)
+
+    candidate = deepcopy(_load_json(STATE_PATH))
+    candidate["active_write_lease"]["last_lease_type"] = (
+        "BOUNDED_PR19_AUTHORITY_SNAPSHOT_REPAIR"
+    )
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(state_schema).validate(candidate)
+
+    candidate = deepcopy(_load_json(STATE_PATH))
+    candidate["next_gate"] = "V0-FL3-OFFLINE-OPERATOR-REVIEW-SURFACE-AND-SHADOW-JOURNAL"
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(state_schema).validate(candidate)
+
+    candidate = deepcopy(_load_json(STATE_PATH))
+    candidate["next_gate_status"] = (
+        "USER_APPROVED_PENDING_SEPARATE_IMPLEMENTATION_AUTHORIZATION"
+    )
 
     with pytest.raises(ValidationError):
         Draft202012Validator(state_schema).validate(candidate)
@@ -218,6 +256,19 @@ def test_schema_rejects_stale_active_pr19_authority_values() -> None:
 @pytest.mark.parametrize(
     "path, stale_value",
     [
+        (
+            ("authority", "last_completed_implementation"),
+            "V0-FLP1-DECISION-TO-OUTCOME-OPERATOR-ASSIST-PILOT",
+        ),
+        (("authority", "last_completed_implementation_pr"), 19),
+        (
+            ("authority", "next_gate"),
+            "V0-FL3-OFFLINE-OPERATOR-REVIEW-SURFACE-AND-SHADOW-JOURNAL",
+        ),
+        (
+            ("authority", "next_gate_status"),
+            "USER_APPROVED_PENDING_SEPARATE_IMPLEMENTATION_AUTHORIZATION",
+        ),
         (
             ("authority", "last_completed_implementation"),
             "V0-01A6-OFFLINE-CANDLE-CROSS-SOURCE-RECONCILIATION-CONTRACT",
@@ -407,20 +458,16 @@ def test_docs_share_capture_now_semantics() -> None:
 
 def test_exact_changed_file_scope_and_forbidden_boundaries() -> None:
     changed = EXPECTED_CHANGED_FILES
-    assert len(changed) == 8
+    assert len(changed) == 5
     assert changed == {
-        "governance/ENGINEERING_AUTOMATION_TRACK_V1.md",
-        "governance/FASTSAFE_V1_MASTER_CONTROL_CONTRACT.md",
         "governance/V0_FAST_LAUNCH_PROGRAM.json",
         "governance/PROJECT_STATE.json",
         "schemas/governance/V0FastLaunchProgram.schema.json",
-        "tests/test_first_launch_governance.py",
         "tests/test_v0_fast_launch_governance_state.py",
         "tests/test_v0_t2_eth_public_capture_runtime.py",
     }
     assert set(EXPECTED_COMMITTED_STATUS_MAP) == changed
-    assert tuple(EXPECTED_COMMITTED_STATUS_MAP.values()).count("A") == 2
-    assert tuple(EXPECTED_COMMITTED_STATUS_MAP.values()).count("M") == 6
+    assert tuple(EXPECTED_COMMITTED_STATUS_MAP.values()).count("M") == 5
     assert not _scope_boundary_errors(changed)
 
 
@@ -792,7 +839,7 @@ def _check_pr_scope(base_sha: str) -> int:
             print(f"boundary error: {error}", file=sys.stderr)
         return 1
 
-    print(f"PR scope check passed: {len(snapshot.committed)} files (2 A, 6 M)")
+    print(f"PR scope check passed: {len(snapshot.committed)} files (0 A, 5 M)")
     return 0
 
 

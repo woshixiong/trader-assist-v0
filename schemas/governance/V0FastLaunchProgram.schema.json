@@ -91,19 +91,19 @@
         },
         "next_gate": {
           "type": "string",
-          "const": "V0-FL3-OFFLINE-OPERATOR-REVIEW-SURFACE-AND-SHADOW-JOURNAL"
+          "const": "NEXT_GATE_UNRESOLVED"
         },
         "next_gate_status": {
           "type": "string",
-          "const": "USER_APPROVED_PENDING_SEPARATE_IMPLEMENTATION_AUTHORIZATION"
+          "const": "NEXT_GATE_UNRESOLVED_PENDING_SEPARATE_USER_DECISION"
         },
         "last_completed_implementation": {
           "type": "string",
-          "const": "V0-FLP1-DECISION-TO-OUTCOME-OPERATOR-ASSIST-PILOT"
+          "const": "V0-FL3-OFFLINE-OPERATOR-REVIEW-SURFACE-AND-SHADOW-JOURNAL"
         },
         "last_completed_implementation_pr": {
           "type": "integer",
-          "const": 19
+          "const": 22
         },
         "last_policy_state_pr": {
           "type": "integer",
@@ -252,7 +252,7 @@
         },
         "next_runtime_gate": {
           "type": "string",
-          "const": "V0-FL3-OFFLINE-OPERATOR-REVIEW-SURFACE-AND-SHADOW-JOURNAL"
+          "const": "NEXT_GATE_UNRESOLVED"
         },
         "forbidden_capabilities": {
           "type": "array",
@@ -2035,7 +2035,7 @@
         },
         "next_gate": {
           "type": "string",
-          "const": "V0-FL3-OFFLINE-OPERATOR-REVIEW-SURFACE-AND-SHADOW-JOURNAL"
+          "const": "NEXT_GATE_UNRESOLVED"
         }
       }
     },
@@ -2070,7 +2070,7 @@
         },
         "post_merge_next_gate": {
           "type": "string",
-          "const": "V0-FL3-OFFLINE-OPERATOR-REVIEW-SURFACE-AND-SHADOW-JOURNAL"
+          "const": "NEXT_GATE_UNRESOLVED"
         },
         "handoff_required_fields": {
           "type": "array",
@@ -2614,15 +2614,15 @@
         },
         "state_base_sha": {
           "type": "string",
-          "const": "8beca954a2d0ba51ea5ceff3c0249308ae46e299"
+          "const": "7a71598876e5519aedfecab0bba405b40c75565d"
         },
         "last_completed_implementation": {
           "type": "string",
-          "const": "V0-FLP1-DECISION-TO-OUTCOME-OPERATOR-ASSIST-PILOT"
+          "const": "V0-FL3-OFFLINE-OPERATOR-REVIEW-SURFACE-AND-SHADOW-JOURNAL"
         },
         "last_completed_implementation_pr": {
           "type": "integer",
-          "const": 19
+          "const": 22
         },
         "last_policy_state_pr": {
           "type": "integer",
@@ -2653,11 +2653,11 @@
             },
             "last_lease_id": {
               "type": "string",
-              "const": "V0-FLP1-PR19-B1B2B5B6-AUTHORITY-SNAPSHOT-REPAIR-WRITE-LEASE-1"
+              "const": "PR22_FINAL_REPAIR_WRITE_LEASE_ID_UNRESOLVED"
             },
             "last_lease_type": {
               "type": "string",
-              "const": "BOUNDED_PR19_AUTHORITY_SNAPSHOT_REPAIR"
+              "const": "PR22_FINAL_REPAIR_WRITE_LEASE_TYPE_UNRESOLVED"
             },
             "last_governance_level": {
               "type": "string",
@@ -2715,11 +2715,11 @@
         },
         "next_gate": {
           "type": "string",
-          "const": "V0-FL3-OFFLINE-OPERATOR-REVIEW-SURFACE-AND-SHADOW-JOURNAL"
+          "const": "NEXT_GATE_UNRESOLVED"
         },
         "next_gate_status": {
           "type": "string",
-          "const": "USER_APPROVED_PENDING_SEPARATE_IMPLEMENTATION_AUTHORIZATION"
+          "const": "NEXT_GATE_UNRESOLVED_PENDING_SEPARATE_USER_DECISION"
         },
         "conflict_state": {
           "type": "string",
