@@ -29,7 +29,13 @@ from trader_assist_v0.first_launch.pilot_review import (
 from trader_assist_v0.first_launch.strategy import Side, build_plan
 
 
-def _taken_bundle(tmp_path: Path, *, side: Side = Side.LONG, fast: bool = True):
+def _taken_bundle(
+    tmp_path: Path,
+    *,
+    side: Side = Side.LONG,
+    fast: bool = True,
+    decision_journal: Path | None = None,
+):
     output = _output(side, fast)
     plan = build_plan(
         strategy_output=output,
@@ -37,7 +43,7 @@ def _taken_bundle(tmp_path: Path, *, side: Side = Side.LONG, fast: bool = True):
         equity=Decimal("1000"),
         sz_decimals=3,
     )
-    decision_journal = tmp_path / "decision.jsonl"
+    decision_journal = decision_journal or tmp_path / "decision.jsonl"
     card = build_operator_card(plan, now=plan.created_at, quality=DataQualityState.READY)
     shadow = create_shadow_order(card)
     decision = append_decision(
@@ -155,3 +161,201 @@ def test_symlinked_source_is_rejected(tmp_path: Path) -> None:
     link.symlink_to(target)
     with pytest.raises(PilotReviewError, match="TARGET_INVALID"):
         build_pilot_review(link, tmp_path / "missing-outcomes")
+
+
+def _rehash(payload: dict[str, object]) -> dict[str, object]:
+    import trader_assist_v0.first_launch.pilot_review as module
+
+    digest = module._digest(payload)
+    payload["report_id"] = payload["canonical_hash"] = digest
+    return payload
+
+
+def _payload(report: PilotReviewReportV1) -> dict[str, object]:
+    return json.loads(report.canonical_json())
+
+
+def _two_outcome_report(tmp_path: Path) -> PilotReviewReportV1:
+    decisions = tmp_path / "decisions.jsonl"
+    first_journal, first_bundle = _taken_bundle(
+        tmp_path, decision_journal=decisions, side=Side.LONG, fast=True
+    )
+    second_journal, second_bundle = _taken_bundle(
+        tmp_path, decision_journal=decisions, side=Side.SHORT, fast=False
+    )
+    assert first_journal == second_journal == decisions
+    outcomes = tmp_path / "outcomes.jsonl"
+    append_outcome(outcomes, outcome=_outcome(first_bundle, side=Side.LONG))
+    append_outcome(outcomes, outcome=_outcome(second_bundle, side=Side.SHORT))
+    return build_pilot_review(decisions, outcomes)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda payload: payload["r_multiple_summary"].update({"total": "0"}),
+        lambda payload: payload["r_multiple_summary"].update(
+            {"count": 0, "total": "0", "minimum": None, "maximum": None}
+        ),
+        lambda payload: payload["mfe_summary"].update(
+            {"count": 0, "total": "0", "minimum": None, "maximum": None}
+        ),
+        lambda payload: payload["mae_summary"].update(
+            {"count": 0, "total": "0", "minimum": None, "maximum": None}
+        ),
+        lambda payload: payload["deviation_summary"].update(
+            {"nonzero_entry_deviation": 0, "total_absolute_entry_deviation": "1"}
+        ),
+        lambda payload: payload["deviation_summary"].update(
+            {"nonzero_quantity_deviation": 1, "total_absolute_quantity_deviation": "0"}
+        ),
+        lambda payload: payload["learning_finding_counts"].update({"ENTRY_DEVIATION": 0}),
+        lambda payload: payload["learning_finding_counts"].update({"SIZE_DEVIATION": 0}),
+        lambda payload: payload["learning_finding_counts"].update({"AMBIGUOUS_PATH": 1}),
+        lambda payload: payload["learning_finding_counts"].update({"INSUFFICIENT_EVIDENCE": 1}),
+        lambda payload: payload["financial_summary"].update(
+            {"total_fees": "0", "total_net_pnl": "2"}
+        ),
+        lambda payload: payload["learning_finding_counts"].update({"FEE_DRAG": 0}),
+    ],
+)
+def test_coherently_rehashed_aggregate_forgery_fails(tmp_path: Path, mutate) -> None:
+    decision_journal, bundle = _taken_bundle(tmp_path)
+    outcome_journal = tmp_path / "outcome.jsonl"
+    append_outcome(outcome_journal, outcome=_outcome(bundle))
+    report = build_pilot_review(decision_journal, outcome_journal)
+    forged = _payload(report)
+    mutate(forged)
+    with pytest.raises(PilotReviewError):
+        PilotReviewReportV1(_rehash(forged))
+
+
+def test_coherently_rehashed_multi_observation_total_outside_bounds_fails(tmp_path: Path) -> None:
+    report = _two_outcome_report(tmp_path)
+    forged = _payload(report)
+    summary = forged["r_multiple_summary"]
+    assert isinstance(summary, dict) and summary["count"] == 2
+    summary["total"] = "999"
+    with pytest.raises(PilotReviewError, match="STATISTIC"):
+        PilotReviewReportV1(_rehash(forged))
+
+
+def test_plan_followed_mathematical_range_rejects_coherent_rehash(tmp_path: Path) -> None:
+    decision_journal, bundle = _taken_bundle(tmp_path)
+    outcomes = tmp_path / "outcomes.jsonl"
+    append_outcome(outcomes, outcome=_outcome(bundle))
+    forged = _payload(build_pilot_review(decision_journal, outcomes))
+    deviation = forged["deviation_summary"]
+    findings = forged["learning_finding_counts"]
+    assert isinstance(deviation, dict) and isinstance(findings, dict)
+    deviation["nonzero_entry_deviation"] = 1
+    deviation["total_absolute_entry_deviation"] = "1"
+    deviation["nonzero_quantity_deviation"] = 1
+    deviation["total_absolute_quantity_deviation"] = "1"
+    findings["ENTRY_DEVIATION"] = 1
+    findings["SIZE_DEVIATION"] = 1
+    findings["PLAN_FOLLOWED"] = 1
+    with pytest.raises(PilotReviewError, match="FINDING"):
+        PilotReviewReportV1(_rehash(forged))
+
+
+@pytest.mark.parametrize("journal_kind", ("decision", "outcome"))
+def test_final_verification_rejects_equal_byte_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, journal_kind: str
+) -> None:
+    import trader_assist_v0.first_launch.pilot_review as module
+
+    decision_journal, bundle = _taken_bundle(tmp_path)
+    outcome_journal = tmp_path / "outcome.jsonl"
+    append_outcome(outcome_journal, outcome=_outcome(bundle))
+    target = decision_journal if journal_kind == "decision" else outcome_journal
+    original = module._build_payload
+
+    def replace(*args, **kwargs):
+        replacement = target.with_name(target.name + ".replacement")
+        replacement.write_bytes(target.read_bytes())
+        replacement.replace(target)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(module, "_build_payload", replace)
+    with pytest.raises(PilotReviewError, match="SOURCE_CHANGED"):
+        build_pilot_review(decision_journal, outcome_journal)
+
+
+def test_final_verification_rejects_symlink_and_missing_source_creation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import trader_assist_v0.first_launch.pilot_review as module
+
+    missing = tmp_path / "missing.jsonl"
+    original = module._build_payload
+
+    def create_missing(*args, **kwargs):
+        missing.write_bytes(b"")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(module, "_build_payload", create_missing)
+    with pytest.raises(PilotReviewError, match="SOURCE_CHANGED"):
+        build_pilot_review(missing, tmp_path / "missing-outcomes")
+
+    monkeypatch.setattr(module, "_build_payload", original)
+    decision_journal, bundle = _taken_bundle(tmp_path)
+    outcome_journal = tmp_path / "outcome.jsonl"
+    append_outcome(outcome_journal, outcome=_outcome(bundle))
+
+    def replace_with_symlink(*args, **kwargs):
+        target = decision_journal.with_name("target.jsonl")
+        target.write_bytes(decision_journal.read_bytes())
+        decision_journal.unlink()
+        decision_journal.symlink_to(target)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(module, "_build_payload", replace_with_symlink)
+    with pytest.raises(PilotReviewError, match="SOURCE_TARGET_INVALID"):
+        build_pilot_review(decision_journal, outcome_journal)
+
+
+def _reverse_objects(value: object) -> object:
+    if isinstance(value, dict):
+        return {key: _reverse_objects(value[key]) for key in reversed(value)}
+    if isinstance(value, list):
+        return [_reverse_objects(item) for item in value]
+    return value
+
+
+def test_terminal_is_canonical_and_renders_all_evidence_sections(tmp_path: Path) -> None:
+    decision_journal, bundle = _taken_bundle(tmp_path)
+    outcomes = tmp_path / "outcomes.jsonl"
+    append_outcome(outcomes, outcome=_outcome(bundle))
+    report = build_pilot_review(decision_journal, outcomes)
+    reversed_payload = _reverse_objects(_payload(report))
+    assert isinstance(reversed_payload, dict)
+    reordered = PilotReviewReportV1(_rehash(reversed_payload))
+    rendered = render_pilot_review_terminal(report)
+    assert rendered == render_pilot_review_terminal(
+        PilotReviewReportV1.from_json(report.canonical_json())
+    )
+    assert rendered == render_pilot_review_terminal(reordered)
+    for token in (
+        "OFFLINE REVIEW ONLY",
+        "NOT SUBMITTED",
+        "decision_journal_sha256",
+        "outcome_journal_sha256",
+        "decision_record_hashes",
+        "outcome_ids",
+        "Decision summary",
+        "Coverage: 1/1",
+        "Outcome summary",
+        "Financial summary",
+        "Deviation summary",
+        "R summary",
+        "MFE summary",
+        "MAE summary",
+        "Replay coverage",
+        "Replay paths",
+        "Finding counts",
+        "Unavailable metrics",
+        "Authority boundary",
+    ):
+        assert token in rendered
+    assert "recommend" not in rendered.lower()

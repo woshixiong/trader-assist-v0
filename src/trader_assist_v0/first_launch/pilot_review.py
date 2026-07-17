@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import stat
 from dataclasses import dataclass
@@ -175,33 +176,75 @@ def _identity(info: object) -> tuple[int, int, int, int]:
     return (stat_result.st_dev, stat_result.st_ino, stat_result.st_size, stat_result.st_mtime_ns)
 
 
-def _capture_journal(path: str | Path, *, outcome: bool) -> _SourceCapture:
-    target = Path(path)
-    error_prefix = "OUTCOME" if outcome else "DECISION"
+def _read_descriptor(fd: int, error: str) -> bytes:
+    try:
+        chunks: list[bytes] = []
+        while chunk := os.read(fd, 64 * 1024):
+            chunks.append(chunk)
+        return b"".join(chunks)
+    except OSError as exc:
+        raise PilotReviewError(error) from exc
+
+
+def _stable_regular_bytes(
+    target: Path,
+    *,
+    error_prefix: str,
+    expected: tuple[int, int, int, int] | None = None,
+) -> _SourceCapture:
+    """Read an exact regular file through a descriptor bound to its path identity."""
     try:
         before = target.lstat()
     except FileNotFoundError:
-        return _SourceCapture(b"", None)
+        if expected is None:
+            return _SourceCapture(b"", None)
+        raise PilotReviewError(f"PILOT_REVIEW_{error_prefix}_SOURCE_CHANGED") from None
     except OSError as exc:
         raise PilotReviewError(f"PILOT_REVIEW_{error_prefix}_SOURCE_READ_FAILED") from exc
     if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
         raise PilotReviewError(f"PILOT_REVIEW_{error_prefix}_SOURCE_TARGET_INVALID")
-    signature = _identity(before)
+    before_identity = _identity(before)
+    if expected is not None and before_identity != expected:
+        raise PilotReviewError(f"PILOT_REVIEW_{error_prefix}_SOURCE_CHANGED")
     try:
-        raw = target.read_bytes()
-    except OSError as exc:
-        raise PilotReviewError(f"PILOT_REVIEW_{error_prefix}_SOURCE_READ_FAILED") from exc
-    try:
-        after = target.lstat()
+        fd = os.open(target, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     except OSError as exc:
         raise PilotReviewError(f"PILOT_REVIEW_{error_prefix}_SOURCE_CHANGED") from exc
-    if (
-        stat.S_ISLNK(after.st_mode)
-        or not stat.S_ISREG(after.st_mode)
-        or _identity(after) != signature
-    ):
-        raise PilotReviewError(f"PILOT_REVIEW_{error_prefix}_SOURCE_CHANGED")
-    return _SourceCapture(raw, signature)
+    try:
+        try:
+            opened = os.fstat(fd)
+        except OSError as exc:
+            raise PilotReviewError(f"PILOT_REVIEW_{error_prefix}_SOURCE_READ_FAILED") from exc
+        if not stat.S_ISREG(opened.st_mode):
+            raise PilotReviewError(f"PILOT_REVIEW_{error_prefix}_SOURCE_TARGET_INVALID")
+        identity = _identity(opened)
+        if identity != before_identity or (expected is not None and identity != expected):
+            raise PilotReviewError(f"PILOT_REVIEW_{error_prefix}_SOURCE_CHANGED")
+        raw = _read_descriptor(fd, f"PILOT_REVIEW_{error_prefix}_SOURCE_READ_FAILED")
+        try:
+            after_read = os.fstat(fd)
+        except OSError as exc:
+            raise PilotReviewError(f"PILOT_REVIEW_{error_prefix}_SOURCE_READ_FAILED") from exc
+        if _identity(after_read) != identity:
+            raise PilotReviewError(f"PILOT_REVIEW_{error_prefix}_SOURCE_CHANGED")
+        try:
+            resolved = target.stat(follow_symlinks=False)
+        except OSError as exc:
+            raise PilotReviewError(f"PILOT_REVIEW_{error_prefix}_SOURCE_CHANGED") from exc
+        if not stat.S_ISREG(resolved.st_mode) or (resolved.st_dev, resolved.st_ino) != (
+            identity[0],
+            identity[1],
+        ):
+            raise PilotReviewError(f"PILOT_REVIEW_{error_prefix}_SOURCE_CHANGED")
+        return _SourceCapture(raw, identity)
+    finally:
+        os.close(fd)
+
+
+def _capture_journal(path: str | Path, *, outcome: bool) -> _SourceCapture:
+    target = Path(path)
+    error_prefix = "OUTCOME" if outcome else "DECISION"
+    return _stable_regular_bytes(target, error_prefix=error_prefix)
 
 
 def _verify_source(path: str | Path, capture: _SourceCapture, *, outcome: bool) -> None:
@@ -215,17 +258,8 @@ def _verify_source(path: str | Path, capture: _SourceCapture, *, outcome: bool) 
         except OSError as exc:
             raise PilotReviewError(f"PILOT_REVIEW_{error_prefix}_SOURCE_CHANGED") from exc
         raise PilotReviewError(f"PILOT_REVIEW_{error_prefix}_SOURCE_CHANGED")
-    try:
-        info = target.lstat()
-        current = target.read_bytes()
-    except OSError as exc:
-        raise PilotReviewError(f"PILOT_REVIEW_{error_prefix}_SOURCE_CHANGED") from exc
-    if (
-        stat.S_ISLNK(info.st_mode)
-        or not stat.S_ISREG(info.st_mode)
-        or _identity(info) != capture.identity
-        or current != capture.raw
-    ):
+    current = _stable_regular_bytes(target, error_prefix=error_prefix, expected=capture.identity)
+    if current.raw != capture.raw:
         raise PilotReviewError(f"PILOT_REVIEW_{error_prefix}_SOURCE_CHANGED")
 
 
@@ -436,7 +470,14 @@ def _validate_summary(value: object, matched: int, code: str) -> None:
         return
     low = _decimal(minimum, code) if minimum is not None else None
     high = _decimal(maximum, code) if maximum is not None else None
-    if low is None or high is None or low > high:
+    if (
+        low is None
+        or high is None
+        or low > high
+        or total < low * count
+        or total > high * count
+        or (count == 1 and (total != low or total != high))
+    ):
         raise PilotReviewError(code)
 
 
@@ -533,21 +574,16 @@ def _validate_payload(payload: dict[str, object]) -> None:
         },
         "PILOT_REVIEW_DEVIATION_INVALID",
     )
-    for key in ("nonzero_entry_deviation", "nonzero_quantity_deviation"):
-        if _count(deviation[key], "PILOT_REVIEW_DEVIATION_INVALID") > matched:
+    deviation_counts: dict[str, int] = {}
+    for count_key, total_key in (
+        ("nonzero_entry_deviation", "total_absolute_entry_deviation"),
+        ("nonzero_quantity_deviation", "total_absolute_quantity_deviation"),
+    ):
+        count = _count(deviation[count_key], "PILOT_REVIEW_DEVIATION_INVALID")
+        total = _decimal(deviation[total_key], "PILOT_REVIEW_DEVIATION_INVALID", nonnegative=True)
+        if count > matched or (count == 0) != (total == 0):
             raise PilotReviewError("PILOT_REVIEW_DEVIATION_INVALID")
-    _decimal(
-        deviation["total_absolute_entry_deviation"],
-        "PILOT_REVIEW_DEVIATION_INVALID",
-        nonnegative=True,
-    )
-    _decimal(
-        deviation["total_absolute_quantity_deviation"],
-        "PILOT_REVIEW_DEVIATION_INVALID",
-        nonnegative=True,
-    )
-    for key in ("r_multiple_summary", "mfe_summary", "mae_summary"):
-        _validate_summary(payload[key], matched, "PILOT_REVIEW_STATISTIC_INVALID")
+        deviation_counts[count_key] = count
     replay = _object(
         payload["replay_summary"], {"coverage_counts", "path_counts"}, "PILOT_REVIEW_REPLAY_INVALID"
     )
@@ -562,10 +598,65 @@ def _validate_payload(payload: dict[str, object]) -> None:
         or coverage_counts["COMPLETE"] != sum(path_counts[key] for key in _PATHS[:-1])
     ):
         raise PilotReviewError("PILOT_REVIEW_REPLAY_INVALID")
+    complete = coverage_counts["COMPLETE"]
+    _validate_summary(payload["r_multiple_summary"], matched, "PILOT_REVIEW_STATISTIC_INVALID")
+    _validate_summary(payload["mfe_summary"], matched, "PILOT_REVIEW_STATISTIC_INVALID")
+    _validate_summary(payload["mae_summary"], matched, "PILOT_REVIEW_STATISTIC_INVALID")
+    if (
+        _count(
+            _object(
+                payload["r_multiple_summary"],
+                {"count", "total", "minimum", "maximum"},
+                "PILOT_REVIEW_STATISTIC_INVALID",
+            )["count"],
+            "PILOT_REVIEW_STATISTIC_INVALID",
+        )
+        != matched
+        or _count(
+            _object(
+                payload["mfe_summary"],
+                {"count", "total", "minimum", "maximum"},
+                "PILOT_REVIEW_STATISTIC_INVALID",
+            )["count"],
+            "PILOT_REVIEW_STATISTIC_INVALID",
+        )
+        != complete
+        or _count(
+            _object(
+                payload["mae_summary"],
+                {"count", "total", "minimum", "maximum"},
+                "PILOT_REVIEW_STATISTIC_INVALID",
+            )["count"],
+            "PILOT_REVIEW_STATISTIC_INVALID",
+        )
+        != complete
+    ):
+        raise PilotReviewError("PILOT_REVIEW_STATISTIC_INVALID")
     findings = _count_map(
         payload["learning_finding_counts"], _FINDINGS, "PILOT_REVIEW_FINDING_INVALID"
     )
     if any(value > matched for value in findings.values()):
+        raise PilotReviewError("PILOT_REVIEW_FINDING_INVALID")
+    if (
+        findings["ENTRY_DEVIATION"] != deviation_counts["nonzero_entry_deviation"]
+        or findings["SIZE_DEVIATION"] != deviation_counts["nonzero_quantity_deviation"]
+        or findings["AMBIGUOUS_PATH"] != path_counts["AMBIGUOUS_SAME_CANDLE"]
+        or findings["INSUFFICIENT_EVIDENCE"] != path_counts["INSUFFICIENT_EVIDENCE"]
+        or findings["INSUFFICIENT_EVIDENCE"] != coverage_counts["INSUFFICIENT_EVIDENCE"]
+        or (financial["total_fees"] == 0) != (findings["FEE_DRAG"] == 0)
+    ):
+        raise PilotReviewError("PILOT_REVIEW_FINDING_INVALID")
+    lower = max(
+        0,
+        matched
+        - deviation_counts["nonzero_entry_deviation"]
+        - deviation_counts["nonzero_quantity_deviation"],
+    )
+    upper = matched - max(
+        deviation_counts["nonzero_entry_deviation"],
+        deviation_counts["nonzero_quantity_deviation"],
+    )
+    if not lower <= findings["PLAN_FOLLOWED"] <= upper:
         raise PilotReviewError("PILOT_REVIEW_FINDING_INVALID")
     if (
         payload["unavailable_metrics"] != _UNAVAILABLE_METRICS
@@ -620,24 +711,34 @@ def render_pilot_review_terminal(report: PilotReviewReportV1) -> str:
         raise PilotReviewError("PILOT_REVIEW_REPORT_INVALID")
     report.__post_init__()
     report_payload = report.payload
+    source_evidence = cast(dict[str, object], report_payload["source_evidence"])
     coverage = cast(dict[str, object], report_payload["coverage_summary"])
     replay = cast(dict[str, object], report_payload["replay_summary"])
+
+    def canonical(section: object) -> str:
+        return canonical_json_bytes(section).decode("utf-8")
+
     return "\n".join(
         (
             "OFFLINE REVIEW ONLY — NOT SUBMITTED",
-            f"Report: {report.report_id}",
-            f"Decisions: {report_payload['decision_summary']}",
+            f"Report identity: {report.report_id}",
+            "Source evidence:",
+            f"  decision_journal_sha256: {source_evidence['decision_journal_sha256']}",
+            f"  outcome_journal_sha256: {source_evidence['outcome_journal_sha256']}",
+            f"  decision_record_hashes: {canonical(source_evidence['decision_record_hashes'])}",
+            f"  outcome_ids: {canonical(source_evidence['outcome_ids'])}",
+            f"Decision summary: {canonical(report_payload['decision_summary'])}",
             f"Coverage: {coverage['numerator']}/{coverage['denominator']}",
-            f"Outcomes: {report_payload['outcome_summary']}",
-            f"Financial: {report_payload['financial_summary']}",
-            f"Deviation: {report_payload['deviation_summary']}",
-            f"R: {report_payload['r_multiple_summary']}",
-            f"MFE: {report_payload['mfe_summary']}",
-            f"MAE: {report_payload['mae_summary']}",
-            f"Replay: {replay['coverage_counts']}",
-            f"Path: {replay['path_counts']}",
-            f"Findings: {report_payload['learning_finding_counts']}",
-            f"Unavailable metrics: {', '.join(_UNAVAILABLE_METRICS)}",
-            "Authority: ETH only; runtime/account/exchange/strategy change unauthorized.",
+            f"Outcome summary: {canonical(report_payload['outcome_summary'])}",
+            f"Financial summary: {canonical(report_payload['financial_summary'])}",
+            f"Deviation summary: {canonical(report_payload['deviation_summary'])}",
+            f"R summary: {canonical(report_payload['r_multiple_summary'])}",
+            f"MFE summary: {canonical(report_payload['mfe_summary'])}",
+            f"MAE summary: {canonical(report_payload['mae_summary'])}",
+            f"Replay coverage: {canonical(replay['coverage_counts'])}",
+            f"Replay paths: {canonical(replay['path_counts'])}",
+            f"Finding counts: {canonical(report_payload['learning_finding_counts'])}",
+            f"Unavailable metrics: {canonical(report_payload['unavailable_metrics'])}",
+            f"Authority boundary: {canonical(report_payload['authority_boundary'])}",
         )
     )
