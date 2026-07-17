@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from decimal import Decimal
 from pathlib import Path
 
@@ -359,3 +360,162 @@ def test_terminal_is_canonical_and_renders_all_evidence_sections(tmp_path: Path)
     ):
         assert token in rendered
     assert "recommend" not in rendered.lower()
+
+
+@pytest.mark.parametrize("summary_name", ("r_multiple_summary", "mfe_summary", "mae_summary"))
+def test_summary_count_two_requires_realizable_extrema_total(
+    tmp_path: Path, summary_name: str
+) -> None:
+    report = _two_outcome_report(tmp_path)
+    forged = _payload(report)
+    summary = forged[summary_name]
+    assert isinstance(summary, dict) and summary["count"] == 2
+    summary.update({"minimum": "0", "maximum": "10", "total": "5"})
+    with pytest.raises(PilotReviewError, match="STATISTIC"):
+        PilotReviewReportV1(_rehash(forged))
+
+    summary["total"] = "10"
+    assert PilotReviewReportV1(_rehash(forged)).payload[summary_name] == summary
+
+
+def test_summary_count_three_extrema_inclusive_bounds_are_enforced() -> None:
+    import trader_assist_v0.first_launch.pilot_review as module
+
+    for total in ("9", "21"):
+        with pytest.raises(PilotReviewError, match="STATISTIC"):
+            module._validate_summary(
+                {"count": 3, "total": total, "minimum": "0", "maximum": "10"},
+                3,
+                "PILOT_REVIEW_STATISTIC_INVALID",
+            )
+    module._validate_summary(
+        {"count": 3, "total": "10", "minimum": "0", "maximum": "10"},
+        3,
+        "PILOT_REVIEW_STATISTIC_INVALID",
+    )
+    module._validate_summary(
+        {"count": 3, "total": "20", "minimum": "0", "maximum": "10"},
+        3,
+        "PILOT_REVIEW_STATISTIC_INVALID",
+    )
+
+
+def _set_sign_summary(
+    payload: dict[str, object], *, positive: int, zero: int, negative: int, net: str
+) -> None:
+    outcome = payload["outcome_summary"]
+    financial = payload["financial_summary"]
+    assert isinstance(outcome, dict) and isinstance(financial, dict)
+    outcome.update(
+        {
+            "positive_net_pnl": positive,
+            "zero_net_pnl": zero,
+            "negative_net_pnl": negative,
+        }
+    )
+    fees = Decimal(str(financial["total_fees"]))
+    net_value = Decimal(net)
+    financial["total_net_pnl"] = net
+    financial["total_gross_pnl"] = str(net_value + fees)
+
+
+@pytest.mark.parametrize(
+    "positive,zero,negative,net",
+    (
+        (1, 0, 0, "0"),
+        (1, 0, 0, "-1"),
+        (0, 0, 1, "0"),
+        (0, 0, 1, "1"),
+        (0, 1, 0, "1"),
+    ),
+)
+def test_coherently_rehashed_pnl_sign_contradictions_fail(
+    tmp_path: Path, positive: int, zero: int, negative: int, net: str
+) -> None:
+    decision_journal, bundle = _taken_bundle(tmp_path)
+    outcomes = tmp_path / "outcomes.jsonl"
+    append_outcome(outcomes, outcome=_outcome(bundle))
+    forged = _payload(build_pilot_review(decision_journal, outcomes))
+    _set_sign_summary(forged, positive=positive, zero=zero, negative=negative, net=net)
+    with pytest.raises(PilotReviewError, match="FINANCIAL"):
+        PilotReviewReportV1(_rehash(forged))
+
+
+@pytest.mark.parametrize(
+    "positive,zero,negative,net",
+    ((1, 1, 0, "0"), (0, 1, 1, "0")),
+)
+def test_mixed_zero_pnl_sign_contradictions_fail(
+    tmp_path: Path, positive: int, zero: int, negative: int, net: str
+) -> None:
+    forged = _payload(_two_outcome_report(tmp_path))
+    _set_sign_summary(forged, positive=positive, zero=zero, negative=negative, net=net)
+    with pytest.raises(PilotReviewError, match="FINANCIAL"):
+        PilotReviewReportV1(_rehash(forged))
+
+
+@pytest.mark.parametrize("journal_kind", ("decision", "outcome"))
+def test_path_fingerprint_detects_same_inode_overwrite_at_observation_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, journal_kind: str
+) -> None:
+    import trader_assist_v0.first_launch.pilot_review as module
+
+    source = tmp_path / f"{journal_kind}.jsonl"
+    source.write_bytes(b"exact-bytes\n")
+    original_stat = Path.stat
+    nonfollowing_calls = 0
+
+    def mutate_before_path_stat(self: Path, *, follow_symlinks: bool = True):
+        nonlocal nonfollowing_calls
+        if self == source and not follow_symlinks:
+            nonfollowing_calls += 1
+        if self == source and not follow_symlinks and nonfollowing_calls == 2:
+            stamp = source.stat().st_mtime_ns + 1_000_000
+            os.utime(source, ns=(stamp, stamp))
+        return original_stat(self, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(module.Path, "stat", mutate_before_path_stat)
+    with pytest.raises(PilotReviewError, match="SOURCE_CHANGED"):
+        module._stable_regular_bytes(source, error_prefix=journal_kind.upper())
+
+
+def test_path_fingerprint_detects_hard_link_metadata_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import trader_assist_v0.first_launch.pilot_review as module
+
+    source = tmp_path / "decision.jsonl"
+    alias = tmp_path / "decision-alias.jsonl"
+    source.write_bytes(b"exact-bytes\n")
+    os.link(source, alias)
+    original_stat = Path.stat
+    nonfollowing_calls = 0
+
+    def mutate_via_alias(self: Path, *, follow_symlinks: bool = True):
+        nonlocal nonfollowing_calls
+        if self == source and not follow_symlinks:
+            nonfollowing_calls += 1
+        if self == source and not follow_symlinks and nonfollowing_calls == 2:
+            stamp = alias.stat().st_mtime_ns + 1_000_000
+            os.utime(alias, ns=(stamp, stamp))
+        return original_stat(self, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(module.Path, "stat", mutate_via_alias)
+    with pytest.raises(PilotReviewError, match="SOURCE_CHANGED"):
+        module._stable_regular_bytes(source, error_prefix="DECISION")
+
+
+def test_report_source_hashes_bind_exact_descriptor_captured_bytes(tmp_path: Path) -> None:
+    import hashlib
+
+    decision_journal, bundle = _taken_bundle(tmp_path)
+    outcomes = tmp_path / "outcomes.jsonl"
+    append_outcome(outcomes, outcome=_outcome(bundle))
+    report = build_pilot_review(decision_journal, outcomes)
+    evidence = report.payload["source_evidence"]
+    assert isinstance(evidence, dict)
+    assert (
+        evidence["decision_journal_sha256"]
+        == hashlib.sha256(decision_journal.read_bytes()).hexdigest()
+    )
+    assert evidence["outcome_journal_sha256"] == hashlib.sha256(outcomes.read_bytes()).hexdigest()

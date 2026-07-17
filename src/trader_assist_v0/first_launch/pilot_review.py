@@ -231,10 +231,7 @@ def _stable_regular_bytes(
             resolved = target.stat(follow_symlinks=False)
         except OSError as exc:
             raise PilotReviewError(f"PILOT_REVIEW_{error_prefix}_SOURCE_CHANGED") from exc
-        if not stat.S_ISREG(resolved.st_mode) or (resolved.st_dev, resolved.st_ino) != (
-            identity[0],
-            identity[1],
-        ):
+        if not stat.S_ISREG(resolved.st_mode) or _identity(resolved) != identity:
             raise PilotReviewError(f"PILOT_REVIEW_{error_prefix}_SOURCE_CHANGED")
         return _SourceCapture(raw, identity)
     finally:
@@ -474,9 +471,9 @@ def _validate_summary(value: object, matched: int, code: str) -> None:
         low is None
         or high is None
         or low > high
-        or total < low * count
-        or total > high * count
         or (count == 1 and (total != low or total != high))
+        or (count >= 2 and total < ((count - 1) * low) + high)
+        or (count >= 2 and total > low + ((count - 1) * high))
     ):
         raise PilotReviewError(code)
 
@@ -562,6 +559,20 @@ def _validate_payload(payload: dict[str, object]) -> None:
     if (
         financial["total_fees"] < 0
         or financial["total_net_pnl"] != financial["total_gross_pnl"] - financial["total_fees"]
+    ):
+        raise PilotReviewError("PILOT_REVIEW_FINANCIAL_INVALID")
+    positive = outcomes["positive_net_pnl"]
+    zero = outcomes["zero_net_pnl"]
+    negative = outcomes["negative_net_pnl"]
+    net_total = financial["total_net_pnl"]
+    if (
+        (matched == 0 and net_total != 0)
+        or (positive == 0 and negative == 0 and net_total != 0)
+        or (positive > 0 and negative == 0 and net_total <= 0)
+        or (negative > 0 and positive == 0 and net_total >= 0)
+        or (zero == matched and net_total != 0)
+        or (matched > 0 and positive == matched and net_total <= 0)
+        or (matched > 0 and negative == matched and net_total >= 0)
     ):
         raise PilotReviewError("PILOT_REVIEW_FINANCIAL_INVALID")
     deviation = _object(
