@@ -1154,7 +1154,9 @@ def _outcome_journal_records(raw: bytes) -> tuple[dict[str, object], ...]:
             OUTCOME_JOURNAL_HASH_DOMAIN, payload, omit=("record_hash",)
         ):
             raise OutcomeError("OUTCOME_JOURNAL_HASH_INVALID")
-        OutcomeRecordV1(cast(dict[str, object], payload["outcome"]))
+        outcome = OutcomeRecordV1(cast(dict[str, object], payload["outcome"]))
+        if payload["decision_hash"] != outcome.payload["decision_hash"]:
+            raise OutcomeError("OUTCOME_JOURNAL_DECISION_MISMATCH")
         if payload["decision_hash"] in decisions:
             raise OutcomeError("OUTCOME_JOURNAL_DUPLICATE_DECISION")
         decisions.add(cast(str, payload["decision_hash"]))
