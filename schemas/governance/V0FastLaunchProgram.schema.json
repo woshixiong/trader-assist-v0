@@ -91,19 +91,19 @@
         },
         "next_gate": {
           "type": "string",
-          "const": "NEXT_GATE_UNRESOLVED"
+          "const": "V0-FLP1-OFFLINE-MINIMAL-PILOT-REVIEW-AND-COVERAGE-REPORT"
         },
         "next_gate_status": {
           "type": "string",
-          "const": "NEXT_GATE_UNRESOLVED_PENDING_SEPARATE_USER_DECISION"
+          "const": "USER_SELECTED_PENDING_SEPARATE_PRODUCT_TASK_AUTHORIZATION"
         },
         "last_completed_implementation": {
           "type": "string",
-          "const": "V0-FL3-OFFLINE-OPERATOR-REVIEW-SURFACE-AND-SHADOW-JOURNAL"
+          "const": "V0-FLP1-OFFLINE-PLAN-TO-OUTCOME-MATCHING-AND-REPLAY"
         },
         "last_completed_implementation_pr": {
           "type": "integer",
-          "const": 22
+          "const": 25
         },
         "last_policy_state_pr": {
           "type": "integer",
@@ -252,7 +252,7 @@
         },
         "next_runtime_gate": {
           "type": "string",
-          "const": "NEXT_GATE_UNRESOLVED"
+          "const": "V0-FLP1-OFFLINE-MINIMAL-PILOT-REVIEW-AND-COVERAGE-REPORT"
         },
         "forbidden_capabilities": {
           "type": "array",
@@ -2035,7 +2035,7 @@
         },
         "next_gate": {
           "type": "string",
-          "const": "NEXT_GATE_UNRESOLVED"
+          "const": "V0-FLP1-OFFLINE-MINIMAL-PILOT-REVIEW-AND-COVERAGE-REPORT"
         }
       }
     },
@@ -2070,7 +2070,7 @@
         },
         "post_merge_next_gate": {
           "type": "string",
-          "const": "NEXT_GATE_UNRESOLVED"
+          "const": "V0-FLP1-OFFLINE-MINIMAL-PILOT-REVIEW-AND-COVERAGE-REPORT"
         },
         "handoff_required_fields": {
           "type": "array",
@@ -2614,15 +2614,15 @@
         },
         "state_base_sha": {
           "type": "string",
-          "const": "7a71598876e5519aedfecab0bba405b40c75565d"
+          "const": "11d05269dc7cebfedf60754874259ef6d049fd2d"
         },
         "last_completed_implementation": {
           "type": "string",
-          "const": "V0-FL3-OFFLINE-OPERATOR-REVIEW-SURFACE-AND-SHADOW-JOURNAL"
+          "const": "V0-FLP1-OFFLINE-PLAN-TO-OUTCOME-MATCHING-AND-REPLAY"
         },
         "last_completed_implementation_pr": {
           "type": "integer",
-          "const": 22
+          "const": 25
         },
         "last_policy_state_pr": {
           "type": "integer",
@@ -2715,11 +2715,11 @@
         },
         "next_gate": {
           "type": "string",
-          "const": "NEXT_GATE_UNRESOLVED"
+          "const": "V0-FLP1-OFFLINE-MINIMAL-PILOT-REVIEW-AND-COVERAGE-REPORT"
         },
         "next_gate_status": {
           "type": "string",
-          "const": "NEXT_GATE_UNRESOLVED_PENDING_SEPARATE_USER_DECISION"
+          "const": "USER_SELECTED_PENDING_SEPARATE_PRODUCT_TASK_AUTHORIZATION"
         },
         "conflict_state": {
           "type": "string",

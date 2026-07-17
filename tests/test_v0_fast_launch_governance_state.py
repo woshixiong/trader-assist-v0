@@ -21,16 +21,16 @@ SCHEMA_PATH = ROOT / "schemas" / "governance" / "V0FastLaunchProgram.schema.json
 
 PROGRAM_TASK_ID = "V0-FLP1B0B-CAPTURE-NOW-AUTHORITY-AMENDMENT"
 PROGRAM_BASE_SHA = "78d2d37bfe5a4f3f1d382a2a96e57896ae9676ae"
-CURRENT_STATE_BASE_SHA = "7a71598876e5519aedfecab0bba405b40c75565d"
+CURRENT_STATE_BASE_SHA = "11d05269dc7cebfedf60754874259ef6d049fd2d"
 CURRENT_ACTIVE_TASK_ID = "NONE"
-COMPLETED_IMPLEMENTATION = "V0-FL3-OFFLINE-OPERATOR-REVIEW-SURFACE-AND-SHADOW-JOURNAL"
-COMPLETED_IMPLEMENTATION_PR = 22
+COMPLETED_IMPLEMENTATION = "V0-FLP1-OFFLINE-PLAN-TO-OUTCOME-MATCHING-AND-REPLAY"
+COMPLETED_IMPLEMENTATION_PR = 25
 LAST_LEASE_ID = "PR22_FINAL_REPAIR_WRITE_LEASE_ID_UNRESOLVED"
 LAST_LEASE_TYPE = "PR22_FINAL_REPAIR_WRITE_LEASE_TYPE_UNRESOLVED"
 FASTSAFE_CONTROL_CONTRACT_ID = "FASTSAFE-V1-2026-07"
 ENGINEERING_TRACK_ID = "ENGINEERING-AUTOMATION-TRACK-V1-2026-07"
-NEXT_GATE = "NEXT_GATE_UNRESOLVED"
-NEXT_GATE_STATUS = "NEXT_GATE_UNRESOLVED_PENDING_SEPARATE_USER_DECISION"
+NEXT_GATE = "V0-FLP1-OFFLINE-MINIMAL-PILOT-REVIEW-AND-COVERAGE-REPORT"
+NEXT_GATE_STATUS = "USER_SELECTED_PENDING_SEPARATE_PRODUCT_TASK_AUTHORIZATION"
 AUTHORITY_HASH = "0e327e566589d8030ff00d4d009eb4b6827679ab508133d66840b2c245dc53df"
 SOURCE_CATALOG_HASH = "0ca27f650f399f8fa481ad9421eab4183c1c13812c71dfa8daaf878719bd99b7"
 COMMIT_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -192,7 +192,7 @@ def test_r0_r1_and_deferred_g4_migration() -> None:
     assert "required_controls" not in r1
 
 
-def test_schema_rejects_stale_pr19_and_active_authority_values() -> None:
+def test_schema_rejects_stale_pr22_and_active_authority_values() -> None:
     schema = _load_json(SCHEMA_PATH)
     state_schema = schema["$defs"]["ProjectState"]
     assert isinstance(state_schema, dict)
@@ -204,14 +204,14 @@ def test_schema_rejects_stale_pr19_and_active_authority_values() -> None:
 
     candidate = deepcopy(_load_json(STATE_PATH))
     candidate["last_completed_implementation"] = (
-        "V0-FLP1-DECISION-TO-OUTCOME-OPERATOR-ASSIST-PILOT"
+        "V0-FL3-OFFLINE-OPERATOR-REVIEW-SURFACE-AND-SHADOW-JOURNAL"
     )
 
     with pytest.raises(ValidationError):
         Draft202012Validator(state_schema).validate(candidate)
 
     candidate = deepcopy(_load_json(STATE_PATH))
-    candidate["last_completed_implementation_pr"] = 19
+    candidate["last_completed_implementation_pr"] = 22
 
     with pytest.raises(ValidationError):
         Draft202012Validator(state_schema).validate(candidate)
@@ -233,14 +233,14 @@ def test_schema_rejects_stale_pr19_and_active_authority_values() -> None:
         Draft202012Validator(state_schema).validate(candidate)
 
     candidate = deepcopy(_load_json(STATE_PATH))
-    candidate["next_gate"] = "V0-FL3-OFFLINE-OPERATOR-REVIEW-SURFACE-AND-SHADOW-JOURNAL"
+    candidate["next_gate"] = "NEXT_GATE_UNRESOLVED"
 
     with pytest.raises(ValidationError):
         Draft202012Validator(state_schema).validate(candidate)
 
     candidate = deepcopy(_load_json(STATE_PATH))
     candidate["next_gate_status"] = (
-        "USER_APPROVED_PENDING_SEPARATE_IMPLEMENTATION_AUTHORIZATION"
+        "NEXT_GATE_UNRESOLVED_PENDING_SEPARATE_USER_DECISION"
     )
 
     with pytest.raises(ValidationError):
@@ -256,6 +256,31 @@ def test_schema_rejects_stale_pr19_and_active_authority_values() -> None:
 @pytest.mark.parametrize(
     "path, stale_value",
     [
+        (
+            ("authority", "last_completed_implementation"),
+            "V0-FL3-OFFLINE-OPERATOR-REVIEW-SURFACE-AND-SHADOW-JOURNAL",
+        ),
+        (("authority", "last_completed_implementation_pr"), 22),
+        (
+            ("authority", "next_gate"),
+            "NEXT_GATE_UNRESOLVED",
+        ),
+        (
+            ("authority", "next_gate_status"),
+            "NEXT_GATE_UNRESOLVED_PENDING_SEPARATE_USER_DECISION",
+        ),
+        (
+            ("first_release", "next_runtime_gate"),
+            "NEXT_GATE_UNRESOLVED",
+        ),
+        (
+            ("review_finalization_policy", "next_gate"),
+            "NEXT_GATE_UNRESOLVED",
+        ),
+        (
+            ("recursive_rotation", "post_merge_next_gate"),
+            "NEXT_GATE_UNRESOLVED",
+        ),
         (
             ("authority", "last_completed_implementation"),
             "V0-FLP1-DECISION-TO-OUTCOME-OPERATOR-ASSIST-PILOT",
@@ -431,6 +456,10 @@ def test_rate_limit_authority_immutability_and_false_gates() -> None:
             "flp1_implementation_authorized",
         ):
             assert document[gate] is False
+    assert state["active_task_id"] == "NONE"
+    assert state["active_write_lease"]["status"] == "NONE"
+    assert state["runtime_started"] is False
+    assert state["t2_runtime_started"] is False
 
 
 def test_docs_share_capture_now_semantics() -> None:
