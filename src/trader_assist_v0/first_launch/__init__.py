@@ -29,6 +29,12 @@ from .outcome import (
     read_candle_evidence,
     read_outcome_journal,
 )
+from .pilot_review import (
+    PilotReviewError,
+    PilotReviewReportV1,
+    build_pilot_review,
+    render_pilot_review_terminal,
+)
 
 __all__ = [
     "DataQualityState",
@@ -41,6 +47,8 @@ __all__ = [
     "OperatorReviewError",
     "OutcomeError",
     "OutcomeRecordV1",
+    "PilotReviewError",
+    "PilotReviewReportV1",
     "ReconnectController",
     "ShadowOrder",
     "append_decision",
@@ -49,9 +57,11 @@ __all__ = [
     "build_manual_execution_import",
     "build_operator_card",
     "build_outcome",
+    "build_pilot_review",
     "create_shadow_order",
     "read_candle_evidence",
     "read_journal",
     "read_outcome_journal",
+    "render_pilot_review_terminal",
     "render_terminal",
 ]

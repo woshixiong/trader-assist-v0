@@ -174,6 +174,26 @@ def test_missing_candles_are_insufficient_and_journal_is_append_only(tmp_path: P
         read_outcome_journal(journal)
 
 
+def test_outcome_journal_requires_wrapper_and_nested_decision_hash_match(tmp_path: Path) -> None:
+    import trader_assist_v0.first_launch.outcome as module
+
+    bundle, _ = _bundle(tmp_path)
+    execution, candles = _import(bundle, Side.LONG)
+    outcome = build_outcome(bundle=bundle, manual_execution=execution, candles=candles)
+    journal = tmp_path / "outcome.jsonl"
+    append_outcome(journal, outcome=outcome)
+    assert read_outcome_journal(journal) == (outcome,)
+
+    wrapper = json.loads(journal.read_bytes())
+    wrapper["decision_hash"] = "f" * 64
+    wrapper["record_hash"] = module._digest(
+        module.OUTCOME_JOURNAL_HASH_DOMAIN, wrapper, omit=("record_hash",)
+    )
+    journal.write_bytes(canonical_json_bytes(wrapper) + b"\n")
+    with pytest.raises(OutcomeError, match="OUTCOME_JOURNAL_DECISION_MISMATCH"):
+        read_outcome_journal(journal)
+
+
 @pytest.mark.parametrize(
     ("high", "low", "expected"),
     (
