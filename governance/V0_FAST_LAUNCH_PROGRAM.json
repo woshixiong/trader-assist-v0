@@ -9,10 +9,10 @@
   "authority": {
     "fastsafe_control_contract_id": "FASTSAFE-V1-2026-07",
     "engineering_track_id": "ENGINEERING-AUTOMATION-TRACK-V1-2026-07",
-    "next_gate": "V0-FLP1-OFFLINE-MINIMAL-PILOT-REVIEW-AND-COVERAGE-REPORT",
-    "next_gate_status": "USER_SELECTED_PENDING_SEPARATE_PRODUCT_TASK_AUTHORIZATION",
-    "last_completed_implementation": "V0-FLP1-OFFLINE-PLAN-TO-OUTCOME-MATCHING-AND-REPLAY",
-    "last_completed_implementation_pr": 25,
+    "next_gate": "NEXT_GATE_UNRESOLVED",
+    "next_gate_status": "NEXT_GATE_UNRESOLVED_PENDING_SEPARATE_USER_DECISION",
+    "last_completed_implementation": "V0-FLP1-OFFLINE-MINIMAL-PILOT-REVIEW-AND-COVERAGE-REPORT",
+    "last_completed_implementation_pr": 27,
     "last_policy_state_pr": 15,
     "rate_limit_status": "UNRESOLVED_OFFICIAL_LIMIT",
     "live_transport_authorized": false,
@@ -45,7 +45,7 @@
     "exchange_execution_authorized": false,
     "runtime_started": false,
     "scope": "CAPTURE_CONTRACT_SCHEMA_GOVERNANCE_ONLY",
-    "next_runtime_gate": "V0-FLP1-OFFLINE-MINIMAL-PILOT-REVIEW-AND-COVERAGE-REPORT",
+    "next_runtime_gate": "NEXT_GATE_UNRESOLVED",
     "forbidden_capabilities": [
       "API_WALLET",
       "PRIVATE_KEY",
@@ -451,13 +451,13 @@
     "separate_project_control_finalization_authorization_required": true,
     "pre_finalization_base_head_state_reverification_required": true,
     "unresolved_blocker_prevents_merge": true,
-    "next_gate": "V0-FLP1-OFFLINE-MINIMAL-PILOT-REVIEW-AND-COVERAGE-REPORT"
+    "next_gate": "NEXT_GATE_UNRESOLVED"
   },
   "recursive_rotation": {
     "required": true,
     "next_window_role": "V0 Fast Launch project-control successor",
     "next_window_permission": "STRICT_READ_ONLY",
-    "post_merge_next_gate": "V0-FLP1-OFFLINE-MINIMAL-PILOT-REVIEW-AND-COVERAGE-REPORT",
+    "post_merge_next_gate": "NEXT_GATE_UNRESOLVED",
     "handoff_required_fields": [
       "CURRENT_WINDOW_ROLE",
       "REPOSITORY",
