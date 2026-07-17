@@ -48,16 +48,16 @@ ALLOWLIST = {
 }
 IMMUTABLE_HASHES = {
     "governance/V0_FAST_LAUNCH_PROGRAM.json": (
-        "56d51257e60f20c860640ec0aac858792f72039f53403a48100e8b8884f12132"
+        "9e89cd7dcf86c20b08ef7e4f32620a6186e4900815e9b4976126a2e3654ea40c"
     ),
     "governance/PROJECT_STATE.json": (
-        "3eef3a7fc158e8502699046bacc88434b4dac3bfd8b84ee332a11b0301f8f996"
+        "177de53f4c9b0104e145521c38fff9fc571b4696c2f6035a3dcd2754aa6cfa41"
     ),
     "schemas/governance/V0FastLaunchProgram.schema.json": (
-        "3fb712595daf2daba6216db6f7cfc65a71ea3583aed33770a7c7d37c447b9e38"
+        "9d54e8c58bfdff174de86fea4350a4d3a52137f7fdbfbd2587915f6b0c4207e1"
     ),
     "tests/test_v0_fast_launch_governance_state.py": (
-        "3b83d411942f06f242581ecc213be58ff8e60211693c8c97acbd6ca607de428d"
+        "40f51a5169d38d86bc27f7d39c7d4f09d7ce756a0d4ed9aaca8ea54a0d480be4"
     ),
 }
 
