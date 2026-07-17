@@ -396,18 +396,30 @@ def _bound_evidence(raw_text: str, evidence: RawEvidence, operation: str) -> Non
         raise MarketDataError("raw text and evidence authority do not match")
 
 
-def candle_from_websocket(raw_text: str, evidence: RawEvidence) -> Candle:
-    _bound_evidence(raw_text, evidence, "WebSocket")
-    message = _strict_object(raw_text)
-    if message.get("channel") != "candle" or type(message.get("data")) is not dict:
-        raise MarketDataError("expected a candle WebSocket envelope")
-    data = message["data"]
+def _candle_from_public_object(
+    data: object,
+    *,
+    evidence: RawEvidence,
+    requested_interval: str | None = None,
+    require_trade_count: bool = False,
+) -> Candle:
+    """Validate one unwrapped Hyperliquid public candle without inventing an envelope."""
+    if type(data) is not dict:
+        raise MarketDataError("public candle must be a JSON object")
     if data.get("s") != ETH or data.get("i") not in INTERVAL_MILLISECONDS:
         raise MarketDataError("candle is outside the ETH 5m/15m authority")
-    interval = data["i"]
-    assert interval in {"5m", "15m"}
+    interval = cast(Literal["5m", "15m"], data["i"])
+    if requested_interval is not None and interval != requested_interval:
+        raise MarketDataError("candle snapshot interval does not match request")
+    required = {"t", "T", "s", "i", "o", "c", "h", "l", "v"}
+    if require_trade_count:
+        required.add("n")
+    if not required.issubset(data):
+        raise MarketDataError("public candle lacks a frozen required field")
     open_time = _integer(data.get("t"), "candle open time")
     close_time = _integer(data.get("T"), "candle close time")
+    if require_trade_count:
+        _integer(data.get("n"), "candle trade count")
     if close_time - open_time != INTERVAL_MILLISECONDS[interval]:
         raise MarketDataError("candle interval boundary is invalid")
     candle = Candle(
@@ -418,14 +430,61 @@ def candle_from_websocket(raw_text: str, evidence: RawEvidence) -> Candle:
         high=_decimal(data.get("h"), "high", positive=True),
         low=_decimal(data.get("l"), "low", positive=True),
         close=_decimal(data.get("c"), "close", positive=True),
-        volume=_decimal(data.get("v"), "volume"),
+        volume=_decimal(data.get("v"), "volume", non_negative=True),
         evidence=evidence,
     )
     if candle.low > min(candle.open, candle.close) or candle.high < max(candle.open, candle.close):
         raise MarketDataError("candle OHLC range is invalid")
-    if candle.volume < 0:
-        raise MarketDataError("candle volume is invalid")
-    return _issue(candle, _candle_fingerprint(candle))  # type: ignore[return-value]
+    return cast(Candle, _issue(candle, _candle_fingerprint(candle)))
+
+
+def candles_from_snapshot(
+    raw_text: str,
+    evidence: RawEvidence,
+    *,
+    requested_interval: Literal["5m", "15m"],
+) -> tuple[Candle, ...]:
+    """Parse one bounded public ``candleSnapshot`` response into closed authority."""
+    if requested_interval not in INTERVAL_MILLISECONDS:
+        raise MarketDataError("unsupported candle snapshot interval")
+    _bound_evidence(raw_text, evidence, "candleSnapshot")
+    if evidence.source_id != "hyperliquid-public-mainnet":
+        raise MarketDataError("candle snapshot source is not authorized")
+    payload = _strict_json(raw_text)
+    if type(payload) is not list or not payload:
+        raise MarketDataError("candle snapshot must be a non-empty JSON array")
+    if len(payload) > SNAPSHOT_LIMITS[requested_interval]:
+        raise MarketDataError("snapshot exceeds its bounded recovery limit")
+    parsed = tuple(
+        _candle_from_public_object(
+            item,
+            evidence=evidence,
+            requested_interval=requested_interval,
+            require_trade_count=True,
+        )
+        for item in payload
+    )
+    opens = [item.open_time_ms for item in parsed]
+    if opens != sorted(opens) or len(set(opens)) != len(opens):
+        raise MarketDataError("snapshot candle identities must be strictly increasing")
+    closed = tuple(
+        item for item in parsed if item.close_time_ms < int(evidence.received_at.timestamp() * 1000)
+    )
+    width = INTERVAL_MILLISECONDS[requested_interval]
+    if any(right.open_time_ms - left.open_time_ms != width for left, right in pairwise(closed)):
+        raise MarketDataError("snapshot closed candles are non-contiguous")
+    return closed
+
+
+def candle_from_websocket(raw_text: str, evidence: RawEvidence) -> Candle:
+    _bound_evidence(raw_text, evidence, "WebSocket")
+    message = _strict_object(raw_text)
+    if message.get("channel") != "candle" or type(message.get("data")) is not dict:
+        raise MarketDataError("expected a candle WebSocket envelope")
+    data = message["data"]
+    # WebSocket frames are envelopes, but their contained public candle retains
+    # the same frozen field and geometry contract as an HTTP snapshot candle.
+    return _candle_from_public_object(data, evidence=evidence)
 
 
 def context_from_websocket(raw_text: str, evidence: RawEvidence) -> ActiveAssetContext:
@@ -495,11 +554,12 @@ class EthMarketData:
     def mark_disconnected(self) -> None:
         self.disconnected = True
 
-    def accept_candle(self, candle: Candle) -> Literal["ACCEPTED", "DUPLICATE", "CONFLICT"]:
+    def accept_candle(
+        self, candle: Candle
+    ) -> Literal["ACCEPTED", "DUPLICATE", "CONFLICT", "IGNORED_OPEN"]:
         candle = _validated_candle(candle)
         if candle.evidence.received_at.timestamp() * 1000 <= candle.close_time_ms:
-            self.invalid_reason = "CANDLE_NOT_CLOSED"
-            return "CONFLICT"
+            return "IGNORED_OPEN"
         interval_candles = self.candles[candle.interval]
         existing = interval_candles.get(candle.open_time_ms)
         if existing is None:
@@ -517,7 +577,35 @@ class EthMarketData:
         if any(_validated_candle(candle).interval != interval for candle in recovered):
             raise MarketDataError("snapshot interval does not match its authority")
         for candle in recovered:
-            self.accept_candle(candle)
+            result = self.accept_candle(candle)
+            if result == "CONFLICT":
+                raise MarketDataError("snapshot candle conflicts with authority")
+
+    def ingest_candle_snapshot(
+        self,
+        raw_text: str,
+        *,
+        interval: Literal["5m", "15m"],
+        received_at: datetime,
+        receive_sequence: int,
+        connection_id: str,
+    ) -> tuple[Candle, ...]:
+        """Recover bounded, already-closed public candles without a synthetic frame."""
+        evidence = evidence_from_raw(
+            raw_text,
+            operation="candleSnapshot",
+            received_at=received_at,
+            receive_sequence=receive_sequence,
+            connection_id=connection_id,
+            source_id="hyperliquid-public-mainnet",
+        )
+        try:
+            recovered = candles_from_snapshot(raw_text, evidence, requested_interval=interval)
+            self.recover_snapshot(interval, recovered)
+        except MarketDataError:
+            self.invalid_reason = "SNAPSHOT_OBSERVATION_INVALID"
+            raise
+        return recovered
 
     def accept_context(self, context: ActiveAssetContext) -> None:
         context = _validated_context(context)
@@ -536,7 +624,7 @@ class EthMarketData:
         received_at: datetime,
         receive_sequence: int,
         connection_id: str,
-    ) -> Literal["ACCEPTED", "DUPLICATE", "CONFLICT", "CONTEXT_ACCEPTED"]:
+    ) -> Literal["ACCEPTED", "DUPLICATE", "CONFLICT", "IGNORED_OPEN", "CONTEXT_ACCEPTED"]:
         """Apply one original WebSocket text frame through the live/replay path."""
         evidence = evidence_from_raw(
             raw_text,
@@ -631,12 +719,8 @@ class EthMarketData:
     def strategy_snapshot(self, evaluated_at: datetime) -> StrategySnapshot:
         """Freeze the only strategy input that this market authority can issue."""
         now = _utc(evaluated_at)
-        candles_5m = tuple(
-            self.candles["5m"][key] for key in sorted(self.candles["5m"])
-        )
-        candles_15m = tuple(
-            self.candles["15m"][key] for key in sorted(self.candles["15m"])
-        )
+        candles_5m = tuple(self.candles["5m"][key] for key in sorted(self.candles["5m"]))
+        candles_15m = tuple(self.candles["15m"][key] for key in sorted(self.candles["15m"]))
         for candle in (*candles_5m, *candles_15m):
             _validated_candle(candle)
         if self.active_context is not None:

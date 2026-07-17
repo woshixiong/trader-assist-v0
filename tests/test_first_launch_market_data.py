@@ -17,6 +17,7 @@ from trader_assist_v0.first_launch.market_data import (
     RawEvidence,
     ReconnectController,
     candle_from_websocket,
+    candles_from_snapshot,
     context_from_websocket,
     evidence_from_raw,
     metadata_from_info,
@@ -51,6 +52,7 @@ def _candle(interval: Literal["5m", "15m"], offset: int) -> Candle:
                 "l": "99",
                 "c": "101",
                 "v": "12",
+                "n": 1,
             },
         },
         separators=(",", ":"),
@@ -69,9 +71,7 @@ def _ready_data() -> EthMarketData:
         '{"channel":"activeAssetCtx","data":{"coin":"ETH","ctx":'
         '{"markPx":"101","midPx":"100.9","openInterest":"5","funding":"0.001"}}}'
     )
-    data.accept_context(
-        context_from_websocket(context_raw, _evidence(context_raw, sequence=100))
-    )
+    data.accept_context(context_from_websocket(context_raw, _evidence(context_raw, sequence=100)))
 
     metadata_raw = '{"universe":[{"name":"ETH","szDecimals":3}]}'
     data.accept_metadata(
@@ -130,7 +130,7 @@ def test_raw_evidence_constructor_and_factory_are_fail_closed() -> None:
 def test_lower_parsers_bind_raw_text_hash_and_operation() -> None:
     candle = (
         '{"channel":"candle","data":{"s":"ETH","i":"5m","t":0,"T":300000,'
-        '"o":"1","h":"2","l":"1","c":"2","v":"3"}}'
+        '"o":"1","h":"2","l":"1","c":"2","v":"3","n":1}}'
     )
     evidence = _evidence(candle)
     assert candle_from_websocket(candle, evidence).interval == "5m"
@@ -148,10 +148,7 @@ def test_lower_parsers_bind_raw_text_hash_and_operation() -> None:
         context_from_websocket(context, _evidence(context, "metaAndAssetCtxs"))
 
     metadata = '{"universe":[{"name":"ETH","szDecimals":3}]}'
-    assert (
-        metadata_from_info(metadata, _evidence(metadata, "metaAndAssetCtxs")).sz_decimals
-        == 3
-    )
+    assert metadata_from_info(metadata, _evidence(metadata, "metaAndAssetCtxs")).sz_decimals == 3
     with pytest.raises(MarketDataError):
         metadata_from_info(metadata, _evidence(metadata))
 
@@ -282,7 +279,7 @@ def test_direct_or_modified_normalized_objects_are_not_ingestable() -> None:
 def test_primary_ingest_and_reconnect_paths_retain_evidence_validation() -> None:
     raw = (
         '{"channel":"candle","data":{"s":"ETH","i":"5m","t":0,'
-        '"T":300000,"o":"1","h":"2","l":"1","c":"2","v":"3"}}'
+        '"T":300000,"o":"1","h":"2","l":"1","c":"2","v":"3","n":1}}'
     )
     data = EthMarketData()
     data.begin_connection()
@@ -319,7 +316,7 @@ def test_primary_ingest_and_reconnect_paths_retain_evidence_validation() -> None
 def test_live_and_replay_normalization_are_identical() -> None:
     raw = (
         '{"channel":"candle","data":{"s":"ETH","i":"5m","t":1000,'
-        '"T":301000,"o":"1","h":"2","l":"1","c":"2","v":"3"}}'
+        '"T":301000,"o":"1","h":"2","l":"1","c":"2","v":"3","n":1}}'
     )
     live_data = EthMarketData()
     replay_data = EthMarketData()
@@ -368,3 +365,73 @@ def test_live_and_replay_normalization_are_identical() -> None:
         replay.close,
         replay.volume,
     )
+
+
+def test_public_candle_snapshot_is_strict_closed_parser_issued_authority() -> None:
+    close = int(NOW.timestamp() * 1000) - 1
+    raw = json.dumps(
+        [
+            {
+                "t": close - 300_000,
+                "T": close,
+                "s": "ETH",
+                "i": "5m",
+                "o": "100",
+                "c": "101",
+                "h": "102",
+                "l": "99",
+                "v": "0",
+                "n": 3,
+            }
+        ],
+        separators=(",", ":"),
+    )
+    evidence = _evidence(raw, operation="candleSnapshot")
+    candles = candles_from_snapshot(raw, evidence, requested_interval="5m")
+    assert len(candles) == 1
+    assert candles[0].canonical_hash
+    assert evidence.sha256 == hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def test_snapshot_rejects_wrong_interval_duplicate_keys_and_open_candles() -> None:
+    close = int(NOW.timestamp() * 1000)
+    open_raw = json.dumps(
+        [
+            {
+                "t": close - 300_000,
+                "T": close,
+                "s": "ETH",
+                "i": "5m",
+                "o": "1",
+                "c": "1",
+                "h": "1",
+                "l": "1",
+                "v": "0",
+                "n": 0,
+            }
+        ],
+        separators=(",", ":"),
+    )
+    evidence = _evidence(open_raw, operation="candleSnapshot")
+    assert candles_from_snapshot(open_raw, evidence, requested_interval="5m") == ()
+    data = EthMarketData()
+    data.begin_connection()
+    assert (
+        data.ingest_candle_snapshot(
+            open_raw,
+            interval="5m",
+            received_at=NOW,
+            receive_sequence=2,
+            connection_id="snapshot",
+        )
+        == ()
+    )
+    assert data.invalid_reason is None
+    wrong = open_raw.replace('"i":"5m"', '"i":"15m"')
+    with pytest.raises(MarketDataError):
+        candles_from_snapshot(wrong, _evidence(wrong, "candleSnapshot"), requested_interval="5m")
+    duplicate = '[{"t":1,"t":1}]'
+    with pytest.raises(MarketDataError):
+        candles_from_snapshot(
+            duplicate, _evidence(duplicate, "candleSnapshot"), requested_interval="5m"
+        )
