@@ -91,19 +91,19 @@
         },
         "next_gate": {
           "type": "string",
-          "const": "V0-FLP1-OFFLINE-MINIMAL-PILOT-REVIEW-AND-COVERAGE-REPORT"
+          "const": "NEXT_GATE_UNRESOLVED"
         },
         "next_gate_status": {
           "type": "string",
-          "const": "USER_SELECTED_PENDING_SEPARATE_PRODUCT_TASK_AUTHORIZATION"
+          "const": "NEXT_GATE_UNRESOLVED_PENDING_SEPARATE_USER_DECISION"
         },
         "last_completed_implementation": {
           "type": "string",
-          "const": "V0-FLP1-OFFLINE-PLAN-TO-OUTCOME-MATCHING-AND-REPLAY"
+          "const": "V0-FLP1-OFFLINE-MINIMAL-PILOT-REVIEW-AND-COVERAGE-REPORT"
         },
         "last_completed_implementation_pr": {
           "type": "integer",
-          "const": 25
+          "const": 27
         },
         "last_policy_state_pr": {
           "type": "integer",
@@ -252,7 +252,7 @@
         },
         "next_runtime_gate": {
           "type": "string",
-          "const": "V0-FLP1-OFFLINE-MINIMAL-PILOT-REVIEW-AND-COVERAGE-REPORT"
+          "const": "NEXT_GATE_UNRESOLVED"
         },
         "forbidden_capabilities": {
           "type": "array",
@@ -2035,7 +2035,7 @@
         },
         "next_gate": {
           "type": "string",
-          "const": "V0-FLP1-OFFLINE-MINIMAL-PILOT-REVIEW-AND-COVERAGE-REPORT"
+          "const": "NEXT_GATE_UNRESOLVED"
         }
       }
     },
@@ -2070,7 +2070,7 @@
         },
         "post_merge_next_gate": {
           "type": "string",
-          "const": "V0-FLP1-OFFLINE-MINIMAL-PILOT-REVIEW-AND-COVERAGE-REPORT"
+          "const": "NEXT_GATE_UNRESOLVED"
         },
         "handoff_required_fields": {
           "type": "array",
@@ -2614,15 +2614,15 @@
         },
         "state_base_sha": {
           "type": "string",
-          "const": "11d05269dc7cebfedf60754874259ef6d049fd2d"
+          "const": "681397395957dacbcc9f8a80816d14bb8c4603b2"
         },
         "last_completed_implementation": {
           "type": "string",
-          "const": "V0-FLP1-OFFLINE-PLAN-TO-OUTCOME-MATCHING-AND-REPLAY"
+          "const": "V0-FLP1-OFFLINE-MINIMAL-PILOT-REVIEW-AND-COVERAGE-REPORT"
         },
         "last_completed_implementation_pr": {
           "type": "integer",
-          "const": 25
+          "const": 27
         },
         "last_policy_state_pr": {
           "type": "integer",
@@ -2715,11 +2715,11 @@
         },
         "next_gate": {
           "type": "string",
-          "const": "V0-FLP1-OFFLINE-MINIMAL-PILOT-REVIEW-AND-COVERAGE-REPORT"
+          "const": "NEXT_GATE_UNRESOLVED"
         },
         "next_gate_status": {
           "type": "string",
-          "const": "USER_SELECTED_PENDING_SEPARATE_PRODUCT_TASK_AUTHORIZATION"
+          "const": "NEXT_GATE_UNRESOLVED_PENDING_SEPARATE_USER_DECISION"
         },
         "conflict_state": {
           "type": "string",

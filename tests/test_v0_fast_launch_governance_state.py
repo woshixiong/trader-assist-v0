@@ -21,16 +21,16 @@ SCHEMA_PATH = ROOT / "schemas" / "governance" / "V0FastLaunchProgram.schema.json
 
 PROGRAM_TASK_ID = "V0-FLP1B0B-CAPTURE-NOW-AUTHORITY-AMENDMENT"
 PROGRAM_BASE_SHA = "78d2d37bfe5a4f3f1d382a2a96e57896ae9676ae"
-CURRENT_STATE_BASE_SHA = "11d05269dc7cebfedf60754874259ef6d049fd2d"
+CURRENT_STATE_BASE_SHA = "681397395957dacbcc9f8a80816d14bb8c4603b2"
 CURRENT_ACTIVE_TASK_ID = "NONE"
-COMPLETED_IMPLEMENTATION = "V0-FLP1-OFFLINE-PLAN-TO-OUTCOME-MATCHING-AND-REPLAY"
-COMPLETED_IMPLEMENTATION_PR = 25
+COMPLETED_IMPLEMENTATION = "V0-FLP1-OFFLINE-MINIMAL-PILOT-REVIEW-AND-COVERAGE-REPORT"
+COMPLETED_IMPLEMENTATION_PR = 27
 LAST_LEASE_ID = "PR22_FINAL_REPAIR_WRITE_LEASE_ID_UNRESOLVED"
 LAST_LEASE_TYPE = "PR22_FINAL_REPAIR_WRITE_LEASE_TYPE_UNRESOLVED"
 FASTSAFE_CONTROL_CONTRACT_ID = "FASTSAFE-V1-2026-07"
 ENGINEERING_TRACK_ID = "ENGINEERING-AUTOMATION-TRACK-V1-2026-07"
-NEXT_GATE = "V0-FLP1-OFFLINE-MINIMAL-PILOT-REVIEW-AND-COVERAGE-REPORT"
-NEXT_GATE_STATUS = "USER_SELECTED_PENDING_SEPARATE_PRODUCT_TASK_AUTHORIZATION"
+NEXT_GATE = "NEXT_GATE_UNRESOLVED"
+NEXT_GATE_STATUS = "NEXT_GATE_UNRESOLVED_PENDING_SEPARATE_USER_DECISION"
 AUTHORITY_HASH = "0e327e566589d8030ff00d4d009eb4b6827679ab508133d66840b2c245dc53df"
 SOURCE_CATALOG_HASH = "0ca27f650f399f8fa481ad9421eab4183c1c13812c71dfa8daaf878719bd99b7"
 COMMIT_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -141,6 +141,46 @@ def test_program_provenance_and_current_state_are_distinct() -> None:
     }
 
 
+def test_safe_stop_authority_fields_remain_disabled() -> None:
+    program = _load_json(PROGRAM_PATH)
+    state = _load_json(STATE_PATH)
+
+    assert state["active_task_id"] == "NONE"
+    assert state["active_write_lease"]["status"] == "NONE"
+    for field in (
+        "transition_eligible",
+        "runtime_started",
+        "t2_runtime_started",
+        "live_transport_authorized",
+        "account_readonly_runtime_authorized",
+        "testnet_execution_authorized",
+        "mainnet_execution_authorized",
+        "flp1_implementation_authorized",
+    ):
+        assert state[field] is False
+    assert state["mark_ready_prohibited"] is True
+    assert state["merge_prohibited"] is True
+
+    for field in (
+        "live_transport_authorized",
+        "account_readonly_runtime_authorized",
+        "testnet_execution_authorized",
+        "mainnet_execution_authorized",
+        "flp1_implementation_authorized",
+        "transition_eligible",
+    ):
+        assert program["authority"][field] is False
+    for capability in (
+        "EXCHANGE_WRITE",
+        "AUTOMATIC_ENTRY",
+        "AUTOMATIC_CANCEL",
+        "AUTOMATIC_SL_TP_SUBMISSION",
+        "ONLINE_LEARNING",
+        "AUTOMATIC_PRODUCTION_PARAMETER_MUTATION",
+    ):
+        assert capability in program["first_release"]["forbidden_capabilities"]
+
+
 def test_r0_r1_and_deferred_g4_migration() -> None:
     program = _load_json(PROGRAM_PATH)
     r0 = program["first_release"]
@@ -192,7 +232,7 @@ def test_r0_r1_and_deferred_g4_migration() -> None:
     assert "required_controls" not in r1
 
 
-def test_schema_rejects_stale_pr22_and_active_authority_values() -> None:
+def test_schema_rejects_stale_pr25_and_active_authority_values() -> None:
     schema = _load_json(SCHEMA_PATH)
     state_schema = schema["$defs"]["ProjectState"]
     assert isinstance(state_schema, dict)
@@ -204,14 +244,14 @@ def test_schema_rejects_stale_pr22_and_active_authority_values() -> None:
 
     candidate = deepcopy(_load_json(STATE_PATH))
     candidate["last_completed_implementation"] = (
-        "V0-FL3-OFFLINE-OPERATOR-REVIEW-SURFACE-AND-SHADOW-JOURNAL"
+        "V0-FLP1-OFFLINE-PLAN-TO-OUTCOME-MATCHING-AND-REPLAY"
     )
 
     with pytest.raises(ValidationError):
         Draft202012Validator(state_schema).validate(candidate)
 
     candidate = deepcopy(_load_json(STATE_PATH))
-    candidate["last_completed_implementation_pr"] = 22
+    candidate["last_completed_implementation_pr"] = 25
 
     with pytest.raises(ValidationError):
         Draft202012Validator(state_schema).validate(candidate)
@@ -233,14 +273,20 @@ def test_schema_rejects_stale_pr22_and_active_authority_values() -> None:
         Draft202012Validator(state_schema).validate(candidate)
 
     candidate = deepcopy(_load_json(STATE_PATH))
-    candidate["next_gate"] = "NEXT_GATE_UNRESOLVED"
+    candidate["state_base_sha"] = "11d05269dc7cebfedf60754874259ef6d049fd2d"
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(state_schema).validate(candidate)
+
+    candidate = deepcopy(_load_json(STATE_PATH))
+    candidate["next_gate"] = "V0-FLP1-OFFLINE-MINIMAL-PILOT-REVIEW-AND-COVERAGE-REPORT"
 
     with pytest.raises(ValidationError):
         Draft202012Validator(state_schema).validate(candidate)
 
     candidate = deepcopy(_load_json(STATE_PATH))
     candidate["next_gate_status"] = (
-        "NEXT_GATE_UNRESOLVED_PENDING_SEPARATE_USER_DECISION"
+        "USER_SELECTED_PENDING_SEPARATE_PRODUCT_TASK_AUTHORIZATION"
     )
 
     with pytest.raises(ValidationError):
@@ -254,32 +300,78 @@ def test_schema_rejects_stale_pr22_and_active_authority_values() -> None:
 
 
 @pytest.mark.parametrize(
+    "field",
+    (
+        "transition_eligible",
+        "runtime_started",
+        "t2_runtime_started",
+        "live_transport_authorized",
+        "account_readonly_runtime_authorized",
+        "testnet_execution_authorized",
+        "mainnet_execution_authorized",
+        "flp1_implementation_authorized",
+    ),
+)
+def test_schema_rejects_enabled_safe_stop_authority(field: str) -> None:
+    schema = _load_json(SCHEMA_PATH)
+    state_schema = schema["$defs"]["ProjectState"]
+    assert isinstance(state_schema, dict)
+    candidate = deepcopy(_load_json(STATE_PATH))
+    candidate[field] = True
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(state_schema).validate(candidate)
+
+
+@pytest.mark.parametrize(
+    "path, replacement",
+    (
+        (("task_id",), COMPLETED_IMPLEMENTATION),
+        (("state_base_sha",), CURRENT_STATE_BASE_SHA),
+        (("first_release", "milestone"), COMPLETED_IMPLEMENTATION),
+    ),
+)
+def test_schema_rejects_replaced_historical_program_provenance(
+    path: tuple[str, ...], replacement: str
+) -> None:
+    schema = _load_json(SCHEMA_PATH)
+    candidate = deepcopy(_load_json(PROGRAM_PATH))
+    target = candidate
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = replacement
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(candidate)
+
+
+@pytest.mark.parametrize(
     "path, stale_value",
     [
         (
             ("authority", "last_completed_implementation"),
-            "V0-FL3-OFFLINE-OPERATOR-REVIEW-SURFACE-AND-SHADOW-JOURNAL",
+            "V0-FLP1-OFFLINE-PLAN-TO-OUTCOME-MATCHING-AND-REPLAY",
         ),
-        (("authority", "last_completed_implementation_pr"), 22),
+        (("authority", "last_completed_implementation_pr"), 25),
         (
             ("authority", "next_gate"),
-            "NEXT_GATE_UNRESOLVED",
+            "V0-FLP1-OFFLINE-MINIMAL-PILOT-REVIEW-AND-COVERAGE-REPORT",
         ),
         (
             ("authority", "next_gate_status"),
-            "NEXT_GATE_UNRESOLVED_PENDING_SEPARATE_USER_DECISION",
+            "USER_SELECTED_PENDING_SEPARATE_PRODUCT_TASK_AUTHORIZATION",
         ),
         (
             ("first_release", "next_runtime_gate"),
-            "NEXT_GATE_UNRESOLVED",
+            "V0-FLP1-OFFLINE-MINIMAL-PILOT-REVIEW-AND-COVERAGE-REPORT",
         ),
         (
             ("review_finalization_policy", "next_gate"),
-            "NEXT_GATE_UNRESOLVED",
+            "V0-FLP1-OFFLINE-MINIMAL-PILOT-REVIEW-AND-COVERAGE-REPORT",
         ),
         (
             ("recursive_rotation", "post_merge_next_gate"),
-            "NEXT_GATE_UNRESOLVED",
+            "V0-FLP1-OFFLINE-MINIMAL-PILOT-REVIEW-AND-COVERAGE-REPORT",
         ),
         (
             ("authority", "last_completed_implementation"),
