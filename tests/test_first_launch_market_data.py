@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -9,12 +10,13 @@ from typing import Literal
 
 import pytest
 
+from trader_assist_v0.contracts.common import canonical_json_bytes
 from trader_assist_v0.first_launch.market_data import (
     Candle,
     DataQualityState,
     EthMarketData,
-    IgnoredOpenCandle,
     MarketDataError,
+    OpenCandleIgnored,
     RawEvidence,
     ReconnectController,
     candle_from_websocket,
@@ -23,6 +25,7 @@ from trader_assist_v0.first_launch.market_data import (
     evidence_from_raw,
     metadata_from_info,
 )
+from trader_assist_v0.first_launch.outcome import OutcomeError, read_candle_evidence
 
 NOW = datetime(2026, 7, 14, 12, 0, tzinfo=UTC)
 _MISSING = object()
@@ -454,7 +457,7 @@ def test_invalid_or_missing_trade_count_is_rejected_before_issuance(
     assert issued == []
 
 
-def test_open_candles_are_explicitly_nonissued_and_cannot_advance_authority(
+def test_open_websocket_candle_raises_control_flow_exception_and_ingest_ignores_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import trader_assist_v0.first_launch.market_data as market_data
@@ -482,7 +485,9 @@ def test_open_candles_are_explicitly_nonissued_and_cannot_advance_authority(
     monkeypatch.setattr(market_data, "_issue", issue_spy)
     websocket = json.dumps({"channel": "candle", "data": candle}, separators=(",", ":"))
     snapshot = json.dumps([candle], separators=(",", ":"))
-    assert type(candle_from_websocket(websocket, _evidence(websocket))) is IgnoredOpenCandle
+    with pytest.raises(OpenCandleIgnored) as raised:
+        candle_from_websocket(websocket, _evidence(websocket))
+    assert not isinstance(raised.value, Candle)
     assert (
         candles_from_snapshot(
             snapshot,
@@ -493,6 +498,13 @@ def test_open_candles_are_explicitly_nonissued_and_cannot_advance_authority(
     )
     data = EthMarketData()
     data.begin_connection()
+    accepted: list[object] = []
+
+    def accept_spy(value: Candle) -> str:
+        accepted.append(value)
+        return "ACCEPTED"
+
+    monkeypatch.setattr(data, "accept_candle", accept_spy)
     assert (
         data.ingest_websocket(
             websocket,
@@ -502,16 +514,9 @@ def test_open_candles_are_explicitly_nonissued_and_cannot_advance_authority(
         )
         == "IGNORED_OPEN"
     )
-    data.recover_snapshot(
-        "5m",
-        candles_from_snapshot(
-            snapshot,
-            _evidence(snapshot, "candleSnapshot"),
-            requested_interval="5m",
-        ),
-    )
     assert data.candles["5m"] == {}
-    assert data.quality(NOW).state is DataQualityState.METADATA_UNAVAILABLE
+    assert data.invalid_reason is None
+    assert accepted == []
     assert issued == []
 
 
@@ -553,3 +558,190 @@ def test_snapshot_order_and_interval_are_fail_closed_without_repair() -> None:
             _evidence(wrong_interval, "candleSnapshot"),
             requested_interval="5m",
         )
+
+
+def _snapshot_candle(
+    close_time: int, *, n: object = 0, interval: str = "5m"
+) -> dict[str, object]:
+    width = 300_000 if interval == "5m" else 900_000
+    return {
+        "s": "ETH",
+        "i": interval,
+        "t": close_time - width,
+        "T": close_time,
+        "o": "1",
+        "h": "2",
+        "l": "1",
+        "c": "2",
+        "v": "3",
+        "n": n,
+    }
+
+
+def _snapshot_raw(candles: list[dict[str, object]]) -> str:
+    return json.dumps(candles, separators=(",", ":"))
+
+
+def test_closed_websocket_and_snapshot_results_are_exact_issued_candles() -> None:
+    import trader_assist_v0.first_launch.market_data as market_data
+
+    now_ms = int(NOW.timestamp() * 1000)
+    closed = _snapshot_candle(now_ms - 1_000)
+    websocket = json.dumps({"channel": "candle", "data": closed}, separators=(",", ":"))
+    result = candle_from_websocket(websocket, _evidence(websocket))
+    assert type(result) is Candle
+    assert market_data._validated_candle(result) is result
+
+    snapshot = _snapshot_raw([closed])
+    recovered = candles_from_snapshot(
+        snapshot, _evidence(snapshot, "candleSnapshot"), requested_interval="5m"
+    )
+    assert len(recovered) == 1 and type(recovered[0]) is Candle
+    assert market_data._validated_candle(recovered[0]) is recovered[0]
+
+    equal = _snapshot_candle(now_ms)
+    equal_raw = json.dumps({"channel": "candle", "data": equal}, separators=(",", ":"))
+    with pytest.raises(OpenCandleIgnored):
+        candle_from_websocket(equal_raw, _evidence(equal_raw))
+
+
+@pytest.mark.parametrize(
+    "second",
+    [
+        pytest.param(lambda now_ms: {**_snapshot_candle(now_ms - 1_000), "v": "bad"}),
+        pytest.param(lambda now_ms: {**_snapshot_candle(now_ms), "n": "bad"}),
+        pytest.param(
+            lambda now_ms: {
+                key: value
+                for key, value in _snapshot_candle(now_ms - 1_000).items()
+                if key != "n"
+            }
+        ),
+    ],
+)
+def test_malformed_snapshot_is_atomic_before_any_issuance(
+    monkeypatch: pytest.MonkeyPatch,
+    second: Callable[[int], dict[str, object]],
+) -> None:
+    import trader_assist_v0.first_launch.market_data as market_data
+
+    now_ms = int(NOW.timestamp() * 1000)
+    valid = _snapshot_candle(now_ms - 301_000)
+    malformed = second(now_ms)
+    raw = _snapshot_raw([valid, malformed])
+    issued: list[object] = []
+    original_issue = market_data._issue
+
+    def issue_spy(value: object, fingerprint: str) -> object:
+        issued.append(value)
+        return original_issue(value, fingerprint)
+
+    monkeypatch.setattr(market_data, "_issue", issue_spy)
+    data = EthMarketData()
+    data.begin_connection()
+    with pytest.raises(MarketDataError):
+        candles_from_snapshot(raw, _evidence(raw, "candleSnapshot"), requested_interval="5m")
+    assert issued == [] and data.candles["5m"] == {}
+
+
+def test_snapshot_open_filtering_preserves_only_closed_prefix_and_rejects_bad_open() -> None:
+    now_ms = int(NOW.timestamp() * 1000)
+    first = _snapshot_candle(now_ms - 600_000)
+    second = _snapshot_candle(now_ms - 300_000)
+    trailing_open = _snapshot_candle(now_ms)
+    next_open = _snapshot_candle(now_ms + 300_000)
+    mixed = _snapshot_raw([first, second, trailing_open])
+    multiple = _snapshot_raw([first, second, trailing_open, next_open])
+    all_open = _snapshot_raw([trailing_open, next_open])
+    assert [item.open_time_ms for item in candles_from_snapshot(
+        mixed, _evidence(mixed, "candleSnapshot"), requested_interval="5m"
+    )] == [first["t"], second["t"]]
+    assert [item.open_time_ms for item in candles_from_snapshot(
+        multiple, _evidence(multiple, "candleSnapshot"), requested_interval="5m"
+    )] == [first["t"], second["t"]]
+    assert candles_from_snapshot(
+        all_open, _evidence(all_open, "candleSnapshot"), requested_interval="5m"
+    ) == ()
+    malformed_open = _snapshot_raw([first, second, {**trailing_open, "n": "bad"}])
+    with pytest.raises(MarketDataError):
+        candles_from_snapshot(
+            malformed_open,
+            _evidence(malformed_open, "candleSnapshot"),
+            requested_interval="5m",
+        )
+
+
+def test_snapshot_order_duplicate_gap_and_interval_rules_remain_fail_closed() -> None:
+    now_ms = int(NOW.timestamp() * 1000)
+    first = _snapshot_candle(now_ms - 600_000)
+    second = _snapshot_candle(now_ms - 300_000)
+    trailing_open = _snapshot_candle(now_ms)
+    for payload in (
+        [second, first],
+        [trailing_open, trailing_open],
+        [
+            _snapshot_candle(now_ms - 900_000),
+            _snapshot_candle(now_ms - 300_000),
+        ],
+        [{**first, "i": "15m", "t": first["t"] - 600_000}],
+    ):
+        raw = _snapshot_raw(payload)
+        with pytest.raises(MarketDataError):
+            candles_from_snapshot(raw, _evidence(raw, "candleSnapshot"), requested_interval="5m")
+
+
+def test_malformed_and_all_open_snapshots_do_not_invoke_downstream_work() -> None:
+    now_ms = int(NOW.timestamp() * 1000)
+    malformed = _snapshot_raw(
+        [_snapshot_candle(now_ms - 1_000), {**_snapshot_candle(now_ms), "n": "bad"}]
+    )
+    all_open = _snapshot_raw([_snapshot_candle(now_ms), _snapshot_candle(now_ms + 300_000)])
+
+    def guarded_pipeline(raw: str) -> tuple[int, int, int]:
+        calls = [0, 0, 0]
+        try:
+            candles = candles_from_snapshot(
+                raw, _evidence(raw, "candleSnapshot"), requested_interval="5m"
+            )
+        except MarketDataError:
+            return tuple(calls)
+        if not candles:
+            return tuple(calls)
+        calls[0] += 1
+        calls[1] += 1
+        calls[2] += 1
+        return tuple(calls)
+
+    assert guarded_pipeline(malformed) == (0, 0, 0)
+    assert guarded_pipeline(all_open) == (0, 0, 0)
+
+
+def test_direct_integer_subclasses_are_rejected_at_the_integer_boundary() -> None:
+    import trader_assist_v0.first_launch.market_data as market_data
+
+    class IntegerSubclass(int):
+        pass
+
+    with pytest.raises(MarketDataError):
+        market_data._integer(IntegerSubclass(1), "candle trade count")
+
+
+def test_existing_outcome_reader_fails_closed_on_open_candle_evidence() -> None:
+    now_ms = int(NOW.timestamp() * 1000)
+    candle = _snapshot_candle(now_ms)
+    websocket = json.dumps({"channel": "candle", "data": candle}, separators=(",", ":"))
+    payload = canonical_json_bytes(
+        {
+            "candle_evidence_version": "1",
+            "candles": [
+                {
+                    "raw_text": websocket,
+                    "received_at": NOW.isoformat(),
+                    "receive_sequence": 1,
+                    "connection_id": "connection-1",
+                }
+            ],
+        }
+    )
+    with pytest.raises(OutcomeError, match="CANDLE_EVIDENCE_INVALID"):
+        read_candle_evidence(payload)

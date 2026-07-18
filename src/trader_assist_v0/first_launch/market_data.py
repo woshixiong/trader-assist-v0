@@ -33,6 +33,10 @@ class MarketDataError(ValueError):
     """An observation cannot become an ETH-LDAR input."""
 
 
+class OpenCandleIgnored(MarketDataError):
+    """A valid public candle observation that is not yet closed or issuable."""
+
+
 # This registry deliberately binds authority to the object that a reviewed parser
 # issued.  A field hash alone is forgeable by a caller; identity plus the frozen
 # issuance fingerprint rejects constructors, copies, and post-issuance mutation.
@@ -178,11 +182,6 @@ class Candle:
                 }
             )
         ).hexdigest()
-
-
-@dataclass(frozen=True)
-class IgnoredOpenCandle(Candle):
-    """A validated but deliberately non-issued open candle observation."""
 
 
 @dataclass(frozen=True)
@@ -442,20 +441,10 @@ def _candle_from_public_object(
     return candle
 
 
-def _issue_closed_candle(value: Candle) -> Candle | IgnoredOpenCandle:
+def _issue_closed_candle(value: Candle) -> Candle:
     """Issue immutable candle authority only after the evidence proves closure."""
     if value.close_time_ms >= int(value.evidence.received_at.timestamp() * 1000):
-        return IgnoredOpenCandle(
-            interval=value.interval,
-            open_time_ms=value.open_time_ms,
-            close_time_ms=value.close_time_ms,
-            open=value.open,
-            high=value.high,
-            low=value.low,
-            close=value.close,
-            volume=value.volume,
-            evidence=value.evidence,
-        )
+        raise OpenCandleIgnored("candle is not closed at evidence receipt")
     return _issue(value, _candle_fingerprint(value))
 
 
@@ -496,7 +485,7 @@ def candles_from_snapshot(
     return tuple(_issue(item, _candle_fingerprint(item)) for item in closed)
 
 
-def candle_from_websocket(raw_text: str, evidence: RawEvidence) -> Candle | IgnoredOpenCandle:
+def candle_from_websocket(raw_text: str, evidence: RawEvidence) -> Candle:
     _bound_evidence(raw_text, evidence, "WebSocket")
     message = _strict_object(raw_text)
     if message.get("channel") != "candle" or type(message.get("data")) is not dict:
@@ -625,15 +614,13 @@ class EthMarketData:
             message = _strict_object(raw_text)
             if message.get("channel") == "candle":
                 candle = candle_from_websocket(raw_text, evidence)
-                return (
-                    "IGNORED_OPEN"
-                    if type(candle) is IgnoredOpenCandle
-                    else self.accept_candle(candle)
-                )
+                return self.accept_candle(candle)
             if message.get("channel") == "activeAssetCtx":
                 self.accept_context(context_from_websocket(raw_text, evidence))
                 return "CONTEXT_ACCEPTED"
             raise MarketDataError("WebSocket channel is outside the First Launch authority")
+        except OpenCandleIgnored:
+            return "IGNORED_OPEN"
         except MarketDataError:
             self.invalid_reason = "WEBSOCKET_OBSERVATION_INVALID"
             raise
