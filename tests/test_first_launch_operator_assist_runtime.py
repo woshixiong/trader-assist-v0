@@ -408,11 +408,25 @@ class _SetupIdSubclass(str):
         {"setup_id": "a" * 64},
         _SetupIdSubclass("a" * 64),
         "not-a-setup-id",
+        "A" * 64,
+        "a" * 63,
+        "g" * 64,
     ],
 )
 def test_malformed_wait_setup_id_fails_closed_before_clock_or_mutation(setup_id: object) -> None:
     clocks = Clocks()
     lifecycle = InMemorySignalLifecycle(clocks.utc)
+    unrelated = _strategy_value(fast=True)
+    assert type(unrelated) is StrategyOutput and lifecycle.accept(unrelated) is not None
+    before_calls = clocks.utc_calls
+    before_states = lifecycle._states
+    before_prepared = lifecycle._prepared
+    before_outputs = lifecycle._outputs
+    before_emitted_ids = lifecycle._emitted_ids
+    expected_states = dict(lifecycle._states)
+    expected_prepared = dict(lifecycle._prepared)
+    expected_outputs = dict(lifecycle._outputs)
+    expected_emitted_ids = set(lifecycle._emitted_ids)
     with pytest.raises(LifecycleTransitionError):
         lifecycle.accept(
             Signal(
@@ -423,11 +437,17 @@ def test_malformed_wait_setup_id_fails_closed_before_clock_or_mutation(setup_id:
                 "SETUP_ALREADY_DECIDED",
             )
         )
-    assert clocks.utc_calls == 0
-    assert lifecycle._states == {}
-    assert lifecycle._prepared == {}
-    assert lifecycle._outputs == {}
-    assert lifecycle._emitted_ids == set()
+    assert clocks.utc_calls == before_calls
+    assert lifecycle._states is before_states
+    assert lifecycle._prepared is before_prepared
+    assert lifecycle._outputs is before_outputs
+    assert lifecycle._emitted_ids is before_emitted_ids
+    assert lifecycle._states == expected_states
+    assert lifecycle._prepared == expected_prepared
+    assert lifecycle._outputs == expected_outputs
+    assert lifecycle._emitted_ids == expected_emitted_ids
+    assert lifecycle.state_for(unrelated.setup_id) is SignalState.TRIGGERED_FAST
+    assert lifecycle._outputs[unrelated.setup_id] is unrelated
 
 
 def test_prepare_advances_only_through_strategy_and_terminal_paths_are_immutable() -> None:
@@ -650,6 +670,214 @@ def test_observe_uses_exact_utc_clock_and_emission_identity_is_deterministic() -
     assert terminal.emission_id == expected
 
 
+def _terminal_emission_id(setup_id: str, state: SignalState) -> str:
+    return hashlib.sha256(
+        b"trader-assist-v0/first-launch/lifecycle-emission/v1\0"
+        + json.dumps(
+            {"setup_id": setup_id, "state": state.value},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+
+
+def test_reentrant_initial_prepare_rejects_stale_outer_transition() -> None:
+    clocks = Clocks()
+    lifecycle = InMemorySignalLifecycle(clocks.utc)
+    prepared = _strategy_value(fast=False)
+    assert type(prepared) is PreparedSetup
+    nested: list[object] = []
+    reentered = False
+
+    def reentrant_utc() -> datetime:
+        nonlocal reentered
+        if not reentered:
+            reentered = True
+            nested.append(lifecycle.accept(prepared))
+        return clocks.value
+
+    lifecycle.utc_now = reentrant_utc
+    with pytest.raises(
+        LifecycleTransitionError, match="lifecycle changed during external callback"
+    ):
+        lifecycle.accept(prepared)
+    inner = nested[0]
+    assert type(inner) is runtime.LifecycleEmission
+    assert lifecycle.state_for(prepared.setup_id) is SignalState.PREPARE
+    assert lifecycle._prepared[prepared.setup_id] is prepared
+    assert lifecycle._emitted_ids == {inner.emission_id}
+
+
+def test_reentrant_terminate_rejects_stale_outer_terminal_transition() -> None:
+    clocks = Clocks()
+    lifecycle = InMemorySignalLifecycle(clocks.utc)
+    fast = _strategy_value(fast=True)
+    assert type(fast) is StrategyOutput
+    initial = lifecycle.accept(fast)
+    assert initial is not None
+    nested: list[object] = []
+    reentered = False
+
+    def reentrant_utc() -> datetime:
+        nonlocal reentered
+        if not reentered:
+            reentered = True
+            nested.append(lifecycle.terminate(fast.setup_id, SignalState.SKIPPED))
+        return clocks.value
+
+    lifecycle.utc_now = reentrant_utc
+    with pytest.raises(
+        LifecycleTransitionError, match="lifecycle changed during external callback"
+    ):
+        lifecycle.terminate(fast.setup_id, SignalState.TAKEN)
+    skipped = nested[0]
+    assert type(skipped) is runtime.LifecycleEmission
+    assert lifecycle.state_for(fast.setup_id) is SignalState.SKIPPED
+    assert lifecycle._outputs[fast.setup_id] is fast
+    assert lifecycle._emitted_ids == {initial.emission_id, skipped.emission_id}
+    assert _terminal_emission_id(fast.setup_id, SignalState.TAKEN) not in lifecycle._emitted_ids
+
+
+def test_reentrant_observe_rejects_stale_outer_expiry_before_lifecycle_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clocks = Clocks()
+    lifecycle = InMemorySignalLifecycle(clocks.utc)
+    fast = _strategy_value(fast=True)
+    assert type(fast) is StrategyOutput
+    initial = lifecycle.accept(fast)
+    assert initial is not None
+    clocks.value = fast.expires_at
+    nested: list[object] = []
+    reentered = False
+    lifecycle_state_calls = 0
+
+    def reentrant_utc() -> datetime:
+        nonlocal reentered
+        if not reentered:
+            reentered = True
+            nested.append(lifecycle.terminate(fast.setup_id, SignalState.TAKEN))
+        return clocks.value
+
+    def record_lifecycle_state(_output: StrategyOutput, **_kwargs: object) -> SignalState:
+        nonlocal lifecycle_state_calls
+        lifecycle_state_calls += 1
+        return SignalState.EXPIRED
+
+    lifecycle.utc_now = reentrant_utc
+    monkeypatch.setattr(runtime, "lifecycle_state", record_lifecycle_state)
+    with pytest.raises(
+        LifecycleTransitionError, match="lifecycle changed during external callback"
+    ):
+        lifecycle.observe(
+            fast.setup_id, reference=fast.raw_entry_low, quality=DataQualityState.READY
+        )
+    taken = nested[0]
+    assert type(taken) is runtime.LifecycleEmission
+    assert lifecycle.state_for(fast.setup_id) is SignalState.TAKEN
+    assert lifecycle._outputs[fast.setup_id] is fast
+    assert lifecycle._emitted_ids == {initial.emission_id, taken.emission_id}
+    assert _terminal_emission_id(fast.setup_id, SignalState.EXPIRED) not in lifecycle._emitted_ids
+    assert lifecycle_state_calls == 0
+
+
+def test_reentrant_lifecycle_state_rejects_stale_outer_observation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clocks = Clocks()
+    lifecycle = InMemorySignalLifecycle(clocks.utc)
+    fast = _strategy_value(fast=True)
+    assert type(fast) is StrategyOutput
+    initial = lifecycle.accept(fast)
+    assert initial is not None
+    clocks.value = fast.expires_at
+    nested: list[object] = []
+
+    def reentrant_lifecycle_state(_output: StrategyOutput, **_kwargs: object) -> SignalState:
+        nested.append(lifecycle.terminate(fast.setup_id, SignalState.TAKEN))
+        return SignalState.EXPIRED
+
+    monkeypatch.setattr(runtime, "lifecycle_state", reentrant_lifecycle_state)
+    with pytest.raises(
+        LifecycleTransitionError, match="lifecycle changed during external callback"
+    ):
+        lifecycle.observe(
+            fast.setup_id, reference=fast.raw_entry_low, quality=DataQualityState.READY
+        )
+    taken = nested[0]
+    assert type(taken) is runtime.LifecycleEmission
+    assert lifecycle.state_for(fast.setup_id) is SignalState.TAKEN
+    assert lifecycle._emitted_ids == {initial.emission_id, taken.emission_id}
+    assert _terminal_emission_id(fast.setup_id, SignalState.EXPIRED) not in lifecycle._emitted_ids
+
+
+def test_reentrant_advance_rejects_stale_outer_transition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clocks = Clocks()
+    lifecycle = InMemorySignalLifecycle(clocks.utc)
+    prepared = _strategy_value(fast=False)
+    assert type(prepared) is PreparedSetup
+    initial = lifecycle.accept(prepared)
+    assert initial is not None
+    calls = 0
+    nested: list[object] = []
+    inner = Signal(
+        SignalState.EXPIRED,
+        prepared.provenance.side,
+        "STANDARD",
+        prepared.setup_id,
+        "INNER_TERMINAL",
+    )
+    outer = Signal(
+        SignalState.INVALIDATED,
+        prepared.provenance.side,
+        "STANDARD",
+        prepared.setup_id,
+        "OUTER_TERMINAL",
+    )
+
+    def reentrant_advance(_setup: PreparedSetup, _snapshot: object) -> Signal:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            nested.append(lifecycle.advance(prepared.setup_id, cast(object, object())))
+            return outer
+        return inner
+
+    monkeypatch.setattr(runtime, "advance_prepare", reentrant_advance)
+    with pytest.raises(
+        LifecycleTransitionError, match="lifecycle changed during external callback"
+    ):
+        lifecycle.advance(prepared.setup_id, cast(object, object()))
+    expired = nested[0]
+    assert type(expired) is runtime.LifecycleEmission
+    assert lifecycle.state_for(prepared.setup_id) is SignalState.EXPIRED
+    assert prepared.setup_id not in lifecycle._prepared
+    assert prepared.setup_id not in lifecycle._outputs
+    assert lifecycle._emitted_ids == {initial.emission_id, expired.emission_id}
+    assert (
+        _terminal_emission_id(prepared.setup_id, SignalState.INVALIDATED)
+        not in lifecycle._emitted_ids
+    )
+
+
+def test_non_reentrant_utc_read_does_not_invalidate_terminal_transition() -> None:
+    clocks = Clocks()
+    lifecycle = InMemorySignalLifecycle(clocks.utc)
+    fast = _strategy_value(fast=True)
+    assert type(fast) is StrategyOutput and lifecycle.accept(fast) is not None
+
+    def read_only_utc() -> datetime:
+        assert lifecycle.state_for(fast.setup_id) is SignalState.TRIGGERED_FAST
+        return clocks.value
+
+    lifecycle.utc_now = read_only_utc
+    emission = lifecycle.terminate(fast.setup_id, SignalState.TAKEN)
+    assert emission is not None and emission.state is SignalState.TAKEN
+    assert lifecycle.state_for(fast.setup_id) is SignalState.TAKEN
+
+
 class _CopyMemoryErrorDict(dict[str, object]):
     def copy(self) -> dict[str, object]:
         raise MemoryError
@@ -769,12 +997,11 @@ def _assert_transaction_is_unchanged(
         dict[str, SignalState], dict[str, PreparedSetup], dict[str, StrategyOutput], set[str]
     ],
 ) -> None:
-    assert (
-        lifecycle._states,
-        lifecycle._prepared,
-        lifecycle._outputs,
-        lifecycle._emitted_ids,
-    ) == before
+    before_states, before_prepared, before_outputs, before_emitted_ids = before
+    assert lifecycle._states is before_states
+    assert lifecycle._prepared is before_prepared
+    assert lifecycle._outputs is before_outputs
+    assert lifecycle._emitted_ids is before_emitted_ids
     assert lifecycle._states == contents[0]
     assert lifecycle._prepared == contents[1]
     assert lifecycle._outputs == contents[2]

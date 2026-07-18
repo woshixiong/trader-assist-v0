@@ -401,6 +401,34 @@ class InMemorySignalLifecycle:
     _outputs: dict[str, StrategyOutput] = field(init=False, default_factory=dict)
     _emitted_ids: set[str] = field(init=False, default_factory=set)
 
+    def _container_snapshot(
+        self,
+    ) -> tuple[
+        dict[str, SignalState],
+        dict[str, PreparedSetup],
+        dict[str, StrategyOutput],
+        set[str],
+    ]:
+        return self._states, self._prepared, self._outputs, self._emitted_ids
+
+    def _require_current_containers(
+        self,
+        expected: tuple[
+            dict[str, SignalState],
+            dict[str, PreparedSetup],
+            dict[str, StrategyOutput],
+            set[str],
+        ],
+    ) -> None:
+        expected_states, expected_prepared, expected_outputs, expected_emitted_ids = expected
+        if (
+            self._states is not expected_states
+            or self._prepared is not expected_prepared
+            or self._outputs is not expected_outputs
+            or self._emitted_ids is not expected_emitted_ids
+        ):
+            raise LifecycleTransitionError("lifecycle changed during external callback")
+
     def _timestamp(self) -> datetime:
         try:
             return _exact_utc(self.utc_now(), "UTC clock is invalid")
@@ -462,11 +490,18 @@ class InMemorySignalLifecycle:
         self,
         emission: LifecycleEmission,
         state: SignalState,
+        expected: tuple[
+            dict[str, SignalState],
+            dict[str, PreparedSetup],
+            dict[str, StrategyOutput],
+            set[str],
+        ],
         *,
         prepared: PreparedSetup | None = None,
         output: StrategyOutput | None = None,
         remove_prepared: bool = False,
     ) -> LifecycleEmission:
+        self._require_current_containers(expected)
         try:
             next_states = self._states.copy()
             next_prepared = self._prepared.copy()
@@ -517,12 +552,15 @@ class InMemorySignalLifecycle:
             setup_id = _setup_id(setup.setup_id)
             current = self._states.get(setup_id)
             if current is None:
+                expected = self._container_snapshot()
                 emission = self._build_emission(setup_id, SignalState.PREPARE, setup)
                 if emission is None:
                     raise LifecycleTransitionError(
                         "prepare emission conflicts with retained identity"
                     )
-                return self._commit_transition(emission, SignalState.PREPARE, prepared=setup)
+                return self._commit_transition(
+                    emission, SignalState.PREPARE, expected, prepared=setup
+                )
             if current is SignalState.PREPARE and self._prepared.get(setup_id) == setup:
                 return None
             raise LifecycleTransitionError("prepared setup conflicts with lifecycle state")
@@ -534,10 +572,13 @@ class InMemorySignalLifecycle:
             raise LifecycleTransitionError("strategy output transition is invalid")
         current = self._states.get(setup_id)
         if current is None:
+            expected = self._container_snapshot()
             emission = self._build_emission(setup_id, SignalState.TRIGGERED_FAST, output)
             if emission is None:
                 raise LifecycleTransitionError("fast emission conflicts with retained identity")
-            return self._commit_transition(emission, SignalState.TRIGGERED_FAST, output=output)
+            return self._commit_transition(
+                emission, SignalState.TRIGGERED_FAST, expected, output=output
+            )
         if current is SignalState.TRIGGERED_FAST and self._outputs.get(setup_id) == output:
             return None
         raise LifecycleTransitionError("fast output conflicts with lifecycle state")
@@ -547,10 +588,12 @@ class InMemorySignalLifecycle:
         if self._states.get(setup_id) is not SignalState.PREPARE or setup_id not in self._prepared:
             raise LifecycleTransitionError("advance requires retained prepare")
         retained = self._validate_prepared(self._prepared[setup_id])
+        expected = self._container_snapshot()
         try:
             result = advance_prepare(retained, snapshot)
         except (TypeError, ValueError) as exc:
             raise LifecycleTransitionError("prepare advance failed") from exc
+        self._require_current_containers(expected)
         if type(result) is Signal:
             if (
                 type(result.state) is not SignalState
@@ -574,7 +617,7 @@ class InMemorySignalLifecycle:
             emission = self._build_emission(setup_id, result.state, None)
             if emission is None:
                 raise LifecycleTransitionError("terminal emission conflicts with retained identity")
-            return self._commit_transition(emission, result.state, remove_prepared=True)
+            return self._commit_transition(emission, result.state, expected, remove_prepared=True)
         if type(result) is not StrategyOutput:
             raise LifecycleTransitionError("advance returned an invalid type")
         output = self._validate_output(result)
@@ -591,6 +634,7 @@ class InMemorySignalLifecycle:
         return self._commit_transition(
             emission,
             SignalState.TRIGGERED_STANDARD,
+            expected,
             output=output,
             remove_prepared=True,
         )
@@ -607,11 +651,14 @@ class InMemorySignalLifecycle:
         if type(quality) is not DataQualityState:
             raise LifecycleTransitionError("quality is invalid")
         output = self._validate_output(self._outputs[setup_id])
+        expected = self._container_snapshot()
         now = self._timestamp()
+        self._require_current_containers(expected)
         try:
             next_state = lifecycle_state(output, now=now, reference=reference, quality=quality)
         except (TypeError, ValueError) as exc:
             raise LifecycleTransitionError("output observation failed") from exc
+        self._require_current_containers(expected)
         if type(next_state) is not SignalState:
             raise LifecycleTransitionError("output observation returned an invalid state")
         if next_state is current:
@@ -621,7 +668,7 @@ class InMemorySignalLifecycle:
         emission = self._build_emission(setup_id, next_state, None, emitted_at=now)
         if emission is None:
             raise LifecycleTransitionError("terminal emission conflicts with retained identity")
-        return self._commit_transition(emission, next_state)
+        return self._commit_transition(emission, next_state, expected)
 
     def terminate(self, setup_id: str, terminal: SignalState) -> LifecycleEmission | None:
         setup_id = _setup_id(setup_id)
@@ -631,10 +678,11 @@ class InMemorySignalLifecycle:
             raise LifecycleTransitionError("terminal state is invalid")
         current = self._states.get(setup_id)
         if current in {SignalState.TRIGGERED_FAST, SignalState.TRIGGERED_STANDARD}:
+            expected = self._container_snapshot()
             emission = self._build_emission(setup_id, terminal, None)
             if emission is None:
                 raise LifecycleTransitionError("terminal emission conflicts with retained identity")
-            return self._commit_transition(emission, terminal)
+            return self._commit_transition(emission, terminal, expected)
         if current is terminal:
             return None
         raise LifecycleTransitionError("terminal transition is invalid")
