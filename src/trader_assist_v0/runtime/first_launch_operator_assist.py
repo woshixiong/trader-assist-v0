@@ -387,6 +387,7 @@ def _signal_is_ignored(value: Signal) -> bool:
             return True
         return (
             value.reason == "SETUP_ALREADY_DECIDED"
+            and type(value.setup_id) is str
             and _SETUP_ID_RE.fullmatch(value.setup_id) is not None
         )
     return False
@@ -457,8 +458,36 @@ class InMemorySignalLifecycle:
         speed = output.speed if output is not None else None
         return LifecycleEmission(setup_id, state, speed, timestamp, emission_id, output)
 
-    def _commit_emission(self, emission: LifecycleEmission) -> LifecycleEmission:
-        self._emitted_ids.add(emission.emission_id)
+    def _commit_transition(
+        self,
+        emission: LifecycleEmission,
+        state: SignalState,
+        *,
+        prepared: PreparedSetup | None = None,
+        output: StrategyOutput | None = None,
+        remove_prepared: bool = False,
+    ) -> LifecycleEmission:
+        try:
+            next_states = self._states.copy()
+            next_prepared = self._prepared.copy()
+            next_outputs = self._outputs.copy()
+            next_emitted_ids = self._emitted_ids.copy()
+            if emission.emission_id in next_emitted_ids:
+                raise LifecycleTransitionError("emission conflicts with retained identity")
+            next_states[emission.setup_id] = state
+            if remove_prepared:
+                del next_prepared[emission.setup_id]
+            elif prepared is not None:
+                next_prepared[emission.setup_id] = prepared
+            if output is not None:
+                next_outputs[emission.setup_id] = output
+            next_emitted_ids.add(emission.emission_id)
+        except MemoryError as exc:
+            raise LifecycleTransitionError("lifecycle transition planning failed") from exc
+        self._states = next_states
+        self._prepared = next_prepared
+        self._outputs = next_outputs
+        self._emitted_ids = next_emitted_ids
         return emission
 
     def _validate_prepared(self, value: object) -> PreparedSetup:
@@ -493,9 +522,7 @@ class InMemorySignalLifecycle:
                     raise LifecycleTransitionError(
                         "prepare emission conflicts with retained identity"
                     )
-                self._prepared[setup_id] = setup
-                self._states[setup_id] = SignalState.PREPARE
-                return self._commit_emission(emission)
+                return self._commit_transition(emission, SignalState.PREPARE, prepared=setup)
             if current is SignalState.PREPARE and self._prepared.get(setup_id) == setup:
                 return None
             raise LifecycleTransitionError("prepared setup conflicts with lifecycle state")
@@ -510,9 +537,7 @@ class InMemorySignalLifecycle:
             emission = self._build_emission(setup_id, SignalState.TRIGGERED_FAST, output)
             if emission is None:
                 raise LifecycleTransitionError("fast emission conflicts with retained identity")
-            self._outputs[setup_id] = output
-            self._states[setup_id] = SignalState.TRIGGERED_FAST
-            return self._commit_emission(emission)
+            return self._commit_transition(emission, SignalState.TRIGGERED_FAST, output=output)
         if current is SignalState.TRIGGERED_FAST and self._outputs.get(setup_id) == output:
             return None
         raise LifecycleTransitionError("fast output conflicts with lifecycle state")
@@ -549,9 +574,7 @@ class InMemorySignalLifecycle:
             emission = self._build_emission(setup_id, result.state, None)
             if emission is None:
                 raise LifecycleTransitionError("terminal emission conflicts with retained identity")
-            del self._prepared[setup_id]
-            self._states[setup_id] = result.state
-            return self._commit_emission(emission)
+            return self._commit_transition(emission, result.state, remove_prepared=True)
         if type(result) is not StrategyOutput:
             raise LifecycleTransitionError("advance returned an invalid type")
         output = self._validate_output(result)
@@ -565,10 +588,12 @@ class InMemorySignalLifecycle:
         emission = self._build_emission(setup_id, SignalState.TRIGGERED_STANDARD, output)
         if emission is None:
             raise LifecycleTransitionError("standard emission conflicts with retained identity")
-        del self._prepared[setup_id]
-        self._outputs[setup_id] = output
-        self._states[setup_id] = SignalState.TRIGGERED_STANDARD
-        return self._commit_emission(emission)
+        return self._commit_transition(
+            emission,
+            SignalState.TRIGGERED_STANDARD,
+            output=output,
+            remove_prepared=True,
+        )
 
     def observe(
         self, setup_id: str, *, reference: Decimal, quality: DataQualityState
@@ -596,8 +621,7 @@ class InMemorySignalLifecycle:
         emission = self._build_emission(setup_id, next_state, None, emitted_at=now)
         if emission is None:
             raise LifecycleTransitionError("terminal emission conflicts with retained identity")
-        self._states[setup_id] = next_state
-        return self._commit_emission(emission)
+        return self._commit_transition(emission, next_state)
 
     def terminate(self, setup_id: str, terminal: SignalState) -> LifecycleEmission | None:
         setup_id = _setup_id(setup_id)
@@ -610,8 +634,7 @@ class InMemorySignalLifecycle:
             emission = self._build_emission(setup_id, terminal, None)
             if emission is None:
                 raise LifecycleTransitionError("terminal emission conflicts with retained identity")
-            self._states[setup_id] = terminal
-            return self._commit_emission(emission)
+            return self._commit_transition(emission, terminal)
         if current is terminal:
             return None
         raise LifecycleTransitionError("terminal transition is invalid")

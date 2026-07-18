@@ -38,7 +38,8 @@ from trader_assist_v0.runtime.first_launch_operator_assist import (
 class Clocks:
     def __init__(self) -> None:
         self.utc_calls = 0
-        self.monotonic = 0.0
+        self.monotonic_calls = 0
+        self.monotonic_value = 0.0
         self.value = datetime(2026, 7, 19, tzinfo=UTC)
 
     def utc(self) -> datetime:
@@ -46,7 +47,8 @@ class Clocks:
         return self.value
 
     def mono(self) -> float:
-        return self.monotonic
+        self.monotonic_calls += 1
+        return self.monotonic_value
 
 
 def _ack(spec: object) -> str:
@@ -152,7 +154,7 @@ def test_acknowledgement_errors_timeout_disconnect_and_close_are_terminal() -> N
         session_timeout_seconds=2,
     )
     protocol.start()
-    clocks.monotonic = 1
+    clocks.monotonic_value = 1
     with pytest.raises(SessionTimeoutError, match="acknowledgement timeout"):
         protocol.check_timeout()
     with pytest.raises(SessionStateError):
@@ -195,7 +197,7 @@ def test_pre_start_frames_fail_before_any_clock_or_protocol_mutation(frame: str)
     assert protocol.state is PublicSessionState.FAILED
     assert protocol.receive_sequence == 0
     assert protocol.acknowledged_subscriptions == frozenset()
-    assert clocks.utc_calls == 0 and clocks.monotonic == 0
+    assert clocks.utc_calls == 0 and clocks.monotonic_calls == 0
     with pytest.raises(SessionStateError):
         protocol.start()
     with pytest.raises(SessionStateError):
@@ -203,33 +205,42 @@ def test_pre_start_frames_fail_before_any_clock_or_protocol_mutation(frame: str)
 
 
 @pytest.mark.parametrize(
-    "connection_id, utc_now, monotonic_now, acknowledgement_timeout, session_timeout",
+    "field, value",
     [
-        ("", None, None, 1, 1),
-        (" padded ", None, None, 1, 1),
-        (1, None, None, 1, 1),
-        ("connection", None, None, True, 1),
-        ("connection", None, None, 0, 1),
-        ("connection", None, None, -1, 1),
-        ("connection", None, None, float("nan"), 1),
-        ("connection", None, None, 1, float("inf")),
-        ("connection", None, None, 2, 1),
+        ("connection_id", ""),
+        ("connection_id", " padded "),
+        ("connection_id", 1),
+        ("utc_now", None),
+        ("utc_now", object()),
+        ("monotonic_now", None),
+        ("monotonic_now", object()),
+        ("acknowledgement_timeout_seconds", True),
+        ("acknowledgement_timeout_seconds", 0),
+        ("acknowledgement_timeout_seconds", -1),
+        ("acknowledgement_timeout_seconds", float("nan")),
+        ("session_timeout_seconds", float("inf")),
+        ("session_timeout_seconds", 0),
+        ("acknowledgement_timeout_seconds", 2),
     ],
 )
 def test_startup_rejections_fail_closed_without_protocol_authority(
-    connection_id: object,
-    utc_now: object,
-    monotonic_now: object,
-    acknowledgement_timeout: object,
-    session_timeout: object,
+    field: str, value: object
 ) -> None:
     clocks = Clocks()
+    arguments: dict[str, object] = {
+        "connection_id": "connection",
+        "utc_now": clocks.utc,
+        "monotonic_now": clocks.mono,
+        "acknowledgement_timeout_seconds": 1,
+        "session_timeout_seconds": 1,
+    }
+    arguments[field] = value
     protocol = PublicRuntimeProtocol(
-        cast(str, connection_id),
-        cast(object, clocks.utc if utc_now is None else utc_now),
-        cast(object, clocks.mono if monotonic_now is None else monotonic_now),
-        cast(float, acknowledgement_timeout),
-        cast(float, session_timeout),
+        cast(str, arguments["connection_id"]),
+        cast(runtime.UtcClock, arguments["utc_now"]),
+        cast(runtime.MonotonicClock, arguments["monotonic_now"]),
+        cast(float, arguments["acknowledgement_timeout_seconds"]),
+        cast(float, arguments["session_timeout_seconds"]),
     )
     with pytest.raises(SessionStateError):
         protocol.start()
@@ -237,17 +248,65 @@ def test_startup_rejections_fail_closed_without_protocol_authority(
     assert protocol.receive_sequence == 0
     assert protocol.acknowledged_subscriptions == frozenset()
     assert clocks.utc_calls == 0
+    assert clocks.monotonic_calls == 0
 
 
-def test_acknowledgement_shape_and_data_before_activation_fail_without_utc() -> None:
+@pytest.mark.parametrize(
+    "frame",
+    [
+        '{"channel":"subscriptionResponse","extra":1,"data":{"method":"subscribe","subscription":{"type":"candle","coin":"ETH","interval":"5m"}}}',
+        '{"channel":"subscriptionResponse","data":{"method":"subscribe","extra":1,"subscription":{"type":"candle","coin":"ETH","interval":"5m"}}}',
+        '{"channel":"subscriptionResponse","data":{"method":"subscribe","subscription":{"type":"candle","coin":"ETH","interval":"5m","extra":1}}}',
+        '{"channel":"subscriptionResponse","data":{"method":1,"subscription":{"type":"candle","coin":"ETH","interval":"5m"}}}',
+        '{"channel":"subscriptionResponse","data":{"method":"subscribe","subscription":{"type":1,"coin":"ETH","interval":"5m"}}}',
+        '{"channel":"subscriptionResponse","data":{"method":"subscribe","subscription":{"type":"candle","coin":1,"interval":"5m"}}}',
+        '{"channel":"subscriptionResponse","data":{"method":"subscribe","subscription":{"type":"candle","coin":"ETH","interval":5}}}',
+        _candle_frame(),
+    ],
+)
+def test_acknowledgement_negative_matrix_fails_closed_without_utc(frame: str) -> None:
     clocks = Clocks()
     protocol = PublicRuntimeProtocol("connection", clocks.utc, clocks.mono)
     protocol.start()
     with pytest.raises(ProtocolAcknowledgementError):
-        protocol.accept_frame(
-            '{"channel":"subscriptionResponse","extra":1,"data":{"method":"subscribe","subscription":{"type":"candle","coin":"ETH","interval":"5m"}}}'
-        )
+        protocol.accept_frame(frame)
     assert protocol.receive_sequence == 0 and clocks.utc_calls == 0
+    assert protocol.state is PublicSessionState.FAILED
+    with pytest.raises(SessionStateError):
+        protocol.accept_frame(_candle_frame())
+
+
+def test_acknowledgements_are_rejected_after_partial_or_complete_handshake() -> None:
+    clocks = Clocks()
+    protocol = PublicRuntimeProtocol("connection", clocks.utc, clocks.mono)
+    protocol.start()
+    first = REQUIRED_PUBLIC_SUBSCRIPTIONS[0]
+    assert protocol.accept_frame(_ack(first.subscription)) is None
+    with pytest.raises(ProtocolAcknowledgementError, match="duplicate"):
+        protocol.accept_frame(_ack(first.subscription))
+    assert protocol.receive_sequence == 1 and clocks.utc_calls == 0
+    assert protocol.state is PublicSessionState.FAILED
+    with pytest.raises(SessionStateError):
+        protocol.accept_frame(_candle_frame())
+
+    protocol = PublicRuntimeProtocol("connection", clocks.utc, clocks.mono)
+    protocol.start()
+    assert protocol.accept_frame(_ack(first.subscription)) is None
+    with pytest.raises(ProtocolAcknowledgementError):
+        protocol.accept_frame(_candle_frame())
+    assert protocol.receive_sequence == 1 and clocks.utc_calls == 0
+    assert protocol.state is PublicSessionState.FAILED
+    with pytest.raises(SessionStateError):
+        protocol.accept_frame(_candle_frame())
+
+    protocol = PublicRuntimeProtocol("connection", clocks.utc, clocks.mono)
+    _active(protocol)
+    with pytest.raises(PublicFrameError):
+        protocol.accept_frame(_ack(first.subscription))
+    assert protocol.receive_sequence == 3 and clocks.utc_calls == 0
+    assert protocol.state is PublicSessionState.FAILED
+    with pytest.raises(SessionStateError):
+        protocol.accept_frame(_candle_frame())
 
 
 def test_active_session_timeout_at_exact_deadline_is_terminal() -> None:
@@ -260,7 +319,7 @@ def test_active_session_timeout_at_exact_deadline_is_terminal() -> None:
         session_timeout_seconds=2,
     )
     _active(protocol)
-    clocks.monotonic = 2
+    clocks.monotonic_value = 2
     with pytest.raises(SessionTimeoutError, match="session timeout"):
         protocol.accept_frame(_candle_frame())
     assert protocol.state is PublicSessionState.TIMED_OUT
@@ -331,6 +390,44 @@ def test_wait_watch_are_ignored_without_clock_or_state_mutation() -> None:
         lifecycle.accept(Signal(SignalState.WAIT, None, None, "a" * 64, "OTHER"))
     with pytest.raises(LifecycleTransitionError):
         lifecycle.accept(Signal(SignalState.PREPARE, Side.LONG, "STANDARD", "a" * 64, "FORGED"))
+
+
+class _SetupIdSubclass(str):
+    pass
+
+
+@pytest.mark.parametrize(
+    "setup_id",
+    [
+        1,
+        1.0,
+        True,
+        b"a" * 64,
+        object(),
+        ["a" * 64],
+        {"setup_id": "a" * 64},
+        _SetupIdSubclass("a" * 64),
+        "not-a-setup-id",
+    ],
+)
+def test_malformed_wait_setup_id_fails_closed_before_clock_or_mutation(setup_id: object) -> None:
+    clocks = Clocks()
+    lifecycle = InMemorySignalLifecycle(clocks.utc)
+    with pytest.raises(LifecycleTransitionError):
+        lifecycle.accept(
+            Signal(
+                SignalState.WAIT,
+                None,
+                None,
+                cast(str | None, setup_id),
+                "SETUP_ALREADY_DECIDED",
+            )
+        )
+    assert clocks.utc_calls == 0
+    assert lifecycle._states == {}
+    assert lifecycle._prepared == {}
+    assert lifecycle._outputs == {}
+    assert lifecycle._emitted_ids == set()
 
 
 def test_prepare_advances_only_through_strategy_and_terminal_paths_are_immutable() -> None:
@@ -507,14 +604,28 @@ def test_plain_string_observation_state_preserves_active_output(
     lifecycle = InMemorySignalLifecycle(clocks.utc)
     fast = _strategy_value(fast=True)
     assert type(fast) is StrategyOutput and lifecycle.accept(fast) is not None
-    monkeypatch.setattr(runtime, "lifecycle_state", lambda **_kwargs: cast(SignalState, state))
+    invoked = False
+
+    def fake_lifecycle_state(_output: StrategyOutput, **_kwargs: object) -> SignalState:
+        nonlocal invoked
+        invoked = True
+        return cast(SignalState, state)
+
+    monkeypatch.setattr(runtime, "lifecycle_state", fake_lifecycle_state)
     before_calls = clocks.utc_calls
+    before_states = lifecycle._states
+    before_outputs = lifecycle._outputs
+    before_emitted_ids = lifecycle._emitted_ids
     with pytest.raises(LifecycleTransitionError):
         lifecycle.observe(
             fast.setup_id, reference=fast.raw_entry_low, quality=DataQualityState.READY
         )
     assert lifecycle.state_for(fast.setup_id) is SignalState.TRIGGERED_FAST
     assert lifecycle._outputs[fast.setup_id] is fast
+    assert lifecycle._states is before_states
+    assert lifecycle._outputs is before_outputs
+    assert lifecycle._emitted_ids is before_emitted_ids
+    assert invoked is True
     assert clocks.utc_calls == before_calls + 1
 
 
@@ -537,6 +648,235 @@ def test_observe_uses_exact_utc_clock_and_emission_identity_is_deterministic() -
         ).encode()
     ).hexdigest()
     assert terminal.emission_id == expected
+
+
+class _CopyMemoryErrorDict(dict[str, object]):
+    def copy(self) -> dict[str, object]:
+        raise MemoryError
+
+
+class _CopyMemoryErrorSet(set[str]):
+    def copy(self) -> set[str]:
+        raise MemoryError
+
+
+class _UpdateMemoryErrorDict(dict[str, object]):
+    def __init__(self, *args: object, fail_updates: bool = False) -> None:
+        super().__init__(*args)
+        self.fail_updates = fail_updates
+
+    def copy(self) -> _UpdateMemoryErrorDict:
+        return _UpdateMemoryErrorDict(self, fail_updates=True)
+
+    def __setitem__(self, key: str, value: object) -> None:
+        if self.fail_updates:
+            raise MemoryError
+        super().__setitem__(key, value)
+
+    def __delitem__(self, key: str) -> None:
+        if self.fail_updates:
+            raise MemoryError
+        super().__delitem__(key)
+
+
+class _UpdateMemoryErrorSet(set[str]):
+    def __init__(self, *args: object, fail_updates: bool = False) -> None:
+        super().__init__(*args)
+        self.fail_updates = fail_updates
+
+    def copy(self) -> _UpdateMemoryErrorSet:
+        return _UpdateMemoryErrorSet(self, fail_updates=True)
+
+    def add(self, value: str) -> None:
+        if self.fail_updates:
+            raise MemoryError
+        super().add(value)
+
+
+def _memory_error_transition(
+    monkeypatch: pytest.MonkeyPatch, kind: str
+) -> tuple[InMemorySignalLifecycle, str, object, object]:
+    clocks = Clocks()
+    lifecycle = InMemorySignalLifecycle(clocks.utc)
+    if kind == "initial_fast":
+        fast = _strategy_value(fast=True)
+        assert type(fast) is StrategyOutput
+        return lifecycle, "_outputs", fast, lambda: lifecycle.accept(fast)
+    if kind == "initial_prepared":
+        prepared = _strategy_value(fast=False)
+        assert type(prepared) is PreparedSetup
+        return lifecycle, "_prepared", prepared, lambda: lifecycle.accept(prepared)
+    if kind == "active_terminal":
+        fast = _strategy_value(fast=True)
+        assert type(fast) is StrategyOutput and lifecycle.accept(fast) is not None
+        return (
+            lifecycle,
+            "_states",
+            fast,
+            lambda: lifecycle.terminate(fast.setup_id, SignalState.TAKEN),
+        )
+    if kind == "advance_terminal":
+        prepared = _strategy_value(fast=False)
+        assert type(prepared) is PreparedSetup and lifecycle.accept(prepared) is not None
+        result = Signal(
+            SignalState.EXPIRED,
+            prepared.provenance.side,
+            "STANDARD",
+            prepared.setup_id,
+            "TERMINAL",
+        )
+        monkeypatch.setattr(runtime, "advance_prepare", lambda _setup, _snapshot: result)
+        return (
+            lifecycle,
+            "_prepared",
+            prepared,
+            lambda: lifecycle.advance(prepared.setup_id, cast(object, object())),
+        )
+    if kind == "standard_promotion":
+        from tests.test_first_launch_strategy import _confirmed
+
+        prepared = _strategy_value(fast=False)
+        standard = _confirmed(SetupFamily.SWEEP_RECLAIM, Side.LONG, False)
+        assert type(prepared) is PreparedSetup and type(standard) is StrategyOutput
+        assert lifecycle.accept(prepared) is not None
+        monkeypatch.setattr(runtime, "advance_prepare", lambda _setup, _snapshot: standard)
+        return (
+            lifecycle,
+            "_outputs",
+            prepared,
+            lambda: lifecycle.advance(prepared.setup_id, cast(object, object())),
+        )
+    fast = _strategy_value(fast=True)
+    assert type(fast) is StrategyOutput and lifecycle.accept(fast) is not None
+    if kind == "observe_expire":
+        clocks.value = fast.expires_at
+        quality = DataQualityState.READY
+    else:
+        assert kind == "observe_invalidate"
+        quality = DataQualityState.INVALID
+    return (
+        lifecycle,
+        "_states",
+        fast,
+        lambda: lifecycle.observe(fast.setup_id, reference=fast.raw_entry_low, quality=quality),
+    )
+
+
+def _assert_transaction_is_unchanged(
+    lifecycle: InMemorySignalLifecycle,
+    before: tuple[object, object, object, object],
+    contents: tuple[
+        dict[str, SignalState], dict[str, PreparedSetup], dict[str, StrategyOutput], set[str]
+    ],
+) -> None:
+    assert (
+        lifecycle._states,
+        lifecycle._prepared,
+        lifecycle._outputs,
+        lifecycle._emitted_ids,
+    ) == before
+    assert lifecycle._states == contents[0]
+    assert lifecycle._prepared == contents[1]
+    assert lifecycle._outputs == contents[2]
+    assert lifecycle._emitted_ids == contents[3]
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "initial_fast",
+        "initial_prepared",
+        "active_terminal",
+        "advance_terminal",
+        "standard_promotion",
+        "observe_expire",
+        "observe_invalidate",
+    ],
+)
+def test_copy_on_write_transition_copy_memory_errors_are_retryable(
+    monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    lifecycle, field, _value, transition = _memory_error_transition(monkeypatch, kind)
+    before = (lifecycle._states, lifecycle._prepared, lifecycle._outputs, lifecycle._emitted_ids)
+    contents = (
+        dict(lifecycle._states),
+        dict(lifecycle._prepared),
+        dict(lifecycle._outputs),
+        set(lifecycle._emitted_ids),
+    )
+    replacement: object = (
+        _CopyMemoryErrorSet(lifecycle._emitted_ids)
+        if field == "_emitted_ids"
+        else _CopyMemoryErrorDict(getattr(lifecycle, field))
+    )
+    setattr(lifecycle, field, replacement)
+    before = (lifecycle._states, lifecycle._prepared, lifecycle._outputs, lifecycle._emitted_ids)
+    with pytest.raises(LifecycleTransitionError, match="planning failed"):
+        transition()
+    _assert_transaction_is_unchanged(lifecycle, before, contents)
+    lifecycle._states = dict(contents[0])
+    lifecycle._prepared = dict(contents[1])
+    lifecycle._outputs = dict(contents[2])
+    lifecycle._emitted_ids = set(contents[3])
+    assert transition() is not None
+
+
+def test_copy_on_write_emitted_identity_copy_error_is_retryable() -> None:
+    lifecycle = InMemorySignalLifecycle(Clocks().utc)
+    fast = _strategy_value(fast=True)
+    assert type(fast) is StrategyOutput
+    contents = (
+        dict(lifecycle._states),
+        dict(lifecycle._prepared),
+        dict(lifecycle._outputs),
+        set(lifecycle._emitted_ids),
+    )
+    lifecycle._emitted_ids = _CopyMemoryErrorSet(lifecycle._emitted_ids)
+    before = (lifecycle._states, lifecycle._prepared, lifecycle._outputs, lifecycle._emitted_ids)
+    with pytest.raises(LifecycleTransitionError, match="planning failed"):
+        lifecycle.accept(fast)
+    _assert_transaction_is_unchanged(lifecycle, before, contents)
+    lifecycle._emitted_ids = set(contents[3])
+    assert lifecycle.accept(fast) is not None
+
+
+@pytest.mark.parametrize(
+    ("kind", "field"),
+    [
+        ("initial_fast", "_emitted_ids"),
+        ("initial_prepared", "_prepared"),
+        ("active_terminal", "_states"),
+        ("advance_terminal", "_prepared"),
+        ("standard_promotion", "_outputs"),
+        ("observe_expire", "_states"),
+        ("observe_invalidate", "_states"),
+    ],
+)
+def test_copy_on_write_transition_update_memory_errors_are_retryable(
+    monkeypatch: pytest.MonkeyPatch, kind: str, field: str
+) -> None:
+    lifecycle, _field, _value, transition = _memory_error_transition(monkeypatch, kind)
+    contents = (
+        dict(lifecycle._states),
+        dict(lifecycle._prepared),
+        dict(lifecycle._outputs),
+        set(lifecycle._emitted_ids),
+    )
+    replacement: object = (
+        _UpdateMemoryErrorSet(lifecycle._emitted_ids)
+        if field == "_emitted_ids"
+        else _UpdateMemoryErrorDict(getattr(lifecycle, field))
+    )
+    setattr(lifecycle, field, replacement)
+    before = (lifecycle._states, lifecycle._prepared, lifecycle._outputs, lifecycle._emitted_ids)
+    with pytest.raises(LifecycleTransitionError, match="planning failed"):
+        transition()
+    _assert_transaction_is_unchanged(lifecycle, before, contents)
+    lifecycle._states = dict(contents[0])
+    lifecycle._prepared = dict(contents[1])
+    lifecycle._outputs = dict(contents[2])
+    lifecycle._emitted_ids = set(contents[3])
+    assert transition() is not None
 
 
 def test_private_import_boundary_and_no_transport_owner_surface() -> None:
