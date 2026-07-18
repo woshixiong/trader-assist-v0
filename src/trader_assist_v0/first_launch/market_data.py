@@ -33,13 +33,17 @@ class MarketDataError(ValueError):
     """An observation cannot become an ETH-LDAR input."""
 
 
+class OpenCandleIgnored(MarketDataError):
+    """A valid public candle observation that is not yet closed or issuable."""
+
+
 # This registry deliberately binds authority to the object that a reviewed parser
 # issued.  A field hash alone is forgeable by a caller; identity plus the frozen
 # issuance fingerprint rejects constructors, copies, and post-issuance mutation.
 _ISSUED: dict[int, tuple[weakref.ReferenceType[object], str]] = {}
 
 
-def _issue(value: object, fingerprint: str) -> object:
+def _issue[Issued](value: Issued, fingerprint: str) -> Issued:
     key = id(value)
 
     def _release(reference: weakref.ReferenceType[object]) -> None:
@@ -48,7 +52,7 @@ def _issue(value: object, fingerprint: str) -> object:
             del _ISSUED[key]
 
     _ISSUED[key] = (weakref.ref(value, _release), fingerprint)
-    return cast(Candle, value)
+    return value
 
 
 def _is_issued(value: object, fingerprint: str) -> bool:
@@ -396,18 +400,27 @@ def _bound_evidence(raw_text: str, evidence: RawEvidence, operation: str) -> Non
         raise MarketDataError("raw text and evidence authority do not match")
 
 
-def candle_from_websocket(raw_text: str, evidence: RawEvidence) -> Candle:
-    _bound_evidence(raw_text, evidence, "WebSocket")
-    message = _strict_object(raw_text)
-    if message.get("channel") != "candle" or type(message.get("data")) is not dict:
-        raise MarketDataError("expected a candle WebSocket envelope")
-    data = message["data"]
+def _candle_from_public_object(
+    data: object,
+    *,
+    evidence: RawEvidence,
+    requested_interval: Literal["5m", "15m"] | None = None,
+) -> Candle:
+    """Validate one public candle object without issuing market authority."""
+    if type(data) is not dict:
+        raise MarketDataError("public candle must be a JSON object")
     if data.get("s") != ETH or data.get("i") not in INTERVAL_MILLISECONDS:
         raise MarketDataError("candle is outside the ETH 5m/15m authority")
     interval = data["i"]
     assert interval in {"5m", "15m"}
+    if requested_interval is not None and interval != requested_interval:
+        raise MarketDataError("candle snapshot interval does not match request")
+    required = {"t", "T", "s", "i", "o", "h", "l", "c", "v", "n"}
+    if not required.issubset(data):
+        raise MarketDataError("public candle lacks a frozen required field")
     open_time = _integer(data.get("t"), "candle open time")
     close_time = _integer(data.get("T"), "candle close time")
+    _integer(data.get("n"), "candle trade count")
     if close_time - open_time != INTERVAL_MILLISECONDS[interval]:
         raise MarketDataError("candle interval boundary is invalid")
     candle = Candle(
@@ -425,7 +438,59 @@ def candle_from_websocket(raw_text: str, evidence: RawEvidence) -> Candle:
         raise MarketDataError("candle OHLC range is invalid")
     if candle.volume < 0:
         raise MarketDataError("candle volume is invalid")
-    return _issue(candle, _candle_fingerprint(candle))  # type: ignore[return-value]
+    return candle
+
+
+def _issue_closed_candle(value: Candle) -> Candle:
+    """Issue immutable candle authority only after the evidence proves closure."""
+    if value.close_time_ms >= int(value.evidence.received_at.timestamp() * 1000):
+        raise OpenCandleIgnored("candle is not closed at evidence receipt")
+    return _issue(value, _candle_fingerprint(value))
+
+
+def candles_from_snapshot(
+    raw_text: str,
+    evidence: RawEvidence,
+    *,
+    requested_interval: Literal["5m", "15m"],
+) -> tuple[Candle, ...]:
+    """Return only parser-issued, closed candles from one bounded snapshot response."""
+    _bound_evidence(raw_text, evidence, "candleSnapshot")
+    if requested_interval not in INTERVAL_MILLISECONDS:
+        raise MarketDataError("unsupported candle snapshot interval")
+    payload = _strict_json(raw_text)
+    if type(payload) is not list or not payload:
+        raise MarketDataError("candle snapshot must be a non-empty JSON array")
+    if len(payload) > SNAPSHOT_LIMITS[requested_interval]:
+        raise MarketDataError("snapshot exceeds its bounded recovery limit")
+    parsed = tuple(
+        _candle_from_public_object(
+            item,
+            evidence=evidence,
+            requested_interval=requested_interval,
+        )
+        for item in payload
+    )
+    opens = [item.open_time_ms for item in parsed]
+    if opens != sorted(opens) or len(set(opens)) != len(opens):
+        raise MarketDataError("snapshot candle identities must be strictly increasing")
+    closed = tuple(
+        item
+        for item in parsed
+        if item.close_time_ms < int(evidence.received_at.timestamp() * 1000)
+    )
+    width = INTERVAL_MILLISECONDS[requested_interval]
+    if any(right.open_time_ms - left.open_time_ms != width for left, right in pairwise(closed)):
+        raise MarketDataError("snapshot closed candles are non-contiguous")
+    return tuple(_issue(item, _candle_fingerprint(item)) for item in closed)
+
+
+def candle_from_websocket(raw_text: str, evidence: RawEvidence) -> Candle:
+    _bound_evidence(raw_text, evidence, "WebSocket")
+    message = _strict_object(raw_text)
+    if message.get("channel") != "candle" or type(message.get("data")) is not dict:
+        raise MarketDataError("expected a candle WebSocket envelope")
+    return _issue_closed_candle(_candle_from_public_object(message["data"], evidence=evidence))
 
 
 def context_from_websocket(raw_text: str, evidence: RawEvidence) -> ActiveAssetContext:
@@ -447,7 +512,7 @@ def context_from_websocket(raw_text: str, evidence: RawEvidence) -> ActiveAssetC
         source_time_ms=None if source_time is None else _integer(source_time, "context time"),
         evidence=evidence,
     )
-    return _issue(context_value, _context_fingerprint(context_value))  # type: ignore[return-value]
+    return _issue(context_value, _context_fingerprint(context_value))
 
 
 def metadata_from_info(raw_text: str, evidence: RawEvidence) -> AssetMetadata:
@@ -471,7 +536,7 @@ def metadata_from_info(raw_text: str, evidence: RawEvidence) -> AssetMetadata:
     if type(decimals) is not int or isinstance(decimals, bool) or decimals < 0 or decimals > 18:
         raise MarketDataError("ETH szDecimals is invalid")
     metadata_value = AssetMetadata(sz_decimals=decimals, evidence=evidence)
-    return _issue(metadata_value, _metadata_fingerprint(metadata_value))  # type: ignore[return-value]
+    return _issue(metadata_value, _metadata_fingerprint(metadata_value))
 
 
 @dataclass
@@ -536,7 +601,7 @@ class EthMarketData:
         received_at: datetime,
         receive_sequence: int,
         connection_id: str,
-    ) -> Literal["ACCEPTED", "DUPLICATE", "CONFLICT", "CONTEXT_ACCEPTED"]:
+    ) -> Literal["ACCEPTED", "DUPLICATE", "CONFLICT", "CONTEXT_ACCEPTED", "IGNORED_OPEN"]:
         """Apply one original WebSocket text frame through the live/replay path."""
         evidence = evidence_from_raw(
             raw_text,
@@ -548,11 +613,14 @@ class EthMarketData:
         try:
             message = _strict_object(raw_text)
             if message.get("channel") == "candle":
-                return self.accept_candle(candle_from_websocket(raw_text, evidence))
+                candle = candle_from_websocket(raw_text, evidence)
+                return self.accept_candle(candle)
             if message.get("channel") == "activeAssetCtx":
                 self.accept_context(context_from_websocket(raw_text, evidence))
                 return "CONTEXT_ACCEPTED"
             raise MarketDataError("WebSocket channel is outside the First Launch authority")
+        except OpenCandleIgnored:
+            return "IGNORED_OPEN"
         except MarketDataError:
             self.invalid_reason = "WEBSOCKET_OBSERVATION_INVALID"
             raise
@@ -651,7 +719,7 @@ class EthMarketData:
             active_context=self.active_context,
             metadata=self.metadata,
         )
-        return _issue(snapshot, _snapshot_fingerprint(snapshot))  # type: ignore[return-value]
+        return _issue(snapshot, _snapshot_fingerprint(snapshot))
 
 
 @dataclass
