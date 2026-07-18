@@ -13,16 +13,19 @@ from trader_assist_v0.first_launch.market_data import (
     Candle,
     DataQualityState,
     EthMarketData,
+    IgnoredOpenCandle,
     MarketDataError,
     RawEvidence,
     ReconnectController,
     candle_from_websocket,
+    candles_from_snapshot,
     context_from_websocket,
     evidence_from_raw,
     metadata_from_info,
 )
 
 NOW = datetime(2026, 7, 14, 12, 0, tzinfo=UTC)
+_MISSING = object()
 
 
 def _evidence(raw: str, operation: str = "WebSocket", sequence: int = 1) -> RawEvidence:
@@ -51,6 +54,7 @@ def _candle(interval: Literal["5m", "15m"], offset: int) -> Candle:
                 "l": "99",
                 "c": "101",
                 "v": "12",
+                "n": 0,
             },
         },
         separators=(",", ":"),
@@ -130,7 +134,7 @@ def test_raw_evidence_constructor_and_factory_are_fail_closed() -> None:
 def test_lower_parsers_bind_raw_text_hash_and_operation() -> None:
     candle = (
         '{"channel":"candle","data":{"s":"ETH","i":"5m","t":0,"T":300000,'
-        '"o":"1","h":"2","l":"1","c":"2","v":"3"}}'
+        '"o":"1","h":"2","l":"1","c":"2","v":"3","n":0}}'
     )
     evidence = _evidence(candle)
     assert candle_from_websocket(candle, evidence).interval == "5m"
@@ -282,7 +286,7 @@ def test_direct_or_modified_normalized_objects_are_not_ingestable() -> None:
 def test_primary_ingest_and_reconnect_paths_retain_evidence_validation() -> None:
     raw = (
         '{"channel":"candle","data":{"s":"ETH","i":"5m","t":0,'
-        '"T":300000,"o":"1","h":"2","l":"1","c":"2","v":"3"}}'
+        '"T":300000,"o":"1","h":"2","l":"1","c":"2","v":"3","n":0}}'
     )
     data = EthMarketData()
     data.begin_connection()
@@ -319,7 +323,7 @@ def test_primary_ingest_and_reconnect_paths_retain_evidence_validation() -> None
 def test_live_and_replay_normalization_are_identical() -> None:
     raw = (
         '{"channel":"candle","data":{"s":"ETH","i":"5m","t":1000,'
-        '"T":301000,"o":"1","h":"2","l":"1","c":"2","v":"3"}}'
+        '"T":301000,"o":"1","h":"2","l":"1","c":"2","v":"3","n":0}}'
     )
     live_data = EthMarketData()
     replay_data = EthMarketData()
@@ -368,3 +372,184 @@ def test_live_and_replay_normalization_are_identical() -> None:
         replay.close,
         replay.volume,
     )
+
+
+@pytest.mark.parametrize("trade_count", [1, 0])
+def test_closed_websocket_and_snapshot_candles_require_valid_trade_counts(
+    trade_count: int,
+) -> None:
+    close_time = int(NOW.timestamp() * 1000) - 1_000
+    candle = {
+        "s": "ETH",
+        "i": "5m",
+        "t": close_time - 300_000,
+        "T": close_time,
+        "o": "1",
+        "h": "2",
+        "l": "1",
+        "c": "2",
+        "v": "3",
+        "n": trade_count,
+    }
+    websocket = json.dumps({"channel": "candle", "data": candle}, separators=(",", ":"))
+    snapshot = json.dumps([candle], separators=(",", ":"))
+    assert candle_from_websocket(websocket, _evidence(websocket)).interval == "5m"
+    assert len(
+        candles_from_snapshot(
+            snapshot,
+            _evidence(snapshot, "candleSnapshot"),
+            requested_interval="5m",
+        )
+    ) == 1
+
+
+@pytest.mark.parametrize("trade_count", [_MISSING, None, True, False, "1", 1.0, -1])
+def test_invalid_or_missing_trade_count_is_rejected_before_issuance(
+    monkeypatch: pytest.MonkeyPatch, trade_count: object
+) -> None:
+    import trader_assist_v0.first_launch.market_data as market_data
+
+    close_time = int(NOW.timestamp() * 1000) - 1_000
+    candle: dict[str, object] = {
+        "s": "ETH",
+        "i": "5m",
+        "t": close_time - 300_000,
+        "T": close_time,
+        "o": "1",
+        "h": "2",
+        "l": "1",
+        "c": "2",
+        "v": "3",
+    }
+    if trade_count is not _MISSING:
+        candle["n"] = trade_count
+    issued: list[object] = []
+    original_issue = market_data._issue
+
+    def issue_spy(value: object, fingerprint: str) -> object:
+        issued.append(value)
+        return original_issue(value, fingerprint)
+
+    monkeypatch.setattr(market_data, "_issue", issue_spy)
+    websocket = json.dumps({"channel": "candle", "data": candle}, separators=(",", ":"))
+    snapshot = json.dumps([candle], separators=(",", ":"))
+    with pytest.raises(MarketDataError):
+        candle_from_websocket(websocket, _evidence(websocket))
+    with pytest.raises(MarketDataError):
+        candles_from_snapshot(
+            snapshot,
+            _evidence(snapshot, "candleSnapshot"),
+            requested_interval="5m",
+        )
+    data = EthMarketData()
+    data.begin_connection()
+    with pytest.raises(MarketDataError):
+        data.ingest_websocket(
+            websocket,
+            received_at=NOW,
+            receive_sequence=1,
+            connection_id="connection-1",
+        )
+    assert data.candles["5m"] == {}
+    assert issued == []
+
+
+def test_open_candles_are_explicitly_nonissued_and_cannot_advance_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import trader_assist_v0.first_launch.market_data as market_data
+
+    close_time = int(NOW.timestamp() * 1000)
+    candle = {
+        "s": "ETH",
+        "i": "5m",
+        "t": close_time - 300_000,
+        "T": close_time,
+        "o": "1",
+        "h": "2",
+        "l": "1",
+        "c": "2",
+        "v": "3",
+        "n": 0,
+    }
+    issued: list[object] = []
+    original_issue = market_data._issue
+
+    def issue_spy(value: object, fingerprint: str) -> object:
+        issued.append(value)
+        return original_issue(value, fingerprint)
+
+    monkeypatch.setattr(market_data, "_issue", issue_spy)
+    websocket = json.dumps({"channel": "candle", "data": candle}, separators=(",", ":"))
+    snapshot = json.dumps([candle], separators=(",", ":"))
+    assert type(candle_from_websocket(websocket, _evidence(websocket))) is IgnoredOpenCandle
+    assert (
+        candles_from_snapshot(
+            snapshot,
+            _evidence(snapshot, "candleSnapshot"),
+            requested_interval="5m",
+        )
+        == ()
+    )
+    data = EthMarketData()
+    data.begin_connection()
+    assert (
+        data.ingest_websocket(
+            websocket,
+            received_at=NOW,
+            receive_sequence=1,
+            connection_id="connection-1",
+        )
+        == "IGNORED_OPEN"
+    )
+    data.recover_snapshot(
+        "5m",
+        candles_from_snapshot(
+            snapshot,
+            _evidence(snapshot, "candleSnapshot"),
+            requested_interval="5m",
+        ),
+    )
+    assert data.candles["5m"] == {}
+    assert data.quality(NOW).state is DataQualityState.METADATA_UNAVAILABLE
+    assert issued == []
+
+
+def test_snapshot_order_and_interval_are_fail_closed_without_repair() -> None:
+    close_time = int(NOW.timestamp() * 1000) - 1_000
+    first = {
+        "s": "ETH",
+        "i": "5m",
+        "t": close_time - 600_000,
+        "T": close_time - 300_000,
+        "o": "1",
+        "h": "2",
+        "l": "1",
+        "c": "2",
+        "v": "3",
+        "n": 0,
+    }
+    second = {**first, "t": close_time - 300_000, "T": close_time}
+    ordered = json.dumps([first, second], separators=(",", ":"))
+    unsorted = json.dumps([second, first], separators=(",", ":"))
+    wrong_interval = json.dumps([{**first, "i": "15m"}], separators=(",", ":"))
+    with pytest.raises(MarketDataError, match="strictly increasing"):
+        candles_from_snapshot(
+            unsorted,
+            _evidence(unsorted, "candleSnapshot"),
+            requested_interval="5m",
+        )
+    assert [
+        candle.open_time_ms
+        for candle in candles_from_snapshot(
+            ordered,
+            _evidence(ordered, "candleSnapshot"),
+            requested_interval="5m",
+        )
+    ] == [first["t"], second["t"]]
+    with pytest.raises(MarketDataError, match="interval"):
+        candles_from_snapshot(
+            wrong_interval,
+            _evidence(wrong_interval, "candleSnapshot"),
+            requested_interval="5m",
+        )

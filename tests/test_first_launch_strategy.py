@@ -78,6 +78,7 @@ def _candle(
                 "l": str(low_value),
                 "c": str(close_value),
                 "v": volume,
+                "n": 0,
             },
         },
         separators=(",", ":"),
