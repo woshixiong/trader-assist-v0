@@ -7,21 +7,29 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_CEILING, ROUND_DOWN, ROUND_FLOOR, Decimal, InvalidOperation
 from enum import StrEnum
+from itertools import pairwise
 from statistics import median
-from typing import Literal
+from typing import Literal, cast
 
 from trader_assist_v0.contracts.common import canonical_json_bytes, decimal_to_canonical_string
+from trader_assist_v0.first_launch.configuration import RiskConfiguration
 from trader_assist_v0.first_launch.market_data import (
     Candle,
     DataQualityState,
+    RollingComposite,
     StrategySnapshot,
+    _validated_candle,
     _validated_strategy_snapshot,
+    rolling_composite,
 )
+from trader_assist_v0.first_launch.signal_context import ContextSummary
 
 STRATEGY_VERSION: Literal["ETH-LDAR-v0.1"] = "ETH-LDAR-v0.1"
 CONFIGURATION_VERSION: Literal["1"] = "1"
-TRADE_PLAN_VERSION: Literal["2"] = "2"
-TRADE_PLAN_HASH_DOMAIN = "trader-assist-v0/first-launch/trade-plan/v2"
+TRADE_PLAN_VERSION: Literal["3"] = "3"
+TRADE_PLAN_HASH_DOMAIN = "trader-assist-v0/first-launch/trade-plan/v3"
+HISTORICAL_TRADE_PLAN_VERSION: Literal["2"] = "2"
+HISTORICAL_TRADE_PLAN_HASH_DOMAIN = "trader-assist-v0/first-launch/trade-plan/v2"
 
 
 class PlanError(ValueError):
@@ -71,6 +79,193 @@ class SignalState(StrEnum):
     TAKEN = "TAKEN"
     SKIPPED = "SKIPPED"
     REJECTED = "REJECTED"
+
+
+class VolatilityRegime(StrEnum):
+    LOW = "LOW"
+    NORMAL = "NORMAL"
+    HIGH = "HIGH"
+    EXTREME = "EXTREME"
+
+
+@dataclass(frozen=True)
+class VolatilitySnapshot:
+    current_atr: Decimal
+    previous_48_median_atr: Decimal
+    atr_ratio: Decimal
+    regime: VolatilityRegime
+    candle_cutoff_identity: tuple[str, str, int]
+    candle_cutoff_close_time_ms: int
+    candle_identities: tuple[tuple[str, str, int], ...]
+    candle_hashes: tuple[str, ...]
+    canonical_hash: str
+
+
+@dataclass(frozen=True)
+class OverlayDecision:
+    """A visible decision overlay; it never mutates the base strategy output."""
+
+    base_output: StrategyOutput
+    state: SignalState
+    actionable: bool
+    regime: VolatilityRegime
+    selected_decision_span: int
+    action: str
+    reason: str
+    effective_raw_chase_limit: Decimal
+
+
+def apply_volatility_overlay(
+    output: StrategyOutput,
+    volatility: VolatilitySnapshot,
+    candles: tuple[Candle, ...],
+    reference_price: Decimal,
+) -> OverlayDecision:
+    output = _validated_strategy_output(output)
+    if (
+        type(reference_price) is not Decimal
+        or not reference_price.is_finite()
+        or reference_price <= 0
+    ):
+        raise PlanError("OVERLAY_REFERENCE_INVALID")
+    support, span, _c30, _c60 = longer_window_support(output.side, candles)
+    limit = output.raw_chase_limit
+    if volatility.regime is VolatilityRegime.EXTREME:
+        return OverlayDecision(
+            output,
+            SignalState.WATCH,
+            False,
+            volatility.regime,
+            span,
+            "EXTREME_VETO",
+            "EXTREME_NON_ACTIONABLE",
+            limit,
+        )
+    if volatility.regime is VolatilityRegime.LOW and output.speed == "FAST" and not support:
+        return OverlayDecision(
+            output,
+            SignalState.PREPARE,
+            False,
+            volatility.regime,
+            span,
+            "LOW_DOWNGRADE",
+            "LOW_AWAITING_LONGER_WINDOW_SUPPORT",
+            limit,
+        )
+    if volatility.regime is VolatilityRegime.HIGH:
+        limit = output.provenance.boundary + Decimal("0.75") * (
+            output.raw_chase_limit - output.provenance.boundary
+        )
+        eligible = (
+            reference_price <= limit if output.side is Side.LONG else reference_price >= limit
+        )
+        if not eligible:
+            return OverlayDecision(
+                output,
+                SignalState.WATCH,
+                False,
+                volatility.regime,
+                span,
+                "HIGH_CHASE_DISCIPLINE",
+                "HIGH_CHASE_LIMIT_EXCEEDED",
+                limit,
+            )
+        return OverlayDecision(
+            output,
+            output.state,
+            True,
+            volatility.regime,
+            span,
+            "HIGH_CHASE_DISCIPLINE",
+            "HIGH_CHASE_LIMIT_APPLIED",
+            limit,
+        )
+    return OverlayDecision(
+        output, output.state, True, volatility.regime, span, "BASE", "BASE_CONFIRMED", limit
+    )
+
+
+def wilder_atr14(candles: tuple[Candle, ...]) -> VolatilitySnapshot:
+    """Compute the exact 64-candle Wilder sequence, causally bound to candles."""
+    if len(candles) < 64:
+        raise PlanError("ATR_WARMING")
+    values = candles[-64:]
+    for candle in values:
+        _validated_candle(candle)
+    for left, right in pairwise(values):
+        if (
+            right.open_time_ms - left.open_time_ms != 300_000
+            or right.close_time_ms > values[-1].close_time_ms
+        ):
+            raise PlanError("ATR_CANDLE_AUTHORITY_INVALID")
+    trs = [
+        max(
+            item.high - item.low,
+            abs(item.high - values[index - 1].close),
+            abs(item.low - values[index - 1].close),
+        )
+        for index, item in enumerate(values[1:], 1)
+    ]
+    seed = sum(trs[:14], Decimal()) / Decimal("14")
+    atrs: dict[int, Decimal] = {14: seed}
+    current = seed
+    for index in range(15, 64):
+        current = ((current * Decimal("13")) + trs[index - 1]) / Decimal("14")
+        atrs[index] = current
+    prior = tuple(atrs[index] for index in range(15, 63))
+    denom = Decimal(str(median(prior)))
+    if not denom.is_finite() or denom <= 0 or not current.is_finite() or current <= 0:
+        raise PlanError("ATR_DENOMINATOR_INVALID")
+    ratio = current / denom
+    regime = (
+        VolatilityRegime.LOW
+        if ratio < Decimal("0.75")
+        else VolatilityRegime.NORMAL
+        if ratio <= Decimal("1.50")
+        else VolatilityRegime.HIGH
+        if ratio <= Decimal("2.25")
+        else VolatilityRegime.EXTREME
+    )
+    body = {
+        "current_atr": current,
+        "previous_48_median_atr": denom,
+        "atr_ratio": ratio,
+        "regime": regime.value,
+        "candle_cutoff_identity": values[-1].identity,
+        "candle_cutoff_close_time_ms": values[-1].close_time_ms,
+        "candle_identities": tuple(item.identity for item in values),
+        "candle_hashes": tuple(item.canonical_hash for item in values),
+    }
+    return VolatilitySnapshot(
+        current,
+        denom,
+        ratio,
+        regime,
+        values[-1].identity,
+        values[-1].close_time_ms,
+        tuple(item.identity for item in values),
+        tuple(item.canonical_hash for item in values),
+        _hash(body),
+    )
+
+
+def longer_window_support(
+    side: Side, candles: tuple[Candle, ...]
+) -> tuple[bool, int, RollingComposite, RollingComposite]:
+    """Apply the primary-30m and neutral-only 60m support rule."""
+    c30, c60 = rolling_composite(candles, 30), rolling_composite(candles, 60)
+
+    def direction(value: RollingComposite) -> Side | None:
+        if value.close > value.open and value.close >= value.midpoint:
+            return Side.LONG
+        if value.close < value.open and value.close <= value.midpoint:
+            return Side.SHORT
+        return None
+
+    primary = direction(c30)
+    if primary is not None:
+        return primary is side, 30, c30, c60
+    return direction(c60) is side, 60, c30, c60
 
 
 def _hash(value: object) -> str:
@@ -282,9 +477,8 @@ class StrategyOutput:
         )
         created = _exact_utc(self.created_at, "STRATEGY_CREATED_AT_INVALID")
         expiry = _exact_utc(self.expires_at, "STRATEGY_EXPIRES_AT_INVALID")
-        if (
-            created != received
-            or expiry != created + timedelta(seconds=180 if self.speed == "FAST" else 900)
+        if created != received or expiry != created + timedelta(
+            seconds=180 if self.speed == "FAST" else 900
         ):
             raise PlanError("STRATEGY_OUTPUT_EXPIRY_INVALID")
         if self.reason != "CONFIRMED" or self.do_not_chase != "DO NOT CHASE":
@@ -483,8 +677,7 @@ def advance_prepare(
             not any(value < p.boundary - Decimal(".20") * p.atr for value in intervening_closes)
             if long
             else not any(
-                value > p.boundary + Decimal(".20") * p.atr
-                for value in intervening_closes
+                value > p.boundary + Decimal(".20") * p.atr for value in intervening_closes
             )
         )
     confirmed = (
@@ -512,18 +705,14 @@ def _mean(values: list[Decimal]) -> Decimal:
 def _features(
     c5: tuple[Candle, ...], c15: tuple[Candle, ...]
 ) -> tuple[Decimal, Decimal, Decimal, Decimal, Decimal, bool, bool]:
-    if len(c5) < 27 or len(c15) < 11:
+    if len(c5) < 64 or len(c15) < 20:
         raise PlanError("INSUFFICIENT_LOOKBACK")
     trigger = c5[-1]
     if trigger.high == trigger.low:
         raise PlanError("ZERO_RANGE_TRIGGER")
-    trs = [
-        max(item.high - item.low, abs(item.high - c5[i - 1].close), abs(item.low - c5[i - 1].close))
-        for i, item in enumerate(c5[-14:], start=len(c5) - 14)
-    ]
     closes = [item.close for item in c15]
     return (
-        _mean(trs),
+        wilder_atr14(c5).current_atr,
         max(item.high for item in c5[-13:-1]),
         min(item.low for item in c5[-13:-1]),
         median([item.volume for item in c5[-21:-1]]),
@@ -696,6 +885,21 @@ class RawRiskMath:
     quantity_raw: Decimal
 
 
+@dataclass(frozen=True)
+class V3RiskMath:
+    adverse_entry: Decimal
+    adverse_stop: Decimal
+    worst_case_loss_per_unit: Decimal
+    base_risk_budget: Decimal
+    risk_multiplier: Decimal
+    effective_risk_budget: Decimal
+    system_hard_notional_cap: Decimal
+    effective_max_notional: Decimal
+    risk_limited_quantity_raw: Decimal
+    notional_limited_quantity_raw: Decimal
+    quantity_raw: Decimal
+
+
 def risk_math(
     *, side: Side, planned_entry: Decimal, stop: Decimal, account_equity_usd: Decimal
 ) -> RawRiskMath:
@@ -744,6 +948,63 @@ def size_plan(
     return RiskResult(quantity, quantity * entry, result.risk_budget_usd, planned_risk)
 
 
+def risk_math_v3(
+    *,
+    side: Side,
+    planned_entry: Decimal,
+    stop: Decimal,
+    configuration: RiskConfiguration,
+    regime: VolatilityRegime,
+) -> V3RiskMath:
+    if type(configuration) is not RiskConfiguration or regime is VolatilityRegime.EXTREME:
+        raise PlanError("V3_RISK_AUTHORITY_INVALID")
+    # Preserve the reviewed fee/slippage loss model while replacing only v2 budgets/caps.
+    legacy = risk_math(
+        side=side,
+        planned_entry=planned_entry,
+        stop=stop,
+        account_equity_usd=configuration.account_equity_usd,
+    )
+    multiplier = Decimal("0.75") if regime is VolatilityRegime.HIGH else Decimal("1")
+    base = configuration.account_equity_usd * (configuration.risk_per_trade_pct / Decimal("100"))
+    effective = base * multiplier
+    risk_quantity = effective / legacy.worst_case_loss_per_unit
+    notional_quantity = configuration.effective_max_notional / abs(legacy.adverse_entry)
+    return V3RiskMath(
+        legacy.adverse_entry,
+        legacy.adverse_stop,
+        legacy.worst_case_loss_per_unit,
+        base,
+        multiplier,
+        effective,
+        configuration.system_hard_notional_cap,
+        configuration.effective_max_notional,
+        risk_quantity,
+        notional_quantity,
+        min(risk_quantity, notional_quantity),
+    )
+
+
+def size_plan_v3(
+    *,
+    side: Side,
+    entry: Decimal,
+    stop: Decimal,
+    configuration: RiskConfiguration,
+    regime: VolatilityRegime,
+    sz_decimals: int,
+) -> tuple[RiskResult, V3RiskMath]:
+    raw = risk_math_v3(
+        side=side, planned_entry=entry, stop=stop, configuration=configuration, regime=regime
+    )
+    quantity = round_quantity(raw.quantity_raw, sz_decimals)
+    planned_risk = quantity * raw.worst_case_loss_per_unit
+    notional = quantity * entry
+    if planned_risk > raw.effective_risk_budget or notional > raw.effective_max_notional:
+        raise PlanError("V3_RISK_LIMIT_EXCEEDED")
+    return RiskResult(quantity, notional, raw.effective_risk_budget, planned_risk), raw
+
+
 @dataclass(frozen=True)
 class TradePlan:
     plan_id: str
@@ -781,10 +1042,35 @@ class TradePlan:
     risk_budget: Decimal
     planned_risk: Decimal
     sz_decimals: int
-    trade_plan_version: Literal["2"] = TRADE_PLAN_VERSION
+    trade_plan_version: str = TRADE_PLAN_VERSION
     strategy_version: Literal["ETH-LDAR-v0.1"] = STRATEGY_VERSION
     configuration_version: Literal["1"] = CONFIGURATION_VERSION
     do_not_chase: Literal["DO NOT CHASE"] = "DO NOT CHASE"
+    signal_id: str = ""
+    volatility_regime: VolatilityRegime = VolatilityRegime.NORMAL
+    current_atr: Decimal = Decimal("1")
+    previous_48_median_atr: Decimal = Decimal("1")
+    atr_ratio: Decimal = Decimal("1")
+    selected_decision_span: int = 30
+    overlay_action: str = "BASE"
+    overlay_reason: str = "BASE_CONFIRMED"
+    effective_raw_chase_limit: Decimal = Decimal("1")
+    candle_cutoff_identity: tuple[str, str, int] = ("ETH", "5m", 0)
+    candle_cutoff_close_time_ms: int = 0
+    plan_evaluation_cutoff: datetime | None = None
+    mark_price: Decimal = Decimal("1")
+    mid_price: Decimal | None = None
+    context_summary: ContextSummary | None = None
+    context_hash: str = ""
+    configured_risk_per_trade_pct: Decimal = Decimal("0.01")
+    base_risk_budget: Decimal = Decimal("1")
+    risk_multiplier: Decimal = Decimal("1")
+    effective_risk_budget: Decimal = Decimal("1")
+    configured_max_notional: Decimal | None = None
+    system_hard_notional_cap: Decimal = Decimal("1")
+    effective_max_notional: Decimal = Decimal("1")
+    risk_configuration_version: str = ""
+    risk_configuration_hash: str = ""
 
     @property
     def side(self) -> Side:
@@ -828,10 +1114,12 @@ class TradePlan:
         )
 
     def __post_init__(self) -> None:
+        if self.trade_plan_version == HISTORICAL_TRADE_PLAN_VERSION:
+            self._validate_v2()
+            return
         if (
             self.trade_plan_version != TRADE_PLAN_VERSION
             or self.strategy_version != STRATEGY_VERSION
-            or self.configuration_version != CONFIGURATION_VERSION
             or self.symbol != "ETH"
             or self.do_not_chase != "DO NOT CHASE"
         ):
@@ -875,7 +1163,7 @@ class TradePlan:
             min(max(self.reference, low), high), self.sz_decimals, direction
         )
         expected_chase = _round_price(
-            output.raw_chase_limit,
+            self.effective_raw_chase_limit,
             self.sz_decimals,
             "down" if output.side is Side.LONG else "up",
         )
@@ -890,8 +1178,8 @@ class TradePlan:
             expected_stop,
         ):
             raise PlanError("TRADE_PLAN_ROUNDED_EXECUTION_INVALID")
-        if (output.side is Side.LONG and self.reference > output.raw_chase_limit) or (
-            output.side is Side.SHORT and self.reference < output.raw_chase_limit
+        if (output.side is Side.LONG and self.reference > self.effective_raw_chase_limit) or (
+            output.side is Side.SHORT and self.reference < self.effective_raw_chase_limit
         ):
             raise PlanError("CHASE_LIMIT_EXCEEDED")
         distance = abs(self.planned_entry - self.stop)
@@ -901,20 +1189,82 @@ class TradePlan:
             <= Decimal("1.50") * output.provenance.atr
         ):
             raise PlanError("STOP_DISTANCE_OUT_OF_RANGE")
-        risk = size_plan(
+        config = RiskConfiguration(
+            self.risk_configuration_version,
+            self.account_equity,
+            self.configured_risk_per_trade_pct,
+            self.configured_max_notional,
+            self.risk_configuration_hash,
+        )
+        risk, raw_risk = size_plan_v3(
             side=output.side,
             entry=self.planned_entry,
             stop=self.stop,
-            equity=self.account_equity,
+            configuration=config,
+            regime=self.volatility_regime,
             sz_decimals=self.sz_decimals,
         )
-        if (self.quantity, self.notional, self.risk_budget, self.planned_risk) != (
-            risk.quantity,
-            risk.notional,
-            risk.risk_budget,
-            risk.planned_risk,
-        ) or self.notional < Decimal("10"):
+        if (
+            (self.quantity, self.notional, self.risk_budget, self.planned_risk)
+            != (
+                risk.quantity,
+                risk.notional,
+                risk.risk_budget,
+                risk.planned_risk,
+            )
+            or self.notional < Decimal("10")
+            or (
+                self.base_risk_budget,
+                self.risk_multiplier,
+                self.effective_risk_budget,
+                self.system_hard_notional_cap,
+                self.effective_max_notional,
+            )
+            != (
+                raw_risk.base_risk_budget,
+                raw_risk.risk_multiplier,
+                raw_risk.effective_risk_budget,
+                raw_risk.system_hard_notional_cap,
+                raw_risk.effective_max_notional,
+            )
+        ):
             raise PlanError("TRADE_PLAN_RISK_INCONSISTENT")
+        if (
+            self.plan_evaluation_cutoff is None
+            or self.context_summary is None
+            or self.context_hash != self.context_summary.canonical_hash
+        ):
+            raise PlanError("TRADE_PLAN_CONTEXT_INVALID")
+        if (
+            self.mark_price != self.context_summary.current.mark_price
+            or self.mid_price != self.context_summary.current.mid_price
+        ):
+            raise PlanError("TRADE_PLAN_CONTEXT_INVALID")
+        if (
+            self.candle_cutoff_identity != self.decision_trigger_identity
+            or self.candle_cutoff_close_time_ms != self.decision_trigger_open_time_ms + 300_000
+        ):
+            raise PlanError("TRADE_PLAN_CANDLE_CUTOFF_INVALID")
+        expected_signal = _hash(
+            {
+                "strategy_version": STRATEGY_VERSION,
+                "setup_id": self.setup_id,
+                "decision_trigger_identity": self.decision_trigger_identity,
+                "decision_trigger_canonical_hash": self.decision_trigger_canonical_hash,
+                "speed": self.speed,
+                "state": self.state.value
+                if hasattr(self, "state")
+                else ("TRIGGERED_FAST" if self.speed == "FAST" else "TRIGGERED_STANDARD"),
+                "regime": self.volatility_regime.value,
+                "selected_decision_span": self.selected_decision_span,
+                "overlay_action": self.overlay_action,
+                "overlay_reason": self.overlay_reason,
+                "effective_raw_chase_limit": self.effective_raw_chase_limit,
+                "candle_cutoff_close_time_ms": self.candle_cutoff_close_time_ms,
+            }
+        )
+        if self.signal_id != expected_signal:
+            raise PlanError("TRADE_PLAN_SIGNAL_ID_INVALID")
         r_value = abs(self.planned_entry - self.stop)
         target_direction = "down" if output.side is Side.LONG else "up"
         expected_targets = (
@@ -945,6 +1295,36 @@ class TradePlan:
         ):
             raise PlanError("TRADE_PLAN_HASH_INVALID")
 
+    def _validate_v2(self) -> None:
+        if self.symbol != "ETH" or self.configuration_version != CONFIGURATION_VERSION:
+            raise PlanError("TRADE_PLAN_FIXED_AUTHORITY_INVALID")
+        output = _validated_strategy_output(self.strategy_output)
+        if self._strategy_output() != output:
+            raise PlanError("TRADE_PLAN_STRATEGY_CORRESPONDENCE_INVALID")
+        low, high = inward_zone(output.raw_entry_low, output.raw_entry_high, self.sz_decimals)
+        if (self.entry_low, self.entry_high) != (low, high):
+            raise PlanError("TRADE_PLAN_ROUNDED_ZONE_INVALID")
+        if (output.side is Side.LONG and self.reference > output.raw_chase_limit) or (
+            output.side is Side.SHORT and self.reference < output.raw_chase_limit
+        ):
+            raise PlanError("CHASE_LIMIT_EXCEEDED")
+        risk = size_plan(
+            side=output.side,
+            entry=self.planned_entry,
+            stop=self.stop,
+            equity=self.account_equity,
+            sz_decimals=self.sz_decimals,
+        )
+        if (self.quantity, self.notional, self.risk_budget, self.planned_risk) != (
+            risk.quantity,
+            risk.notional,
+            risk.risk_budget,
+            risk.planned_risk,
+        ):
+            raise PlanError("TRADE_PLAN_RISK_INCONSISTENT")
+        if self.plan_id != self.canonical_hash or self.plan_id != _trade_digest(self.payload()):
+            raise PlanError("TRADE_PLAN_HASH_INVALID")
+
     def payload(self) -> dict[str, object]:
         return _trade_plan_payload(self.__dict__)
 
@@ -962,6 +1342,45 @@ def _trade_plan_payload(values: dict[str, object]) -> dict[str, object]:
         or type(received_at) is not datetime
     ):
         raise PlanError("TRADE_PLAN_TIMESTAMP_INVALID")
+    if values["trade_plan_version"] == HISTORICAL_TRADE_PLAN_VERSION:
+        return {
+            "trade_plan_version": HISTORICAL_TRADE_PLAN_VERSION,
+            "strategy_version": values["strategy_version"],
+            "configuration_version": values["configuration_version"],
+            "symbol": values["symbol"],
+            "setup_id": values["setup_id"],
+            "provenance": provenance.payload(),
+            "speed": values["speed"],
+            "decision_trigger_identity": values["decision_trigger_identity"],
+            "decision_trigger_open_time_ms": values["decision_trigger_open_time_ms"],
+            "decision_trigger_canonical_hash": values["decision_trigger_canonical_hash"],
+            "decision_trigger_received_at": received_at.isoformat(),
+            "strategy_reason": values["strategy_reason"],
+            "strategy_do_not_chase": values["strategy_do_not_chase"],
+            "material_extreme": values["material_extreme"],
+            "raw_entry_low": values["raw_entry_low"],
+            "raw_entry_high": values["raw_entry_high"],
+            "raw_chase_limit": values["raw_chase_limit"],
+            "raw_stop": values["raw_stop"],
+            "strategy_created_at": created_at.isoformat(),
+            "strategy_expires_at": expires_at.isoformat(),
+            "supersedes_plan_id": values["supersedes_plan_id"],
+            "reference": values["reference"],
+            "entry_low": values["entry_low"],
+            "entry_high": values["entry_high"],
+            "planned_entry": values["planned_entry"],
+            "chase_limit": values["chase_limit"],
+            "stop": values["stop"],
+            "tp1": values["tp1"],
+            "tp2": values["tp2"],
+            "quantity": values["quantity"],
+            "notional": values["notional"],
+            "account_equity": values["account_equity"],
+            "risk_budget": values["risk_budget"],
+            "planned_risk": values["planned_risk"],
+            "sz_decimals": values["sz_decimals"],
+            "do_not_chase": values["do_not_chase"],
+        }
     return {
         "trade_plan_version": values["trade_plan_version"],
         "strategy_version": values["strategy_version"],
@@ -980,6 +1399,7 @@ def _trade_plan_payload(values: dict[str, object]) -> dict[str, object]:
         "raw_entry_low": values["raw_entry_low"],
         "raw_entry_high": values["raw_entry_high"],
         "raw_chase_limit": values["raw_chase_limit"],
+        "effective_raw_chase_limit": values["effective_raw_chase_limit"],
         "raw_stop": values["raw_stop"],
         "strategy_created_at": created_at.isoformat(),
         "strategy_expires_at": expires_at.isoformat(),
@@ -999,21 +1419,151 @@ def _trade_plan_payload(values: dict[str, object]) -> dict[str, object]:
         "planned_risk": values["planned_risk"],
         "sz_decimals": values["sz_decimals"],
         "do_not_chase": values["do_not_chase"],
+        "signal_id": values["signal_id"],
+        "volatility_regime": cast(VolatilityRegime, values["volatility_regime"]).value,
+        "current_atr": values["current_atr"],
+        "previous_48_median_atr": values["previous_48_median_atr"],
+        "atr_ratio": values["atr_ratio"],
+        "selected_decision_span": values["selected_decision_span"],
+        "overlay_action": values["overlay_action"],
+        "overlay_reason": values["overlay_reason"],
+        "candle_cutoff_identity": values["candle_cutoff_identity"],
+        "candle_cutoff_close_time_ms": values["candle_cutoff_close_time_ms"],
+        "plan_evaluation_cutoff": cast(datetime, values["plan_evaluation_cutoff"]).isoformat(),
+        "mark_price": values["mark_price"],
+        "mid_price": values["mid_price"],
+        "context_summary": _context_summary_payload(
+            cast(ContextSummary, values["context_summary"])
+        ),
+        "context_hash": values["context_hash"],
+        "configured_risk_per_trade_pct": values["configured_risk_per_trade_pct"],
+        "base_risk_budget": values["base_risk_budget"],
+        "risk_multiplier": values["risk_multiplier"],
+        "effective_risk_budget": values["effective_risk_budget"],
+        "configured_max_notional": values["configured_max_notional"],
+        "system_hard_notional_cap": values["system_hard_notional_cap"],
+        "effective_max_notional": values["effective_max_notional"],
+        "risk_configuration_version": values["risk_configuration_version"],
+        "risk_configuration_hash": values["risk_configuration_hash"],
+    }
+
+
+def _context_summary_payload(value: ContextSummary) -> dict[str, object]:
+    return {
+        "current": value.current.payload(),
+        "oi_delta_5m": value.oi_delta_5m,
+        "oi_pct_delta_5m": value.oi_pct_delta_5m,
+        "oi_delta_15m": value.oi_delta_15m,
+        "oi_pct_delta_15m": value.oi_pct_delta_15m,
+        "funding_delta_5m": value.funding_delta_5m,
+        "funding_delta_15m": value.funding_delta_15m,
+        "classification_5m": None
+        if value.classification_5m is None
+        else value.classification_5m.value,
+        "classification_15m": None
+        if value.classification_15m is None
+        else value.classification_15m.value,
+        "canonical_hash": value.canonical_hash,
     }
 
 
 def _trade_digest(payload: dict[str, object]) -> str:
     return hashlib.sha256(
-        TRADE_PLAN_HASH_DOMAIN.encode() + b"\0" + canonical_json_bytes(payload)
+        (
+            HISTORICAL_TRADE_PLAN_HASH_DOMAIN
+            if payload.get("trade_plan_version") == HISTORICAL_TRADE_PLAN_VERSION
+            else TRADE_PLAN_HASH_DOMAIN
+        ).encode()
+        + b"\0"
+        + canonical_json_bytes(payload)
     ).hexdigest()
+
+
+def _build_plan_v2(
+    *,
+    output: StrategyOutput,
+    reference: Decimal,
+    equity: Decimal,
+    sz_decimals: int,
+    supersedes_plan_id: str | None,
+) -> TradePlan:
+    low, high = inward_zone(output.raw_entry_low, output.raw_entry_high, sz_decimals)
+    if (output.side is Side.LONG and reference > output.raw_chase_limit) or (
+        output.side is Side.SHORT and reference < output.raw_chase_limit
+    ):
+        raise PlanError("CHASE_LIMIT_EXCEEDED")
+    entry = _round_price(
+        min(max(reference, low), high), sz_decimals, "up" if output.side is Side.LONG else "down"
+    )
+    stop = _round_price(output.raw_stop, sz_decimals, "down" if output.side is Side.LONG else "up")
+    risk = size_plan(
+        side=output.side, entry=entry, stop=stop, equity=equity, sz_decimals=sz_decimals
+    )
+    if risk.notional < Decimal("10"):
+        raise PlanError("MINIMUM_NOTIONAL_NOT_MET")
+    distance = abs(entry - stop)
+    target = "down" if output.side is Side.LONG else "up"
+    values: dict[str, object] = {
+        "strategy_output": output,
+        "provenance": output.provenance,
+        "setup_id": output.setup_id,
+        "speed": output.speed,
+        "decision_trigger_identity": output.decision_trigger_identity,
+        "decision_trigger_open_time_ms": output.decision_trigger_open_time_ms,
+        "decision_trigger_canonical_hash": output.decision_trigger_canonical_hash,
+        "decision_trigger_received_at": output.decision_trigger_received_at,
+        "strategy_reason": output.reason,
+        "strategy_do_not_chase": output.do_not_chase,
+        "material_extreme": output.material_extreme,
+        "raw_entry_low": output.raw_entry_low,
+        "raw_entry_high": output.raw_entry_high,
+        "raw_chase_limit": output.raw_chase_limit,
+        "raw_stop": output.raw_stop,
+        "created_at": output.created_at,
+        "expires_at": output.expires_at,
+        "supersedes_plan_id": supersedes_plan_id,
+        "symbol": "ETH",
+        "reference": reference,
+        "entry_low": low,
+        "entry_high": high,
+        "planned_entry": entry,
+        "chase_limit": _round_price(
+            output.raw_chase_limit, sz_decimals, "down" if output.side is Side.LONG else "up"
+        ),
+        "stop": stop,
+        "tp1": _round_price(
+            entry + distance if output.side is Side.LONG else entry - distance, sz_decimals, target
+        ),
+        "tp2": _round_price(
+            entry + 2 * distance if output.side is Side.LONG else entry - 2 * distance,
+            sz_decimals,
+            target,
+        ),
+        "quantity": risk.quantity,
+        "notional": risk.notional,
+        "account_equity": equity,
+        "risk_budget": risk.risk_budget,
+        "planned_risk": risk.planned_risk,
+        "sz_decimals": sz_decimals,
+        "trade_plan_version": HISTORICAL_TRADE_PLAN_VERSION,
+        "strategy_version": STRATEGY_VERSION,
+        "configuration_version": CONFIGURATION_VERSION,
+        "do_not_chase": "DO NOT CHASE",
+    }
+    digest = _trade_digest(_trade_plan_payload(values))
+    return TradePlan(plan_id=digest, canonical_hash=digest, **values)  # type: ignore[arg-type]
 
 
 def build_plan(
     *,
     strategy_output: StrategyOutput,
     reference: Decimal,
-    equity: Decimal,
     sz_decimals: int,
+    configuration: RiskConfiguration | None = None,
+    volatility: VolatilitySnapshot | None = None,
+    context_summary: ContextSummary | None = None,
+    low_longer_window_support: bool | None = None,
+    equity: Decimal | None = None,
     supersedes_plan_id: str | None = None,
 ) -> TradePlan:
     if type(strategy_output) is not StrategyOutput or type(reference) is not Decimal:
@@ -1021,9 +1571,37 @@ def build_plan(
     if not reference.is_finite() or reference <= 0:
         raise PlanError("BUILD_PLAN_AUTHORITY_INVALID")
     output = _validated_strategy_output(strategy_output)
+    if configuration is None:
+        if type(equity) is not Decimal:
+            raise PlanError("V3_CONFIGURATION_VOLATILITY_CONTEXT_REQUIRED")
+        return _build_plan_v2(
+            output=output,
+            reference=reference,
+            equity=equity,
+            sz_decimals=sz_decimals,
+            supersedes_plan_id=supersedes_plan_id,
+        )
+    if (
+        type(configuration) is not RiskConfiguration
+        or type(volatility) is not VolatilitySnapshot
+        or type(context_summary) is not ContextSummary
+    ):
+        raise PlanError("V3_CONFIGURATION_VOLATILITY_CONTEXT_REQUIRED")
+    if equity is not None and equity != configuration.account_equity_usd:
+        raise PlanError("V3_EQUITY_CONFIGURATION_MISMATCH")
+    if volatility.regime is VolatilityRegime.EXTREME:
+        raise PlanError("EXTREME_NON_ACTIONABLE")
+    support = True if volatility.regime is not VolatilityRegime.LOW else low_longer_window_support
+    if support is not True:
+        raise PlanError("LOW_AWAITING_LONGER_WINDOW_SUPPORT")
+    effective_raw_chase = output.raw_chase_limit
+    if volatility.regime is VolatilityRegime.HIGH:
+        effective_raw_chase = output.provenance.boundary + Decimal("0.75") * (
+            output.raw_chase_limit - output.provenance.boundary
+        )
     low, high = inward_zone(output.raw_entry_low, output.raw_entry_high, sz_decimals)
-    if (output.side is Side.LONG and reference > output.raw_chase_limit) or (
-        output.side is Side.SHORT and reference < output.raw_chase_limit
+    if (output.side is Side.LONG and reference > effective_raw_chase) or (
+        output.side is Side.SHORT and reference < effective_raw_chase
     ):
         raise PlanError("CHASE_LIMIT_EXCEEDED")
     direction = "up" if output.side is Side.LONG else "down"
@@ -1040,8 +1618,13 @@ def build_plan(
         <= Decimal("1.50") * output.provenance.atr
     ):
         raise PlanError("STOP_DISTANCE_OUT_OF_RANGE")
-    risk = size_plan(
-        side=output.side, entry=entry, stop=stop, equity=equity, sz_decimals=sz_decimals
+    risk, raw_risk = size_plan_v3(
+        side=output.side,
+        entry=entry,
+        stop=stop,
+        configuration=configuration,
+        regime=volatility.regime,
+        sz_decimals=sz_decimals,
     )
     if risk.notional < Decimal("10"):
         raise PlanError("MINIMUM_NOTIONAL_NOT_MET")
@@ -1071,6 +1654,7 @@ def build_plan(
         "raw_entry_low": output.raw_entry_low,
         "raw_entry_high": output.raw_entry_high,
         "raw_chase_limit": output.raw_chase_limit,
+        "effective_raw_chase_limit": effective_raw_chase,
         "raw_stop": output.raw_stop,
         "created_at": output.created_at,
         "expires_at": output.expires_at,
@@ -1088,7 +1672,7 @@ def build_plan(
         "tp2": tp2,
         "quantity": risk.quantity,
         "notional": risk.notional,
-        "account_equity": equity,
+        "account_equity": configuration.account_equity_usd,
         "risk_budget": risk.risk_budget,
         "planned_risk": risk.planned_risk,
         "sz_decimals": sz_decimals,
@@ -1096,7 +1680,50 @@ def build_plan(
         "strategy_version": STRATEGY_VERSION,
         "configuration_version": CONFIGURATION_VERSION,
         "do_not_chase": "DO NOT CHASE",
+        "volatility_regime": volatility.regime,
+        "current_atr": volatility.current_atr,
+        "previous_48_median_atr": volatility.previous_48_median_atr,
+        "atr_ratio": volatility.atr_ratio,
+        "selected_decision_span": 30,
+        "overlay_action": "HIGH_CHASE_DISCIPLINE"
+        if volatility.regime is VolatilityRegime.HIGH
+        else "BASE",
+        "overlay_reason": "HIGH_CHASE_LIMIT_APPLIED"
+        if volatility.regime is VolatilityRegime.HIGH
+        else "BASE_CONFIRMED",
+        "candle_cutoff_identity": volatility.candle_cutoff_identity,
+        "candle_cutoff_close_time_ms": volatility.candle_cutoff_close_time_ms,
+        "plan_evaluation_cutoff": context_summary.current.received_at,
+        "mark_price": context_summary.current.mark_price,
+        "mid_price": context_summary.current.mid_price,
+        "context_summary": context_summary,
+        "context_hash": context_summary.canonical_hash,
+        "configured_risk_per_trade_pct": configuration.risk_per_trade_pct,
+        "base_risk_budget": raw_risk.base_risk_budget,
+        "risk_multiplier": raw_risk.risk_multiplier,
+        "effective_risk_budget": raw_risk.effective_risk_budget,
+        "configured_max_notional": configuration.max_notional_usd,
+        "system_hard_notional_cap": raw_risk.system_hard_notional_cap,
+        "effective_max_notional": raw_risk.effective_max_notional,
+        "risk_configuration_version": configuration.configuration_version,
+        "risk_configuration_hash": configuration.configuration_hash,
     }
+    values["signal_id"] = _hash(
+        {
+            "strategy_version": STRATEGY_VERSION,
+            "setup_id": output.setup_id,
+            "decision_trigger_identity": output.decision_trigger_identity,
+            "decision_trigger_canonical_hash": output.decision_trigger_canonical_hash,
+            "speed": output.speed,
+            "state": output.state.value,
+            "regime": volatility.regime.value,
+            "selected_decision_span": 30,
+            "overlay_action": values["overlay_action"],
+            "overlay_reason": values["overlay_reason"],
+            "effective_raw_chase_limit": effective_raw_chase,
+            "candle_cutoff_close_time_ms": volatility.candle_cutoff_close_time_ms,
+        }
+    )
     digest = _trade_digest(_trade_plan_payload(values))
     return TradePlan(plan_id=digest, canonical_hash=digest, **values)  # type: ignore[arg-type]
 

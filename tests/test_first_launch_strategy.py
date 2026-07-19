@@ -60,9 +60,7 @@ def _candle(
         )
     else:
         actual_open_time = open_time
-    open_value, high_value, low_value, close_value = map(
-        Decimal, (open, high, low, close)
-    )
+    open_value, high_value, low_value, close_value = map(Decimal, (open, high, low, close))
     high_value = max(high_value, open_value, close_value)
     low_value = min(low_value, open_value, close_value)
     raw = json.dumps(
@@ -139,7 +137,7 @@ def _snapshot(candles_5m: tuple[Candle, ...], candles_15m: tuple[Candle, ...]) -
 def _history(
     family: SetupFamily, side: Side, fast: bool
 ) -> tuple[tuple[Candle, ...], tuple[Candle, ...]]:
-    c5 = [_candle(i * 300_000) for i in range(-9, 26)]
+    c5 = [_candle(i * 300_000) for i in range(-37, 26)]
     volume = "20" if fast else "13"
     if family is SetupFamily.SWEEP_RECLAIM:
         trigger = _candle(
@@ -401,6 +399,7 @@ def test_plan_is_immutable_and_fixed_authority_is_enforced() -> None:
     with pytest.raises(PlanError, match="FIXED_AUTHORITY"):
         replace(plan, symbol="BTC")
 
+
 GEOMETRY_VECTORS: dict[
     tuple[SetupFamily, Side, bool],
     tuple[str, str, str, str],
@@ -488,11 +487,7 @@ def _retest(setup: PreparedSetup, offset: int) -> Candle:
         open=str(boundary),
         high=str(boundary + Decimal("1")) if side is Side.LONG else str(boundary),
         low=str(boundary) if side is Side.LONG else str(boundary - Decimal("1")),
-        close=(
-            str(boundary + Decimal("1"))
-            if side is Side.LONG
-            else str(boundary - Decimal("1"))
-        ),
+        close=(str(boundary + Decimal("1")) if side is Side.LONG else str(boundary - Decimal("1"))),
     )
 
 
@@ -744,7 +739,7 @@ def _ten_dollar_output() -> StrategyOutput:
             low="10",
             close="11",
         )
-        for index in range(-9, 26)
+        for index in range(-37, 26)
     )
     trigger = _candle(
         26 * 300_000,
@@ -756,11 +751,11 @@ def _ten_dollar_output() -> StrategyOutput:
     )
     candles_15m = tuple(
         _candle(
-                index * 900_000,
-                open=str(max(1, 10 + index)),
-                high=str(max(2, 11 + index)),
-                low=str(max(1, 9 + index)),
-                close=str(max(1, 10 + index)),
+            index * 900_000,
+            open=str(max(1, 10 + index)),
+            high=str(max(2, 11 + index)),
+            low=str(max(1, 9 + index)),
+            close=str(max(1, 10 + index)),
             interval="15m",
         )
         for index in range(-9, 11)

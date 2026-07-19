@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
+from trader_assist_v0.first_launch.configuration import RiskConfiguration
 from trader_assist_v0.first_launch.market_data import (
     Candle,
     DataQualityState,
@@ -29,11 +30,15 @@ from trader_assist_v0.first_launch.operator_review import (
     render_terminal,
 )
 from trader_assist_v0.first_launch.outcome import build_decision_bundle
+from trader_assist_v0.first_launch.signal_context import ContextSeries
 from trader_assist_v0.first_launch.strategy import (
     PreparedSetup,
     Side,
     Signal,
     StrategyOutput,
+    TradePlan,
+    VolatilityRegime,
+    VolatilitySnapshot,
     advance_prepare,
     build_plan,
     evaluate_signal,
@@ -128,7 +133,7 @@ def _snapshot(candles_5m: tuple[Candle, ...], candles_15m: tuple[Candle, ...]) -
 
 
 def _output(side: Side, fast: bool) -> StrategyOutput:
-    candles_5m = [_candle(index * 300_000) for index in range(-9, 26)]
+    candles_5m = [_candle(index * 300_000) for index in range(-37, 26)]
     trigger = _candle(
         26 * 300_000,
         high="101" if side is Side.LONG else "102",
@@ -166,8 +171,54 @@ def _output(side: Side, fast: bool) -> StrategyOutput:
     return result
 
 
+def _plan(output: StrategyOutput) -> TradePlan:
+    context_raw = (
+        '{"channel":"activeAssetCtx","data":{"coin":"ETH","ctx":'
+        '{"markPx":"100","midPx":"100","openInterest":"1","funding":"0"}}}'
+    )
+    context = context_from_websocket(
+        context_raw,
+        evidence_from_raw(
+            context_raw,
+            operation="WebSocket",
+            received_at=output.created_at,
+            receive_sequence=999,
+            connection_id="operator-demo",
+        ),
+    )
+    series = ContextSeries()
+    series.accept(context)
+    summary = series.summary_at(output.created_at)
+    if summary is None:
+        raise RuntimeError("demo context summary is unavailable")
+    configuration = RiskConfiguration.from_json(
+        '{"CONFIGURATION_VERSION":"operator-demo-r3","ACCOUNT_EQUITY_USD":"1000.00",'
+        '"RISK_PER_TRADE_PCT":"0.2500","MAX_NOTIONAL_USD":null}'
+    )
+    volatility = VolatilitySnapshot(
+        output.provenance.atr,
+        output.provenance.atr,
+        Decimal("1"),
+        VolatilityRegime.NORMAL,
+        output.decision_trigger_identity,
+        output.decision_trigger_open_time_ms + 300_000,
+        (output.decision_trigger_identity,),
+        (output.decision_trigger_canonical_hash,),
+        output.decision_trigger_canonical_hash,
+    )
+    return build_plan(
+        strategy_output=output,
+        reference=output.raw_entry_low,
+        sz_decimals=3,
+        configuration=configuration,
+        volatility=volatility,
+        context_summary=summary,
+        low_longer_window_support=True,
+    )
+
+
 def _wait() -> Signal:
-    candles_5m = tuple(_candle(index * 300_000) for index in range(-9, 27))
+    candles_5m = tuple(_candle(index * 300_000) for index in range(-37, 27))
     candles_15m = tuple(_candle(index * 900_000, interval="15m") for index in range(-9, 11))
     result = evaluate_signal(_snapshot(candles_5m, candles_15m))
     if type(result) is not Signal:
@@ -185,12 +236,7 @@ def _card(case: str) -> OperatorReviewCard:
         "short-standard": (Side.SHORT, False),
     }[case]
     output = _output(side, fast)
-    plan = build_plan(
-        strategy_output=output,
-        reference=output.raw_entry_low,
-        equity=Decimal("1000"),
-        sz_decimals=3,
-    )
+    plan = _plan(output)
     return build_operator_card(plan, now=output.created_at, quality=DataQualityState.READY)
 
 
@@ -246,12 +292,7 @@ def main() -> int:
             "short-standard": (Side.SHORT, False),
         }[args.case]
         output = _output(side, fast)
-        plan = build_plan(
-            strategy_output=output,
-            reference=output.raw_entry_low,
-            equity=Decimal("1000"),
-            sz_decimals=3,
-        )
+        plan = _plan(output)
         bundle = build_decision_bundle(
             card=card,
             shadow_order=shadow,

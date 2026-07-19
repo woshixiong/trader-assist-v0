@@ -13,9 +13,11 @@ from typing import Any, Literal, cast
 
 from trader_assist_v0.contracts.common import canonical_json_bytes
 
-ETH = "ETH"
+ETH: Literal["ETH"] = "ETH"
 INTERVAL_MILLISECONDS: dict[str, int] = {"5m": 5 * 60_000, "15m": 15 * 60_000}
 SNAPSHOT_LIMITS: dict[str, int] = {"5m": 64, "15m": 32}
+STRATEGY_WARMUP_5M = 64
+STRATEGY_WARMUP_15M = 20
 
 
 class DataQualityState(StrEnum):
@@ -182,6 +184,112 @@ class Candle:
                 }
             )
         ).hexdigest()
+
+
+@dataclass(frozen=True)
+class RollingComposite:
+    """A causal, immutable 5m rolling candle composite."""
+
+    symbol: Literal["ETH"]
+    span_minutes: Literal[15, 30, 60]
+    cutoff_identity: tuple[str, str, int]
+    cutoff_close_time_ms: int
+    constituent_identities: tuple[tuple[str, str, int], ...]
+    constituent_canonical_hashes: tuple[str, ...]
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: Decimal
+    midpoint: Decimal
+    canonical_hash: str
+
+    def __post_init__(self) -> None:
+        expected_count = {15: 3, 30: 6, 60: 12}.get(self.span_minutes)
+        if (
+            self.symbol != ETH
+            or expected_count is None
+            or len(self.constituent_identities) != expected_count
+            or len(self.constituent_canonical_hashes) != expected_count
+            or self.midpoint != (self.high + self.low) / Decimal("2")
+            or self.canonical_hash
+            != hashlib.sha256(canonical_json_bytes(self.payload())).hexdigest()
+        ):
+            raise MarketDataError("ROLLING_COMPOSITE_AUTHORITY_INVALID")
+
+    def payload(self) -> dict[str, object]:
+        return {
+            "symbol": self.symbol,
+            "span_minutes": self.span_minutes,
+            "cutoff_identity": self.cutoff_identity,
+            "cutoff_close_time_ms": self.cutoff_close_time_ms,
+            "constituent_identities": self.constituent_identities,
+            "constituent_canonical_hashes": self.constituent_canonical_hashes,
+            "open": self.open,
+            "high": self.high,
+            "low": self.low,
+            "close": self.close,
+            "volume": self.volume,
+            "midpoint": self.midpoint,
+        }
+
+
+def rolling_composite(
+    candles: Iterable[Candle], span_minutes: Literal[15, 30, 60]
+) -> RollingComposite:
+    """Build a single final composite and reject all non-causal candle authority."""
+    count = {15: 3, 30: 6, 60: 12}.get(span_minutes)
+    if count is None:
+        raise MarketDataError("ROLLING_SPAN_INVALID")
+    values = tuple(candles)
+    if len(values) < count:
+        raise MarketDataError("ROLLING_COMPOSITE_INSUFFICIENT_CANDLES")
+    selected = values[-count:]
+    for candle in selected:
+        _validated_candle(candle)
+        if candle.interval != "5m" or candle.close_time_ms > selected[-1].close_time_ms:
+            raise MarketDataError("ROLLING_COMPOSITE_UNAUTHORIZED_CANDLE")
+    if any(
+        right.open_time_ms - left.open_time_ms != INTERVAL_MILLISECONDS["5m"]
+        for left, right in pairwise(selected)
+    ):
+        raise MarketDataError("ROLLING_COMPOSITE_GAP")
+    identities = tuple(item.identity for item in selected)
+    hashes = tuple(item.canonical_hash for item in selected)
+    if len(set(identities)) != len(identities) or len(set(hashes)) != len(hashes):
+        raise MarketDataError("ROLLING_COMPOSITE_DUPLICATE_OR_CONFLICT")
+    midpoint = (max(item.high for item in selected) + min(item.low for item in selected)) / Decimal(
+        "2"
+    )
+    body = {
+        "symbol": ETH,
+        "span_minutes": span_minutes,
+        "cutoff_identity": selected[-1].identity,
+        "cutoff_close_time_ms": selected[-1].close_time_ms,
+        "constituent_identities": identities,
+        "constituent_canonical_hashes": hashes,
+        "open": selected[0].open,
+        "high": max(item.high for item in selected),
+        "low": min(item.low for item in selected),
+        "close": selected[-1].close,
+        "volume": sum((item.volume for item in selected), Decimal()),
+        "midpoint": midpoint,
+    }
+    return RollingComposite(
+        ETH,
+        span_minutes,
+        selected[-1].identity,
+        selected[-1].close_time_ms,
+        identities,
+        hashes,
+        selected[0].open,
+        cast(Decimal, body["high"]),
+        cast(Decimal, body["low"]),
+        selected[-1].close,
+        cast(Decimal, body["volume"]),
+        midpoint,
+        hashlib.sha256(canonical_json_bytes(body)).hexdigest(),
+    )
 
 
 @dataclass(frozen=True)
@@ -475,9 +583,7 @@ def candles_from_snapshot(
     if opens != sorted(opens) or len(set(opens)) != len(opens):
         raise MarketDataError("snapshot candle identities must be strictly increasing")
     closed = tuple(
-        item
-        for item in parsed
-        if item.close_time_ms < int(evidence.received_at.timestamp() * 1000)
+        item for item in parsed if item.close_time_ms < int(evidence.received_at.timestamp() * 1000)
     )
     width = INTERVAL_MILLISECONDS[requested_interval]
     if any(right.open_time_ms - left.open_time_ms != width for left, right in pairwise(closed)):
@@ -663,9 +769,12 @@ class EthMarketData:
         elif self.conflicts:
             result = DataQuality(DataQualityState.CONFLICT, "CANDLE_IDENTITY_CONFLICT")
         elif (
-            len(self.candles["5m"]) >= 36
-            and len(self.candles["15m"]) >= 20
-            and (not self._contiguous("5m", 36) or not self._contiguous("15m", 20))
+            len(self.candles["5m"]) >= STRATEGY_WARMUP_5M
+            and len(self.candles["15m"]) >= STRATEGY_WARMUP_15M
+            and (
+                not self._contiguous("5m", STRATEGY_WARMUP_5M)
+                or not self._contiguous("15m", STRATEGY_WARMUP_15M)
+            )
         ):
             result = DataQuality(DataQualityState.GAP, "CANDLE_SEQUENCE_GAP")
         elif self.disconnected:
@@ -675,7 +784,9 @@ class EthMarketData:
                 DataQualityState.METADATA_UNAVAILABLE,
                 "ETH_SZ_DECIMALS_UNAVAILABLE",
             )
-        elif not self._contiguous("5m", 36) or not self._contiguous("15m", 20):
+        elif not self._contiguous("5m", STRATEGY_WARMUP_5M) or not self._contiguous(
+            "15m", STRATEGY_WARMUP_15M
+        ):
             result = DataQuality(DataQualityState.WARMING, "INSUFFICIENT_CLOSED_CANDLES")
         elif self.active_context is None:
             result = DataQuality(DataQualityState.WARMING, "ACTIVE_ASSET_CONTEXT_UNAVAILABLE")
@@ -699,12 +810,8 @@ class EthMarketData:
     def strategy_snapshot(self, evaluated_at: datetime) -> StrategySnapshot:
         """Freeze the only strategy input that this market authority can issue."""
         now = _utc(evaluated_at)
-        candles_5m = tuple(
-            self.candles["5m"][key] for key in sorted(self.candles["5m"])
-        )
-        candles_15m = tuple(
-            self.candles["15m"][key] for key in sorted(self.candles["15m"])
-        )
+        candles_5m = tuple(self.candles["5m"][key] for key in sorted(self.candles["5m"]))
+        candles_15m = tuple(self.candles["15m"][key] for key in sorted(self.candles["15m"]))
         for candle in (*candles_5m, *candles_15m):
             _validated_candle(candle)
         if self.active_context is not None:

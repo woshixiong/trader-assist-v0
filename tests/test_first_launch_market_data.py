@@ -68,7 +68,7 @@ def _candle(interval: Literal["5m", "15m"], offset: int) -> Candle:
 def _ready_data() -> EthMarketData:
     data = EthMarketData()
     data.begin_connection()
-    for interval, count in (("5m", 36), ("15m", 20)):
+    for interval, count in (("5m", 64), ("15m", 20)):
         for offset in reversed(range(count)):
             assert data.accept_candle(_candle(interval, offset)) == "ACCEPTED"
 
@@ -76,9 +76,7 @@ def _ready_data() -> EthMarketData:
         '{"channel":"activeAssetCtx","data":{"coin":"ETH","ctx":'
         '{"markPx":"101","midPx":"100.9","openInterest":"5","funding":"0.001"}}}'
     )
-    data.accept_context(
-        context_from_websocket(context_raw, _evidence(context_raw, sequence=100))
-    )
+    data.accept_context(context_from_websocket(context_raw, _evidence(context_raw, sequence=100)))
 
     metadata_raw = '{"universe":[{"name":"ETH","szDecimals":3}]}'
     data.accept_metadata(
@@ -155,10 +153,7 @@ def test_lower_parsers_bind_raw_text_hash_and_operation() -> None:
         context_from_websocket(context, _evidence(context, "metaAndAssetCtxs"))
 
     metadata = '{"universe":[{"name":"ETH","szDecimals":3}]}'
-    assert (
-        metadata_from_info(metadata, _evidence(metadata, "metaAndAssetCtxs")).sz_decimals
-        == 3
-    )
+    assert metadata_from_info(metadata, _evidence(metadata, "metaAndAssetCtxs")).sz_decimals == 3
     with pytest.raises(MarketDataError):
         metadata_from_info(metadata, _evidence(metadata))
 
@@ -220,7 +215,7 @@ def test_gap_duplicate_and_conflict_fail_closed() -> None:
     assert data.quality(NOW).state is DataQualityState.CONFLICT
 
     gap = _ready_data()
-    assert gap.accept_candle(_candle("5m", 36)) == "ACCEPTED"
+    assert gap.accept_candle(_candle("5m", 64)) == "ACCEPTED"
     del gap.candles["5m"][sorted(gap.candles["5m"])[-2]]
     assert gap.quality(NOW).state is DataQualityState.GAP
     gap.mark_disconnected()
@@ -397,13 +392,16 @@ def test_closed_websocket_and_snapshot_candles_require_valid_trade_counts(
     websocket = json.dumps({"channel": "candle", "data": candle}, separators=(",", ":"))
     snapshot = json.dumps([candle], separators=(",", ":"))
     assert candle_from_websocket(websocket, _evidence(websocket)).interval == "5m"
-    assert len(
-        candles_from_snapshot(
-            snapshot,
-            _evidence(snapshot, "candleSnapshot"),
-            requested_interval="5m",
+    assert (
+        len(
+            candles_from_snapshot(
+                snapshot,
+                _evidence(snapshot, "candleSnapshot"),
+                requested_interval="5m",
+            )
         )
-    ) == 1
+        == 1
+    )
 
 
 @pytest.mark.parametrize("trade_count", [_MISSING, None, True, False, "1", 1.0, -1])
@@ -560,9 +558,7 @@ def test_snapshot_order_and_interval_are_fail_closed_without_repair() -> None:
         )
 
 
-def _snapshot_candle(
-    close_time: int, *, n: object = 0, interval: str = "5m"
-) -> dict[str, object]:
+def _snapshot_candle(close_time: int, *, n: object = 0, interval: str = "5m") -> dict[str, object]:
     width = 300_000 if interval == "5m" else 900_000
     return {
         "s": "ETH",
@@ -612,9 +608,7 @@ def test_closed_websocket_and_snapshot_results_are_exact_issued_candles() -> Non
         pytest.param(lambda now_ms: {**_snapshot_candle(now_ms), "n": "bad"}),
         pytest.param(
             lambda now_ms: {
-                key: value
-                for key, value in _snapshot_candle(now_ms - 1_000).items()
-                if key != "n"
+                key: value for key, value in _snapshot_candle(now_ms - 1_000).items() if key != "n"
             }
         ),
     ],
@@ -653,15 +647,24 @@ def test_snapshot_open_filtering_preserves_only_closed_prefix_and_rejects_bad_op
     mixed = _snapshot_raw([first, second, trailing_open])
     multiple = _snapshot_raw([first, second, trailing_open, next_open])
     all_open = _snapshot_raw([trailing_open, next_open])
-    assert [item.open_time_ms for item in candles_from_snapshot(
-        mixed, _evidence(mixed, "candleSnapshot"), requested_interval="5m"
-    )] == [first["t"], second["t"]]
-    assert [item.open_time_ms for item in candles_from_snapshot(
-        multiple, _evidence(multiple, "candleSnapshot"), requested_interval="5m"
-    )] == [first["t"], second["t"]]
-    assert candles_from_snapshot(
-        all_open, _evidence(all_open, "candleSnapshot"), requested_interval="5m"
-    ) == ()
+    assert [
+        item.open_time_ms
+        for item in candles_from_snapshot(
+            mixed, _evidence(mixed, "candleSnapshot"), requested_interval="5m"
+        )
+    ] == [first["t"], second["t"]]
+    assert [
+        item.open_time_ms
+        for item in candles_from_snapshot(
+            multiple, _evidence(multiple, "candleSnapshot"), requested_interval="5m"
+        )
+    ] == [first["t"], second["t"]]
+    assert (
+        candles_from_snapshot(
+            all_open, _evidence(all_open, "candleSnapshot"), requested_interval="5m"
+        )
+        == ()
+    )
     malformed_open = _snapshot_raw([first, second, {**trailing_open, "n": "bad"}])
     with pytest.raises(MarketDataError):
         candles_from_snapshot(
