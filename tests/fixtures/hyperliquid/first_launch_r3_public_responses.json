@@ -1,0 +1,18 @@
+{
+  "provenance": "Bounded public Hyperliquid response shapes, redacted to public ETH market data only; captured for offline parser tests.",
+  "candle_snapshot": [
+    {"t": 1780000000000, "T": 1780000300000, "s": "ETH", "i": "5m", "o": "2500.0", "h": "2505.0", "l": "2498.0", "c": "2502.0", "v": "123.45", "n": 42}
+  ],
+  "active_asset_ctx": {
+    "channel": "activeAssetCtx",
+    "data": {"coin": "ETH", "ctx": {"markPx": "2502.0", "midPx": "2501.5", "openInterest": "123456.7", "funding": "0.0001", "time": 1780000301000}}
+  },
+  "active_asset_ctx_without_mid": {
+    "channel": "activeAssetCtx",
+    "data": {"coin": "ETH", "ctx": {"markPx": "2502.0", "openInterest": "123456.7", "funding": "0.0001"}}
+  },
+  "meta_and_asset_ctxs": [
+    {"universe": [{"name": "ETH", "szDecimals": 3}]},
+    [{"coin": "ETH", "markPx": "2502.0", "openInterest": "123456.7", "funding": "0.0001"}]
+  ]
+}

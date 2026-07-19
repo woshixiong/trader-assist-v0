@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from trader_assist_v0.contracts.common import canonical_json_bytes, decimal_to_canonical_string
+from trader_assist_v0.first_launch.configuration import RiskConfiguration
 from trader_assist_v0.first_launch.market_data import (
     Candle,
     MarketDataError,
@@ -43,13 +44,17 @@ from trader_assist_v0.first_launch.operator_review import (
 )
 from trader_assist_v0.first_launch.strategy import (
     CONFIGURATION_VERSION,
+    HISTORICAL_TRADE_PLAN_HASH_DOMAIN,
+    HISTORICAL_TRADE_PLAN_VERSION,
     STRATEGY_VERSION,
     TRADE_PLAN_HASH_DOMAIN,
     TRADE_PLAN_VERSION,
     Side,
     TradePlan,
+    VolatilityRegime,
     _round_price,
     size_plan,
+    size_plan_v3,
 )
 
 DECISION_BUNDLE_VERSION: Literal["1"] = "1"
@@ -244,7 +249,7 @@ def _plan_payload(plan: TradePlan) -> dict[str, object]:
         raise OutcomeError("BUNDLE_PLAN_INVALID") from exc
     payload = plan.payload()
     if (
-        plan.plan_id != _digest(TRADE_PLAN_HASH_DOMAIN, payload)
+        plan.plan_id != _digest(_plan_domain(payload.get("trade_plan_version")), payload)
         or plan.plan_id != plan.canonical_hash
     ):
         raise OutcomeError("BUNDLE_PLAN_INVALID")
@@ -258,7 +263,15 @@ def _bundle_time(value: object, error: str) -> datetime:
     return _timestamp(normalized, error)
 
 
-def _validate_plan_semantics(plan: dict[str, object]) -> tuple[str, dict[str, Decimal]]:
+def _plan_domain(version: object) -> str:
+    if version == HISTORICAL_TRADE_PLAN_VERSION:
+        return HISTORICAL_TRADE_PLAN_HASH_DOMAIN
+    if version == TRADE_PLAN_VERSION:
+        return TRADE_PLAN_HASH_DOMAIN
+    raise OutcomeError("BUNDLE_PLAN_INVALID")
+
+
+def _validate_v2_plan_semantics(plan: dict[str, object]) -> tuple[str, dict[str, Decimal]]:
     """Validate every serialised financial value without process-local issuance."""
     required = {
         "trade_plan_version",
@@ -308,12 +321,25 @@ def _validate_plan_semantics(plan: dict[str, object]) -> tuple[str, dict[str, De
         plan.get("trade_plan_version"),
         plan.get("strategy_version"),
         plan.get("configuration_version"),
-    ) != (TRADE_PLAN_VERSION, STRATEGY_VERSION, CONFIGURATION_VERSION):
+    ) != (HISTORICAL_TRADE_PLAN_VERSION, STRATEGY_VERSION, CONFIGURATION_VERSION):
         raise OutcomeError("BUNDLE_PLAN_INVALID")
     provenance = plan.get("provenance")
     if type(provenance) is not dict or provenance.get("side") not in {"LONG", "SHORT"}:
         raise OutcomeError("BUNDLE_PLAN_INVALID")
     side = cast(str, provenance["side"])
+    if (
+        plan.get("setup_id")
+        != hashlib.sha256(
+            canonical_json_bytes(
+                {
+                    "strategy_version": STRATEGY_VERSION,
+                    "configuration_version": CONFIGURATION_VERSION,
+                    "provenance": provenance,
+                }
+            )
+        ).hexdigest()
+    ):
+        raise OutcomeError("BUNDLE_PLAN_INVALID")
     if (
         plan.get("setup_id")
         != hashlib.sha256(
@@ -418,6 +444,362 @@ def _validate_plan_semantics(plan: dict[str, object]) -> tuple[str, dict[str, De
     return side, values
 
 
+def _validate_v3_plan_semantics(plan: dict[str, object]) -> tuple[str, dict[str, Decimal]]:
+    """Validate the v3 additions independently of process-local plan issuance."""
+    v2_keys = {
+        "trade_plan_version",
+        "strategy_version",
+        "configuration_version",
+        "symbol",
+        "setup_id",
+        "provenance",
+        "speed",
+        "decision_trigger_identity",
+        "decision_trigger_open_time_ms",
+        "decision_trigger_canonical_hash",
+        "decision_trigger_received_at",
+        "strategy_reason",
+        "strategy_do_not_chase",
+        "material_extreme",
+        "raw_entry_low",
+        "raw_entry_high",
+        "raw_chase_limit",
+        "raw_stop",
+        "strategy_created_at",
+        "strategy_expires_at",
+        "supersedes_plan_id",
+        "reference",
+        "entry_low",
+        "entry_high",
+        "planned_entry",
+        "chase_limit",
+        "stop",
+        "tp1",
+        "tp2",
+        "quantity",
+        "notional",
+        "account_equity",
+        "risk_budget",
+        "planned_risk",
+        "sz_decimals",
+        "do_not_chase",
+    }
+    additions = {
+        "effective_raw_chase_limit",
+        "signal_id",
+        "volatility_regime",
+        "current_atr",
+        "previous_48_median_atr",
+        "atr_ratio",
+        "selected_decision_span",
+        "overlay_action",
+        "overlay_reason",
+        "candle_cutoff_identity",
+        "candle_cutoff_close_time_ms",
+        "plan_evaluation_cutoff",
+        "mark_price",
+        "mid_price",
+        "context_summary",
+        "context_hash",
+        "configured_risk_per_trade_pct",
+        "base_risk_budget",
+        "risk_multiplier",
+        "effective_risk_budget",
+        "configured_max_notional",
+        "system_hard_notional_cap",
+        "effective_max_notional",
+        "risk_configuration_version",
+        "risk_configuration_hash",
+        "configuration_account_equity_text",
+        "configuration_risk_pct_text",
+        "configuration_max_notional_text",
+        "manual_execution_required",
+        "submission_status",
+        "volatility_snapshot",
+        "overlay_payload",
+        "overlay_hash",
+    }
+    if set(plan) != v2_keys | additions or plan.get("trade_plan_version") != TRADE_PLAN_VERSION:
+        raise OutcomeError("BUNDLE_PLAN_INVALID")
+    # The old structural validator is intentionally not used: its static v2 version and
+    # hard-coded 0.25% sizing are historical compatibility only.
+    provenance = plan.get("provenance")
+    if type(provenance) is not dict or provenance.get("side") not in {"LONG", "SHORT"}:
+        raise OutcomeError("BUNDLE_PLAN_INVALID")
+    side = cast(str, provenance["side"])
+    decimals = plan.get("sz_decimals")
+    if type(decimals) is not int or isinstance(decimals, bool) or not 0 <= decimals <= 18:
+        raise OutcomeError("BUNDLE_PLAN_INVALID")
+    values = {
+        name: _decimal(plan.get(name), positive=True, error="BUNDLE_PLAN_INVALID")
+        for name in (
+            "reference",
+            "entry_low",
+            "entry_high",
+            "planned_entry",
+            "chase_limit",
+            "stop",
+            "tp1",
+            "tp2",
+            "quantity",
+            "notional",
+            "account_equity",
+            "risk_budget",
+            "planned_risk",
+            "raw_entry_low",
+            "raw_entry_high",
+            "raw_chase_limit",
+            "effective_raw_chase_limit",
+            "raw_stop",
+            "material_extreme",
+            "current_atr",
+            "previous_48_median_atr",
+            "atr_ratio",
+            "mark_price",
+            "configured_risk_per_trade_pct",
+            "base_risk_budget",
+            "risk_multiplier",
+            "effective_risk_budget",
+            "system_hard_notional_cap",
+            "effective_max_notional",
+        )
+    }
+    configured_max = plan.get("configured_max_notional")
+    if configured_max is not None:
+        values["configured_max_notional"] = _decimal(
+            configured_max, positive=True, error="BUNDLE_PLAN_INVALID"
+        )
+    if (
+        plan.get("volatility_regime") not in {"LOW", "NORMAL", "HIGH"}
+        or plan.get("selected_decision_span") not in {5, 30, 60}
+        or plan.get("manual_execution_required") is not True
+        or plan.get("submission_status") != "NOT_SUBMITTED"
+    ):
+        raise OutcomeError("BUNDLE_PLAN_INVALID")
+    snapshot = plan.get("volatility_snapshot")
+    snapshot_keys = {
+        "current_atr",
+        "previous_48_median_atr",
+        "atr_ratio",
+        "regime",
+        "candle_cutoff_identity",
+        "candle_cutoff_close_time_ms",
+        "candle_identities",
+        "candle_hashes",
+    }
+    if type(snapshot) is not dict or set(snapshot) != snapshot_keys:
+        raise OutcomeError("BUNDLE_PLAN_INVALID")
+    source = cast(dict[str, object], snapshot)
+    source_ids, source_hashes = source.get("candle_identities"), source.get("candle_hashes")
+    if (
+        type(source_ids) is not list
+        or type(source_hashes) is not list
+        or len(source_ids) != 64
+        or len(source_hashes) != 64
+        or any(type(item) is not list or len(item) != 3 for item in source_ids)
+        or any(type(item) is not str or _HASH_RE.fullmatch(item) is None for item in source_hashes)
+        or source.get("candle_cutoff_identity") != source_ids[-1]
+        or source.get("candle_cutoff_close_time_ms") != plan.get("candle_cutoff_close_time_ms")
+        or source.get("candle_cutoff_identity") != plan.get("candle_cutoff_identity")
+        or source.get("regime") != plan.get("volatility_regime")
+        or any(
+            source.get(name) != plan.get(name)
+            for name in ("current_atr", "previous_48_median_atr", "atr_ratio")
+        )
+    ):
+        raise OutcomeError("BUNDLE_PLAN_INVALID")
+    source_current = _decimal(source.get("current_atr"), positive=True, error="BUNDLE_PLAN_INVALID")
+    source_median = _decimal(
+        source.get("previous_48_median_atr"), positive=True, error="BUNDLE_PLAN_INVALID"
+    )
+    source_ratio = _decimal(source.get("atr_ratio"), positive=True, error="BUNDLE_PLAN_INVALID")
+    expected_regime = (
+        "LOW"
+        if source_ratio < Decimal("0.75")
+        else "NORMAL"
+        if source_ratio <= Decimal("1.50")
+        else "HIGH"
+        if source_ratio <= Decimal("2.25")
+        else "EXTREME"
+    )
+    if source_ratio != source_current / source_median or source.get("regime") != expected_regime:
+        raise OutcomeError("BUNDLE_PLAN_INVALID")
+    if (
+        type(plan.get("overlay_hash")) is not str
+        or _HASH_RE.fullmatch(cast(str, plan["overlay_hash"])) is None
+    ):
+        raise OutcomeError("BUNDLE_PLAN_INVALID")
+    overlay = plan.get("overlay_payload")
+    if (
+        type(overlay) is not dict
+        or hashlib.sha256(canonical_json_bytes(overlay)).hexdigest() != plan.get("overlay_hash")
+        or overlay.get("regime") != plan.get("volatility_regime")
+        or overlay.get("selected_decision_span") != plan.get("selected_decision_span")
+        or overlay.get("action") != plan.get("overlay_action")
+        or overlay.get("reason") != plan.get("overlay_reason")
+        or overlay.get("effective_raw_chase_limit") != plan.get("effective_raw_chase_limit")
+        or overlay.get("reference_price") != plan.get("reference")
+        or overlay.get("volatility_hash")
+        != hashlib.sha256(canonical_json_bytes(source)).hexdigest()
+    ):
+        raise OutcomeError("BUNDLE_PLAN_INVALID")
+    multiplier = Decimal("0.75") if plan["volatility_regime"] == "HIGH" else Decimal("1")
+    if (
+        values["risk_multiplier"] != multiplier
+        or values["base_risk_budget"]
+        != values["account_equity"] * (values["configured_risk_per_trade_pct"] / Decimal("100"))
+        or values["effective_risk_budget"] != values["base_risk_budget"] * multiplier
+    ):
+        raise OutcomeError("BUNDLE_PLAN_INVALID")
+    # Independently execute the reviewed configuration and fee-aware sizing path;
+    # caps alone are not authority for a serialized decision.
+    try:
+        configuration = RiskConfiguration(
+            cast(str, plan.get("risk_configuration_version")),
+            Decimal(cast(str, plan.get("configuration_account_equity_text"))),
+            Decimal(cast(str, plan.get("configuration_risk_pct_text"))),
+            (
+                None
+                if plan.get("configuration_max_notional_text") is None
+                else Decimal(cast(str, plan.get("configuration_max_notional_text")))
+            ),
+            cast(str, plan.get("risk_configuration_hash")),
+        )
+        expected_risk, _ = size_plan_v3(
+            side=Side(side),
+            entry=values["planned_entry"],
+            stop=values["stop"],
+            configuration=configuration,
+            regime=VolatilityRegime(cast(str, plan["volatility_regime"])),
+            sz_decimals=decimals,
+        )
+    except (ValueError, TypeError) as exc:
+        raise OutcomeError("BUNDLE_PLAN_INVALID") from exc
+    if (values["quantity"], values["notional"], values["risk_budget"], values["planned_risk"]) != (
+        expected_risk.quantity,
+        expected_risk.notional,
+        expected_risk.risk_budget,
+        expected_risk.planned_risk,
+    ):
+        raise OutcomeError("BUNDLE_PLAN_INVALID")
+    if values["system_hard_notional_cap"] != values["account_equity"] * Decimal("25"):
+        raise OutcomeError("BUNDLE_PLAN_INVALID")
+    expected_cap = (
+        values["system_hard_notional_cap"]
+        if configured_max is None
+        else min(values["configured_max_notional"], values["system_hard_notional_cap"])
+    )
+    if (
+        values["effective_max_notional"] != expected_cap
+        or values["notional"] != values["quantity"] * values["planned_entry"]
+        or values["notional"] > expected_cap
+        or values["planned_risk"] > values["effective_risk_budget"]
+    ):
+        raise OutcomeError("BUNDLE_PLAN_INVALID")
+    if (
+        type(plan.get("signal_id")) is not str
+        or len(cast(str, plan["signal_id"])) != 64
+        or type(plan.get("risk_configuration_hash")) is not str
+        or len(cast(str, plan["risk_configuration_hash"])) != 64
+    ):
+        raise OutcomeError("BUNDLE_PLAN_INVALID")
+    expected_signal = hashlib.sha256(
+        canonical_json_bytes(
+            {
+                "strategy_version": STRATEGY_VERSION,
+                "setup_id": plan.get("setup_id"),
+                "decision_trigger_identity": plan.get("decision_trigger_identity"),
+                "decision_trigger_canonical_hash": plan.get("decision_trigger_canonical_hash"),
+                "speed": plan.get("speed"),
+                "state": "TRIGGERED_FAST" if plan.get("speed") == "FAST" else "TRIGGERED_STANDARD",
+                "regime": plan.get("volatility_regime"),
+                "selected_decision_span": plan.get("selected_decision_span"),
+                "overlay_action": plan.get("overlay_action"),
+                "overlay_reason": plan.get("overlay_reason"),
+                "effective_raw_chase_limit": plan.get("effective_raw_chase_limit"),
+                "candle_cutoff_close_time_ms": plan.get("candle_cutoff_close_time_ms"),
+            }
+        )
+    ).hexdigest()
+    if plan.get("signal_id") != expected_signal:
+        raise OutcomeError("BUNDLE_PLAN_INVALID")
+    context = plan.get("context_summary")
+    if (
+        type(context) is not dict
+        or context.get("canonical_hash") != plan.get("context_hash")
+        or type(context.get("current")) is not dict
+    ):
+        raise OutcomeError("BUNDLE_PLAN_INVALID")
+    current = cast(dict[str, object], context["current"])
+    if current.get("mark_price") != plan.get("mark_price") or current.get("mid_price") != plan.get(
+        "mid_price"
+    ):
+        raise OutcomeError("BUNDLE_PLAN_INVALID")
+    context_body = {
+        "current": {
+            key: current.get(key)
+            for key in (
+                "mark_price",
+                "mid_price",
+                "open_interest",
+                "funding",
+                "source_time_ms",
+                "received_at",
+                "receive_sequence",
+                "evidence_hash",
+                "reference_price",
+                "mark_mid_basis_bps",
+            )
+        },
+        "current_hash": context.get("current_hash"),
+        "baseline_5m": context.get("baseline_5m"),
+        "baseline_5m_hash": context.get("baseline_5m_hash"),
+        "baseline_15m": context.get("baseline_15m"),
+        "baseline_15m_hash": context.get("baseline_15m_hash"),
+        "summary_cutoff": context.get("summary_cutoff"),
+        "oi_delta_5m": context.get("oi_delta_5m"),
+        "oi_pct_delta_5m": context.get("oi_pct_delta_5m"),
+        "oi_delta_15m": context.get("oi_delta_15m"),
+        "oi_pct_delta_15m": context.get("oi_pct_delta_15m"),
+        "funding_delta_5m": context.get("funding_delta_5m"),
+        "funding_delta_15m": context.get("funding_delta_15m"),
+        "classification_5m": context.get("classification_5m"),
+        "classification_15m": context.get("classification_15m"),
+        "selection_proof": context.get("selection_proof"),
+        "selection_proof_hashes": context.get("selection_proof_hashes"),
+    }
+    if hashlib.sha256(canonical_json_bytes(context_body)).hexdigest() != plan.get("context_hash"):
+        raise OutcomeError("BUNDLE_PLAN_INVALID")
+    if (
+        context.get("summary_cutoff") != plan.get("plan_evaluation_cutoff")
+        or current.get("reference_price") != plan.get("reference")
+        or current.get("canonical_hash") is not None
+    ):
+        raise OutcomeError("BUNDLE_PLAN_INVALID")
+    expected_configuration = RiskConfiguration.digest(
+        cast(str, plan.get("risk_configuration_version")),
+        Decimal(cast(str, plan.get("configuration_account_equity_text"))),
+        Decimal(cast(str, plan.get("configuration_risk_pct_text"))),
+        (
+            None
+            if plan.get("configuration_max_notional_text") is None
+            else Decimal(cast(str, plan.get("configuration_max_notional_text")))
+        ),
+    )
+    if plan.get("risk_configuration_hash") != expected_configuration:
+        raise OutcomeError("BUNDLE_PLAN_INVALID")
+    return side, values
+
+
+def _validate_plan_semantics(plan: dict[str, object]) -> tuple[str, dict[str, Decimal]]:
+    version = plan.get("trade_plan_version")
+    if version == HISTORICAL_TRADE_PLAN_VERSION:
+        return _validate_v2_plan_semantics(plan)
+    if version == TRADE_PLAN_VERSION:
+        return _validate_v3_plan_semantics(plan)
+    raise OutcomeError("BUNDLE_PLAN_INVALID")
+
+
 def _expected_card_from_plan(
     plan: dict[str, object], *, plan_id: str, side: str, values: dict[str, Decimal]
 ) -> dict[str, object]:
@@ -447,7 +829,7 @@ def _expected_card_from_plan(
         "plan_canonical_hash": plan_id,
         "strategy_version": STRATEGY_VERSION,
         "configuration_version": CONFIGURATION_VERSION,
-        "trade_plan_version": TRADE_PLAN_VERSION,
+        "trade_plan_version": plan["trade_plan_version"],
         "decision_trigger_identity": plan["decision_trigger_identity"],
         "decision_trigger_open_time_ms": plan["decision_trigger_open_time_ms"],
         "decision_trigger_canonical_hash": plan["decision_trigger_canonical_hash"],
@@ -569,7 +951,7 @@ def _validate_bundle(payload: dict[str, object]) -> None:
     if (
         plan.get("symbol") != "ETH"
         or payload.get("plan_id") != payload.get("plan_hash")
-        or payload["plan_id"] != _digest(TRADE_PLAN_HASH_DOMAIN, plan)
+        or payload["plan_id"] != _digest(_plan_domain(plan.get("trade_plan_version")), plan)
     ):
         raise OutcomeError("BUNDLE_PLAN_INVALID")
     for key in ("setup_id", "setup_hash", "plan_id", "plan_hash"):

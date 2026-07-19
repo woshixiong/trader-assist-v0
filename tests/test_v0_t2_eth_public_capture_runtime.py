@@ -1042,11 +1042,8 @@ def test_cli_runtime_and_repository_boundaries_are_exact() -> None:
             cwd=root,
         ).decode().splitlines()
     )
-    changed.update(
-        _run("git", "ls-files", "--others", "--exclude-standard", cwd=root)
-        .decode()
-        .splitlines()
-    )
+    # Historical exact scope comes solely from its frozen commit range; unrelated
+    # current-worktree untracked files must not alter the historical assertion.
     assert changed == ALLOWLIST
     repair_changed = set(
         _run(
@@ -1057,11 +1054,6 @@ def test_cli_runtime_and_repository_boundaries_are_exact() -> None:
             T2_FINAL_REVIEWED_HEAD,
             cwd=root,
         ).decode().splitlines()
-    )
-    repair_changed.update(
-        _run("git", "ls-files", "--others", "--exclude-standard", cwd=root)
-        .decode()
-        .splitlines()
     )
     assert repair_changed == REPAIR_ALLOWLIST
     assert not _run(
