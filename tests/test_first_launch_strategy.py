@@ -8,6 +8,7 @@ from decimal import Decimal
 
 import pytest
 
+from trader_assist_v0.first_launch.configuration import RiskConfiguration
 from trader_assist_v0.first_launch.market_data import (
     Candle,
     DataQualityState,
@@ -21,6 +22,7 @@ from trader_assist_v0.first_launch.market_data import (
     metadata_from_info,
     rolling_composite,
 )
+from trader_assist_v0.first_launch.signal_context import ContextSeries, ContextSummary
 from trader_assist_v0.first_launch.strategy import (
     AIExplanation,
     OverlayDecision,
@@ -31,6 +33,7 @@ from trader_assist_v0.first_launch.strategy import (
     Signal,
     SignalState,
     StrategyOutput,
+    TradePlan,
     VolatilityRegime,
     VolatilitySnapshot,
     _hash,
@@ -825,6 +828,110 @@ def _coherently_rehashed_plan(plan: object, **updates: object) -> object:
         canonical_hash=digest,
         **updates,
     )
+
+
+def _v3_plan_inputs(
+    output: StrategyOutput, reference: Decimal
+) -> tuple[RiskConfiguration, VolatilitySnapshot, OverlayDecision, ContextSummary]:
+    candles, _ = _history(output.family, output.side, output.speed == "FAST")
+    volatility = wilder_atr14(candles)
+    overlay = apply_volatility_overlay(output, volatility, candles, reference)
+    context_raw = json.dumps(
+        {
+            "channel": "activeAssetCtx",
+            "data": {
+                "coin": "ETH",
+                "ctx": {
+                    "markPx": str(reference),
+                    "midPx": str(reference),
+                    "openInterest": "1",
+                    "funding": "0",
+                },
+            },
+        },
+        separators=(",", ":"),
+    )
+    context = context_from_websocket(
+        context_raw,
+        evidence_from_raw(
+            context_raw,
+            operation="WebSocket",
+            received_at=output.created_at,
+            receive_sequence=999,
+            connection_id="test",
+        ),
+    )
+    series = ContextSeries()
+    series.accept(context)
+    summary = series.summary_at(output.created_at)
+    assert summary is not None
+    configuration = RiskConfiguration.from_json(
+        '{"CONFIGURATION_VERSION":"test-r3","ACCOUNT_EQUITY_USD":"1000.00",'
+        '"RISK_PER_TRADE_PCT":"0.2500","MAX_NOTIONAL_USD":null}'
+    )
+    return configuration, volatility, overlay, summary
+
+
+def _build_v3_plan(
+    output: StrategyOutput,
+    reference: Decimal,
+    configuration: RiskConfiguration,
+    volatility: VolatilitySnapshot,
+    overlay: OverlayDecision,
+    summary: ContextSummary,
+) -> TradePlan:
+    return build_plan(
+        strategy_output=output,
+        reference=reference,
+        sz_decimals=3,
+        configuration=configuration,
+        volatility=volatility,
+        overlay=overlay,
+        context_summary=summary,
+    )
+
+
+def test_v3_trade_plan_accepts_matching_issued_overlay_reference() -> None:
+    output = _confirmed(SetupFamily.SWEEP_RECLAIM, Side.LONG, True)
+    reference = output.raw_entry_low
+    configuration, volatility, overlay, summary = _v3_plan_inputs(output, reference)
+    plan = _build_v3_plan(output, reference, configuration, volatility, overlay, summary)
+    assert plan.reference == overlay.reference_price == reference
+
+
+def test_v3_build_rejects_issued_overlay_with_mismatched_reference() -> None:
+    output = _confirmed(SetupFamily.SWEEP_RECLAIM, Side.LONG, True)
+    reference = output.raw_entry_low
+    configuration, volatility, _, summary = _v3_plan_inputs(output, reference)
+    candles, _ = _history(output.family, output.side, output.speed == "FAST")
+    mismatched_overlay = apply_volatility_overlay(
+        output, volatility, candles, reference + Decimal("0.001")
+    )
+    with pytest.raises(PlanError, match="TRADE_PLAN_OVERLAY_CORRESPONDENCE_INVALID"):
+        _build_v3_plan(output, reference, configuration, volatility, mismatched_overlay, summary)
+
+
+def test_v3_validation_rejects_coherently_rehashed_overlay_reference_mismatch() -> None:
+    output = _confirmed(SetupFamily.SWEEP_RECLAIM, Side.LONG, True)
+    reference = output.raw_entry_low
+    configuration, volatility, overlay, summary = _v3_plan_inputs(output, reference)
+    plan = _build_v3_plan(output, reference, configuration, volatility, overlay, summary)
+    candles, _ = _history(output.family, output.side, output.speed == "FAST")
+    mismatched_overlay = apply_volatility_overlay(
+        output, volatility, candles, reference + Decimal("0.001")
+    )
+    assert mismatched_overlay.canonical_hash == _hash(mismatched_overlay.payload())
+    with pytest.raises(PlanError, match="TRADE_PLAN_OVERLAY_CORRESPONDENCE_INVALID"):
+        _coherently_rehashed_plan(plan, overlay=mismatched_overlay)
+
+
+@pytest.mark.parametrize("side", [Side.LONG, Side.SHORT])
+def test_v3_trade_plan_accepts_reference_at_effective_raw_chase_limit(side: Side) -> None:
+    output = _confirmed(SetupFamily.SWEEP_RECLAIM, side, True)
+    reference = output.raw_chase_limit
+    configuration, volatility, overlay, summary = _v3_plan_inputs(output, reference)
+    plan = _build_v3_plan(output, reference, configuration, volatility, overlay, summary)
+    assert plan.reference == overlay.reference_price == plan.effective_raw_chase_limit
 
 
 def test_strategy_output_time_and_trigger_authority_is_fail_closed() -> None:

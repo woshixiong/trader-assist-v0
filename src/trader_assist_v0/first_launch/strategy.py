@@ -1309,6 +1309,7 @@ class TradePlan:
             or overlay.volatility_hash != volatility.canonical_hash
             or overlay.candle_cutoff_identity != self.decision_trigger_identity
             or overlay.regime is not self.volatility_regime
+            or overlay.reference_price != self.reference
             or not overlay.actionable
             or overlay.state is not output.state
             or (
@@ -1762,6 +1763,8 @@ def build_plan(
     context_summary = _validated_context_summary(context_summary)
     if overlay.base_output is not output or overlay.volatility_hash != volatility.canonical_hash:
         raise PlanError("OVERLAY_AUTHORITY_INVALID")
+    if overlay.reference_price != reference:
+        raise PlanError("TRADE_PLAN_OVERLAY_CORRESPONDENCE_INVALID")
     if volatility.regime is VolatilityRegime.EXTREME or not overlay.actionable:
         raise PlanError("EXTREME_NON_ACTIONABLE")
     if overlay.state is not output.state:
