@@ -10,7 +10,7 @@ import pytest
 
 from trader_assist_v0.contracts.common import canonical_json_bytes, decimal_to_canonical_string
 from trader_assist_v0.first_launch.market_data import DataQualityState
-from trader_assist_v0.first_launch.operator_demo import _candle, _output
+from trader_assist_v0.first_launch.operator_demo import _candle, _output, _plan
 from trader_assist_v0.first_launch.operator_review import (
     HumanDecision,
     append_decision,
@@ -21,6 +21,7 @@ from trader_assist_v0.first_launch.outcome import (
     DecisionBundleV1,
     ManualExecutionImportV1,
     OutcomeError,
+    _validate_v3_plan_semantics,
     append_outcome,
     build_decision_bundle,
     build_manual_execution_import,
@@ -81,6 +82,17 @@ def _import(bundle, side: Side, *, quantity: str = "1"):
         ),
         (first, second),
     )
+
+
+def test_c1_f006_v3_requires_complete_overlay_proof() -> None:
+    plan = _plan(_output(Side.LONG, True))
+    payload = json.loads(canonical_json_bytes(plan.payload()))
+    assert "overlay_payload" in payload
+    _validate_v3_plan_semantics(payload)
+    missing = dict(payload)
+    missing.pop("overlay_payload")
+    with pytest.raises(OutcomeError, match="BUNDLE_PLAN_INVALID"):
+        _validate_v3_plan_semantics(missing)
 
 
 @pytest.mark.parametrize("side", [Side.LONG, Side.SHORT])

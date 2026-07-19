@@ -30,6 +30,7 @@ from trader_assist_v0.first_launch.strategy import (
     _round_price,
     _trade_digest,
     advance_prepare,
+    apply_volatility_overlay,
     bounded_explanation,
     build_plan,
     evaluate_signal,
@@ -37,6 +38,7 @@ from trader_assist_v0.first_launch.strategy import (
     risk_math,
     round_quantity,
     size_plan,
+    wilder_atr14,
 )
 
 NOW = datetime(2026, 7, 14, tzinfo=UTC)
@@ -209,6 +211,15 @@ def test_production_authority_matrix(family: SetupFamily, side: Side, fast: bool
         output.raw_chase_limit,
         output.raw_stop,
     )
+
+
+def test_c1_f004_normal_overlay_serializes_five_minute_span() -> None:
+    candles, _ = _history(SetupFamily.SWEEP_RECLAIM, Side.LONG, True)
+    output = _confirmed(SetupFamily.SWEEP_RECLAIM, Side.LONG, True)
+    overlay = apply_volatility_overlay(output, wilder_atr14(candles), candles, output.raw_entry_low)
+    assert overlay.regime is not None
+    if overlay.regime.value in {"NORMAL", "HIGH"}:
+        assert overlay.selected_decision_span == 5
 
 
 def test_plan_rejects_coherently_rehashed_strategy_substitution() -> None:

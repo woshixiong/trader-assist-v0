@@ -228,13 +228,16 @@ def apply_volatility_overlay(
     ):
         raise PlanError("OVERLAY_REFERENCE_INVALID")
     if (
-        not candles
+        len(candles) != 64
         or candles[-1].identity != output.decision_trigger_identity
         or candles[-1].canonical_hash != output.decision_trigger_canonical_hash
         or volatility.candle_cutoff_identity != output.decision_trigger_identity
+        or tuple(item.identity for item in candles) != volatility.candle_identities
+        or tuple(item.canonical_hash for item in candles) != volatility.candle_hashes
     ):
         raise PlanError("OVERLAY_CUTOFF_CORRESPONDENCE_INVALID")
     support, span, c30, c60 = longer_window_support(output.side, candles)
+    selected_span = span if volatility.regime is VolatilityRegime.LOW else 5
     limit = output.raw_chase_limit
 
     def issued(state: SignalState, actionable: bool, action: str, reason: str) -> OverlayDecision:
@@ -249,7 +252,7 @@ def apply_volatility_overlay(
             state,
             actionable,
             volatility.regime,
-            span,
+            selected_span,
             action,
             reason,
             limit,
@@ -267,9 +270,12 @@ def apply_volatility_overlay(
 
     if volatility.regime is VolatilityRegime.EXTREME:
         return issued(SignalState.WATCH, False, "EXTREME_VETO", "EXTREME_NON_ACTIONABLE")
-    if volatility.regime is VolatilityRegime.LOW and output.speed == "FAST" and not support:
+    if volatility.regime is VolatilityRegime.LOW and not support:
         return issued(
-            SignalState.PREPARE, False, "LOW_DOWNGRADE", "LOW_AWAITING_LONGER_WINDOW_SUPPORT"
+            SignalState.PREPARE if output.speed == "FAST" else SignalState.WATCH,
+            False,
+            "LOW_DOWNGRADE" if output.speed == "FAST" else "LOW_SUPPORT_REQUIRED",
+            "LOW_AWAITING_LONGER_WINDOW_SUPPORT",
         )
     if volatility.regime is VolatilityRegime.HIGH:
         limit = output.provenance.boundary + Decimal("0.75") * (
@@ -1165,6 +1171,9 @@ class TradePlan:
     effective_max_notional: Decimal = Decimal("1")
     risk_configuration_version: str = ""
     risk_configuration_hash: str = ""
+    configuration_account_equity_text: str = ""
+    configuration_risk_pct_text: str = ""
+    configuration_max_notional_text: str | None = None
     manual_execution_required: Literal[True] = True
     submission_status: Literal["NOT_SUBMITTED"] = "NOT_SUBMITTED"
     volatility_snapshot: VolatilitySnapshot | None = None
@@ -1367,8 +1376,19 @@ class TradePlan:
             self.mark_price != context.current.mark_price
             or self.mid_price != context.current.mid_price
             or self.reference != context.current.reference_price
+            or self.plan_evaluation_cutoff < output.created_at
+            or self.plan_evaluation_cutoff > output.expires_at
         ):
             raise PlanError("TRADE_PLAN_CONTEXT_INVALID")
+        if self.volatility_regime is VolatilityRegime.LOW and self.selected_decision_span not in {
+            30,
+            60,
+        }:
+            raise PlanError("TRADE_PLAN_OVERLAY_CORRESPONDENCE_INVALID")
+        if self.volatility_regime in {VolatilityRegime.NORMAL, VolatilityRegime.HIGH} and (
+            self.selected_decision_span != 5
+        ):
+            raise PlanError("TRADE_PLAN_OVERLAY_CORRESPONDENCE_INVALID")
         if (
             self.candle_cutoff_identity != self.decision_trigger_identity
             or self.candle_cutoff_close_time_ms != self.decision_trigger_open_time_ms + 300_000
@@ -1576,7 +1596,11 @@ def _trade_plan_payload(values: dict[str, object]) -> dict[str, object]:
         "effective_max_notional": values["effective_max_notional"],
         "risk_configuration_version": values["risk_configuration_version"],
         "risk_configuration_hash": values["risk_configuration_hash"],
+        "configuration_account_equity_text": values["configuration_account_equity_text"],
+        "configuration_risk_pct_text": values["configuration_risk_pct_text"],
+        "configuration_max_notional_text": values["configuration_max_notional_text"],
         "volatility_snapshot": cast(VolatilitySnapshot, values["volatility_snapshot"]).payload(),
+        "overlay_payload": cast(OverlayDecision, values["overlay"]).payload(),
         "overlay_hash": cast(OverlayDecision, values["overlay"]).canonical_hash,
     }
 
@@ -1604,6 +1628,8 @@ def _context_summary_payload(value: ContextSummary) -> dict[str, object]:
         "classification_15m": None
         if value.classification_15m is None
         else value.classification_15m.value,
+        "selection_proof": [item.payload() for item in value.selection_proof],
+        "selection_proof_hashes": [item.canonical_hash for item in value.selection_proof],
         "canonical_hash": value.canonical_hash,
     }
 
@@ -1845,6 +1871,11 @@ def build_plan(
         "effective_max_notional": raw_risk.effective_max_notional,
         "risk_configuration_version": configuration.configuration_version,
         "risk_configuration_hash": configuration.configuration_hash,
+        "configuration_account_equity_text": str(configuration.account_equity_usd),
+        "configuration_risk_pct_text": str(configuration.risk_per_trade_pct),
+        "configuration_max_notional_text": (
+            None if configuration.max_notional_usd is None else str(configuration.max_notional_usd)
+        ),
         "manual_execution_required": True,
         "submission_status": "NOT_SUBMITTED",
         "volatility_snapshot": volatility,

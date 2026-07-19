@@ -7,7 +7,9 @@ from trader_assist_v0.first_launch.market_data import context_from_websocket, ev
 from trader_assist_v0.first_launch.signal_context import (
     ContextError,
     ContextSeries,
+    ContextSummary,
     PriceOiClassification,
+    _validated_context_summary,
 )
 
 
@@ -50,3 +52,15 @@ def test_retention_uses_the_latest_retained_observation_not_a_late_arrival() -> 
     # Exact boundary remains permitted.
     accepted = series.accept(_observation(1, "100", "10"))
     assert accepted.received_at == datetime(2026, 7, 14, tzinfo=UTC) + timedelta(seconds=1)
+
+
+def test_c1_f002_direct_summary_creation_is_not_plan_authority() -> None:
+    series = ContextSeries()
+    first = series.accept(_observation(0, "100", "10"))
+    current = series.accept(_observation(300, "101", "11"))
+    direct = ContextSummary.create(current, first, None, current.received_at)
+    with pytest.raises(ContextError, match="AUTHORITY"):
+        _validated_context_summary(direct)
+    issued = series.summary_at(current.received_at)
+    assert issued is not None
+    assert _validated_context_summary(issued) is issued

@@ -150,6 +150,7 @@ class ContextSummary:
     classification_5m: PriceOiClassification | None
     classification_15m: PriceOiClassification | None
     canonical_hash: str
+    selection_proof: tuple[ContextObservation, ...] = ()
 
     @classmethod
     def create(
@@ -159,74 +160,92 @@ class ContextSummary:
         fifteen: ContextObservation | None,
         cutoff: datetime,
     ) -> ContextSummary:
-        current = _validated_context_observation(current)
-        if five is not None:
-            five = _validated_context_observation(five)
-        if fifteen is not None:
-            fifteen = _validated_context_observation(fifteen)
-        if cutoff.tzinfo is None:
-            raise ContextError("CONTEXT_CUTOFF_INVALID")
-        cutoff = cutoff.astimezone(UTC)
-        if (
-            current.received_at > cutoff
-            or (five is not None and five.received_at > current.received_at)
-            or (fifteen is not None and fifteen.received_at > current.received_at)
-        ):
-            raise ContextError("CONTEXT_SUMMARY_CAUSAL_INVALID")
+        """Create a value for display only; it is never plan-issued authority."""
+        return _build_summary(current, five, fifteen, cutoff, (), issue=False)
 
-        def values(
-            base: ContextObservation | None,
-        ) -> tuple[Decimal | None, Decimal | None, Decimal | None, PriceOiClassification | None]:
-            if base is None:
-                return None, None, None, None
-            oi = current.open_interest - base.open_interest
-            pct = None if base.open_interest == 0 else oi / base.open_interest * Decimal("100")
-            price = current.reference_price - base.reference_price
-            category = None
-            if price and oi:
-                category = PriceOiClassification(
-                    "PRICE_"
-                    + ("UP" if price > 0 else "DOWN")
-                    + "_OI_"
-                    + ("UP" if oi > 0 else "DOWN")
-                )
-            return oi, pct, current.funding - base.funding, category
 
-        oi5, pct5, funding5, cls5 = values(five)
-        oi15, pct15, funding15, cls15 = values(fifteen)
-        body = {
-            "current": current.payload(),
-            "current_hash": current.canonical_hash,
-            "baseline_5m": None if five is None else five.payload(),
-            "baseline_5m_hash": None if five is None else five.canonical_hash,
-            "baseline_15m": None if fifteen is None else fifteen.payload(),
-            "baseline_15m_hash": None if fifteen is None else fifteen.canonical_hash,
-            "summary_cutoff": cutoff.isoformat(),
-            "oi_delta_5m": oi5,
-            "oi_pct_delta_5m": pct5,
-            "oi_delta_15m": oi15,
-            "oi_pct_delta_15m": pct15,
-            "funding_delta_5m": funding5,
-            "funding_delta_15m": funding15,
-            "classification_5m": cls5,
-            "classification_15m": cls15,
-        }
-        summary = cls(
-            current,
-            five,
-            fifteen,
-            cutoff,
-            oi5,
-            pct5,
-            oi15,
-            pct15,
-            funding5,
-            funding15,
-            cls5,
-            cls15,
-            _hash(body),
-        )
-        return _issue(summary, _summary_fingerprint(summary))  # type: ignore[return-value]
+def _build_summary(
+    current: ContextObservation,
+    five: ContextObservation | None,
+    fifteen: ContextObservation | None,
+    cutoff: datetime,
+    proof: tuple[ContextObservation, ...],
+    *,
+    issue: bool,
+) -> ContextSummary:
+    current = _validated_context_observation(current)
+    if five is not None:
+        five = _validated_context_observation(five)
+    if fifteen is not None:
+        fifteen = _validated_context_observation(fifteen)
+    if cutoff.tzinfo is None:
+        raise ContextError("CONTEXT_CUTOFF_INVALID")
+    cutoff = cutoff.astimezone(UTC)
+    if (
+        current.received_at > cutoff
+        or (five is not None and five.received_at > current.received_at)
+        or (fifteen is not None and fifteen.received_at > current.received_at)
+    ):
+        raise ContextError("CONTEXT_SUMMARY_CAUSAL_INVALID")
+
+    def values(
+        base: ContextObservation | None,
+    ) -> tuple[Decimal | None, Decimal | None, Decimal | None, PriceOiClassification | None]:
+        if base is None:
+            return None, None, None, None
+        oi = current.open_interest - base.open_interest
+        pct = None if base.open_interest == 0 else oi / base.open_interest * Decimal("100")
+        price = current.reference_price - base.reference_price
+        category = None
+        if price and oi:
+            category = PriceOiClassification(
+                "PRICE_" + ("UP" if price > 0 else "DOWN") + "_OI_" + ("UP" if oi > 0 else "DOWN")
+            )
+        return oi, pct, current.funding - base.funding, category
+
+    oi5, pct5, funding5, cls5 = values(five)
+    oi15, pct15, funding15, cls15 = values(fifteen)
+    ordered = tuple(sorted(proof, key=lambda item: (item.received_at, item.receive_sequence)))
+    if ordered != proof or any(item.received_at > cutoff for item in ordered):
+        raise ContextError("CONTEXT_SELECTION_PROOF_INVALID")
+    body = {
+        "current": current.payload(),
+        "current_hash": current.canonical_hash,
+        "baseline_5m": None if five is None else five.payload(),
+        "baseline_5m_hash": None if five is None else five.canonical_hash,
+        "baseline_15m": None if fifteen is None else fifteen.payload(),
+        "baseline_15m_hash": None if fifteen is None else fifteen.canonical_hash,
+        "summary_cutoff": cutoff.isoformat(),
+        "oi_delta_5m": oi5,
+        "oi_pct_delta_5m": pct5,
+        "oi_delta_15m": oi15,
+        "oi_pct_delta_15m": pct15,
+        "funding_delta_5m": funding5,
+        "funding_delta_15m": funding15,
+        "classification_5m": cls5,
+        "classification_15m": cls15,
+        "selection_proof": [item.payload() for item in ordered],
+        "selection_proof_hashes": [item.canonical_hash for item in ordered],
+    }
+    summary = ContextSummary(
+        current,
+        five,
+        fifteen,
+        cutoff,
+        oi5,
+        pct5,
+        oi15,
+        pct15,
+        funding5,
+        funding15,
+        cls5,
+        cls15,
+        _hash(body),
+        ordered,
+    )
+    if not issue:
+        return summary
+    return _issue(summary, _summary_fingerprint(summary))  # type: ignore[return-value]
 
 
 def _summary_fingerprint(value: ContextSummary) -> str:
@@ -237,6 +256,33 @@ def _summary_fingerprint(value: ContextSummary) -> str:
     fifteen = (
         None if value.baseline_15m is None else _validated_context_observation(value.baseline_15m)
     )
+    proof = tuple(_validated_context_observation(item) for item in value.selection_proof)
+    if (
+        not proof
+        or tuple(sorted(proof, key=lambda item: (item.received_at, item.receive_sequence))) != proof
+    ):
+        raise ContextError("CONTEXT_SELECTION_PROOF_INVALID")
+    eligible = tuple(item for item in proof if item.received_at <= value.summary_cutoff)
+    if not eligible or current is not eligible[-1]:
+        raise ContextError("CONTEXT_SELECTION_PROOF_INVALID")
+    expected_five = next(
+        (
+            item
+            for item in reversed(eligible)
+            if item.received_at <= current.received_at - timedelta(minutes=5)
+        ),
+        None,
+    )
+    expected_fifteen = next(
+        (
+            item
+            for item in reversed(eligible)
+            if item.received_at <= current.received_at - timedelta(minutes=15)
+        ),
+        None,
+    )
+    if five is not expected_five or fifteen is not expected_fifteen:
+        raise ContextError("CONTEXT_SELECTION_PROOF_INVALID")
 
     def derived(
         base: ContextObservation | None,
@@ -271,6 +317,8 @@ def _summary_fingerprint(value: ContextSummary) -> str:
         "funding_delta_15m": funding15,
         "classification_5m": classification5,
         "classification_15m": classification15,
+        "selection_proof": [item.payload() for item in proof],
+        "selection_proof_hashes": [item.canonical_hash for item in proof],
     }
     if (
         (value.oi_delta_5m, value.oi_pct_delta_5m, value.funding_delta_5m, value.classification_5m)
@@ -335,9 +383,11 @@ class ContextSeries:
             selected = [item for item in choices if item.received_at <= moment]
             return selected[-1] if selected else None
 
-        return ContextSummary.create(
+        return _build_summary(
             current,
             before(current.received_at - timedelta(minutes=5)),
             before(current.received_at - timedelta(minutes=15)),
             cutoff.astimezone(UTC),
+            tuple(choices),
+            issue=True,
         )

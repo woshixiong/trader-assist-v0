@@ -510,9 +510,13 @@ def _validate_v3_plan_semantics(plan: dict[str, object]) -> tuple[str, dict[str,
         "effective_max_notional",
         "risk_configuration_version",
         "risk_configuration_hash",
+        "configuration_account_equity_text",
+        "configuration_risk_pct_text",
+        "configuration_max_notional_text",
         "manual_execution_required",
         "submission_status",
         "volatility_snapshot",
+        "overlay_payload",
         "overlay_hash",
     }
     if set(plan) != v2_keys | additions or plan.get("trade_plan_version") != TRADE_PLAN_VERSION:
@@ -625,6 +629,20 @@ def _validate_v3_plan_semantics(plan: dict[str, object]) -> tuple[str, dict[str,
         or _HASH_RE.fullmatch(cast(str, plan["overlay_hash"])) is None
     ):
         raise OutcomeError("BUNDLE_PLAN_INVALID")
+    overlay = plan.get("overlay_payload")
+    if (
+        type(overlay) is not dict
+        or hashlib.sha256(canonical_json_bytes(overlay)).hexdigest() != plan.get("overlay_hash")
+        or overlay.get("regime") != plan.get("volatility_regime")
+        or overlay.get("selected_decision_span") != plan.get("selected_decision_span")
+        or overlay.get("action") != plan.get("overlay_action")
+        or overlay.get("reason") != plan.get("overlay_reason")
+        or overlay.get("effective_raw_chase_limit") != plan.get("effective_raw_chase_limit")
+        or overlay.get("reference_price") != plan.get("reference")
+        or overlay.get("volatility_hash")
+        != hashlib.sha256(canonical_json_bytes(source)).hexdigest()
+    ):
+        raise OutcomeError("BUNDLE_PLAN_INVALID")
     multiplier = Decimal("0.75") if plan["volatility_regime"] == "HIGH" else Decimal("1")
     if (
         values["risk_multiplier"] != multiplier
@@ -638,9 +656,13 @@ def _validate_v3_plan_semantics(plan: dict[str, object]) -> tuple[str, dict[str,
     try:
         configuration = RiskConfiguration(
             cast(str, plan.get("risk_configuration_version")),
-            values["account_equity"],
-            values["configured_risk_per_trade_pct"],
-            cast(Decimal | None, configured_max),
+            Decimal(cast(str, plan.get("configuration_account_equity_text"))),
+            Decimal(cast(str, plan.get("configuration_risk_pct_text"))),
+            (
+                None
+                if plan.get("configuration_max_notional_text") is None
+                else Decimal(cast(str, plan.get("configuration_max_notional_text")))
+            ),
             cast(str, plan.get("risk_configuration_hash")),
         )
         expected_risk, _ = size_plan_v3(
@@ -743,6 +765,8 @@ def _validate_v3_plan_semantics(plan: dict[str, object]) -> tuple[str, dict[str,
         "funding_delta_15m": context.get("funding_delta_15m"),
         "classification_5m": context.get("classification_5m"),
         "classification_15m": context.get("classification_15m"),
+        "selection_proof": context.get("selection_proof"),
+        "selection_proof_hashes": context.get("selection_proof_hashes"),
     }
     if hashlib.sha256(canonical_json_bytes(context_body)).hexdigest() != plan.get("context_hash"):
         raise OutcomeError("BUNDLE_PLAN_INVALID")
@@ -754,9 +778,13 @@ def _validate_v3_plan_semantics(plan: dict[str, object]) -> tuple[str, dict[str,
         raise OutcomeError("BUNDLE_PLAN_INVALID")
     expected_configuration = RiskConfiguration.digest(
         cast(str, plan.get("risk_configuration_version")),
-        values["account_equity"],
-        values["configured_risk_per_trade_pct"],
-        cast(Decimal | None, configured_max),
+        Decimal(cast(str, plan.get("configuration_account_equity_text"))),
+        Decimal(cast(str, plan.get("configuration_risk_pct_text"))),
+        (
+            None
+            if plan.get("configuration_max_notional_text") is None
+            else Decimal(cast(str, plan.get("configuration_max_notional_text")))
+        ),
     )
     if plan.get("risk_configuration_hash") != expected_configuration:
         raise OutcomeError("BUNDLE_PLAN_INVALID")
