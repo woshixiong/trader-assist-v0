@@ -294,7 +294,7 @@ def apply_volatility_overlay(
 
 def wilder_atr14(candles: tuple[Candle, ...]) -> VolatilitySnapshot:
     """Compute the exact 64-candle Wilder sequence, causally bound to candles."""
-    if len(candles) < 64:
+    if len(candles) != 64:
         raise PlanError("ATR_WARMING")
     values = candles[-64:]
     for candle in values:

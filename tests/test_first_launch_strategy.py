@@ -12,14 +12,18 @@ from trader_assist_v0.first_launch.market_data import (
     Candle,
     DataQualityState,
     EthMarketData,
+    MarketDataError,
+    RollingComposite,
     StrategySnapshot,
     candle_from_websocket,
     context_from_websocket,
     evidence_from_raw,
     metadata_from_info,
+    rolling_composite,
 )
 from trader_assist_v0.first_launch.strategy import (
     AIExplanation,
+    OverlayDecision,
     PlanError,
     PreparedSetup,
     SetupFamily,
@@ -27,8 +31,13 @@ from trader_assist_v0.first_launch.strategy import (
     Signal,
     SignalState,
     StrategyOutput,
+    VolatilityRegime,
+    VolatilitySnapshot,
+    _hash,
     _round_price,
     _trade_digest,
+    _validated_overlay_decision,
+    _validated_volatility_snapshot,
     advance_prepare,
     apply_volatility_overlay,
     bounded_explanation,
@@ -928,3 +937,524 @@ def test_trade_plan_payload_rejects_invalid_provenance_without_assert() -> None:
     object.__setattr__(candidate, "provenance", object())
     with pytest.raises(PlanError, match="TRADE_PLAN_PROVENANCE_INVALID"):
         candidate.payload()
+
+
+# ============================================================
+# C2A VOLATILITY MATRIX — Helpers
+# ============================================================
+
+
+def _atr_candles(n: int = 64) -> tuple[Candle, ...]:
+    """Generate n continuous 5m candles ending at relative index 0."""
+    return tuple(_candle(i * 300_000) for i in range(-(n - 1), 1))
+
+
+def _issued_volatility() -> tuple[VolatilitySnapshot, tuple[Candle, ...]]:
+    """Return (volatility, candles) for a standard 64-candle ATR snapshot."""
+    candles = _atr_candles(64)
+    return wilder_atr14(candles), candles
+
+
+def _reconstruct_volatility(original: VolatilitySnapshot) -> VolatilitySnapshot:
+    """Reconstruct a VolatilitySnapshot via object.__new__ (loses issuance)."""
+    forged = object.__new__(VolatilitySnapshot)
+    for field_name in original.__dict__:
+        object.__setattr__(forged, field_name, getattr(original, field_name))
+    return forged
+
+
+def _coherently_rehash_volatility(
+    original: VolatilitySnapshot, **updates: object
+) -> VolatilitySnapshot:
+    """Rehash a VolatilitySnapshot after mutation (canonical_hash matches payload)."""
+    forged = copy.copy(original)
+    for field_name, value in updates.items():
+        object.__setattr__(forged, field_name, value)
+    object.__setattr__(forged, "canonical_hash", _hash(forged.payload()))
+    return forged
+
+
+def _overlay_context() -> tuple[
+    OverlayDecision, VolatilitySnapshot, tuple[Candle, ...], StrategyOutput
+]:
+    """Return (overlay, volatility, candles, output) for overlay correspondence tests."""
+    candles, _ = _history(SetupFamily.SWEEP_RECLAIM, Side.LONG, True)
+    output = _confirmed(SetupFamily.SWEEP_RECLAIM, Side.LONG, True)
+    volatility = wilder_atr14(candles)
+    overlay = apply_volatility_overlay(output, volatility, candles, output.raw_entry_low)
+    return overlay, volatility, candles, output
+
+
+# ============================================================
+# C2A VOLATILITY MATRIX A. SOURCE SIZE
+# ============================================================
+
+
+def test_c2a_vol_a01_exactly_64_candles_accepted() -> None:
+    """Exactly 64 issued continuous 5m candles are accepted by wilder_atr14."""
+    candles = _atr_candles(64)
+    snapshot = wilder_atr14(candles)
+    assert snapshot is not None
+    assert len(snapshot.candle_identities) == 64
+
+
+def test_c2a_vol_a02_63_candles_rejected() -> None:
+    """63 candles are rejected (insufficient warmup)."""
+    candles = _atr_candles(63)
+    with pytest.raises(PlanError):
+        wilder_atr14(candles)
+
+
+def test_c2a_vol_a03_65_candles_rejected() -> None:
+    """65 candles are rejected — the source must be exactly 64, not silently truncated."""
+    candles = _atr_candles(65)
+    with pytest.raises(PlanError):
+        wilder_atr14(candles)
+
+
+def test_c2a_vol_a04_empty_source_rejected() -> None:
+    """An empty candle tuple is rejected."""
+    with pytest.raises(PlanError):
+        wilder_atr14(())
+
+
+# ============================================================
+# C2A VOLATILITY MATRIX B. COMPLETE SOURCE CORRESPONDENCE
+# ============================================================
+
+
+def test_c2a_vol_b01_candle_identities_match_snapshot() -> None:
+    """VolatilitySnapshot identities match the source candles in order."""
+    volatility, candles = _issued_volatility()
+    assert volatility.candle_identities == tuple(c.identity for c in candles)
+
+
+def test_c2a_vol_b02_candle_hashes_match_snapshot() -> None:
+    """VolatilitySnapshot hashes match the source candles in order."""
+    volatility, candles = _issued_volatility()
+    assert volatility.candle_hashes == tuple(c.canonical_hash for c in candles)
+
+
+def test_c2a_vol_b03_reordered_source_rejected() -> None:
+    """A reordered source is rejected by wilder_atr14 (spacing check)."""
+    candles = _atr_candles(64)
+    reordered = tuple(reversed(candles))
+    with pytest.raises(PlanError):
+        wilder_atr14(reordered)
+
+
+def test_c2a_vol_b04_shortened_source_rejected() -> None:
+    """A shortened source (63 candles) is rejected by wilder_atr14."""
+    candles = _atr_candles(64)
+    with pytest.raises(PlanError):
+        wilder_atr14(candles[:-1])
+
+
+def test_c2a_vol_b05_extended_source_rejected_by_overlay() -> None:
+    """apply_volatility_overlay rejects an extended source (65 candles)."""
+    _, volatility, candles, output = _overlay_context()
+    extra = _candle(candles[-1].open_time_ms + 300_000)
+    extended = (*candles, extra)
+    with pytest.raises(PlanError, match="OVERLAY_CUTOFF_CORRESPONDENCE_INVALID"):
+        apply_volatility_overlay(output, volatility, extended, output.raw_entry_low)
+
+
+def test_c2a_vol_b06_same_final_trigger_different_history_rejected() -> None:
+    """Same final trigger with different earlier history is rejected by the overlay."""
+    _, volatility, candles, output = _overlay_context()
+    different_earlier = list(candles)
+    # Replace the first candle with one at a different open_time (different identity).
+    different_earlier[0] = _candle(candles[0].open_time_ms - 300_000)
+    candles_b = tuple(different_earlier)
+    assert candles_b[-1] is candles[-1]  # Same final trigger
+    assert candles_b[0].identity != candles[0].identity  # Different earlier history
+    with pytest.raises(PlanError, match="OVERLAY_CUTOFF_CORRESPONDENCE_INVALID"):
+        apply_volatility_overlay(output, volatility, candles_b, output.raw_entry_low)
+
+
+def test_c2a_vol_b07_same_identity_altered_hash_rejected() -> None:
+    """Same identity with altered canonical hash is rejected by the overlay."""
+    _, volatility, candles, output = _overlay_context()
+    altered = list(candles)
+    # Replace an earlier candle with one at the same open_time but different OHLC.
+    altered[-2] = _candle(candles[-2].open_time_ms, close="105")
+    candles_b = tuple(altered)
+    assert candles_b[-2].identity == candles[-2].identity  # Same identity
+    assert candles_b[-2].canonical_hash != candles[-2].canonical_hash  # Different hash
+    with pytest.raises(PlanError, match="OVERLAY_CUTOFF_CORRESPONDENCE_INVALID"):
+        apply_volatility_overlay(output, volatility, candles_b, output.raw_entry_low)
+
+
+def test_c2a_vol_b08_altered_identity_rejected() -> None:
+    """An altered candle identity is rejected by the overlay."""
+    _, volatility, candles, output = _overlay_context()
+    altered = list(candles)
+    # Replace the second candle with one at a different open_time.
+    altered[1] = _candle(candles[1].open_time_ms + 600_000)
+    candles_b = tuple(altered)
+    assert candles_b[1].identity != candles[1].identity
+    with pytest.raises(PlanError, match="OVERLAY_CUTOFF_CORRESPONDENCE_INVALID"):
+        apply_volatility_overlay(output, volatility, candles_b, output.raw_entry_low)
+
+
+def test_c2a_vol_b09_duplicate_identity_rejected() -> None:
+    """Duplicate identity (same open_time twice) is rejected by wilder_atr14."""
+    candles = _atr_candles(64)
+    duplicated = list(candles)
+    # Replace the second candle with a copy of the first (same identity).
+    duplicated[1] = candles[0]
+    with pytest.raises(PlanError):
+        wilder_atr14(tuple(duplicated))
+
+
+def test_c2a_vol_b10_duplicate_conflicting_hash_rejected() -> None:
+    """Duplicate identity with a conflicting hash is rejected by wilder_atr14."""
+    candles = _atr_candles(64)
+    duplicated = list(candles)
+    # Create a candle at the same open_time as the first but with different OHLC.
+    conflicting = _candle(candles[0].open_time_ms, close="105")
+    duplicated[1] = conflicting
+    with pytest.raises(PlanError):
+        wilder_atr14(tuple(duplicated))
+
+
+def test_c2a_vol_b11_source_gap_rejected() -> None:
+    """A source gap (missing candle in the middle) is rejected by wilder_atr14."""
+    candles = _atr_candles(64)
+    # Remove a middle candle and append a filler to keep count at 64.
+    gapped = [*list(candles[:32]), *list(candles[33:])]
+    # Add a candle at the end to maintain 64 count.
+    gapped = (*gapped, _candle(candles[-1].open_time_ms + 300_000))
+    with pytest.raises(PlanError):
+        wilder_atr14(gapped)
+
+
+def test_c2a_vol_b12_non_5m_candle_rejected() -> None:
+    """A non-5m candle in the source is rejected by VolatilitySnapshot validation."""
+    candles = list(_atr_candles(64))
+    # Replace the last candle with a 15m candle at the same open_time.
+    last = candles[-1]
+    candles[-1] = _candle(last.open_time_ms, interval="15m")
+    with pytest.raises(PlanError):
+        wilder_atr14(tuple(candles))
+
+
+def test_c2a_vol_b13_wrong_final_decision_trigger_rejected() -> None:
+    """A wrong final decision trigger in the overlay is rejected."""
+    _, volatility, candles, output = _overlay_context()
+    # Use candles[:-1] + a different candle at a different open_time.
+    wrong_final = _candle(candles[-1].open_time_ms + 300_000)
+    candles_b = (*candles[:-1], wrong_final)
+    with pytest.raises(PlanError, match="OVERLAY_CUTOFF_CORRESPONDENCE_INVALID"):
+        apply_volatility_overlay(output, volatility, candles_b, output.raw_entry_low)
+
+
+def test_c2a_vol_b14_wrong_volatility_cutoff_identity_rejected() -> None:
+    """A volatility cutoff identity that differs from the decision trigger is rejected."""
+    _, volatility, candles, output = _overlay_context()
+    # Build a different volatility from a shifted candle tuple.
+    shifted = _atr_candles(64)
+    other_volatility = wilder_atr14(shifted)
+    assert other_volatility.candle_cutoff_identity != volatility.candle_cutoff_identity
+    with pytest.raises(PlanError, match="OVERLAY_CUTOFF_CORRESPONDENCE_INVALID"):
+        apply_volatility_overlay(output, other_volatility, candles, output.raw_entry_low)
+
+
+def test_c2a_vol_b15_wrong_volatility_cutoff_close_time_rejected() -> None:
+    """A wrong cutoff close time on the snapshot is rejected by __post_init__."""
+    volatility, _ = _issued_volatility()
+    wrong_close = volatility.candle_cutoff_close_time_ms + 1
+    object.__setattr__(volatility, "candle_cutoff_close_time_ms", wrong_close)
+    with pytest.raises(PlanError, match="AUTHORITY"):
+        _validated_volatility_snapshot(volatility)
+
+
+# ============================================================
+# C2A VOLATILITY MATRIX C. VOLATILITY AUTHORITY ATTACKS
+# ============================================================
+
+
+def test_c2a_vol_c01_directly_constructed_snapshot_rejected() -> None:
+    """A directly constructed VolatilitySnapshot has no issuance authority."""
+    volatility, _ = _issued_volatility()
+    direct = VolatilitySnapshot(
+        volatility.current_atr,
+        volatility.previous_48_median_atr,
+        volatility.atr_ratio,
+        volatility.regime,
+        volatility.candle_cutoff_identity,
+        volatility.candle_cutoff_close_time_ms,
+        volatility.candle_identities,
+        volatility.candle_hashes,
+        volatility.canonical_hash,
+    )
+    with pytest.raises(PlanError, match="AUTHORITY"):
+        _validated_volatility_snapshot(direct)
+
+
+def test_c2a_vol_c02_copied_snapshot_rejected() -> None:
+    """A copied VolatilitySnapshot loses issuance authority."""
+    volatility, _ = _issued_volatility()
+    forged = copy.copy(volatility)
+    with pytest.raises(PlanError, match="AUTHORITY"):
+        _validated_volatility_snapshot(forged)
+
+
+def test_c2a_vol_c03_dataclass_replaced_snapshot_rejected() -> None:
+    """A dataclass-replaced VolatilitySnapshot loses issuance authority."""
+    volatility, _ = _issued_volatility()
+    forged = replace(volatility, current_atr=volatility.current_atr)
+    with pytest.raises(PlanError, match="AUTHORITY"):
+        _validated_volatility_snapshot(forged)
+
+
+def test_c2a_vol_c04_reconstructed_snapshot_rejected() -> None:
+    """A reconstructed VolatilitySnapshot loses issuance authority."""
+    volatility, _ = _issued_volatility()
+    forged = _reconstruct_volatility(volatility)
+    with pytest.raises(PlanError, match="AUTHORITY"):
+        _validated_volatility_snapshot(forged)
+
+
+def test_c2a_vol_c05_tampered_candle_identity_rejected() -> None:
+    """Tampering with a candle identity is rejected."""
+    volatility, _ = _issued_volatility()
+    tampered_identities = list(volatility.candle_identities)
+    original = tampered_identities[0]
+    tampered_identities[0] = (original[0], original[1], original[2] + 1)
+    object.__setattr__(volatility, "candle_identities", tuple(tampered_identities))
+    with pytest.raises(PlanError, match="AUTHORITY"):
+        _validated_volatility_snapshot(volatility)
+
+
+def test_c2a_vol_c06_tampered_candle_hash_rejected() -> None:
+    """Tampering with a candle hash is rejected."""
+    volatility, _ = _issued_volatility()
+    tampered_hashes = list(volatility.candle_hashes)
+    tampered_hashes[0] = "a" * 64
+    object.__setattr__(volatility, "candle_hashes", tuple(tampered_hashes))
+    with pytest.raises(PlanError, match="AUTHORITY"):
+        _validated_volatility_snapshot(volatility)
+
+
+def test_c2a_vol_c07_tampered_cutoff_identity_rejected() -> None:
+    """Tampering with the cutoff identity is rejected."""
+    volatility, _ = _issued_volatility()
+    base_id = volatility.candle_cutoff_identity
+    wrong_cutoff = (base_id[0], base_id[1], base_id[2] + 1)
+    object.__setattr__(volatility, "candle_cutoff_identity", wrong_cutoff)
+    with pytest.raises(PlanError, match="AUTHORITY"):
+        _validated_volatility_snapshot(volatility)
+
+
+def test_c2a_vol_c08_tampered_cutoff_close_time_rejected() -> None:
+    """Tampering with the cutoff close time is rejected."""
+    volatility, _ = _issued_volatility()
+    object.__setattr__(
+        volatility,
+        "candle_cutoff_close_time_ms",
+        volatility.candle_cutoff_close_time_ms + 1,
+    )
+    with pytest.raises(PlanError, match="AUTHORITY"):
+        _validated_volatility_snapshot(volatility)
+
+
+def test_c2a_vol_c09_tampered_atr_rejected() -> None:
+    """Tampering with current_atr is rejected."""
+    volatility, _ = _issued_volatility()
+    object.__setattr__(volatility, "current_atr", volatility.current_atr + Decimal("1"))
+    with pytest.raises(PlanError, match="AUTHORITY"):
+        _validated_volatility_snapshot(volatility)
+
+
+def test_c2a_vol_c10_tampered_previous_48_median_rejected() -> None:
+    """Tampering with previous_48_median_atr is rejected."""
+    volatility, _ = _issued_volatility()
+    object.__setattr__(
+        volatility,
+        "previous_48_median_atr",
+        volatility.previous_48_median_atr + Decimal("1"),
+    )
+    with pytest.raises(PlanError, match="AUTHORITY"):
+        _validated_volatility_snapshot(volatility)
+
+
+def test_c2a_vol_c11_tampered_ratio_rejected() -> None:
+    """Tampering with atr_ratio is rejected."""
+    volatility, _ = _issued_volatility()
+    object.__setattr__(volatility, "atr_ratio", volatility.atr_ratio + Decimal("1"))
+    with pytest.raises(PlanError, match="AUTHORITY"):
+        _validated_volatility_snapshot(volatility)
+
+
+def test_c2a_vol_c12_tampered_regime_rejected() -> None:
+    """Tampering with regime is rejected."""
+    volatility, _ = _issued_volatility()
+    # Swap regime to a different valid value.
+    original_regime = volatility.regime
+    if original_regime is not VolatilityRegime.EXTREME:
+        new_regime = VolatilityRegime.EXTREME
+    else:
+        new_regime = VolatilityRegime.LOW
+    object.__setattr__(volatility, "regime", new_regime)
+    with pytest.raises(PlanError, match="AUTHORITY"):
+        _validated_volatility_snapshot(volatility)
+
+
+def test_c2a_vol_c13_altered_canonical_hash_rejected() -> None:
+    """An altered canonical_hash is rejected."""
+    volatility, _ = _issued_volatility()
+    object.__setattr__(volatility, "canonical_hash", "b" * 64)
+    with pytest.raises(PlanError, match="AUTHORITY"):
+        _validated_volatility_snapshot(volatility)
+
+
+def test_c2a_vol_c14_coherently_rehashed_snapshot_rejected() -> None:
+    """A coherently rehashed snapshot (canonical_hash matches payload) is still rejected."""
+    volatility, _ = _issued_volatility()
+    # Replace one candle hash with a different valid-format hash.
+    new_hashes = list(volatility.candle_hashes)
+    new_hashes[0] = "a" * 64
+    forged = _coherently_rehash_volatility(volatility, candle_hashes=tuple(new_hashes))
+    # __post_init__ passes (hash format is valid, canonical_hash matches payload),
+    # but _is_issued fails (new canonical_hash not in registry).
+    with pytest.raises(PlanError, match="AUTHORITY"):
+        _validated_volatility_snapshot(forged)
+
+
+# ============================================================
+# C2A VOLATILITY MATRIX D. ROLLING COMPOSITE EXACT-SOURCE PROOF
+# ============================================================
+
+
+def test_c2a_vol_d01_30m_uses_final_6_candles() -> None:
+    """The authoritative 30m composite uses the final exact 6 candles."""
+    candles = _atr_candles(64)
+    c30 = rolling_composite(candles, 30)
+    assert c30.constituent_identities == tuple(c.identity for c in candles[-6:])
+
+
+def test_c2a_vol_d02_60m_uses_final_12_candles() -> None:
+    """The authoritative 60m composite uses the final exact 12 candles."""
+    candles = _atr_candles(64)
+    c60 = rolling_composite(candles, 60)
+    assert c60.constituent_identities == tuple(c.identity for c in candles[-12:])
+
+
+def test_c2a_vol_d03_both_use_same_final_cutoff() -> None:
+    """Both 30m and 60m composites use the same final cutoff."""
+    candles = _atr_candles(64)
+    c30 = rolling_composite(candles, 30)
+    c60 = rolling_composite(candles, 60)
+    assert c30.cutoff_identity == candles[-1].identity
+    assert c60.cutoff_identity == candles[-1].identity
+    assert c30.cutoff_close_time_ms == candles[-1].close_time_ms
+    assert c60.cutoff_close_time_ms == candles[-1].close_time_ms
+
+
+def test_c2a_vol_d04_constituent_identities_match_source() -> None:
+    """Constituent identities of the 30m and 60m composites match the source."""
+    candles = _atr_candles(64)
+    c30 = rolling_composite(candles, 30)
+    c60 = rolling_composite(candles, 60)
+    assert c30.constituent_identities == tuple(c.identity for c in candles[-6:])
+    assert c60.constituent_identities == tuple(c.identity for c in candles[-12:])
+
+
+def test_c2a_vol_d05_constituent_hashes_match_source() -> None:
+    """Constituent hashes of the 30m and 60m composites match the source."""
+    candles = _atr_candles(64)
+    c30 = rolling_composite(candles, 30)
+    c60 = rolling_composite(candles, 60)
+    assert c30.constituent_canonical_hashes == tuple(c.canonical_hash for c in candles[-6:])
+    assert c60.constituent_canonical_hashes == tuple(c.canonical_hash for c in candles[-12:])
+
+
+def test_c2a_vol_d06_altered_earlier_history_changes_composite() -> None:
+    """Same final candle with altered earlier history changes the appropriate composite."""
+    candles_a = _atr_candles(64)
+    # Create candles_b with a different candle at index -3 (within both 30m and 60m windows).
+    candles_b = list(candles_a)
+    candles_b[-3] = _candle(candles_a[-3].open_time_ms, close="105")
+    candles_b = tuple(candles_b)
+    assert candles_b[-1] is candles_a[-1]  # Same final candle
+    c30_a = rolling_composite(candles_a, 30)
+    c30_b = rolling_composite(candles_b, 30)
+    c60_a = rolling_composite(candles_a, 60)
+    c60_b = rolling_composite(candles_b, 60)
+    assert c30_a.canonical_hash != c30_b.canonical_hash
+    assert c60_a.canonical_hash != c60_b.canonical_hash
+
+    # Now alter a candle within the 60m window but outside the 30m window.
+    candles_c = list(candles_a)
+    candles_c[-8] = _candle(candles_a[-8].open_time_ms, close="105")
+    candles_c = tuple(candles_c)
+    c30_c = rolling_composite(candles_c, 30)
+    c60_c = rolling_composite(candles_c, 60)
+    assert c30_a.canonical_hash == c30_c.canonical_hash  # 30m unchanged
+    assert c60_a.canonical_hash != c60_c.canonical_hash  # 60m changed
+
+
+def test_c2a_vol_d07_composite_from_another_tuple_cannot_be_substituted() -> None:
+    """A composite from another tuple cannot be substituted into the overlay."""
+    _, _, candles, output = _overlay_context()
+    volatility = wilder_atr14(candles)
+    overlay = apply_volatility_overlay(output, volatility, candles, output.raw_entry_low)
+
+    # Build a different candle tuple (same final trigger, different earlier history).
+    candles_b = list(candles)
+    candles_b[-3] = _candle(candles[-3].open_time_ms, close="105")
+    candles_b = tuple(candles_b)
+
+    c30_a = rolling_composite(candles, 30)
+    c30_b = rolling_composite(candles_b, 30)
+    assert overlay.rolling_30m_hash == c30_a.canonical_hash
+    assert c30_a.canonical_hash != c30_b.canonical_hash
+
+    # A coherently rehashed overlay with a substituted rolling hash is rejected.
+    forged = copy.copy(overlay)
+    object.__setattr__(forged, "rolling_30m_hash", c30_b.canonical_hash)
+    object.__setattr__(forged, "canonical_hash", _hash(forged.payload()))
+    with pytest.raises(PlanError, match="OVERLAY_AUTHORITY_INVALID"):
+        _validated_overlay_decision(forged)
+
+
+def test_c2a_vol_d08_reordered_constituent_rejected() -> None:
+    """A reordered constituent proof is rejected by rolling_composite."""
+    candles = _atr_candles(64)
+    reordered = tuple(reversed(candles[-6:]))
+    with pytest.raises(MarketDataError):
+        rolling_composite(reordered, 30)
+
+
+def test_c2a_vol_d09_truncated_constituent_rejected() -> None:
+    """A truncated constituent proof is rejected by rolling_composite."""
+    candles = _atr_candles(64)
+    truncated = candles[-5:]  # Only 5 candles instead of 6.
+    with pytest.raises(MarketDataError, match="ROLLING_COMPOSITE_INSUFFICIENT"):
+        rolling_composite(truncated, 30)
+
+
+def test_c2a_vol_d10_mismatched_constituent_identity_hash_rejected() -> None:
+    """A RollingComposite with mismatched constituent identity/hash is rejected."""
+    candles = _atr_candles(64)
+    c30 = rolling_composite(candles, 30)
+    wrong_identities = tuple(
+        ("ETH", "5m", c.open_time_ms + 1) for c in candles[-6:]
+    )
+    with pytest.raises(MarketDataError, match="ROLLING_COMPOSITE_AUTHORITY_INVALID"):
+        RollingComposite(
+            c30.symbol,
+            c30.span_minutes,
+            c30.cutoff_identity,
+            c30.cutoff_close_time_ms,
+            wrong_identities,
+            c30.constituent_canonical_hashes,
+            c30.open,
+            c30.high,
+            c30.low,
+            c30.close,
+            c30.volume,
+            c30.midpoint,
+            c30.canonical_hash,
+        )
