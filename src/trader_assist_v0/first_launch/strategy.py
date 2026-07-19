@@ -22,7 +22,7 @@ from trader_assist_v0.first_launch.market_data import (
     _validated_strategy_snapshot,
     rolling_composite,
 )
-from trader_assist_v0.first_launch.signal_context import ContextSummary
+from trader_assist_v0.first_launch.signal_context import ContextSummary, _validated_context_summary
 
 STRATEGY_VERSION: Literal["ETH-LDAR-v0.1"] = "ETH-LDAR-v0.1"
 CONFIGURATION_VERSION: Literal["1"] = "1"
@@ -100,6 +100,39 @@ class VolatilitySnapshot:
     candle_hashes: tuple[str, ...]
     canonical_hash: str
 
+    def payload(self) -> dict[str, object]:
+        return {
+            "current_atr": self.current_atr,
+            "previous_48_median_atr": self.previous_48_median_atr,
+            "atr_ratio": self.atr_ratio,
+            "regime": self.regime.value,
+            "candle_cutoff_identity": self.candle_cutoff_identity,
+            "candle_cutoff_close_time_ms": self.candle_cutoff_close_time_ms,
+            "candle_identities": self.candle_identities,
+            "candle_hashes": self.candle_hashes,
+        }
+
+    def __post_init__(self) -> None:
+        if (
+            any(
+                type(value) is not Decimal or not value.is_finite() or value <= 0
+                for value in (self.current_atr, self.previous_48_median_atr, self.atr_ratio)
+            )
+            or len(self.candle_identities) != 64
+            or len(self.candle_hashes) != 64
+            or self.candle_cutoff_identity != self.candle_identities[-1]
+            or self.candle_cutoff_close_time_ms != self.candle_cutoff_identity[2] + 300_000
+            or any(identity[0:2] != ("ETH", "5m") for identity in self.candle_identities)
+            or any(
+                right[2] - left[2] != 300_000 for left, right in pairwise(self.candle_identities)
+            )
+            or any(re.fullmatch(r"[0-9a-f]{64}", item) is None for item in self.candle_hashes)
+            or self.atr_ratio != self.current_atr / self.previous_48_median_atr
+            or self.regime is not _regime(self.atr_ratio)
+            or self.canonical_hash != _hash(self.payload())
+        ):
+            raise PlanError("VOLATILITY_SNAPSHOT_INVALID")
+
 
 @dataclass(frozen=True)
 class OverlayDecision:
@@ -113,6 +146,71 @@ class OverlayDecision:
     action: str
     reason: str
     effective_raw_chase_limit: Decimal
+    volatility_hash: str
+    rolling_30m_hash: str | None
+    rolling_60m_hash: str | None
+    reference_price: Decimal
+    candle_cutoff_identity: tuple[str, str, int]
+    canonical_hash: str
+    prepared_setup: PreparedSetup | None = None
+
+    def payload(self) -> dict[str, object]:
+        return {
+            "base_output_fingerprint": _output_fingerprint(self.base_output),
+            "state": self.state.value,
+            "actionable": self.actionable,
+            "regime": self.regime.value,
+            "selected_decision_span": self.selected_decision_span,
+            "action": self.action,
+            "reason": self.reason,
+            "effective_raw_chase_limit": self.effective_raw_chase_limit,
+            "volatility_hash": self.volatility_hash,
+            "rolling_30m_hash": self.rolling_30m_hash,
+            "rolling_60m_hash": self.rolling_60m_hash,
+            "reference_price": self.reference_price,
+            "candle_cutoff_identity": self.candle_cutoff_identity,
+            "prepared_setup_id": None
+            if self.prepared_setup is None
+            else self.prepared_setup.setup_id,
+        }
+
+
+def _regime(ratio: Decimal) -> VolatilityRegime:
+    return (
+        VolatilityRegime.LOW
+        if ratio < Decimal("0.75")
+        else VolatilityRegime.NORMAL
+        if ratio <= Decimal("1.50")
+        else VolatilityRegime.HIGH
+        if ratio <= Decimal("2.25")
+        else VolatilityRegime.EXTREME
+    )
+
+
+def _validated_volatility_snapshot(value: object) -> VolatilitySnapshot:
+    try:
+        if type(value) is not VolatilitySnapshot:
+            raise PlanError("VOLATILITY_SNAPSHOT_AUTHORITY_INVALID")
+        value.__post_init__()
+        if not _is_issued(value, value.canonical_hash):
+            raise PlanError("VOLATILITY_SNAPSHOT_AUTHORITY_INVALID")
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise PlanError("VOLATILITY_SNAPSHOT_AUTHORITY_INVALID") from exc
+    return value
+
+
+def _validated_overlay_decision(value: object) -> OverlayDecision:
+    try:
+        if type(value) is not OverlayDecision or not _is_issued(value, value.canonical_hash):
+            raise PlanError("OVERLAY_AUTHORITY_INVALID")
+        _validated_strategy_output(value.base_output)
+        if value.state not in SignalState or type(value.actionable) is not bool:
+            raise PlanError("OVERLAY_AUTHORITY_INVALID")
+        if value.canonical_hash != _hash(value.payload()):
+            raise PlanError("OVERLAY_AUTHORITY_INVALID")
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise PlanError("OVERLAY_AUTHORITY_INVALID") from exc
+    return value
 
 
 def apply_volatility_overlay(
@@ -122,35 +220,56 @@ def apply_volatility_overlay(
     reference_price: Decimal,
 ) -> OverlayDecision:
     output = _validated_strategy_output(output)
+    volatility = _validated_volatility_snapshot(volatility)
     if (
         type(reference_price) is not Decimal
         or not reference_price.is_finite()
         or reference_price <= 0
     ):
         raise PlanError("OVERLAY_REFERENCE_INVALID")
-    support, span, _c30, _c60 = longer_window_support(output.side, candles)
+    if (
+        not candles
+        or candles[-1].identity != output.decision_trigger_identity
+        or candles[-1].canonical_hash != output.decision_trigger_canonical_hash
+        or volatility.candle_cutoff_identity != output.decision_trigger_identity
+    ):
+        raise PlanError("OVERLAY_CUTOFF_CORRESPONDENCE_INVALID")
+    support, span, c30, c60 = longer_window_support(output.side, candles)
     limit = output.raw_chase_limit
-    if volatility.regime is VolatilityRegime.EXTREME:
-        return OverlayDecision(
+
+    def issued(state: SignalState, actionable: bool, action: str, reason: str) -> OverlayDecision:
+        prepared = None
+        if state is SignalState.PREPARE:
+            prepared = PreparedSetup(
+                output.provenance, output.provenance.setup_trigger_open_time_ms + 900_000
+            )
+            _issue(prepared, _prepared_fingerprint(prepared))
+        decision = OverlayDecision(
             output,
-            SignalState.WATCH,
-            False,
+            state,
+            actionable,
             volatility.regime,
             span,
-            "EXTREME_VETO",
-            "EXTREME_NON_ACTIONABLE",
+            action,
+            reason,
             limit,
+            volatility.canonical_hash,
+            c30.canonical_hash,
+            c60.canonical_hash,
+            reference_price,
+            volatility.candle_cutoff_identity,
+            "",
+            prepared,
         )
+        digest = _hash(decision.payload())
+        object.__setattr__(decision, "canonical_hash", digest)
+        return _issue(decision, digest)  # type: ignore[return-value]
+
+    if volatility.regime is VolatilityRegime.EXTREME:
+        return issued(SignalState.WATCH, False, "EXTREME_VETO", "EXTREME_NON_ACTIONABLE")
     if volatility.regime is VolatilityRegime.LOW and output.speed == "FAST" and not support:
-        return OverlayDecision(
-            output,
-            SignalState.PREPARE,
-            False,
-            volatility.regime,
-            span,
-            "LOW_DOWNGRADE",
-            "LOW_AWAITING_LONGER_WINDOW_SUPPORT",
-            limit,
+        return issued(
+            SignalState.PREPARE, False, "LOW_DOWNGRADE", "LOW_AWAITING_LONGER_WINDOW_SUPPORT"
         )
     if volatility.regime is VolatilityRegime.HIGH:
         limit = output.provenance.boundary + Decimal("0.75") * (
@@ -160,29 +279,11 @@ def apply_volatility_overlay(
             reference_price <= limit if output.side is Side.LONG else reference_price >= limit
         )
         if not eligible:
-            return OverlayDecision(
-                output,
-                SignalState.WATCH,
-                False,
-                volatility.regime,
-                span,
-                "HIGH_CHASE_DISCIPLINE",
-                "HIGH_CHASE_LIMIT_EXCEEDED",
-                limit,
+            return issued(
+                SignalState.WATCH, False, "HIGH_CHASE_DISCIPLINE", "HIGH_CHASE_LIMIT_EXCEEDED"
             )
-        return OverlayDecision(
-            output,
-            output.state,
-            True,
-            volatility.regime,
-            span,
-            "HIGH_CHASE_DISCIPLINE",
-            "HIGH_CHASE_LIMIT_APPLIED",
-            limit,
-        )
-    return OverlayDecision(
-        output, output.state, True, volatility.regime, span, "BASE", "BASE_CONFIRMED", limit
-    )
+        return issued(output.state, True, "HIGH_CHASE_DISCIPLINE", "HIGH_CHASE_LIMIT_APPLIED")
+    return issued(output.state, True, "BASE", "BASE_CONFIRMED")
 
 
 def wilder_atr14(candles: tuple[Candle, ...]) -> VolatilitySnapshot:
@@ -217,15 +318,7 @@ def wilder_atr14(candles: tuple[Candle, ...]) -> VolatilitySnapshot:
     if not denom.is_finite() or denom <= 0 or not current.is_finite() or current <= 0:
         raise PlanError("ATR_DENOMINATOR_INVALID")
     ratio = current / denom
-    regime = (
-        VolatilityRegime.LOW
-        if ratio < Decimal("0.75")
-        else VolatilityRegime.NORMAL
-        if ratio <= Decimal("1.50")
-        else VolatilityRegime.HIGH
-        if ratio <= Decimal("2.25")
-        else VolatilityRegime.EXTREME
-    )
+    regime = _regime(ratio)
     body = {
         "current_atr": current,
         "previous_48_median_atr": denom,
@@ -236,7 +329,7 @@ def wilder_atr14(candles: tuple[Candle, ...]) -> VolatilitySnapshot:
         "candle_identities": tuple(item.identity for item in values),
         "candle_hashes": tuple(item.canonical_hash for item in values),
     }
-    return VolatilitySnapshot(
+    snapshot = VolatilitySnapshot(
         current,
         denom,
         ratio,
@@ -247,6 +340,7 @@ def wilder_atr14(candles: tuple[Candle, ...]) -> VolatilitySnapshot:
         tuple(item.canonical_hash for item in values),
         _hash(body),
     )
+    return _issue(snapshot, snapshot.canonical_hash)  # type: ignore[return-value]
 
 
 def longer_window_support(
@@ -1071,6 +1165,10 @@ class TradePlan:
     effective_max_notional: Decimal = Decimal("1")
     risk_configuration_version: str = ""
     risk_configuration_hash: str = ""
+    manual_execution_required: Literal[True] = True
+    submission_status: Literal["NOT_SUBMITTED"] = "NOT_SUBMITTED"
+    volatility_snapshot: VolatilitySnapshot | None = None
+    overlay: OverlayDecision | None = None
 
     @property
     def side(self) -> Side:
@@ -1122,6 +1220,8 @@ class TradePlan:
             or self.strategy_version != STRATEGY_VERSION
             or self.symbol != "ETH"
             or self.do_not_chase != "DO NOT CHASE"
+            or self.manual_execution_required is not True
+            or self.submission_status != "NOT_SUBMITTED"
         ):
             raise PlanError("TRADE_PLAN_FIXED_AUTHORITY_INVALID")
         if self.supersedes_plan_id is not None and (
@@ -1189,6 +1289,33 @@ class TradePlan:
             <= Decimal("1.50") * output.provenance.atr
         ):
             raise PlanError("STOP_DISTANCE_OUT_OF_RANGE")
+        try:
+            context = _validated_context_summary(self.context_summary)
+            volatility = _validated_volatility_snapshot(self.volatility_snapshot)
+            overlay = _validated_overlay_decision(self.overlay)
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise PlanError("TRADE_PLAN_ISSUED_AUTHORITY_INVALID") from exc
+        if (
+            overlay.base_output is not embedded_output
+            or overlay.volatility_hash != volatility.canonical_hash
+            or overlay.candle_cutoff_identity != self.decision_trigger_identity
+            or overlay.regime is not self.volatility_regime
+            or not overlay.actionable
+            or overlay.state is not output.state
+            or (
+                self.selected_decision_span,
+                self.overlay_action,
+                self.overlay_reason,
+                self.effective_raw_chase_limit,
+            )
+            != (
+                overlay.selected_decision_span,
+                overlay.action,
+                overlay.reason,
+                overlay.effective_raw_chase_limit,
+            )
+        ):
+            raise PlanError("TRADE_PLAN_OVERLAY_CORRESPONDENCE_INVALID")
         config = RiskConfiguration(
             self.risk_configuration_version,
             self.account_equity,
@@ -1232,12 +1359,14 @@ class TradePlan:
         if (
             self.plan_evaluation_cutoff is None
             or self.context_summary is None
-            or self.context_hash != self.context_summary.canonical_hash
+            or self.context_hash != context.canonical_hash
+            or self.plan_evaluation_cutoff != context.summary_cutoff
         ):
             raise PlanError("TRADE_PLAN_CONTEXT_INVALID")
         if (
-            self.mark_price != self.context_summary.current.mark_price
-            or self.mid_price != self.context_summary.current.mid_price
+            self.mark_price != context.current.mark_price
+            or self.mid_price != context.current.mid_price
+            or self.reference != context.current.reference_price
         ):
             raise PlanError("TRADE_PLAN_CONTEXT_INVALID")
         if (
@@ -1419,6 +1548,8 @@ def _trade_plan_payload(values: dict[str, object]) -> dict[str, object]:
         "planned_risk": values["planned_risk"],
         "sz_decimals": values["sz_decimals"],
         "do_not_chase": values["do_not_chase"],
+        "manual_execution_required": values["manual_execution_required"],
+        "submission_status": values["submission_status"],
         "signal_id": values["signal_id"],
         "volatility_regime": cast(VolatilityRegime, values["volatility_regime"]).value,
         "current_atr": values["current_atr"],
@@ -1445,12 +1576,22 @@ def _trade_plan_payload(values: dict[str, object]) -> dict[str, object]:
         "effective_max_notional": values["effective_max_notional"],
         "risk_configuration_version": values["risk_configuration_version"],
         "risk_configuration_hash": values["risk_configuration_hash"],
+        "volatility_snapshot": cast(VolatilitySnapshot, values["volatility_snapshot"]).payload(),
+        "overlay_hash": cast(OverlayDecision, values["overlay"]).canonical_hash,
     }
 
 
 def _context_summary_payload(value: ContextSummary) -> dict[str, object]:
     return {
         "current": value.current.payload(),
+        "current_hash": value.current.canonical_hash,
+        "baseline_5m": None if value.baseline_5m is None else value.baseline_5m.payload(),
+        "baseline_5m_hash": None if value.baseline_5m is None else value.baseline_5m.canonical_hash,
+        "baseline_15m": None if value.baseline_15m is None else value.baseline_15m.payload(),
+        "baseline_15m_hash": None
+        if value.baseline_15m is None
+        else value.baseline_15m.canonical_hash,
+        "summary_cutoff": value.summary_cutoff.isoformat(),
         "oi_delta_5m": value.oi_delta_5m,
         "oi_pct_delta_5m": value.oi_pct_delta_5m,
         "oi_delta_15m": value.oi_delta_15m,
@@ -1561,8 +1702,8 @@ def build_plan(
     sz_decimals: int,
     configuration: RiskConfiguration | None = None,
     volatility: VolatilitySnapshot | None = None,
+    overlay: OverlayDecision | None = None,
     context_summary: ContextSummary | None = None,
-    low_longer_window_support: bool | None = None,
     equity: Decimal | None = None,
     supersedes_plan_id: str | None = None,
 ) -> TradePlan:
@@ -1584,21 +1725,22 @@ def build_plan(
     if (
         type(configuration) is not RiskConfiguration
         or type(volatility) is not VolatilitySnapshot
+        or type(overlay) is not OverlayDecision
         or type(context_summary) is not ContextSummary
     ):
         raise PlanError("V3_CONFIGURATION_VOLATILITY_CONTEXT_REQUIRED")
     if equity is not None and equity != configuration.account_equity_usd:
         raise PlanError("V3_EQUITY_CONFIGURATION_MISMATCH")
-    if volatility.regime is VolatilityRegime.EXTREME:
+    volatility = _validated_volatility_snapshot(volatility)
+    overlay = _validated_overlay_decision(overlay)
+    context_summary = _validated_context_summary(context_summary)
+    if overlay.base_output is not output or overlay.volatility_hash != volatility.canonical_hash:
+        raise PlanError("OVERLAY_AUTHORITY_INVALID")
+    if volatility.regime is VolatilityRegime.EXTREME or not overlay.actionable:
         raise PlanError("EXTREME_NON_ACTIONABLE")
-    support = True if volatility.regime is not VolatilityRegime.LOW else low_longer_window_support
-    if support is not True:
+    if overlay.state is not output.state:
         raise PlanError("LOW_AWAITING_LONGER_WINDOW_SUPPORT")
-    effective_raw_chase = output.raw_chase_limit
-    if volatility.regime is VolatilityRegime.HIGH:
-        effective_raw_chase = output.provenance.boundary + Decimal("0.75") * (
-            output.raw_chase_limit - output.provenance.boundary
-        )
+    effective_raw_chase = overlay.effective_raw_chase_limit
     low, high = inward_zone(output.raw_entry_low, output.raw_entry_high, sz_decimals)
     if (output.side is Side.LONG and reference > effective_raw_chase) or (
         output.side is Side.SHORT and reference < effective_raw_chase
@@ -1665,7 +1807,7 @@ def build_plan(
         "entry_high": high,
         "planned_entry": entry,
         "chase_limit": _round_price(
-            output.raw_chase_limit, sz_decimals, "down" if output.side is Side.LONG else "up"
+            effective_raw_chase, sz_decimals, "down" if output.side is Side.LONG else "up"
         ),
         "stop": stop,
         "tp1": tp1,
@@ -1684,16 +1826,12 @@ def build_plan(
         "current_atr": volatility.current_atr,
         "previous_48_median_atr": volatility.previous_48_median_atr,
         "atr_ratio": volatility.atr_ratio,
-        "selected_decision_span": 30,
-        "overlay_action": "HIGH_CHASE_DISCIPLINE"
-        if volatility.regime is VolatilityRegime.HIGH
-        else "BASE",
-        "overlay_reason": "HIGH_CHASE_LIMIT_APPLIED"
-        if volatility.regime is VolatilityRegime.HIGH
-        else "BASE_CONFIRMED",
+        "selected_decision_span": overlay.selected_decision_span,
+        "overlay_action": overlay.action,
+        "overlay_reason": overlay.reason,
         "candle_cutoff_identity": volatility.candle_cutoff_identity,
         "candle_cutoff_close_time_ms": volatility.candle_cutoff_close_time_ms,
-        "plan_evaluation_cutoff": context_summary.current.received_at,
+        "plan_evaluation_cutoff": context_summary.summary_cutoff,
         "mark_price": context_summary.current.mark_price,
         "mid_price": context_summary.current.mid_price,
         "context_summary": context_summary,
@@ -1707,6 +1845,10 @@ def build_plan(
         "effective_max_notional": raw_risk.effective_max_notional,
         "risk_configuration_version": configuration.configuration_version,
         "risk_configuration_hash": configuration.configuration_hash,
+        "manual_execution_required": True,
+        "submission_status": "NOT_SUBMITTED",
+        "volatility_snapshot": volatility,
+        "overlay": overlay,
     }
     values["signal_id"] = _hash(
         {
@@ -1717,7 +1859,7 @@ def build_plan(
             "speed": output.speed,
             "state": output.state.value,
             "regime": volatility.regime.value,
-            "selected_decision_span": 30,
+            "selected_decision_span": overlay.selected_decision_span,
             "overlay_action": values["overlay_action"],
             "overlay_reason": values["overlay_reason"],
             "effective_raw_chase_limit": effective_raw_chase,

@@ -37,11 +37,11 @@ from trader_assist_v0.first_launch.strategy import (
     Signal,
     StrategyOutput,
     TradePlan,
-    VolatilityRegime,
-    VolatilitySnapshot,
     advance_prepare,
+    apply_volatility_overlay,
     build_plan,
     evaluate_signal,
+    wilder_atr14,
 )
 
 _NOW = datetime(2026, 7, 14, tzinfo=UTC)
@@ -172,9 +172,10 @@ def _output(side: Side, fast: bool) -> StrategyOutput:
 
 
 def _plan(output: StrategyOutput) -> TradePlan:
+    reference = output.raw_entry_low
     context_raw = (
         '{"channel":"activeAssetCtx","data":{"coin":"ETH","ctx":'
-        '{"markPx":"100","midPx":"100","openInterest":"1","funding":"0"}}}'
+        f'{{"markPx":"{reference}","midPx":"{reference}","openInterest":"1","funding":"0"}}}}}}'
     )
     context = context_from_websocket(
         context_raw,
@@ -195,25 +196,42 @@ def _plan(output: StrategyOutput) -> TradePlan:
         '{"CONFIGURATION_VERSION":"operator-demo-r3","ACCOUNT_EQUITY_USD":"1000.00",'
         '"RISK_PER_TRADE_PCT":"0.2500","MAX_NOTIONAL_USD":null}'
     )
-    volatility = VolatilitySnapshot(
-        output.provenance.atr,
-        output.provenance.atr,
-        Decimal("1"),
-        VolatilityRegime.NORMAL,
-        output.decision_trigger_identity,
-        output.decision_trigger_open_time_ms + 300_000,
-        (output.decision_trigger_identity,),
-        (output.decision_trigger_canonical_hash,),
-        output.decision_trigger_canonical_hash,
-    )
+    trigger_index = 26 if output.speed == "FAST" else 27
+    candles = [_candle(index * 300_000) for index in range(trigger_index - 63, trigger_index)]
+    if output.speed == "FAST":
+        candles.append(
+            _candle(
+                trigger_index * 300_000,
+                high="101" if output.side is Side.LONG else "102",
+                low="98" if output.side is Side.LONG else "99",
+                close="100",
+                volume="20",
+            )
+        )
+    else:
+        boundary = output.provenance.boundary
+        candles.append(
+            _candle(
+                trigger_index * 300_000,
+                open=str(boundary),
+                high=str(boundary + Decimal("1")) if output.side is Side.LONG else str(boundary),
+                low=str(boundary) if output.side is Side.LONG else str(boundary - Decimal("1")),
+                close=str(boundary + Decimal("1"))
+                if output.side is Side.LONG
+                else str(boundary - Decimal("1")),
+            )
+        )
+    history = tuple(candles)
+    volatility = wilder_atr14(history)
+    overlay = apply_volatility_overlay(output, volatility, history, reference)
     return build_plan(
         strategy_output=output,
-        reference=output.raw_entry_low,
+        reference=reference,
         sz_decimals=3,
         configuration=configuration,
         volatility=volatility,
+        overlay=overlay,
         context_summary=summary,
-        low_longer_window_support=True,
     )
 
 

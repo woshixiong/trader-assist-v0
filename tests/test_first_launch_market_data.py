@@ -201,6 +201,34 @@ def test_warmup_ready_and_freshness() -> None:
     assert stale.reason == "ACTIVE_ASSET_CONTEXT_STALE"
 
 
+def test_strategy_snapshot_is_strictly_causal_at_the_requested_cutoff() -> None:
+    data = _ready_data()
+    # The same stored observations are valid at equality, but must never make an
+    # earlier decision ready merely because they arrived later in memory.
+    assert data.strategy_snapshot(NOW).quality.state is DataQualityState.READY
+    earlier = data.strategy_snapshot(NOW - timedelta(microseconds=1))
+    assert earlier.quality.state is DataQualityState.METADATA_UNAVAILABLE
+    assert not earlier.candles_5m and not earlier.candles_15m
+
+    future_context = (
+        '{"channel":"activeAssetCtx","data":{"coin":"ETH","ctx":'
+        '{"markPx":"101","openInterest":"5","funding":"0"}}}'
+    )
+    data.accept_context(
+        context_from_websocket(
+            future_context,
+            evidence_from_raw(
+                future_context,
+                operation="WebSocket",
+                received_at=NOW + timedelta(seconds=1),
+                receive_sequence=999,
+                connection_id="future",
+            ),
+        )
+    )
+    assert data.strategy_snapshot(NOW).quality.state is DataQualityState.WARMING
+
+
 def test_gap_duplicate_and_conflict_fail_closed() -> None:
     data = _ready_data()
     existing = _candle("5m", 0)
