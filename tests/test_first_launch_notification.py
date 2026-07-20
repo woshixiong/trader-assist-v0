@@ -714,6 +714,40 @@ def test_ga03_malformed_host_whitespace_rejected() -> None:
         _config(url="https://hooks .example.com/notify")
 
 
+def test_ga03_malformed_non_numeric_port_rejected() -> None:
+    """GA-03: non-numeric port is rejected at admission."""
+    with pytest.raises(NotificationConfigError, match="port"):
+        _config(url="https://hooks.example.com:bad/notify")
+
+
+def test_ga03_malformed_non_numeric_port_zero_network() -> None:
+    """GA-03: non-numeric port: no network call is attempted."""
+    with pytest.raises(NotificationConfigError):
+        NotificationConfig(
+            webhook_url="https://hooks.example.com:bad/notify",
+            timeout_seconds=10.0,
+            authorization_header_name=None,
+            authorization_header_value=None,
+        )
+
+
+def test_ga03_malformed_out_of_range_port_rejected() -> None:
+    """GA-03: out-of-range port is rejected at admission."""
+    with pytest.raises(NotificationConfigError, match="port"):
+        _config(url="https://hooks.example.com:65536/notify")
+
+
+def test_ga03_malformed_out_of_range_port_zero_network() -> None:
+    """GA-03: out-of-range port: no network call is attempted."""
+    with pytest.raises(NotificationConfigError):
+        NotificationConfig(
+            webhook_url="https://hooks.example.com:65536/notify",
+            timeout_seconds=10.0,
+            authorization_header_name=None,
+            authorization_header_value=None,
+        )
+
+
 def test_ga03_malformed_path_control_char_rejected() -> None:
     """GA-03: paths with control characters must be rejected."""
     with pytest.raises(NotificationConfigError, match="malformed"):
@@ -873,20 +907,248 @@ def test_ga03_double_encoded_path_rejected() -> None:
     [
         "https://api.hyperliquid.xyz/exchange",
         "https://API.HYPERLIQUID.XYZ/exchange",
-        "https://API.HYPERLIQUID.XYZ./exchange",
-        "https://api.hyperliquid.xyz./exchange",
         "https://api.HYPERLIQUID.xyz/exchange",
         "https://api.hyperliquid-testnet.xyz/exchange",
-        "https://API.HYPERLIQUID-TESTNET.XYZ./exchange",
     ],
 )
 def test_ga03_canonical_host_variants_rejected(url: str) -> None:
     """GA03_CANONICAL_HOST_VARIANTS_REJECTED.
 
-    Case and trailing-dot variants are rejected after IDNA canonicalization.
+    Case variants are rejected after IDNA canonicalization.
     """
     with pytest.raises(NotificationConfigError, match="Hyperliquid API host"):
         _config(url=url)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://API.HYPERLIQUID.XYZ./exchange",
+        "https://api.hyperliquid.xyz./exchange",
+        "https://API.HYPERLIQUID-TESTNET.XYZ./exchange",
+    ],
+)
+def test_ga03_trailing_dot_variants_rejected_at_validation(url: str) -> None:
+    """Trailing-dot FQDN forms are rejected at post-IDNA validation.
+
+    The terminal dot is not stripped and then accepted; the hostname is
+    rejected as malformed before any prohibited-host comparison.
+    """
+    with pytest.raises(NotificationConfigError, match="malformed"):
+        _config(url=url)
+
+
+# ============================================================
+# GA-03: Post-IDNA Unicode separator bypass (U+3002, U+FF0E, U+FF61)
+# ============================================================
+
+
+def test_ga03_u3002_ideographic_full_stop_rejected() -> None:
+    """U+3002 IDEOGRAPHIC FULL STOP separator is rejected at admission.
+
+    ``https://api.hyperliquid.xyz。/exchange`` — the U+3002 separator is
+    converted to an ASCII dot by IDNA, producing a trailing-dot hostname that
+    is rejected by post-IDNA validation before any prohibited-host comparison.
+    """
+    with pytest.raises(NotificationConfigError, match="malformed"):
+        _config(url="https://api.hyperliquid.xyz\u3002/exchange")
+
+
+def test_ga03_u3002_zero_network() -> None:
+    """U+3002 separator: no network call is attempted."""
+    with pytest.raises(NotificationConfigError):
+        NotificationConfig(
+            webhook_url="https://api.hyperliquid.xyz\u3002/exchange",
+            timeout_seconds=10.0,
+            authorization_header_name=None,
+            authorization_header_value=None,
+        )
+
+
+def test_ga03_uff0e_fullwidth_full_stop_rejected() -> None:
+    """U+FF0E FULLWIDTH FULL STOP separator is rejected at admission."""
+    with pytest.raises(NotificationConfigError, match="malformed"):
+        _config(url="https://api.hyperliquid.xyz\uff0e/exchange")
+
+
+def test_ga03_uff0e_zero_network() -> None:
+    """U+FF0E separator: no network call is attempted."""
+    with pytest.raises(NotificationConfigError):
+        NotificationConfig(
+            webhook_url="https://api.hyperliquid.xyz\uff0e/exchange",
+            timeout_seconds=10.0,
+            authorization_header_name=None,
+            authorization_header_value=None,
+        )
+
+
+def test_ga03_uff61_halfwidth_ideographic_full_stop_rejected() -> None:
+    """U+FF61 HALFWIDTH IDEOGRAPHIC FULL STOP separator is rejected at admission."""
+    with pytest.raises(NotificationConfigError, match="malformed"):
+        _config(url="https://api.hyperliquid.xyz\uff61/exchange")
+
+
+def test_ga03_uff61_zero_network() -> None:
+    """U+FF61 separator: no network call is attempted."""
+    with pytest.raises(NotificationConfigError):
+        NotificationConfig(
+            webhook_url="https://api.hyperliquid.xyz\uff61/exchange",
+            timeout_seconds=10.0,
+            authorization_header_name=None,
+            authorization_header_value=None,
+        )
+
+
+def test_ga03_uppercase_plus_u3002_rejected() -> None:
+    """Uppercase hostname plus U+3002 separator is rejected."""
+    with pytest.raises(NotificationConfigError, match="malformed"):
+        _config(url="https://API.HYPERLIQUID.XYZ\u3002/exchange")
+
+
+def test_ga03_uppercase_plus_u3002_zero_network() -> None:
+    """Uppercase + U+3002: no network call is attempted."""
+    with pytest.raises(NotificationConfigError):
+        NotificationConfig(
+            webhook_url="https://API.HYPERLIQUID.XYZ\u3002/exchange",
+            timeout_seconds=10.0,
+            authorization_header_name=None,
+            authorization_header_value=None,
+        )
+
+
+def test_ga03_testnet_plus_u3002_rejected() -> None:
+    """Testnet hostname plus U+3002 separator is rejected."""
+    with pytest.raises(NotificationConfigError, match="malformed"):
+        _config(url="https://api.hyperliquid-testnet.xyz\u3002/exchange")
+
+
+def test_ga03_testnet_plus_u3002_zero_network() -> None:
+    """Testnet + U+3002: no network call is attempted."""
+    with pytest.raises(NotificationConfigError):
+        NotificationConfig(
+            webhook_url="https://api.hyperliquid-testnet.xyz\u3002/exchange",
+            timeout_seconds=10.0,
+            authorization_header_name=None,
+            authorization_header_value=None,
+        )
+
+
+def test_ga03_u3002_with_explicit_port_rejected() -> None:
+    """U+3002 separator plus explicit port is rejected."""
+    with pytest.raises(NotificationConfigError, match="malformed"):
+        _config(url="https://api.hyperliquid.xyz\u3002:443/exchange")
+
+
+def test_ga03_u3002_with_port_zero_network() -> None:
+    """U+3002 + explicit port: no network call is attempted."""
+    with pytest.raises(NotificationConfigError):
+        NotificationConfig(
+            webhook_url="https://api.hyperliquid.xyz\u3002:443/exchange",
+            timeout_seconds=10.0,
+            authorization_header_name=None,
+            authorization_header_value=None,
+        )
+
+
+def test_ga03_u3002_with_path_and_query_rejected() -> None:
+    """U+3002 separator plus path and query is rejected."""
+    with pytest.raises(NotificationConfigError, match="malformed"):
+        _config(url="https://api.hyperliquid.xyz\u3002/exchange?x=1")
+
+
+def test_ga03_u3002_with_path_and_query_zero_network() -> None:
+    """U+3002 + path/query: no network call is attempted."""
+    with pytest.raises(NotificationConfigError):
+        NotificationConfig(
+            webhook_url="https://api.hyperliquid.xyz\u3002/exchange?x=1",
+            timeout_seconds=10.0,
+            authorization_header_name=None,
+            authorization_header_value=None,
+        )
+
+
+# ============================================================
+# Post-IDNA hostname structural validation
+# ============================================================
+
+
+def test_ga03_leading_dot_rejected() -> None:
+    """Leading ASCII dot hostname is rejected."""
+    with pytest.raises(NotificationConfigError, match="malformed"):
+        _config(url="https://.example.com/notify")
+
+
+def test_ga03_leading_dot_zero_network() -> None:
+    """Leading dot: no network call is attempted."""
+    with pytest.raises(NotificationConfigError):
+        NotificationConfig(
+            webhook_url="https://.example.com/notify",
+            timeout_seconds=10.0,
+            authorization_header_name=None,
+            authorization_header_value=None,
+        )
+
+
+def test_ga03_consecutive_dots_rejected() -> None:
+    """Consecutive ASCII dots in hostname are rejected."""
+    with pytest.raises(NotificationConfigError, match="malformed"):
+        _config(url="https://example..com/notify")
+
+
+def test_ga03_consecutive_dots_zero_network() -> None:
+    """Consecutive dots: no network call is attempted."""
+    with pytest.raises(NotificationConfigError):
+        NotificationConfig(
+            webhook_url="https://example..com/notify",
+            timeout_seconds=10.0,
+            authorization_header_name=None,
+            authorization_header_value=None,
+        )
+
+
+def test_ga03_terminal_dot_rejected() -> None:
+    """Terminal ASCII dot FQDN form is rejected."""
+    with pytest.raises(NotificationConfigError, match="malformed"):
+        _config(url="https://example.com./notify")
+
+
+def test_ga03_terminal_dot_zero_network() -> None:
+    """Terminal dot: no network call is attempted."""
+    with pytest.raises(NotificationConfigError):
+        NotificationConfig(
+            webhook_url="https://example.com./notify",
+            timeout_seconds=10.0,
+            authorization_header_name=None,
+            authorization_header_value=None,
+        )
+
+
+def test_ga03_multiple_terminal_dots_rejected() -> None:
+    """Multiple terminal ASCII dots are rejected."""
+    with pytest.raises(NotificationConfigError, match="malformed"):
+        _config(url="https://example.com../notify")
+
+
+def test_ga03_multiple_terminal_dots_zero_network() -> None:
+    """Multiple terminal dots: no network call is attempted."""
+    with pytest.raises(NotificationConfigError):
+        NotificationConfig(
+            webhook_url="https://example.com../notify",
+            timeout_seconds=10.0,
+            authorization_header_name=None,
+            authorization_header_value=None,
+        )
+
+
+# ============================================================
+# Legitimate webhook remains accepted
+# ============================================================
+
+
+def test_ga03_legitimate_webhook_remains_accepted() -> None:
+    """Legitimate webhook ``https://hooks.example.com/notify`` is accepted."""
+    config = _config(url="https://hooks.example.com/notify")
+    assert config.webhook_url == "https://hooks.example.com/notify"
 
 
 def test_outbox_delivered_on_redirect_false(tmp_path: Path) -> None:

@@ -133,6 +133,29 @@ def _strict_percent_decode_once(value: str) -> str:
     return "".join(result)
 
 
+def _validate_post_idna_hostname(hostname: str) -> None:
+    """Validate a post-IDNA ASCII hostname before prohibited-host comparison.
+
+    Rejects: empty hostname, leading ASCII dot, terminal ASCII dot,
+    consecutive ASCII dots, empty labels, labels outside valid DNS
+    length bounds, and hostname outside valid DNS length bounds.
+    """
+    if not hostname:
+        raise NotificationConfigError("webhook URL host is malformed")
+    if len(hostname) > 253:
+        raise NotificationConfigError("webhook URL host is malformed")
+    if hostname.startswith("."):
+        raise NotificationConfigError("webhook URL host is malformed")
+    if hostname.endswith("."):
+        raise NotificationConfigError("webhook URL host is malformed")
+    labels = hostname.split(".")
+    for label in labels:
+        if not label:
+            raise NotificationConfigError("webhook URL host is malformed")
+        if len(label) > 63:
+            raise NotificationConfigError("webhook URL host is malformed")
+
+
 def _reject_prohibited_endpoint(*, parsed_url: object) -> None:
     """GA-03: enforce the strict webhook URL admission policy.
 
@@ -175,21 +198,35 @@ def _reject_prohibited_endpoint(*, parsed_url: object) -> None:
         raise NotificationConfigError("webhook URL must have a host")
     if any(ch.isspace() or ord(ch) < 0x20 or ord(ch) == 0x7F for ch in hostname):
         raise NotificationConfigError("webhook URL host is malformed")
-    # IDNA ASCII + lowercase + trailing-dot canonicalization.  The parsed
-    # hostname is already lowercased by urlparse, but we re-normalize here so
-    # that uppercase or trailing-dot variants cannot bypass the host list.
-    host_no_trailing_dot = hostname.rstrip(".")
-    if not host_no_trailing_dot:
-        raise NotificationConfigError("webhook URL host is malformed")
+    # Force port parsing to fail closed on malformed or out-of-range ports.
+    # urlparse defers port parsing until the ``.port`` property is accessed;
+    # force evaluation here so that non-numeric and out-of-range ports are
+    # rejected during NotificationConfig admission before any hostname or
+    # path validation.
     try:
-        canonical_host = ".".join(
-            label.encode("idna").decode("ascii").lower()
-            for label in host_no_trailing_dot.split(".")
-        )
+        _ = getattr(parsed_url, "port", None)
+    except ValueError as exc:
+        raise NotificationConfigError("webhook URL port is malformed") from exc
+    # Deterministic IDNA ASCII conversion on the complete hostname.
+    # Do NOT strip ASCII terminal dots before IDNA conversion: Unicode
+    # dot-equivalent separators (U+3002, U+FF0E, U+FF61) are converted to
+    # ASCII dots by IDNA, and stripping before conversion would hide them.
+    # The conversion must be performed on the complete hostname, not
+    # per-label, so that Unicode separator conversion at label boundaries
+    # is not silently accepted.
+    try:
+        canonical_host = hostname.encode("idna").decode("ascii")
     except (UnicodeError, ValueError) as exc:
         raise NotificationConfigError("webhook URL host is malformed") from exc
     if not canonical_host:
         raise NotificationConfigError("webhook URL host is malformed")
+    # Lowercase the complete post-IDNA ASCII hostname.
+    canonical_host = canonical_host.lower()
+    # Validate the complete post-IDNA hostname before prohibited-host
+    # comparison.  This rejects terminal-dot FQDN forms, leading dots,
+    # consecutive dots, empty labels and labels outside valid DNS length
+    # bounds.
+    _validate_post_idna_hostname(canonical_host)
     if canonical_host in _PROHIBITED_HOSTS:
         raise NotificationConfigError(
             "webhook URL must not target a Hyperliquid API host"
