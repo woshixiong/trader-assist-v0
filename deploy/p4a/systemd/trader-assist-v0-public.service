@@ -26,7 +26,10 @@ StandardError=journal
 SyslogIdentifier=trader-assist-v0-public
 
 StateDirectory=trader-assist-v0
+StateDirectoryMode=0750
 RuntimeDirectory=trader-assist-v0
+RuntimeDirectoryMode=0750
+UMask=0077
 
 # Hardening
 NoNewPrivileges=yes

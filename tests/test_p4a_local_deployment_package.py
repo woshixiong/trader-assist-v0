@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -75,6 +76,23 @@ PROHIBITED_CONTENT_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"NONCE", re.IGNORECASE),
     re.compile(r"SIGNING_KEY", re.IGNORECASE),
 ]
+
+# ---------------------------------------------------------------------------
+# Exact-scope constants (ER-06)
+# ---------------------------------------------------------------------------
+
+EXACT_BASE = "8480d0b6ef0354de29283d86bbc5759491f822f3"
+EXACT_SCOPE_BRANCH = "feature/v0-fl-r3-p4a-local-deployment-package"
+
+EXPECTED_EXACT_SCOPE: set[tuple[str, str]] = {
+    ("A", "deploy/p4a/config/risk-configuration.json.example"),
+    ("A", "deploy/p4a/evidence/supervised-smoke-manifest-v1.json.example"),
+    ("A", "deploy/p4a/systemd/trader-assist-v0-public.env.example"),
+    ("A", "deploy/p4a/systemd/trader-assist-v0-public.service"),
+    ("A", "docs/operations/V0_FL_R3_P4A_LOCAL_DEPLOYMENT.md"),
+    ("A", "scripts/p4a/run_restricted_public_runtime.sh"),
+    ("A", "tests/test_p4a_local_deployment_package.py"),
+}
 
 # ---------------------------------------------------------------------------
 # Test 1: Exact seven-file implementation scope
@@ -224,6 +242,27 @@ def test_service_hardening_directives(service_unit: str) -> None:
         assert directive in service_unit, f"Missing hardening directive: {directive}"
 
 
+def test_service_state_directory_mode(service_unit: str) -> None:
+    """StateDirectoryMode must be exactly 0750."""
+    match = re.search(r"StateDirectoryMode=(\S+)", service_unit)
+    assert match is not None, "StateDirectoryMode not found"
+    assert match.group(1) == "0750", f"StateDirectoryMode must be 0750, got {match.group(1)}"
+
+
+def test_service_runtime_directory_mode(service_unit: str) -> None:
+    """RuntimeDirectoryMode must be exactly 0750."""
+    match = re.search(r"RuntimeDirectoryMode=(\S+)", service_unit)
+    assert match is not None, "RuntimeDirectoryMode not found"
+    assert match.group(1) == "0750", f"RuntimeDirectoryMode must be 0750, got {match.group(1)}"
+
+
+def test_service_umask(service_unit: str) -> None:
+    """UMask must be exactly 0077."""
+    match = re.search(r"UMask=(\S+)", service_unit)
+    assert match is not None, "UMask not found"
+    assert match.group(1) == "0077", f"UMask must be 0077, got {match.group(1)}"
+
+
 # ---------------------------------------------------------------------------
 # Test 4: Unchanged environment example cannot activate runtime
 # ---------------------------------------------------------------------------
@@ -293,19 +332,43 @@ def test_risk_example_fails_closed(risk_example: str) -> None:
     Either the CONFIGURATION_VERSION is a placeholder that fails the version
     regex, or the ACCOUNT_EQUITY_USD is 0.00 which fails the range check.
 
+    The test succeeds ONLY when the expected ConfigurationError occurs.  It
+    fails on ImportError, ModuleNotFoundError, or any unexpected exception.
+
     Uses sys.executable and PYTHONPATH=src so the test is portable across
     macOS local devel and Linux GitHub Actions.
     """
     import subprocess as _sp
 
     src_dir = str(REPO_ROOT / "src")
+    # Distinct exit codes:
+    #   0 = expected ConfigurationError raised (risk example fails closed)
+    #   2 = ImportError / ModuleNotFoundError (test must fail)
+    #   3 = unexpected success (risk example did NOT fail closed; test must fail)
+    #   4 = unexpected exception (test must fail)
+    # Embed the raw risk example as a Python string literal via repr() so the
+    # subprocess receives the exact JSON text.  Do NOT use json.dumps() of a
+    # Python dict here: JSON `null` is not valid Python and would raise
+    # NameError before the try/except block, exiting with code 1.
+    raw_literal = repr(risk_example)
     script = (
-        "import json, sys; "
-        "from trader_assist_v0.first_launch.configuration import "
-        "ConfigurationError, RiskConfiguration; "
-        f"raw = json.dumps({json.dumps(json.loads(risk_example))}); "
-        "try: RiskConfiguration.from_json(raw); sys.exit(0)\n"
-        "except ConfigurationError: sys.exit(1)\n"
+        "import json, sys\n"
+        "try:\n"
+        "    from trader_assist_v0.first_launch.configuration import "
+        "ConfigurationError, RiskConfiguration\n"
+        "except (ImportError, ModuleNotFoundError) as exc:\n"
+        "    sys.stderr.write('IMPORT_FAILURE: ' + repr(exc) + chr(10))\n"
+        "    sys.exit(2)\n"
+        f"raw = {raw_literal}\n"
+        "try:\n"
+        "    RiskConfiguration.from_json(raw)\n"
+        "    sys.stderr.write('UNEXPECTED_SUCCESS: risk example did not fail closed' + chr(10))\n"
+        "    sys.exit(3)\n"
+        "except ConfigurationError:\n"
+        "    sys.exit(0)\n"
+        "except Exception as exc:\n"
+        "    sys.stderr.write('UNEXPECTED_EXCEPTION: ' + repr(exc) + chr(10))\n"
+        "    sys.exit(4)\n"
     )
     env = {**os.environ, "PYTHONPATH": src_dir}
     result = _sp.run(
@@ -315,8 +378,9 @@ def test_risk_example_fails_closed(risk_example: str) -> None:
         text=True,
         timeout=10,
     )
-    assert result.returncode == 1, (
-        f"Risk example should fail closed, got exit code {result.returncode}"
+    assert result.returncode == 0, (
+        f"Risk example should fail closed with ConfigurationError (exit 0), "
+        f"got exit code {result.returncode}. stderr: {result.stderr}"
     )
 
 
@@ -409,8 +473,6 @@ def _run_wrapper(
         "TRADER_ASSIST_V0_DATABASE_PATH": "",
         "TRADER_ASSIST_V0_RISK_CONFIGURATION_PATH": "",
         "TRADER_ASSIST_V0_WEBHOOK_URL": "",
-        "TRADER_ASSIST_V0_AUTHORIZATION_HEADER_NAME": "",
-        "TRADER_ASSIST_V0_AUTHORIZATION_HEADER_VALUE": "",
     }
     if extra_env:
         env.update(extra_env)
@@ -503,38 +565,6 @@ def test_wrapper_exits_when_risk_path_outside_approved(
     })
     assert result.returncode != 0, (
         "Wrapper should exit non-zero when risk config path is outside approved directory"
-    )
-
-
-def test_wrapper_exits_when_authorization_pair_incomplete(
-    wrapper_path: Path,
-) -> None:
-    """Wrapper exits non-zero when only one of the authorization pair is set."""
-    # Name set, value empty
-    result = _run_wrapper(wrapper_path, extra_env={
-        "TRADER_ASSIST_V0_ENABLE": "1",
-        "TRADER_ASSIST_V0_MODE": "RESTRICTED_PUBLIC_LIVE_SHADOW",
-        "TRADER_ASSIST_V0_DATABASE_PATH": "/var/lib/trader-assist-v0/runtime.db",
-        "TRADER_ASSIST_V0_RISK_CONFIGURATION_PATH": "/etc/trader-assist-v0/risk.json",
-        "TRADER_ASSIST_V0_WEBHOOK_URL": "https://example.com/hook",
-        "TRADER_ASSIST_V0_AUTHORIZATION_HEADER_NAME": "Authorization",
-        "TRADER_ASSIST_V0_AUTHORIZATION_HEADER_VALUE": "",
-    })
-    assert result.returncode != 0, (
-        "Wrapper should exit non-zero when auth name set but value empty"
-    )
-    # Value set, name empty
-    result2 = _run_wrapper(wrapper_path, extra_env={
-        "TRADER_ASSIST_V0_ENABLE": "1",
-        "TRADER_ASSIST_V0_MODE": "RESTRICTED_PUBLIC_LIVE_SHADOW",
-        "TRADER_ASSIST_V0_DATABASE_PATH": "/var/lib/trader-assist-v0/runtime.db",
-        "TRADER_ASSIST_V0_RISK_CONFIGURATION_PATH": "/etc/trader-assist-v0/risk.json",
-        "TRADER_ASSIST_V0_WEBHOOK_URL": "https://example.com/hook",
-        "TRADER_ASSIST_V0_AUTHORIZATION_HEADER_NAME": "",
-        "TRADER_ASSIST_V0_AUTHORIZATION_HEADER_VALUE": "Bearer token",
-    })
-    assert result2.returncode != 0, (
-        "Wrapper should exit non-zero when auth value set but name empty"
     )
 
 
@@ -791,11 +821,67 @@ def test_runbook_has_smoke_not_authorized(runbook: str) -> None:
     assert "SMOKE IS NOT AUTHORIZED" in runbook
 
 
-def test_runbook_has_pip_install_editable(runbook: str) -> None:
-    """Runbook must include pip install --no-deps --no-build-isolation -e step."""
-    assert "--no-deps" in runbook or "--no-build-isolation" in runbook
-    assert "-e" in runbook or "--editable" in runbook.lower()
+def test_runbook_installs_only_runtime_lock_with_require_hashes(runbook: str) -> None:
+    """Runbook must install only requirements-runtime.lock with --require-hashes."""
     assert "pip install" in runbook
+    assert "--require-hashes" in runbook
+    assert "requirements-runtime.lock" in runbook
+    # Must not install the dev lockfile
+    assert "requirements-dev.lock" not in runbook
+
+
+def test_runbook_prohibits_editable_install(runbook: str) -> None:
+    """Runbook must not include editable install instructions."""
+    assert "pip install --no-deps --no-build-isolation -e" not in runbook, (
+        "Runbook must not include editable install step"
+    )
+    assert "--no-build-isolation" not in runbook, (
+        "Runbook must not use --no-build-isolation"
+    )
+    # No editable install of the project path
+    assert "-e /opt/trader-assist-v0" not in runbook, (
+        "Runbook must not editable-install /opt/trader-assist-v0"
+    )
+
+
+def test_runbook_verifies_import_source_path(runbook: str) -> None:
+    """Runbook must verify trader_assist_v0 imports from /opt/src/trader_assist_v0."""
+    assert "import trader_assist_v0" in runbook
+    assert "/opt/trader-assist-v0/src/trader_assist_v0" in runbook, (
+        "Runbook must verify import source path"
+    )
+    # Must reference the forced PYTHONPATH
+    assert "PYTHONPATH=/opt/trader-assist-v0/src" in runbook, (
+        "Runbook must reference the forced PYTHONPATH"
+    )
+
+
+def test_runbook_prohibits_pythonpath_in_env(runbook: str) -> None:
+    """Runbook must state PYTHONPATH is not set in public.env."""
+    assert "PYTHONPATH" in runbook
+    assert "public.env" in runbook
+
+
+def test_runbook_requires_exact_sha_deployment(runbook: str) -> None:
+    """Runbook must require full 40-char SHA, exact fetch, detached checkout."""
+    assert "40-character SHA" in runbook or "40-character" in runbook
+    assert "git fetch" in runbook
+    assert "git checkout" in runbook
+    assert "rev-parse HEAD" in runbook
+    assert "status --porcelain" in runbook
+
+
+def test_runbook_prohibits_floating_deployment(runbook: str) -> None:
+    """Runbook must prohibit floating main, mutable branches, abbreviated SHAs."""
+    assert "floating" in runbook.lower()
+    assert "abbreviated" in runbook.lower()
+    assert "mutable" in runbook.lower()
+
+
+def test_runbook_documents_webhook_header_deferral(runbook: str) -> None:
+    """Runbook must document the authenticated webhook header deferral."""
+    assert "AUTHENTICATED_WEBHOOK_HEADER_SUPPORT" in runbook
+    assert "DEFERRED_PENDING_SEPARATELY_AUTHORIZED_SECURE_SECRET_INGRESS" in runbook
 
 
 def test_runbook_has_import_verification(runbook: str) -> None:
@@ -871,3 +957,372 @@ def test_evidence_manifest_valid_json() -> None:
     parsed = json.loads(raw)
     assert isinstance(parsed, dict)
     assert len(parsed) >= 30, f"Expected at least 30 fields, got {len(parsed)}"
+
+
+# ---------------------------------------------------------------------------
+# Test 14: Controlled behavioral test harness (ER-05) and filesystem
+# containment adversarial tests (ER-03)
+# ---------------------------------------------------------------------------
+#
+# The harness creates a temporary copy of the production wrapper, replaces
+# only the fixed production path constants with temp paths, and sets up temp
+# permit/state/config/risk/database/stub Python/stub entrypoint paths.  Each
+# adversarial test satisfies every preceding guard before triggering the
+# target guard and asserts the exact target error.  No root is required;
+# nothing is written to /etc, /var/lib or /opt; no network, AWS, real
+# webhook or systemd service is used.  The real runtime is never started.
+
+@pytest.fixture
+def harness(tmp_path: Path) -> dict[str, Any]:
+    """Build a temporary copy of the production wrapper with replaced path
+    constants, plus temp permit/state/config/risk/db/stub paths.
+
+    The default setup satisfies every guard so each test can target a
+    specific guard by overriding one env var or mutating one path.
+    """
+    prod = (REPO_ROOT / "scripts/p4a/run_restricted_public_runtime.sh").read_text()
+
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    venv_bin = tmp_path / "venv" / "bin"
+    venv_bin.mkdir(parents=True)
+
+    # Permit lives outside config_dir so config_dir can be broken independently
+    permit = tmp_path / "permit"
+    permit.write_text("")
+
+    # Stub Python executable (replaces the real venv python)
+    stub_python = venv_bin / "python"
+    stub_python.write_text("#!/usr/bin/env bash\necho STUB_PYTHON_EXEC\nexit 0\n")
+    stub_python.chmod(0o755)
+
+    # Stub entrypoint (must be a regular file; content irrelevant)
+    stub_entry = scripts_dir / "run_first_launch_public_runtime.py"
+    stub_entry.write_text("# stub entrypoint\n")
+
+    # Valid risk config (regular file inside approved config dir)
+    risk_file = config_dir / "risk-configuration.json"
+    risk_file.write_text('{"CONFIGURATION_VERSION": "PLACEHOLDER_DISABLED"}\n')
+
+    # Default database path: missing file is valid (SQLite creates it)
+    db_path = state_dir / "runtime.db"
+
+    # Replace only the fixed production path constants in the copy
+    content = prod
+    content = content.replace(
+        'ACTIVATION_PERMIT="/etc/trader-assist-v0/activation-permit"',
+        f'ACTIVATION_PERMIT="{permit}"',
+    )
+    content = content.replace(
+        'PYTHON_ENTRYPOINT="/opt/trader-assist-v0/scripts/run_first_launch_public_runtime.py"',
+        f'PYTHON_ENTRYPOINT="{stub_entry}"',
+    )
+    content = content.replace(
+        'PYTHON_EXECUTABLE="/opt/trader-assist-v0/venv/bin/python"',
+        f'PYTHON_EXECUTABLE="{stub_python}"',
+    )
+    content = content.replace(
+        'PYTHONPATH_FORCED="/opt/trader-assist-v0/src"',
+        f'PYTHONPATH_FORCED="{src_dir}"',
+    )
+    content = content.replace(
+        'APPROVED_STATE_DIR="/var/lib/trader-assist-v0"',
+        f'APPROVED_STATE_DIR="{state_dir}"',
+    )
+    content = content.replace(
+        'APPROVED_CONFIG_DIR="/etc/trader-assist-v0"',
+        f'APPROVED_CONFIG_DIR="{config_dir}"',
+    )
+
+    wrapper_copy = tmp_path / "wrapper.sh"
+    wrapper_copy.write_text(content)
+    wrapper_copy.chmod(0o755)
+
+    base_env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "TRADER_ASSIST_V0_ENABLE": "1",
+        "TRADER_ASSIST_V0_MODE": "RESTRICTED_PUBLIC_LIVE_SHADOW",
+        "TRADER_ASSIST_V0_DATABASE_PATH": str(db_path),
+        "TRADER_ASSIST_V0_RISK_CONFIGURATION_PATH": str(risk_file),
+        "TRADER_ASSIST_V0_WEBHOOK_URL": "https://example.com/hook",
+    }
+
+    return {
+        "wrapper": wrapper_copy,
+        "wrapper_text": content,
+        "base_env": base_env,
+        "tmp_path": tmp_path,
+        "state_dir": state_dir,
+        "config_dir": config_dir,
+        "src_dir": src_dir,
+        "risk_file": risk_file,
+        "permit": permit,
+        "stub_python": stub_python,
+        "stub_entry": stub_entry,
+        "db_path": db_path,
+    }
+
+
+def _run_harness(
+    harness: dict[str, Any],
+    env_overrides: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    env = dict(harness["base_env"])
+    if env_overrides:
+        env.update(env_overrides)
+    return subprocess.run(
+        ["bash", str(harness["wrapper"])],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+
+# --- ER-05: positive path and real-runtime-never-started proof ---
+
+def test_harness_positive_path_reaches_stub_exec(harness: dict[str, Any]) -> None:
+    """All guards satisfied: wrapper execs the stub Python (not the real runtime).
+
+    This also covers the 'valid missing database file' case (the default
+    database path does not exist).
+    """
+    result = _run_harness(harness)
+    assert result.returncode == 0, (
+        f"Positive path should reach stub exec, got rc={result.returncode}: {result.stderr}"
+    )
+    assert "STUB_PYTHON_EXEC" in result.stdout, (
+        f"Stub Python was not exec'd. stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+
+
+def test_harness_proves_real_runtime_never_started(harness: dict[str, Any]) -> None:
+    """The wrapper copy must reference only temp paths, never production paths."""
+    text = harness["wrapper_text"]
+    assert "/opt/trader-assist-v0" not in text, "wrapper copy references /opt"
+    assert "/etc/trader-assist-v0" not in text, "wrapper copy references /etc"
+    assert "/var/lib/trader-assist-v0" not in text, "wrapper copy references /var/lib"
+    # The real entrypoint must not exist on the test machine
+    assert not Path("/opt/trader-assist-v0/scripts/run_first_launch_public_runtime.py").exists()
+
+
+def test_harness_writes_nothing_to_system_paths(harness: dict[str, Any]) -> None:
+    """The harness uses only tmp_path; no writes to /etc, /var/lib or /opt."""
+    tmp_str = str(harness["tmp_path"])
+    assert (
+        tmp_str.startswith("/tmp")
+        or tmp_str.startswith("/var/folders")
+        or tmp_str.startswith("/private/var/folders")
+        or tmp_str.startswith("/private/tmp")
+    ), f"tmp_path not under a recognized temp root: {tmp_str}"
+    assert "/etc/trader-assist-v0" not in tmp_str
+    assert "/var/lib/trader-assist-v0" not in tmp_str
+    assert "/opt/trader-assist-v0" not in tmp_str
+
+
+# --- ER-03: approved directory canonicalization failures ---
+
+def test_harness_rejects_state_dir_canonicalization_failure(harness: dict[str, Any]) -> None:
+    """Approved state directory cannot canonicalize -> exact error."""
+    shutil.rmtree(harness["state_dir"])
+    result = _run_harness(harness)
+    assert result.returncode != 0
+    assert "approved state directory cannot canonicalize" in result.stderr, (
+        f"Expected state canonicalization error, got: {result.stderr}"
+    )
+
+
+def test_harness_rejects_config_dir_canonicalization_failure(harness: dict[str, Any]) -> None:
+    """Approved config directory cannot canonicalize -> exact error."""
+    shutil.rmtree(harness["config_dir"])
+    result = _run_harness(harness)
+    assert result.returncode != 0
+    assert "approved config directory cannot canonicalize" in result.stderr, (
+        f"Expected config canonicalization error, got: {result.stderr}"
+    )
+
+
+# --- ER-03: database filesystem containment adversarial tests ---
+
+def test_harness_rejects_database_parent_nonexistent(harness: dict[str, Any]) -> None:
+    """Database parent directory cannot canonicalize -> exact error."""
+    db_path = harness["state_dir"] / "nonexistent_subdir" / "runtime.db"
+    result = _run_harness(harness, {"TRADER_ASSIST_V0_DATABASE_PATH": str(db_path)})
+    assert result.returncode != 0
+    assert "database parent directory cannot canonicalize" in result.stderr, (
+        f"Expected db parent canonicalization error, got: {result.stderr}"
+    )
+
+
+def test_harness_rejects_database_parent_outside_approved(harness: dict[str, Any]) -> None:
+    """Database parent outside approved state -> exact error."""
+    outside = harness["tmp_path"] / "outside"
+    outside.mkdir()
+    db_path = outside / "runtime.db"
+    result = _run_harness(harness, {"TRADER_ASSIST_V0_DATABASE_PATH": str(db_path)})
+    assert result.returncode != 0
+    assert "database parent directory must be under" in result.stderr, (
+        f"Expected db parent outside error, got: {result.stderr}"
+    )
+
+
+def test_harness_rejects_existing_database_symlink(harness: dict[str, Any]) -> None:
+    """Existing database symlink -> exact error."""
+    target = harness["tmp_path"] / "target.db"
+    target.write_text("data")
+    link = harness["db_path"]
+    os.symlink(target, link)
+    result = _run_harness(harness)
+    assert result.returncode != 0
+    assert "database final path must not be a symlink" in result.stderr, (
+        f"Expected db symlink error, got: {result.stderr}"
+    )
+
+
+def test_harness_rejects_existing_database_non_regular(harness: dict[str, Any]) -> None:
+    """Existing database non-regular object (directory) -> exact error."""
+    db_as_dir = harness["db_path"]
+    db_as_dir.mkdir()
+    result = _run_harness(harness)
+    assert result.returncode != 0
+    assert "database final path must be a regular file" in result.stderr, (
+        f"Expected db non-regular error, got: {result.stderr}"
+    )
+
+
+def test_harness_allows_missing_database_file(harness: dict[str, Any]) -> None:
+    """Missing final database file is valid -> stub exec reached."""
+    assert not harness["db_path"].exists()
+    result = _run_harness(harness)
+    assert result.returncode == 0, (
+        f"Missing db file should be valid, got: {result.stderr}"
+    )
+    assert "STUB_PYTHON_EXEC" in result.stdout
+
+
+def test_harness_allows_existing_regular_database_file(harness: dict[str, Any]) -> None:
+    """Existing regular database file is valid -> stub exec reached."""
+    harness["db_path"].write_text("sqlite data")
+    result = _run_harness(harness)
+    assert result.returncode == 0, (
+        f"Existing regular db file should be valid, got: {result.stderr}"
+    )
+    assert "STUB_PYTHON_EXEC" in result.stdout
+
+
+# --- ER-03: risk configuration filesystem containment adversarial tests ---
+
+def test_harness_rejects_missing_risk_file(harness: dict[str, Any]) -> None:
+    """Missing risk file -> exact error."""
+    missing = harness["config_dir"] / "nonexistent.json"
+    result = _run_harness(harness, {"TRADER_ASSIST_V0_RISK_CONFIGURATION_PATH": str(missing)})
+    assert result.returncode != 0
+    assert "risk configuration file not found or not a regular file" in result.stderr, (
+        f"Expected missing risk file error, got: {result.stderr}"
+    )
+
+
+def test_harness_rejects_non_regular_risk_path(harness: dict[str, Any]) -> None:
+    """Non-regular risk path (directory) -> exact error."""
+    risk_dir = harness["config_dir"] / "not-a-file"
+    risk_dir.mkdir()
+    result = _run_harness(harness, {"TRADER_ASSIST_V0_RISK_CONFIGURATION_PATH": str(risk_dir)})
+    assert result.returncode != 0
+    assert "risk configuration file not found or not a regular file" in result.stderr, (
+        f"Expected non-regular risk error, got: {result.stderr}"
+    )
+
+
+def test_harness_rejects_risk_path_outside_approved_config(harness: dict[str, Any]) -> None:
+    """Risk path outside approved config -> exact error."""
+    outside = harness["tmp_path"] / "outside-risk"
+    outside.mkdir()
+    risk_outside = outside / "risk.json"
+    risk_outside.write_text("{}")
+    result = _run_harness(harness, {"TRADER_ASSIST_V0_RISK_CONFIGURATION_PATH": str(risk_outside)})
+    assert result.returncode != 0
+    assert "risk configuration path must be under" in result.stderr, (
+        f"Expected risk outside config error, got: {result.stderr}"
+    )
+
+
+def test_harness_rejects_risk_path_symlink(harness: dict[str, Any]) -> None:
+    """Risk path symlink -> exact error."""
+    target = harness["config_dir"] / "real-risk.json"
+    target.write_text("{}")
+    link = harness["config_dir"] / "link-risk.json"
+    os.symlink(target, link)
+    result = _run_harness(harness, {"TRADER_ASSIST_V0_RISK_CONFIGURATION_PATH": str(link)})
+    assert result.returncode != 0
+    assert "risk configuration path must not be a symlink" in result.stderr, (
+        f"Expected risk symlink error, got: {result.stderr}"
+    )
+
+
+# --- ER-03: TOCTOU documentation in wrapper ---
+
+def test_wrapper_documents_toctou_limitation(wrapper_path: Path) -> None:
+    """Wrapper must document that same-UID TOCTOU races are reduced but not eliminated."""
+    content = wrapper_path.read_text()
+    assert "TOCTOU" in content, "Wrapper must document TOCTOU limitation"
+    assert "not mathematically eliminated" in content, (
+        "Wrapper must state TOCTOU races are not mathematically eliminated"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 15: Exact scope relative to EXACT_BASE (ER-06)
+# ---------------------------------------------------------------------------
+
+def _exact_scope_active() -> bool:
+    """True when local branch or CI PR head matches the exact scope branch."""
+    # Local branch check
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True,
+            text=True,
+            cwd=REPO_ROOT,
+            timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip() == EXACT_SCOPE_BRANCH:
+            return True
+    except Exception:
+        pass
+    # CI check: pull_request event with matching head ref
+    if os.environ.get("GITHUB_EVENT_NAME") == "pull_request" and \
+       os.environ.get("GITHUB_HEAD_REF") == EXACT_SCOPE_BRANCH:
+        return True
+    return False
+
+
+def test_exact_scope_relative_to_base() -> None:
+    """When active on the exact branch or PR, require exactly the 7 A paths.
+
+    Skips main, post-merge push, unrelated branches and unrelated PRs.
+    """
+    if not _exact_scope_active():
+        pytest.skip(
+            "exact-scope test only active on "
+            "feature/v0-fl-r3-p4a-local-deployment-package"
+        )
+    result = subprocess.run(
+        ["git", "diff", "--name-status", f"{EXACT_BASE}...HEAD"],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+        timeout=10,
+    )
+    assert result.returncode == 0, f"git diff failed: {result.stderr}"
+    lines = [line.split("\t") for line in result.stdout.strip().split("\n") if line.strip()]
+    actual = {(parts[0], parts[1]) for parts in lines if len(parts) >= 2}
+    assert actual == EXPECTED_EXACT_SCOPE, (
+        f"Scope mismatch.\nExpected: {sorted(EXPECTED_EXACT_SCOPE)}\n"
+        f"Got: {sorted(actual)}"
+    )

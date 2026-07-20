@@ -18,29 +18,64 @@ sudo useradd --system --gid traderassist --no-create-home --shell /usr/sbin/nolo
 
 ## 3. Repository Installation
 
-Clone the repository to `/opt/trader-assist-v0`:
+Deployment authority requires a Project-Control-authorized full 40-character
+SHA.  Deployment from floating `main`, mutable branches, abbreviated SHAs,
+or any non-exact ref is prohibited.
+
+Set the authorized SHA and install the repository at the exact commit:
 
 ```bash
+AUTHORIZED_SHA="<full 40-character SHA authorized by Project Control>"
+
+sudo mkdir -p /opt/trader-assist-v0
 sudo git clone https://github.com/woshixiong/trader-assist-v0.git /opt/trader-assist-v0
+cd /opt/trader-assist-v0
+
+# Exact SHA fetch and detached checkout (no mutable branch, no abbrev)
+sudo git fetch origin "$AUTHORIZED_SHA"
+sudo git checkout "$AUTHORIZED_SHA"
+
+# Verify exact HEAD equality with the authorized SHA
+test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"
+
+# Verify clean tree
+test -z "$(git status --porcelain)"
+
 sudo chown -R root:root /opt/trader-assist-v0
 ```
 
 ## 4. Virtual Environment
 
-Create the Python virtual environment under `/opt/trader-assist-v0/venv` and install
-dependencies using the original hashed lockfiles:
+Create the Python virtual environment under `/opt/trader-assist-v0/venv` and
+install only the hashed runtime lockfile.  Do not install the development
+lockfile, unhashed build dependencies, or an editable (`-e`) install of the
+project.  The project is imported exclusively via the forced `PYTHONPATH`
+(see Section 8 and the wrapper), never via site-packages.
 
 ```bash
 cd /opt/trader-assist-v0
 sudo python3.12 -m venv venv
 sudo venv/bin/pip install --require-hashes -r requirements-runtime.lock
-sudo venv/bin/pip install --no-deps --no-build-isolation -e /opt/trader-assist-v0
 ```
 
-Verify the installation can import the trader_assist_v0 package:
+Verify `trader_assist_v0` imports exclusively from
+`/opt/trader-assist-v0/src/trader_assist_v0` and that the import fails if it
+would resolve from site-packages or another checkout:
 
 ```bash
-sudo /opt/trader-assist-v0/venv/bin/python -c "import trader_assist_v0; print('OK')"
+# Positive: with forced PYTHONPATH, import must resolve from /opt/src
+sudo PYTHONPATH=/opt/trader-assist-v0/src /opt/trader-assist-v0/venv/bin/python -c "
+import os, trader_assist_v0
+expected = os.path.realpath('/opt/trader-assist-v0/src/trader_assist_v0')
+actual = [os.path.realpath(p) for p in (trader_assist_v0.__path__ or [])]
+assert actual == [expected], f'import resolved from {actual}, expected [{expected}]'
+print('OK: import source verified')
+"
+
+# Negative: without PYTHONPATH, import must fail (not installed in site-packages)
+sudo /opt/trader-assist-v0/venv/bin/python -c "import trader_assist_v0" \
+  && { echo 'FAIL: import succeeded without PYTHONPATH'; exit 1; } \
+  || echo 'OK: import correctly fails without PYTHONPATH'
 ```
 
 ## 5. Configuration Directory
@@ -86,6 +121,19 @@ with operator-reviewed values. At minimum:
 - `TRADER_ASSIST_V0_WEBHOOK_URL` must contain a valid HTTPS webhook URL.
 - `TRADER_ASSIST_V0_DATABASE_PATH` must point to a path under `/var/lib/trader-assist-v0`.
 - `TRADER_ASSIST_V0_RISK_CONFIGURATION_PATH` must point to a path under `/etc/trader-assist-v0`.
+
+`PYTHONPATH` must NOT be defined or overridden in `public.env`.  The production
+wrapper forces `PYTHONPATH=/opt/trader-assist-v0/src` so `trader_assist_v0`
+imports exclusively from the approved source tree.
+
+AUTHENTICATED_WEBHOOK_HEADER_SUPPORT:
+DEFERRED_PENDING_SEPARATELY_AUTHORIZED_SECURE_SECRET_INGRESS
+
+Authenticated webhook header support is intentionally absent from this
+package.  No authorization-header name/value environment variables, pair
+validation, or argv construction are present.  A separately authorized secure
+secret ingress workstream is required before any authenticated webhook
+header mechanism is introduced.
 
 ## 9. Risk Configuration
 
