@@ -23,14 +23,14 @@ PROGRAM_TASK_ID = "V0-FLP1B0B-CAPTURE-NOW-AUTHORITY-AMENDMENT"
 PROGRAM_BASE_SHA = "78d2d37bfe5a4f3f1d382a2a96e57896ae9676ae"
 CURRENT_STATE_BASE_SHA = "681397395957dacbcc9f8a80816d14bb8c4603b2"
 CURRENT_ACTIVE_TASK_ID = "NONE"
-COMPLETED_IMPLEMENTATION = "V0-FLP1-OFFLINE-MINIMAL-PILOT-REVIEW-AND-COVERAGE-REPORT"
-COMPLETED_IMPLEMENTATION_PR = 27
+COMPLETED_IMPLEMENTATION = "V0-FL-R3-P3B-RESTRICTED-PUBLIC-RUNTIME-COMPOSITION"
+COMPLETED_IMPLEMENTATION_PR = 37
 LAST_LEASE_ID = "PR22_FINAL_REPAIR_WRITE_LEASE_ID_UNRESOLVED"
 LAST_LEASE_TYPE = "PR22_FINAL_REPAIR_WRITE_LEASE_TYPE_UNRESOLVED"
 FASTSAFE_CONTROL_CONTRACT_ID = "FASTSAFE-V1-2026-07"
 ENGINEERING_TRACK_ID = "ENGINEERING-AUTOMATION-TRACK-V1-2026-07"
-NEXT_GATE = "NEXT_GATE_UNRESOLVED"
-NEXT_GATE_STATUS = "NEXT_GATE_UNRESOLVED_PENDING_SEPARATE_USER_DECISION"
+NEXT_GATE = "V0-FL-R3-P4-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE"
+NEXT_GATE_STATUS = "ENGINEERING_ELIGIBLE_PENDING_PROJECT_CONTROL_ACTIVATION"
 AUTHORITY_HASH = "0e327e566589d8030ff00d4d009eb4b6827679ab508133d66840b2c245dc53df"
 SOURCE_CATALOG_HASH = "0ca27f650f399f8fa481ad9421eab4183c1c13812c71dfa8daaf878719bd99b7"
 COMMIT_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -141,14 +141,30 @@ def test_program_provenance_and_current_state_are_distinct() -> None:
     }
 
 
-def test_safe_stop_authority_fields_remain_disabled() -> None:
+def test_p3b_closeout_and_p4_eligibility_state() -> None:
     program = _load_json(PROGRAM_PATH)
     state = _load_json(STATE_PATH)
 
-    assert state["active_task_id"] == "NONE"
-    assert state["active_write_lease"]["status"] == "NONE"
+    # P3B is the latest completed implementation.
+    assert state["last_completed_implementation"] == COMPLETED_IMPLEMENTATION
+    assert state["last_completed_implementation_pr"] == COMPLETED_IMPLEMENTATION_PR
+    assert program["authority"]["last_completed_implementation"] == COMPLETED_IMPLEMENTATION
+    assert (
+        program["authority"]["last_completed_implementation_pr"]
+        == COMPLETED_IMPLEMENTATION_PR
+    )
+
+    # P4 is selected as the next gate but not activated.
+    assert state["next_gate"] == NEXT_GATE
+    assert state["next_gate_status"] == NEXT_GATE_STATUS
+    assert program["authority"]["next_gate"] == NEXT_GATE
+    assert program["authority"]["next_gate_status"] == NEXT_GATE_STATUS
+    assert program["first_release"]["next_runtime_gate"] == NEXT_GATE
+    assert program["review_finalization_policy"]["next_gate"] == NEXT_GATE
+    assert program["recursive_rotation"]["post_merge_next_gate"] == NEXT_GATE
+
+    # P4 activation authorities remain disabled.
     for field in (
-        "transition_eligible",
         "runtime_started",
         "t2_runtime_started",
         "live_transport_authorized",
@@ -158,6 +174,41 @@ def test_safe_stop_authority_fields_remain_disabled() -> None:
         "flp1_implementation_authorized",
     ):
         assert state[field] is False
+    for field in (
+        "live_transport_authorized",
+        "account_readonly_runtime_authorized",
+        "testnet_execution_authorized",
+        "mainnet_execution_authorized",
+        "flp1_implementation_authorized",
+    ):
+        assert program["authority"][field] is False
+
+    # Transition is eligible pending project-control activation.
+    assert state["transition_eligible"] is True
+    assert program["authority"]["transition_eligible"] is True
+
+    # Active task and write lease remain inactive.
+    assert state["active_task_id"] == "NONE"
+    assert state["active_write_lease"]["status"] == "NONE"
+
+
+def test_safe_stop_authority_fields_remain_disabled() -> None:
+    program = _load_json(PROGRAM_PATH)
+    state = _load_json(STATE_PATH)
+
+    assert state["active_task_id"] == "NONE"
+    assert state["active_write_lease"]["status"] == "NONE"
+    for field in (
+        "runtime_started",
+        "t2_runtime_started",
+        "live_transport_authorized",
+        "account_readonly_runtime_authorized",
+        "testnet_execution_authorized",
+        "mainnet_execution_authorized",
+        "flp1_implementation_authorized",
+    ):
+        assert state[field] is False
+    assert state["transition_eligible"] is True
     assert state["mark_ready_prohibited"] is True
     assert state["merge_prohibited"] is True
 
@@ -167,9 +218,9 @@ def test_safe_stop_authority_fields_remain_disabled() -> None:
         "testnet_execution_authorized",
         "mainnet_execution_authorized",
         "flp1_implementation_authorized",
-        "transition_eligible",
     ):
         assert program["authority"][field] is False
+    assert program["authority"]["transition_eligible"] is True
     for capability in (
         "EXCHANGE_WRITE",
         "AUTOMATIC_ENTRY",
@@ -302,7 +353,6 @@ def test_schema_rejects_stale_pr25_and_active_authority_values() -> None:
 @pytest.mark.parametrize(
     "field",
     (
-        "transition_eligible",
         "runtime_started",
         "t2_runtime_started",
         "live_transport_authorized",
@@ -540,7 +590,6 @@ def test_rate_limit_authority_immutability_and_false_gates() -> None:
         assert document["fact_count"] == 25
         assert document["unknown_count"] == 14
         for gate in (
-            "transition_eligible",
             "live_transport_authorized",
             "account_readonly_runtime_authorized",
             "testnet_execution_authorized",
@@ -548,6 +597,7 @@ def test_rate_limit_authority_immutability_and_false_gates() -> None:
             "flp1_implementation_authorized",
         ):
             assert document[gate] is False
+        assert document["transition_eligible"] is True
     assert state["active_task_id"] == "NONE"
     assert state["active_write_lease"]["status"] == "NONE"
     assert state["runtime_started"] is False
