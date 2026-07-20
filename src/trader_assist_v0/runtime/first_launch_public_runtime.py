@@ -85,6 +85,7 @@ from trader_assist_v0.runtime.first_launch_runtime_store import (
     PublicationBundleRecord,
     RuntimeStore,
     RuntimeStoreError,
+    _register_tradeplan_proof,
 )
 
 _RUNTIME_MODE: Final[Literal["RESTRICTED_PUBLIC_LIVE_SHADOW"]] = (
@@ -790,6 +791,19 @@ class RestrictedPublicRuntime:
             volatility=volatility,
             overlay=overlay,
             context_summary=context_summary,
+        )
+        # GA-04: register the process-local issuance proof binding the exact
+        # TradePlan object identity to its plan_id, canonical_hash and the
+        # exact embedded StrategyOutput/VolatilitySnapshot/OverlayDecision
+        # identities. The proof is private to the P3B runtime store, lives only
+        # for the lifetime of this plan object in this process, and is never
+        # serialized or persisted. The store validates the proof at the start
+        # of persist_publication_bundle, before any SQLite mutation.
+        _register_tradeplan_proof(
+            plan,
+            strategy_output=output,
+            volatility_snapshot=volatility,
+            overlay_decision=overlay,
         )
         card = build_operator_card(
             plan, now=now, quality=DataQualityState.READY

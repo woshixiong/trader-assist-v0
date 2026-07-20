@@ -12,6 +12,7 @@ Covers Section 16 category G (Notification):
 
 from __future__ import annotations
 
+import email.message
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -685,11 +686,19 @@ def test_attempt_count_increments_on_retry(tmp_path: Path) -> None:
         "https://api.hyperliquid.xyz:443/exchange",
         "https://api.hyperliquid.xyz/path/exchange",
         "https://api.hyperliquid.xyz/exchange/sub",
+        "https://api.hyperliquid.xyz/info",
+        "https://api.hyperliquid.xyz/anything",
+        "https://api.hyperliquid-testnet.xyz/",
     ],
 )
 def test_ga03_prohibited_hyperliquid_exchange_endpoints_rejected(url: str) -> None:
-    """GA-03: Hyperliquid exchange-write endpoints must be rejected before any network call."""
-    with pytest.raises(NotificationConfigError, match="exchange-write endpoint"):
+    """GA-03: both Hyperliquid API hosts are rejected entirely before any network call.
+
+    The notification transport is operation-specific; both Hyperliquid API hosts
+    are rejected regardless of port/path/query because any accepted configuration
+    could be redirected or normalized to reach an exchange-write endpoint.
+    """
+    with pytest.raises(NotificationConfigError, match="Hyperliquid API host"):
         _config(url=url)
 
 
@@ -717,15 +726,6 @@ def test_ga03_normal_https_webhook_remains_accepted() -> None:
     assert config.webhook_url == "https://hooks.example.com/eth-notify"
 
 
-def test_ga03_hyperliquid_info_endpoint_remains_accepted() -> None:
-    """GA-03: a Hyperliquid non-exchange endpoint (e.g. /info) is not blocked.
-
-    The policy is operation-specific (exchange-write), not host-specific.
-    """
-    config = _config(url="https://api.hyperliquid.xyz/info")
-    assert config.webhook_url == "https://api.hyperliquid.xyz/info"
-
-
 def test_ga03_no_dispatch_attempt_for_invalid_endpoint(tmp_path: Path) -> None:
     """GA-03: no outbox dispatch attempt can occur because configuration admission itself rejects.
 
@@ -743,11 +743,178 @@ def test_ga03_no_dispatch_attempt_for_invalid_endpoint(tmp_path: Path) -> None:
 
 
 def test_ga03_case_variant_of_prohibited_target_rejected() -> None:
-    """GA-03: case-insensitive matching of the exchange path token."""
-    # urlparse lowercases the scheme and host, but the path is case-sensitive.
-    # The policy lowercases the path before matching, so Exchange/EXCHANGE
-    # are also rejected.
-    with pytest.raises(NotificationConfigError, match="exchange-write endpoint"):
+    """GA-03: case and trailing-dot variants of a prohibited host are rejected.
+
+    Variants are rejected after IDNA canonicalization.
+    ``urlparse`` already lowercases the parsed hostname, and the canonicalization
+    re-lowercases after IDNA encoding so that uppercase or trailing-dot variants
+    cannot bypass the prohibited-host list.
+    """
+    with pytest.raises(NotificationConfigError, match="Hyperliquid API host"):
         _config(url="https://api.hyperliquid.xyz/Exchange")
-    with pytest.raises(NotificationConfigError, match="exchange-write endpoint"):
+    with pytest.raises(NotificationConfigError, match="Hyperliquid API host"):
         _config(url="https://api.hyperliquid.xyz/EXCHANGE")
+
+
+# ============================================================
+# GA-03 required closure assertions
+# ============================================================
+
+
+def test_ga03_redirect_not_followed() -> None:
+    """GA03_REDIRECT_NOT_FOLLOWED: ``_NoRedirectHandler.redirect_request`` returns None.
+
+    When the redirect handler returns None, urllib's ``http_error_30x`` returns
+    None and falls through to the default error handler that raises
+    ``HTTPError``.  ``HttpsWebhookTransport.post`` catches ``HTTPError`` and
+    converts it to an ``HttpResponse`` with the 3xx status code, which
+    ``_classify_response`` then maps to ``FAILED_CONFIGURATION``.
+    """
+    from trader_assist_v0.runtime.first_launch_notification import _NoRedirectHandler
+
+    handler = _NoRedirectHandler()
+    headers = email.message.Message()
+    headers["Location"] = "https://evil.example/redirected"
+    for code in (301, 302, 303, 307, 308):
+        result = handler.redirect_request(
+            req=None,
+            fp=None,
+            code=code,
+            msg="Redirect",
+            headers=headers,
+            newurl="https://evil.example/redirected",
+        )
+        assert result is None, f"redirect was followed for {code}"
+
+
+def test_ga03_redirect_location_not_called() -> None:
+    """GA03_REDIRECT_LOCATION_NOT_CALLED: no Request is built for the Location URL.
+
+    Because ``_NoRedirectHandler.redirect_request`` returns None, urllib never
+    constructs a new ``Request`` for the redirect target and never invokes
+    ``OpenerDirector.open`` on it.  The only URL ever opened is the originally
+    authorized URL.  This test monkey-patches the opener to assert that the
+    Location URL is never fetched.
+    """
+    from trader_assist_v0.runtime.first_launch_notification import (
+        _WEBHOOK_OPENER,
+        HttpsWebhookTransport,
+    )
+
+    opened_urls: list[str] = []
+
+    class _FakeResponse:
+        def __init__(self, status: int, url: str) -> None:
+            self.status = status
+            self._url = url
+
+        def read(self) -> bytes:
+            return b""
+
+        def geturl(self) -> str:
+            return self._url
+
+        def __enter__(self) -> _FakeResponse:
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            return None
+
+    def fake_open(req: object, timeout: float | None = None) -> _FakeResponse:
+        url = getattr(req, "full_url", str(req))
+        opened_urls.append(url)
+        # Return a 302 response with a Location header in the body.  The opener
+        # must NOT call this for the Location URL.
+        return _FakeResponse(302, url)
+
+    original_open = _WEBHOOK_OPENER.open
+    _WEBHOOK_OPENER.open = fake_open  # type: ignore[method-assign]
+    try:
+        transport = HttpsWebhookTransport()
+        response = transport.post(
+            url="https://accepted-webhook.example/notify",
+            payload=b"{}",
+            headers={"Content-Type": "application/json"},
+            timeout=5.0,
+        )
+    finally:
+        _WEBHOOK_OPENER.open = original_open  # type: ignore[method-assign]
+    assert response.status_code == 302
+    # The Location URL must never have been opened.
+    assert opened_urls == ["https://accepted-webhook.example/notify"]
+    assert all("evil" not in url for url in opened_urls)
+
+
+def test_ga03_encoded_exchange_zero_network() -> None:
+    """GA03_ENCODED_EXCHANGE_ZERO_NETWORK: percent-encoded ``/exchange`` is rejected at admission.
+
+    ``https://api.hyperliquid.xyz/%65xchange`` percent-decodes once to
+    ``/exchange``, but the host ``api.hyperliquid.xyz`` is rejected entirely
+    at configuration admission.  No dispatcher, no transport and no network
+    call is constructed for this URL.
+    """
+    with pytest.raises(NotificationConfigError, match="Hyperliquid API host"):
+        _config(url="https://api.hyperliquid.xyz/%65xchange")
+
+
+def test_ga03_double_encoded_path_rejected() -> None:
+    """GA03_DOUBLE_ENCODED_PATH_REJECTED: ``%2565`` decodes once to ``%65``.
+
+    ``%65`` is still a percent escape.
+    A path that contains a double-encoded percent escape must be rejected at
+    configuration admission, even when the host itself is not prohibited.
+    """
+    with pytest.raises(NotificationConfigError, match="double percent encoding"):
+        _config(url="https://accepted.example/%2565xchange")
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://api.hyperliquid.xyz/exchange",
+        "https://API.HYPERLIQUID.XYZ/exchange",
+        "https://API.HYPERLIQUID.XYZ./exchange",
+        "https://api.hyperliquid.xyz./exchange",
+        "https://api.HYPERLIQUID.xyz/exchange",
+        "https://api.hyperliquid-testnet.xyz/exchange",
+        "https://API.HYPERLIQUID-TESTNET.XYZ./exchange",
+    ],
+)
+def test_ga03_canonical_host_variants_rejected(url: str) -> None:
+    """GA03_CANONICAL_HOST_VARIANTS_REJECTED.
+
+    Case and trailing-dot variants are rejected after IDNA canonicalization.
+    """
+    with pytest.raises(NotificationConfigError, match="Hyperliquid API host"):
+        _config(url=url)
+
+
+def test_outbox_delivered_on_redirect_false(tmp_path: Path) -> None:
+    """OUTBOX_DELIVERED_ON_REDIRECT_FALSE.
+
+    A 302 redirect response must NOT mark the outbox as DELIVERED.
+    The mock transport returns a 302 response.  ``_classify_response`` maps 302
+    to ``FAILED_CONFIGURATION``, so the dispatcher marks the outbox row as
+    ``FAILED_CONFIGURATION``, never as ``DELIVERED``.
+    """
+    store = _open_store(tmp_path)
+    try:
+        _insert_session(store)
+        _insert_publication_and_notification(store)
+        transport = _MockTransport(
+            responses=(HttpResponse(status_code=302, body=b"redirect"),),
+            calls=[],
+        )
+        dispatcher = NotificationDispatcher(
+            store=store, transport=transport, config=_config()
+        )
+        result = dispatcher.dispatch_one(
+            notification_id=_VALID_NOTIFICATION_ID, now=NOW
+        )
+        assert result.status == "FAILED_CONFIGURATION"
+        assert result.status_code == 302
+        record = store.get_notification(_VALID_NOTIFICATION_ID)
+        assert record.status == "FAILED_CONFIGURATION"
+        assert record.status != "DELIVERED"
+    finally:
+        store.close()

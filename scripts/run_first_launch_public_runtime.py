@@ -327,7 +327,15 @@ async def _run_transport(
                     shutdown_event=shutdown_event,
                     status=status,
                 )
-        except BaseException as exc:
+        except asyncio.CancelledError:
+            # GA-05: cancellation must propagate. Do NOT call
+            # runtime.mark_disconnected, do NOT log "ERROR websocket:
+            # CancelledError", and do NOT call _bounded_reconnect_wait.
+            # The for-loop body exits via the propagating CancelledError so
+            # the reconnect branch below is skipped. Cleanup is performed by
+            # run_runtime's nested finally block (runtime.shutdown + store.close).
+            raise
+        except Exception as exc:
             status(f"ERROR websocket: {type(exc).__name__}")
             runtime.mark_disconnected(now=_utc_now(), reason=f"websocket-{type(exc).__name__}")
         if not shutdown_event.is_set():
@@ -343,7 +351,12 @@ async def _websocket_scope(
     try:
         yield connection
     finally:
-        with contextlib.suppress(BaseException):
+        # GA-05: close must be attempted, but suppress only ordinary close
+        # exceptions. ``Exception`` does NOT include ``asyncio.CancelledError``
+        # (which is a ``BaseException`` subclass since Python 3.8), so a
+        # cancellation raised during close() remains visible to the awaiting
+        # caller. The original cancellation raised in the body also propagates.
+        with contextlib.suppress(Exception):
             await connection.close()
 
 
@@ -460,8 +473,16 @@ async def run_runtime(
             shutdown_event=shutdown_event,
         )
     finally:
-        runtime.shutdown(now=_utc_now())
-        store.close()
+        # GA-05: nested try/finally/try/finally/finally so that
+        # runtime.shutdown executes even if _run_transport raised, and
+        # store.close executes even if runtime.shutdown raised. Cancellation
+        # (asyncio.CancelledError) raised by _run_transport propagates through
+        # both finally blocks unchanged; it is never swallowed as ERROR
+        # websocket and never triggers a reconnect.
+        try:
+            runtime.shutdown(now=_utc_now())
+        finally:
+            store.close()
     return exit_code
 
 

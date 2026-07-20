@@ -1412,3 +1412,299 @@ def test_ga05_no_duplicate_session_or_publication_on_reconnect(tmp_path: Path) -
         asyncio.run(_test())
     finally:
         store.close()
+
+
+# ============================================================
+# GA-05: task.cancel() propagation and durable shutdown (Packet-required)
+# ============================================================
+#
+# Required assertions:
+#   GA05_TASK_CANCEL_PROPAGATES
+#   GA05_WEBSOCKET_CLOSES
+#   GA05_RUNTIME_SHUTDOWN_CALLED
+#   GA05_SESSION_CLOSED_AT_PERSISTED
+#   GA05_STORE_CLOSES
+#   GA05_NO_RECONNECT_AFTER_CANCEL
+#   GA05_NO_SECOND_SNAPSHOT
+#   GA05_NO_SECOND_WEBSOCKET
+#
+# A single end-to-end run_runtime task is cancelled mid-transport. The eight
+# required assertions are checked against the post-cancellation state. This
+# verifies the Packet's required cancellation-and-shutdown model:
+#   except asyncio.CancelledError:
+#       raise
+#   except Exception as exc:
+#       handle ordinary transport failure
+# and the nested try/finally/try/finally/finally cleanup in run_runtime.
+
+
+def _write_risk_config(tmp_path: Path) -> Path:
+    """Write a valid r3.0 risk configuration JSON file and return its path."""
+    path = tmp_path / "risk.json"
+    path.write_text(
+        '{"CONFIGURATION_VERSION":"r3.0","ACCOUNT_EQUITY_USD":"1000.00",'
+        '"RISK_PER_TRADE_PCT":"0.5000","MAX_NOTIONAL_USD":null}',
+        encoding="utf-8",
+    )
+    return path
+
+
+class _BlockingFakeWebSocket:
+    """Fake WebSocket that sends canned frames, then blocks on recv() forever.
+
+    The blocking recv() is the cancellation point: when the surrounding task is
+    cancelled, ``await recv()`` raises ``asyncio.CancelledError`` which must
+    propagate unchanged through ``_run_transport`` and ``run_runtime``.
+    """
+
+    def __init__(
+        self,
+        frames: list[str],
+        *,
+        shutdown_event: asyncio.Event | None = None,
+    ) -> None:
+        self._frames = list(frames)
+        self._pos = 0
+        self._shutdown_event = shutdown_event
+        self.sent: list[str] = []
+        self.closed = False
+        self.close_call_count = 0
+
+    async def send(self, message: str) -> None:
+        self.sent.append(message)
+
+    async def recv(self) -> str | bytes:
+        if self._pos < len(self._frames):
+            frame = self._frames[self._pos]
+            self._pos += 1
+            return frame
+        # No more frames: block forever (until cancelled).
+        if self._shutdown_event is not None:
+            await self._shutdown_event.wait()
+        else:
+            await asyncio.Event().wait()  # never set
+        raise ConnectionError("unreachable")
+
+    async def close(self) -> None:
+        self.close_call_count += 1
+        self.closed = True
+
+
+class _CancelTrackingFactory:
+    """WebSocket factory that tracks how many WebSockets it has created."""
+
+    def __init__(self, ws: object) -> None:
+        self._ws = ws
+        self.created_count = 0
+
+    async def __call__(self, url: str) -> object:
+        self.created_count += 1
+        return self._ws
+
+
+class _CancelTrackingRecovery:
+    """recover_snapshot callable that tracks how many times it was called."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(self) -> tuple[str, str, str]:
+        self.calls += 1
+        return _recovery_frames()
+
+
+class _CloseTrackingStore(RuntimeStore):
+    """RuntimeStore subclass that records close() invocations.
+
+    Because GA-05's nested finally block calls ``runtime.shutdown()``
+    (which persists ``closed_at`` on the durable session row) and then
+    immediately calls ``store.close()`` (which closes the SQLite
+    connection), the test cannot read the session row after ``run_runtime``
+    returns.  ``close()`` therefore snapshots the durable session list
+    just before closing the connection so the test can inspect it.
+    """
+
+    def __init__(self, *, database_path: Path) -> None:
+        super().__init__(database_path=database_path)
+        self.close_call_count = 0
+        self.sessions_at_close: list[object] | None = None
+
+    def close(self) -> None:
+        self.close_call_count += 1
+        try:
+            self.sessions_at_close = list(self.list_runtime_sessions())
+        except Exception:
+            self.sessions_at_close = None
+        super().close()
+
+
+class _ShutdownTrackingRuntime(RestrictedPublicRuntime):
+    """RestrictedPublicRuntime subclass that records shutdown() invocations."""
+
+    def shutdown(self, *, now: datetime) -> None:
+        if not hasattr(self, "_shutdown_call_count"):
+            object.__setattr__(self, "_shutdown_call_count", 0)
+        object.__setattr__(self, "_shutdown_call_count", self._shutdown_call_count + 1)
+        super().shutdown(now=now)
+
+
+def test_ga05_task_cancel_propagates_and_durable_cleanup(tmp_path: Path) -> None:
+    """GA05_TASK_CANCEL_PROPAGATES, GA05_WEBSOCKET_CLOSES,
+    GA05_RUNTIME_SHUTDOWN_CALLED, GA05_SESSION_CLOSED_AT_PERSISTED,
+    GA05_STORE_CLOSES, GA05_NO_RECONNECT_AFTER_CANCEL,
+    GA05_NO_SECOND_SNAPSHOT, GA05_NO_SECOND_WEBSOCKET.
+
+    Cancelling the run_runtime task mid-transport propagates CancelledError
+    through _run_transport and run_runtime unchanged, while the nested
+    try/finally/try/finally/finally cleanup still executes WebSocket close,
+    runtime.shutdown, durable session close, and store close. No reconnect,
+    second snapshot recovery, or second WebSocket factory call occurs.
+    """
+    risk_path = _write_risk_config(tmp_path)
+    args = _SCRIPT_MODULE.CliArguments(
+        enable_restricted_public_runtime=True,
+        mode="RESTRICTED_PUBLIC_LIVE_SHADOW",
+        database_path=tmp_path / "runtime.db",
+        risk_configuration_path=risk_path,
+        webhook_url="https://hooks.example.com/eth-notify",
+        webhook_timeout_seconds=10.0,
+        authorization_header_name=None,
+        authorization_header_value=None,
+        acknowledgement_timeout_seconds=30.0,
+        session_timeout_seconds=21600.0,
+    )
+
+    shutdown_event = asyncio.Event()
+    ws = _BlockingFakeWebSocket(
+        _ack_and_context_frames(), shutdown_event=shutdown_event
+    )
+    factory = _CancelTrackingFactory(ws)
+    recovery = _CancelTrackingRecovery()
+    status_messages: list[str] = []
+
+    original_store = _SCRIPT_MODULE.RuntimeStore
+    original_runtime = _SCRIPT_MODULE.RestrictedPublicRuntime
+    _SCRIPT_MODULE.RuntimeStore = _CloseTrackingStore
+    _SCRIPT_MODULE.RestrictedPublicRuntime = _ShutdownTrackingRuntime
+
+    runtime_ref: list[_ShutdownTrackingRuntime] = []
+    store_ref: list[_CloseTrackingStore] = []
+
+    original_runtime_init = _ShutdownTrackingRuntime.__init__
+
+    def _tracking_init(self, *a, **kw):  # type: ignore[no-untyped-def]
+        original_runtime_init(self, *a, **kw)
+        runtime_ref.append(self)
+
+    _ShutdownTrackingRuntime.__init__ = _tracking_init  # type: ignore[assignment]
+
+    original_store_open = _CloseTrackingStore.open
+
+    @classmethod
+    def _tracking_open(cls, database_path: Path) -> _CloseTrackingStore:  # type: ignore[override]
+        instance = cls(database_path=database_path)
+        store_ref.append(instance)
+        return instance
+
+    _CloseTrackingStore.open = _tracking_open  # type: ignore[assignment]
+
+    try:
+        async def _test() -> None:
+            runtime_task = asyncio.create_task(
+                _SCRIPT_MODULE.run_runtime(
+                    args=args,
+                    recover_snapshot=recovery,
+                    websocket_factory=factory,
+                    status=status_messages.append,
+                )
+            )
+            # Wait for READY: poll the runtime reference until activate() +
+            # snapshot recovery + 3 acks + context frame have all been
+            # processed.
+            for _ in range(500):
+                if runtime_ref and runtime_ref[0].is_ready:
+                    break
+                await asyncio.sleep(0.01)
+            assert runtime_ref, "runtime was never constructed"
+            assert runtime_ref[0].is_ready is True, "runtime never reached READY"
+
+            # GA05_TASK_CANCEL_PROPAGATES: cancel the task and verify
+            # CancelledError propagates unchanged out of run_runtime.
+            runtime_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await runtime_task
+
+            # GA05_TASK_CANCEL_PROPAGATES: task is done and was cancelled.
+            assert runtime_task.done() is True
+            assert runtime_task.cancelled() is True
+
+            # GA05_WEBSOCKET_CLOSES: WebSocket.close() was attempted exactly once.
+            assert ws.close_call_count == 1, (
+                f"expected exactly 1 WebSocket close, got {ws.close_call_count}"
+            )
+
+            # GA05_RUNTIME_SHUTDOWN_CALLED: runtime.shutdown() was called.
+            assert runtime_ref[0]._shutdown_call_count == 1, (
+                f"expected 1 shutdown call, "
+                f"got {runtime_ref[0]._shutdown_call_count}"
+            )
+            assert runtime_ref[0].is_shutdown is True
+
+            # GA05_SESSION_CLOSED_AT_PERSISTED: the durable session row has
+            # closed_at set after shutdown.  ``run_runtime``'s nested finally
+            # calls ``runtime.shutdown()`` (which persists closed_at) and then
+            # immediately closes the store connection, so we read the snapshot
+            # captured by ``_CloseTrackingStore.close()`` rather than reopening
+            # the database.
+            sessions = store_ref[0].sessions_at_close
+            assert sessions is not None, (
+                "store.close() did not snapshot runtime sessions"
+            )
+            assert len(sessions) == 1, (
+                "exactly one durable runtime session must exist"
+            )
+            assert sessions[0].closed_at is not None, (
+                "session closed_at must be set"
+            )
+
+            # GA05_STORE_CLOSES: store.close() was called.
+            assert store_ref[0].close_call_count == 1, (
+                f"expected 1 store.close call, "
+                f"got {store_ref[0].close_call_count}"
+            )
+
+            # GA05_NO_RECONNECT_AFTER_CANCEL: no reconnect was attempted.
+            # After cancellation the runtime's reconnect_attempt must
+            # remain at 0 (initial READY was via begin_warmup).
+            assert runtime_ref[0]._reconnect_attempt == 0, (
+                f"expected 0 reconnect attempts after cancel, "
+                f"got {runtime_ref[0]._reconnect_attempt}"
+            )
+
+            # GA05_NO_SECOND_SNAPSHOT: recover_snapshot was called exactly
+            # once (the initial recovery).
+            assert recovery.calls == 1, (
+                f"expected exactly 1 recover_snapshot call, got {recovery.calls}"
+            )
+
+            # GA05_NO_SECOND_WEBSOCKET: the websocket factory was called
+            # exactly once (the initial connection).
+            assert factory.created_count == 1, (
+                f"expected exactly 1 WebSocket factory call, "
+                f"got {factory.created_count}"
+            )
+
+            # No "ERROR websocket: CancelledError" status message was emitted.
+            assert not any(
+                "CancelledError" in message for message in status_messages
+            ), (
+                f"CancelledError was logged as ERROR websocket: "
+                f"{status_messages}"
+            )
+
+        asyncio.run(_test())
+    finally:
+        _SCRIPT_MODULE.RuntimeStore = original_store
+        _SCRIPT_MODULE.RestrictedPublicRuntime = original_runtime
+        _ShutdownTrackingRuntime.__init__ = original_runtime_init  # type: ignore[assignment]
+        _CloseTrackingStore.open = original_store_open  # type: ignore[assignment]

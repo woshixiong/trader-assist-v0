@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+import weakref
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -257,6 +259,145 @@ def _validate_publication_authorities(
     # Cross-object correspondence already enforced below for setup_id, plan_id,
     # shadow_order_id and card identities; the validators above guarantee that
     # each object's own hash and identity are internally coherent.
+    # GA-04: also require the exact TradePlan object to be the one returned by
+    # build_plan(). The reuse-only authorities above only check the embedded
+    # chain identities; a coherent reconstruction (``dataclasses.replace`` with
+    # no field changes, ``copy.copy``, or a freshly-built plan with the same
+    # legitimate embedded authorities) would otherwise satisfy the ``is`` checks
+    # because it shares the exact embedded authority objects. The P3B-local
+    # weakref proof below binds the plan's own object identity.
+    _validate_tradeplan_proof(
+        trade_plan,
+        strategy_output=strategy_output,
+        volatility_snapshot=volatility_snapshot,
+        overlay_decision=overlay_decision,
+    )
+
+
+@dataclass(frozen=True)
+class _TradePlanProof:
+    """Immutable process-local issuance fingerprint for one TradePlan object.
+
+    Binds the exact TradePlan object identity (its ``id()``) to its
+    ``plan_id``, ``canonical_hash`` and the exact identity of each embedded
+    authority object (StrategyOutput, VolatilitySnapshot, OverlayDecision).
+    The proof is never serialized or persisted; it lives only for the lifetime
+    of the bound plan object inside this process.
+    """
+
+    plan_id: str
+    canonical_hash: str
+    strategy_output_id: int
+    volatility_snapshot_id: int
+    overlay_decision_id: int
+
+
+# Module-private weakref registry keyed by ``id(trade_plan)``. Each value is
+# a ``(weakref, proof)`` pair. The weakref's callback removes the entry when
+# the bound plan is garbage-collected, so the registry cannot grow without
+# bound and cannot be abused to resurrect a stale proof for a freed id.
+_TRADEPLAN_PROOF_REGISTRY: dict[
+    int, tuple[weakref.ref[TradePlan], _TradePlanProof]
+] = {}
+
+
+def _tradeplan_proof_finalizer(plan_key: int) -> Callable[[weakref.ref[TradePlan]], None]:
+    """Return a weakref callback that drops the proof entry when the plan dies."""
+
+    def _finalize(_ref: weakref.ref[TradePlan]) -> None:
+        _TRADEPLAN_PROOF_REGISTRY.pop(plan_key, None)
+
+    return _finalize
+
+
+def _register_tradeplan_proof(
+    plan: TradePlan,
+    *,
+    strategy_output: StrategyOutput,
+    volatility_snapshot: VolatilitySnapshot,
+    overlay_decision: OverlayDecision,
+) -> None:
+    """Register the process-local issuance proof for one TradePlan.
+
+    This is called by the restricted public runtime immediately after
+    ``build_plan()`` returns, before the OperatorReviewCard and ShadowOrder
+    are derived and before ``RuntimeStore.persist_publication_bundle`` is
+    called. The proof binds the exact plan object identity to its plan_id,
+    canonical_hash, and the exact identity of each embedded authority. The
+    proof is private to the P3B runtime store; it is never serialized or
+    persisted and is never exported from ``runtime/__init__.py``.
+
+    Re-registering the same exact plan object is a no-op so that a legitimate
+    retry with the same plan after a failed persistence transaction still
+    satisfies the proof check.
+    """
+    plan_key = id(plan)
+    proof = _TradePlanProof(
+        plan_id=plan.plan_id,
+        canonical_hash=plan.canonical_hash,
+        strategy_output_id=id(strategy_output),
+        volatility_snapshot_id=id(volatility_snapshot),
+        overlay_decision_id=id(overlay_decision),
+    )
+    existing = _TRADEPLAN_PROOF_REGISTRY.get(plan_key)
+    if existing is not None:
+        existing_ref, existing_proof = existing
+        if existing_ref() is plan and existing_proof == proof:
+            return
+    _TRADEPLAN_PROOF_REGISTRY[plan_key] = (
+        weakref.ref(plan, _tradeplan_proof_finalizer(plan_key)),
+        proof,
+    )
+
+
+def _validate_tradeplan_proof(
+    plan: TradePlan,
+    *,
+    strategy_output: StrategyOutput,
+    volatility_snapshot: VolatilitySnapshot,
+    overlay_decision: OverlayDecision,
+) -> None:
+    """Validate that the plan is the exact object registered after build_plan().
+
+    Rejects (raising ``PersistenceAuthorityError``) when:
+    - the plan was never registered (direct constructor, ``dataclasses.replace``,
+      ``copy.copy``, ``copy.deepcopy``, or coherent reconstruction);
+    - the registered plan was garbage-collected and the proof no longer exists;
+    - the registered proof's plan_id/canonical_hash do not match the passed plan;
+    - the embedded authority identities differ from the registered proof
+      (cross-bundle substitution or embedded authority swap).
+    """
+    plan_key = id(plan)
+    entry = _TRADEPLAN_PROOF_REGISTRY.get(plan_key)
+    if entry is None:
+        raise PersistenceAuthorityError(
+            "trade plan was not issued by the restricted runtime build_plan()"
+        )
+    ref, proof = entry
+    if ref() is not plan:
+        raise PersistenceAuthorityError(
+            "trade plan identity does not match the registered proof"
+        )
+    if proof.plan_id != plan.plan_id:
+        raise PersistenceAuthorityError(
+            "trade plan plan_id does not match the registered proof"
+        )
+    if proof.canonical_hash != plan.canonical_hash:
+        raise PersistenceAuthorityError(
+            "trade plan canonical_hash does not match the registered proof"
+        )
+    if proof.strategy_output_id != id(strategy_output):
+        raise PersistenceAuthorityError(
+            "trade plan embedded strategy output identity differs from the proof"
+        )
+    if proof.volatility_snapshot_id != id(volatility_snapshot):
+        raise PersistenceAuthorityError(
+            "trade plan embedded volatility snapshot identity differs from the proof"
+        )
+    if proof.overlay_decision_id != id(overlay_decision):
+        raise PersistenceAuthorityError(
+            "trade plan embedded overlay decision identity differs from the proof"
+        )
 
 
 def notification_id_for_plan(plan_id: str) -> str:

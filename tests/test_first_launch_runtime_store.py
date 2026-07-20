@@ -49,6 +49,7 @@ from trader_assist_v0.runtime.first_launch_runtime_store import (
     PublicationConflictError,
     RuntimeStore,
     RuntimeStoreError,
+    _register_tradeplan_proof,
     notification_id_for_plan,
     publication_bundle_hash,
 )
@@ -283,6 +284,20 @@ def _full_publication_chain(now: datetime) -> dict[str, object]:
         volatility=volatility,
         overlay=overlay,
         context_summary=context_summary,
+    )
+    # GA-04: register the process-local issuance proof binding the exact
+    # TradePlan object identity (its id()) to its plan_id, canonical_hash
+    # and the exact embedded StrategyOutput / VolatilitySnapshot /
+    # OverlayDecision identity. The proof is private to the P3B runtime
+    # store, never serialized or persisted, and removed by the weakref
+    # callback when the plan is garbage-collected. The store validates the
+    # proof at the start of persist_publication_bundle, before any SQLite
+    # mutation. This mirrors the production RestrictedPublicRuntime flow.
+    _register_tradeplan_proof(
+        plan,
+        strategy_output=output,
+        volatility_snapshot=volatility,
+        overlay_decision=overlay,
     )
     card = build_operator_card(plan, now=now, quality=DataQualityState.READY)
     shadow = create_shadow_order(card)
@@ -787,6 +802,315 @@ def test_ga04_rejects_cross_bundle_substitution(
             _persist_chain(store, session_id, tampered_chain, now)
         after = _row_counts(store)
         assert after == before
+    finally:
+        store.close()
+
+
+# ============================================================
+# GA-04: TradePlan object identity proof (Packet-required assertions)
+# ============================================================
+#
+# The reuse-only validators already reject reconstructions of StrategyOutput,
+# VolatilitySnapshot, OverlayDecision, OperatorReviewCard and ShadowOrder.
+# They do NOT, however, distinguish the exact TradePlan object returned by
+# build_plan() from any coherent reconstruction with identical values and
+# hashes (dataclasses.replace with no field changes, copy.copy, copy.deepcopy
+# with the same legitimate embedded authorities, or a freshly-built plan with
+# the same legitimate embedded authorities). The P3B-local weakref proof
+# registry closes this hole by binding the plan's own object identity.
+
+
+def _plan_only_chain_with_transform(
+    base_chain: dict[str, object], transformed_plan: object
+) -> dict[str, object]:
+    """Return a chain that swaps only the TradePlan object, keeping the
+    same issued embedded authorities at the top level."""
+    tampered = dict(base_chain)
+    tampered["plan"] = transformed_plan
+    return tampered
+
+
+def test_ga04_direct_constructor_rejected(tmp_path: Path) -> None:
+    """GA04_DIRECT_CONSTRUCTOR_REJECTED.
+
+    A TradePlan constructed directly via ``type(plan)(**fields)`` (bypassing
+    build_plan and the P3B-local proof registration) is rejected even when its
+    plan_id, canonical_hash and embedded authorities are all legitimately
+    issued and identical to the registered chain.
+    """
+    store = _open_store(tmp_path)
+    try:
+        now = NOW
+        session_id = _record_session(
+            store, now=now, database_path=tmp_path / "test_runtime.db"
+        )
+        chain = _full_publication_chain(now)
+        original_plan = chain["plan"]
+        direct_constructed = _reconstruct_authority(original_plan)
+        assert direct_constructed is not original_plan
+        # The direct constructor preserves plan_id / canonical_hash because
+        # __post_init__ re-derives them deterministically from the same
+        # embedded authorities.
+        assert direct_constructed.plan_id == original_plan.plan_id  # type: ignore[attr-defined]
+        assert direct_constructed.canonical_hash == original_plan.canonical_hash  # type: ignore[attr-defined]
+        tampered_chain = _plan_only_chain_with_transform(chain, direct_constructed)
+        before = _row_counts(store)
+        with pytest.raises(PersistenceAuthorityError):
+            _persist_chain(store, session_id, tampered_chain, now)
+        after = _row_counts(store)
+        assert after == before
+    finally:
+        store.close()
+
+
+def test_ga04_dataclasses_replace_rejected(tmp_path: Path) -> None:
+    """GA04_DATACLASSES_REPLACE_REJECTED."""
+    store = _open_store(tmp_path)
+    try:
+        now = NOW
+        session_id = _record_session(
+            store, now=now, database_path=tmp_path / "test_runtime.db"
+        )
+        chain = _full_publication_chain(now)
+        original_plan = chain["plan"]
+        replaced = dataclasses.replace(original_plan)  # type: ignore[arg-type]
+        assert replaced is not original_plan
+        tampered_chain = _plan_only_chain_with_transform(chain, replaced)
+        before = _row_counts(store)
+        with pytest.raises(PersistenceAuthorityError):
+            _persist_chain(store, session_id, tampered_chain, now)
+        after = _row_counts(store)
+        assert after == before
+    finally:
+        store.close()
+
+
+def test_ga04_shallow_copy_rejected(tmp_path: Path) -> None:
+    """GA04_SHALLOW_COPY_REJECTED."""
+    store = _open_store(tmp_path)
+    try:
+        now = NOW
+        session_id = _record_session(
+            store, now=now, database_path=tmp_path / "test_runtime.db"
+        )
+        chain = _full_publication_chain(now)
+        original_plan = chain["plan"]
+        shallow = copy.copy(original_plan)  # type: ignore[arg-type]
+        assert shallow is not original_plan
+        tampered_chain = _plan_only_chain_with_transform(chain, shallow)
+        before = _row_counts(store)
+        with pytest.raises(PersistenceAuthorityError):
+            _persist_chain(store, session_id, tampered_chain, now)
+        after = _row_counts(store)
+        assert after == before
+    finally:
+        store.close()
+
+
+def test_ga04_deep_copy_rejected(tmp_path: Path) -> None:
+    """GA04_DEEP_COPY_REJECTED.
+
+    Deep copy creates a new plan AND new embedded authorities; the rejection
+    can occur either at the embedded-authority identity check or at the
+    TradePlan proof check. Both raise PersistenceAuthorityError.
+    """
+    store = _open_store(tmp_path)
+    try:
+        now = NOW
+        session_id = _record_session(
+            store, now=now, database_path=tmp_path / "test_runtime.db"
+        )
+        chain = _full_publication_chain(now)
+        original_plan = chain["plan"]
+        deep = copy.deepcopy(original_plan)  # type: ignore[arg-type]
+        assert deep is not original_plan
+        # The tampered chain passes the ORIGINAL embedded authorities at the
+        # top level, but the deep-copied plan embeds its own copies. The
+        # ``is`` checks and the proof check together reject this.
+        tampered_chain = _plan_only_chain_with_transform(chain, deep)
+        before = _row_counts(store)
+        with pytest.raises(PersistenceAuthorityError):
+            _persist_chain(store, session_id, tampered_chain, now)
+        after = _row_counts(store)
+        assert after == before
+    finally:
+        store.close()
+
+
+def test_ga04_coherent_reconstruction_rejected(tmp_path: Path) -> None:
+    """GA04_COHERENT_RECONSTRUCTION_REJECTED.
+
+    A freshly-built TradePlan that shares the SAME legitimately issued
+    embedded StrategyOutput / VolatilitySnapshot / OverlayDecision objects
+    (so all reuse-only validators pass and the ``is`` checks succeed) but is
+    NOT the exact object returned by build_plan() must still be rejected by
+    the P3B-local weakref proof.
+    """
+    store = _open_store(tmp_path)
+    try:
+        now = NOW
+        session_id = _record_session(
+            store, now=now, database_path=tmp_path / "test_runtime.db"
+        )
+        chain = _full_publication_chain(now)
+        original_plan = chain["plan"]
+        # Coherent reconstruction: rebuild with the same fields, which means
+        # the same embedded authorities (still issued). __post_init__ succeeds
+        # and the plan_id/canonical_hash match the original. Only the proof
+        # check can reject this.
+        coherent = _reconstruct_authority(original_plan)
+        assert coherent is not original_plan
+        assert coherent.strategy_output is original_plan.strategy_output  # type: ignore[attr-defined]
+        assert coherent.volatility_snapshot is original_plan.volatility_snapshot  # type: ignore[attr-defined]
+        assert coherent.overlay is original_plan.overlay  # type: ignore[attr-defined]
+        tampered_chain = _plan_only_chain_with_transform(chain, coherent)
+        before = _row_counts(store)
+        with pytest.raises(PersistenceAuthorityError):
+            _persist_chain(store, session_id, tampered_chain, now)
+        after = _row_counts(store)
+        assert after == before
+    finally:
+        store.close()
+
+
+def test_ga04_cross_bundle_substitution_rejected(tmp_path: Path) -> None:
+    """GA04_CROSS_BUNDLE_SUBSTITUTION_REJECTED.
+
+    A legitimately issued TradePlan from chain B (registered with chain B's
+    embedded authorities) is rejected when substituted into chain A, even
+    though the chain B plan itself is a legitimately issued plan object.
+    """
+    store = _open_store(tmp_path)
+    try:
+        now = NOW
+        session_id = _record_session(
+            store, now=now, database_path=tmp_path / "test_runtime.db"
+        )
+        chain_a = _full_publication_chain(now)
+        chain_b = _full_publication_chain(now)
+        plan_b = chain_b["plan"]
+        assert plan_b is not chain_a["plan"]
+        # Mix chain_a's embedded authorities with chain_b's plan: chain_b's
+        # plan is registered with chain_b's embedded authorities, but we pass
+        # chain_a's embedded authorities at the top level. The proof check
+        # rejects because chain_a's authority identities differ from the
+        # identities recorded in plan_b's proof entry.
+        tampered_chain = {
+            "output": chain_a["output"],
+            "volatility": chain_a["volatility"],
+            "overlay": chain_a["overlay"],
+            "plan": plan_b,
+            "card": chain_a["card"],
+            "shadow": chain_a["shadow"],
+        }
+        before = _row_counts(store)
+        with pytest.raises(PersistenceAuthorityError):
+            _persist_chain(store, session_id, tampered_chain, now)
+        after = _row_counts(store)
+        assert after == before
+    finally:
+        store.close()
+
+
+def test_ga04_rejection_zero_db_mutation(tmp_path: Path) -> None:
+    """GA04_REJECTION_ZERO_DB_MUTATION.
+
+    Every plan-identity rejection must occur before transaction mutation and
+    leave publication_bundles and notification_outbox unchanged. Verifies
+    across all four transforms in a single store instance.
+    """
+    store = _open_store(tmp_path)
+    try:
+        now = NOW
+        session_id = _record_session(
+            store, now=now, database_path=tmp_path / "test_runtime.db"
+        )
+        chain = _full_publication_chain(now)
+        original_plan = chain["plan"]
+        before = _row_counts(store)
+        for transform in (
+            lambda p: _reconstruct_authority(p),
+            lambda p: dataclasses.replace(p),  # type: ignore[arg-type]
+            copy.copy,
+            copy.deepcopy,
+        ):
+            tampered_plan = transform(original_plan)
+            assert tampered_plan is not original_plan
+            tampered_chain = _plan_only_chain_with_transform(chain, tampered_plan)
+            with pytest.raises(PersistenceAuthorityError):
+                _persist_chain(store, session_id, tampered_chain, now)
+            after = _row_counts(store)
+            assert after == before, (
+                f"row counts changed after rejecting {transform.__name__} on plan"
+            )
+    finally:
+        store.close()
+
+
+def test_ga04_failed_transaction_proof_retry_valid(tmp_path: Path) -> None:
+    """GA04_FAILED_TRANSACTION_PROOF_RETRY_VALID.
+
+    A failed persistence transaction (e.g. PublicationConflictError on a
+    duplicate identity) must NOT invalidate the proof. The same exact TradePlan
+    object must remain persistable on retry against a fresh store.
+    """
+    store_a = RuntimeStore.open(tmp_path / "store_a.db")
+    store_b = RuntimeStore.open(tmp_path / "store_b.db")
+    try:
+        now = NOW
+        session_a = _record_session(
+            store_a, now=now, database_path=tmp_path / "store_a.db"
+        )
+        session_b = _record_session(
+            store_b, now=now, database_path=tmp_path / "store_b.db"
+        )
+        chain = _full_publication_chain(now)
+        # First successful persist on store_a.
+        bundle_a, _outbox_a = _persist_chain(store_a, session_a, chain, now)  # type: ignore[misc]
+        # Second persist on store_a with the same identities must raise
+        # PublicationConflictError (IntegrityError -> PublicationConflictError).
+        with pytest.raises(PublicationConflictError):
+            _persist_chain(store_a, session_a, chain, now)
+        # The proof must still be valid: the same exact plan object can be
+        # persisted on a fresh store_b without re-registering the proof.
+        bundle_b, outbox_b = _persist_chain(store_b, session_b, chain, now)  # type: ignore[misc]
+        assert bundle_b.plan_id == bundle_a.plan_id
+        assert outbox_b.status == "PENDING"  # type: ignore[union-attr]
+    finally:
+        store_a.close()
+        store_b.close()
+
+
+def test_ga04_legitimate_exact_plan_persists(tmp_path: Path) -> None:
+    """GA04_LEGITIMATE_EXACT_PLAN_PERSISTS.
+
+    The exact TradePlan object returned by build_plan() and registered with
+    the P3B-local proof persists successfully (positive baseline).
+    """
+    store = _open_store(tmp_path)
+    try:
+        now = NOW
+        session_id = _record_session(
+            store, now=now, database_path=tmp_path / "test_runtime.db"
+        )
+        chain = _full_publication_chain(now)
+        plan = chain["plan"]
+        # Sanity: the plan object is registered in the proof registry.
+        from trader_assist_v0.runtime.first_launch_runtime_store import (
+            _TRADEPLAN_PROOF_REGISTRY,
+        )
+
+        entry = _TRADEPLAN_PROOF_REGISTRY.get(id(plan))
+        assert entry is not None
+        ref, _proof = entry
+        assert ref() is plan
+        # Persist succeeds.
+        bundle, outbox = _persist_chain(store, session_id, chain, now)  # type: ignore[misc]
+        assert bundle.plan_id == plan.plan_id  # type: ignore[attr-defined]
+        assert outbox.status == "PENDING"  # type: ignore[union-attr]
+        pubs, outbox_rows = _row_counts(store)
+        assert pubs == 1
+        assert outbox_rows == 1
     finally:
         store.close()
 

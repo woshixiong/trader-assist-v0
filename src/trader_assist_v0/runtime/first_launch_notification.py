@@ -15,12 +15,13 @@ Tests must mock the HTTP transport; no real webhook is sent during this task.
 from __future__ import annotations
 
 import json
-import ssl
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Final, Literal, Protocol
-from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from email.message import Message
+from typing import IO, Final, Literal, Protocol
 
 from trader_assist_v0.runtime.first_launch_runtime_store import (
     NotificationOutboxRecord,
@@ -38,24 +39,54 @@ _MIN_TIMEOUT_SECONDS: Final[float] = 1.0
 _MAX_TIMEOUT_SECONDS: Final[float] = 60.0
 _MAX_URL_LENGTH: Final[int] = 2048
 _RETRYABLE_STATUS_CODES: Final[frozenset[int]] = frozenset({408, 429, 500, 502, 503, 504})
-# GA-03: prohibited Hyperliquid exchange-write endpoint policy.
+# GA-03: prohibited Hyperliquid API hosts.
 # The notification transport is operation-specific (fixed POST, fixed
-# notification payload, no exchange action body).  These hosts and path
-# suffixes identify Hyperliquid exchange-write endpoints that must never be
-# targeted by the notification webhook, regardless of credentials.
+# notification payload, no exchange action body).  Both Hyperliquid API
+# hosts are rejected entirely, regardless of port/path/query, because the
+# notification transport has no legitimate reason to target them and any
+# accepted configuration could be redirected or normalized to reach them.
 _PROHIBITED_HOSTS: Final[frozenset[str]] = frozenset(
     {
         "api.hyperliquid.xyz",
         "api.hyperliquid-testnet.xyz",
     }
 )
-_PROHIBITED_PATH_SUFFIXES: Final[tuple[str, ...]] = (
-    "/exchange",
-    "/exchange/",
+# GA-03: synthetic 4xx status used to classify a non-redirect response whose
+# final URL does not match the authorized URL.  ``_classify_response`` maps
+# any 4xx (except the retryable 408/429) to FAILED_CONFIGURATION, so this code
+# causes the dispatcher to mark the notification as terminal configuration
+# failure rather than retryable.
+_URL_MISMATCH_STATUS: Final[int] = 422
+_HEX_DIGITS: Final[frozenset[str]] = frozenset("0123456789ABCDEFabcdef")
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """GA-03: prevent urllib from following 301/302/303/307/308 redirects.
+
+    The default ``HTTPRedirectHandler.redirect_request`` returns a new
+    ``Request`` for the ``Location`` URL, which urllib then opens.  Returning
+    ``None`` here causes the parent ``http_error_30x`` methods to return
+    ``None``, which makes urllib return the original 3xx response to the
+    caller without performing any network call to the redirect target.
+    """
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: IO[bytes],
+        code: int,
+        msg: str,
+        headers: Message,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        return None
+
+
+# Module-level opener that does not follow redirects.  Built once at import
+# time so that no per-call opener construction cost is paid by the dispatcher.
+_WEBHOOK_OPENER: Final[urllib.request.OpenerDirector] = urllib.request.build_opener(
+    _NoRedirectHandler()
 )
-# Path tokens that identify a Hyperliquid exchange action endpoint under any
-# recognized routing variant (query parameters are evaluated separately).
-_PROHIBITED_PATH_TOKENS: Final[tuple[str, ...]] = ("exchange",)
 
 
 class NotificationConfigError(ValueError):
@@ -66,56 +97,126 @@ class NotificationDeliveryError(RuntimeError):
     """Raised when a delivery attempt cannot be classified."""
 
 
+def _strict_percent_decode_once(value: str) -> str:
+    """Strictly percent-decode ``value`` exactly once.
+
+    Each ``%HH`` sequence must be exactly two hexadecimal digits; otherwise the
+    value is malformed.  Each ``%HH`` is decoded to a single character using
+    latin-1 (one byte per character) so that any further ``%`` in the result
+    indicates double percent-encoding (e.g. ``%2565`` decodes once to ``%65``).
+    This strict decode is intentionally not a UTF-8 decode: the security check
+    is byte-level, not character-level.
+    """
+    if "%" not in value:
+        return value
+    result: list[str] = []
+    index = 0
+    length = len(value)
+    while index < length:
+        ch = value[index]
+        if ch == "%":
+            if index + 2 >= length:
+                raise NotificationConfigError(
+                    "webhook URL path has malformed percent escape"
+                )
+            high = value[index + 1]
+            low = value[index + 2]
+            if high not in _HEX_DIGITS or low not in _HEX_DIGITS:
+                raise NotificationConfigError(
+                    "webhook URL path has malformed percent escape"
+                )
+            result.append(chr(int(high + low, 16)))
+            index += 3
+        else:
+            result.append(ch)
+            index += 1
+    return "".join(result)
+
+
 def _reject_prohibited_endpoint(*, parsed_url: object) -> None:
-    """Reject Hyperliquid exchange-write endpoints, URL userinfo and malformed host/path.
+    """GA-03: enforce the strict webhook URL admission policy.
 
-    The notification transport is operation-specific: fixed POST, fixed notification
-    payload, no configurable method, no exchange action body, no account or signing
-    data.  The endpoint itself must be rejected before persistence or network access,
-    independent of whether credentials are present.
+    The notification transport is operation-specific (fixed POST, fixed
+    notification payload, no configurable method, no exchange action body,
+    no account or signing data).  The endpoint itself must be rejected before
+    persistence or network access, independent of whether credentials are
+    present.
 
-    Rejects:
-    - ``api.hyperliquid.xyz`` and ``api.hyperliquid-testnet.xyz`` with ``/exchange``
-      or any routing variant that resolves to the exchange action path;
-    - URL userinfo (``https://user:pass@host/...``), which has no legitimate role
-      for a notification webhook and can hide redirect or credential injection;
-    - malformed host/path (whitespace, control characters).
+    Rejects (in order):
+    - URL userinfo (``https://user:pass@host/...``);
+    - URL fragment (``https://host/path#frag``);
+    - percent encoding in the authority/hostname;
+    - malformed/empty host (including IDNA-unsafe labels);
+    - raw control characters and whitespace in the host;
+    - both Hyperliquid API hosts entirely, after IDNA ASCII + lowercase +
+      trailing-dot canonicalization, regardless of port/path/query;
+    - malformed percent escapes in the path;
+    - any remaining percent escape after one strict decode (double encoding);
+    - dot segments, traversal, backslashes, encoded slash/backslash;
+    - raw control characters or NUL in the decoded path.
     """
     username = getattr(parsed_url, "username", None)
     password = getattr(parsed_url, "password", None)
     if username is not None or password is not None:
         raise NotificationConfigError("webhook URL must not carry userinfo")
+    fragment = getattr(parsed_url, "fragment", "")
+    if fragment:
+        raise NotificationConfigError("webhook URL must not carry a fragment")
+    # The parsed netloc carries userinfo, host, port.  Percent-encoding in
+    # the authority (e.g. ``%2F`` or ``%40`` to encode slash/at) has no
+    # legitimate role for a notification webhook and is rejected.
+    netloc = getattr(parsed_url, "netloc", "") or ""
+    if "%" in netloc:
+        raise NotificationConfigError(
+            "webhook URL authority must not carry percent encoding"
+        )
     hostname = getattr(parsed_url, "hostname", None)
     if type(hostname) is not str or not hostname:
         raise NotificationConfigError("webhook URL must have a host")
-    if hostname != hostname.strip().lower():
+    if any(ch.isspace() or ord(ch) < 0x20 or ord(ch) == 0x7F for ch in hostname):
         raise NotificationConfigError("webhook URL host is malformed")
-    if any(ch.isspace() or ord(ch) < 0x20 for ch in hostname):
+    # IDNA ASCII + lowercase + trailing-dot canonicalization.  The parsed
+    # hostname is already lowercased by urlparse, but we re-normalize here so
+    # that uppercase or trailing-dot variants cannot bypass the host list.
+    host_no_trailing_dot = hostname.rstrip(".")
+    if not host_no_trailing_dot:
         raise NotificationConfigError("webhook URL host is malformed")
+    try:
+        canonical_host = ".".join(
+            label.encode("idna").decode("ascii").lower()
+            for label in host_no_trailing_dot.split(".")
+        )
+    except (UnicodeError, ValueError) as exc:
+        raise NotificationConfigError("webhook URL host is malformed") from exc
+    if not canonical_host:
+        raise NotificationConfigError("webhook URL host is malformed")
+    if canonical_host in _PROHIBITED_HOSTS:
+        raise NotificationConfigError(
+            "webhook URL must not target a Hyperliquid API host"
+        )
+    # Path strict percent-decode and traversal checks.
     path = getattr(parsed_url, "path", "")
     if type(path) is not str:
         raise NotificationConfigError("webhook URL path is malformed")
-    if any(ord(ch) < 0x20 for ch in path):
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in path):
         raise NotificationConfigError("webhook URL path is malformed")
-    normalized_host = hostname.lower()
-    normalized_path = path.rstrip("/")
-    if normalized_host in _PROHIBITED_HOSTS:
-        # Reject the exchange action endpoint under any recognized routing,
-        # including trailing slash and query-parameter variants.  A bare
-        # prohibited host with a non-exchange path (e.g. ``/info``) is not
-        # an exchange-write endpoint and is not blocked here; the policy is
-        # operation-specific, not host-specific.
-        lowered = normalized_path.lower()
-        for suffix in _PROHIBITED_PATH_SUFFIXES:
-            if lowered == suffix.rstrip("/") or lowered.endswith(suffix):
-                raise NotificationConfigError(
-                    "webhook URL must not target a Hyperliquid exchange-write endpoint"
-                )
-        tokens = [token for token in normalized_path.split("/") if token]
-        if any(token in _PROHIBITED_PATH_TOKENS for token in tokens):
-            raise NotificationConfigError(
-                "webhook URL must not target a Hyperliquid exchange-write endpoint"
-            )
+    decoded_path = _strict_percent_decode_once(path)
+    # After one strict decode, no percent escape may remain.  This catches
+    # double-encoding such as ``%2565`` (decodes once to ``%65``).
+    if "%" in decoded_path:
+        raise NotificationConfigError(
+            "webhook URL path must not carry double percent encoding"
+        )
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in decoded_path):
+        raise NotificationConfigError("webhook URL path is malformed")
+    if "\\" in decoded_path or "\x00" in decoded_path:
+        raise NotificationConfigError("webhook URL path is malformed")
+    # Reject dot segments, traversal, and ambiguous routing.  The decoded
+    # path is checked because percent-encoded variants such as ``%2e`` and
+    # ``%2f`` are decoded by the strict decode above.
+    segments = decoded_path.split("/")
+    if "." in segments or ".." in segments:
+        raise NotificationConfigError("webhook URL path is ambiguous")
 
 
 @dataclass(frozen=True)
@@ -143,13 +244,15 @@ class NotificationConfig:
         # control-character check below).
         if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in self.webhook_url):
             raise NotificationConfigError("webhook URL is malformed")
-        parsed = urlparse(self.webhook_url)
+        parsed = urllib.parse.urlparse(self.webhook_url)
         if parsed.scheme != _HTTPS_SCHEME:
             raise NotificationConfigError("webhook URL must use HTTPS")
         if not parsed.netloc or not parsed.hostname:
             raise NotificationConfigError("webhook URL must have a host")
-        # GA-03: reject Hyperliquid exchange-write endpoints, URL userinfo,
-        # and malformed host/path before persistence or network access.
+        # GA-03: reject Hyperliquid API hosts (regardless of port/path/query),
+        # URL userinfo, fragments, percent encoding in authority, malformed
+        # host/path, double-encoding and dot-segment traversal before any
+        # persistence or network access.
         _reject_prohibited_endpoint(parsed_url=parsed)
         if (
             type(self.timeout_seconds) is not float
@@ -228,21 +331,35 @@ class HttpsWebhookTransport:
             raise NotificationDeliveryError("headers must be a dict")
         if type(timeout) not in {int, float} or isinstance(timeout, bool):
             raise NotificationDeliveryError("timeout is invalid")
-        request = Request(
+        request = urllib.request.Request(
             url,
             data=payload,
             method="POST",
             headers=headers,
         )
-        context = ssl.create_default_context()
         try:
-            with urlopen(request, timeout=timeout, context=context) as response:
+            with _WEBHOOK_OPENER.open(request, timeout=timeout) as response:
                 body = response.read()
                 status_code = int(response.status)
+                final_url = response.geturl()
+        except urllib.error.HTTPError as exc:
+            # GA-03: HTTPError is raised by the default error handler for 3xx
+            # responses (because ``_NoRedirectHandler.redirect_request`` returns
+            # None) and for 4xx/5xx responses.  HTTPError is also a response
+            # object: carry its status code, body and final URL through so
+            # that the dispatcher can classify the outcome.
+            body = exc.read()
+            status_code = int(exc.code)
+            final_url = exc.url
         except TimeoutError as exc:
             raise NotificationDeliveryError("timeout") from exc
         except OSError as exc:
             raise NotificationDeliveryError("network error") from exc
+        # GA-03: the final URL must match the authorized URL.  A mismatch means
+        # a redirect was followed or the URL was rewritten; classify as a
+        # terminal configuration failure rather than delivered.
+        if final_url != url:
+            return HttpResponse(status_code=_URL_MISMATCH_STATUS, body=b"")
         return HttpResponse(status_code=status_code, body=body)
 
 
@@ -267,6 +384,11 @@ def _headers_for(
 def _classify_response(status_code: int) -> Literal["DELIVERED", "PENDING", "FAILED_CONFIGURATION"]:
     if 200 <= status_code < 300:
         return "DELIVERED"
+    if 300 <= status_code < 400:
+        # GA-03: redirects are disabled.  Any 3xx response means the configured
+        # webhook tried to redirect the request; classify as terminal
+        # configuration failure rather than delivered or retried.
+        return "FAILED_CONFIGURATION"
     if status_code in _RETRYABLE_STATUS_CODES:
         return "PENDING"
     if 400 <= status_code < 500:
