@@ -9,10 +9,10 @@
   "authority": {
     "fastsafe_control_contract_id": "FASTSAFE-V1-2026-07",
     "engineering_track_id": "ENGINEERING-AUTOMATION-TRACK-V1-2026-07",
-    "next_gate": "NEXT_GATE_UNRESOLVED",
-    "next_gate_status": "NEXT_GATE_UNRESOLVED_PENDING_SEPARATE_USER_DECISION",
-    "last_completed_implementation": "V0-FLP1-OFFLINE-MINIMAL-PILOT-REVIEW-AND-COVERAGE-REPORT",
-    "last_completed_implementation_pr": 27,
+    "next_gate": "V0-FL-R3-P4-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE",
+    "next_gate_status": "ENGINEERING_ELIGIBLE_PENDING_PROJECT_CONTROL_ACTIVATION",
+    "last_completed_implementation": "V0-FL-R3-P3B-RESTRICTED-PUBLIC-RUNTIME-COMPOSITION",
+    "last_completed_implementation_pr": 37,
     "last_policy_state_pr": 15,
     "rate_limit_status": "UNRESOLVED_OFFICIAL_LIMIT",
     "live_transport_authorized": false,
@@ -27,7 +27,7 @@
     "source_count": 2,
     "fact_count": 25,
     "unknown_count": 14,
-    "transition_eligible": false
+    "transition_eligible": true
   },
   "first_release": {
     "release_id": "V0-R0",
@@ -45,7 +45,7 @@
     "exchange_execution_authorized": false,
     "runtime_started": false,
     "scope": "CAPTURE_CONTRACT_SCHEMA_GOVERNANCE_ONLY",
-    "next_runtime_gate": "NEXT_GATE_UNRESOLVED",
+    "next_runtime_gate": "V0-FL-R3-P4-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE",
     "forbidden_capabilities": [
       "API_WALLET",
       "PRIVATE_KEY",
@@ -451,13 +451,13 @@
     "separate_project_control_finalization_authorization_required": true,
     "pre_finalization_base_head_state_reverification_required": true,
     "unresolved_blocker_prevents_merge": true,
-    "next_gate": "NEXT_GATE_UNRESOLVED"
+    "next_gate": "V0-FL-R3-P4-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE"
   },
   "recursive_rotation": {
     "required": true,
     "next_window_role": "V0 Fast Launch project-control successor",
     "next_window_permission": "STRICT_READ_ONLY",
-    "post_merge_next_gate": "NEXT_GATE_UNRESOLVED",
+    "post_merge_next_gate": "V0-FL-R3-P4-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE",
     "handoff_required_fields": [
       "CURRENT_WINDOW_ROLE",
       "REPOSITORY",

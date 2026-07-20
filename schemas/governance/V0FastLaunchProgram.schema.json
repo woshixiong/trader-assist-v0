@@ -91,19 +91,19 @@
         },
         "next_gate": {
           "type": "string",
-          "const": "NEXT_GATE_UNRESOLVED"
+          "const": "V0-FL-R3-P4-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE"
         },
         "next_gate_status": {
           "type": "string",
-          "const": "NEXT_GATE_UNRESOLVED_PENDING_SEPARATE_USER_DECISION"
+          "const": "ENGINEERING_ELIGIBLE_PENDING_PROJECT_CONTROL_ACTIVATION"
         },
         "last_completed_implementation": {
           "type": "string",
-          "const": "V0-FLP1-OFFLINE-MINIMAL-PILOT-REVIEW-AND-COVERAGE-REPORT"
+          "const": "V0-FL-R3-P3B-RESTRICTED-PUBLIC-RUNTIME-COMPOSITION"
         },
         "last_completed_implementation_pr": {
           "type": "integer",
-          "const": 27
+          "const": 37
         },
         "last_policy_state_pr": {
           "type": "integer",
@@ -163,7 +163,7 @@
         },
         "transition_eligible": {
           "type": "boolean",
-          "const": false
+          "const": true
         }
       }
     },
@@ -252,7 +252,7 @@
         },
         "next_runtime_gate": {
           "type": "string",
-          "const": "NEXT_GATE_UNRESOLVED"
+          "const": "V0-FL-R3-P4-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE"
         },
         "forbidden_capabilities": {
           "type": "array",
@@ -2035,7 +2035,7 @@
         },
         "next_gate": {
           "type": "string",
-          "const": "NEXT_GATE_UNRESOLVED"
+          "const": "V0-FL-R3-P4-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE"
         }
       }
     },
@@ -2070,7 +2070,7 @@
         },
         "post_merge_next_gate": {
           "type": "string",
-          "const": "NEXT_GATE_UNRESOLVED"
+          "const": "V0-FL-R3-P4-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE"
         },
         "handoff_required_fields": {
           "type": "array",
@@ -2618,11 +2618,11 @@
         },
         "last_completed_implementation": {
           "type": "string",
-          "const": "V0-FLP1-OFFLINE-MINIMAL-PILOT-REVIEW-AND-COVERAGE-REPORT"
+          "const": "V0-FL-R3-P3B-RESTRICTED-PUBLIC-RUNTIME-COMPOSITION"
         },
         "last_completed_implementation_pr": {
           "type": "integer",
-          "const": 27
+          "const": 37
         },
         "last_policy_state_pr": {
           "type": "integer",
@@ -2715,11 +2715,11 @@
         },
         "next_gate": {
           "type": "string",
-          "const": "NEXT_GATE_UNRESOLVED"
+          "const": "V0-FL-R3-P4-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE"
         },
         "next_gate_status": {
           "type": "string",
-          "const": "NEXT_GATE_UNRESOLVED_PENDING_SEPARATE_USER_DECISION"
+          "const": "ENGINEERING_ELIGIBLE_PENDING_PROJECT_CONTROL_ACTIVATION"
         },
         "conflict_state": {
           "type": "string",
@@ -2751,7 +2751,7 @@
         },
         "transition_eligible": {
           "type": "boolean",
-          "const": false
+          "const": true
         },
         "runtime_started": {
           "type": "boolean",
