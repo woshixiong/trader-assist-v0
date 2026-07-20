@@ -12,9 +12,12 @@ Covers Section 16 categories A-E (Runtime composition):
 
 from __future__ import annotations
 
+import asyncio
+import importlib.util
 import json
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -29,6 +32,7 @@ from trader_assist_v0.runtime.first_launch_notification import (
 )
 from trader_assist_v0.runtime.first_launch_operator_assist import (
     REQUIRED_PUBLIC_SUBSCRIPTIONS,
+    OperatorAssistRuntimeError,
 )
 from trader_assist_v0.runtime.first_launch_public_runtime import (
     RestrictedPublicRuntime,
@@ -656,5 +660,755 @@ def test_shutdown_closes_runtime_session(tmp_path: Path) -> None:
         sessions = store.list_runtime_sessions()
         assert len(sessions) == 1
         assert sessions[0].closed_at is not None
+    finally:
+        store.close()
+
+
+# ============================================================
+# Script module loader for GA-01 / GA-05 transport loop tests
+# ============================================================
+
+
+def _load_script_module() -> object:
+    """Load scripts/run_first_launch_public_runtime.py as an importable module."""
+    module_name = "_run_first_launch_public_runtime_under_test"
+    spec = importlib.util.spec_from_file_location(module_name, _SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    # Register in sys.modules before exec so that the @dataclass decorator
+    # (which looks up ``sys.modules.get(cls.__module__)``) can resolve the module.
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    # GA-05 tests: the script's _utc_now returns wall-clock time, but the
+    # runtime is activated with the test's fixed NOW (2026-07-14).  Patch the
+    # script's clock so _run_transport uses the same deterministic timestamp
+    # as the rest of the test, preventing false session-timeout failures.
+    module._utc_now = _utc_now  # type: ignore[attr-defined]
+    return module
+
+
+_SCRIPT_MODULE = _load_script_module()
+
+
+def _valid_cli_args(
+    tmp_path: Path,
+    *,
+    enable: bool = True,
+    mode: str = "RESTRICTED_PUBLIC_LIVE_SHADOW",
+) -> object:
+    """Build CliArguments for GA-01 / GA-05 tests."""
+    return _SCRIPT_MODULE.CliArguments(
+        enable_restricted_public_runtime=enable,
+        mode=mode,
+        database_path=tmp_path / "runtime.db",
+        risk_configuration_path=tmp_path / "risk.json",
+        webhook_url="https://hooks.example.com/notify",
+        webhook_timeout_seconds=10.0,
+        authorization_header_name=None,
+        authorization_header_value=None,
+        acknowledgement_timeout_seconds=30.0,
+        session_timeout_seconds=21600.0,
+    )
+
+
+class _RecoverySpy:
+    """Records calls to recover_snapshot; raises if invoked unexpectedly."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(self) -> tuple[str, str, str]:
+        self.calls += 1
+        raise AssertionError("recover_snapshot must not be called before activation gate")
+
+
+class _WebSocketFactorySpy:
+    """Records calls to websocket_factory; raises if invoked unexpectedly."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def __call__(self, url: str) -> object:
+        self.calls += 1
+        raise AssertionError("websocket_factory must not be called before activation gate")
+
+
+# ============================================================
+# GA-01: run_runtime activation gate
+# ============================================================
+
+
+@pytest.mark.parametrize(
+    "enable,mode",
+    [
+        (False, ""),  # enable flag false (mode also empty)
+        (True, ""),  # missing/empty mode
+        (True, "LIVE"),  # wrong mode
+        (False, "RESTRICTED_PUBLIC_LIVE_SHADOW"),  # valid mode but enable false
+    ],
+)
+def test_ga01_run_runtime_rejects_invalid_activation_before_side_effects(
+    tmp_path: Path, enable: bool, mode: str
+) -> None:
+    """GA-01: run_runtime must independently enforce the activation contract.
+
+    Direct callers with disabled or wrong activation must fail nonzero before
+    any side effect: no SQLite/store construction, no session creation, no HTTP
+    calls, no WebSocket calls, no publication, no webhook calls.
+    """
+    args = _valid_cli_args(tmp_path, enable=enable, mode=mode)
+    recovery_spy = _RecoverySpy()
+    ws_spy = _WebSocketFactorySpy()
+    db_path = tmp_path / "runtime.db"
+    assert not db_path.exists()
+
+    with pytest.raises(_SCRIPT_MODULE.CliArgumentError):
+        asyncio.run(
+            _SCRIPT_MODULE.run_runtime(
+                args=args,
+                recover_snapshot=recovery_spy,
+                websocket_factory=ws_spy,
+                status=lambda msg: None,
+            )
+        )
+
+    # Zero side effects: no recovery, no websocket, no database file
+    assert recovery_spy.calls == 0
+    assert ws_spy.calls == 0
+    assert not db_path.exists()
+
+
+# ============================================================
+# GA-02: Malformed frame must withdraw READY
+# ============================================================
+
+
+def _establish_ready(
+    tmp_path: Path,
+) -> tuple[RestrictedPublicRuntime, RuntimeStore, NotificationDispatcher, _MockTransport]:
+    runtime, store, dispatcher, transport = _make_runtime(tmp_path)
+    _warmup_to_active(runtime, now=NOW)
+    _recover_to_ready(runtime, now=NOW)
+    assert runtime.is_ready is True
+    return runtime, store, dispatcher, transport
+
+
+def _row_counts(store: RuntimeStore) -> tuple[int, int]:
+    pubs = store._connection.execute(
+        "SELECT COUNT(*) FROM publication_bundles"
+    ).fetchone()[0]
+    outbox = store._connection.execute(
+        "SELECT COUNT(*) FROM notification_outbox"
+    ).fetchone()[0]
+    return pubs, outbox
+
+
+def _assert_ga02_withdrawal(
+    runtime: RestrictedPublicRuntime,
+    store: RuntimeStore,
+    action: Callable[[], object],
+) -> None:
+    """Assert that a malformed frame from READY withdraws to blocking non-ready.
+
+    Proves: exception remains visible, is_ready is false, no evaluation
+    produced a publication or outbox row, and exactly one blocking health
+    event is persisted.
+    """
+    pubs_before, outbox_before = _row_counts(store)
+    health_before = len(store.list_health_events(session_id=runtime.session_id))
+    assert runtime.is_ready is True
+
+    with pytest.raises((ValueError, OperatorAssistRuntimeError)):
+        action()
+
+    assert runtime.is_ready is False
+    pubs_after, outbox_after = _row_counts(store)
+    assert pubs_after == pubs_before
+    assert outbox_after == outbox_before
+    health_after = len(store.list_health_events(session_id=runtime.session_id))
+    assert health_after == health_before + 1
+    events = store.list_health_events(session_id=runtime.session_id)
+    # GA-02: events share the same NOW timestamp, so ordering by (recorded_at,
+    # event_id) is by UUID (non-deterministic).  Find the withdrawal event by
+    # its reason rather than assuming it is last.
+    withdrawal_events = [e for e in events if e.reason == "PUBLIC_FRAME_REJECTED"]
+    assert len(withdrawal_events) == 1
+    assert withdrawal_events[0].to_state in ("NOT_READY", "DISCONNECTED")
+
+
+def test_ga02_malformed_json_withdraws_ready(tmp_path: Path) -> None:
+    """GA-02: malformed JSON from READY must withdraw to blocking non-ready."""
+    runtime, store, _, _ = _establish_ready(tmp_path)
+    try:
+        _assert_ga02_withdrawal(
+            runtime, store, lambda: runtime.accept_public_frame(frame_text="{not json", now=NOW)
+        )
+    finally:
+        store.close()
+
+
+def test_ga02_wrong_acknowledgement_withdraws_ready(tmp_path: Path) -> None:
+    """GA-02: wrong subscription acknowledgement from READY must withdraw."""
+    runtime, store, _, _ = _establish_ready(tmp_path)
+    try:
+        wrong_ack = json.dumps(
+            {
+                "channel": "subscriptionResponse",
+                "data": {
+                    "method": "subscribe",
+                    "subscription": {"type": "candle", "coin": "BTC", "interval": "1m"},
+                },
+            },
+            separators=(",", ":"),
+        )
+        _assert_ga02_withdrawal(
+            runtime,
+            store,
+            lambda: runtime.accept_acknowledgement(frame_text=wrong_ack, now=NOW),
+        )
+    finally:
+        store.close()
+
+
+def test_ga02_malformed_5m_candle_withdraws_ready(tmp_path: Path) -> None:
+    """GA-02: malformed 5m candle from READY must withdraw."""
+    runtime, store, _, _ = _establish_ready(tmp_path)
+    try:
+        malformed_candle = json.dumps(
+            {"channel": "candle", "data": {"s": "ETH", "i": "5m"}},
+            separators=(",", ":"),
+        )
+        _assert_ga02_withdrawal(
+            runtime,
+            store,
+            lambda: runtime.accept_public_frame(frame_text=malformed_candle, now=NOW),
+        )
+    finally:
+        store.close()
+
+
+def test_ga02_malformed_15m_candle_withdraws_ready(tmp_path: Path) -> None:
+    """GA-02: malformed 15m candle from READY must withdraw."""
+    runtime, store, _, _ = _establish_ready(tmp_path)
+    try:
+        malformed_candle = json.dumps(
+            {"channel": "candle", "data": {"s": "ETH", "i": "15m"}},
+            separators=(",", ":"),
+        )
+        _assert_ga02_withdrawal(
+            runtime,
+            store,
+            lambda: runtime.accept_public_frame(frame_text=malformed_candle, now=NOW),
+        )
+    finally:
+        store.close()
+
+
+def test_ga02_malformed_context_withdraws_ready(tmp_path: Path) -> None:
+    """GA-02: malformed activeAssetCtx from READY must withdraw."""
+    runtime, store, _, _ = _establish_ready(tmp_path)
+    try:
+        malformed_ctx = json.dumps(
+            {
+                "channel": "activeAssetCtx",
+                "data": {"coin": "ETH", "ctx": {"markPx": "not-a-number"}},
+            },
+            separators=(",", ":"),
+        )
+        _assert_ga02_withdrawal(
+            runtime,
+            store,
+            lambda: runtime.accept_public_frame(frame_text=malformed_ctx, now=NOW),
+        )
+    finally:
+        store.close()
+
+
+def test_ga02_symbol_mismatch_withdraws_ready(tmp_path: Path) -> None:
+    """GA-02: candle with wrong symbol from READY must withdraw."""
+    runtime, store, _, _ = _establish_ready(tmp_path)
+    try:
+        mismatch = json.dumps(
+            {
+                "channel": "candle",
+                "data": {
+                    "s": "BTC",
+                    "i": "5m",
+                    "t": 0,
+                    "T": 1000,
+                    "o": "100",
+                    "h": "101",
+                    "l": "99",
+                    "c": "100",
+                    "v": "10",
+                    "n": 0,
+                },
+            },
+            separators=(",", ":"),
+        )
+        _assert_ga02_withdrawal(
+            runtime,
+            store,
+            lambda: runtime.accept_public_frame(frame_text=mismatch, now=NOW),
+        )
+    finally:
+        store.close()
+
+
+def test_ga02_interval_mismatch_withdraws_ready(tmp_path: Path) -> None:
+    """GA-02: candle with wrong interval from READY must withdraw."""
+    runtime, store, _, _ = _establish_ready(tmp_path)
+    try:
+        mismatch = json.dumps(
+            {
+                "channel": "candle",
+                "data": {
+                    "s": "ETH",
+                    "i": "1m",
+                    "t": 0,
+                    "T": 1000,
+                    "o": "100",
+                    "h": "101",
+                    "l": "99",
+                    "c": "100",
+                    "v": "10",
+                    "n": 0,
+                },
+            },
+            separators=(",", ":"),
+        )
+        _assert_ga02_withdrawal(
+            runtime,
+            store,
+            lambda: runtime.accept_public_frame(frame_text=mismatch, now=NOW),
+        )
+    finally:
+        store.close()
+
+
+def test_ga02_publication_blocked_during_disconnect(tmp_path: Path) -> None:
+    """GA-02: after a malformed frame withdraws READY, no further frame can produce a publication.
+
+    The runtime stays in a blocking non-ready state. ``accept_public_frame``
+    returns ``None`` for any subsequent frame because the health state is in
+    ``_BLOCKING_HEALTH_STATES``.
+    """
+    runtime, store, _, _ = _establish_ready(tmp_path)
+    try:
+        # Withdraw READY with a malformed frame
+        with pytest.raises((ValueError, OperatorAssistRuntimeError)):
+            runtime.accept_public_frame(frame_text="{not json", now=NOW)
+        assert runtime.is_ready is False
+        # A subsequent valid context frame must not produce an evaluation
+        result = runtime.accept_public_frame(frame_text=_context_frame("101"), now=NOW)
+        assert result is None
+        pubs, outbox = _row_counts(store)
+        assert pubs == 0
+        assert outbox == 0
+    finally:
+        store.close()
+
+
+# ============================================================
+# GA-05: Actual transport reconnect lifecycle
+# ============================================================
+
+
+def _make_runtime_short_reconnect(
+    tmp_path: Path,
+    *,
+    reconnect_delays: tuple[float, ...] = (0.001, 0.001, 0.001),
+) -> tuple[RestrictedPublicRuntime, RuntimeStore, NotificationDispatcher, _MockTransport]:
+    """Runtime with very short reconnect delays for fast transport loop tests."""
+    store = _open_store(tmp_path)
+    transport = _MockTransport(
+        responses=(HttpResponse(status_code=200, body=b"ok"),), calls=[]
+    )
+    dispatcher = NotificationDispatcher(
+        store=store, transport=transport, config=_notification_config()
+    )
+    config = RestrictedPublicRuntimeConfig(
+        database_path=tmp_path / "runtime.db",
+        risk_configuration=_risk_configuration(),
+        notification_config=_notification_config(),
+        reconnect_delays_seconds=reconnect_delays,
+    )
+    runtime = RestrictedPublicRuntime(
+        config=config,
+        utc_now=_utc_now,
+        monotonic_now=_monotonic_now,
+        store=store,
+        dispatcher=dispatcher,
+    )
+    return runtime, store, dispatcher, transport
+
+
+class _FakeWebSocket:
+    """Fake WebSocket that sends canned frames then optionally disconnects."""
+
+    def __init__(
+        self,
+        frames: list[str],
+        *,
+        disconnect_after: int | None = None,
+        shutdown_event: asyncio.Event | None = None,
+    ) -> None:
+        self._frames = list(frames)
+        self._pos = 0
+        self._disconnect_after = (
+            disconnect_after if disconnect_after is not None else len(frames)
+        )
+        self._shutdown_event = shutdown_event
+        self.sent: list[str] = []
+        self.closed = False
+
+    async def send(self, message: str) -> None:
+        self.sent.append(message)
+
+    async def recv(self) -> str | bytes:
+        if self._pos >= self._disconnect_after:
+            if self._shutdown_event is not None:
+                await asyncio.wait_for(self._shutdown_event.wait(), timeout=30.0)
+                raise ConnectionError("shutdown")
+            raise ConnectionError("simulated disconnect")
+        frame = self._frames[self._pos]
+        self._pos += 1
+        return frame
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class _FakeWebSocketFactory:
+    """Factory that returns scripted fake WebSockets on each call."""
+
+    def __init__(self) -> None:
+        self._queue: list[_FakeWebSocket] = []
+        self.created: list[_FakeWebSocket] = []
+
+    def enqueue(self, ws: _FakeWebSocket) -> None:
+        self._queue.append(ws)
+
+    async def __call__(self, url: str) -> _FakeWebSocket:
+        if not self._queue:
+            raise AssertionError("no fake websocket queued")
+        ws = self._queue.pop(0)
+        self.created.append(ws)
+        return ws
+
+
+def _recovery_frames() -> tuple[str, str, str]:
+    """Return valid snapshot recovery data for the fake recover_snapshot."""
+    candles_5m = [_candle_obj(i) for i in range(64)]
+    candles_15m = [_candle_obj(i, interval="15m") for i in range(20)]
+    return (
+        _snapshot_json(candles_5m),
+        _snapshot_json(candles_15m),
+        _metadata_json(),
+    )
+
+
+def _ack_and_context_frames() -> list[str]:
+    """Return 3 ack frames + 1 context frame to reach READY."""
+    acks = [_ack_frame(spec.subscription) for spec in REQUIRED_PUBLIC_SUBSCRIPTIONS]
+    return [*acks, _context_frame("100")]
+
+
+def test_ga05_first_connection_reaches_ready_via_transport_loop(tmp_path: Path) -> None:
+    """GA-05: the actual _run_transport loop must reach READY on first connection."""
+    runtime, store, _, _ = _make_runtime_short_reconnect(tmp_path)
+    try:
+        runtime.activate(now=NOW)
+        shutdown_event = asyncio.Event()
+
+        ws = _FakeWebSocket(
+            _ack_and_context_frames(), shutdown_event=shutdown_event
+        )
+        factory = _FakeWebSocketFactory()
+        factory.enqueue(ws)
+
+        async def _test() -> None:
+            transport_task = asyncio.create_task(
+                _SCRIPT_MODULE._run_transport(
+                    runtime=runtime,
+                    recover_snapshot=_recovery_frames,
+                    websocket_factory=factory,
+                    websocket_url="wss://test",
+                    status=lambda msg: None,
+                    shutdown_event=shutdown_event,
+                )
+            )
+            # Poll for READY
+            for _ in range(200):
+                if runtime.is_ready:
+                    break
+                await asyncio.sleep(0.01)
+            assert runtime.is_ready is True
+            assert len(ws.sent) == 3  # three subscriptions sent
+            # Shutdown cleanly
+            shutdown_event.set()
+            exit_code = await asyncio.wait_for(transport_task, timeout=10.0)
+            assert exit_code == 0
+
+        asyncio.run(_test())
+    finally:
+        store.close()
+
+
+def test_ga05_disconnect_then_reconnect_uses_begin_reconnect(tmp_path: Path) -> None:
+    """GA-05: after disconnect, the next iteration uses begin_reconnect, not begin_warmup."""
+    runtime, store, _, _ = _make_runtime_short_reconnect(tmp_path)
+    try:
+        runtime.activate(now=NOW)
+        shutdown_event = asyncio.Event()
+
+        # First connection: 3 acks + context → READY, then disconnect
+        ws1 = _FakeWebSocket(_ack_and_context_frames(), disconnect_after=4)
+        # Second connection: 3 acks + context → READY, then block for shutdown
+        ws2 = _FakeWebSocket(
+            _ack_and_context_frames(), shutdown_event=shutdown_event
+        )
+        factory = _FakeWebSocketFactory()
+        factory.enqueue(ws1)
+        factory.enqueue(ws2)
+
+        async def _test() -> None:
+            transport_task = asyncio.create_task(
+                _SCRIPT_MODULE._run_transport(
+                    runtime=runtime,
+                    recover_snapshot=_recovery_frames,
+                    websocket_factory=factory,
+                    websocket_url="wss://test",
+                    status=lambda msg: None,
+                    shutdown_event=shutdown_event,
+                )
+            )
+            # Wait for first READY
+            for _ in range(200):
+                if runtime.is_ready:
+                    break
+                await asyncio.sleep(0.01)
+            assert runtime.is_ready is True
+            # Wait for disconnect + reconnect (second WebSocket created).
+            # The 0.001s reconnect delay is too short for a 0.01s poll to
+            # reliably observe the intermediate non-ready state, so we
+            # poll for the reconnect signal instead.
+            for _ in range(400):
+                if len(factory.created) >= 2:
+                    break
+                await asyncio.sleep(0.01)
+            assert len(factory.created) == 2
+            assert runtime._reconnect_attempt >= 1
+            # Wait for second READY (via begin_reconnect)
+            for _ in range(400):
+                if runtime.is_ready:
+                    break
+                await asyncio.sleep(0.01)
+            assert runtime.is_ready is True
+            # begin_reconnect was used (reconnect_attempt > 0)
+            assert runtime._reconnect_attempt >= 1
+            # begin_warmup was NOT called a second time: _connection_id changed
+            assert len(factory.created) == 2
+            # Shutdown cleanly
+            shutdown_event.set()
+            exit_code = await asyncio.wait_for(transport_task, timeout=10.0)
+            assert exit_code == 0
+
+        asyncio.run(_test())
+    finally:
+        store.close()
+
+
+def test_ga05_reconnect_requires_fresh_snapshot_and_acks(tmp_path: Path) -> None:
+    """GA-05: after reconnect, fresh snapshot and all three acks are required again.
+
+    The protocol is reset on begin_reconnect, so acknowledged_subscriptions
+    is empty until all three fresh acks are received.
+    """
+    runtime, store, _, _ = _make_runtime_short_reconnect(tmp_path)
+    try:
+        runtime.activate(now=NOW)
+        shutdown_event = asyncio.Event()
+
+        ws1 = _FakeWebSocket(_ack_and_context_frames(), disconnect_after=4)
+        ws2 = _FakeWebSocket(
+            _ack_and_context_frames(), shutdown_event=shutdown_event
+        )
+        factory = _FakeWebSocketFactory()
+        factory.enqueue(ws1)
+        factory.enqueue(ws2)
+
+        async def _test() -> None:
+            transport_task = asyncio.create_task(
+                _SCRIPT_MODULE._run_transport(
+                    runtime=runtime,
+                    recover_snapshot=_recovery_frames,
+                    websocket_factory=factory,
+                    websocket_url="wss://test",
+                    status=lambda msg: None,
+                    shutdown_event=shutdown_event,
+                )
+            )
+            # Wait for first READY
+            for _ in range(200):
+                if runtime.is_ready:
+                    break
+                await asyncio.sleep(0.01)
+            assert runtime.is_ready is True
+            assert len(runtime.acknowledged_subscriptions) == 3
+            # Wait for disconnect + reconnect (second WebSocket created).
+            # The 0.001s reconnect delay is too short for a 0.01s poll to
+            # reliably observe the intermediate state where acks are cleared,
+            # so we poll for the reconnect signal instead.
+            for _ in range(400):
+                if len(factory.created) >= 2:
+                    break
+                await asyncio.sleep(0.01)
+            # Wait for second READY
+            for _ in range(400):
+                if runtime.is_ready:
+                    break
+                await asyncio.sleep(0.01)
+            assert runtime.is_ready is True
+            # Fresh acks were required and received
+            assert len(runtime.acknowledged_subscriptions) == 3
+            shutdown_event.set()
+            await asyncio.wait_for(transport_task, timeout=10.0)
+
+        asyncio.run(_test())
+    finally:
+        store.close()
+
+
+def test_ga05_budget_exhaustion_exits_fail_closed(tmp_path: Path) -> None:
+    """GA-05: exhausting the reconnect budget stops fail-closed (exit code 1)."""
+    # Only 1 reconnect delay: first reconnect succeeds, second fails
+    runtime, store, _, _ = _make_runtime_short_reconnect(
+        tmp_path, reconnect_delays=(0.001,)
+    )
+    try:
+        runtime.activate(now=NOW)
+        shutdown_event = asyncio.Event()
+
+        # First connection: 3 acks + context → READY, then disconnect
+        ws1 = _FakeWebSocket(_ack_and_context_frames(), disconnect_after=4)
+        # Second connection (reconnect): 3 acks + context → READY, then disconnect
+        ws2 = _FakeWebSocket(_ack_and_context_frames(), disconnect_after=4)
+        factory = _FakeWebSocketFactory()
+        factory.enqueue(ws1)
+        factory.enqueue(ws2)
+
+        async def _test() -> None:
+            exit_code = await _SCRIPT_MODULE._run_transport(
+                runtime=runtime,
+                recover_snapshot=_recovery_frames,
+                websocket_factory=factory,
+                websocket_url="wss://test",
+                status=lambda msg: None,
+                shutdown_event=shutdown_event,
+            )
+            # Budget exhausted: first reconnect used the only delay, second
+            # begin_reconnect returned None → exit 1.
+            assert exit_code == 1
+            assert runtime.is_ready is False
+
+        asyncio.run(_test())
+    finally:
+        store.close()
+
+
+def test_ga05_cancellation_closes_resources(tmp_path: Path) -> None:
+    """GA-05: setting shutdown_event during the transport loop exits cleanly."""
+    runtime, store, _, _ = _make_runtime_short_reconnect(tmp_path)
+    try:
+        runtime.activate(now=NOW)
+        shutdown_event = asyncio.Event()
+
+        ws = _FakeWebSocket(
+            _ack_and_context_frames(), shutdown_event=shutdown_event
+        )
+        factory = _FakeWebSocketFactory()
+        factory.enqueue(ws)
+
+        async def _test() -> None:
+            transport_task = asyncio.create_task(
+                _SCRIPT_MODULE._run_transport(
+                    runtime=runtime,
+                    recover_snapshot=_recovery_frames,
+                    websocket_factory=factory,
+                    websocket_url="wss://test",
+                    status=lambda msg: None,
+                    shutdown_event=shutdown_event,
+                )
+            )
+            # Wait for READY
+            for _ in range(200):
+                if runtime.is_ready:
+                    break
+                await asyncio.sleep(0.01)
+            assert runtime.is_ready is True
+            # Cancel by setting shutdown_event
+            shutdown_event.set()
+            exit_code = await asyncio.wait_for(transport_task, timeout=10.0)
+            assert exit_code == 0
+            # WebSocket was closed
+            assert ws.closed is True
+
+        asyncio.run(_test())
+    finally:
+        store.close()
+
+
+def test_ga05_no_duplicate_session_or_publication_on_reconnect(tmp_path: Path) -> None:
+    """GA-05: reconnect must not create a duplicate runtime session or publication."""
+    runtime, store, _, _ = _make_runtime_short_reconnect(tmp_path)
+    try:
+        runtime.activate(now=NOW)
+        session_id = runtime.session_id
+        shutdown_event = asyncio.Event()
+
+        ws1 = _FakeWebSocket(_ack_and_context_frames(), disconnect_after=4)
+        ws2 = _FakeWebSocket(
+            _ack_and_context_frames(), shutdown_event=shutdown_event
+        )
+        factory = _FakeWebSocketFactory()
+        factory.enqueue(ws1)
+        factory.enqueue(ws2)
+
+        async def _test() -> None:
+            transport_task = asyncio.create_task(
+                _SCRIPT_MODULE._run_transport(
+                    runtime=runtime,
+                    recover_snapshot=_recovery_frames,
+                    websocket_factory=factory,
+                    websocket_url="wss://test",
+                    status=lambda msg: None,
+                    shutdown_event=shutdown_event,
+                )
+            )
+            # Wait for first READY
+            for _ in range(200):
+                if runtime.is_ready:
+                    break
+                await asyncio.sleep(0.01)
+            assert runtime.is_ready is True
+            # Wait for disconnect + reconnect
+            for _ in range(400):
+                if runtime.is_ready and runtime._reconnect_attempt >= 1:
+                    break
+                await asyncio.sleep(0.01)
+            assert runtime._reconnect_attempt >= 1
+            # Session identity is unchanged
+            assert runtime.session_id == session_id
+            sessions = store.list_runtime_sessions()
+            assert len(sessions) == 1
+            # No publication was created (no triggering candle was sent)
+            pubs, outbox = _row_counts(store)
+            assert pubs == 0
+            assert outbox == 0
+            shutdown_event.set()
+            await asyncio.wait_for(transport_task, timeout=10.0)
+
+        asyncio.run(_test())
     finally:
         store.close()

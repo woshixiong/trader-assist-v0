@@ -449,10 +449,17 @@ class RestrictedPublicRuntime:
             raise RuntimeNotActivatedError("warmup has not begun")
         if self._shutdown:
             raise RuntimeShutdownError("runtime has been shut down")
-        self._protocol.check_timeout()
-        result = self._protocol.accept_frame(frame_text)
-        if result is not None:
-            raise RestrictedRuntimeError("acknowledgement frame produced a data frame")
+        try:
+            self._protocol.check_timeout()
+            result = self._protocol.accept_frame(frame_text)
+            if result is not None:
+                raise RestrictedRuntimeError("acknowledgement frame produced a data frame")
+        except BaseException:
+            # GA-02: acknowledgement validation failure must atomically withdraw
+            # from READY/WARMING/DEGRADED to a blocking non-ready state before
+            # the error is re-raised.  Do not swallow the original exception.
+            self._withdraw_on_frame_rejection(timestamp)
+            raise
         if (
             self._protocol.state is PublicSessionState.ACTIVE
             and self._health_state is RuntimeHealthState.WARMING
@@ -525,16 +532,26 @@ class RestrictedPublicRuntime:
             raise RuntimeShutdownError("runtime has been shut down")
         if self._health_state in _BLOCKING_HEALTH_STATES:
             return None
-        self._protocol.check_timeout()
-        frame = self._protocol.accept_frame(frame_text)
-        if frame is None:
+        try:
+            self._protocol.check_timeout()
+            frame = self._protocol.accept_frame(frame_text)
+            if frame is None:
+                return None
+            if frame.channel == "candle":
+                return self._accept_candle_frame(frame, timestamp)
+            if frame.channel == "activeAssetCtx":
+                self._accept_context_frame(frame, timestamp)
+                return None
             return None
-        if frame.channel == "candle":
-            return self._accept_candle_frame(frame, timestamp)
-        if frame.channel == "activeAssetCtx":
-            self._accept_context_frame(frame, timestamp)
-            return None
-        return None
+        except BaseException:
+            # GA-02: any malformed, rejected or authority-invalid public frame
+            # received while READY (or WARMING/DEGRADED) must atomically move
+            # the runtime to a blocking non-ready state before the error is
+            # re-raised.  is_ready must never be true when parsing failed.
+            # Do not depend on the CLI frame loop to call mark_disconnected
+            # after the fact; do not swallow the original exception.
+            self._withdraw_on_frame_rejection(timestamp)
+            raise
 
     def _accept_candle_frame(
         self, frame: AcceptedPublicFrame, timestamp: datetime
@@ -868,6 +885,37 @@ class RestrictedPublicRuntime:
         self._transition_health(
             to=RuntimeHealthState.NOT_READY, reason=reason, now=now
         )
+
+    def _withdraw_on_frame_rejection(self, now: datetime) -> None:
+        """GA-02: atomically withdraw to a blocking non-ready state on frame rejection.
+
+        Called from ``accept_public_frame`` and ``accept_acknowledgement`` when
+        any malformed, rejected or authority-invalid frame is encountered.  The
+        original exception is re-raised by the caller after this method returns;
+        this method must not swallow it.  If the withdrawal itself fails (for
+        example because the durable health-event store is unavailable), the
+        original exception still propagates.
+        """
+        if self._shutdown:
+            return
+        if self._connection_id == "":
+            return
+        if self._health_state not in (
+            RuntimeHealthState.READY,
+            RuntimeHealthState.WARMING,
+            RuntimeHealthState.DEGRADED,
+        ):
+            return
+        try:
+            self._transition_health(
+                to=RuntimeHealthState.NOT_READY,
+                reason="PUBLIC_FRAME_REJECTED",
+                now=now,
+            )
+        except BaseException:
+            # The original exception must remain visible; suppress any
+            # secondary failure from the durable health-event record.
+            pass
 
     def shutdown(self, *, now: datetime) -> None:
         """Deterministic shutdown: withdraw READY, close resources, persist terminal state."""

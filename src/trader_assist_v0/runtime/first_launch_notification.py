@@ -38,6 +38,24 @@ _MIN_TIMEOUT_SECONDS: Final[float] = 1.0
 _MAX_TIMEOUT_SECONDS: Final[float] = 60.0
 _MAX_URL_LENGTH: Final[int] = 2048
 _RETRYABLE_STATUS_CODES: Final[frozenset[int]] = frozenset({408, 429, 500, 502, 503, 504})
+# GA-03: prohibited Hyperliquid exchange-write endpoint policy.
+# The notification transport is operation-specific (fixed POST, fixed
+# notification payload, no exchange action body).  These hosts and path
+# suffixes identify Hyperliquid exchange-write endpoints that must never be
+# targeted by the notification webhook, regardless of credentials.
+_PROHIBITED_HOSTS: Final[frozenset[str]] = frozenset(
+    {
+        "api.hyperliquid.xyz",
+        "api.hyperliquid-testnet.xyz",
+    }
+)
+_PROHIBITED_PATH_SUFFIXES: Final[tuple[str, ...]] = (
+    "/exchange",
+    "/exchange/",
+)
+# Path tokens that identify a Hyperliquid exchange action endpoint under any
+# recognized routing variant (query parameters are evaluated separately).
+_PROHIBITED_PATH_TOKENS: Final[tuple[str, ...]] = ("exchange",)
 
 
 class NotificationConfigError(ValueError):
@@ -46,6 +64,58 @@ class NotificationConfigError(ValueError):
 
 class NotificationDeliveryError(RuntimeError):
     """Raised when a delivery attempt cannot be classified."""
+
+
+def _reject_prohibited_endpoint(*, parsed_url: object) -> None:
+    """Reject Hyperliquid exchange-write endpoints, URL userinfo and malformed host/path.
+
+    The notification transport is operation-specific: fixed POST, fixed notification
+    payload, no configurable method, no exchange action body, no account or signing
+    data.  The endpoint itself must be rejected before persistence or network access,
+    independent of whether credentials are present.
+
+    Rejects:
+    - ``api.hyperliquid.xyz`` and ``api.hyperliquid-testnet.xyz`` with ``/exchange``
+      or any routing variant that resolves to the exchange action path;
+    - URL userinfo (``https://user:pass@host/...``), which has no legitimate role
+      for a notification webhook and can hide redirect or credential injection;
+    - malformed host/path (whitespace, control characters).
+    """
+    username = getattr(parsed_url, "username", None)
+    password = getattr(parsed_url, "password", None)
+    if username is not None or password is not None:
+        raise NotificationConfigError("webhook URL must not carry userinfo")
+    hostname = getattr(parsed_url, "hostname", None)
+    if type(hostname) is not str or not hostname:
+        raise NotificationConfigError("webhook URL must have a host")
+    if hostname != hostname.strip().lower():
+        raise NotificationConfigError("webhook URL host is malformed")
+    if any(ch.isspace() or ord(ch) < 0x20 for ch in hostname):
+        raise NotificationConfigError("webhook URL host is malformed")
+    path = getattr(parsed_url, "path", "")
+    if type(path) is not str:
+        raise NotificationConfigError("webhook URL path is malformed")
+    if any(ord(ch) < 0x20 for ch in path):
+        raise NotificationConfigError("webhook URL path is malformed")
+    normalized_host = hostname.lower()
+    normalized_path = path.rstrip("/")
+    if normalized_host in _PROHIBITED_HOSTS:
+        # Reject the exchange action endpoint under any recognized routing,
+        # including trailing slash and query-parameter variants.  A bare
+        # prohibited host with a non-exchange path (e.g. ``/info``) is not
+        # an exchange-write endpoint and is not blocked here; the policy is
+        # operation-specific, not host-specific.
+        lowered = normalized_path.lower()
+        for suffix in _PROHIBITED_PATH_SUFFIXES:
+            if lowered == suffix.rstrip("/") or lowered.endswith(suffix):
+                raise NotificationConfigError(
+                    "webhook URL must not target a Hyperliquid exchange-write endpoint"
+                )
+        tokens = [token for token in normalized_path.split("/") if token]
+        if any(token in _PROHIBITED_PATH_TOKENS for token in tokens):
+            raise NotificationConfigError(
+                "webhook URL must not target a Hyperliquid exchange-write endpoint"
+            )
 
 
 @dataclass(frozen=True)
@@ -67,11 +137,20 @@ class NotificationConfig:
             raise NotificationConfigError("webhook URL must be configured")
         if len(self.webhook_url) > _MAX_URL_LENGTH:
             raise NotificationConfigError("webhook URL exceeds the bounded length")
+        # GA-03: reject control characters in the raw URL string before
+        # ``urlparse`` strips them (Python's urlparse silently removes ``\n``,
+        # ``\r`` and ``\t`` from URLs, which would bypass the parsed-path
+        # control-character check below).
+        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in self.webhook_url):
+            raise NotificationConfigError("webhook URL is malformed")
         parsed = urlparse(self.webhook_url)
         if parsed.scheme != _HTTPS_SCHEME:
             raise NotificationConfigError("webhook URL must use HTTPS")
         if not parsed.netloc or not parsed.hostname:
             raise NotificationConfigError("webhook URL must have a host")
+        # GA-03: reject Hyperliquid exchange-write endpoints, URL userinfo,
+        # and malformed host/path before persistence or network access.
+        _reject_prohibited_endpoint(parsed_url=parsed)
         if (
             type(self.timeout_seconds) is not float
             and type(self.timeout_seconds) is not int

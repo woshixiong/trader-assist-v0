@@ -270,13 +270,36 @@ async def _run_transport(
     status: Callable[[str], None],
     shutdown_event: asyncio.Event,
 ) -> int:
-    """Drive the async transport loop: snapshot recovery, WebSocket, reconnect."""
+    """Drive the async transport loop: snapshot recovery, WebSocket, reconnect.
+
+    GA-05: the initial connection uses ``begin_warmup``.  After any disconnect
+    or failure, subsequent iterations use ``begin_reconnect`` (the separately
+    tested reconnect lifecycle) instead of calling ``begin_warmup`` a second
+    time.  Exhausting the bounded reconnect budget stops fail-closed.  Each
+    reconnect attempt requires a fresh snapshot recovery and three fresh
+    subscription acknowledgements before the runtime can return to READY.
+    """
+    first_connection = True
     while not shutdown_event.is_set():
         connection_id = f"conn-{int(_utc_now().timestamp() * 1000)}"
         try:
-            requests = runtime.begin_warmup(connection_id=connection_id, now=_utc_now())
+            requests: tuple[str, str, str] | None
+            if first_connection:
+                requests = runtime.begin_warmup(
+                    connection_id=connection_id, now=_utc_now()
+                )
+                first_connection = False
+            else:
+                requests = runtime.begin_reconnect(
+                    connection_id=connection_id, now=_utc_now()
+                )
+                if requests is None:
+                    # Reconnect budget exhausted or runtime shutdown; stop
+                    # fail-closed without attempting another connection.
+                    status("ERROR reconnect budget exhausted")
+                    return 1
         except Exception as exc:
-            status(f"ERROR begin_warmup: {type(exc).__name__}")
+            status(f"ERROR begin_connection: {type(exc).__name__}")
             return 1
         try:
             raw_5m, raw_15m, raw_metadata = recover_snapshot()
@@ -289,7 +312,8 @@ async def _run_transport(
         except Exception as exc:
             status(f"ERROR snapshot recovery: {type(exc).__name__}")
             runtime.mark_disconnected(now=_utc_now(), reason="snapshot-recovery-failure")
-            await _bounded_reconnect_wait(runtime, shutdown_event)
+            if not shutdown_event.is_set():
+                await _bounded_reconnect_wait(runtime, shutdown_event)
             continue
         try:
             async with _websocket_scope(
@@ -393,6 +417,13 @@ async def run_runtime(
     status: Callable[[str], None],
 ) -> int:
     """Wire up dependencies and run the restricted public runtime transport loop."""
+    # GA-01: independently enforce the default-off activation contract as the
+    # first meaningful operation of run_runtime().  Direct callers must not
+    # reach configuration validation, SQLite, snapshot HTTP, WebSocket factory
+    # invocation, publication or notification without both the enable flag and
+    # the exact RESTRICTED_PUBLIC_LIVE_SHADOW mode.  main()'s own
+    # validate_activation call is not relied upon here.
+    validate_activation(args)
     risk_configuration, notification_config, runtime_config = validate_configuration(args)
     store = RuntimeStore.open(runtime_config.database_path)
     transport = HttpsWebhookTransport()

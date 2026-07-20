@@ -11,7 +11,10 @@ Covers Section 16 categories F (Persistence) and parts of G (Notification):
 
 from __future__ import annotations
 
+import copy
+import dataclasses
 import json
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -42,6 +45,7 @@ from trader_assist_v0.first_launch.strategy import (
     wilder_atr14,
 )
 from trader_assist_v0.runtime.first_launch_runtime_store import (
+    PersistenceAuthorityError,
     PublicationConflictError,
     RuntimeStore,
     RuntimeStoreError,
@@ -620,5 +624,243 @@ def test_database_user_version_is_set(tmp_path: Path) -> None:
             assert version == 1
         finally:
             reopened.close()
+    finally:
+        store.close()
+
+
+# ============================================================
+# GA-04: publication authority validation
+# ============================================================
+
+
+def _row_counts(store: RuntimeStore) -> tuple[int, int]:
+    pubs = store._connection.execute(
+        "SELECT COUNT(*) FROM publication_bundles"
+    ).fetchone()[0]
+    outbox = store._connection.execute(
+        "SELECT COUNT(*) FROM notification_outbox"
+    ).fetchone()[0]
+    return pubs, outbox
+
+
+def _persist_chain(
+    store: RuntimeStore,
+    session_id: str,
+    chain: dict[str, object],
+    now: datetime,
+) -> object:
+    return store.persist_publication_bundle(
+        session_id=session_id,
+        strategy_output=chain["output"],  # type: ignore[arg-type]
+        volatility_snapshot=chain["volatility"],  # type: ignore[arg-type]
+        overlay_decision=chain["overlay"],  # type: ignore[arg-type]
+        trade_plan=chain["plan"],  # type: ignore[arg-type]
+        operator_review_card=chain["card"],  # type: ignore[arg-type]
+        shadow_order=chain["shadow"],  # type: ignore[arg-type]
+        now=now,
+    )
+
+
+def _reconstruct_authority(original: object) -> object:
+    """Construct a new instance of the same type with identical init field values.
+
+    This bypasses the process-local issuance registry: the new object has the
+    correct canonical hash (``__post_init__`` re-validates it) but is not
+    registered in ``_ISSUED``, so the reuse-only validators reject it.
+    """
+    fields = dataclasses.fields(original)
+    kwargs = {f.name: getattr(original, f.name) for f in fields if f.init}
+    return type(original)(**kwargs)
+
+
+def test_ga04_legitimate_issued_chain_persists(tmp_path: Path) -> None:
+    """The legitimate issuance chain persists successfully (baseline)."""
+    store = _open_store(tmp_path)
+    try:
+        now = NOW
+        session_id = _record_session(
+            store, now=now, database_path=tmp_path / "test_runtime.db"
+        )
+        chain = _full_publication_chain(now)
+        bundle, outbox = _persist_chain(store, session_id, chain, now)  # type: ignore[misc]
+        assert bundle.signal_id == chain["output"].setup_id  # type: ignore[attr-defined]
+        assert outbox.status == "PENDING"  # type: ignore[union-attr]
+        pubs, outbox_rows = _row_counts(store)
+        assert pubs == 1
+        assert outbox_rows == 1
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize(
+    "authority_key, transform_name",
+    [
+        ("output", "replace"),
+        ("volatility", "replace"),
+        ("overlay", "replace"),
+        ("card", "replace"),
+        ("shadow", "replace"),
+        ("output", "copy"),
+        ("volatility", "copy"),
+        ("overlay", "copy"),
+        ("card", "copy"),
+        ("shadow", "copy"),
+        ("output", "deepcopy"),
+        ("volatility", "deepcopy"),
+        ("overlay", "deepcopy"),
+        ("card", "deepcopy"),
+        ("shadow", "deepcopy"),
+        ("output", "reconstruct"),
+        ("volatility", "reconstruct"),
+        ("overlay", "reconstruct"),
+        ("card", "reconstruct"),
+        ("shadow", "reconstruct"),
+    ],
+)
+def test_ga04_rejects_unissued_authority(
+    tmp_path: Path, authority_key: str, transform_name: str
+) -> None:
+    """Direct constructor / replace / copy / deepcopy / coherent reconstruction are rejected."""
+    if transform_name == "replace":
+
+        def transform(o: object) -> object:
+            return dataclasses.replace(o)
+
+    elif transform_name == "copy":
+        transform = copy.copy
+    elif transform_name == "deepcopy":
+        transform = copy.deepcopy
+    else:
+        transform = _reconstruct_authority
+
+    store = _open_store(tmp_path)
+    try:
+        now = NOW
+        session_id = _record_session(
+            store, now=now, database_path=tmp_path / "test_runtime.db"
+        )
+        chain = _full_publication_chain(now)
+        original = chain[authority_key]
+        tampered_authority = transform(original)  # type: ignore[arg-type]
+        assert tampered_authority is not original, (
+            f"{transform_name} did not create a new object for {authority_key}"
+        )
+        tampered_chain = dict(chain)
+        tampered_chain[authority_key] = tampered_authority
+        before = _row_counts(store)
+        with pytest.raises(PersistenceAuthorityError):
+            _persist_chain(store, session_id, tampered_chain, now)
+        after = _row_counts(store)
+        assert after == before, (
+            f"row counts changed after rejecting {transform_name} on {authority_key}"
+        )
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize(
+    "authority_key",
+    ["output", "volatility", "overlay"],
+)
+def test_ga04_rejects_cross_bundle_substitution(
+    tmp_path: Path, authority_key: str
+) -> None:
+    """A legitimately issued authority from a different chain is rejected by
+    identity correspondence (plan's embedded authority must be the very same
+    object passed at the top level)."""
+    store = _open_store(tmp_path)
+    try:
+        now = NOW
+        session_id = _record_session(
+            store, now=now, database_path=tmp_path / "test_runtime.db"
+        )
+        chain_a = _full_publication_chain(now)
+        chain_b = _full_publication_chain(now)
+        substitute = chain_b[authority_key]
+        assert substitute is not chain_a[authority_key], (
+            "chain B authority must be a different object"
+        )
+        tampered_chain = dict(chain_a)
+        tampered_chain[authority_key] = substitute
+        before = _row_counts(store)
+        with pytest.raises(PersistenceAuthorityError):
+            _persist_chain(store, session_id, tampered_chain, now)
+        after = _row_counts(store)
+        assert after == before
+    finally:
+        store.close()
+
+
+# ============================================================
+# GA-06: non-IntegrityError rollback
+# ============================================================
+
+
+class _GA06InjectingStore(RuntimeStore):
+    """RuntimeStore subclass that injects a non-IntegrityError on the outbox INSERT."""
+
+    inject_failure: bool = False
+
+    def _execute(
+        self, sql: str, parameters: tuple[object, ...] = ()
+    ) -> sqlite3.Cursor:
+        if (
+            type(self).inject_failure
+            and "INSERT INTO notification_outbox" in sql
+        ):
+            raise sqlite3.OperationalError("injected GA-06 failure")
+        return super()._execute(sql, parameters)
+
+
+def test_ga06_non_integrity_error_rolls_back_atomically(tmp_path: Path) -> None:
+    """A non-IntegrityError after the bundle insert but before the outbox insert
+    rolls back the entire transaction, leaving zero new rows and a usable connection."""
+    _GA06InjectingStore.inject_failure = True
+    store = _GA06InjectingStore.open(tmp_path / "test_runtime.db")
+    try:
+        now = NOW
+        session_id = _record_session(
+            store, now=now, database_path=tmp_path / "test_runtime.db"
+        )
+        chain = _full_publication_chain(now)
+        before = _row_counts(store)
+        with pytest.raises(sqlite3.OperationalError, match="injected GA-06 failure"):
+            _persist_chain(store, session_id, chain, now)
+        after = _row_counts(store)
+        assert after == before, "partial insert must be rolled back"
+        # The connection remains usable after rollback.
+        assert store._connection.execute("SELECT 1").fetchone()[0] == 1
+        # A subsequent legitimate transaction succeeds.
+        _GA06InjectingStore.inject_failure = False
+        bundle, outbox = _persist_chain(store, session_id, chain, now)  # type: ignore[misc]
+        assert bundle.signal_id == chain["output"].setup_id  # type: ignore[attr-defined]
+        assert outbox.status == "PENDING"  # type: ignore[union-attr]
+        final_pubs, final_outbox = _row_counts(store)
+        assert final_pubs == before[0] + 1
+        assert final_outbox == before[1] + 1
+    finally:
+        store.close()
+        _GA06InjectingStore.inject_failure = False
+
+
+def test_ga06_integrity_error_remains_atomic_and_pending(tmp_path: Path) -> None:
+    """An IntegrityError (duplicate identity) still rolls back atomically and
+    leaves exactly one pending notification from the first successful insert."""
+    store = _open_store(tmp_path)
+    try:
+        now = NOW
+        session_id = _record_session(
+            store, now=now, database_path=tmp_path / "test_runtime.db"
+        )
+        chain = _full_publication_chain(now)
+        bundle, _outbox = _persist_chain(store, session_id, chain, now)  # type: ignore[misc]
+        before = _row_counts(store)
+        with pytest.raises(PublicationConflictError):
+            _persist_chain(store, session_id, chain, now)
+        after = _row_counts(store)
+        assert after == before, "duplicate insert must not add rows"
+        pending = store.list_pending_notifications()
+        assert len(pending) == 1
+        assert pending[0].notification_id == bundle.notification_id
     finally:
         store.close()

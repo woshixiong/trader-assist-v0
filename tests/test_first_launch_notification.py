@@ -667,3 +667,87 @@ def test_attempt_count_increments_on_retry(tmp_path: Path) -> None:
         assert len(transport.calls) == 3
     finally:
         store.close()
+
+
+# ============================================================
+# GA-03: Webhook endpoint policy
+# ============================================================
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://api.hyperliquid.xyz/exchange",
+        "https://api.hyperliquid-testnet.xyz/exchange",
+        "https://api.hyperliquid.xyz/exchange/",
+        "https://api.hyperliquid-testnet.xyz/exchange/",
+        "https://api.hyperliquid.xyz/exchange?foo=bar",
+        "https://api.hyperliquid.xyz:443/exchange",
+        "https://api.hyperliquid.xyz/path/exchange",
+        "https://api.hyperliquid.xyz/exchange/sub",
+    ],
+)
+def test_ga03_prohibited_hyperliquid_exchange_endpoints_rejected(url: str) -> None:
+    """GA-03: Hyperliquid exchange-write endpoints must be rejected before any network call."""
+    with pytest.raises(NotificationConfigError, match="exchange-write endpoint"):
+        _config(url=url)
+
+
+def test_ga03_url_userinfo_rejected() -> None:
+    """GA-03: URL userinfo must be rejected."""
+    with pytest.raises(NotificationConfigError, match="userinfo"):
+        _config(url="https://user:pass@hooks.example.com/notify")
+
+
+def test_ga03_malformed_host_whitespace_rejected() -> None:
+    """GA-03: hosts with whitespace must be rejected."""
+    with pytest.raises(NotificationConfigError, match="malformed"):
+        _config(url="https://hooks .example.com/notify")
+
+
+def test_ga03_malformed_path_control_char_rejected() -> None:
+    """GA-03: paths with control characters must be rejected."""
+    with pytest.raises(NotificationConfigError, match="malformed"):
+        _config(url="https://hooks.example.com/notify\n")
+
+
+def test_ga03_normal_https_webhook_remains_accepted() -> None:
+    """GA-03: a normal HTTPS webhook must remain accepted."""
+    config = _config(url="https://hooks.example.com/eth-notify")
+    assert config.webhook_url == "https://hooks.example.com/eth-notify"
+
+
+def test_ga03_hyperliquid_info_endpoint_remains_accepted() -> None:
+    """GA-03: a Hyperliquid non-exchange endpoint (e.g. /info) is not blocked.
+
+    The policy is operation-specific (exchange-write), not host-specific.
+    """
+    config = _config(url="https://api.hyperliquid.xyz/info")
+    assert config.webhook_url == "https://api.hyperliquid.xyz/info"
+
+
+def test_ga03_no_dispatch_attempt_for_invalid_endpoint(tmp_path: Path) -> None:
+    """GA-03: no outbox dispatch attempt can occur because configuration admission itself rejects.
+
+    The endpoint is rejected at NotificationConfig construction time, before
+    any dispatcher is created or any network call is attempted.  This test
+    proves that the rejection happens before persistence or network access.
+    """
+    with pytest.raises(NotificationConfigError):
+        NotificationConfig(
+            webhook_url="https://api.hyperliquid.xyz/exchange",
+            timeout_seconds=10.0,
+            authorization_header_name=None,
+            authorization_header_value=None,
+        )
+
+
+def test_ga03_case_variant_of_prohibited_target_rejected() -> None:
+    """GA-03: case-insensitive matching of the exchange path token."""
+    # urlparse lowercases the scheme and host, but the path is case-sensitive.
+    # The policy lowercases the path before matching, so Exchange/EXCHANGE
+    # are also rejected.
+    with pytest.raises(NotificationConfigError, match="exchange-write endpoint"):
+        _config(url="https://api.hyperliquid.xyz/Exchange")
+    with pytest.raises(NotificationConfigError, match="exchange-write endpoint"):
+        _config(url="https://api.hyperliquid.xyz/EXCHANGE")

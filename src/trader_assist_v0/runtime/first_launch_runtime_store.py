@@ -30,13 +30,20 @@ from uuid import uuid4
 from trader_assist_v0.contracts.common import canonical_json_bytes
 from trader_assist_v0.first_launch.operator_review import (
     OperatorReviewCard,
+    OperatorReviewError,
     ShadowOrder,
+    _validated_card,
+    _validated_shadow,
 )
 from trader_assist_v0.first_launch.strategy import (
     OverlayDecision,
+    PlanError,
     StrategyOutput,
     TradePlan,
     VolatilitySnapshot,
+    _validated_overlay_decision,
+    _validated_strategy_output,
+    _validated_volatility_snapshot,
 )
 
 _RUNTIME_MODE_VALUES: Final[frozenset[str]] = frozenset(
@@ -58,6 +65,10 @@ class RuntimeStoreError(RuntimeError):
 
 class PublicationConflictError(RuntimeStoreError):
     """Raised when a signal/plan identity already has a publication bundle."""
+
+
+class PersistenceAuthorityError(RuntimeStoreError):
+    """Raised when persistence ingress rejects reconstructed or unissued authority."""
 
 
 class NotificationStatusError(RuntimeStoreError):
@@ -183,6 +194,69 @@ def _datetime_from_text(value: str) -> datetime:
     if parsed.tzinfo is not UTC:
         raise RuntimeStoreError("datetime is not UTC")
     return parsed
+
+
+def _validate_publication_authorities(
+    *,
+    strategy_output: StrategyOutput,
+    volatility_snapshot: VolatilitySnapshot,
+    overlay_decision: OverlayDecision,
+    trade_plan: TradePlan,
+    operator_review_card: OperatorReviewCard,
+    shadow_order: ShadowOrder,
+) -> None:
+    """Validate the complete issuance chain before opening the persistence transaction.
+
+    The store boundary must reject direct constructor objects, ``dataclasses.replace``
+    results, shallow or deep copies, coherent rehash/reconstruction, and plan/card/shadow
+    substitutions.  The reuse-only modules already publish validators that bind each
+    issued authority to its process-local weakref registry; the store re-runs them here
+    so that no unissued reconstruction can reach the SQLite transaction.
+
+    ``TradePlan`` is not registered in a reuse-only issuance registry, so the store
+    re-runs its ``__post_init__`` (which re-validates every embedded authority and the
+    plan hash) and additionally enforces identity correspondence between the plan's
+    embedded authorities and the top-level authorities passed to the store.  A
+    ``dataclasses.replace`` plan with a forged ``plan_id`` cannot satisfy
+    ``plan_id == _trade_digest(payload)``; a substitution that swaps in a different
+    issued plan cannot satisfy the identity checks.
+    """
+    try:
+        validated_output = _validated_strategy_output(strategy_output)
+        validated_volatility = _validated_volatility_snapshot(volatility_snapshot)
+        validated_overlay = _validated_overlay_decision(overlay_decision)
+        _validated_card(operator_review_card)
+        _validated_shadow(shadow_order)
+    except (PlanError, OperatorReviewError) as exc:
+        raise PersistenceAuthorityError(
+            "publication authority was not issued by the restricted runtime"
+        ) from exc
+    # TradePlan has no reuse-only issuance registry entry; re-run its post-init
+    # to revalidate embedded authorities, financial consistency and the plan hash.
+    try:
+        trade_plan.__post_init__()
+    except PlanError as exc:
+        raise PersistenceAuthorityError(
+            "trade plan authority was not issued by the restricted runtime"
+        ) from exc
+    # Identity correspondence: the plan's embedded authorities must be the very
+    # same issued objects passed to the store.  This rejects plan substitution
+    # even when the substitute is itself a legitimately issued plan.
+    if trade_plan.strategy_output is not validated_output:
+        raise PersistenceAuthorityError(
+            "trade plan strategy output does not match the publication chain"
+        )
+    if trade_plan.volatility_snapshot is not validated_volatility:
+        raise PersistenceAuthorityError(
+            "trade plan volatility snapshot does not match the publication chain"
+        )
+    if trade_plan.overlay is not validated_overlay:
+        raise PersistenceAuthorityError(
+            "trade plan overlay decision does not match the publication chain"
+        )
+    # Cross-object correspondence already enforced below for setup_id, plan_id,
+    # shadow_order_id and card identities; the validators above guarantee that
+    # each object's own hash and identity are internally coherent.
 
 
 def notification_id_for_plan(plan_id: str) -> str:
@@ -626,6 +700,18 @@ class RuntimeStore:
         """
         if type(session_id) is not str or not session_id:
             raise RuntimeStoreError("session identity is invalid")
+        # GA-04: validate the complete issuance chain before any side effect.
+        # This rejects direct constructor objects, dataclasses.replace results,
+        # shallow/deep copies, coherent rehash/reconstruction and plan/card/shadow
+        # substitutions before the SQLite transaction begins.
+        _validate_publication_authorities(
+            strategy_output=strategy_output,
+            volatility_snapshot=volatility_snapshot,
+            overlay_decision=overlay_decision,
+            trade_plan=trade_plan,
+            operator_review_card=operator_review_card,
+            shadow_order=shadow_order,
+        )
         timestamp = _exact_utc(now, "now is not UTC")
         signal_id = _validate_sha256(strategy_output.setup_id, "signal identity is invalid")
         plan_id = _validate_sha256(trade_plan.plan_id, "plan identity is invalid")
@@ -779,10 +865,16 @@ class RuntimeStore:
             )
             self._connection.commit()
         except sqlite3.IntegrityError as exc:
+            # GA-06: IntegrityError remains a deterministic PublicationConflictError.
             self._connection.rollback()
             raise PublicationConflictError(
                 "publication bundle or notification identity already persists"
             ) from exc
+        except BaseException:
+            # GA-06: every other failure after the transaction begins must roll
+            # back so that no partial insert can be committed by a later op.
+            self._connection.rollback()
+            raise
         return bundle_record, outbox_record
 
     def list_pending_notifications(self) -> tuple[NotificationOutboxRecord, ...]:
