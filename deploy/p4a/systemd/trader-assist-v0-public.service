@@ -4,14 +4,14 @@ Documentation=https://github.com/woshixiong/trader-assist-v0
 After=network-online.target
 Wants=network-online.target
 
+# Default-off activation: the service remains inactive until the operator
+# creates the activation permit file at the path below.
+ConditionPathExists=/etc/trader-assist-v0/activation-permit
+
 [Service]
 Type=simple
 User=traderassist
 Group=traderassist
-
-# Default-off activation: the service remains inactive until the operator
-# creates the activation permit file at the path below.
-ConditionPathExists=/etc/trader-assist-v0/activation-permit
 
 EnvironmentFile=/etc/trader-assist-v0/public.env
 

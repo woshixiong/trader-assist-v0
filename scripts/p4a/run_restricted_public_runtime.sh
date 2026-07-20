@@ -71,21 +71,49 @@ fi
 
 # ===========================================================================
 # 5. Path containment: database must be under approved state directory
+#    The database file may be absent on first start (SQLite creates it).
 # ===========================================================================
-DB_REALPATH="$(realpath "${TRADER_ASSIST_V0_DATABASE_PATH}" 2>/dev/null || true)"
-if [[ -z "${DB_REALPATH}" ]]; then
-    echo "ERROR: cannot resolve database path" >&2
+if [[ "${TRADER_ASSIST_V0_DATABASE_PATH}" != /* ]]; then
+    echo "ERROR: database path must be absolute" >&2
+    exit 1
+fi
+# Reject traversal
+if [[ "${TRADER_ASSIST_V0_DATABASE_PATH}" == *"/../"* || \
+      "${TRADER_ASSIST_V0_DATABASE_PATH}" == *"/.." ]]; then
+    echo "ERROR: database path contains traversal" >&2
+    exit 1
+fi
+DB_DIR="$(dirname "${TRADER_ASSIST_V0_DATABASE_PATH}")"
+DB_PARENT_REAL="$(realpath "${DB_DIR}" 2>/dev/null || true)"
+if [[ -z "${DB_PARENT_REAL}" ]]; then
+    echo "ERROR: cannot resolve database parent directory" >&2
     exit 1
 fi
 APPROVED_STATE_REAL="$(realpath "${APPROVED_STATE_DIR}" 2>/dev/null || true)"
-if [[ "${DB_REALPATH}" != "${APPROVED_STATE_REAL}"/* ]]; then
-    echo "ERROR: database path must be under ${APPROVED_STATE_DIR}" >&2
+if [[ "${DB_PARENT_REAL}" != "${APPROVED_STATE_REAL}" && \
+      "${DB_PARENT_REAL}" != "${APPROVED_STATE_REAL}"/* ]]; then
+    echo "ERROR: database parent directory must be under ${APPROVED_STATE_DIR}" >&2
+    exit 1
+fi
+# Reject the approved state directory itself as the database filename
+DB_FILENAME="$(basename "${TRADER_ASSIST_V0_DATABASE_PATH}")"
+if [[ "${DB_PARENT_REAL}" == "${APPROVED_STATE_REAL}" && \
+      ( -z "${DB_FILENAME}" || "${DB_FILENAME}" == "." || "${DB_FILENAME}" == "/" ) ]]; then
+    echo "ERROR: database path must include a filename" >&2
     exit 1
 fi
 
 # ===========================================================================
-# 6. Path containment: risk config must be under approved config directory
+# 6. Risk config: must be an existing regular file under approved config dir
 # ===========================================================================
+if [[ "${TRADER_ASSIST_V0_RISK_CONFIGURATION_PATH}" != /* ]]; then
+    echo "ERROR: risk configuration path must be absolute" >&2
+    exit 1
+fi
+if [[ ! -f "${TRADER_ASSIST_V0_RISK_CONFIGURATION_PATH}" ]]; then
+    echo "ERROR: risk configuration file not found" >&2
+    exit 1
+fi
 RISK_REALPATH="$(realpath "${TRADER_ASSIST_V0_RISK_CONFIGURATION_PATH}" 2>/dev/null || true)"
 if [[ -z "${RISK_REALPATH}" ]]; then
     echo "ERROR: cannot resolve risk configuration path" >&2
@@ -94,6 +122,18 @@ fi
 APPROVED_CONFIG_REAL="$(realpath "${APPROVED_CONFIG_DIR}" 2>/dev/null || true)"
 if [[ "${RISK_REALPATH}" != "${APPROVED_CONFIG_REAL}"/* ]]; then
     echo "ERROR: risk configuration path must be under ${APPROVED_CONFIG_DIR}" >&2
+    exit 1
+fi
+
+# ===========================================================================
+# 6a. Verify Python entrypoint and executable exist
+# ===========================================================================
+if [[ ! -x "${PYTHON_EXECUTABLE}" ]]; then
+    echo "ERROR: Python executable not found at ${PYTHON_EXECUTABLE}" >&2
+    exit 1
+fi
+if [[ ! -f "${PYTHON_ENTRYPOINT}" ]]; then
+    echo "ERROR: Python entrypoint not found at ${PYTHON_ENTRYPOINT}" >&2
     exit 1
 fi
 

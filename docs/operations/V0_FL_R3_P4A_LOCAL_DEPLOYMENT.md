@@ -34,6 +34,13 @@ dependencies using the original hashed lockfiles:
 cd /opt/trader-assist-v0
 sudo python3.12 -m venv venv
 sudo venv/bin/pip install --require-hashes -r requirements-runtime.lock
+sudo venv/bin/pip install --no-deps --no-build-isolation -e /opt/trader-assist-v0
+```
+
+Verify the installation can import the trader_assist_v0 package:
+
+```bash
+sudo /opt/trader-assist-v0/venv/bin/python -c "import trader_assist_v0; print('OK')"
 ```
 
 ## 5. Configuration Directory

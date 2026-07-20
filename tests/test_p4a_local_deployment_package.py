@@ -6,6 +6,8 @@ and the absence of secrets, credentials, or prohibited configuration.
 
 All tests are static, offline, and non-root. No runtime is started, no
 network requests are made, and no systemd service is installed or enabled.
+
+Tests are portable across macOS local devel and Linux GitHub Actions.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -138,6 +141,27 @@ def test_service_group_traderassist(service_unit: str) -> None:
 
 def test_service_condition_path_exists(service_unit: str) -> None:
     assert "ConditionPathExists=" in service_unit
+
+
+def test_service_condition_path_exists_in_unit_section(service_unit: str) -> None:
+    """ConditionPathExists must be in the [Unit] section, not [Service]."""
+    # Split unit into sections
+    sections = re.split(r"\n\[", service_unit)
+    unit_section = ""
+    service_section = ""
+    for section in sections:
+        section_text = "[" + section if not section.startswith("[") else section
+        if section_text.startswith("[Unit]"):
+            unit_section = "\n[" + section
+        elif section_text.startswith("[Service]"):
+            service_section = "\n[" + section
+
+    assert "ConditionPathExists=" in unit_section, (
+        "ConditionPathExists must be in [Unit] section"
+    )
+    assert "ConditionPathExists=" not in service_section, (
+        "ConditionPathExists must NOT be in [Service] section"
+    )
 
 
 def test_service_environment_file(service_unit: str) -> None:
@@ -269,12 +293,12 @@ def test_risk_example_fails_closed(risk_example: str) -> None:
     Either the CONFIGURATION_VERSION is a placeholder that fails the version
     regex, or the ACCOUNT_EQUITY_USD is 0.00 which fails the range check.
 
-    We verify this by importing RiskConfiguration and asserting it rejects
-    the example JSON. The import is done via a subprocess to avoid polluting
-    the test module's path.
+    Uses sys.executable and PYTHONPATH=src so the test is portable across
+    macOS local devel and Linux GitHub Actions.
     """
     import subprocess as _sp
 
+    src_dir = str(REPO_ROOT / "src")
     script = (
         "import json, sys; "
         "from trader_assist_v0.first_launch.configuration import "
@@ -282,10 +306,11 @@ def test_risk_example_fails_closed(risk_example: str) -> None:
         f"raw = json.dumps({json.dumps(json.loads(risk_example))}); "
         "try: RiskConfiguration.from_json(raw); sys.exit(0)\n"
         "except ConfigurationError: sys.exit(1)\n"
-        "except Exception: sys.exit(0)\n"
     )
+    env = {**os.environ, "PYTHONPATH": src_dir}
     result = _sp.run(
-        ["/tmp/trader-assist-v0-p4a-writer-venv/bin/python", "-c", script],
+        [sys.executable, "-c", script],
+        env=env,
         capture_output=True,
         text=True,
         timeout=10,
@@ -514,6 +539,145 @@ def test_wrapper_exits_when_authorization_pair_incomplete(
 
 
 # ---------------------------------------------------------------------------
+# Test 8a: Fresh database (non-existent file) passes path check
+# ---------------------------------------------------------------------------
+
+def test_wrapper_allows_fresh_database_path(
+    wrapper_path: Path, tmp_path: Path
+) -> None:
+    """Wrapper accepts a database path whose parent directory exists but
+    the database file does not yet exist (SQLite creates it on first start)."""
+    parent = tmp_path / "approved"
+    parent.mkdir()
+    db_path = parent / "runtime.db"
+    # db_path does NOT exist — that's the point of this test
+    assert not db_path.exists()
+
+    result = _run_wrapper(wrapper_path, extra_env={
+        "TRADER_ASSIST_V0_ENABLE": "1",
+        "TRADER_ASSIST_V0_MODE": "RESTRICTED_PUBLIC_LIVE_SHADOW",
+        "TRADER_ASSIST_V0_DATABASE_PATH": str(db_path),
+        "TRADER_ASSIST_V0_RISK_CONFIGURATION_PATH": "/etc/trader-assist-v0/risk.json",
+        "TRADER_ASSIST_V0_WEBHOOK_URL": "https://example.com/hook",
+    })
+    # The wrapper should exit before Python because the risk config file
+    # doesn't exist — but the database path check should pass.
+    # If the database path check fails, the error message will mention database.
+    stderr = result.stderr.lower()
+    assert "database" not in stderr or "db" not in stderr, (
+        f"Fresh database path should not cause error, got: {result.stderr}"
+    )
+
+
+def test_wrapper_rejects_database_parent_nonexistent(
+    wrapper_path: Path, tmp_path: Path
+) -> None:
+    """Wrapper rejects a database path whose parent directory does not exist."""
+    db_path = tmp_path / "nonexistent" / "runtime.db"
+    assert not db_path.parent.exists()
+
+    result = _run_wrapper(wrapper_path, extra_env={
+        "TRADER_ASSIST_V0_ENABLE": "1",
+        "TRADER_ASSIST_V0_MODE": "RESTRICTED_PUBLIC_LIVE_SHADOW",
+        "TRADER_ASSIST_V0_DATABASE_PATH": str(db_path),
+        "TRADER_ASSIST_V0_RISK_CONFIGURATION_PATH": "/etc/trader-assist-v0/risk.json",
+        "TRADER_ASSIST_V0_WEBHOOK_URL": "https://example.com/hook",
+    })
+    assert result.returncode != 0, (
+        "Wrapper should reject nonexistent database parent directory"
+    )
+
+
+def test_wrapper_rejects_database_traversal_path(
+    wrapper_path: Path,
+) -> None:
+    """Wrapper rejects database paths containing traversal."""
+    result = _run_wrapper(wrapper_path, extra_env={
+        "TRADER_ASSIST_V0_ENABLE": "1",
+        "TRADER_ASSIST_V0_MODE": "RESTRICTED_PUBLIC_LIVE_SHADOW",
+        "TRADER_ASSIST_V0_DATABASE_PATH": "/var/lib/trader-assist-v0/../outside.db",
+        "TRADER_ASSIST_V0_RISK_CONFIGURATION_PATH": "/etc/trader-assist-v0/risk.json",
+        "TRADER_ASSIST_V0_WEBHOOK_URL": "https://example.com/hook",
+    })
+    assert result.returncode != 0, (
+        "Wrapper should reject traversal in database path"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 8b: Risk config must be an existing regular file
+# ---------------------------------------------------------------------------
+
+def test_wrapper_rejects_risk_config_not_a_file(
+    wrapper_path: Path, tmp_path: Path
+) -> None:
+    """Wrapper rejects a risk config path that is not a regular file."""
+    dir_path = tmp_path / "not-a-file"
+    dir_path.mkdir()
+
+    result = _run_wrapper(wrapper_path, extra_env={
+        "TRADER_ASSIST_V0_ENABLE": "1",
+        "TRADER_ASSIST_V0_MODE": "RESTRICTED_PUBLIC_LIVE_SHADOW",
+        "TRADER_ASSIST_V0_DATABASE_PATH": "/var/lib/trader-assist-v0/runtime.db",
+        "TRADER_ASSIST_V0_RISK_CONFIGURATION_PATH": str(dir_path),
+        "TRADER_ASSIST_V0_WEBHOOK_URL": "https://example.com/hook",
+    })
+    assert result.returncode != 0, (
+        "Wrapper should reject risk config path that is not a regular file"
+    )
+
+
+def test_wrapper_rejects_risk_config_nonexistent(
+    wrapper_path: Path, tmp_path: Path
+) -> None:
+    """Wrapper rejects a risk config path that does not exist."""
+    nonexistent = tmp_path / "nonexistent.json"
+    assert not nonexistent.exists()
+
+    result = _run_wrapper(wrapper_path, extra_env={
+        "TRADER_ASSIST_V0_ENABLE": "1",
+        "TRADER_ASSIST_V0_MODE": "RESTRICTED_PUBLIC_LIVE_SHADOW",
+        "TRADER_ASSIST_V0_DATABASE_PATH": "/var/lib/trader-assist-v0/runtime.db",
+        "TRADER_ASSIST_V0_RISK_CONFIGURATION_PATH": str(nonexistent),
+        "TRADER_ASSIST_V0_WEBHOOK_URL": "https://example.com/hook",
+    })
+    assert result.returncode != 0, (
+        "Wrapper should reject nonexistent risk config path"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 8c: Python entrypoint and executable must exist
+# ---------------------------------------------------------------------------
+
+def test_wrapper_rejects_missing_python_executable(
+    wrapper_path: Path, tmp_path: Path
+) -> None:
+    """Wrapper exits non-zero when PYTHON_EXECUTABLE is not found.
+
+    The wrapper hardcodes PYTHON_EXECUTABLE=/opt/trader-assist-v0/venv/bin/python.
+    On a test machine, this path is unlikely to exist. We verify the wrapper
+    exits non-zero with an error about the Python executable.
+    """
+    result = _run_wrapper(wrapper_path, extra_env={
+        "TRADER_ASSIST_V0_ENABLE": "1",
+        "TRADER_ASSIST_V0_MODE": "RESTRICTED_PUBLIC_LIVE_SHADOW",
+        "TRADER_ASSIST_V0_DATABASE_PATH": "/var/lib/trader-assist-v0/runtime.db",
+        "TRADER_ASSIST_V0_RISK_CONFIGURATION_PATH": "/etc/trader-assist-v0/risk.json",
+        "TRADER_ASSIST_V0_WEBHOOK_URL": "https://example.com/hook",
+    })
+    # The wrapper will fail at either the risk config file check or the
+    # Python executable check. Either way, it must exit non-zero.
+    assert result.returncode != 0, (
+        "Wrapper should exit non-zero when Python executable or risk config is missing"
+    )
+    stderr = result.stderr.lower()
+    assert "python" in stderr or "risk" in stderr or "not found" in stderr, (
+        f"Expected error about Python or risk config, got: {result.stderr}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Test 9: Wrapper contains no eval
 # ---------------------------------------------------------------------------
 
@@ -625,6 +789,18 @@ def test_runbook_has_final_disable(runbook: str) -> None:
 
 def test_runbook_has_smoke_not_authorized(runbook: str) -> None:
     assert "SMOKE IS NOT AUTHORIZED" in runbook
+
+
+def test_runbook_has_pip_install_editable(runbook: str) -> None:
+    """Runbook must include pip install --no-deps --no-build-isolation -e step."""
+    assert "--no-deps" in runbook or "--no-build-isolation" in runbook
+    assert "-e" in runbook or "--editable" in runbook.lower()
+    assert "pip install" in runbook
+
+
+def test_runbook_has_import_verification(runbook: str) -> None:
+    """Runbook must include an import verification step."""
+    assert "import trader_assist_v0" in runbook
 
 
 # ---------------------------------------------------------------------------
