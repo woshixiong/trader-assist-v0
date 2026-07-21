@@ -16,6 +16,7 @@ import asyncio
 import importlib.util
 import json
 import os
+import stat
 import subprocess
 import sys
 from collections.abc import Callable
@@ -2794,3 +2795,377 @@ def test_proc_cmdline_credential_content_absent(
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
+
+
+# ============================================================
+# FR-01: Deterministic descriptor regression tests
+# ============================================================
+
+
+def _valid_credential_bytes() -> bytes:
+    """Return a valid version-1 credential document as bytes (synthetic fixture)."""
+    doc = {
+        "version": 1,
+        "webhook_url": "https://hooks.example.com/eth-notify",
+        "authorization_header": None,
+    }
+    return json.dumps(doc).encode("utf-8")
+
+
+def _credential_json(tmp_path: Path) -> Path:
+    """Create a valid credential file with secure permissions in a tmp dir."""
+    path = tmp_path / "credential.json"
+    path.write_bytes(_valid_credential_bytes())
+    path.chmod(0o600)
+    return path
+
+
+# --- TEST 1: DESCRIPTOR_MODE_IS_AUTHORITATIVE ---
+
+
+def test_fr01_descriptor_mode_is_authoritative(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FR-01: Descriptor mode, not pathname mode, controls admission.
+
+    Create a valid temp credential with acceptable pathname permissions.
+    Inject fstat metadata whose mode contains prohibited group/other bits.
+    Prove rejection is driven by descriptor metadata, not pathname stat.
+    """
+    credential_file = _credential_json(tmp_path)
+    sentinel_fd = 9999
+
+    # Build synthetic stat with group-writable permissions but otherwise valid
+    real_stat = credential_file.stat()
+    uid = real_stat.st_uid
+    size = len(_valid_credential_bytes())
+
+    class _InjectedStat:
+        st_mode = stat.S_IFREG | 0o640  # group-readable = insecure
+        st_uid = uid
+        st_size = size
+        st_dev = real_stat.st_dev
+        st_ino = real_stat.st_ino
+
+    open_calls: list[tuple[object, ...]] = []
+    fstat_calls: list[int] = []
+
+    def _fake_open(path: str, flags: int, *args: object, **kwargs: object) -> int:
+        open_calls.append((path, flags))
+        return sentinel_fd
+
+    def _fake_fstat(fd: int) -> _InjectedStat:
+        fstat_calls.append(fd)
+        return _InjectedStat()
+
+    close_calls: list[int] = []
+
+    def _fake_close(fd: int) -> None:
+        close_calls.append(fd)
+
+    monkeypatch.setattr(os, "open", _fake_open)
+    monkeypatch.setattr(os, "fstat", _fake_fstat)
+    monkeypatch.setattr(os, "close", _fake_close)
+
+    with pytest.raises(_SCRIPT_MODULE.CredentialFileError, match="group or other"):
+        _load_credential_file(credential_file)
+
+    # Prove the injected os.open and os.fstat paths were exercised
+    assert len(open_calls) >= 1
+    assert len(fstat_calls) >= 1
+    assert fstat_calls[0] == sentinel_fd
+    # Prove os.close was called on the sentinel descriptor
+    assert len(close_calls) >= 1
+    assert close_calls[0] == sentinel_fd
+
+
+# --- TEST 2: FOREIGN_DESCRIPTOR_OWNER_IS_REJECTED ---
+
+
+def test_fr02_foreign_descriptor_owner_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FR-01: Foreign descriptor owner (st_uid) is rejected.
+
+    Inject fstat metadata whose st_uid is neither 0 nor os.geteuid().
+    Must run even when the process is root, and must not skip merely
+    because os.geteuid() == 0.
+    """
+    credential_file = _credential_json(tmp_path)
+    sentinel_fd = 9999
+
+    real_stat = credential_file.stat()
+    current_euid = os.geteuid()
+    size = len(_valid_credential_bytes())
+
+    # Choose a deterministic foreign UID distinct from both 0 and current euid
+    # The production code allows st_uid == 0 or st_uid == current_euid.
+    # We need a UID that is neither, so the check must reject.
+    foreign_uid = 1 if current_euid == 0 else 9999
+    if foreign_uid == current_euid:
+        foreign_uid = 9998
+
+    class _InjectedStat:
+        st_mode = stat.S_IFREG | 0o600
+        st_uid = foreign_uid
+        st_size = size
+        st_dev = real_stat.st_dev
+        st_ino = real_stat.st_ino
+
+    fstat_calls: list[int] = []
+
+    def _fake_open(path: str, flags: int, *args: object, **kwargs: object) -> int:
+        return sentinel_fd
+
+    def _fake_fstat(fd: int) -> _InjectedStat:
+        fstat_calls.append(fd)
+        return _InjectedStat()
+
+    def _fake_close(fd: int) -> None:
+        pass
+
+    monkeypatch.setattr(os, "open", _fake_open)
+    monkeypatch.setattr(os, "fstat", _fake_fstat)
+    monkeypatch.setattr(os, "close", _fake_close)
+
+    with pytest.raises(_SCRIPT_MODULE.CredentialFileError, match="owner"):
+        _load_credential_file(credential_file)
+
+    assert len(fstat_calls) >= 1
+    assert fstat_calls[0] == sentinel_fd
+
+
+# --- TEST 3: MULTIPLE_SHORT_READS_THEN_EOF_SUCCEED ---
+
+
+def test_fr03_multiple_short_reads_then_eof_succeed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FR-01: Multiple short reads then EOF succeed.
+
+    Patch os.read to return the credential through multiple short
+    chunks, then EOF.  Verify exact read-call counts and that the
+    resulting NotificationConfig fields match expected values.
+    """
+    credential_file = _credential_json(tmp_path)
+    sentinel_fd = 9999
+    credential_bytes = _valid_credential_bytes()
+
+    real_stat = credential_file.stat()
+
+    class _InjectedStat:
+        st_mode = stat.S_IFREG | 0o600
+        st_uid = real_stat.st_uid
+        st_size = len(credential_bytes)
+        st_dev = real_stat.st_dev
+        st_ino = real_stat.st_ino
+
+    read_calls: list[int] = []
+
+    # Split into 3 chunks: 3, 5, and the rest
+    chunk1 = credential_bytes[:3]
+    chunk2 = credential_bytes[3:8]
+    chunk3 = credential_bytes[8:]
+    chunks = [chunk1, chunk2, chunk3, b""]
+
+    def _fake_read(fd: int, size: int) -> bytes:
+        read_calls.append(size)
+        if not chunks:
+            return b""
+        return chunks.pop(0)
+
+    def _fake_open(path: str, flags: int, *args: object, **kwargs: object) -> int:
+        return sentinel_fd
+
+    def _fake_fstat(fd: int) -> _InjectedStat:
+        return _InjectedStat()
+
+    def _fake_close(fd: int) -> None:
+        pass
+
+    monkeypatch.setattr(os, "open", _fake_open)
+    monkeypatch.setattr(os, "fstat", _fake_fstat)
+    monkeypatch.setattr(os, "read", _fake_read)
+    monkeypatch.setattr(os, "close", _fake_close)
+
+    config = _load_credential_file(credential_file)
+
+    # More than one non-empty read must occur, plus one EOF read
+    assert len(read_calls) >= 4, (
+        f"expected at least 4 reads (3 content + 1 EOF), got {len(read_calls)}"
+    )
+    # The last read returned EOF
+    # Verify expected NotificationConfig fields
+    assert config.webhook_url == "https://hooks.example.com/eth-notify"
+
+
+# --- TEST 4: READ_ERROR_AFTER_PARTIAL_ACCUMULATION_FAILS_CLOSED ---
+
+
+def test_fr04_read_error_after_partial_accumulation_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FR-01: Read error after partial accumulation fails closed.
+
+    Patch os.read to return partial credential bytes, then raise OSError.
+    Prove partial data was returned, the OSError path was exercised,
+    loading fails, and the exception text contains only generic
+    bounded descriptor-read failure language.
+    """
+    credential_file = _credential_json(tmp_path)
+    sentinel_fd = 9999
+    credential_bytes = _valid_credential_bytes()
+
+    real_stat = credential_file.stat()
+
+    class _InjectedStat:
+        st_mode = stat.S_IFREG | 0o600
+        st_uid = real_stat.st_uid
+        st_size = len(credential_bytes)
+        st_dev = real_stat.st_dev
+        st_ino = real_stat.st_ino
+
+    read_calls: list[int] = []
+    partial = credential_bytes[:5]
+
+    class _ReadError(OSError):
+        pass
+
+    def _fake_read(fd: int, size: int) -> bytes:
+        read_calls.append(size)
+        if len(read_calls) == 1:
+            return partial  # return partial data
+        raise _ReadError("simulated read error")
+
+    def _fake_open(path: str, flags: int, *args: object, **kwargs: object) -> int:
+        return sentinel_fd
+
+    def _fake_fstat(fd: int) -> _InjectedStat:
+        return _InjectedStat()
+
+    def _fake_close(fd: int) -> None:
+        pass
+
+    monkeypatch.setattr(os, "open", _fake_open)
+    monkeypatch.setattr(os, "fstat", _fake_fstat)
+    monkeypatch.setattr(os, "read", _fake_read)
+    monkeypatch.setattr(os, "close", _fake_close)
+
+    with pytest.raises(_SCRIPT_MODULE.CredentialFileError, match="cannot be read"):
+        _load_credential_file(credential_file)
+
+    # Prove partial data was returned before the error
+    assert len(read_calls) >= 2
+    # The error message must not contain credential content
+    try:
+        _load_credential_file(credential_file)
+    except _SCRIPT_MODULE.CredentialFileError as exc:
+        msg = str(exc)
+        assert "https://" not in msg
+        assert "hooks.example.com" not in msg
+
+
+# --- TEST 5: DESCRIPTOR_SIZE_ACCEPTABLE_BUT_STREAM_EXCEEDS_LIMIT ---
+
+
+def test_fr05_descriptor_size_acceptable_but_stream_exceeds_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FR-01: Descriptor size acceptable but stream exceeds limit.
+
+    Inject fstat metadata reporting st_size <= 4096 bytes.
+    Patch os.read to provide exactly 4097 accumulated bytes.
+    Prove the initial descriptor size check passes, accumulated bytes
+    exceed the limit, and the loader rejects with bounded-size error.
+    """
+    credential_file = _credential_json(tmp_path)
+    sentinel_fd = 9999
+
+    real_stat = credential_file.stat()
+
+    class _InjectedStat:
+        st_mode = stat.S_IFREG | 0o600
+        st_uid = real_stat.st_uid
+        st_size = 100  # well below 4096, fstat size check passes
+        st_dev = real_stat.st_dev
+        st_ino = real_stat.st_ino
+
+    fstat_calls: list[int] = []
+    read_calls: list[int] = []
+
+    def _fake_read(fd: int, size: int) -> bytes:
+        read_calls.append(size)
+        if len(read_calls) == 1:
+            # Return 1024 bytes (first chunk)
+            return b"x" * 1024
+        if len(read_calls) == 2:
+            # Return another 1024 bytes
+            return b"x" * 1024
+        if len(read_calls) == 3:
+            # Return another 1024 bytes
+            return b"x" * 1024
+        if len(read_calls) == 4:
+            # Return another 1024 bytes (total 4096 still OK)
+            return b"x" * 1024
+        # 5th call: return 1 more byte → 4097, exceeds 4096
+        return b"x" * 1
+
+    def _fake_open(path: str, flags: int, *args: object, **kwargs: object) -> int:
+        return sentinel_fd
+
+    def _fake_fstat(fd: int) -> _InjectedStat:
+        fstat_calls.append(fd)
+        return _InjectedStat()
+
+    def _fake_close(fd: int) -> None:
+        pass
+
+    monkeypatch.setattr(os, "open", _fake_open)
+    monkeypatch.setattr(os, "fstat", _fake_fstat)
+    monkeypatch.setattr(os, "read", _fake_read)
+    monkeypatch.setattr(os, "close", _fake_close)
+
+    with pytest.raises(_SCRIPT_MODULE.CredentialFileError, match="bounded size"):
+        _load_credential_file(credential_file)
+
+    # Prove fstat and repeated-read paths were exercised
+    assert len(fstat_calls) >= 1
+    assert len(read_calls) >= 5
+
+
+# --- TEST 6: O_NOFOLLOW_OPEN_FLAG_IS_ENFORCED ---
+
+
+def test_fr06_o_nofollow_open_flag_is_enforced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FR-01: O_NOFOLLOW open flag is enforced.
+
+    Intercept the actual credential os.open call, capture the flags,
+    and prove os.O_NOFOLLOW is included.  Allow the underlying valid
+    credential load to complete successfully.
+    """
+    if not hasattr(os, "O_NOFOLLOW"):
+        pytest.skip("O_NOFOLLOW is not available on this platform")
+
+    credential_file = _credential_json(tmp_path)
+    open_flags_captured: list[int] = []
+
+    real_open = os.open
+
+    def _capture_open(path: str, flags: int, *args: object, **kwargs: object) -> int:
+        open_flags_captured.append(flags)
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", _capture_open)
+
+    config = _load_credential_file(credential_file)
+
+    # Prove the real credential-open path was exercised
+    assert len(open_flags_captured) >= 1
+    # Prove O_NOFOLLOW is included in the flags
+    assert open_flags_captured[0] & os.O_NOFOLLOW, (
+        f"O_NOFOLLOW not in flags: {open_flags_captured[0]:#x}"
+    )
+    # Verify successful load
+    assert config.webhook_url == "https://hooks.example.com/eth-notify"
