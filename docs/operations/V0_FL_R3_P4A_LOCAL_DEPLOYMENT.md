@@ -99,32 +99,48 @@ sudo chmod 700 /etc/trader-assist-v0/credentials
 
 ## 5b. Notification Credential Installation
 
-Create the notification credential file securely. Never echo credential content
-to the terminal or shell history.
+The notification credential content must first be created outside the terminal
+through an approved secret manager or approved secure editor/export mechanism.
+Never type or paste credential content into terminal commands.  The shell
+workflow receives only the path to the already-prepared secure source file.
+
+The operator must prepare a secure source file (e.g. at
+`/root/secure/notification.json`) that satisfies:
+
+- absolute path;
+- not a symlink;
+- regular file;
+- owner-only permissions (0600).
+
+Then install the credential into the production path:
 
 ```bash
-# Create a secured temporary file
-sudo install -m 600 /dev/null /etc/trader-assist-v0/credentials/notification.json.tmp
+# Verify the source file meets all preconditions
+SOURCE="/root/secure/notification.json"
+test -f "$SOURCE" || { echo "ERROR: source not found"; exit 1; }
+test "${SOURCE#/}" != "$SOURCE" || { echo "ERROR: source must be absolute"; exit 1; }
+test ! -L "$SOURCE" || { echo "ERROR: source must not be a symlink"; exit 1; }
+test "$(stat -c '%a' "$SOURCE")" = "600" || { echo "ERROR: source must be 0600"; exit 1; }
 
-# Write the credential content to the temporary file
-# (operator must supply the content; never echo credential values)
-sudo tee /etc/trader-assist-v0/credentials/notification.json.tmp > /dev/null <<'CRED_EOF'
-{
-  "version": 1,
-  "webhook_url": "https://your-webhook.example.com/notify",
-  "authorization_header": null
-}
-CRED_EOF
+# Create same-directory temporary destination
+sudo install -m 600 -o root -g root "$SOURCE" /etc/trader-assist-v0/credentials/notification.json.tmp
 
-# Verify ownership, mode and JSON validity without printing content
-sudo chown root:root /etc/trader-assist-v0/credentials/notification.json.tmp
-sudo chmod 600 /etc/trader-assist-v0/credentials/notification.json.tmp
-sudo python3 -c "import json; json.load(open('/etc/trader-assist-v0/credentials/notification.json.tmp'))" \
-  && echo "OK: credential JSON is valid"
+# Run the production offline validation-only path
+sudo /opt/trader-assist-v0/venv/bin/python \
+  /opt/trader-assist-v0/scripts/run_first_launch_public_runtime.py \
+  --validate-only \
+  --notification-credential-file /etc/trader-assist-v0/credentials/notification.json.tmp \
+  --webhook-timeout-seconds 10 \
+  && echo "PASS: credential validation succeeded" \
+  || { echo "FAIL: credential validation failed"; \
+       sudo rm -f /etc/trader-assist-v0/credentials/notification.json.tmp; exit 1; }
 
-# Atomically rename into place
+# Atomically rename only after successful validation
 sudo mv /etc/trader-assist-v0/credentials/notification.json.tmp \
        /etc/trader-assist-v0/credentials/notification.json
+
+# Securely remove the external source according to operator policy
+# (operator is responsible for secure removal of the source file)
 ```
 
 The credential file:
@@ -139,29 +155,30 @@ The credential file:
 
 To rotate the credential without disrupting active runtime sessions:
 
-1. Create a secured root-owned temporary file.
-2. Apply 0600 before installing content.
-3. Validate ownership, mode and JSON without printing content.
-4. Atomically rename over `notification.json`.
-5. Restart the service only under separate runtime authorization.
+1. Prepare a new secure source file outside the terminal (see Section 5b).
+2. Copy to a same-directory temporary destination (`notification.json.new`).
+3. Validate with the production offline validation-only path.
+4. Atomically rename only after successful validation.
+5. Clean up the temporary file on validation failure.
+6. Restart the service only under separate runtime authorization.
 
 ```bash
-# Create rotated credential
-sudo install -m 600 /dev/null /etc/trader-assist-v0/credentials/notification.json.new
-sudo tee /etc/trader-assist-v0/credentials/notification.json.new > /dev/null <<'CRED_EOF'
-{
-  "version": 1,
-  "webhook_url": "https://your-new-webhook.example.com/notify",
-  "authorization_header": {
-    "name": "Authorization",
-    "value": "Bearer new-token"
-  }
-}
-CRED_EOF
-sudo chown root:root /etc/trader-assist-v0/credentials/notification.json.new
-sudo chmod 600 /etc/trader-assist-v0/credentials/notification.json.new
-sudo python3 -c "import json; json.load(open('/etc/trader-assist-v0/credentials/notification.json.new'))" \
-  && echo "OK: rotated credential JSON is valid"
+SOURCE="/root/secure/notification-rotated.json"
+test -f "$SOURCE" || { echo "ERROR: source not found"; exit 1; }
+test "${SOURCE#/}" != "$SOURCE" || { echo "ERROR: source must be absolute"; exit 1; }
+test ! -L "$SOURCE" || { echo "ERROR: source must not be a symlink"; exit 1; }
+test "$(stat -c '%a' "$SOURCE")" = "600" || { echo "ERROR: source must be 0600"; exit 1; }
+
+sudo install -m 600 -o root -g root "$SOURCE" /etc/trader-assist-v0/credentials/notification.json.new
+
+sudo /opt/trader-assist-v0/venv/bin/python \
+  /opt/trader-assist-v0/scripts/run_first_launch_public_runtime.py \
+  --validate-only \
+  --notification-credential-file /etc/trader-assist-v0/credentials/notification.json.new \
+  --webhook-timeout-seconds 10 \
+  && echo "PASS: rotated credential validation succeeded" \
+  || { echo "FAIL: rotated credential validation failed"; \
+       sudo rm -f /etc/trader-assist-v0/credentials/notification.json.new; exit 1; }
 
 # Atomically replace
 sudo mv /etc/trader-assist-v0/credentials/notification.json.new \

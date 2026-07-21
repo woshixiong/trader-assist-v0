@@ -106,6 +106,11 @@ if [[ -z "${CREDENTIALS_DIRECTORY:-}" ]]; then
     exit 1
 fi
 
+if [[ "${CREDENTIALS_DIRECTORY}" != /* ]]; then
+    echo "ERROR: CREDENTIALS_DIRECTORY must be an absolute path" >&2
+    exit 1
+fi
+
 NOTIFICATION_CREDENTIAL_FILE="${CREDENTIALS_DIRECTORY}/notification.json"
 if [[ ! -f "${NOTIFICATION_CREDENTIAL_FILE}" ]]; then
     echo "ERROR: notification credential file not found" >&2
