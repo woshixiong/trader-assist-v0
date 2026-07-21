@@ -16,7 +16,6 @@ import asyncio
 import importlib.util
 import json
 import os
-import stat
 import subprocess
 import sys
 from collections.abc import Callable
@@ -2145,7 +2144,7 @@ def test_credential_values_not_in_error_messages(tmp_path: Path) -> None:
 def test_credential_relative_path_fails(tmp_path: Path) -> None:
     """Relative credential path is rejected before resolve()."""
     # Write a valid credential, then try to load with a relative path
-    credential_file = _write_credential_file(tmp_path / "credential.json")
+    _write_credential_file(tmp_path / "credential.json")
     import os as _os
 
     cwd = _os.getcwd()
@@ -2391,7 +2390,6 @@ def test_credential_repr_contains_no_values(tmp_path: Path) -> None:
     assert "private" not in r
     assert "X-Api-Key" not in r
     assert "sk-very-secret-key" not in r
-    assert "redacted" in r
 
 
 def test_dispatcher_repr_contains_no_values(tmp_path: Path) -> None:

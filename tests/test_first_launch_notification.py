@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from trader_assist_v0.first_launch.configuration import RiskConfiguration
 from trader_assist_v0.runtime.first_launch_notification import (
     HttpResponse,
     NotificationConfig,
@@ -29,6 +30,9 @@ from trader_assist_v0.runtime.first_launch_notification import (
     _classify_response,
     _headers_for,
     encode_payload,
+)
+from trader_assist_v0.runtime.first_launch_public_runtime import (
+    RestrictedPublicRuntimeConfig,
 )
 from trader_assist_v0.runtime.first_launch_runtime_store import (
     NotificationOutboxRecord,
@@ -1180,3 +1184,103 @@ def test_outbox_delivered_on_redirect_false(tmp_path: Path) -> None:
         assert record.status != "DELIVERED"
     finally:
         store.close()
+
+
+# ---------------------------------------------------------------------------
+# Credential representation tests
+# ---------------------------------------------------------------------------
+
+_SECRET_URL = "https://hooks.example.com/secret-webhook-path?key=secret-token"
+_SECRET_HEADER_NAME = "X-Api-Key"
+_SECRET_HEADER_VALUE = "sk-1234567890abcdef"
+
+
+def _make_config() -> NotificationConfig:
+    return NotificationConfig(
+        webhook_url=_SECRET_URL,
+        timeout_seconds=10.0,
+        authorization_header_name=_SECRET_HEADER_NAME,
+        authorization_header_value=_SECRET_HEADER_VALUE,
+    )
+
+
+def _make_risk_configuration() -> RiskConfiguration:
+    return RiskConfiguration.from_json(
+        json.dumps({
+            "CONFIGURATION_VERSION": "r3.0",
+            "ACCOUNT_EQUITY_USD": "1000.00",
+            "RISK_PER_TRADE_PCT": "0.5000",
+            "MAX_NOTIONAL_USD": None,
+        })
+    )
+
+
+def test_repr_notification_config_does_not_leak_webhook_url() -> None:
+    """repr(NotificationConfig) must not contain the complete webhook URL."""
+    config = _make_config()
+    r = repr(config)
+    assert _SECRET_URL not in r
+
+
+def test_repr_notification_config_does_not_leak_secret_path() -> None:
+    """repr(NotificationConfig) must not contain the secret-bearing path."""
+    config = _make_config()
+    r = repr(config)
+    assert "secret-webhook-path" not in r
+
+
+def test_repr_notification_config_does_not_leak_secret_query() -> None:
+    """repr(NotificationConfig) must not contain the secret-bearing query."""
+    config = _make_config()
+    r = repr(config)
+    assert "secret-token" not in r
+
+
+def test_repr_notification_config_does_not_leak_auth_header_name() -> None:
+    """repr(NotificationConfig) must not contain the authorization header name."""
+    config = _make_config()
+    r = repr(config)
+    assert _SECRET_HEADER_NAME not in r
+
+
+def test_repr_notification_config_does_not_leak_auth_header_value() -> None:
+    """repr(NotificationConfig) must not contain the authorization header value."""
+    config = _make_config()
+    r = repr(config)
+    assert _SECRET_HEADER_VALUE not in r
+
+
+def test_repr_notification_dispatcher_does_not_leak_credentials(tmp_path: Path) -> None:
+    """repr(NotificationDispatcher) must not leak credential values."""
+    store = _open_store(tmp_path)
+    try:
+        dispatcher = NotificationDispatcher(
+            store=store,
+            transport=_MockTransport(responses=(), calls=[]),
+            config=_make_config(),
+        )
+        r = repr(dispatcher)
+        assert _SECRET_URL not in r
+        assert "secret-webhook-path" not in r
+        assert "secret-token" not in r
+        assert _SECRET_HEADER_NAME not in r
+        assert _SECRET_HEADER_VALUE not in r
+    finally:
+        store.close()
+
+
+def test_repr_restricted_public_runtime_config_does_not_leak_credentials() -> None:
+    """repr(RestrictedPublicRuntimeConfig) must not leak credential values."""
+    runtime_config = RestrictedPublicRuntimeConfig(
+        database_path=Path("/tmp/runtime.db"),
+        risk_configuration=_make_risk_configuration(),
+        notification_config=_make_config(),
+        acknowledgement_timeout_seconds=30.0,
+        session_timeout_seconds=3600.0,
+    )
+    r = repr(runtime_config)
+    assert _SECRET_URL not in r
+    assert "secret-webhook-path" not in r
+    assert "secret-token" not in r
+    assert _SECRET_HEADER_NAME not in r
+    assert _SECRET_HEADER_VALUE not in r

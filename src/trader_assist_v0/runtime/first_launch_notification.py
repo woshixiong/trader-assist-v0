@@ -18,7 +18,7 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email.message import Message
 from typing import IO, Final, Literal, Protocol
@@ -263,12 +263,16 @@ class NotificationConfig:
     No URL or secret is hardcoded. The webhook URL must use HTTPS. An optional
     authorization header value may be supplied by the caller; it is never
     embedded in code, fixtures, logs, or Git history by this module.
+
+    Credential-bearing fields use ``repr=False`` so that ``repr()``,
+    ``str()``, and dataclass-generated representations never include
+    webhook URLs, authorization header names or header values.
     """
 
-    webhook_url: str
+    webhook_url: str = field(repr=False)
     timeout_seconds: float
-    authorization_header_name: str | None
-    authorization_header_value: str | None
+    authorization_header_name: str | None = field(repr=False)
+    authorization_header_value: str | None = field(repr=False)
 
     def __post_init__(self) -> None:
         if type(self.webhook_url) is not str or not self.webhook_url:

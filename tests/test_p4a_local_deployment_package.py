@@ -82,18 +82,21 @@ PROHIBITED_CONTENT_PATTERNS: list[re.Pattern[str]] = [
 # Exact-scope constants (ER-06)
 # ---------------------------------------------------------------------------
 
-EXACT_BASE = "8480d0b6ef0354de29283d86bbc5759491f822f3"
-EXACT_SCOPE_BRANCH = "feature/v0-fl-r3-p4a-local-deployment-package"
+EXACT_BASE = "b85ea870676ef2fa398ca3707832dda42509b93b"
+EXACT_SCOPE_BRANCH = "feature/v0-fl-r3-secure-secret-ingress"
 
 EXPECTED_EXACT_SCOPE: set[tuple[str, str]] = {
-    ("A", "deploy/p4a/config/risk-configuration.json.example"),
     ("A", "deploy/p4a/credentials/notification-credential.json.example"),
-    ("A", "deploy/p4a/evidence/supervised-smoke-manifest-v1.json.example"),
-    ("A", "deploy/p4a/systemd/trader-assist-v0-public.env.example"),
-    ("A", "deploy/p4a/systemd/trader-assist-v0-public.service"),
-    ("A", "docs/operations/V0_FL_R3_P4A_LOCAL_DEPLOYMENT.md"),
-    ("A", "scripts/p4a/run_restricted_public_runtime.sh"),
-    ("A", "tests/test_p4a_local_deployment_package.py"),
+    ("M", "deploy/p4a/evidence/supervised-smoke-manifest-v1.json.example"),
+    ("M", "deploy/p4a/systemd/trader-assist-v0-public.env.example"),
+    ("M", "deploy/p4a/systemd/trader-assist-v0-public.service"),
+    ("M", "docs/operations/V0_FL_R3_P4A_LOCAL_DEPLOYMENT.md"),
+    ("M", "scripts/p4a/run_restricted_public_runtime.sh"),
+    ("M", "scripts/run_first_launch_public_runtime.py"),
+    ("M", "src/trader_assist_v0/runtime/first_launch_notification.py"),
+    ("M", "tests/test_first_launch_notification.py"),
+    ("M", "tests/test_first_launch_public_runtime.py"),
+    ("M", "tests/test_p4a_local_deployment_package.py"),
 }
 
 # ---------------------------------------------------------------------------
@@ -1335,10 +1338,10 @@ def test_exact_scope_relative_to_base() -> None:
     if not _exact_scope_active():
         pytest.skip(
             "exact-scope test only active on "
-            "feature/v0-fl-r3-p4a-local-deployment-package"
+            "feature/v0-fl-r3-secure-secret-ingress"
         )
     result = subprocess.run(
-        ["git", "diff", "--name-status", f"{EXACT_BASE}...HEAD"],
+        ["git", "diff", "--name-status", EXACT_BASE],
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,

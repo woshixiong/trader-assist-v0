@@ -75,19 +75,6 @@ _HEADER_TOKEN_RE: Final[re.Pattern[str]] = re.compile(
 )
 
 
-class _RedactedNotificationConfig(NotificationConfig):
-    """NotificationConfig subclass whose repr never contains credential values.
-
-    The inherited constructor and __post_init__ validation are preserved
-    unchanged.  Only __repr__ is overridden to return a fixed redacted
-    representation that never includes webhook_url, authorization_header_name
-    or authorization_header_value.
-    """
-
-    def __repr__(self) -> str:
-        return "NotificationConfig(redacted)"
-
-
 def _validate_header_name(name: str) -> None:
     """Validate an HTTP field-name against token grammar.
 
@@ -213,8 +200,24 @@ def _load_credential_file(
         if fd_stat.st_size > _MAX_CREDENTIAL_FILE_SIZE:
             raise CredentialFileError("credential file exceeds the bounded size")
 
-        # Read at most max size plus one byte to detect oversized
-        raw = os.read(fd, _MAX_CREDENTIAL_FILE_SIZE + 1)
+        # Bounded descriptor read in chunks.  Accumulate at most
+        # _MAX_CREDENTIAL_FILE_SIZE + 1 bytes to detect overflow.
+        # Each chunk is at most _CHUNK_SIZE bytes; short reads are
+        # handled by continuing the loop.  EOF terminates the loop.
+        _CHUNK_SIZE = 1024
+        raw_parts: list[bytes] = []
+        total_read = 0
+        max_read = _MAX_CREDENTIAL_FILE_SIZE + 1
+        while total_read < max_read:
+            try:
+                chunk = os.read(fd, min(_CHUNK_SIZE, max_read - total_read))
+            except OSError as exc:
+                raise CredentialFileError("credential file cannot be read") from exc
+            if not chunk:
+                break
+            raw_parts.append(chunk)
+            total_read += len(chunk)
+        raw = b"".join(raw_parts)
     finally:
         os.close(fd)
 
@@ -272,8 +275,8 @@ def _load_credential_file(
         _validate_header_name(auth_name)
         _validate_header_value(auth_value)
 
-    # Build redacted NotificationConfig subclass and let its own admission validate
-    return _RedactedNotificationConfig(
+    # Build NotificationConfig with repr=False on credential fields
+    return NotificationConfig(
         webhook_url=webhook_url,
         timeout_seconds=timeout_seconds,
         authorization_header_name=auth_name,
@@ -390,20 +393,10 @@ def validate_configuration(args: CliArguments) -> tuple[
     notification_config = _load_credential_file(
         args.notification_credential_file, args.webhook_timeout_seconds
     )
-    # RestrictedPublicRuntimeConfig uses type() is not NotificationConfig
-    # (exact type check, rejects subclasses).  Provide a plain instance that
-    # satisfies the check while keeping the redacted subclass for the return
-    # value (used by the caller to construct the dispatcher).
-    runtime_notification_config = NotificationConfig(
-        webhook_url=notification_config.webhook_url,
-        timeout_seconds=notification_config.timeout_seconds,
-        authorization_header_name=notification_config.authorization_header_name,
-        authorization_header_value=notification_config.authorization_header_value,
-    )
     runtime_config = RestrictedPublicRuntimeConfig(
         database_path=args.database_path,
         risk_configuration=risk_configuration,
-        notification_config=runtime_notification_config,
+        notification_config=notification_config,
         acknowledgement_timeout_seconds=args.acknowledgement_timeout_seconds,
         session_timeout_seconds=args.session_timeout_seconds,
     )
@@ -692,11 +685,11 @@ def main(argv: tuple[str, ...] | None = None) -> int:
             _load_credential_file(
                 args.notification_credential_file, args.webhook_timeout_seconds
             )
-        except CredentialFileError as exc:
-            print(f"ERROR credential validation failed", file=sys.stderr)
+        except CredentialFileError:
+            print("ERROR credential validation failed", file=sys.stderr)
             return 3
-        except NotificationConfigError as exc:
-            print(f"ERROR credential validation failed", file=sys.stderr)
+        except NotificationConfigError:
+            print("ERROR credential validation failed", file=sys.stderr)
             return 3
         print("PASS")
         return 0
