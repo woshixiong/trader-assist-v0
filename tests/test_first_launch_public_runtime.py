@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from collections.abc import Callable
@@ -53,6 +54,23 @@ def _utc_now() -> datetime:
 
 def _monotonic_now() -> float:
     return 0.0
+
+
+def _write_credential_file(
+    path: Path,
+    *,
+    webhook_url: str = "https://hooks.example.com/eth-notify",
+    authorization_header: dict[str, str] | None = None,
+) -> Path:
+    """Write a valid version-1 credential file for testing."""
+    data: dict[str, object] = {
+        "version": 1,
+        "webhook_url": webhook_url,
+        "authorization_header": authorization_header,
+    }
+    path.write_text(json.dumps(data), encoding="utf-8")
+    path.chmod(0o600)
+    return path
 
 
 def _risk_configuration() -> RiskConfiguration:
@@ -697,15 +715,14 @@ def _valid_cli_args(
     mode: str = "RESTRICTED_PUBLIC_LIVE_SHADOW",
 ) -> object:
     """Build CliArguments for GA-01 / GA-05 tests."""
+    credential_file = _write_credential_file(tmp_path / "credential.json")
     return _SCRIPT_MODULE.CliArguments(
         enable_restricted_public_runtime=enable,
         mode=mode,
         database_path=tmp_path / "runtime.db",
         risk_configuration_path=tmp_path / "risk.json",
-        webhook_url="https://hooks.example.com/notify",
+        notification_credential_file=credential_file,
         webhook_timeout_seconds=10.0,
-        authorization_header_name=None,
-        authorization_header_value=None,
         acknowledgement_timeout_seconds=30.0,
         session_timeout_seconds=21600.0,
     )
@@ -1561,15 +1578,14 @@ def test_ga05_task_cancel_propagates_and_durable_cleanup(tmp_path: Path) -> None
     second snapshot recovery, or second WebSocket factory call occurs.
     """
     risk_path = _write_risk_config(tmp_path)
+    credential_file = _write_credential_file(tmp_path / "credential.json")
     args = _SCRIPT_MODULE.CliArguments(
         enable_restricted_public_runtime=True,
         mode="RESTRICTED_PUBLIC_LIVE_SHADOW",
         database_path=tmp_path / "runtime.db",
         risk_configuration_path=risk_path,
-        webhook_url="https://hooks.example.com/eth-notify",
+        notification_credential_file=credential_file,
         webhook_timeout_seconds=10.0,
-        authorization_header_name=None,
-        authorization_header_value=None,
         acknowledgement_timeout_seconds=30.0,
         session_timeout_seconds=21600.0,
     )
@@ -1708,3 +1724,411 @@ def test_ga05_task_cancel_propagates_and_durable_cleanup(tmp_path: Path) -> None
         _SCRIPT_MODULE.RestrictedPublicRuntime = original_runtime
         _ShutdownTrackingRuntime.__init__ = original_runtime_init  # type: ignore[assignment]
         _CloseTrackingStore.open = original_store_open  # type: ignore[assignment]
+
+
+# ============================================================
+# Credential file admission tests
+# ============================================================
+
+
+def _load_credential_file(credential_path: Path) -> object:
+    """Call the entrypoint's _load_credential_file function."""
+    return _SCRIPT_MODULE._load_credential_file(credential_path)
+
+
+def test_credential_valid_null_auth_succeeds(tmp_path: Path) -> None:
+    """Valid credential with null authorization header is accepted."""
+    credential_file = _write_credential_file(tmp_path / "credential.json")
+    config = _load_credential_file(credential_file)
+    assert config.webhook_url == "https://hooks.example.com/eth-notify"
+
+
+def test_credential_valid_with_auth_succeeds(tmp_path: Path) -> None:
+    """Valid credential with authorization header is accepted."""
+    credential_file = _write_credential_file(
+        tmp_path / "credential.json",
+        authorization_header={"name": "Authorization", "value": "Bearer token"},
+    )
+    config = _load_credential_file(credential_file)
+    assert config.webhook_url == "https://hooks.example.com/eth-notify"
+    assert config.authorization_header_name == "Authorization"
+    assert config.authorization_header_value == "Bearer token"
+
+
+def test_credential_missing_file_fails(tmp_path: Path) -> None:
+    """Missing credential file fails before network activity."""
+    missing = tmp_path / "nonexistent.json"
+    with pytest.raises(_SCRIPT_MODULE.CredentialFileError, match="not a regular file"):
+        _load_credential_file(missing)
+
+
+def test_credential_symlink_fails(tmp_path: Path) -> None:
+    """Symlink credential file is rejected."""
+    target = tmp_path / "real.json"
+    _write_credential_file(target)
+    link = tmp_path / "link.json"
+    os.symlink(target, link)
+    with pytest.raises(_SCRIPT_MODULE.CredentialFileError, match="symlink"):
+        _load_credential_file(link)
+
+
+def test_credential_directory_fails(tmp_path: Path) -> None:
+    """Directory as credential file is rejected."""
+    dir_path = tmp_path / "not-a-file"
+    dir_path.mkdir()
+    with pytest.raises(_SCRIPT_MODULE.CredentialFileError, match="not a regular file"):
+        _load_credential_file(dir_path)
+
+
+def test_credential_group_readable_fails(tmp_path: Path) -> None:
+    """Group-readable credential file is rejected."""
+    credential_file = _write_credential_file(tmp_path / "credential.json")
+    credential_file.chmod(0o640)
+    with pytest.raises(_SCRIPT_MODULE.CredentialFileError, match="group or other access"):
+        _load_credential_file(credential_file)
+
+
+def test_credential_world_readable_fails(tmp_path: Path) -> None:
+    """World-readable credential file is rejected."""
+    credential_file = _write_credential_file(tmp_path / "credential.json")
+    credential_file.chmod(0o604)
+    with pytest.raises(_SCRIPT_MODULE.CredentialFileError, match="group or other access"):
+        _load_credential_file(credential_file)
+
+
+def test_credential_owner_only_mode_succeeds(tmp_path: Path) -> None:
+    """Owner-only mode (600) credential is accepted."""
+    credential_file = _write_credential_file(tmp_path / "credential.json")
+    credential_file.chmod(0o600)
+    config = _load_credential_file(credential_file)
+    assert config.webhook_url == "https://hooks.example.com/eth-notify"
+
+
+def test_credential_malformed_utf8_fails(tmp_path: Path) -> None:
+    """Malformed UTF-8 credential file is rejected."""
+    credential_file = tmp_path / "credential.json"
+    credential_file.write_bytes(b'{"version": 1, "webhook_url": "\xff\xfe"}')
+    credential_file.chmod(0o600)
+    with pytest.raises(_SCRIPT_MODULE.CredentialFileError, match="UTF-8"):
+        _load_credential_file(credential_file)
+
+
+def test_credential_malformed_json_fails(tmp_path: Path) -> None:
+    """Malformed JSON credential file is rejected."""
+    credential_file = tmp_path / "credential.json"
+    credential_file.write_text("{not json", encoding="utf-8")
+    credential_file.chmod(0o600)
+    with pytest.raises(_SCRIPT_MODULE.CredentialFileError, match="JSON"):
+        _load_credential_file(credential_file)
+
+
+def test_credential_unknown_keys_fails(tmp_path: Path) -> None:
+    """Credential file with unknown top-level keys is rejected."""
+    credential_file = tmp_path / "credential.json"
+    credential_file.write_text(
+        json.dumps({"version": 1, "webhook_url": "https://example.com/hook", "extra": "bad"}),
+        encoding="utf-8",
+    )
+    credential_file.chmod(0o600)
+    with pytest.raises(_SCRIPT_MODULE.CredentialFileError, match="unrecognized top-level"):
+        _load_credential_file(credential_file)
+
+
+def test_credential_invalid_version_fails(tmp_path: Path) -> None:
+    """Credential file with invalid version is rejected."""
+    credential_file = tmp_path / "credential.json"
+    credential_file.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "webhook_url": "https://example.com/hook",
+                "authorization_header": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+    credential_file.chmod(0o600)
+    with pytest.raises(_SCRIPT_MODULE.CredentialFileError, match="version"):
+        _load_credential_file(credential_file)
+
+
+def test_credential_missing_webhook_url_fails(tmp_path: Path) -> None:
+    """Credential file with missing webhook_url is rejected."""
+    credential_file = tmp_path / "credential.json"
+    credential_file.write_text(
+        json.dumps({"version": 1, "webhook_url": "", "authorization_header": None}),
+        encoding="utf-8",
+    )
+    credential_file.chmod(0o600)
+    with pytest.raises(_SCRIPT_MODULE.CredentialFileError, match="webhook_url"):
+        _load_credential_file(credential_file)
+
+
+def test_credential_malformed_auth_object_fails(tmp_path: Path) -> None:
+    """Credential file with malformed authorization_header is rejected."""
+    credential_file = tmp_path / "credential.json"
+    credential_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "webhook_url": "https://example.com/hook",
+                "authorization_header": "not-an-object",
+            }
+        ),
+        encoding="utf-8",
+    )
+    credential_file.chmod(0o600)
+    with pytest.raises(_SCRIPT_MODULE.CredentialFileError, match="authorization_header"):
+        _load_credential_file(credential_file)
+
+
+def test_credential_auth_unknown_keys_fails(tmp_path: Path) -> None:
+    """Credential file authorization_header with unknown keys is rejected."""
+    credential_file = tmp_path / "credential.json"
+    credential_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "webhook_url": "https://example.com/hook",
+                "authorization_header": {
+                    "name": "X",
+                    "value": "Y",
+                    "extra": "Z",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    credential_file.chmod(0o600)
+    with pytest.raises(_SCRIPT_MODULE.CredentialFileError, match="authorization_header"):
+        _load_credential_file(credential_file)
+
+
+def test_credential_auth_empty_name_fails(tmp_path: Path) -> None:
+    """Credential file authorization_header with empty name is rejected."""
+    credential_file = tmp_path / "credential.json"
+    credential_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "webhook_url": "https://example.com/hook",
+                "authorization_header": {"name": "", "value": "Y"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    credential_file.chmod(0o600)
+    with pytest.raises(_SCRIPT_MODULE.CredentialFileError, match="authorization_header"):
+        _load_credential_file(credential_file)
+
+
+def test_credential_auth_empty_value_fails(tmp_path: Path) -> None:
+    """Credential file authorization_header with empty value is rejected."""
+    credential_file = tmp_path / "credential.json"
+    credential_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "webhook_url": "https://example.com/hook",
+                "authorization_header": {"name": "X", "value": ""},
+            }
+        ),
+        encoding="utf-8",
+    )
+    credential_file.chmod(0o600)
+    with pytest.raises(_SCRIPT_MODULE.CredentialFileError, match="authorization_header"):
+        _load_credential_file(credential_file)
+
+
+def test_credential_oversized_file_fails(tmp_path: Path) -> None:
+    """Credential file exceeding max size is rejected."""
+    credential_file = tmp_path / "credential.json"
+    credential_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "webhook_url": "https://example.com/" + "x" * 5000,
+                "authorization_header": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+    credential_file.chmod(0o600)
+    with pytest.raises(_SCRIPT_MODULE.CredentialFileError, match="bounded size"):
+        _load_credential_file(credential_file)
+
+
+def test_credential_non_object_fails(tmp_path: Path) -> None:
+    """Credential file that is not a JSON object is rejected."""
+    credential_file = tmp_path / "credential.json"
+    credential_file.write_text(json.dumps(["not", "an", "object"]), encoding="utf-8")
+    credential_file.chmod(0o600)
+    with pytest.raises(_SCRIPT_MODULE.CredentialFileError, match="JSON object"):
+        _load_credential_file(credential_file)
+
+
+def test_credential_unreadable_file_fails(tmp_path: Path) -> None:
+    """Unreadable credential file is rejected."""
+    credential_file = _write_credential_file(tmp_path / "credential.json")
+    credential_file.chmod(0o000)
+    with pytest.raises(_SCRIPT_MODULE.CredentialFileError):
+        _load_credential_file(credential_file)
+
+
+# ============================================================
+# Secret-absence proofs
+# ============================================================
+
+
+def test_secret_webhook_url_not_in_argv(tmp_path: Path) -> None:
+    """Secret URL and path values do not appear in Python argv."""
+    credential_file = _write_credential_file(
+        tmp_path / "credential.json",
+        webhook_url="https://secret.example.com/path?key=value",
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(_SCRIPT),
+            "--enable-restricted-public-runtime",
+            "--mode", "RESTRICTED_PUBLIC_LIVE_SHADOW",
+            "--database-path", str(tmp_path / "runtime.db"),
+            "--risk-configuration-path", str(tmp_path / "risk.json"),
+            "--notification-credential-file", str(credential_file),
+        ],
+        capture_output=True,
+        text=True,
+        env={"PYTHONPATH": "src", "PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+    )
+    # The command should fail (missing risk config), but the credential
+    # URL must not appear in argv or stdout/stderr.
+    output = result.stdout + result.stderr
+    assert "secret.example.com" not in output
+    assert "key=value" not in output
+
+
+def test_secret_auth_value_not_in_argv(tmp_path: Path) -> None:
+    """Authorization header values do not appear in Python argv."""
+    credential_file = _write_credential_file(
+        tmp_path / "credential.json",
+        authorization_header={"name": "Authorization", "value": "Bearer secret-token-123"},
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(_SCRIPT),
+            "--enable-restricted-public-runtime",
+            "--mode", "RESTRICTED_PUBLIC_LIVE_SHADOW",
+            "--database-path", str(tmp_path / "runtime.db"),
+            "--risk-configuration-path", str(tmp_path / "risk.json"),
+            "--notification-credential-file", str(credential_file),
+        ],
+        capture_output=True,
+        text=True,
+        env={"PYTHONPATH": "src", "PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+    )
+    output = result.stdout + result.stderr
+    assert "secret-token-123" not in output
+    assert "Bearer secret" not in output
+
+
+def test_secret_wrapper_stub_argv_contains_only_credential_path(
+    tmp_path: Path,
+) -> None:
+    """Wrapper stub-exec argv contains only the credential path, not its contents."""
+    # Write a credential file with secrets
+    credential_file = _write_credential_file(
+        tmp_path / "credential.json",
+        webhook_url="https://secret-webhook.example.com/notify",
+        authorization_header={"name": "X-Api-Key", "value": "sk-top-secret"},
+    )
+    # Create a stub Python that records its argv
+    stub_python = tmp_path / "stub_python"
+    stub_python.write_text(
+        "#!/usr/bin/env bash\n"
+        "for arg in \"$@\"; do echo \"$arg\"; done\n"
+    )
+    stub_python.chmod(0o755)
+    stub_entry = tmp_path / "entry.py"
+    stub_entry.write_text("")
+
+    result = subprocess.run(
+        [
+            "bash", "-c",
+            f"CREDENTIALS_DIRECTORY={tmp_path} "
+            f"exec {stub_python} {stub_entry} "
+            f"--notification-credential-file {credential_file}",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    output = result.stdout + result.stderr
+    assert "secret-webhook" not in output
+    assert "sk-top-secret" not in output
+    assert "X-Api-Key" not in output
+    # The credential path itself should appear
+    assert str(credential_file) in output
+
+
+def test_secret_credential_values_not_in_subprocess_output(
+    tmp_path: Path,
+) -> None:
+    """Credential values do not appear in stdout or stderr."""
+    credential_file = _write_credential_file(
+        tmp_path / "credential.json",
+        webhook_url="https://stdout-test.example.com/notify",
+        authorization_header={"name": "Authorization", "value": "Bearer stdout-test-secret"},
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(_SCRIPT),
+            "--enable-restricted-public-runtime",
+            "--mode", "RESTRICTED_PUBLIC_LIVE_SHADOW",
+            "--database-path", str(tmp_path / "runtime.db"),
+            "--risk-configuration-path", str(tmp_path / "risk.json"),
+            "--notification-credential-file", str(credential_file),
+        ],
+        capture_output=True,
+        text=True,
+        env={"PYTHONPATH": "src", "PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+    )
+    output = result.stdout + result.stderr
+    assert "stdout-test-secret" not in output
+    assert "stdout-test.example.com" not in output
+
+
+def test_committed_example_not_production_usable() -> None:
+    """The committed credential example is not production-usable."""
+    example_path = (
+        Path(__file__).resolve().parents[1]
+        / "deploy"
+        / "p4a"
+        / "credentials"
+        / "notification-credential.json.example"
+    )
+    raw = example_path.read_text(encoding="utf-8")
+    data = json.loads(raw)
+    assert data["version"] == 1
+    assert "example.invalid" in data["webhook_url"]
+    assert "replace-me" in data["webhook_url"]
+    assert data["authorization_header"] is None
+
+
+def test_credential_values_not_in_error_messages(tmp_path: Path) -> None:
+    """Credential values are not leaked in error messages."""
+    credential_file = _write_credential_file(
+        tmp_path / "credential.json",
+        webhook_url="https://error-leak-test.example.com/notify",
+    )
+    # Trigger a credential error by making the file group-readable
+    credential_file.chmod(0o640)
+    try:
+        _load_credential_file(credential_file)
+    except _SCRIPT_MODULE.CredentialFileError as exc:
+        msg = str(exc)
+        assert "error-leak-test" not in msg
+        assert "https://" not in msg
+    else:
+        pytest.fail("Expected CredentialFileError")

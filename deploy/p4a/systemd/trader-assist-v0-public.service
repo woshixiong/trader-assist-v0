@@ -15,6 +15,11 @@ Group=traderassist
 
 EnvironmentFile=/etc/trader-assist-v0/public.env
 
+# Secure credential ingress: systemd provides a private per-service runtime
+# copy of the notification credential.  The credential is received at
+# $CREDENTIALS_DIRECTORY/notification.json and never appears in process argv.
+LoadCredential=notification.json:/etc/trader-assist-v0/credentials/notification.json
+
 ExecStart=/opt/trader-assist-v0/scripts/p4a/run_restricted_public_runtime.sh
 
 Restart=no

@@ -13,8 +13,11 @@ set -euo pipefail
 # execution.  It never creates the activation permit, never creates real
 # configuration, and never accesses AWS.
 #
-# AUTHENTICATED_WEBHOOK_HEADER_SUPPORT:
-# DEFERRED_PENDING_SEPARATELY_AUTHORIZED_SECURE_SECRET_INGRESS
+# SECURE SECRET INGRESS:
+# The notification credential is supplied by systemd via LoadCredential and
+# received at $CREDENTIALS_DIRECTORY/notification.json.  The wrapper passes
+# only the credential file path to Python.  No webhook URL, authorization
+# header name or authorization header value appear in process argv.
 # ---------------------------------------------------------------------------
 
 # --- Paths ---------------------------------------------------------------
@@ -95,13 +98,22 @@ if [[ -z "${TRADER_ASSIST_V0_RISK_CONFIGURATION_PATH:-}" ]]; then
     exit 1
 fi
 
-if [[ -z "${TRADER_ASSIST_V0_WEBHOOK_URL:-}" ]]; then
-    echo "ERROR: TRADER_ASSIST_V0_WEBHOOK_URL is required" >&2
+# ===========================================================================
+# 5. Credential file from systemd CREDENTIALS_DIRECTORY
+# ===========================================================================
+if [[ -z "${CREDENTIALS_DIRECTORY:-}" ]]; then
+    echo "ERROR: CREDENTIALS_DIRECTORY is required" >&2
+    exit 1
+fi
+
+NOTIFICATION_CREDENTIAL_FILE="${CREDENTIALS_DIRECTORY}/notification.json"
+if [[ ! -f "${NOTIFICATION_CREDENTIAL_FILE}" ]]; then
+    echo "ERROR: notification credential file not found" >&2
     exit 1
 fi
 
 # ===========================================================================
-# 5. Approved directory canonicalization
+# 6. Approved directory canonicalization
 #    The approved state and config directories must exist and canonicalize.
 #    Same-UID shell TOCTOU races are reduced by ownership and service
 #    isolation (root-owned config, traderassist-owned state, systemd
@@ -120,7 +132,7 @@ if [[ -z "${APPROVED_CONFIG_REAL}" ]]; then
 fi
 
 # ===========================================================================
-# 6. Database filesystem containment
+# 7. Database filesystem containment
 #    The database file may be absent on first start (SQLite creates it).
 #    An existing database final path must not be a symlink and must be a
 #    regular file.  The canonical parent must remain inside the canonical
@@ -168,7 +180,7 @@ if [[ "${DB_PARENT_REAL}" == "${APPROVED_STATE_REAL}" && \
 fi
 
 # ===========================================================================
-# 7. Risk configuration filesystem containment
+# 8. Risk configuration filesystem containment
 #    The risk configuration must be an existing regular file (not a symlink)
 #    inside the canonical approved config directory.
 # ===========================================================================
@@ -196,7 +208,7 @@ if [[ "${RISK_REALPATH}" != "${APPROVED_CONFIG_REAL}" && \
 fi
 
 # ===========================================================================
-# 8. Verify Python entrypoint and executable exist
+# 9. Verify Python entrypoint and executable exist
 # ===========================================================================
 if [[ ! -x "${PYTHON_EXECUTABLE}" ]]; then
     echo "ERROR: Python executable not found at ${PYTHON_EXECUTABLE}" >&2
@@ -208,10 +220,14 @@ if [[ ! -f "${PYTHON_ENTRYPOINT}" ]]; then
 fi
 
 # ===========================================================================
-# 9. Construct Python argv as a bash array and exec
+# 10. Construct Python argv as a bash array and exec
 #    PYTHONPATH is forced to the approved source tree so trader_assist_v0
 #    imports exclusively from the forced source path.  public.env must
 #    never define or override PYTHONPATH.
+#
+#    Only the credential file path is passed to Python.  No webhook URL,
+#    authorization header name or authorization header value appear in
+#    process argv.
 # ===========================================================================
 export PYTHONPATH="${PYTHONPATH_FORCED}"
 
@@ -222,7 +238,7 @@ PYTHON_ARGS=(
     "--mode" "${REQUIRED_MODE}"
     "--database-path" "${TRADER_ASSIST_V0_DATABASE_PATH}"
     "--risk-configuration-path" "${TRADER_ASSIST_V0_RISK_CONFIGURATION_PATH}"
-    "--webhook-url" "${TRADER_ASSIST_V0_WEBHOOK_URL}"
+    "--notification-credential-file" "${NOTIFICATION_CREDENTIAL_FILE}"
     "--webhook-timeout-seconds" "${TRADER_ASSIST_V0_WEBHOOK_TIMEOUT_SECONDS:-10}"
     "--acknowledgement-timeout-seconds" "${TRADER_ASSIST_V0_ACKNOWLEDGEMENT_TIMEOUT_SECONDS:-30}"
     "--session-timeout-seconds" "${TRADER_ASSIST_V0_SESSION_TIMEOUT_SECONDS:-21600}"

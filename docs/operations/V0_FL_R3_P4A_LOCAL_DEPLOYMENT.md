@@ -86,6 +86,111 @@ sudo chown root:root /etc/trader-assist-v0
 sudo chmod 755 /etc/trader-assist-v0
 ```
 
+## 5a. Credential Directory
+
+The notification credential is stored in a separate restricted directory with
+owner-only access. The directory mode is 0700 (root:root only).
+
+```bash
+sudo mkdir -p /etc/trader-assist-v0/credentials
+sudo chown root:root /etc/trader-assist-v0/credentials
+sudo chmod 700 /etc/trader-assist-v0/credentials
+```
+
+## 5b. Notification Credential Installation
+
+Create the notification credential file securely. Never echo credential content
+to the terminal or shell history.
+
+```bash
+# Create a secured temporary file
+sudo install -m 600 /dev/null /etc/trader-assist-v0/credentials/notification.json.tmp
+
+# Write the credential content to the temporary file
+# (operator must supply the content; never echo credential values)
+sudo tee /etc/trader-assist-v0/credentials/notification.json.tmp > /dev/null <<'CRED_EOF'
+{
+  "version": 1,
+  "webhook_url": "https://your-webhook.example.com/notify",
+  "authorization_header": null
+}
+CRED_EOF
+
+# Verify ownership, mode and JSON validity without printing content
+sudo chown root:root /etc/trader-assist-v0/credentials/notification.json.tmp
+sudo chmod 600 /etc/trader-assist-v0/credentials/notification.json.tmp
+sudo python3 -c "import json; json.load(open('/etc/trader-assist-v0/credentials/notification.json.tmp'))" \
+  && echo "OK: credential JSON is valid"
+
+# Atomically rename into place
+sudo mv /etc/trader-assist-v0/credentials/notification.json.tmp \
+       /etc/trader-assist-v0/credentials/notification.json
+```
+
+The credential file:
+- Path: `/etc/trader-assist-v0/credentials/notification.json`
+- Owner: `root:root`
+- Mode: `0600`
+- systemd supplies a private per-service runtime copy via `LoadCredential`.
+- The wrapper receives the credential at `$CREDENTIALS_DIRECTORY/notification.json`.
+- No webhook URL, authorization header name or value appear in process argv.
+
+## 5c. Credential Rotation
+
+To rotate the credential without disrupting active runtime sessions:
+
+1. Create a secured root-owned temporary file.
+2. Apply 0600 before installing content.
+3. Validate ownership, mode and JSON without printing content.
+4. Atomically rename over `notification.json`.
+5. Restart the service only under separate runtime authorization.
+
+```bash
+# Create rotated credential
+sudo install -m 600 /dev/null /etc/trader-assist-v0/credentials/notification.json.new
+sudo tee /etc/trader-assist-v0/credentials/notification.json.new > /dev/null <<'CRED_EOF'
+{
+  "version": 1,
+  "webhook_url": "https://your-new-webhook.example.com/notify",
+  "authorization_header": {
+    "name": "Authorization",
+    "value": "Bearer new-token"
+  }
+}
+CRED_EOF
+sudo chown root:root /etc/trader-assist-v0/credentials/notification.json.new
+sudo chmod 600 /etc/trader-assist-v0/credentials/notification.json.new
+sudo python3 -c "import json; json.load(open('/etc/trader-assist-v0/credentials/notification.json.new'))" \
+  && echo "OK: rotated credential JSON is valid"
+
+# Atomically replace
+sudo mv /etc/trader-assist-v0/credentials/notification.json.new \
+       /etc/trader-assist-v0/credentials/notification.json
+```
+
+## 5d. Credential Rollback
+
+To roll back the credential:
+
+```bash
+# Stop the service
+sudo systemctl stop trader-assist-v0-public.service
+
+# Remove or invalidate the source credential
+sudo rm -f /etc/trader-assist-v0/credentials/notification.json
+
+# Remove the activation permit when appropriate
+sudo rm -f /etc/trader-assist-v0/activation-permit
+
+# Verify no service process remains
+sudo systemctl is-active trader-assist-v0-public.service || echo "inactive"
+pgrep -f run_restricted_public_runtime.sh || echo "no wrapper process"
+pgrep -f run_first_launch_public_runtime.py || echo "no Python process"
+
+# Verify the runtime credential directory is inactive
+# (systemd cleans up $CREDENTIALS_DIRECTORY when the service stops)
+```
+
 ## 6. SQLite State Directory
 
 ```bash
@@ -118,7 +223,6 @@ with operator-reviewed values. At minimum:
 
 - `TRADER_ASSIST_V0_ENABLE` must be set to `1` for activation.
 - `TRADER_ASSIST_V0_MODE` must be exactly `RESTRICTED_PUBLIC_LIVE_SHADOW`.
-- `TRADER_ASSIST_V0_WEBHOOK_URL` must contain a valid HTTPS webhook URL.
 - `TRADER_ASSIST_V0_DATABASE_PATH` must point to a path under `/var/lib/trader-assist-v0`.
 - `TRADER_ASSIST_V0_RISK_CONFIGURATION_PATH` must point to a path under `/etc/trader-assist-v0`.
 
@@ -126,14 +230,14 @@ with operator-reviewed values. At minimum:
 wrapper forces `PYTHONPATH=/opt/trader-assist-v0/src` so `trader_assist_v0`
 imports exclusively from the approved source tree.
 
-AUTHENTICATED_WEBHOOK_HEADER_SUPPORT:
-DEFERRED_PENDING_SEPARATELY_AUTHORIZED_SECURE_SECRET_INGRESS
+SECURE NOTIFICATION CREDENTIAL INGRESS:
 
-Authenticated webhook header support is intentionally absent from this
-package.  No authorization-header name/value environment variables, pair
-validation, or argv construction are present.  A separately authorized secure
-secret ingress workstream is required before any authenticated webhook
-header mechanism is introduced.
+The webhook URL and optional authorization header are supplied via a versioned
+JSON credential file at `/etc/trader-assist-v0/credentials/notification.json`
+(see Sections 5a-5d).  systemd provides a private per-service runtime copy via
+`LoadCredential`.  The wrapper passes only the credential file path to Python.
+No webhook URL, token, authorization header name or authorization header value
+may appear in this environment file or in process argv.
 
 ## 9. Risk Configuration
 
