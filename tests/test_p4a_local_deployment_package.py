@@ -1,6 +1,6 @@
 """Static offline tests for the P4A local deployment package.
 
-These tests verify the seven-file implementation scope, systemd unit content,
+These tests verify the eight-file implementation scope, systemd unit content,
 environment and risk configuration fail-closed behavior, wrapper guardrails,
 and the absence of secrets, credentials, or prohibited configuration.
 
@@ -33,6 +33,7 @@ ALLOWED_FILES = {
     "deploy/p4a/systemd/trader-assist-v0-public.service",
     "deploy/p4a/systemd/trader-assist-v0-public.env.example",
     "deploy/p4a/config/risk-configuration.json.example",
+    "deploy/p4a/credentials/notification-credential.json.example",
     "scripts/p4a/run_restricted_public_runtime.sh",
     "deploy/p4a/evidence/supervised-smoke-manifest-v1.json.example",
     "docs/operations/V0_FL_R3_P4A_LOCAL_DEPLOYMENT.md",
@@ -81,21 +82,25 @@ PROHIBITED_CONTENT_PATTERNS: list[re.Pattern[str]] = [
 # Exact-scope constants (ER-06)
 # ---------------------------------------------------------------------------
 
-EXACT_BASE = "8480d0b6ef0354de29283d86bbc5759491f822f3"
-EXACT_SCOPE_BRANCH = "feature/v0-fl-r3-p4a-local-deployment-package"
+EXACT_BASE = "b85ea870676ef2fa398ca3707832dda42509b93b"
+EXACT_SCOPE_BRANCH = "feature/v0-fl-r3-secure-secret-ingress"
 
 EXPECTED_EXACT_SCOPE: set[tuple[str, str]] = {
-    ("A", "deploy/p4a/config/risk-configuration.json.example"),
-    ("A", "deploy/p4a/evidence/supervised-smoke-manifest-v1.json.example"),
-    ("A", "deploy/p4a/systemd/trader-assist-v0-public.env.example"),
-    ("A", "deploy/p4a/systemd/trader-assist-v0-public.service"),
-    ("A", "docs/operations/V0_FL_R3_P4A_LOCAL_DEPLOYMENT.md"),
-    ("A", "scripts/p4a/run_restricted_public_runtime.sh"),
-    ("A", "tests/test_p4a_local_deployment_package.py"),
+    ("A", "deploy/p4a/credentials/notification-credential.json.example"),
+    ("M", "deploy/p4a/evidence/supervised-smoke-manifest-v1.json.example"),
+    ("M", "deploy/p4a/systemd/trader-assist-v0-public.env.example"),
+    ("M", "deploy/p4a/systemd/trader-assist-v0-public.service"),
+    ("M", "docs/operations/V0_FL_R3_P4A_LOCAL_DEPLOYMENT.md"),
+    ("M", "scripts/p4a/run_restricted_public_runtime.sh"),
+    ("M", "scripts/run_first_launch_public_runtime.py"),
+    ("M", "src/trader_assist_v0/runtime/first_launch_notification.py"),
+    ("M", "tests/test_first_launch_notification.py"),
+    ("M", "tests/test_first_launch_public_runtime.py"),
+    ("M", "tests/test_p4a_local_deployment_package.py"),
 }
 
 # ---------------------------------------------------------------------------
-# Test 1: Exact seven-file implementation scope
+# Test 1: Exact eight-file implementation scope
 # ---------------------------------------------------------------------------
 
 def _collect_p4a_files() -> set[str]:
@@ -108,15 +113,15 @@ def _collect_p4a_files() -> set[str]:
     return found
 
 
-def test_exact_seven_file_scope() -> None:
-    """All seven authorized files exist and no extra files are present."""
+def test_exact_eight_file_scope() -> None:
+    """All eight authorized files exist and no extra files are present."""
     found = _collect_p4a_files()
     assert found == ALLOWED_FILES, (
-        f"Expected exactly 7 files, got {len(found)}. "
+        f"Expected exactly 8 files, got {len(found)}. "
         f"Missing: {ALLOWED_FILES - found}. "
         f"Extra: {found - ALLOWED_FILES}"
     )
-    assert len(found) == 7, f"Expected 7 files, got {len(found)}"
+    assert len(found) == 8, f"Expected 8 files, got {len(found)}"
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +268,19 @@ def test_service_umask(service_unit: str) -> None:
     assert match.group(1) == "0077", f"UMask must be 0077, got {match.group(1)}"
 
 
+def test_service_unit_contains_load_credential(service_unit: str) -> None:
+    """The systemd service unit must contain the LoadCredential directive."""
+    assert "LoadCredential" in service_unit, (
+        "service unit must contain LoadCredential directive"
+    )
+    assert "notification.json" in service_unit, (
+        "service unit must reference notification.json credential"
+    )
+    assert "/etc/trader-assist-v0/credentials/notification.json" in service_unit, (
+        "service unit must reference the exact credential source path"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Test 4: Unchanged environment example cannot activate runtime
 # ---------------------------------------------------------------------------
@@ -290,13 +308,11 @@ def test_env_example_mode_is_disabled(env_example: str) -> None:
     )
 
 
-def test_env_example_no_valid_webhook_url(env_example: str) -> None:
-    """The example webhook URL must not be a valid HTTPS URL."""
-    match = re.search(r"TRADER_ASSIST_V0_WEBHOOK_URL=(\S+)", env_example)
-    assert match is not None, "TRADER_ASSIST_V0_WEBHOOK_URL not found"
-    value = match.group(1)
-    assert not value.startswith("https://"), (
-        f"Webhook URL must not be a valid HTTPS URL, got {value}"
+def test_env_example_no_webhook_url_variable(env_example: str) -> None:
+    """TRADER_ASSIST_V0_WEBHOOK_URL must not appear in the environment example."""
+    assert "TRADER_ASSIST_V0_WEBHOOK_URL" not in env_example, (
+        "TRADER_ASSIST_V0_WEBHOOK_URL must not appear in the environment example; "
+        "webhook URL is supplied via credential file"
     )
 
 
@@ -472,7 +488,7 @@ def _run_wrapper(
         "TRADER_ASSIST_V0_MODE": "DISABLED",
         "TRADER_ASSIST_V0_DATABASE_PATH": "",
         "TRADER_ASSIST_V0_RISK_CONFIGURATION_PATH": "",
-        "TRADER_ASSIST_V0_WEBHOOK_URL": "",
+        "CREDENTIALS_DIRECTORY": "",
     }
     if extra_env:
         env.update(extra_env)
@@ -543,7 +559,7 @@ def test_wrapper_exits_when_database_path_outside_approved(
         "TRADER_ASSIST_V0_MODE": "RESTRICTED_PUBLIC_LIVE_SHADOW",
         "TRADER_ASSIST_V0_DATABASE_PATH": str(outside),
         "TRADER_ASSIST_V0_RISK_CONFIGURATION_PATH": "/etc/trader-assist-v0/risk.json",
-        "TRADER_ASSIST_V0_WEBHOOK_URL": "https://example.com/hook",
+        "CREDENTIALS_DIRECTORY": "/tmp/credential-dir",
     })
     assert result.returncode != 0, (
         "Wrapper should exit non-zero when database path is outside approved directory"
@@ -561,7 +577,7 @@ def test_wrapper_exits_when_risk_path_outside_approved(
         "TRADER_ASSIST_V0_MODE": "RESTRICTED_PUBLIC_LIVE_SHADOW",
         "TRADER_ASSIST_V0_DATABASE_PATH": "/var/lib/trader-assist-v0/runtime.db",
         "TRADER_ASSIST_V0_RISK_CONFIGURATION_PATH": str(outside),
-        "TRADER_ASSIST_V0_WEBHOOK_URL": "https://example.com/hook",
+        "CREDENTIALS_DIRECTORY": "/tmp/credential-dir",
     })
     assert result.returncode != 0, (
         "Wrapper should exit non-zero when risk config path is outside approved directory"
@@ -588,7 +604,7 @@ def test_wrapper_allows_fresh_database_path(
         "TRADER_ASSIST_V0_MODE": "RESTRICTED_PUBLIC_LIVE_SHADOW",
         "TRADER_ASSIST_V0_DATABASE_PATH": str(db_path),
         "TRADER_ASSIST_V0_RISK_CONFIGURATION_PATH": "/etc/trader-assist-v0/risk.json",
-        "TRADER_ASSIST_V0_WEBHOOK_URL": "https://example.com/hook",
+        "CREDENTIALS_DIRECTORY": "/tmp/credential-dir",
     })
     # The wrapper should exit before Python because the risk config file
     # doesn't exist — but the database path check should pass.
@@ -611,7 +627,7 @@ def test_wrapper_rejects_database_parent_nonexistent(
         "TRADER_ASSIST_V0_MODE": "RESTRICTED_PUBLIC_LIVE_SHADOW",
         "TRADER_ASSIST_V0_DATABASE_PATH": str(db_path),
         "TRADER_ASSIST_V0_RISK_CONFIGURATION_PATH": "/etc/trader-assist-v0/risk.json",
-        "TRADER_ASSIST_V0_WEBHOOK_URL": "https://example.com/hook",
+        "CREDENTIALS_DIRECTORY": "/tmp/credential-dir",
     })
     assert result.returncode != 0, (
         "Wrapper should reject nonexistent database parent directory"
@@ -627,7 +643,7 @@ def test_wrapper_rejects_database_traversal_path(
         "TRADER_ASSIST_V0_MODE": "RESTRICTED_PUBLIC_LIVE_SHADOW",
         "TRADER_ASSIST_V0_DATABASE_PATH": "/var/lib/trader-assist-v0/../outside.db",
         "TRADER_ASSIST_V0_RISK_CONFIGURATION_PATH": "/etc/trader-assist-v0/risk.json",
-        "TRADER_ASSIST_V0_WEBHOOK_URL": "https://example.com/hook",
+        "CREDENTIALS_DIRECTORY": "/tmp/credential-dir",
     })
     assert result.returncode != 0, (
         "Wrapper should reject traversal in database path"
@@ -650,7 +666,7 @@ def test_wrapper_rejects_risk_config_not_a_file(
         "TRADER_ASSIST_V0_MODE": "RESTRICTED_PUBLIC_LIVE_SHADOW",
         "TRADER_ASSIST_V0_DATABASE_PATH": "/var/lib/trader-assist-v0/runtime.db",
         "TRADER_ASSIST_V0_RISK_CONFIGURATION_PATH": str(dir_path),
-        "TRADER_ASSIST_V0_WEBHOOK_URL": "https://example.com/hook",
+        "CREDENTIALS_DIRECTORY": "/tmp/credential-dir",
     })
     assert result.returncode != 0, (
         "Wrapper should reject risk config path that is not a regular file"
@@ -669,7 +685,7 @@ def test_wrapper_rejects_risk_config_nonexistent(
         "TRADER_ASSIST_V0_MODE": "RESTRICTED_PUBLIC_LIVE_SHADOW",
         "TRADER_ASSIST_V0_DATABASE_PATH": "/var/lib/trader-assist-v0/runtime.db",
         "TRADER_ASSIST_V0_RISK_CONFIGURATION_PATH": str(nonexistent),
-        "TRADER_ASSIST_V0_WEBHOOK_URL": "https://example.com/hook",
+        "CREDENTIALS_DIRECTORY": "/tmp/credential-dir",
     })
     assert result.returncode != 0, (
         "Wrapper should reject nonexistent risk config path"
@@ -694,7 +710,7 @@ def test_wrapper_rejects_missing_python_executable(
         "TRADER_ASSIST_V0_MODE": "RESTRICTED_PUBLIC_LIVE_SHADOW",
         "TRADER_ASSIST_V0_DATABASE_PATH": "/var/lib/trader-assist-v0/runtime.db",
         "TRADER_ASSIST_V0_RISK_CONFIGURATION_PATH": "/etc/trader-assist-v0/risk.json",
-        "TRADER_ASSIST_V0_WEBHOOK_URL": "https://example.com/hook",
+        "CREDENTIALS_DIRECTORY": "/tmp/credential-dir",
     })
     # The wrapper will fail at either the risk config file check or the
     # Python executable check. Either way, it must exit non-zero.
@@ -878,10 +894,10 @@ def test_runbook_prohibits_floating_deployment(runbook: str) -> None:
     assert "mutable" in runbook.lower()
 
 
-def test_runbook_documents_webhook_header_deferral(runbook: str) -> None:
-    """Runbook must document the authenticated webhook header deferral."""
-    assert "AUTHENTICATED_WEBHOOK_HEADER_SUPPORT" in runbook
-    assert "DEFERRED_PENDING_SEPARATELY_AUTHORIZED_SECURE_SECRET_INGRESS" in runbook
+def test_runbook_documents_credential_ingress(runbook: str) -> None:
+    """Runbook must document the secure notification credential ingress."""
+    assert "SECURE NOTIFICATION CREDENTIAL INGRESS" in runbook
+    assert "notification.json" in runbook
 
 
 def test_runbook_has_import_verification(runbook: str) -> None:
@@ -908,6 +924,7 @@ MANDATORY_MANIFEST_FIELDS = {
     "python_version",
     "service_unit_sha256",
     "environment_template_sha256",
+    "notification_credential_example_sha256",
     "redacted_effective_configuration",
     "runtime_user",
     "runtime_group",
@@ -1013,6 +1030,17 @@ def harness(tmp_path: Path) -> dict[str, Any]:
     # Default database path: missing file is valid (SQLite creates it)
     db_path = state_dir / "runtime.db"
 
+    # Credential directory and file for wrapper credential check
+    credential_dir = tmp_path / "credentials"
+    credential_dir.mkdir()
+    credential_file = credential_dir / "notification.json"
+    credential_file.write_text(
+        '{"version": 1, '
+        '"webhook_url": "https://example.invalid/replace-me", '
+        '"authorization_header": null}\n'
+    )
+    credential_file.chmod(0o600)
+
     # Replace only the fixed production path constants in the copy
     content = prod
     content = content.replace(
@@ -1050,7 +1078,7 @@ def harness(tmp_path: Path) -> dict[str, Any]:
         "TRADER_ASSIST_V0_MODE": "RESTRICTED_PUBLIC_LIVE_SHADOW",
         "TRADER_ASSIST_V0_DATABASE_PATH": str(db_path),
         "TRADER_ASSIST_V0_RISK_CONFIGURATION_PATH": str(risk_file),
-        "TRADER_ASSIST_V0_WEBHOOK_URL": "https://example.com/hook",
+        "CREDENTIALS_DIRECTORY": str(credential_dir),
     }
 
     return {
@@ -1310,10 +1338,10 @@ def test_exact_scope_relative_to_base() -> None:
     if not _exact_scope_active():
         pytest.skip(
             "exact-scope test only active on "
-            "feature/v0-fl-r3-p4a-local-deployment-package"
+            "feature/v0-fl-r3-secure-secret-ingress"
         )
     result = subprocess.run(
-        ["git", "diff", "--name-status", f"{EXACT_BASE}...HEAD"],
+        ["git", "diff", "--name-status", EXACT_BASE],
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,

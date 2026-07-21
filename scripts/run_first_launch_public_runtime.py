@@ -9,13 +9,14 @@ creates no database publication, and sends no notification.
 After activation, the script:
 
 1. Loads the risk configuration from a bounded JSON file.
-2. Opens the SQLite durability store.
-3. Creates the configured HTTPS webhook notification dispatcher.
-4. Activates the restricted public runtime.
-5. Recovers the HTTP public snapshot (ETH 5m, 15m, metadata).
-6. Opens the WebSocket, sends the three exact subscriptions, and drives the
+2. Loads the notification credential from a versioned JSON credential file.
+3. Opens the SQLite durability store.
+4. Creates the configured HTTPS webhook notification dispatcher.
+5. Activates the restricted public runtime.
+6. Recovers the HTTP public snapshot (ETH 5m, 15m, metadata).
+7. Opens the WebSocket, sends the three exact subscriptions, and drives the
    runtime's frame loop.
-7. Handles bounded reconnect and deterministic shutdown.
+8. Handles bounded reconnect and deterministic shutdown.
 
 No AWS access. No LIVE_SHADOW activation. No account or exchange writes.
 """
@@ -26,8 +27,11 @@ import argparse
 import asyncio
 import contextlib
 import json
+import os
+import re
 import signal
 import ssl
+import stat
 import sys
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -41,6 +45,7 @@ from trader_assist_v0.first_launch.configuration import RiskConfiguration
 from trader_assist_v0.runtime.first_launch_notification import (
     HttpsWebhookTransport,
     NotificationConfig,
+    NotificationConfigError,
     NotificationDispatcher,
 )
 from trader_assist_v0.runtime.first_launch_public_runtime import (
@@ -57,6 +62,44 @@ _WEBSOCKET_URL: Final[str] = "wss://api.hyperliquid.xyz/ws"
 _HTTP_TIMEOUT_SECONDS: Final[float] = 15.0
 _DISPATCH_INTERVAL_SECONDS: Final[float] = 5.0
 _FRAME_BUFFER_SIZE: Final[int] = 1
+_MAX_CREDENTIAL_FILE_SIZE: Final[int] = 4096
+_CREDENTIAL_VERSION: Final[int] = 1
+_CREDENTIAL_TOP_LEVEL_KEYS: Final[set[str]] = {
+    "version",
+    "webhook_url",
+    "authorization_header",
+}
+_CREDENTIAL_AUTH_HEADER_KEYS: Final[set[str]] = {"name", "value"}
+_HEADER_TOKEN_RE: Final[re.Pattern[str]] = re.compile(
+    r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$"
+)
+
+
+def _validate_header_name(name: str) -> None:
+    """Validate an HTTP field-name against token grammar.
+
+    Rejects: empty, whitespace, colon, CR, LF, NUL, control characters,
+    and any character outside the RFC 7230 token grammar.
+    """
+    if not name:
+        raise CredentialFileError("authorization header name is empty")
+    if not _HEADER_TOKEN_RE.match(name):
+        raise CredentialFileError("authorization header name contains invalid characters")
+    for ch in name:
+        if ch == ":" or ord(ch) < 0x21 or ord(ch) == 0x7F:
+            raise CredentialFileError("authorization header name contains invalid characters")
+
+
+def _validate_header_value(value: str) -> None:
+    """Validate an HTTP header value for prohibited characters.
+
+    Rejects: CR, LF, NUL, control characters.
+    """
+    if not value:
+        raise CredentialFileError("authorization header value is empty")
+    for ch in value:
+        if ch in ("\r", "\n") or ord(ch) < 0x20 or ord(ch) == 0x7F:
+            raise CredentialFileError("authorization header value contains invalid characters")
 
 
 class CliArgumentError(RuntimeError):
@@ -67,18 +110,21 @@ class CliConfigurationError(RuntimeError):
     """Raised when required local configuration is missing or invalid."""
 
 
+class CredentialFileError(RuntimeError):
+    """Raised when the notification credential file is missing, invalid or insecure."""
+
+
 @dataclass(frozen=True)
 class CliArguments:
     enable_restricted_public_runtime: bool
     mode: str
     database_path: Path
     risk_configuration_path: Path
-    webhook_url: str
+    notification_credential_file: Path | None
     webhook_timeout_seconds: float
-    authorization_header_name: str | None
-    authorization_header_value: str | None
     acknowledgement_timeout_seconds: float
     session_timeout_seconds: float
+    validate_only: bool
 
     @property
     def is_activated(self) -> bool:
@@ -86,6 +132,156 @@ class CliArguments:
             self.enable_restricted_public_runtime
             and self.mode == _RUNTIME_MODE
         )
+
+
+def _load_credential_file(
+    credential_path: Path, timeout_seconds: float
+) -> NotificationConfig:
+    """Load and validate a versioned JSON notification credential file.
+
+    The credential file is opened with secure flags, and fstat (not pathname
+    stat) is used as the authoritative source for owner, mode and size.
+    Credential values are never included in error messages or logs.
+    """
+    # Reject relative path before resolve()
+    if not credential_path.is_absolute():
+        raise CredentialFileError("credential file path must be absolute")
+
+    # Reject symlinks before resolving
+    if credential_path.is_symlink():
+        raise CredentialFileError("credential file must not be a symlink")
+
+    # Resolve absolute path
+    try:
+        credential_path = credential_path.resolve(strict=False)
+    except OSError as exc:
+        raise CredentialFileError("credential file path cannot be resolved") from exc
+    if not credential_path.is_absolute():
+        raise CredentialFileError("credential file path must be absolute")
+    if credential_path.is_symlink():
+        raise CredentialFileError("credential file must not be a symlink")
+    if not credential_path.is_file():
+        raise CredentialFileError("credential file is not a regular file")
+
+    # Secure opening with O_RDONLY, O_NOFOLLOW and O_CLOEXEC
+    open_flags = os.O_RDONLY
+    if hasattr(os, "O_CLOEXEC"):
+        open_flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        open_flags |= os.O_NOFOLLOW
+
+    try:
+        fd = os.open(str(credential_path), open_flags)
+    except OSError as exc:
+        raise CredentialFileError("credential file cannot be opened") from exc
+
+    try:
+        # fstat after opening is authoritative for owner, mode and size
+        try:
+            fd_stat = os.fstat(fd)
+        except OSError as exc:
+            raise CredentialFileError("credential file cannot be stat'd") from exc
+        if not stat.S_ISREG(fd_stat.st_mode):
+            raise CredentialFileError("credential file is not a regular file")
+
+        # Check permissions via fstat: group and other must not have any access
+        if fd_stat.st_mode & (
+            stat.S_IRGRP | stat.S_IWGRP | stat.S_IXGRP
+            | stat.S_IROTH | stat.S_IWOTH | stat.S_IXOTH
+        ):
+            raise CredentialFileError("credential file has group or other access bits")
+
+        # Check owner via fstat: must be root or effective user
+        current_euid = os.geteuid()
+        if fd_stat.st_uid != 0 and fd_stat.st_uid != current_euid:
+            raise CredentialFileError("credential file owner is not root or effective user")
+
+        # Check file size via fstat
+        if fd_stat.st_size > _MAX_CREDENTIAL_FILE_SIZE:
+            raise CredentialFileError("credential file exceeds the bounded size")
+
+        # Bounded descriptor read in chunks.  Accumulate at most
+        # _MAX_CREDENTIAL_FILE_SIZE + 1 bytes to detect overflow.
+        # Each chunk is at most _CHUNK_SIZE bytes; short reads are
+        # handled by continuing the loop.  EOF terminates the loop.
+        _CHUNK_SIZE = 1024
+        raw_parts: list[bytes] = []
+        total_read = 0
+        max_read = _MAX_CREDENTIAL_FILE_SIZE + 1
+        while total_read < max_read:
+            try:
+                chunk = os.read(fd, min(_CHUNK_SIZE, max_read - total_read))
+            except OSError as exc:
+                raise CredentialFileError("credential file cannot be read") from exc
+            if not chunk:
+                break
+            raw_parts.append(chunk)
+            total_read += len(chunk)
+        raw = b"".join(raw_parts)
+    finally:
+        os.close(fd)
+
+    if len(raw) > _MAX_CREDENTIAL_FILE_SIZE:
+        raise CredentialFileError("credential file exceeds the bounded size")
+
+    # Strict UTF-8
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise CredentialFileError("credential file is not valid UTF-8") from exc
+
+    # Strict JSON
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise CredentialFileError("credential file is not valid JSON") from exc
+
+    # Validate credential structure
+    if not isinstance(data, dict):
+        raise CredentialFileError("credential file must be a JSON object")
+    if set(data.keys()) != _CREDENTIAL_TOP_LEVEL_KEYS:
+        raise CredentialFileError("credential file has unrecognized top-level keys")
+
+    # Exact version: type is int and value == 1 (JSON true must fail)
+    version = data.get("version")
+    if not (type(version) is int and version == _CREDENTIAL_VERSION):
+        raise CredentialFileError("credential file has invalid version")
+
+    webhook_url = data.get("webhook_url")
+    if not isinstance(webhook_url, str) or not webhook_url:
+        raise CredentialFileError("credential file has missing or empty webhook_url")
+    auth_header = data.get("authorization_header")
+    auth_name: str | None = None
+    auth_value: str | None = None
+    if auth_header is not None:
+        if not isinstance(auth_header, dict):
+            raise CredentialFileError(
+                "credential file authorization_header is not an object"
+            )
+        if set(auth_header.keys()) != _CREDENTIAL_AUTH_HEADER_KEYS:
+            raise CredentialFileError(
+                "credential file authorization_header has unrecognized keys"
+            )
+        auth_name = auth_header.get("name")
+        auth_value = auth_header.get("value")
+        if not isinstance(auth_name, str) or not auth_name:
+            raise CredentialFileError(
+                "credential file authorization_header name is missing or empty"
+            )
+        if not isinstance(auth_value, str) or not auth_value:
+            raise CredentialFileError(
+                "credential file authorization_header value is missing or empty"
+            )
+        _validate_header_name(auth_name)
+        _validate_header_value(auth_value)
+
+    # Build NotificationConfig with repr=False on credential fields
+    return NotificationConfig(
+        webhook_url=webhook_url,
+        timeout_seconds=timeout_seconds,
+        authorization_header_name=auth_name,
+        authorization_header_value=auth_value,
+    )
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -116,28 +312,16 @@ def _parser() -> argparse.ArgumentParser:
         help="Path to the bounded JSON risk configuration file.",
     )
     parser.add_argument(
-        "--webhook-url",
-        type=str,
+        "--notification-credential-file",
+        type=Path,
         default=None,
-        help="HTTPS webhook URL for notification delivery.",
+        help="Path to the versioned JSON notification credential file.",
     )
     parser.add_argument(
         "--webhook-timeout-seconds",
         type=float,
         default=10.0,
         help="HTTPS webhook delivery timeout in seconds.",
-    )
-    parser.add_argument(
-        "--authorization-header-name",
-        type=str,
-        default=None,
-        help="Optional HTTPS webhook authorization header name.",
-    )
-    parser.add_argument(
-        "--authorization-header-value",
-        type=str,
-        default=None,
-        help="Optional HTTPS webhook authorization header value.",
     )
     parser.add_argument(
         "--acknowledgement-timeout-seconds",
@@ -151,6 +335,11 @@ def _parser() -> argparse.ArgumentParser:
         default=21600.0,
         help="Bounded session timeout in seconds.",
     )
+    parser.add_argument(
+        "--validate-only",
+        action="store_true",
+        help="Offline validation-only: load credential, validate, print PASS, no network.",
+    )
     return parser
 
 
@@ -161,12 +350,11 @@ def parse_arguments(argv: tuple[str, ...]) -> CliArguments:
         mode=str(args.mode),
         database_path=args.database_path,
         risk_configuration_path=args.risk_configuration_path,
-        webhook_url=args.webhook_url if args.webhook_url is not None else "",
+        notification_credential_file=args.notification_credential_file,
         webhook_timeout_seconds=float(args.webhook_timeout_seconds),
-        authorization_header_name=args.authorization_header_name,
-        authorization_header_value=args.authorization_header_value,
         acknowledgement_timeout_seconds=float(args.acknowledgement_timeout_seconds),
         session_timeout_seconds=float(args.session_timeout_seconds),
+        validate_only=bool(args.validate_only),
     )
 
 
@@ -195,18 +383,15 @@ def validate_configuration(args: CliArguments) -> tuple[
         raise CliConfigurationError("database path is required")
     if args.risk_configuration_path is None:
         raise CliConfigurationError("risk configuration path is required")
-    if not args.webhook_url:
-        raise CliConfigurationError("webhook URL is required")
+    if args.notification_credential_file is None:
+        raise CliConfigurationError("notification credential file is required")
     try:
         risk_text = args.risk_configuration_path.read_text(encoding="utf-8")
     except OSError as exc:
         raise CliConfigurationError("risk configuration file is not readable") from exc
     risk_configuration = RiskConfiguration.from_json(risk_text)
-    notification_config = NotificationConfig(
-        webhook_url=args.webhook_url,
-        timeout_seconds=args.webhook_timeout_seconds,
-        authorization_header_name=args.authorization_header_name,
-        authorization_header_value=args.authorization_header_value,
+    notification_config = _load_credential_file(
+        args.notification_credential_file, args.webhook_timeout_seconds
     )
     runtime_config = RestrictedPublicRuntimeConfig(
         database_path=args.database_path,
@@ -490,6 +675,25 @@ def main(argv: tuple[str, ...] | None = None) -> int:
     if argv is None:
         argv = tuple(sys.argv[1:])
     args = parse_arguments(argv)
+
+    # Validation-only path: offline credential validation, no network, no store
+    if args.validate_only:
+        if args.notification_credential_file is None:
+            print("ERROR notification credential file is required for validation", file=sys.stderr)
+            return 3
+        try:
+            _load_credential_file(
+                args.notification_credential_file, args.webhook_timeout_seconds
+            )
+        except CredentialFileError:
+            print("ERROR credential validation failed", file=sys.stderr)
+            return 3
+        except NotificationConfigError:
+            print("ERROR credential validation failed", file=sys.stderr)
+            return 3
+        print("PASS")
+        return 0
+
     try:
         validate_activation(args)
     except CliArgumentError as exc:
@@ -511,6 +715,12 @@ def main(argv: tuple[str, ...] | None = None) -> int:
         return asyncio.run(_runner())
     except (CliConfigurationError, CliArgumentError) as exc:
         print(f"ERROR {exc}", file=sys.stderr)
+        return 3
+    except CredentialFileError:
+        print("ERROR credential validation failed", file=sys.stderr)
+        return 3
+    except NotificationConfigError:
+        print("ERROR credential validation failed", file=sys.stderr)
         return 3
     except KeyboardInterrupt:
         return 0

@@ -86,6 +86,128 @@ sudo chown root:root /etc/trader-assist-v0
 sudo chmod 755 /etc/trader-assist-v0
 ```
 
+## 5a. Credential Directory
+
+The notification credential is stored in a separate restricted directory with
+owner-only access. The directory mode is 0700 (root:root only).
+
+```bash
+sudo mkdir -p /etc/trader-assist-v0/credentials
+sudo chown root:root /etc/trader-assist-v0/credentials
+sudo chmod 700 /etc/trader-assist-v0/credentials
+```
+
+## 5b. Notification Credential Installation
+
+The notification credential content must first be created outside the terminal
+through an approved secret manager or approved secure editor/export mechanism.
+Never type or paste credential content into terminal commands.  The shell
+workflow receives only the path to the already-prepared secure source file.
+
+The operator must prepare a secure source file (e.g. at
+`/root/secure/notification.json`) that satisfies:
+
+- absolute path;
+- not a symlink;
+- regular file;
+- owner-only permissions (0600).
+
+Then install the credential into the production path:
+
+```bash
+# Verify the source file meets all preconditions
+SOURCE="/root/secure/notification.json"
+test -f "$SOURCE" || { echo "ERROR: source not found"; exit 1; }
+test "${SOURCE#/}" != "$SOURCE" || { echo "ERROR: source must be absolute"; exit 1; }
+test ! -L "$SOURCE" || { echo "ERROR: source must not be a symlink"; exit 1; }
+test "$(stat -c '%a' "$SOURCE")" = "600" || { echo "ERROR: source must be 0600"; exit 1; }
+
+# Create same-directory temporary destination
+sudo install -m 600 -o root -g root "$SOURCE" /etc/trader-assist-v0/credentials/notification.json.tmp
+
+# Run the production offline validation-only path
+sudo /opt/trader-assist-v0/venv/bin/python \
+  /opt/trader-assist-v0/scripts/run_first_launch_public_runtime.py \
+  --validate-only \
+  --notification-credential-file /etc/trader-assist-v0/credentials/notification.json.tmp \
+  --webhook-timeout-seconds 10 \
+  && echo "PASS: credential validation succeeded" \
+  || { echo "FAIL: credential validation failed"; \
+       sudo rm -f /etc/trader-assist-v0/credentials/notification.json.tmp; exit 1; }
+
+# Atomically rename only after successful validation
+sudo mv /etc/trader-assist-v0/credentials/notification.json.tmp \
+       /etc/trader-assist-v0/credentials/notification.json
+
+# Securely remove the external source according to operator policy
+# (operator is responsible for secure removal of the source file)
+```
+
+The credential file:
+- Path: `/etc/trader-assist-v0/credentials/notification.json`
+- Owner: `root:root`
+- Mode: `0600`
+- systemd supplies a private per-service runtime copy via `LoadCredential`.
+- The wrapper receives the credential at `$CREDENTIALS_DIRECTORY/notification.json`.
+- No webhook URL, authorization header name or value appear in process argv.
+
+## 5c. Credential Rotation
+
+To rotate the credential without disrupting active runtime sessions:
+
+1. Prepare a new secure source file outside the terminal (see Section 5b).
+2. Copy to a same-directory temporary destination (`notification.json.new`).
+3. Validate with the production offline validation-only path.
+4. Atomically rename only after successful validation.
+5. Clean up the temporary file on validation failure.
+6. Restart the service only under separate runtime authorization.
+
+```bash
+SOURCE="/root/secure/notification-rotated.json"
+test -f "$SOURCE" || { echo "ERROR: source not found"; exit 1; }
+test "${SOURCE#/}" != "$SOURCE" || { echo "ERROR: source must be absolute"; exit 1; }
+test ! -L "$SOURCE" || { echo "ERROR: source must not be a symlink"; exit 1; }
+test "$(stat -c '%a' "$SOURCE")" = "600" || { echo "ERROR: source must be 0600"; exit 1; }
+
+sudo install -m 600 -o root -g root "$SOURCE" /etc/trader-assist-v0/credentials/notification.json.new
+
+sudo /opt/trader-assist-v0/venv/bin/python \
+  /opt/trader-assist-v0/scripts/run_first_launch_public_runtime.py \
+  --validate-only \
+  --notification-credential-file /etc/trader-assist-v0/credentials/notification.json.new \
+  --webhook-timeout-seconds 10 \
+  && echo "PASS: rotated credential validation succeeded" \
+  || { echo "FAIL: rotated credential validation failed"; \
+       sudo rm -f /etc/trader-assist-v0/credentials/notification.json.new; exit 1; }
+
+# Atomically replace
+sudo mv /etc/trader-assist-v0/credentials/notification.json.new \
+       /etc/trader-assist-v0/credentials/notification.json
+```
+
+## 5d. Credential Rollback
+
+To roll back the credential:
+
+```bash
+# Stop the service
+sudo systemctl stop trader-assist-v0-public.service
+
+# Remove or invalidate the source credential
+sudo rm -f /etc/trader-assist-v0/credentials/notification.json
+
+# Remove the activation permit when appropriate
+sudo rm -f /etc/trader-assist-v0/activation-permit
+
+# Verify no service process remains
+sudo systemctl is-active trader-assist-v0-public.service || echo "inactive"
+pgrep -f run_restricted_public_runtime.sh || echo "no wrapper process"
+pgrep -f run_first_launch_public_runtime.py || echo "no Python process"
+
+# Verify the runtime credential directory is inactive
+# (systemd cleans up $CREDENTIALS_DIRECTORY when the service stops)
+```
+
 ## 6. SQLite State Directory
 
 ```bash
@@ -118,7 +240,6 @@ with operator-reviewed values. At minimum:
 
 - `TRADER_ASSIST_V0_ENABLE` must be set to `1` for activation.
 - `TRADER_ASSIST_V0_MODE` must be exactly `RESTRICTED_PUBLIC_LIVE_SHADOW`.
-- `TRADER_ASSIST_V0_WEBHOOK_URL` must contain a valid HTTPS webhook URL.
 - `TRADER_ASSIST_V0_DATABASE_PATH` must point to a path under `/var/lib/trader-assist-v0`.
 - `TRADER_ASSIST_V0_RISK_CONFIGURATION_PATH` must point to a path under `/etc/trader-assist-v0`.
 
@@ -126,14 +247,14 @@ with operator-reviewed values. At minimum:
 wrapper forces `PYTHONPATH=/opt/trader-assist-v0/src` so `trader_assist_v0`
 imports exclusively from the approved source tree.
 
-AUTHENTICATED_WEBHOOK_HEADER_SUPPORT:
-DEFERRED_PENDING_SEPARATELY_AUTHORIZED_SECURE_SECRET_INGRESS
+SECURE NOTIFICATION CREDENTIAL INGRESS:
 
-Authenticated webhook header support is intentionally absent from this
-package.  No authorization-header name/value environment variables, pair
-validation, or argv construction are present.  A separately authorized secure
-secret ingress workstream is required before any authenticated webhook
-header mechanism is introduced.
+The webhook URL and optional authorization header are supplied via a versioned
+JSON credential file at `/etc/trader-assist-v0/credentials/notification.json`
+(see Sections 5a-5d).  systemd provides a private per-service runtime copy via
+`LoadCredential`.  The wrapper passes only the credential file path to Python.
+No webhook URL, token, authorization header name or authorization header value
+may appear in this environment file or in process argv.
 
 ## 9. Risk Configuration
 
