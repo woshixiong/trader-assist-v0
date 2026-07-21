@@ -3003,21 +3003,47 @@ def test_fr03_multiple_short_reads_then_eof_succeed(
 
 
 def test_fr04_read_error_after_partial_accumulation_fails_closed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """FR-01: Read error after partial accumulation fails closed.
 
-    Patch os.read to return partial credential bytes, then raise OSError.
-    Prove partial data was returned, the OSError path was exercised,
-    loading fails, and the exception text contains only generic
-    bounded descriptor-read failure language.
+    Create a synthetic, non-production credential file with distinctive
+    fragments.  Patch os.read to return partial bytes on the first call
+    and raise an injected OSError on the second.  Prove the loader is
+    invoked exactly once, the complete sequence ["partial", "error"] is
+    observed, and no synthetic fragment appears in exception text, repr,
+    stdout or stderr.
     """
-    credential_file = _credential_json(tmp_path)
-    sentinel_fd = 9999
-    credential_bytes = _valid_credential_bytes()
+    # ── synthetic, non-production credential with distinctive fragments ──
+    synthetic_url = "https://synth-partial-read.example.com/webhook/notify?token=distinctive-fragment-abc123"
+    synthetic_hostname = "synth-partial-read.example.com"
+    synthetic_path = "/webhook/notify"
+    synthetic_token = "distinctive-fragment-abc123"
+    synthetic_auth_name = "X-Synthetic-Auth-Header"
+    synthetic_auth_value = "Bearer synth-auth-value-distinctive-xyz789"
+    synthetic_auth_fragment = "synth-auth-value-distinctive-xyz789"
 
+    credential_file = tmp_path / "credential.json"
+    credential_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "webhook_url": synthetic_url,
+                "authorization_header": {
+                    "name": synthetic_auth_name,
+                    "value": synthetic_auth_value,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    credential_file.chmod(0o600)
+
+    credential_bytes = credential_file.read_bytes()
     real_stat = credential_file.stat()
+    sentinel_fd = 9999
 
+    # ── acceptable descriptor metadata (regular file, 0600, allowed owner) ──
     class _InjectedStat:
         st_mode = stat.S_IFREG | 0o600
         st_uid = real_stat.st_uid
@@ -3025,17 +3051,26 @@ def test_fr04_read_error_after_partial_accumulation_fails_closed(
         st_dev = real_stat.st_dev
         st_ino = real_stat.st_ino
 
-    read_calls: list[int] = []
-    partial = credential_bytes[:5]
+    # ── deterministic os.read: ["partial", "error"] ──
+    read_events: list[str] = []
+    read_call_count = 0
+    partial_bytes: bytes = b""
 
-    class _ReadError(OSError):
+    class _InjectedOSError(OSError):
         pass
 
     def _fake_read(fd: int, size: int) -> bytes:
-        read_calls.append(size)
-        if len(read_calls) == 1:
-            return partial  # return partial data
-        raise _ReadError("simulated read error")
+        nonlocal read_call_count, partial_bytes
+        read_call_count += 1
+        if read_call_count == 1:
+            read_events.append("partial")
+            partial_bytes = credential_bytes[:20]
+            return partial_bytes
+        elif read_call_count == 2:
+            read_events.append("error")
+            raise _InjectedOSError("simulated read error")
+        else:
+            pytest.fail(f"unexpected os.read call #{read_call_count}")
 
     def _fake_open(path: str, flags: int, *args: object, **kwargs: object) -> int:
         return sentinel_fd
@@ -3051,18 +3086,51 @@ def test_fr04_read_error_after_partial_accumulation_fails_closed(
     monkeypatch.setattr(os, "read", _fake_read)
     monkeypatch.setattr(os, "close", _fake_close)
 
-    with pytest.raises(_SCRIPT_MODULE.CredentialFileError, match="cannot be read"):
+    # ── invoke the loader exactly once ──
+    with pytest.raises(
+        _SCRIPT_MODULE.CredentialFileError,
+        match="credential file cannot be read",
+    ) as exc_info:
         _load_credential_file(credential_file)
 
-    # Prove partial data was returned before the error
-    assert len(read_calls) >= 2
-    # The error message must not contain credential content
-    try:
-        _load_credential_file(credential_file)
-    except _SCRIPT_MODULE.CredentialFileError as exc:
-        msg = str(exc)
-        assert "https://" not in msg
-        assert "hooks.example.com" not in msg
+    # ── post-invocation assertions (same invocation) ──
+    assert read_events == ["partial", "error"]
+    assert read_call_count == 2
+    assert len(partial_bytes) > 0, "partial bytes must be non-empty"
+    assert "error" in read_events, "OSError branch must be exercised"
+    assert str(exc_info.value) == "credential file cannot be read"
+
+    # ── inspect exception text and repr ──
+    exception_text = str(exc_info.value)
+    exception_repr = repr(exc_info.value)
+
+    # ── inspect stdout / stderr ──
+    captured = capsys.readouterr()
+
+    # ── no synthetic fragment may appear in any output surface ──
+    synthetic_fragments = [
+        synthetic_url,
+        synthetic_hostname,
+        synthetic_path,
+        synthetic_token,
+        synthetic_auth_name,
+        synthetic_auth_value,
+        synthetic_auth_fragment,
+        "simulated read error",  # injected internal OSError message
+    ]
+    for fragment in synthetic_fragments:
+        assert fragment not in exception_text, (
+            f"synthetic fragment leaked in exception_text: {fragment!r}"
+        )
+        assert fragment not in exception_repr, (
+            f"synthetic fragment leaked in exception_repr: {fragment!r}"
+        )
+        assert fragment not in captured.out, (
+            f"synthetic fragment leaked in stdout: {fragment!r}"
+        )
+        assert fragment not in captured.err, (
+            f"synthetic fragment leaked in stderr: {fragment!r}"
+        )
 
 
 # --- TEST 5: DESCRIPTOR_SIZE_ACCEPTABLE_BUT_STREAM_EXCEEDS_LIMIT ---
