@@ -64,6 +64,7 @@
         "next_gate_status",
         "last_completed_implementation",
         "last_completed_implementation_pr",
+        "accepted_evidence",
         "last_policy_state_pr",
         "rate_limit_status",
         "live_transport_authorized",
@@ -91,19 +92,65 @@
         },
         "next_gate": {
           "type": "string",
-          "const": "V0-FL-R3-P4-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE"
+          "const": "V0-FL-R3-P4B-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE-ACTIVATION"
         },
         "next_gate_status": {
           "type": "string",
-          "const": "ENGINEERING_ELIGIBLE_PENDING_PROJECT_CONTROL_ACTIVATION"
+          "const": "USER_RUNTIME_AND_SMOKE_AUTHORIZATION_REQUIRED_BEFORE_PROJECT_CONTROL_ACTIVATION"
         },
         "last_completed_implementation": {
           "type": "string",
-          "const": "V0-FL-R3-P3B-RESTRICTED-PUBLIC-RUNTIME-COMPOSITION"
+          "const": "V0-FL-R3-SECURE-SECRET-INGRESS"
         },
         "last_completed_implementation_pr": {
           "type": "integer",
-          "const": 37
+          "const": 40
+        },
+        "accepted_evidence": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "prefixItems": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "task_id",
+                "pull_request",
+                "reviewed_head",
+                "merge_sha",
+                "post_merge_ci_run_id"
+              ],
+              "properties": {
+                "task_id": {"type": "string", "const": "V0-FL-R3-P4A-LOCAL-DEPLOYMENT-PACKAGE-AND-NON_AWS-SUPERVISED-SMOKE"},
+                "pull_request": {"type": "integer", "const": 39},
+                "reviewed_head": {"type": "string", "const": "cd17ecdaebd80d8315638927a658dd56772440ca"},
+                "merge_sha": {"type": "string", "const": "b85ea870676ef2fa398ca3707832dda42509b93b"},
+                "post_merge_ci_run_id": {"type": "integer", "const": 29807839442}
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "task_id",
+                "pull_request",
+                "reviewed_head",
+                "merge_sha",
+                "post_merge_ci",
+                "post_merge_ci_run_id"
+              ],
+              "properties": {
+                "task_id": {"type": "string", "const": "V0-FL-R3-SECURE-SECRET-INGRESS"},
+                "pull_request": {"type": "integer", "const": 40},
+                "reviewed_head": {"type": "string", "const": "9a9c674f1447c9f864c270a5130f353b4a07a2de"},
+                "merge_sha": {"type": "string", "const": "f18338c2630feafd49e377397183a93f2e7f48a4"},
+                "post_merge_ci": {"type": "string", "const": "V0 contracts CI / Run 252 / SUCCESS"},
+                "post_merge_ci_run_id": {"type": "integer", "const": 29851016977}
+              }
+            }
+          ],
+          "items": false
         },
         "last_policy_state_pr": {
           "type": "integer",
@@ -252,7 +299,7 @@
         },
         "next_runtime_gate": {
           "type": "string",
-          "const": "V0-FL-R3-P4-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE"
+          "const": "V0-FL-R3-P4B-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE-ACTIVATION"
         },
         "forbidden_capabilities": {
           "type": "array",
@@ -2035,7 +2082,7 @@
         },
         "next_gate": {
           "type": "string",
-          "const": "V0-FL-R3-P4-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE"
+          "const": "V0-FL-R3-P4B-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE-ACTIVATION"
         }
       }
     },
@@ -2070,7 +2117,7 @@
         },
         "post_merge_next_gate": {
           "type": "string",
-          "const": "V0-FL-R3-P4-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE"
+          "const": "V0-FL-R3-P4B-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE-ACTIVATION"
         },
         "handoff_required_fields": {
           "type": "array",
@@ -2553,6 +2600,7 @@
         "state_base_sha",
         "last_completed_implementation",
         "last_completed_implementation_pr",
+        "accepted_evidence",
         "last_policy_state_pr",
         "active_milestone",
         "active_task_id",
@@ -2618,11 +2666,44 @@
         },
         "last_completed_implementation": {
           "type": "string",
-          "const": "V0-FL-R3-P3B-RESTRICTED-PUBLIC-RUNTIME-COMPOSITION"
+          "const": "V0-FL-R3-SECURE-SECRET-INGRESS"
         },
         "last_completed_implementation_pr": {
           "type": "integer",
-          "const": 37
+          "const": 40
+        },
+        "accepted_evidence": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "prefixItems": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["task_id", "pull_request", "reviewed_head", "merge_sha", "post_merge_ci_run_id"],
+              "properties": {
+                "task_id": {"type": "string", "const": "V0-FL-R3-P4A-LOCAL-DEPLOYMENT-PACKAGE-AND-NON_AWS-SUPERVISED-SMOKE"},
+                "pull_request": {"type": "integer", "const": 39},
+                "reviewed_head": {"type": "string", "const": "cd17ecdaebd80d8315638927a658dd56772440ca"},
+                "merge_sha": {"type": "string", "const": "b85ea870676ef2fa398ca3707832dda42509b93b"},
+                "post_merge_ci_run_id": {"type": "integer", "const": 29807839442}
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["task_id", "pull_request", "reviewed_head", "merge_sha", "post_merge_ci", "post_merge_ci_run_id"],
+              "properties": {
+                "task_id": {"type": "string", "const": "V0-FL-R3-SECURE-SECRET-INGRESS"},
+                "pull_request": {"type": "integer", "const": 40},
+                "reviewed_head": {"type": "string", "const": "9a9c674f1447c9f864c270a5130f353b4a07a2de"},
+                "merge_sha": {"type": "string", "const": "f18338c2630feafd49e377397183a93f2e7f48a4"},
+                "post_merge_ci": {"type": "string", "const": "V0 contracts CI / Run 252 / SUCCESS"},
+                "post_merge_ci_run_id": {"type": "integer", "const": 29851016977}
+              }
+            }
+          ],
+          "items": false
         },
         "last_policy_state_pr": {
           "type": "integer",
@@ -2715,11 +2796,11 @@
         },
         "next_gate": {
           "type": "string",
-          "const": "V0-FL-R3-P4-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE"
+          "const": "V0-FL-R3-P4B-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE-ACTIVATION"
         },
         "next_gate_status": {
           "type": "string",
-          "const": "ENGINEERING_ELIGIBLE_PENDING_PROJECT_CONTROL_ACTIVATION"
+          "const": "USER_RUNTIME_AND_SMOKE_AUTHORIZATION_REQUIRED_BEFORE_PROJECT_CONTROL_ACTIVATION"
         },
         "conflict_state": {
           "type": "string",
