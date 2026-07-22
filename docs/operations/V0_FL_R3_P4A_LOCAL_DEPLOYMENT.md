@@ -303,6 +303,9 @@ sudo systemctl daemon-reload
 
 ## 13. Start Procedure
 
+First complete the fail-closed pre-start verification in Section 15 and proceed
+only when it prints `PASS`.
+
 ```bash
 sudo systemctl start trader-assist-v0-public.service
 ```
@@ -313,22 +316,157 @@ sudo systemctl start trader-assist-v0-public.service
 sudo systemctl stop trader-assist-v0-public.service
 ```
 
-## 15. Controlled Restart Procedure
+## 15. P4B Single-Instance Authority
 
-Exactly one controlled restart is permitted:
+P4B has one live operational authority: systemd. The only supported P4B live activation path is:
 
 ```bash
-sudo systemctl stop trader-assist-v0-public.service
 sudo systemctl start trader-assist-v0-public.service
 ```
 
-## 16. Status Procedure
+Direct live execution of either
+`scripts/p4a/run_restricted_public_runtime.sh` or
+`scripts/run_first_launch_public_runtime.py` is unsupported and prohibited.
+Do not create or use a second service unit, copied service unit, templated
+service instance, or alternate unit that launches the same runtime. Do not use
+a second SQLite database path to operate a parallel live runtime; separate
+databases do not make parallel P4B runtime operation supported.
+
+The sole direct-Python exception is offline validation with `--validate-only`,
+such as the credential-validation commands in Sections 5b and 5c. Validation
+only neither authorizes nor starts the live runtime.
+
+Before every authorized start, run the following pre-start verification on the
+systemd Linux host. It performs no start operation. Every expected result is
+shown in the commands; any other result is a `SAFE_STOP`. Do not remove or kill
+any process as part of this procedure.
+
+```bash
+set -eu
+
+SERVICE="trader-assist-v0-public.service"
+EXPECTED_UNIT="/etc/systemd/system/trader-assist-v0-public.service"
+
+safe_stop() {
+  printf 'SAFE_STOP: %s\n' "$1" >&2
+  exit 1
+}
+
+# The service must be inactive. A command error is not accepted as inactive.
+service_state="$(sudo systemctl is-active "$SERVICE" 2>&1 || true)"
+test "$service_state" = "inactive" || safe_stop "service state is not inactive: $service_state"
+
+# systemd must report no service main process.
+main_pid="$(sudo systemctl show --property=MainPID --value "$SERVICE" 2>&1)" \
+  || safe_stop "cannot read MainPID"
+test "$main_pid" = "0" || safe_stop "systemd reports MainPID=$main_pid"
+
+# No out-of-band wrapper or Python runtime process may exist. The bracketed
+# patterns avoid matching these pgrep inspection commands themselves.
+wrapper_processes="$(sudo pgrep -af '[r]un_restricted_public_runtime.sh' || true)"
+test -z "$wrapper_processes" || safe_stop "wrapper process exists: $wrapper_processes"
+python_processes="$(sudo pgrep -af '[r]un_first_launch_public_runtime.py' || true)"
+test -z "$python_processes" || safe_stop "runtime Python process exists: $python_processes"
+
+# The installed unit must be the only service definition that launches either
+# runtime entrypoint. This detects copied, templated, and alternate units.
+runtime_unit_files="$(
+  sudo grep -RIl --include='*.service' \
+    -e 'run_restricted_public_runtime\.sh' \
+    -e 'run_first_launch_public_runtime\.py' \
+    /etc/systemd/system /run/systemd/system /usr/lib/systemd/system /lib/systemd/system \
+    2>/dev/null | LC_ALL=C sort -u || true
+)"
+test "$runtime_unit_files" = "$EXPECTED_UNIT" \
+  || safe_stop "unexpected runtime service definition(s): $runtime_unit_files"
+
+# No P4B lifecycle job may already be running.
+lifecycle_jobs="$(sudo systemctl list-jobs --no-legend --no-pager 2>&1)" \
+  || safe_stop "cannot inspect systemd jobs"
+matching_jobs="$(printf '%s\n' "$lifecycle_jobs" | \
+  awk '$2 == "trader-assist-v0-public.service" { print }')"
+test -z "$matching_jobs" \
+  || safe_stop "P4B start, stop, or restart job already in progress: $matching_jobs"
+
+printf 'PASS: inactive, MainPID=0, no runtime process, one runtime unit, and no lifecycle job\n'
+```
+
+This procedure is a fail-closed operational check, not a mathematical proof
+that no race can ever occur. Detection of an out-of-band live wrapper or
+Python process, duplicate/copied/templated/alternate runtime unit, multiple
+matching runtime processes, a matching process outside the authorized service
+cgroup, an alternate live database-backed runtime, or an unresolved lifecycle
+command requires `SAFE_STOP` before deployment, runtime activation, or
+continued smoke. Do not automatically kill a detected process. Stop the
+workflow and obtain Project Control and Engineering Optimization review.
+
+Concurrent execution can cause SQLite write contention, delayed writes,
+database-locked operational failures, competing runtime-session records,
+duplicate processing, unique-constraint conflicts, notification-delivery
+races, and duplicate semantic output. Do not claim SQLite corruption unless
+independent evidence demonstrates it.
+
+## 16. Controlled Restart Procedure
+
+Exactly one controlled restart is permitted during the separately authorized
+supervised smoke. `systemctl stop` waits for the stop job to complete. Do not
+continue if any verification below fails; follow the `SAFE_STOP` policy in
+Section 15. After Step 2, run the complete Section 15 pre-start verification
+and proceed only when it prints `PASS`.
+
+```bash
+# 1. Stop and wait for completion.
+sudo systemctl stop trader-assist-v0-public.service
+
+# 2. Verify inactive, MainPID=0, and no wrapper or runtime Python remains.
+SERVICE="trader-assist-v0-public.service"
+service_state="$(sudo systemctl is-active "$SERVICE" 2>&1 || true)"
+test "$service_state" = "inactive" || { echo "SAFE_STOP: service is not inactive" >&2; exit 1; }
+main_pid="$(sudo systemctl show --property=MainPID --value "$SERVICE" 2>&1)" \
+  || { echo "SAFE_STOP: cannot read MainPID" >&2; exit 1; }
+test "$main_pid" = "0" || { echo "SAFE_STOP: MainPID=$main_pid" >&2; exit 1; }
+test -z "$(sudo pgrep -af '[r]un_restricted_public_runtime.sh' || true)" \
+  || { echo "SAFE_STOP: wrapper process remains" >&2; exit 1; }
+test -z "$(sudo pgrep -af '[r]un_first_launch_public_runtime.py' || true)" \
+  || { echo "SAFE_STOP: runtime Python process remains" >&2; exit 1; }
+
+# 3. After the complete Section 15 pre-start verification reports PASS, start
+# only through systemd.
+sudo systemctl start "$SERVICE"
+
+# 4. systemd must report exactly one, nonzero MainPID, and it must exist.
+main_pid="$(sudo systemctl show --property=MainPID --value "$SERVICE" 2>&1)" \
+  || { echo "SAFE_STOP: cannot read post-start MainPID" >&2; exit 1; }
+case "$main_pid" in
+  ''|0|*[!0-9]*) echo "SAFE_STOP: expected one nonzero MainPID, got $main_pid" >&2; exit 1 ;;
+esac
+sudo test -d "/proc/$main_pid" \
+  || { echo "SAFE_STOP: MainPID does not exist: $main_pid" >&2; exit 1; }
+
+# 5. Exactly one runtime Python process must be in the service cgroup, and no
+# matching runtime Python process may be outside that cgroup.
+service_cgroup="$(sudo systemctl show --property=ControlGroup --value "$SERVICE" 2>&1)" \
+  || { echo "SAFE_STOP: cannot read service cgroup" >&2; exit 1; }
+test -n "$service_cgroup" \
+  || { echo "SAFE_STOP: empty service cgroup" >&2; exit 1; }
+runtime_in_cgroup="$(sudo ps -eo pid=,args=,cgroup= | \
+  awk -v cgroup="$service_cgroup" \
+    '$0 ~ /[r]un_first_launch_public_runtime\.py/ && $0 ~ (cgroup "$") { print }')"
+runtime_count="$(printf '%s\n' "$runtime_in_cgroup" | sed '/^$/d' | wc -l | tr -d ' ')"
+test "$runtime_count" = "1" \
+  || { echo "SAFE_STOP: expected one runtime Python process in service cgroup" >&2; exit 1; }
+all_runtime="$(sudo pgrep -af '[r]un_first_launch_public_runtime.py' || true)"
+test "$(printf '%s\n' "$all_runtime" | sed '/^$/d' | wc -l | tr -d ' ')" = "1" \
+  || { echo "SAFE_STOP: matching runtime process exists outside the service cgroup" >&2; exit 1; }
+```
+
+## 17. Status Procedure
 
 ```bash
 sudo systemctl status trader-assist-v0-public.service
 ```
 
-## 17. Journald Observation
+## 18. Journald Observation
 
 View runtime logs:
 
@@ -345,7 +483,7 @@ sudo journalctl -u trader-assist-v0-public.service --since "30 minutes ago" --no
 Journald rotation is managed by the system journal configuration. The service
 does not configure its own rotation.
 
-## 18. Bounded Journal Extraction
+## 19. Bounded Journal Extraction
 
 Extract a time-bounded journal segment for evidence:
 
@@ -355,7 +493,7 @@ sudo journalctl -u trader-assist-v0-public.service \
   --no-pager > /tmp/trader-assist-v0-journal-evidence.txt
 ```
 
-## 19. Read-Only SQLite Health Queries
+## 20. Read-Only SQLite Health Queries
 
 Using Python stdlib only (no external tools required):
 
@@ -369,7 +507,7 @@ conn.close()
 "
 ```
 
-## 20. READY Verification
+## 21. READY Verification
 
 The runtime is READY when the journal shows the session activation message:
 
@@ -377,12 +515,12 @@ The runtime is READY when the journal shows the session activation message:
 session=<uuid> mode=RESTRICTED_PUBLIC_LIVE_SHADOW scope=ETH_ONLY
 ```
 
-## 21. STOPPING Verification
+## 22. STOPPING Verification
 
 The runtime is STOPPING when a SIGTERM is delivered and the journal shows the
 shutdown sequence.
 
-## 22. STOPPED Verification
+## 23. STOPPED Verification
 
 The runtime is STOPPED when:
 
@@ -392,12 +530,12 @@ sudo systemctl is-active trader-assist-v0-public.service
 
 returns `inactive`.
 
-## 23. Runtime Session Verification
+## 24. Runtime Session Verification
 
 - **Open session**: Journal contains `session=<uuid> mode=RESTRICTED_PUBLIC_LIVE_SHADOW scope=ETH_ONLY` without a subsequent shutdown message.
 - **Closed session**: Journal contains the shutdown message after the session activation.
 
-## 24. Rollback
+## 25. Rollback
 
 To roll back the deployment:
 
@@ -409,7 +547,7 @@ sudo systemctl daemon-reload
 sudo rm -f /etc/trader-assist-v0/activation-permit
 ```
 
-## 25. Uninstall
+## 26. Uninstall
 
 ```bash
 sudo systemctl stop trader-assist-v0-public.service || true
@@ -423,7 +561,7 @@ sudo userdel traderassist || true
 sudo groupdel traderassist || true
 ```
 
-## 26. Proof That No Runtime Remains
+## 27. Proof That No Runtime Remains
 
 ```bash
 sudo systemctl is-active trader-assist-v0-public.service || echo "inactive"
@@ -431,19 +569,19 @@ pgrep -f run_restricted_public_runtime.sh || echo "no wrapper process"
 pgrep -f run_first_launch_public_runtime.py || echo "no Python process"
 ```
 
-## 27. P4-A / P4-B Separation
+## 28. P4-A / P4-B Separation
 
 P4-A (this package) is the local deployment package for a single supervised Linux
 instance. P4-B is a separate, later-bounded workstream for continuous LIVE_SHADOW
 deployment. P4-A does not authorize or configure P4-B.
 
-## 28. P4-B / Continuous LIVE_SHADOW Separation
+## 29. P4-B / Continuous LIVE_SHADOW Separation
 
 The continuous LIVE_SHADOW deployment (P4-B) is a separately authorized workstream.
 P4-A prepares only the P4-A local deployment package. No P4-B configuration,
 deployment, or runtime is included.
 
-## 29. Future Smoke Plan
+## 30. Future Smoke Plan
 
 LOCAL/NON_AWS SMOKE IS NOT AUTHORIZED BY THIS WRITE LEASE.
 
@@ -461,13 +599,22 @@ The future smoke plan must specify:
 - at least 30 minutes after post-restart READY;
 - target total of 60 minutes;
 - maximum extension to 90 minutes;
+- record the original `MainPID` before the controlled stop;
+- stop and wait for completion, then prove the original PID no longer exists;
+- prove no runtime process remains before the systemd-only start;
+- record exactly one new `MainPID` after the start and prove no process overlap
+  was observed;
+- prove exactly one runtime Python process is in the authorized service cgroup
+  and none is outside it;
+- run the read-only `PRAGMA integrity_check` in Section 20 before and after
+  smoke;
 - final service stopped;
 - final service disabled;
 - no runtime remaining.
 
 LOCAL/NON_AWS SMOKE IS NOT AUTHORIZED BY THIS WRITE LEASE.
 
-## 30. Service Validation
+## 31. Service Validation
 
 Validate the systemd unit syntax:
 
