@@ -315,9 +315,7 @@ sudo systemctl stop trader-assist-v0-public.service
 
 P4B has one live operational authority: systemd. The only supported P4B live activation path is:
 
-```bash
-sudo systemctl start trader-assist-v0-public.service
-```
+`sudo systemctl start trader-assist-v0-public.service`
 
 Direct live execution of either
 `scripts/p4a/run_restricted_public_runtime.sh` or
@@ -349,373 +347,394 @@ and does not grant P4B, AWS, runtime, or smoke authority.
 set -eu
 set -o pipefail
 
+# This outer timeout deliberately does not use --foreground: GNU timeout then
+# owns the proof command's process group.  Its 28-second TERM deadline plus
+# its two-second forced-KILL grace is the complete, hard 30-second cap.
 OPERATION="pre-start"
+TIMEOUT_BIN="$(command -v timeout || true)"
+safe_stop() { printf 'SAFE_STOP: %s\n' "$1" >&2; exit 1; }
+test -n "$TIMEOUT_BIN" || safe_stop "supported host lacks timeout"
+if ! "$TIMEOUT_BIN" --help 2>&1 | grep -F -- '--kill-after' >/dev/null; then
+  safe_stop "timeout lacks required kill-after facility"
+fi
+sudo -v || safe_stop "cannot refresh sudo credentials before proof"
+
+set +e
+"$TIMEOUT_BIN" --signal=TERM --kill-after=2s 28s bash -s -- "$OPERATION" "$TIMEOUT_BIN" <<'P4B_PROOF'
+set -euo pipefail
+
+OPERATION="$1"
+TIMEOUT_BIN="$2"
 SERVICE="trader-assist-v0-public.service"
 AUTHORIZED_FRAGMENT="/etc/systemd/system/trader-assist-v0-public.service"
 APPROVED_WRAPPER="/opt/trader-assist-v0/scripts/p4a/run_restricted_public_runtime.sh"
 APPROVED_PYTHON="/opt/trader-assist-v0/venv/bin/python"
 APPROVED_ENTRYPOINT="/opt/trader-assist-v0/scripts/run_first_launch_public_runtime.py"
+SYSTEM_PYTHON="/usr/bin/python3"
+EXEC_PROPERTIES=(ExecCondition ExecStartPre ExecStart ExecStartPost ExecReload ExecStop ExecStopPost)
+proof_started=$SECONDS
+proof_deadline=$((proof_started + 28))
+test -x "$SYSTEM_PYTHON" || safe_stop "supported host lacks the reviewed executable-property parser"
 
-safe_stop() {
-  printf 'SAFE_STOP: %s\n' "$1" >&2
-  exit 1
+safe_stop() { printf 'SAFE_STOP: %s\n' "$1" >&2; exit 1; }
+
+# Every command that can wait is given the absolute remaining budget.  The
+# nested timeout is foreground-only so it cannot escape the outer process
+# group; it reserves one second for its own KILL and never extends the cap.
+remaining_seconds() {
+  remaining=$((proof_deadline - SECONDS))
+  test "$remaining" -gt 1 || safe_stop "hard 30-second transition-proof deadline exhausted"
+  printf '%s' "$remaining"
 }
 
-read_unit_property() {
-  property="$1"
-  unit="$2"
-  if ! value="$(sudo systemctl show --property="$property" --value "$unit" 2>&1)"; then
-    safe_stop "cannot inspect $property for $unit"
-  fi
+bounded_capture() {
+  destination="$1"; shift
+  remaining="$(remaining_seconds)"
+  command_seconds=$((remaining - 1))
+  set +e
+  output="$("$TIMEOUT_BIN" --foreground --signal=TERM --kill-after=1s "${command_seconds}s" "$@" 2>&1)"
+  command_status=$?
+  set -e
+  case "$command_status" in
+    0) ;;
+    124|137) safe_stop "hard 30-second transition-proof timeout or forced kill" ;;
+    *) safe_stop "bounded command failed or returned partial output" ;;
+  esac
+  printf -v "$destination" '%s' "$output"
+}
+
+bounded_run() {
+  ignored=""
+  bounded_capture ignored "$@"
+  test -z "$ignored" || safe_stop "bounded command produced unexpected output"
+}
+
+bounded_best_effort() {
+  remaining="$(remaining_seconds)"
+  command_seconds=$((remaining - 1))
+  set +e
+  output="$("$TIMEOUT_BIN" --foreground --signal=TERM --kill-after=1s "${command_seconds}s" "$@" 2>&1)"
+  command_status=$?
+  set -e
+  case "$command_status" in
+    0) test -z "$output" || safe_stop "best-effort cleanup produced unexpected output"; return 0 ;;
+    124|137) safe_stop "hard 30-second transition-proof timeout or forced kill" ;;
+    *) return 1 ;;
+  esac
+}
+
+bounded_capture_status() {
+  destination="$1"; allowed_statuses="$2"; shift 2
+  remaining="$(remaining_seconds)"
+  command_seconds=$((remaining - 1))
+  set +e
+  output="$("$TIMEOUT_BIN" --foreground --signal=TERM --kill-after=1s "${command_seconds}s" "$@" 2>&1)"
+  command_status=$?
+  set -e
+  case "$command_status" in 124|137) safe_stop "hard 30-second transition-proof timeout or forced kill" ;; esac
+  case " $allowed_statuses " in *" $command_status "*) ;; *) safe_stop "bounded command returned an unexpected status" ;; esac
+  printf -v "$destination" '%s' "$output"
+  BOUNDED_STATUS="$command_status"
+}
+
+read_property() {
+  property="$1"; unit="$2"
+  bounded_capture value sudo -n systemctl show --property="$property" --value "$unit"
+  case "$value" in *$'\n'*) safe_stop "manager returned multiline or partial $property" ;; esac
   printf '%s' "$value"
 }
 
-assert_active_state() {
-  expected_state="$1"
-  active_state="$(read_unit_property ActiveState "$SERVICE")"
-  test "$active_state" = "$expected_state" || safe_stop "ActiveState is not $expected_state"
-  set +e
-  is_active_output="$(sudo systemctl is-active "$SERVICE" 2>&1)"
-  is_active_status=$?
-  set -e
-  case "$expected_state:$is_active_status" in
-    active:0|inactive:3) ;;
-    *) safe_stop "is-active returned an unexpected status" ;;
-  esac
-  test "$is_active_output" = "$expected_state" || safe_stop "is-active is not exactly $expected_state"
+require_service_name() { case "$1" in *.service) ;; *) safe_stop "manager returned a non-service identity" ;; esac; }
+require_scalar() { case "$1" in *$'\n'*|*$'\r'*) safe_stop "manager returned an ambiguous scalar" ;; esac; }
+assert_nonzero_pid() { case "$1" in ''|0|*[!0-9]*) safe_stop "MainPID is not one nonzero numeric PID" ;; esac; }
+assert_unified_cgroup_v2() { test -r /sys/fs/cgroup/cgroup.controllers || safe_stop "P4B verification requires unified cgroup v2"; }
+
+# This is the explicitly supported, reviewed systemd serialization only:
+# zero or more complete `{ path=... ; argv[]=... ; ignore_errors=... ;
+# start_time=[...] ; stop_time=[...] ; pid=... ; code=... ; status=... }`
+# records, separated solely by whitespace.  The parser rejects every other
+# manager format, parses every record and every shlex argv field structurally,
+# and emits no command arguments.
+EXEC_PARSER='import os,re,shlex,sys
+s=os.environ["EXEC_SERIALIZED"]
+mode=os.environ["EXEC_MODE"]
+prop=os.environ["EXEC_PROPERTY"]
+wrapper=os.environ["APPROVED_WRAPPER"]
+entry=os.environ["APPROVED_ENTRYPOINT"]
+p=re.compile(r"\\{ path=([^ ;{}\\n]+) ; argv\\[\\]=([^{}\\n]*?) ; ignore_errors=(yes|no) ; start_time=\\[([^]\\n]*)\\] ; stop_time=\\[([^]\\n]*)\\] ; pid=([0-9]+) ; code=([^ ;{}\\n]+) ; status=([^ ;{}\\n]+) \\}")
+records=[]; pos=0
+while pos < len(s):
+    while pos < len(s) and s[pos] in " \\t": pos += 1
+    if pos == len(s): break
+    m=p.match(s,pos)
+    if not m: raise SystemExit(1)
+    try: argv=shlex.split(m.group(2), posix=True, comments=False)
+    except ValueError: raise SystemExit(1)
+    if not argv: raise SystemExit(1)
+    records.append((m.group(1),argv)); pos=m.end()
+def trader_path(v): return v == wrapper or v == entry or v.startswith("/opt/trader-assist-v0/")
+if mode == "authorized":
+    if prop == "ExecStart":
+        if len(records) != 1 or records[0][0] != wrapper or records[0][1] != [wrapper]: raise SystemExit(1)
+    elif records: raise SystemExit(1)
+else:
+    for path,argv in records:
+        if trader_path(path) or any(trader_path(arg) for arg in argv): raise SystemExit(1)
+'
+
+parse_exec_property() {
+  serialized="$1"; mode="$2"; property="$3"
+  bounded_capture parser_output env \
+    EXEC_SERIALIZED="$serialized" EXEC_MODE="$mode" EXEC_PROPERTY="$property" \
+    APPROVED_WRAPPER="$APPROVED_WRAPPER" APPROVED_ENTRYPOINT="$APPROVED_ENTRYPOINT" \
+    "$SYSTEM_PYTHON" -c "$EXEC_PARSER"
+  test -z "$parser_output" || safe_stop "executable-property parser emitted unexpected output"
 }
 
-assert_numeric_nonzero_pid() {
-  candidate_pid="$1"
-  case "$candidate_pid" in
-    ''|0|*[!0-9]*) safe_stop "MainPID is not one nonzero numeric PID" ;;
-  esac
+inspect_exec_properties() {
+  unit="$1"; mode="$2"
+  for property in "${EXEC_PROPERTIES[@]}"; do
+    serialized="$(read_property "$property" "$unit")"
+    parse_exec_property "$serialized" "$mode" "$property"
+  done
+}
+
+compare_alias_exec_properties() {
+  alias_unit="$1"; canonical_unit="$2"; canonical_mode="$3"
+  for property in "${EXEC_PROPERTIES[@]}"; do
+    alias_value="$(read_property "$property" "$alias_unit")"
+    canonical_value="$(read_property "$property" "$canonical_unit")"
+    test -z "$alias_value" || test "$alias_value" = "$canonical_value" || safe_stop "alias executable property conflicts with canonical identity"
+    test -z "$alias_value" || parse_exec_property "$alias_value" "$canonical_mode" "$property"
+  done
+}
+
+assert_active_state() {
+  expected="$1"; active="$(read_property ActiveState "$SERVICE")"
+  test "$active" = "$expected" || safe_stop "ActiveState is not $expected"
+  bounded_capture_status active_output '0 3' sudo -n systemctl is-active "$SERVICE"
+  case "$expected:$BOUNDED_STATUS:$active_output" in active:0:active|inactive:3:inactive) ;; *) safe_stop "is-active representation conflicts with ActiveState" ;; esac
 }
 
 assert_no_lifecycle_job() {
-  if ! lifecycle_jobs="$(sudo systemctl list-jobs --no-legend --no-pager 2>&1)"; then
-    safe_stop "cannot inspect systemd jobs"
-  fi
-  matching_job_count="$(printf '%s\n' "$lifecycle_jobs" | awk -v unit="$SERVICE" '$2 == unit { count++ } END { print count + 0 }')"
-  test "$matching_job_count" = "0" || safe_stop "P4B lifecycle job is already in progress"
+  bounded_capture jobs sudo -n systemctl list-jobs --no-legend --no-pager
+  job_count="$(printf '%s\n' "$jobs" | awk -v unit="$SERVICE" 'NF { if (NF < 2) exit 2; if ($2 == unit) n++ } END { print n+0 }')" || safe_stop "malformed lifecycle-job output"
+  test "$job_count" = 0 || safe_stop "P4B lifecycle job is already in progress"
 }
 
-assert_effective_unit_identity() {
-  load_state="$(read_unit_property LoadState "$SERVICE")"
-  fragment_path="$(read_unit_property FragmentPath "$SERVICE")"
-  transient="$(read_unit_property Transient "$SERVICE")"
-  drop_in_paths="$(read_unit_property DropInPaths "$SERVICE")"
-  exec_start="$(read_unit_property ExecStart "$SERVICE")"
-  test "$load_state" = "loaded" || safe_stop "LoadState is not loaded"
-  test "$fragment_path" = "$AUTHORIZED_FRAGMENT" || safe_stop "FragmentPath is not the authorized installed unit"
-  test "$transient" = "no" || safe_stop "Transient unit state is active"
-  test -z "$drop_in_paths" || safe_stop "DropInPaths is not empty"
-  exec_path="$(printf '%s\n' "$exec_start" | awk 'NR == 1 { prefix = "{ path="; if (index($0, prefix) == 1) { value = substr($0, length(prefix) + 1); sub(/ ;.*/, "", value); print value } }')"
-  exec_argv="$(printf '%s\n' "$exec_start" | awk 'NR == 1 { marker = "argv[]="; position = index($0, marker); if (position > 0) { value = substr($0, position + length(marker)); sub(/ ;.*/, "", value); print value } }')"
-  exec_path_count="$(printf '%s\n' "$exec_start" | awk -F 'path=' '{ print NF - 1 }')"
-  test "$exec_path_count" = "1" || safe_stop "ExecStart does not contain exactly one command"
-  test "$exec_path" = "$APPROVED_WRAPPER" || safe_stop "ExecStart path is not the approved wrapper"
-  test "$exec_argv" = "$APPROVED_WRAPPER" || safe_stop "ExecStart argv is not exactly the approved wrapper"
-
-  if ! loaded_service_units="$(sudo systemctl list-units --type=service --all --no-legend --plain --no-pager 2>&1)"; then
-    safe_stop "cannot enumerate manager-loaded service units"
-  fi
-  if ! unit_file_service_units="$(sudo systemctl list-unit-files --type=service --no-legend --no-pager 2>&1)"; then
-    safe_stop "cannot enumerate service unit files"
-  fi
-  manager_units="$(printf '%s\n%s\n' "$loaded_service_units" "$unit_file_service_units" | awk 'NF { print $1 }' | LC_ALL=C sort -u)"
+collect_manager_units() {
+  bounded_capture loaded sudo -n systemctl list-units --type=service --all --no-legend --plain --no-pager
+  bounded_capture files sudo -n systemctl list-unit-files --type=service --no-legend --no-pager
+  manager_units="$(printf '%s\n%s\n' "$loaded" "$files" | awk 'NF { if ($1 !~ /^[A-Za-z0-9@_.-]+\\.service$/) exit 2; print $1 }' | LC_ALL=C sort -u)" || safe_stop "manager service enumeration is malformed"
   test -n "$manager_units" || safe_stop "manager-known service-unit list is empty"
-  while IFS= read -r candidate_unit; do
-    case "$candidate_unit" in *.service) ;; *) safe_stop "manager returned an unsupported service-unit name" ;; esac
-    candidate_load="$(read_unit_property LoadState "$candidate_unit")"
-    candidate_fragment="$(read_unit_property FragmentPath "$candidate_unit")"
-    candidate_exec="$(read_unit_property ExecStart "$candidate_unit")"
-    candidate_following="$(read_unit_property Following "$candidate_unit")"
-    case "$candidate_load" in
-      loaded) ;;
-      masked|not-found)
-        test -z "$candidate_exec" || safe_stop "non-loadable service has an effective ExecStart"
-        test -z "$candidate_following" || safe_stop "non-loadable service has ambiguous canonical identity"
-        continue
-        ;;
-      merged)
-        test -n "$candidate_following" || safe_stop "merged service has no canonical identity"
-        ;;
-      *) safe_stop "service unit has malformed LoadState" ;;
-    esac
-    if test -n "$candidate_following"; then
-      case "$candidate_following" in *.service) ;; *) safe_stop "Following is not a service-unit identity" ;; esac
-      canonical_load="$(read_unit_property LoadState "$candidate_following")"
-      canonical_fragment="$(read_unit_property FragmentPath "$candidate_following")"
-      canonical_exec="$(read_unit_property ExecStart "$candidate_following")"
-      case "$canonical_load" in
-        loaded) ;;
+}
+
+assert_authorized_identity() {
+  test "$(read_property LoadState "$SERVICE")" = loaded || safe_stop "authorized LoadState is not loaded"
+  test "$(read_property FragmentPath "$SERVICE")" = "$AUTHORIZED_FRAGMENT" || safe_stop "authorized FragmentPath is not exact"
+  test "$(read_property Transient "$SERVICE")" = no || safe_stop "authorized Transient is not no"
+  test -z "$(read_property DropInPaths "$SERVICE")" || safe_stop "authorized DropInPaths is not empty"
+  inspect_exec_properties "$SERVICE" authorized
+}
+
+assert_manager_known_executables() {
+  collect_manager_units
+  seen_canonical='|'
+  while IFS= read -r candidate; do
+    require_service_name "$candidate"
+    current="$candidate"; aliases=''; depth=0
+    while :; do
+      depth=$((depth + 1)); test "$depth" -le 8 || safe_stop "alias following exceeded depth 8"
+      require_service_name "$current"
+      load="$(read_property LoadState "$current")"
+      following="$(read_property Following "$current")"
+      case "$load" in
         masked|not-found)
-          test -z "$canonical_exec" || safe_stop "canonical non-loadable service has an effective ExecStart"
-          continue
+          test -z "$following" || safe_stop "non-loadable unit has Following identity"
+          inspect_exec_properties "$current" other
+          current=''; break
           ;;
-        *) safe_stop "canonical service has malformed LoadState" ;;
+        loaded|merged) ;;
+        *) safe_stop "manager returned unsupported LoadState" ;;
       esac
-      test -z "$candidate_exec" || test "$candidate_exec" = "$canonical_exec" || safe_stop "alias ExecStart differs from canonical identity"
-      test -z "$candidate_fragment" || test "$candidate_fragment" = "$canonical_fragment" || safe_stop "alias FragmentPath differs from canonical identity"
-      candidate_fragment="$canonical_fragment"
-      candidate_exec="$canonical_exec"
+      if test -z "$following"; then canonical="$current"; break; fi
+      require_service_name "$following"
+      case "|$aliases|" in *"|$following|"*) safe_stop "alias Following cycle detected" ;; esac
+      aliases="${aliases}${aliases:+|}$current"; current="$following"
+    done
+    test -n "${current:-}" || continue
+    canonical_load="$(read_property LoadState "$canonical")"
+    test "$canonical_load" = loaded || safe_stop "canonical service is not loaded"
+    canonical_transient="$(read_property Transient "$canonical")"
+    case "$canonical_transient" in yes|no) ;; *) safe_stop "canonical Transient is unknown" ;; esac
+    canonical_fragment="$(read_property FragmentPath "$canonical")"
+    if test "$canonical" = "$SERVICE"; then
+      test "$canonical_fragment" = "$AUTHORIZED_FRAGMENT" || safe_stop "authorized canonical FragmentPath conflicts"
+    else
+      case "$canonical_transient" in
+        yes) : ;; # Empty FragmentPath is valid only after complete inspection.
+        no) test -n "$canonical_fragment" || safe_stop "non-transient loaded unit has no reliable FragmentPath" ;;
+      esac
     fi
-    test -z "$candidate_exec" && continue
-    test -n "$candidate_fragment" || safe_stop "launching service has no effective FragmentPath"
-    test "$candidate_fragment" = "$AUTHORIZED_FRAGMENT" && continue
-    if printf '%s\n' "$candidate_exec" | grep -Fq "path=$APPROVED_WRAPPER"; then safe_stop "another manager-known unit launches the approved wrapper"; fi
-    if printf '%s\n' "$candidate_exec" | grep -Fq "argv[]=$APPROVED_WRAPPER"; then safe_stop "another manager-known unit launches the approved wrapper"; fi
-    if printf '%s\n' "$candidate_exec" | grep -Fq "path=$APPROVED_ENTRYPOINT"; then safe_stop "another manager-known unit launches the approved Python entrypoint"; fi
-    if printf '%s\n' "$candidate_exec" | grep -Fq "/opt/trader-assist-v0/"; then safe_stop "another manager-known unit launches a Trader Assist runtime path"; fi
+    case "$seen_canonical" in *"|$canonical|"*) : ;; *)
+      if test "$canonical" = "$SERVICE"; then canonical_mode=authorized; else canonical_mode=other; fi
+      inspect_exec_properties "$canonical" "$canonical_mode"
+      seen_canonical="${seen_canonical}${canonical}|"
+      ;;
+    esac
+    IFS='|'; for alias_unit in $aliases; do
+      test -n "$alias_unit" || continue
+      compare_alias_exec_properties "$alias_unit" "$canonical" "$canonical_mode"
+      alias_fragment="$(read_property FragmentPath "$alias_unit")"
+      test -z "$alias_fragment" || test "$alias_fragment" = "$canonical_fragment" || safe_stop "alias FragmentPath conflicts with canonical identity"
+    done; unset IFS
   done <<EOF
 $manager_units
 EOF
 }
 
+assert_effective_unit_identity() { assert_authorized_identity; assert_manager_known_executables; }
+
+line_count() { printf '%s\n' "$1" | awk 'NF { n++ } END { print n+0 }'; }
+sole_pid() { printf '%s\n' "$1" | awk 'NF { print; exit }'; }
+collect_pids() {
+  pattern="$1"; destination="$2"
+  set +e
+  remaining="$(remaining_seconds)"; command_seconds=$((remaining - 1))
+  output="$("$TIMEOUT_BIN" --foreground --signal=TERM --kill-after=1s "${command_seconds}s" sudo -n pgrep -f "$pattern" 2>&1)"; status=$?
+  set -e
+  case "$status" in 0) ;; 1) output='' ;; 124|137) safe_stop "hard 30-second transition-proof timeout or forced kill" ;; *) safe_stop "cannot enumerate runtime processes" ;; esac
+  printf -v "$destination" '%s' "$output"
+}
+collect_approved_runtime_pids() { collect_pids '[r]un_restricted_public_runtime.sh' WRAPPER_PIDS; collect_pids '[r]un_first_launch_public_runtime.py' PYTHON_PIDS; }
 collect_dedicated_user_pids() {
-  if ! DEDICATED_UID="$(id -u traderassist 2>&1)"; then safe_stop "cannot resolve the dedicated traderassist UID"; fi
-  case "$DEDICATED_UID" in ''|*[!0-9]*) safe_stop "dedicated traderassist UID is invalid" ;; esac
+  bounded_capture DEDICATED_UID id -u traderassist; case "$DEDICATED_UID" in ''|*[!0-9]*) safe_stop "dedicated traderassist UID is invalid" ;; esac
   set +e
-  DEDICATED_PIDS="$(sudo pgrep -u "$DEDICATED_UID" 2>&1)"
-  pgrep_status=$?
+  remaining="$(remaining_seconds)"; command_seconds=$((remaining - 1)); output="$("$TIMEOUT_BIN" --foreground --signal=TERM --kill-after=1s "${command_seconds}s" sudo -n pgrep -u "$DEDICATED_UID" 2>&1)"; status=$?
   set -e
-  case "$pgrep_status" in 0|1) ;; *) safe_stop "cannot inspect processes owned by traderassist" ;; esac
-  test "$pgrep_status" = "0" || DEDICATED_PIDS=""
+  case "$status" in 0) ;; 1) output='' ;; *) safe_stop "cannot enumerate traderassist processes" ;; esac
+  DEDICATED_PIDS="$output"
 }
 
-collect_approved_runtime_pids() {
-  set +e
-  WRAPPER_PIDS="$(sudo pgrep -f '[r]un_restricted_public_runtime.sh' 2>&1)"
-  wrapper_status=$?
-  PYTHON_PIDS="$(sudo pgrep -f '[r]un_first_launch_public_runtime.py' 2>&1)"
-  python_status=$?
-  set -e
-  case "$wrapper_status" in 0|1) ;; *) safe_stop "cannot inspect approved wrapper processes" ;; esac
-  case "$python_status" in 0|1) ;; *) safe_stop "cannot inspect approved Python processes" ;; esac
-  test "$wrapper_status" = "0" || WRAPPER_PIDS=""
-  test "$python_status" = "0" || PYTHON_PIDS=""
-}
-
-line_count() {
-  printf '%s\n' "$1" | awk 'NF { count++ } END { print count + 0 }'
-}
-
-sole_pid() {
-  printf '%s\n' "$1" | awk 'NF { print; exit }'
-}
-
-assert_unified_cgroup_v2() {
-  test -r /sys/fs/cgroup/cgroup.controllers || safe_stop "P4B verification requires unified cgroup v2"
-}
-
-validate_cgroup_path() {
-  cgroup_path="$1"
-  case "$cgroup_path" in /*) ;; *) safe_stop "ControlGroup is not an absolute cgroup-v2 path" ;; esac
-  case "$cgroup_path" in *'..'*|*'//'*) safe_stop "ControlGroup contains an unsupported path component" ;; esac
-}
-
+validate_cgroup_path() { case "$1" in /*) ;; *) safe_stop "ControlGroup is not absolute" ;; esac; case "$1" in *..*|*'//'*) safe_stop "ControlGroup is ambiguous" ;; esac; }
 assert_cgroup_absent_or_empty() {
-  cgroup_path="$1"
-  test -n "$cgroup_path" || return 0
-  assert_unified_cgroup_v2
-  validate_cgroup_path "$cgroup_path"
-  cgroup_directory="/sys/fs/cgroup$cgroup_path"
-  if [ -e "$cgroup_directory" ]; then
-    test -d "$cgroup_directory" || safe_stop "ControlGroup is not a directory"
-    test -r "$cgroup_directory/cgroup.procs" || safe_stop "cannot inspect ControlGroup processes"
-    if ! cgroup_pids="$(sudo cat "$cgroup_directory/cgroup.procs" 2>&1)"; then safe_stop "cannot read ControlGroup processes"; fi
-    test -z "$cgroup_pids" || safe_stop "authorized service cgroup is populated"
-  fi
+  path="$1"; test -n "$path" || return 0; assert_unified_cgroup_v2; validate_cgroup_path "$path"; directory="/sys/fs/cgroup$path"
+  if test -e "$directory"; then test -d "$directory" || safe_stop "ControlGroup is not a directory"; bounded_capture cgroup_pids sudo -n cat "$directory/cgroup.procs"; test -z "$cgroup_pids" || safe_stop "service cgroup is populated"; fi
+}
+assert_inactive_service_cgroup() { assert_unified_cgroup_v2; inactive_cgroup="$(read_property ControlGroup "$SERVICE")"; test -z "$inactive_cgroup" || assert_cgroup_absent_or_empty "$inactive_cgroup"; }
+assert_active_service_cgroup() { assert_unified_cgroup_v2; SERVICE_CGROUP="$(read_property ControlGroup "$SERVICE")"; test -n "$SERVICE_CGROUP" || safe_stop "active service has no ControlGroup"; validate_cgroup_path "$SERVICE_CGROUP"; SERVICE_CGROUP_DIR="/sys/fs/cgroup$SERVICE_CGROUP"; }
+
+derive_runtime_configuration() {
+  bounded_capture config_values sudo -n bash -c '
+set -eu
+f=/etc/trader-assist-v0/public.env
+test -r "$f" || exit 1
+database_count=0; risk_count=0; webhook_count=0; acknowledgement_count=0; session_count=0
+while IFS= read -r line || test -n "$line"; do
+  case "$line" in ""|\#*) continue ;; esac
+  case "$line" in *=*) key=${line%%=*}; value=${line#*=} ;; *) exit 1 ;; esac
+  case "$key" in
+    TRADER_ASSIST_V0_DATABASE_PATH) database_count=$((database_count + 1)); database_path=$value ;;
+    TRADER_ASSIST_V0_RISK_CONFIGURATION_PATH) risk_count=$((risk_count + 1)); risk_path=$value ;;
+    TRADER_ASSIST_V0_WEBHOOK_TIMEOUT_SECONDS) webhook_count=$((webhook_count + 1)); webhook_timeout=$value ;;
+    TRADER_ASSIST_V0_ACKNOWLEDGEMENT_TIMEOUT_SECONDS) acknowledgement_count=$((acknowledgement_count + 1)); acknowledgement_timeout=$value ;;
+    TRADER_ASSIST_V0_SESSION_TIMEOUT_SECONDS) session_count=$((session_count + 1)); session_timeout=$value ;;
+    *) continue ;;
+  esac
+  case "$value" in *["'"'"'\\\\[:space:]]*) exit 1 ;; esac
+done < "$f"
+test "$database_count" = 1 || exit 1; test "$risk_count" = 1 || exit 1
+for count in "$webhook_count" "$acknowledgement_count" "$session_count"; do case "$count" in 0|1) ;; *) exit 1 ;; esac; done
+printf "%s\\n%s\\n%s\\n%s\\n%s" "$database_path" "$risk_path" "${webhook_timeout:-10}" "${acknowledgement_timeout:-30}" "${session_timeout:-21600}"
+'
+  mapfile -t config_array <<<"$config_values"; test "${#config_array[@]}" = 5 || safe_stop "configuration parser returned partial output"
+  DATABASE_PATH="${config_array[0]}"; RISK_PATH="${config_array[1]}"; WEBHOOK_TIMEOUT="${config_array[2]}"; ACK_TIMEOUT="${config_array[3]}"; SESSION_TIMEOUT="${config_array[4]}"
+  case "$DATABASE_PATH" in /var/lib/trader-assist-v0/*) ;; *) safe_stop "configured database path is outside approved state root" ;; esac
+  case "$RISK_PATH" in /etc/trader-assist-v0/*) ;; *) safe_stop "configured risk path is outside approved configuration root" ;; esac
+  for value in "$WEBHOOK_TIMEOUT" "$ACK_TIMEOUT" "$SESSION_TIMEOUT"; do case "$value" in ''|*[!0-9]*) safe_stop "configured timeout is invalid" ;; esac; done
 }
 
-assert_inactive_service_cgroup() {
-  assert_unified_cgroup_v2
-  INACTIVE_CONTROL_GROUP="$(read_unit_property ControlGroup "$SERVICE")"
-  test -z "$INACTIVE_CONTROL_GROUP" || assert_cgroup_absent_or_empty "$INACTIVE_CONTROL_GROUP"
+read_credential_directory() {
+  pid="$1"
+  bounded_capture CREDENTIALS_DIRECTORY sudo -n bash -c '
+count=0; value=""
+while IFS= read -r -d "" entry; do case "$entry" in CREDENTIALS_DIRECTORY=*) count=$((count+1)); value=${entry#CREDENTIALS_DIRECTORY=} ;; esac; done < "/proc/$1/environ"
+test "$count" = 1 || exit 1
+case "$value" in /*) ;; *) exit 1 ;; esac
+case "$value" in *$"\n"*|*"//"*|*".."*) exit 1 ;; esac
+printf %s "$value"
+' bash "$pid"
+  case "$CREDENTIALS_DIRECTORY" in /*) ;; *) safe_stop "credential directory representation is invalid" ;; esac
 }
 
-assert_active_service_cgroup() {
-  assert_unified_cgroup_v2
-  SERVICE_CGROUP="$(read_unit_property ControlGroup "$SERVICE")"
-  test -n "$SERVICE_CGROUP" || safe_stop "active service has no allocated ControlGroup"
-  validate_cgroup_path "$SERVICE_CGROUP"
-  SERVICE_CGROUP_DIR="/sys/fs/cgroup$SERVICE_CGROUP"
+# This one shared verifier is used by stabilization and the final assertion.
+# It reads the NUL-delimited array without printing it, and requires precisely
+# 17 positional entries (0 through 16), including the manager credential path.
+assert_complete_runtime_argv() {
+  pid="$1"
+  bounded_capture approved_python_exe sudo -n readlink -f "$APPROVED_PYTHON"
+  bounded_capture runtime_python_exe sudo -n readlink -f "/proc/$pid/exe"
+  test "$runtime_python_exe" = "$approved_python_exe" || return 1
+  derive_runtime_configuration
+  read_credential_directory "$pid"
+  bounded_capture argv_lines sudo -n bash -c 'mapfile -d "" -t argv < "/proc/$1/cmdline"; printf "%s\\n" "${#argv[@]}"; printf "%s\\n" "${argv[@]}"' bash "$pid"
+  mapfile -t argv <<<"$argv_lines"; test "${#argv[@]}" = 18 || return 1; test "${argv[0]}" = 17 || return 1
+  expected=("$APPROVED_PYTHON" "$APPROVED_ENTRYPOINT" --enable-restricted-public-runtime --mode RESTRICTED_PUBLIC_LIVE_SHADOW --database-path "$DATABASE_PATH" --risk-configuration-path "$RISK_PATH" --notification-credential-file "$CREDENTIALS_DIRECTORY/notification.json" --webhook-timeout-seconds "$WEBHOOK_TIMEOUT" --acknowledgement-timeout-seconds "$ACK_TIMEOUT" --session-timeout-seconds "$SESSION_TIMEOUT")
+  for index in "${!expected[@]}"; do test "${argv[$((index + 1))]}" = "${expected[$index]}" || return 1; done
 }
 
 assert_pre_start() {
-  assert_effective_unit_identity
-  assert_active_state inactive
-  main_pid="$(read_unit_property MainPID "$SERVICE")"
-  test "$main_pid" = "0" || safe_stop "MainPID is not 0 before start"
-  assert_no_lifecycle_job
-  collect_dedicated_user_pids
-  test -z "$DEDICATED_PIDS" || safe_stop "traderassist owns unexplained process(es)"
-  collect_approved_runtime_pids
-  test -z "$WRAPPER_PIDS" || safe_stop "approved wrapper process exists before start"
-  test -z "$PYTHON_PIDS" || safe_stop "approved Python runtime process exists before start"
-  assert_inactive_service_cgroup
+  assert_effective_unit_identity; assert_active_state inactive; test "$(read_property MainPID "$SERVICE")" = 0 || safe_stop "MainPID is not 0 before start"; assert_no_lifecycle_job
+  collect_dedicated_user_pids; test -z "$DEDICATED_PIDS" || safe_stop "traderassist owns unexplained process(es)"; collect_approved_runtime_pids; test -z "$WRAPPER_PIDS" || safe_stop "wrapper exists before start"; test -z "$PYTHON_PIDS" || safe_stop "Python runtime exists before start"; assert_inactive_service_cgroup
 }
 
 stabilize_post_start() {
-  stabilization_timeout_seconds=30
-  stabilization_deadline=$((SECONDS + stabilization_timeout_seconds))
-  if ! approved_python_exe="$(sudo readlink -f "$APPROVED_PYTHON" 2>&1)"; then safe_stop "cannot resolve approved Python executable"; fi
-  while test "$SECONDS" -lt "$stabilization_deadline"; do
-    active_state="$(read_unit_property ActiveState "$SERVICE")"
-    sub_state="$(read_unit_property SubState "$SERVICE")"
-    case "$active_state" in
-      active) ;;
-      failed|inactive) safe_stop "service entered $active_state during exec transition" ;;
-      *) safe_stop "service has unexpected ActiveState during exec transition" ;;
-    esac
-    case "$sub_state" in
-      failed|dead) safe_stop "service entered $sub_state during exec transition" ;;
-      running) ;;
-      *) sleep 1; continue ;;
-    esac
-    transition_pid="$(read_unit_property MainPID "$SERVICE")"
-    case "$transition_pid" in
-      ''|*[!0-9]*) safe_stop "MainPID has an invalid representation during exec transition" ;;
-      0) sleep 1; continue ;;
-    esac
-    test -d "/proc/$transition_pid" || { sleep 1; continue; }
-    if ! transition_exe="$(sudo readlink -f "/proc/$transition_pid/exe" 2>&1)"; then sleep 1; continue; fi
-    test "$transition_exe" = "$approved_python_exe" || { sleep 1; continue; }
-    if ! transition_argv="$(sudo sh -c 'tr "\\000" "\\n" < "$1"' sh "/proc/$transition_pid/cmdline" 2>&1)"; then sleep 1; continue; fi
-    transition_argv0="$(printf '%s\n' "$transition_argv" | awk 'NR == 1 { print; exit }')"
-    transition_argv1="$(printf '%s\n' "$transition_argv" | awk 'NR == 2 { print; exit }')"
-    test "$transition_argv0" = "$APPROVED_PYTHON" || { sleep 1; continue; }
-    test "$transition_argv1" = "$APPROVED_ENTRYPOINT" || { sleep 1; continue; }
-    collect_approved_runtime_pids
-    test -z "$WRAPPER_PIDS" || { sleep 1; continue; }
-    return 0
+  while test "$SECONDS" -lt "$proof_deadline"; do
+    active="$(read_property ActiveState "$SERVICE")"; sub="$(read_property SubState "$SERVICE")"
+    case "$active:$sub" in active:running) ;; failed:*|inactive:*|*:failed|*:dead) safe_stop "service failed during wrapper-to-Python transition" ;; *) bounded_run sleep 1; continue ;; esac
+    pid="$(read_property MainPID "$SERVICE")"; case "$pid" in 0) bounded_run sleep 1; continue ;; *[!0-9]*|'') safe_stop "MainPID is malformed during transition" ;; esac
+    test -d "/proc/$pid" || { bounded_run sleep 1; continue; }
+    if ! assert_complete_runtime_argv "$pid"; then bounded_run sleep 1; continue; fi
+    collect_approved_runtime_pids; test -z "$WRAPPER_PIDS" || { bounded_run sleep 1; continue; }; return 0
   done
-  safe_stop "timed out waiting for the Type=simple wrapper-to-Python exec transition"
+  safe_stop "hard 30-second transition proof timed out"
 }
 
 assert_post_start() {
-  assert_effective_unit_identity
-  assert_active_state active
-  MAIN_PID="$(read_unit_property MainPID "$SERVICE")"
-  assert_numeric_nonzero_pid "$MAIN_PID"
-  test -d "/proc/$MAIN_PID" || safe_stop "MainPID does not exist in /proc"
-  collect_dedicated_user_pids
-  test "$(line_count "$DEDICATED_PIDS")" = "1" || safe_stop "expected exactly one traderassist process"
-  DEDICATED_PID="$(sole_pid "$DEDICATED_PIDS")"
-  test "$DEDICATED_PID" = "$MAIN_PID" || safe_stop "sole traderassist PID is not MainPID"
-  if ! approved_python_exe="$(sudo readlink -f "$APPROVED_PYTHON" 2>&1)"; then safe_stop "cannot resolve approved Python executable"; fi
-  if ! runtime_python_exe="$(sudo readlink -f "/proc/$MAIN_PID/exe" 2>&1)"; then safe_stop "cannot inspect MainPID executable"; fi
-  test "$runtime_python_exe" = "$approved_python_exe" || safe_stop "MainPID executable is not the approved Python executable"
-  if ! runtime_argv="$(sudo sh -c 'tr "\\000" "\\n" < "$1"' sh "/proc/$MAIN_PID/cmdline" 2>&1)"; then safe_stop "cannot inspect MainPID argv"; fi
-  runtime_argv0="$(printf '%s\n' "$runtime_argv" | awk 'NR == 1 { print; exit }')"
-  runtime_argv1="$(printf '%s\n' "$runtime_argv" | awk 'NR == 2 { print; exit }')"
-  test "$runtime_argv0" = "$APPROVED_PYTHON" || safe_stop "MainPID argv[0] is not the approved Python executable"
-  test "$runtime_argv1" = "$APPROVED_ENTRYPOINT" || safe_stop "MainPID argv[1] is not the approved Python entrypoint"
-  assert_active_service_cgroup
-  test -d "$SERVICE_CGROUP_DIR" || safe_stop "authorized service cgroup does not exist after start"
-  if ! runtime_cgroup="$(sudo cat "/proc/$MAIN_PID/cgroup" 2>&1)"; then safe_stop "cannot inspect MainPID cgroup"; fi
-  expected_cgroup_line="0::$SERVICE_CGROUP"
-  test "$runtime_cgroup" = "$expected_cgroup_line" || safe_stop "MainPID cgroup is not literally the service ControlGroup"
-  if ! cgroup_pids="$(sudo cat "$SERVICE_CGROUP_DIR/cgroup.procs" 2>&1)"; then safe_stop "cannot inspect populated service cgroup"; fi
-  test "$cgroup_pids" = "$MAIN_PID" || safe_stop "service cgroup does not contain exactly MainPID"
-  collect_approved_runtime_pids
-  test -z "$WRAPPER_PIDS" || safe_stop "approved wrapper remains after exec"
-  test "$(line_count "$PYTHON_PIDS")" = "1" || safe_stop "expected exactly one approved Python runtime process"
-  test "$(sole_pid "$PYTHON_PIDS")" = "$MAIN_PID" || safe_stop "approved Python runtime PID is not MainPID"
+  assert_effective_unit_identity; assert_active_state active; MAIN_PID="$(read_property MainPID "$SERVICE")"; assert_nonzero_pid "$MAIN_PID"; test -d "/proc/$MAIN_PID" || safe_stop "MainPID does not exist"
+  assert_complete_runtime_argv "$MAIN_PID" || safe_stop "MainPID does not satisfy the exact 17-entry argv contract"
+  collect_dedicated_user_pids; test "$(line_count "$DEDICATED_PIDS")" = 1 || safe_stop "expected exactly one traderassist process"; test "$(sole_pid "$DEDICATED_PIDS")" = "$MAIN_PID" || safe_stop "dedicated PID is not MainPID"
+  assert_active_service_cgroup; test -d "$SERVICE_CGROUP_DIR" || safe_stop "service cgroup does not exist"; bounded_capture runtime_cgroup sudo -n cat "/proc/$MAIN_PID/cgroup"; test "$runtime_cgroup" = "0::$SERVICE_CGROUP" || safe_stop "MainPID cgroup differs"; bounded_capture cgroup_pids sudo -n cat "$SERVICE_CGROUP_DIR/cgroup.procs"; test "$cgroup_pids" = "$MAIN_PID" || safe_stop "cgroup does not contain exactly MainPID"
+  collect_approved_runtime_pids; test -z "$WRAPPER_PIDS" || safe_stop "wrapper remains after exec"; test "$(line_count "$PYTHON_PIDS")" = 1 || safe_stop "expected exactly one Python runtime"; test "$(sole_pid "$PYTHON_PIDS")" = "$MAIN_PID" || safe_stop "Python PID is not MainPID"
 }
 
 assert_final_state() {
-  assert_effective_unit_identity
-  assert_active_state inactive
-  main_pid="$(read_unit_property MainPID "$SERVICE")"
-  test "$main_pid" = "0" || safe_stop "MainPID is not 0 in final state"
-  unit_file_state="$(read_unit_property UnitFileState "$SERVICE")"
-  test "$unit_file_state" = "disabled" || safe_stop "UnitFileState is not exactly disabled"
-  assert_no_lifecycle_job
-  assert_inactive_service_cgroup
-  collect_approved_runtime_pids
-  test -z "$WRAPPER_PIDS" || safe_stop "approved wrapper process exists in final state"
-  test -z "$PYTHON_PIDS" || safe_stop "approved Python runtime process exists in final state"
-  collect_dedicated_user_pids
-  test -z "$DEDICATED_PIDS" || safe_stop "traderassist owns process(es) in final state"
+  assert_effective_unit_identity; assert_active_state inactive; test "$(read_property MainPID "$SERVICE")" = 0 || safe_stop "MainPID is not 0 in final state"; test "$(read_property UnitFileState "$SERVICE")" = disabled || safe_stop "UnitFileState is not disabled"; assert_no_lifecycle_job; assert_inactive_service_cgroup; collect_approved_runtime_pids; test -z "$WRAPPER_PIDS$PYTHON_PIDS" || safe_stop "runtime remains in final state"; collect_dedicated_user_pids; test -z "$DEDICATED_PIDS" || safe_stop "traderassist process remains in final state"
 }
 
-stop_disable_and_verify_final_state() {
-  sudo systemctl stop "$SERVICE"
-  sudo systemctl disable "$SERVICE"
-  assert_final_state
-}
-
-credential_rollback() {
-  stop_disable_and_verify_final_state
-  sudo rm -f /etc/trader-assist-v0/credentials/notification.json
-  sudo rm -f /etc/trader-assist-v0/activation-permit
-  printf 'PASS: credential rollback removed credential and activation permit after final-state proof\n'
-}
-
-deployment_rollback() {
-  stop_disable_and_verify_final_state
-  sudo rm -f /etc/trader-assist-v0/activation-permit
-  sudo rm /etc/systemd/system/trader-assist-v0-public.service
-  sudo systemctl daemon-reload
-  printf 'PASS: deployment rollback removed permit and unit after final-state proof\n'
-}
-
-uninstall_runtime() {
-  stop_disable_and_verify_final_state
-  sudo rm -f /etc/trader-assist-v0/credentials/notification.json
-  sudo rm -f /etc/trader-assist-v0/activation-permit
-  sudo rm /etc/systemd/system/trader-assist-v0-public.service
-  sudo systemctl daemon-reload
-  sudo rm -rf /etc/trader-assist-v0
-  sudo rm -rf /var/lib/trader-assist-v0
-  sudo rm -rf /opt/trader-assist-v0
-  if ! sudo userdel traderassist; then printf 'WARNING: traderassist user cleanup failed after successful proof-bearing removal\n' >&2; fi
-  if ! sudo groupdel traderassist; then printf 'WARNING: traderassist group cleanup failed after successful proof-bearing removal\n' >&2; fi
-  printf 'PASS: uninstall removed unit and deployment paths after final-state proof; user/group cleanup is best effort only\n'
-}
-
-controlled_restart() {
-  assert_effective_unit_identity
-  assert_active_state active
-  ORIGINAL_PID="$(read_unit_property MainPID "$SERVICE")"
-  assert_numeric_nonzero_pid "$ORIGINAL_PID"
-  assert_post_start
-  test "$MAIN_PID" = "$ORIGINAL_PID" || safe_stop "original MainPID identity changed before stop"
-  ORIGINAL_CONTROL_GROUP="$SERVICE_CGROUP"
-  if ! ORIGINAL_START_TICKS="$(sudo awk '{ print $22 }' "/proc/$ORIGINAL_PID/stat" 2>&1)"; then safe_stop "cannot record original process start ticks"; fi
-  case "$ORIGINAL_START_TICKS" in ''|*[!0-9]*) safe_stop "original process start ticks are invalid" ;; esac
-  printf 'EVIDENCE: original_pid=%s original_start_ticks=%s\n' "$ORIGINAL_PID" "$ORIGINAL_START_TICKS"
-  sudo systemctl stop "$SERVICE"
-  test ! -e "/proc/$ORIGINAL_PID" || safe_stop "original PID still exists after synchronous stop"
-  assert_cgroup_absent_or_empty "$ORIGINAL_CONTROL_GROUP"
-  assert_active_state inactive
-  main_pid="$(read_unit_property MainPID "$SERVICE")"
-  test "$main_pid" = "0" || safe_stop "MainPID is not 0 after stop"
-  collect_dedicated_user_pids
-  test -z "$DEDICATED_PIDS" || safe_stop "traderassist process remains after stop"
-  collect_approved_runtime_pids
-  test -z "$WRAPPER_PIDS" || safe_stop "approved wrapper process remains after stop"
-  test -z "$PYTHON_PIDS" || safe_stop "approved Python runtime process remains after stop"
-  assert_pre_start
-  sudo systemctl start "$SERVICE"
-  stabilize_post_start
-  assert_post_start
-  NEW_PID="$MAIN_PID"
-  test "$NEW_PID" != "$ORIGINAL_PID" || safe_stop "new MainPID equals original PID"
-  printf 'PASS: controlled restart recorded new_pid=%s; original identity was absent before start, so no overlap was observed\n' "$NEW_PID"
-}
+stop_disable_and_verify_final_state() { bounded_run sudo -n systemctl stop "$SERVICE"; bounded_run sudo -n systemctl disable "$SERVICE"; assert_final_state; }
+credential_rollback() { stop_disable_and_verify_final_state; bounded_run sudo -n rm -f /etc/trader-assist-v0/credentials/notification.json; bounded_run sudo -n rm -f /etc/trader-assist-v0/activation-permit; printf 'PASS: credential rollback removed credential and activation permit after final-state proof\n'; }
+deployment_rollback() { stop_disable_and_verify_final_state; bounded_run sudo -n rm -f /etc/trader-assist-v0/activation-permit; bounded_run sudo -n rm /etc/systemd/system/trader-assist-v0-public.service; bounded_run sudo -n systemctl daemon-reload; printf 'PASS: deployment rollback removed permit and unit after final-state proof\n'; }
+uninstall_runtime() { stop_disable_and_verify_final_state; bounded_run sudo -n rm -f /etc/trader-assist-v0/credentials/notification.json; bounded_run sudo -n rm -f /etc/trader-assist-v0/activation-permit; bounded_run sudo -n rm /etc/systemd/system/trader-assist-v0-public.service; bounded_run sudo -n systemctl daemon-reload; bounded_run sudo -n rm -rf /etc/trader-assist-v0; bounded_run sudo -n rm -rf /var/lib/trader-assist-v0; bounded_run sudo -n rm -rf /opt/trader-assist-v0; if ! bounded_best_effort sudo -n userdel traderassist; then printf 'WARNING: traderassist user cleanup failed after successful proof-bearing removal\n' >&2; fi; if ! bounded_best_effort sudo -n groupdel traderassist; then printf 'WARNING: traderassist group cleanup failed after successful proof-bearing removal\n' >&2; fi; printf 'PASS: uninstall removed unit and deployment paths after final-state proof; user/group cleanup is best effort only\n'; }
+controlled_restart() { assert_post_start; ORIGINAL_PID="$MAIN_PID"; ORIGINAL_CONTROL_GROUP="$SERVICE_CGROUP"; bounded_capture ORIGINAL_START_TICKS sudo -n awk '{ print $22 }' "/proc/$ORIGINAL_PID/stat"; case "$ORIGINAL_START_TICKS" in ''|*[!0-9]*) safe_stop "original start ticks are invalid" ;; esac; printf 'EVIDENCE: original_pid=%s original_start_ticks=%s\n' "$ORIGINAL_PID" "$ORIGINAL_START_TICKS"; bounded_run sudo -n systemctl stop "$SERVICE"; test ! -e "/proc/$ORIGINAL_PID" || safe_stop "original PID remains after stop"; assert_cgroup_absent_or_empty "$ORIGINAL_CONTROL_GROUP"; assert_pre_start; bounded_run sudo -n systemctl start "$SERVICE"; stabilize_post_start; assert_post_start; test "$MAIN_PID" != "$ORIGINAL_PID" || safe_stop "new MainPID equals original PID"; printf 'PASS: controlled restart recorded new_pid=%s; original identity was absent before start, so no overlap was observed\n' "$MAIN_PID"; }
 
 case "$OPERATION" in
   pre-start) assert_pre_start; printf 'PASS: effective unit verified; inactive; MainPID=0; no job, cgroup, runtime, or traderassist process\n' ;;
-  post-start) stabilize_post_start; assert_post_start; printf 'PASS: active MainPID, approved Python argv, and literal cgroup identity verified\n' ;;
+  post-start) stabilize_post_start; assert_post_start; printf 'PASS: bounded wrapper-to-Python transition and exact 17-entry argv identity verified\n' ;;
   controlled-restart) controlled_restart ;;
   final-state) assert_final_state; printf 'PASS: loaded disabled unit is inactive with MainPID=0 and no cgroup, runtime, or traderassist process\n' ;;
   credential-rollback) credential_rollback ;;
   deployment-rollback) deployment_rollback ;;
   uninstall) uninstall_runtime ;;
   *) safe_stop "OPERATION must select a supported verification or teardown mode" ;;
+esac
+P4B_PROOF
+proof_status=$?
+set -e
+case "$proof_status" in
+  0) ;;
+  124|137) safe_stop "hard 30-second transition-proof timeout or forced kill" ;;
+  *) safe_stop "bounded proof failed" ;;
 esac
 ```
 
@@ -730,6 +749,27 @@ cgroup, an alternate live database-backed runtime, or an unresolved lifecycle
 command requires `SAFE_STOP` before deployment, runtime activation, or
 continued smoke. Stop the workflow and obtain Project Control and Engineering
 Optimization review.
+
+This proof is restricted to supported systemd Linux hosts with unified cgroup
+v2 and the explicitly reviewed manager and executable-property serialization
+used by the block. Unknown fields, a different serialization, truncated or
+partial manager output, malformed command records, or any ambiguous result
+requires `SAFE_STOP`. In particular, an unrelated transient unit is not
+exempt: it can pass only after complete inspection of all seven executable
+properties and every command record. The proof is bounded operational evidence,
+not a mathematical singleton guarantee. It does not universally detect
+malicious root activity, copied or disguised implementations, unrelated UIDs,
+every PID reuse, every race, or arbitrary alternate implementations. It adds
+no wrapper lock, Python lock, PID-file authority, or Unix-socket authority.
+
+The transition check proves only the approved wrapper-to-Python exec transition
+and exact process identity; it is not application `READY`. It may inspect the
+credential-path identity but never prints credential content, authorization
+values, the complete environment, or the complete argv. Static CI does not
+exercise a real systemd manager, privileged boundaries, cgroup allocation,
+transient services, live exec transition, restart, or timeout behavior.
+Supported-host evidence remains a later separately authorized gate: this
+runbook grants no AWS, deployment, runtime, or smoke authority.
 
 Concurrent execution can cause SQLite write contention, delayed writes,
 database-locked operational failures, competing runtime-session records,
