@@ -187,25 +187,21 @@ sudo mv /etc/trader-assist-v0/credentials/notification.json.new \
 
 ## 5d. Credential Rollback
 
-To roll back the credential:
+Credential rollback is a deployment stop, not a supported way to continue a
+runtime session. The authoritative final-state proof is the Section 15
+`OPERATION="final-state"` mode. Do not substitute display-only process
+commands for that proof.
 
 ```bash
-# Stop the service
+# Stop synchronously, disable the unit, and remove the credential and permit.
 sudo systemctl stop trader-assist-v0-public.service
-
-# Remove or invalidate the source credential
+sudo systemctl disable trader-assist-v0-public.service
 sudo rm -f /etc/trader-assist-v0/credentials/notification.json
-
-# Remove the activation permit when appropriate
 sudo rm -f /etc/trader-assist-v0/activation-permit
 
-# Verify no service process remains
-sudo systemctl is-active trader-assist-v0-public.service || echo "inactive"
-pgrep -f run_restricted_public_runtime.sh || echo "no wrapper process"
-pgrep -f run_first_launch_public_runtime.py || echo "no Python process"
-
-# Verify the runtime credential directory is inactive
-# (systemd cleans up $CREDENTIALS_DIRECTORY when the service stops)
+# Run the complete self-contained Section 15 block with:
+# OPERATION="final-state"
+# It must print PASS before this rollback is considered complete.
 ```
 
 ## 6. SQLite State Directory
@@ -303,8 +299,11 @@ sudo systemctl daemon-reload
 
 ## 13. Start Procedure
 
-First complete the fail-closed pre-start verification in Section 15 and proceed
-only when it prints `PASS`.
+P4A remains the repository deployment package. The controls in Section 15
+govern its use only in a separately authorized P4B deployment/runtime stage;
+this runbook grants no P4B, AWS, runtime, or smoke authority. Set
+`OPERATION="pre-start"` in the complete Section 15 block and proceed only
+when it prints `PASS`.
 
 ```bash
 sudo systemctl start trader-assist-v0-public.service
@@ -336,69 +335,280 @@ The sole direct-Python exception is offline validation with `--validate-only`,
 such as the credential-validation commands in Sections 5b and 5c. Validation
 only neither authorizes nor starts the live runtime.
 
-Before every authorized start, run the following pre-start verification on the
-systemd Linux host. It performs no start operation. Every expected result is
-shown in the commands; any other result is a `SAFE_STOP`. Do not remove or kill
-any process as part of this procedure.
+The following is the single canonical, self-contained systemd Linux
+verification block. Set `OPERATION` to exactly one supported mode before
+executing it: `pre-start`, `post-start`, `controlled-restart`, or
+`final-state`. It is deliberately constrained to unified cgroup v2. Any
+unsupported manager, cgroup, process, or configuration representation is a
+`SAFE_STOP`. It does not start a runtime when `OPERATION="pre-start"` or
+`OPERATION="final-state"`, and it never kills a process automatically.
+Aliases and normal enablement links that resolve to the same literal authorized
+`FragmentPath` are one unit identity, not duplicate runtime units.
 
 ```bash
 set -eu
+set -o pipefail
 
+OPERATION="pre-start"
 SERVICE="trader-assist-v0-public.service"
-EXPECTED_UNIT="/etc/systemd/system/trader-assist-v0-public.service"
+AUTHORIZED_FRAGMENT="/etc/systemd/system/trader-assist-v0-public.service"
+APPROVED_WRAPPER="/opt/trader-assist-v0/scripts/p4a/run_restricted_public_runtime.sh"
+APPROVED_PYTHON="/opt/trader-assist-v0/venv/bin/python"
+APPROVED_ENTRYPOINT="/opt/trader-assist-v0/scripts/run_first_launch_public_runtime.py"
 
 safe_stop() {
   printf 'SAFE_STOP: %s\n' "$1" >&2
   exit 1
 }
 
-# The service must be inactive. A command error is not accepted as inactive.
-service_state="$(sudo systemctl is-active "$SERVICE" 2>&1 || true)"
-test "$service_state" = "inactive" || safe_stop "service state is not inactive: $service_state"
+read_unit_property() {
+  property="$1"
+  unit="$2"
+  if ! value="$(sudo systemctl show --property="$property" --value "$unit" 2>&1)"; then
+    safe_stop "cannot inspect $property for $unit"
+  fi
+  printf '%s' "$value"
+}
 
-# systemd must report no service main process.
-main_pid="$(sudo systemctl show --property=MainPID --value "$SERVICE" 2>&1)" \
-  || safe_stop "cannot read MainPID"
-test "$main_pid" = "0" || safe_stop "systemd reports MainPID=$main_pid"
+assert_active_state() {
+  expected_state="$1"
+  active_state="$(read_unit_property ActiveState "$SERVICE")"
+  test "$active_state" = "$expected_state" || safe_stop "ActiveState is not $expected_state"
+  set +e
+  is_active_output="$(sudo systemctl is-active "$SERVICE" 2>&1)"
+  is_active_status=$?
+  set -e
+  case "$expected_state:$is_active_status" in
+    active:0|inactive:3) ;;
+    *) safe_stop "is-active returned an unexpected status" ;;
+  esac
+  test "$is_active_output" = "$expected_state" || safe_stop "is-active is not exactly $expected_state"
+}
 
-# No out-of-band wrapper or Python runtime process may exist. The bracketed
-# patterns avoid matching these pgrep inspection commands themselves.
-wrapper_processes="$(sudo pgrep -af '[r]un_restricted_public_runtime.sh' || true)"
-test -z "$wrapper_processes" || safe_stop "wrapper process exists: $wrapper_processes"
-python_processes="$(sudo pgrep -af '[r]un_first_launch_public_runtime.py' || true)"
-test -z "$python_processes" || safe_stop "runtime Python process exists: $python_processes"
+assert_numeric_nonzero_pid() {
+  candidate_pid="$1"
+  case "$candidate_pid" in
+    ''|0|*[!0-9]*) safe_stop "MainPID is not one nonzero numeric PID" ;;
+  esac
+}
 
-# The installed unit must be the only service definition that launches either
-# runtime entrypoint. This detects copied, templated, and alternate units.
-runtime_unit_files="$(
-  sudo grep -RIl --include='*.service' \
-    -e 'run_restricted_public_runtime\.sh' \
-    -e 'run_first_launch_public_runtime\.py' \
-    /etc/systemd/system /run/systemd/system /usr/lib/systemd/system /lib/systemd/system \
-    2>/dev/null | LC_ALL=C sort -u || true
-)"
-test "$runtime_unit_files" = "$EXPECTED_UNIT" \
-  || safe_stop "unexpected runtime service definition(s): $runtime_unit_files"
+assert_no_lifecycle_job() {
+  if ! lifecycle_jobs="$(sudo systemctl list-jobs --no-legend --no-pager 2>&1)"; then
+    safe_stop "cannot inspect systemd jobs"
+  fi
+  matching_job_count="$(printf '%s\n' "$lifecycle_jobs" | awk -v unit="$SERVICE" '$2 == unit { count++ } END { print count + 0 }')"
+  test "$matching_job_count" = "0" || safe_stop "P4B lifecycle job is already in progress"
+}
 
-# No P4B lifecycle job may already be running.
-lifecycle_jobs="$(sudo systemctl list-jobs --no-legend --no-pager 2>&1)" \
-  || safe_stop "cannot inspect systemd jobs"
-matching_jobs="$(printf '%s\n' "$lifecycle_jobs" | \
-  awk '$2 == "trader-assist-v0-public.service" { print }')"
-test -z "$matching_jobs" \
-  || safe_stop "P4B start, stop, or restart job already in progress: $matching_jobs"
+assert_effective_unit_identity() {
+  load_state="$(read_unit_property LoadState "$SERVICE")"
+  fragment_path="$(read_unit_property FragmentPath "$SERVICE")"
+  transient="$(read_unit_property Transient "$SERVICE")"
+  drop_in_paths="$(read_unit_property DropInPaths "$SERVICE")"
+  exec_start="$(read_unit_property ExecStart "$SERVICE")"
+  test "$load_state" = "loaded" || safe_stop "LoadState is not loaded"
+  test "$fragment_path" = "$AUTHORIZED_FRAGMENT" || safe_stop "FragmentPath is not the authorized installed unit"
+  test "$transient" = "no" || safe_stop "Transient unit state is active"
+  test -z "$drop_in_paths" || safe_stop "DropInPaths is not empty"
+  exec_path="$(printf '%s\n' "$exec_start" | awk 'NR == 1 { prefix = "{ path="; if (index($0, prefix) == 1) { value = substr($0, length(prefix) + 1); sub(/ ;.*/, "", value); print value } }')"
+  exec_argv="$(printf '%s\n' "$exec_start" | awk 'NR == 1 { marker = "argv[]="; position = index($0, marker); if (position > 0) { value = substr($0, position + length(marker)); sub(/ ;.*/, "", value); print value } }')"
+  exec_path_count="$(printf '%s\n' "$exec_start" | awk -F 'path=' '{ print NF - 1 }')"
+  test "$exec_path_count" = "1" || safe_stop "ExecStart does not contain exactly one command"
+  test "$exec_path" = "$APPROVED_WRAPPER" || safe_stop "ExecStart path is not the approved wrapper"
+  test "$exec_argv" = "$APPROVED_WRAPPER" || safe_stop "ExecStart argv is not exactly the approved wrapper"
 
-printf 'PASS: inactive, MainPID=0, no runtime process, one runtime unit, and no lifecycle job\n'
+  if ! manager_units="$({
+    sudo systemctl list-units --type=service --all --no-legend --plain --no-pager | awk 'NF { print $1 }'
+    sudo systemctl list-unit-files --type=service --no-legend --no-pager | awk 'NF { print $1 }'
+  } | LC_ALL=C sort -u)"; then
+    safe_stop "cannot enumerate manager-known service units"
+  fi
+  test -n "$manager_units" || safe_stop "manager-known service-unit list is empty"
+  while IFS= read -r candidate_unit; do
+    case "$candidate_unit" in *.service) ;; *) safe_stop "manager returned an unsupported service-unit name" ;; esac
+    candidate_load="$(read_unit_property LoadState "$candidate_unit")"
+    candidate_fragment="$(read_unit_property FragmentPath "$candidate_unit")"
+    candidate_exec="$(read_unit_property ExecStart "$candidate_unit")"
+    case "$candidate_load" in
+      loaded)
+        test -n "$candidate_fragment" || safe_stop "loaded service has no FragmentPath"
+        test -n "$candidate_exec" || safe_stop "loaded service has no inspectable ExecStart"
+        ;;
+      not-found)
+        test -z "$candidate_exec" || safe_stop "not-found service has an effective ExecStart"
+        continue
+        ;;
+      *) safe_stop "service unit has unsupported LoadState" ;;
+    esac
+    test "$candidate_fragment" = "$AUTHORIZED_FRAGMENT" && continue
+    if printf '%s\n' "$candidate_exec" | grep -Fq "path=$APPROVED_WRAPPER"; then safe_stop "another manager-known unit launches the approved wrapper"; fi
+    if printf '%s\n' "$candidate_exec" | grep -Fq "argv[]=$APPROVED_WRAPPER"; then safe_stop "another manager-known unit launches the approved wrapper"; fi
+    if printf '%s\n' "$candidate_exec" | grep -Fq "path=$APPROVED_ENTRYPOINT"; then safe_stop "another manager-known unit launches the approved Python entrypoint"; fi
+    if printf '%s\n' "$candidate_exec" | grep -Fq "/opt/trader-assist-v0/"; then safe_stop "another manager-known unit launches a Trader Assist runtime path"; fi
+  done <<EOF
+$manager_units
+EOF
+}
+
+collect_dedicated_user_pids() {
+  if ! DEDICATED_UID="$(id -u traderassist 2>&1)"; then safe_stop "cannot resolve the dedicated traderassist UID"; fi
+  case "$DEDICATED_UID" in ''|*[!0-9]*) safe_stop "dedicated traderassist UID is invalid" ;; esac
+  set +e
+  DEDICATED_PIDS="$(sudo pgrep -u "$DEDICATED_UID" 2>&1)"
+  pgrep_status=$?
+  set -e
+  case "$pgrep_status" in 0|1) ;; *) safe_stop "cannot inspect processes owned by traderassist" ;; esac
+  test "$pgrep_status" = "0" || DEDICATED_PIDS=""
+}
+
+collect_approved_runtime_pids() {
+  set +e
+  WRAPPER_PIDS="$(sudo pgrep -f '[r]un_restricted_public_runtime.sh' 2>&1)"
+  wrapper_status=$?
+  PYTHON_PIDS="$(sudo pgrep -f '[r]un_first_launch_public_runtime.py' 2>&1)"
+  python_status=$?
+  set -e
+  case "$wrapper_status" in 0|1) ;; *) safe_stop "cannot inspect approved wrapper processes" ;; esac
+  case "$python_status" in 0|1) ;; *) safe_stop "cannot inspect approved Python processes" ;; esac
+  test "$wrapper_status" = "0" || WRAPPER_PIDS=""
+  test "$python_status" = "0" || PYTHON_PIDS=""
+}
+
+line_count() {
+  printf '%s\n' "$1" | awk 'NF { count++ } END { print count + 0 }'
+}
+
+sole_pid() {
+  printf '%s\n' "$1" | awk 'NF { print; exit }'
+}
+
+assert_unified_cgroup_v2() {
+  test -r /sys/fs/cgroup/cgroup.controllers || safe_stop "P4B verification requires unified cgroup v2"
+  SERVICE_CGROUP="$(read_unit_property ControlGroup "$SERVICE")"
+  case "$SERVICE_CGROUP" in /*) ;; *) safe_stop "ControlGroup is not an absolute cgroup-v2 path" ;; esac
+  case "$SERVICE_CGROUP" in *'..'*) safe_stop "ControlGroup contains an unsupported path component" ;; esac
+  SERVICE_CGROUP_DIR="/sys/fs/cgroup$SERVICE_CGROUP"
+}
+
+assert_empty_service_cgroup() {
+  assert_unified_cgroup_v2
+  if [ -e "$SERVICE_CGROUP_DIR" ]; then
+    test -d "$SERVICE_CGROUP_DIR" || safe_stop "ControlGroup is not a directory"
+    test -r "$SERVICE_CGROUP_DIR/cgroup.procs" || safe_stop "cannot inspect ControlGroup processes"
+    if ! cgroup_pids="$(sudo cat "$SERVICE_CGROUP_DIR/cgroup.procs" 2>&1)"; then safe_stop "cannot read ControlGroup processes"; fi
+    test -z "$cgroup_pids" || safe_stop "authorized service cgroup is populated"
+  fi
+}
+
+assert_pre_start() {
+  assert_effective_unit_identity
+  assert_active_state inactive
+  main_pid="$(read_unit_property MainPID "$SERVICE")"
+  test "$main_pid" = "0" || safe_stop "MainPID is not 0 before start"
+  assert_no_lifecycle_job
+  collect_dedicated_user_pids
+  test -z "$DEDICATED_PIDS" || safe_stop "traderassist owns unexplained process(es)"
+  collect_approved_runtime_pids
+  test -z "$WRAPPER_PIDS" || safe_stop "approved wrapper process exists before start"
+  test -z "$PYTHON_PIDS" || safe_stop "approved Python runtime process exists before start"
+  assert_empty_service_cgroup
+}
+
+assert_post_start() {
+  assert_effective_unit_identity
+  assert_active_state active
+  MAIN_PID="$(read_unit_property MainPID "$SERVICE")"
+  assert_numeric_nonzero_pid "$MAIN_PID"
+  test -d "/proc/$MAIN_PID" || safe_stop "MainPID does not exist in /proc"
+  collect_dedicated_user_pids
+  test "$(line_count "$DEDICATED_PIDS")" = "1" || safe_stop "expected exactly one traderassist process"
+  DEDICATED_PID="$(sole_pid "$DEDICATED_PIDS")"
+  test "$DEDICATED_PID" = "$MAIN_PID" || safe_stop "sole traderassist PID is not MainPID"
+  if ! approved_python_exe="$(sudo readlink -f "$APPROVED_PYTHON" 2>&1)"; then safe_stop "cannot resolve approved Python executable"; fi
+  if ! runtime_python_exe="$(sudo readlink -f "/proc/$MAIN_PID/exe" 2>&1)"; then safe_stop "cannot inspect MainPID executable"; fi
+  test "$runtime_python_exe" = "$approved_python_exe" || safe_stop "MainPID executable is not the approved Python executable"
+  if ! runtime_argv="$(sudo sh -c 'tr "\\000" "\\n" < "$1"' sh "/proc/$MAIN_PID/cmdline" 2>&1)"; then safe_stop "cannot inspect MainPID argv"; fi
+  runtime_argv0="$(printf '%s\n' "$runtime_argv" | awk 'NR == 1 { print; exit }')"
+  runtime_argv1="$(printf '%s\n' "$runtime_argv" | awk 'NR == 2 { print; exit }')"
+  test "$runtime_argv0" = "$APPROVED_PYTHON" || safe_stop "MainPID argv[0] is not the approved Python executable"
+  test "$runtime_argv1" = "$APPROVED_ENTRYPOINT" || safe_stop "MainPID argv[1] is not the approved Python entrypoint"
+  assert_unified_cgroup_v2
+  test -d "$SERVICE_CGROUP_DIR" || safe_stop "authorized service cgroup does not exist after start"
+  if ! runtime_cgroup="$(sudo cat "/proc/$MAIN_PID/cgroup" 2>&1)"; then safe_stop "cannot inspect MainPID cgroup"; fi
+  expected_cgroup_line="0::$SERVICE_CGROUP"
+  test "$runtime_cgroup" = "$expected_cgroup_line" || safe_stop "MainPID cgroup is not literally the service ControlGroup"
+  if ! cgroup_pids="$(sudo cat "$SERVICE_CGROUP_DIR/cgroup.procs" 2>&1)"; then safe_stop "cannot inspect populated service cgroup"; fi
+  test "$cgroup_pids" = "$MAIN_PID" || safe_stop "service cgroup does not contain exactly MainPID"
+  collect_approved_runtime_pids
+  test -z "$WRAPPER_PIDS" || safe_stop "approved wrapper remains after exec"
+  test "$(line_count "$PYTHON_PIDS")" = "1" || safe_stop "expected exactly one approved Python runtime process"
+  test "$(sole_pid "$PYTHON_PIDS")" = "$MAIN_PID" || safe_stop "approved Python runtime PID is not MainPID"
+}
+
+assert_final_state() {
+  assert_effective_unit_identity
+  assert_active_state inactive
+  main_pid="$(read_unit_property MainPID "$SERVICE")"
+  test "$main_pid" = "0" || safe_stop "MainPID is not 0 in final state"
+  unit_file_state="$(read_unit_property UnitFileState "$SERVICE")"
+  test "$unit_file_state" = "disabled" || safe_stop "UnitFileState is not exactly disabled"
+  assert_no_lifecycle_job
+  assert_empty_service_cgroup
+  collect_approved_runtime_pids
+  test -z "$WRAPPER_PIDS" || safe_stop "approved wrapper process exists in final state"
+  test -z "$PYTHON_PIDS" || safe_stop "approved Python runtime process exists in final state"
+  collect_dedicated_user_pids
+  test -z "$DEDICATED_PIDS" || safe_stop "traderassist owns process(es) in final state"
+}
+
+controlled_restart() {
+  assert_effective_unit_identity
+  assert_active_state active
+  ORIGINAL_PID="$(read_unit_property MainPID "$SERVICE")"
+  assert_numeric_nonzero_pid "$ORIGINAL_PID"
+  assert_post_start
+  test "$MAIN_PID" = "$ORIGINAL_PID" || safe_stop "original MainPID identity changed before stop"
+  if ! ORIGINAL_START_TICKS="$(sudo awk '{ print $22 }' "/proc/$ORIGINAL_PID/stat" 2>&1)"; then safe_stop "cannot record original process start ticks"; fi
+  case "$ORIGINAL_START_TICKS" in ''|*[!0-9]*) safe_stop "original process start ticks are invalid" ;; esac
+  printf 'EVIDENCE: original_pid=%s original_start_ticks=%s\n' "$ORIGINAL_PID" "$ORIGINAL_START_TICKS"
+  sudo systemctl stop "$SERVICE"
+  test ! -e "/proc/$ORIGINAL_PID" || safe_stop "original PID still exists after synchronous stop"
+  assert_active_state inactive
+  main_pid="$(read_unit_property MainPID "$SERVICE")"
+  test "$main_pid" = "0" || safe_stop "MainPID is not 0 after stop"
+  collect_dedicated_user_pids
+  test -z "$DEDICATED_PIDS" || safe_stop "traderassist process remains after stop"
+  collect_approved_runtime_pids
+  test -z "$WRAPPER_PIDS" || safe_stop "approved wrapper process remains after stop"
+  test -z "$PYTHON_PIDS" || safe_stop "approved Python runtime process remains after stop"
+  assert_pre_start
+  sudo systemctl start "$SERVICE"
+  assert_post_start
+  NEW_PID="$MAIN_PID"
+  test "$NEW_PID" != "$ORIGINAL_PID" || safe_stop "new MainPID equals original PID"
+  printf 'PASS: controlled restart recorded new_pid=%s; original identity was absent before start, so no overlap was observed\n' "$NEW_PID"
+}
+
+case "$OPERATION" in
+  pre-start) assert_pre_start; printf 'PASS: effective unit verified; inactive; MainPID=0; no job, cgroup, runtime, or traderassist process\n' ;;
+  post-start) assert_post_start; printf 'PASS: active MainPID, approved Python argv, and literal cgroup identity verified\n' ;;
+  controlled-restart) controlled_restart ;;
+  final-state) assert_final_state; printf 'PASS: loaded disabled unit is inactive with MainPID=0 and no cgroup, runtime, or traderassist process\n' ;;
+  *) safe_stop "OPERATION must be pre-start, post-start, controlled-restart, or final-state" ;;
+esac
 ```
 
-This procedure is a fail-closed operational check, not a mathematical proof
-that no race can ever occur. Detection of an out-of-band live wrapper or
-Python process, duplicate/copied/templated/alternate runtime unit, multiple
-matching runtime processes, a matching process outside the authorized service
+The dedicated `traderassist` account is reserved for the authorized service,
+so any unexplained process owned by that UID requires `SAFE_STOP`. The checks
+are bounded operational checks, not universal detection of arbitrarily
+disguised processes, unrelated UIDs, arbitrary implementations, PID reuse, or
+every possible race. Detection of an out-of-band live wrapper or Python
+process, duplicate/copied/templated/alternate runtime unit, multiple matching
+runtime processes, a matching process outside the literal authorized service
 cgroup, an alternate live database-backed runtime, or an unresolved lifecycle
 command requires `SAFE_STOP` before deployment, runtime activation, or
-continued smoke. Do not automatically kill a detected process. Stop the
-workflow and obtain Project Control and Engineering Optimization review.
+continued smoke. Stop the workflow and obtain Project Control and Engineering
+Optimization review.
 
 Concurrent execution can cause SQLite write contention, delayed writes,
 database-locked operational failures, competing runtime-session records,
@@ -408,57 +618,14 @@ independent evidence demonstrates it.
 
 ## 16. Controlled Restart Procedure
 
-Exactly one controlled restart is permitted during the separately authorized
-supervised smoke. `systemctl stop` waits for the stop job to complete. Do not
-continue if any verification below fails; follow the `SAFE_STOP` policy in
-Section 15. After Step 2, run the complete Section 15 pre-start verification
-and proceed only when it prints `PASS`.
-
-```bash
-# 1. Stop and wait for completion.
-sudo systemctl stop trader-assist-v0-public.service
-
-# 2. Verify inactive, MainPID=0, and no wrapper or runtime Python remains.
-SERVICE="trader-assist-v0-public.service"
-service_state="$(sudo systemctl is-active "$SERVICE" 2>&1 || true)"
-test "$service_state" = "inactive" || { echo "SAFE_STOP: service is not inactive" >&2; exit 1; }
-main_pid="$(sudo systemctl show --property=MainPID --value "$SERVICE" 2>&1)" \
-  || { echo "SAFE_STOP: cannot read MainPID" >&2; exit 1; }
-test "$main_pid" = "0" || { echo "SAFE_STOP: MainPID=$main_pid" >&2; exit 1; }
-test -z "$(sudo pgrep -af '[r]un_restricted_public_runtime.sh' || true)" \
-  || { echo "SAFE_STOP: wrapper process remains" >&2; exit 1; }
-test -z "$(sudo pgrep -af '[r]un_first_launch_public_runtime.py' || true)" \
-  || { echo "SAFE_STOP: runtime Python process remains" >&2; exit 1; }
-
-# 3. After the complete Section 15 pre-start verification reports PASS, start
-# only through systemd.
-sudo systemctl start "$SERVICE"
-
-# 4. systemd must report exactly one, nonzero MainPID, and it must exist.
-main_pid="$(sudo systemctl show --property=MainPID --value "$SERVICE" 2>&1)" \
-  || { echo "SAFE_STOP: cannot read post-start MainPID" >&2; exit 1; }
-case "$main_pid" in
-  ''|0|*[!0-9]*) echo "SAFE_STOP: expected one nonzero MainPID, got $main_pid" >&2; exit 1 ;;
-esac
-sudo test -d "/proc/$main_pid" \
-  || { echo "SAFE_STOP: MainPID does not exist: $main_pid" >&2; exit 1; }
-
-# 5. Exactly one runtime Python process must be in the service cgroup, and no
-# matching runtime Python process may be outside that cgroup.
-service_cgroup="$(sudo systemctl show --property=ControlGroup --value "$SERVICE" 2>&1)" \
-  || { echo "SAFE_STOP: cannot read service cgroup" >&2; exit 1; }
-test -n "$service_cgroup" \
-  || { echo "SAFE_STOP: empty service cgroup" >&2; exit 1; }
-runtime_in_cgroup="$(sudo ps -eo pid=,args=,cgroup= | \
-  awk -v cgroup="$service_cgroup" \
-    '$0 ~ /[r]un_first_launch_public_runtime\.py/ && $0 ~ (cgroup "$") { print }')"
-runtime_count="$(printf '%s\n' "$runtime_in_cgroup" | sed '/^$/d' | wc -l | tr -d ' ')"
-test "$runtime_count" = "1" \
-  || { echo "SAFE_STOP: expected one runtime Python process in service cgroup" >&2; exit 1; }
-all_runtime="$(sudo pgrep -af '[r]un_first_launch_public_runtime.py' || true)"
-test "$(printf '%s\n' "$all_runtime" | sed '/^$/d' | wc -l | tr -d ' ')" = "1" \
-  || { echo "SAFE_STOP: matching runtime process exists outside the service cgroup" >&2; exit 1; }
-```
+Exactly one controlled restart is permitted during separately authorized
+supervised smoke. Set `OPERATION="controlled-restart"` in the self-contained
+Section 15 block. That mode establishes the original authorized process
+identity and start ticks, stops synchronously, proves the original identity
+absent, invokes the complete pre-start checks in the same shell sequence, and
+then performs the systemd-only start and post-start identity proof. It prints
+`PASS` only after the new PID differs and the absence-before-start proof
+establishes that no overlap was observed.
 
 ## 17. Status Procedure
 
@@ -493,19 +660,78 @@ sudo journalctl -u trader-assist-v0-public.service \
   --no-pager > /tmp/trader-assist-v0-journal-evidence.txt
 ```
 
-## 20. Read-Only SQLite Health Queries
+## 20. Configured Database Read-Only Integrity Evidence
 
-Using Python stdlib only (no external tools required):
+Use this bounded parser and read-only check before and after separately
+authorized smoke. It does not source or execute `public.env`; it accepts
+exactly one unquoted `TRADER_ASSIST_V0_DATABASE_PATH=` assignment, requires a
+regular configured database file below the approved state directory, retrieves
+the complete `PRAGMA integrity_check` result set, and prints `PASS` only for
+exactly one `ok` row.
 
 ```bash
-sudo -u traderassist /opt/trader-assist-v0/venv/bin/python -c "
+set -eu
+set -o pipefail
+
+ENVIRONMENT_FILE="/etc/trader-assist-v0/public.env"
+STATE_ROOT="/var/lib/trader-assist-v0"
+DATABASE_KEY="TRADER_ASSIST_V0_DATABASE_PATH"
+assignment_count=0
+database_path=""
+
+test -r "$ENVIRONMENT_FILE" || { echo "SAFE_STOP: public.env is not readable" >&2; exit 1; }
+while IFS= read -r line || test -n "$line"; do
+  case "$line" in
+    "$DATABASE_KEY"=*)
+      assignment_count=$((assignment_count + 1))
+      database_path="$(printf '%s\n' "$line" | cut -d= -f2-)"
+      ;;
+    *"$DATABASE_KEY"*) echo "SAFE_STOP: malformed database-path assignment" >&2; exit 1 ;;
+  esac
+done < "$ENVIRONMENT_FILE"
+
+test "$assignment_count" = "1" || { echo "SAFE_STOP: expected exactly one database-path assignment" >&2; exit 1; }
+case "$database_path" in
+  /*) ;;
+  *) echo "SAFE_STOP: database path is not absolute" >&2; exit 1 ;;
+esac
+if ! printf '%s\n' "$database_path" | LC_ALL=C grep -Eq '^[[:alnum:]./_-]+$'; then
+  echo "SAFE_STOP: database-path assignment is quoted or unsupported" >&2
+  exit 1
+fi
+
+state_root="$(realpath -e "$STATE_ROOT" 2>&1)" || { echo "SAFE_STOP: state root cannot canonicalize" >&2; exit 1; }
+database_canonical="$(realpath -e "$database_path" 2>&1)" || { echo "SAFE_STOP: configured database file cannot canonicalize" >&2; exit 1; }
+test -f "$database_canonical" || { echo "SAFE_STOP: configured database path is not a regular file" >&2; exit 1; }
+relative_path="$(realpath --relative-to="$state_root" "$database_canonical" 2>&1)" || { echo "SAFE_STOP: cannot compare configured database path" >&2; exit 1; }
+case "$relative_path" in
+  ""|"."|".."|"../"*|/*) echo "SAFE_STOP: configured database is outside the approved state directory" >&2; exit 1 ;;
+esac
+
+sudo -u traderassist /opt/trader-assist-v0/venv/bin/python - "$database_canonical" <<'PY'
+from pathlib import Path
 import sqlite3
-conn = sqlite3.connect('file:/var/lib/trader-assist-v0/runtime.db?mode=ro', uri=True)
-print('journal_mode:', conn.execute('PRAGMA journal_mode').fetchone()[0])
-print('integrity_check:', conn.execute('PRAGMA integrity_check').fetchone()[0])
-conn.close()
-"
+import sys
+
+path = Path(sys.argv[1])
+try:
+    connection = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)
+    try:
+        rows = connection.execute("PRAGMA integrity_check").fetchall()
+    finally:
+        connection.close()
+except Exception:
+    raise SystemExit("SAFE_STOP: read-only integrity inspection failed")
+
+if rows != [("ok",)]:
+    raise SystemExit("SAFE_STOP: integrity_check did not return exactly one ok row")
+print(f"PASS: database_path={path} integrity_check_rows={rows!r}")
+PY
 ```
+
+Record the exact `database_path` and complete successful result before and
+after smoke. A failed fail-closed result is evidence requiring review; do not
+claim SQLite corruption without that or other independent evidence.
 
 ## 21. READY Verification
 
@@ -522,13 +748,9 @@ shutdown sequence.
 
 ## 23. STOPPED Verification
 
-The runtime is STOPPED when:
-
-```bash
-sudo systemctl is-active trader-assist-v0-public.service
-```
-
-returns `inactive`.
+For an operational final-state proof, use the complete self-contained
+Section 15 block with `OPERATION="final-state"`. A display of inactive state
+alone is not sufficient evidence.
 
 ## 24. Runtime Session Verification
 
@@ -537,21 +759,38 @@ returns `inactive`.
 
 ## 25. Rollback
 
-To roll back the deployment:
+Stop and disable the unit, then use the authoritative final-state proof before
+removing the installed unit:
 
 ```bash
 sudo systemctl stop trader-assist-v0-public.service
 sudo systemctl disable trader-assist-v0-public.service
+sudo rm -f /etc/trader-assist-v0/activation-permit
+
+# Run the complete self-contained Section 15 block with:
+# OPERATION="final-state"
+# Proceed only when it prints PASS.
+
 sudo rm /etc/systemd/system/trader-assist-v0-public.service
 sudo systemctl daemon-reload
-sudo rm -f /etc/trader-assist-v0/activation-permit
 ```
 
 ## 26. Uninstall
 
+`OPERATION="final-state"` in Section 15 is the sole authoritative final
+process proof. Run it after stop/disable and before removing the unit or
+deleting deployment paths. Do not use `|| true` to turn inspection or
+cleanup failures into a successful proof.
+
 ```bash
-sudo systemctl stop trader-assist-v0-public.service || true
-sudo systemctl disable trader-assist-v0-public.service || true
+sudo systemctl stop trader-assist-v0-public.service
+sudo systemctl disable trader-assist-v0-public.service
+sudo rm -f /etc/trader-assist-v0/activation-permit
+
+# Run the complete self-contained Section 15 block with:
+# OPERATION="final-state"
+# Proceed only when it prints PASS.
+
 sudo rm /etc/systemd/system/trader-assist-v0-public.service
 sudo systemctl daemon-reload
 sudo rm -rf /etc/trader-assist-v0
@@ -563,11 +802,11 @@ sudo groupdel traderassist || true
 
 ## 27. Proof That No Runtime Remains
 
-```bash
-sudo systemctl is-active trader-assist-v0-public.service || echo "inactive"
-pgrep -f run_restricted_public_runtime.sh || echo "no wrapper process"
-pgrep -f run_first_launch_public_runtime.py || echo "no Python process"
-```
+Use only the complete self-contained Section 15 block with
+`OPERATION="final-state"`. It fails closed unless the unit is loaded and
+inspectable, exactly inactive and disabled with `MainPID=0`, no lifecycle
+job, no populated surviving cgroup, no approved wrapper or Python runtime,
+and no process owned by `traderassist`.
 
 ## 28. P4-A / P4-B Separation
 
@@ -600,17 +839,14 @@ The future smoke plan must specify:
 - target total of 60 minutes;
 - maximum extension to 90 minutes;
 - record the original `MainPID` before the controlled stop;
-- stop and wait for completion, then prove the original PID no longer exists;
-- prove no runtime process remains before the systemd-only start;
-- record exactly one new `MainPID` after the start and prove no process overlap
-  was observed;
-- prove exactly one runtime Python process is in the authorized service cgroup
-  and none is outside it;
-- run the read-only `PRAGMA integrity_check` in Section 20 before and after
-  smoke;
-- final service stopped;
-- final service disabled;
-- no runtime remaining.
+- use Section 15 `OPERATION="controlled-restart"` exactly once; record its
+  original PID/start-tick evidence and new MainPID evidence;
+- record that the original identity was absent before the new systemd-only
+  start, so no overlap was observed;
+- run the configured-path, read-only Section 20 integrity procedure before
+  and after smoke, recording its exact database path and complete result;
+- finish with the final service stopped and final service disabled;
+- use Section 15 `OPERATION="final-state"` to prove no runtime remains.
 
 LOCAL/NON_AWS SMOKE IS NOT AUTHORIZED BY THIS WRITE LEASE.
 
