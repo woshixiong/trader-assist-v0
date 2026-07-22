@@ -125,8 +125,12 @@ test "$(stat -c '%a' "$SOURCE")" = "600" || { echo "ERROR: source must be 0600";
 # Create same-directory temporary destination
 sudo install -m 600 -o root -g root "$SOURCE" /etc/trader-assist-v0/credentials/notification.json.tmp
 
-# Run the production offline validation-only path
-sudo /opt/trader-assist-v0/venv/bin/python \
+# Run the production offline validation-only path.  The entrypoint's
+# validate-only branch returns before activation, store, HTTP, WebSocket, or
+# notification setup; it is not a runtime start.
+sudo /usr/bin/env \
+  PYTHONPATH=/opt/trader-assist-v0/src \
+  /opt/trader-assist-v0/venv/bin/python \
   /opt/trader-assist-v0/scripts/run_first_launch_public_runtime.py \
   --validate-only \
   --notification-credential-file /etc/trader-assist-v0/credentials/notification.json.tmp \
@@ -171,7 +175,9 @@ test "$(stat -c '%a' "$SOURCE")" = "600" || { echo "ERROR: source must be 0600";
 
 sudo install -m 600 -o root -g root "$SOURCE" /etc/trader-assist-v0/credentials/notification.json.new
 
-sudo /opt/trader-assist-v0/venv/bin/python \
+sudo /usr/bin/env \
+  PYTHONPATH=/opt/trader-assist-v0/src \
+  /opt/trader-assist-v0/venv/bin/python \
   /opt/trader-assist-v0/scripts/run_first_launch_public_runtime.py \
   --validate-only \
   --notification-credential-file /etc/trader-assist-v0/credentials/notification.json.new \
@@ -330,7 +336,12 @@ such as the credential-validation commands in Sections 5b and 5c. Validation
 only neither authorizes nor starts the live runtime.
 
 The following is the single canonical, self-contained systemd Linux
-verification block. Set `OPERATION` to exactly one supported mode before
+verification block. It has two boundaries: `SUDO_PRECONDITION` is interactive
+operator preparation outside the hard cap; `NONINTERACTIVE_PROOF` is the
+complete `sudo -n` proof inside the 30-second hard cap. Tool capability checks
+are also outside the cap, but every busctl, systemctl, process, cgroup, and
+filesystem inspection that establishes proof evidence is inside it. Set
+`OPERATION` to exactly one supported mode before
 executing it: `pre-start`, `post-start`, `controlled-restart`, or
 `final-state`, `credential-rollback`, `deployment-rollback`, or
 `uninstall`. It is deliberately constrained to unified cgroup v2. Any
@@ -347,34 +358,49 @@ and does not grant P4B, AWS, runtime, or smoke authority.
 set -eu
 set -o pipefail
 
-# This outer timeout deliberately does not use --foreground: GNU timeout then
-# owns the proof command's process group.  Its 28-second TERM deadline plus
-# its two-second forced-KILL grace is the complete, hard 30-second cap.
+# SUDO_PRECONDITION (outside NONINTERACTIVE_PROOF): this may prompt.  Do not
+# count it as part of the hard cap; the proof itself never prompts.
 OPERATION="pre-start"
 TIMEOUT_BIN="$(command -v timeout || true)"
+BUSCTL_BIN="$(command -v busctl || true)"
+SYSTEM_PYTHON="/usr/bin/python3"
 safe_stop() { printf 'SAFE_STOP: %s\n' "$1" >&2; exit 1; }
 test -n "$TIMEOUT_BIN" || safe_stop "supported host lacks timeout"
 if ! "$TIMEOUT_BIN" --help 2>&1 | grep -F -- '--kill-after' >/dev/null; then
   safe_stop "timeout lacks required kill-after facility"
 fi
+test -n "$BUSCTL_BIN" || safe_stop "supported host lacks busctl"
+if ! "$BUSCTL_BIN" --help 2>&1 | grep -F -- '--json' >/dev/null; then
+  safe_stop "busctl lacks --json=short support"
+fi
+test -x "$SYSTEM_PYTHON" || safe_stop "supported host lacks the reviewed executable-property parser"
 sudo -v || safe_stop "cannot refresh sudo credentials before proof"
+if ! sudo -n "$BUSCTL_BIN" --system --json=short call \
+  org.freedesktop.systemd1 /org/freedesktop/systemd1 \
+  org.freedesktop.DBus.Peer Ping >/dev/null; then
+  safe_stop "system bus or systemd manager is unreachable"
+fi
 
+# NONINTERACTIVE_PROOF (inside the hard cap). This outer timeout deliberately
+# does not use --foreground: GNU timeout owns the proof command process group.
+# Its 28-second TERM deadline plus its two-second forced-KILL grace is the
+# complete, hard 30-second cap.
 set +e
-"$TIMEOUT_BIN" --signal=TERM --kill-after=2s 28s bash -s -- "$OPERATION" "$TIMEOUT_BIN" <<'P4B_PROOF'
+"$TIMEOUT_BIN" --signal=TERM --kill-after=2s 28s bash -s -- "$OPERATION" "$TIMEOUT_BIN" "$BUSCTL_BIN" "$SYSTEM_PYTHON" <<'P4B_PROOF'
 set -euo pipefail
 
 OPERATION="$1"
 TIMEOUT_BIN="$2"
+BUSCTL_BIN="$3"
+SYSTEM_PYTHON="$4"
 SERVICE="trader-assist-v0-public.service"
 AUTHORIZED_FRAGMENT="/etc/systemd/system/trader-assist-v0-public.service"
 APPROVED_WRAPPER="/opt/trader-assist-v0/scripts/p4a/run_restricted_public_runtime.sh"
 APPROVED_PYTHON="/opt/trader-assist-v0/venv/bin/python"
 APPROVED_ENTRYPOINT="/opt/trader-assist-v0/scripts/run_first_launch_public_runtime.py"
-SYSTEM_PYTHON="/usr/bin/python3"
 EXEC_PROPERTIES=(ExecCondition ExecStartPre ExecStart ExecStartPost ExecReload ExecStop ExecStopPost)
 proof_started=$SECONDS
 proof_deadline=$((proof_started + 28))
-test -x "$SYSTEM_PYTHON" || safe_stop "supported host lacks the reviewed executable-property parser"
 
 safe_stop() { printf 'SAFE_STOP: %s\n' "$1" >&2; exit 1; }
 
@@ -437,6 +463,16 @@ bounded_capture_status() {
   BOUNDED_STATUS="$command_status"
 }
 
+require_directory() { bounded_capture_status ignored_test_output '0' sudo -n test -d "$1"; }
+directory_exists() {
+  bounded_capture_status ignored_test_output '0 1' sudo -n test -d "$1"
+  test "$BOUNDED_STATUS" = 0
+}
+path_exists() {
+  bounded_capture_status ignored_test_output '0 1' sudo -n test -e "$1"
+  test "$BOUNDED_STATUS" = 0
+}
+
 read_property() {
   property="$1"; unit="$2"
   bounded_capture value sudo -n systemctl show --property="$property" --value "$unit"
@@ -444,68 +480,177 @@ read_property() {
   printf '%s' "$value"
 }
 
-require_service_name() { case "$1" in *.service) ;; *) safe_stop "manager returned a non-service identity" ;; esac; }
 require_scalar() { case "$1" in *$'\n'*|*$'\r'*) safe_stop "manager returned an ambiguous scalar" ;; esac; }
 assert_nonzero_pid() { case "$1" in ''|0|*[!0-9]*) safe_stop "MainPID is not one nonzero numeric PID" ;; esac; }
-assert_unified_cgroup_v2() { test -r /sys/fs/cgroup/cgroup.controllers || safe_stop "P4B verification requires unified cgroup v2"; }
+assert_unified_cgroup_v2() { bounded_run sudo -n test -r /sys/fs/cgroup/cgroup.controllers || safe_stop "P4B verification requires unified cgroup v2"; }
 
-# This is the explicitly supported, reviewed systemd serialization only:
-# zero or more complete `{ path=... ; argv[]=... ; ignore_errors=... ;
-# start_time=[...] ; stop_time=[...] ; pid=... ; code=... ; status=... }`
-# records, separated solely by whitespace.  The parser rejects every other
-# manager format, parses every record and every shlex argv field structurally,
-# and emits no command arguments.
-EXEC_PARSER='import os,re,shlex,sys
-s=os.environ["EXEC_SERIALIZED"]
-mode=os.environ["EXEC_MODE"]
-prop=os.environ["EXEC_PROPERTY"]
-wrapper=os.environ["APPROVED_WRAPPER"]
-entry=os.environ["APPROVED_ENTRYPOINT"]
-p=re.compile(r"\\{ path=([^ ;{}\\n]+) ; argv\\[\\]=([^{}\\n]*?) ; ignore_errors=(yes|no) ; start_time=\\[([^]\\n]*)\\] ; stop_time=\\[([^]\\n]*)\\] ; pid=([0-9]+) ; code=([^ ;{}\\n]+) ; status=([^ ;{}\\n]+) \\}")
-records=[]; pos=0
-while pos < len(s):
-    while pos < len(s) and s[pos] in " \\t": pos += 1
-    if pos == len(s): break
-    m=p.match(s,pos)
-    if not m: raise SystemExit(1)
-    try: argv=shlex.split(m.group(2), posix=True, comments=False)
-    except ValueError: raise SystemExit(1)
-    if not argv: raise SystemExit(1)
-    records.append((m.group(1),argv)); pos=m.end()
-def trader_path(v): return v == wrapper or v == entry or v.startswith("/opt/trader-assist-v0/")
+# LOSSLESS_BUSCTL_JSON_TYPED_SYSTEMD_DBUS_PROOF consumes the typed D-Bus value
+# only. It never reconstructs argv from display text and emits neither argv,
+# environment, nor credential values.
+EXEC_JSON_PARSER='import json, os, sys
+raw = os.environ["EXEC_JSON"]
+mode = os.environ["EXEC_MODE"]
+prop = os.environ["EXEC_PROPERTY"]
+wrapper = os.environ["APPROVED_WRAPPER"]
+entry = os.environ["APPROVED_ENTRYPOINT"]
+root = "/opt/trader-assist-v0/"
+def reject_pairs(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError()
+        result[key] = value
+    return result
+def fail():
+    raise SystemExit(1)
+try:
+    raw.encode("utf-8", "strict")
+    document = json.loads(raw, object_pairs_hook=reject_pairs)
+except Exception:
+    fail()
+if not isinstance(document, dict) or set(document) != {"type", "data"}:
+    fail()
+if document["type"] != "a(sasbttttuii)" or not isinstance(document["data"], list):
+    fail()
+def is_int(value):
+    return type(value) is int
+def trader_literal(value):
+    return (value == wrapper or value == entry or value.startswith(root)
+            or root in value or "run_restricted_public_runtime.sh" in value
+            or "run_first_launch_public_runtime.py" in value)
+def inspect_path(value, executable):
+    if not isinstance(value, str) or not value.startswith("/"):
+        fail()
+    if trader_literal(value):
+        fail()
+    try:
+        if executable and (not os.path.isfile(value) or not os.access(value, os.X_OK)):
+            fail()
+        if not os.path.exists(value):
+            fail()
+        canonical = os.path.realpath(value)
+    except Exception:
+        fail()
+    if not canonical.startswith("/") or trader_literal(canonical):
+        fail()
+def inspect_argv(value):
+    if trader_literal(value):
+        fail()
+    if value.startswith("/"):
+        inspect_path(value, False)
+    if "=" in value:
+        attached = value.split("=", 1)[1]
+        if attached.startswith("/"):
+            inspect_path(attached, False)
+records = []
+for record in document["data"]:
+    if not isinstance(record, list) or len(record) != 10:
+        fail()
+    path, argv, ignore_failure, start_a, start_b, stop_a, stop_b, pid, code, status = record
+    if not isinstance(path, str) or not isinstance(argv, list) or any(not isinstance(arg, str) for arg in argv):
+        fail()
+    if type(ignore_failure) is not bool:
+        fail()
+    if any(not is_int(value) or value < 0 for value in (start_a, start_b, stop_a, stop_b, pid)):
+        fail()
+    if not is_int(code) or not is_int(status):
+        fail()
+    records.append((path, argv))
 if mode == "authorized":
     if prop == "ExecStart":
-        if len(records) != 1 or records[0][0] != wrapper or records[0][1] != [wrapper]: raise SystemExit(1)
-    elif records: raise SystemExit(1)
+        if len(records) != 1 or records[0] != (wrapper, [wrapper]):
+            fail()
+    elif records:
+        fail()
+elif mode == "other":
+    for path, argv in records:
+        inspect_path(path, True)
+        for argument in argv:
+            inspect_argv(argument)
 else:
-    for path,argv in records:
-        if trader_path(path) or any(trader_path(arg) for arg in argv): raise SystemExit(1)
+    fail()
 '
 
+DBUS_SCALAR_PARSER='import json, os, re, sys
+raw = os.environ["DBUS_JSON"]
+expected_type = os.environ["DBUS_EXPECTED_TYPE"]
+kind = os.environ["DBUS_SCALAR_KIND"]
+def reject_pairs(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError()
+        result[key] = value
+    return result
+try:
+    document = json.loads(raw, object_pairs_hook=reject_pairs)
+except Exception:
+    raise SystemExit(1)
+if not isinstance(document, dict) or set(document) != {"type", "data"}:
+    raise SystemExit(1)
+value = document["data"]
+if document["type"] != expected_type or not isinstance(value, str):
+    raise SystemExit(1)
+if kind == "object":
+    valid = re.fullmatch(r"/(?:[A-Za-z0-9_]+/)*[A-Za-z0-9_]+", value) is not None
+elif kind == "service":
+    valid = re.fullmatch(r"[A-Za-z0-9@_.-]+\\.service", value) is not None
+else:
+    valid = False
+if not valid:
+    raise SystemExit(1)
+sys.stdout.write(value)
+'
+
+parse_typed_scalar() {
+  json_value="$1"; expected_type="$2"; scalar_kind="$3"
+  bounded_capture scalar_output sudo -n /usr/bin/env \
+    DBUS_JSON="$json_value" DBUS_EXPECTED_TYPE="$expected_type" DBUS_SCALAR_KIND="$scalar_kind" \
+    "$SYSTEM_PYTHON" -c "$DBUS_SCALAR_PARSER"
+  require_scalar "$scalar_output"
+  printf '%s' "$scalar_output"
+}
+
+require_service_name() {
+  [[ "$1" =~ ^[A-Za-z0-9@_.-]+\.service$ ]] || safe_stop "manager returned a non-service identity"
+}
+
+get_unit_object() {
+  unit="$1"; require_service_name "$unit"
+  bounded_capture object_json sudo -n "$BUSCTL_BIN" --system --json=short call \
+    org.freedesktop.systemd1 /org/freedesktop/systemd1 \
+    org.freedesktop.systemd1.Manager GetUnit s "$unit"
+  parse_typed_scalar "$object_json" o object
+}
+
+get_canonical_id() {
+  object_path="$1"
+  bounded_capture id_json sudo -n "$BUSCTL_BIN" --system --json=short get-property \
+    org.freedesktop.systemd1 "$object_path" org.freedesktop.systemd1.Unit Id
+  parse_typed_scalar "$id_json" s service
+}
+
 parse_exec_property() {
-  serialized="$1"; mode="$2"; property="$3"
-  bounded_capture parser_output env \
-    EXEC_SERIALIZED="$serialized" EXEC_MODE="$mode" EXEC_PROPERTY="$property" \
+  json_value="$1"; mode="$2"; property="$3"
+  bounded_capture parser_output sudo -n /usr/bin/env \
+    EXEC_JSON="$json_value" EXEC_MODE="$mode" EXEC_PROPERTY="$property" \
     APPROVED_WRAPPER="$APPROVED_WRAPPER" APPROVED_ENTRYPOINT="$APPROVED_ENTRYPOINT" \
-    "$SYSTEM_PYTHON" -c "$EXEC_PARSER"
-  test -z "$parser_output" || safe_stop "executable-property parser emitted unexpected output"
+    "$SYSTEM_PYTHON" -c "$EXEC_JSON_PARSER"
+  test -z "$parser_output" || safe_stop "typed executable-property parser emitted unexpected output"
+}
+
+read_typed_exec_property() {
+  object_path="$1"; property="$2"
+  bounded_capture exec_json sudo -n "$BUSCTL_BIN" --system --json=short get-property \
+    org.freedesktop.systemd1 "$object_path" org.freedesktop.systemd1.Service "$property"
+  printf '%s' "$exec_json"
 }
 
 inspect_exec_properties() {
-  unit="$1"; mode="$2"
+  object_path="$1"; mode="$2"
   for property in "${EXEC_PROPERTIES[@]}"; do
-    serialized="$(read_property "$property" "$unit")"
-    parse_exec_property "$serialized" "$mode" "$property"
-  done
-}
-
-compare_alias_exec_properties() {
-  alias_unit="$1"; canonical_unit="$2"; canonical_mode="$3"
-  for property in "${EXEC_PROPERTIES[@]}"; do
-    alias_value="$(read_property "$property" "$alias_unit")"
-    canonical_value="$(read_property "$property" "$canonical_unit")"
-    test -z "$alias_value" || test "$alias_value" = "$canonical_value" || safe_stop "alias executable property conflicts with canonical identity"
-    test -z "$alias_value" || parse_exec_property "$alias_value" "$canonical_mode" "$property"
+    typed_json="$(read_typed_exec_property "$object_path" "$property")"
+    parse_exec_property "$typed_json" "$mode" "$property"
   done
 }
 
@@ -534,41 +679,40 @@ assert_authorized_identity() {
   test "$(read_property FragmentPath "$SERVICE")" = "$AUTHORIZED_FRAGMENT" || safe_stop "authorized FragmentPath is not exact"
   test "$(read_property Transient "$SERVICE")" = no || safe_stop "authorized Transient is not no"
   test -z "$(read_property DropInPaths "$SERVICE")" || safe_stop "authorized DropInPaths is not empty"
-  inspect_exec_properties "$SERVICE" authorized
+  authorized_object="$(get_unit_object "$SERVICE")"
+  authorized_id="$(get_canonical_id "$authorized_object")"
+  test "$authorized_id" = "$SERVICE" || safe_stop "authorized typed canonical Id is not exact"
+  inspect_exec_properties "$authorized_object" authorized
 }
 
 assert_manager_known_executables() {
   collect_manager_units
-  seen_canonical='|'
+  declare -A canonical_object_by_id=()
+  declare -A canonical_id_by_object=()
+  declare -A inspected_object=()
   while IFS= read -r candidate; do
     require_service_name "$candidate"
-    current="$candidate"; aliases=''; depth=0
-    while :; do
-      depth=$((depth + 1)); test "$depth" -le 8 || safe_stop "alias following exceeded depth 8"
-      require_service_name "$current"
-      load="$(read_property LoadState "$current")"
-      following="$(read_property Following "$current")"
-      case "$load" in
-        masked|not-found)
-          test -z "$following" || safe_stop "non-loadable unit has Following identity"
-          inspect_exec_properties "$current" other
-          current=''; break
-          ;;
-        loaded|merged) ;;
-        *) safe_stop "manager returned unsupported LoadState" ;;
-      esac
-      if test -z "$following"; then canonical="$current"; break; fi
-      require_service_name "$following"
-      case "|$aliases|" in *"|$following|"*) safe_stop "alias Following cycle detected" ;; esac
-      aliases="${aliases}${aliases:+|}$current"; current="$following"
-    done
-    test -n "${current:-}" || continue
-    canonical_load="$(read_property LoadState "$canonical")"
+    object_path="$(get_unit_object "$candidate")"
+    canonical_id="$(get_canonical_id "$object_path")"
+    # Mode is assigned before object-path deduplication, so enumeration order
+    # cannot change authorized, unrelated, transient, or alias classification.
+    if test "$canonical_id" = "$SERVICE"; then canonical_mode=authorized; else canonical_mode=other; fi
+    if [[ -v "canonical_object_by_id[$canonical_id]" ]]; then
+      test "${canonical_object_by_id[$canonical_id]}" = "$object_path" || safe_stop "aliases with one canonical Id resolved to different D-Bus object paths"
+    else
+      canonical_object_by_id["$canonical_id"]="$object_path"
+    fi
+    if [[ -v "canonical_id_by_object[$object_path]" ]]; then
+      test "${canonical_id_by_object[$object_path]}" = "$canonical_id" || safe_stop "one D-Bus object path returned conflicting canonical Ids"
+    else
+      canonical_id_by_object["$object_path"]="$canonical_id"
+    fi
+    canonical_load="$(read_property LoadState "$canonical_id")"
     test "$canonical_load" = loaded || safe_stop "canonical service is not loaded"
-    canonical_transient="$(read_property Transient "$canonical")"
+    canonical_transient="$(read_property Transient "$canonical_id")"
     case "$canonical_transient" in yes|no) ;; *) safe_stop "canonical Transient is unknown" ;; esac
-    canonical_fragment="$(read_property FragmentPath "$canonical")"
-    if test "$canonical" = "$SERVICE"; then
+    canonical_fragment="$(read_property FragmentPath "$canonical_id")"
+    if test "$canonical_mode" = authorized; then
       test "$canonical_fragment" = "$AUTHORIZED_FRAGMENT" || safe_stop "authorized canonical FragmentPath conflicts"
     else
       case "$canonical_transient" in
@@ -576,24 +720,33 @@ assert_manager_known_executables() {
         no) test -n "$canonical_fragment" || safe_stop "non-transient loaded unit has no reliable FragmentPath" ;;
       esac
     fi
-    case "$seen_canonical" in *"|$canonical|"*) : ;; *)
-      if test "$canonical" = "$SERVICE"; then canonical_mode=authorized; else canonical_mode=other; fi
-      inspect_exec_properties "$canonical" "$canonical_mode"
-      seen_canonical="${seen_canonical}${canonical}|"
-      ;;
-    esac
-    IFS='|'; for alias_unit in $aliases; do
-      test -n "$alias_unit" || continue
-      compare_alias_exec_properties "$alias_unit" "$canonical" "$canonical_mode"
-      alias_fragment="$(read_property FragmentPath "$alias_unit")"
-      test -z "$alias_fragment" || test "$alias_fragment" = "$canonical_fragment" || safe_stop "alias FragmentPath conflicts with canonical identity"
-    done; unset IFS
+    if [[ -v "inspected_object[$object_path]" ]]; then
+      test "${inspected_object[$object_path]}" = "$canonical_id" || safe_stop "deduplicated object has ambiguous canonical identity"
+      continue
+    fi
+    inspected_object["$object_path"]="$canonical_id"
+    inspect_exec_properties "$object_path" "$canonical_mode"
   done <<EOF
 $manager_units
 EOF
 }
 
 assert_effective_unit_identity() { assert_authorized_identity; assert_manager_known_executables; }
+
+preflight_supported_host() {
+  # The interactive sudo refresh and tool checks happened outside the cap.
+  # This noninteractive, bounded check proves that the system bus and manager
+  # are reachable, then requires every reviewed Exec property to have the
+  # exact typed signature and authorized-service contract before any lifecycle
+  # proof can proceed.
+  bounded_capture manager_ping sudo -n "$BUSCTL_BIN" --system --json=short call \
+    org.freedesktop.systemd1 /org/freedesktop/systemd1 \
+    org.freedesktop.DBus.Peer Ping
+  preflight_object="$(get_unit_object "$SERVICE")"
+  preflight_id="$(get_canonical_id "$preflight_object")"
+  test "$preflight_id" = "$SERVICE" || safe_stop "authorized typed canonical Id is not exact"
+  inspect_exec_properties "$preflight_object" authorized
+}
 
 line_count() { printf '%s\n' "$1" | awk 'NF { n++ } END { print n+0 }'; }
 sole_pid() { printf '%s\n' "$1" | awk 'NF { print; exit }'; }
@@ -608,7 +761,7 @@ collect_pids() {
 }
 collect_approved_runtime_pids() { collect_pids '[r]un_restricted_public_runtime.sh' WRAPPER_PIDS; collect_pids '[r]un_first_launch_public_runtime.py' PYTHON_PIDS; }
 collect_dedicated_user_pids() {
-  bounded_capture DEDICATED_UID id -u traderassist; case "$DEDICATED_UID" in ''|*[!0-9]*) safe_stop "dedicated traderassist UID is invalid" ;; esac
+  bounded_capture DEDICATED_UID sudo -n id -u traderassist; case "$DEDICATED_UID" in ''|*[!0-9]*) safe_stop "dedicated traderassist UID is invalid" ;; esac
   set +e
   remaining="$(remaining_seconds)"; command_seconds=$((remaining - 1)); output="$("$TIMEOUT_BIN" --foreground --signal=TERM --kill-after=1s "${command_seconds}s" sudo -n pgrep -u "$DEDICATED_UID" 2>&1)"; status=$?
   set -e
@@ -619,7 +772,7 @@ collect_dedicated_user_pids() {
 validate_cgroup_path() { case "$1" in /*) ;; *) safe_stop "ControlGroup is not absolute" ;; esac; case "$1" in *..*|*'//'*) safe_stop "ControlGroup is ambiguous" ;; esac; }
 assert_cgroup_absent_or_empty() {
   path="$1"; test -n "$path" || return 0; assert_unified_cgroup_v2; validate_cgroup_path "$path"; directory="/sys/fs/cgroup$path"
-  if test -e "$directory"; then test -d "$directory" || safe_stop "ControlGroup is not a directory"; bounded_capture cgroup_pids sudo -n cat "$directory/cgroup.procs"; test -z "$cgroup_pids" || safe_stop "service cgroup is populated"; fi
+  if directory_exists "$directory"; then bounded_capture cgroup_pids sudo -n cat "$directory/cgroup.procs"; test -z "$cgroup_pids" || safe_stop "service cgroup is populated"; fi
 }
 assert_inactive_service_cgroup() { assert_unified_cgroup_v2; inactive_cgroup="$(read_property ControlGroup "$SERVICE")"; test -z "$inactive_cgroup" || assert_cgroup_absent_or_empty "$inactive_cgroup"; }
 assert_active_service_cgroup() { assert_unified_cgroup_v2; SERVICE_CGROUP="$(read_property ControlGroup "$SERVICE")"; test -n "$SERVICE_CGROUP" || safe_stop "active service has no ControlGroup"; validate_cgroup_path "$SERVICE_CGROUP"; SERVICE_CGROUP_DIR="/sys/fs/cgroup$SERVICE_CGROUP"; }
@@ -691,20 +844,20 @@ assert_pre_start() {
 stabilize_post_start() {
   while test "$SECONDS" -lt "$proof_deadline"; do
     active="$(read_property ActiveState "$SERVICE")"; sub="$(read_property SubState "$SERVICE")"
-    case "$active:$sub" in active:running) ;; failed:*|inactive:*|*:failed|*:dead) safe_stop "service failed during wrapper-to-Python transition" ;; *) bounded_run sleep 1; continue ;; esac
-    pid="$(read_property MainPID "$SERVICE")"; case "$pid" in 0) bounded_run sleep 1; continue ;; *[!0-9]*|'') safe_stop "MainPID is malformed during transition" ;; esac
-    test -d "/proc/$pid" || { bounded_run sleep 1; continue; }
-    if ! assert_complete_runtime_argv "$pid"; then bounded_run sleep 1; continue; fi
-    collect_approved_runtime_pids; test -z "$WRAPPER_PIDS" || { bounded_run sleep 1; continue; }; return 0
+    case "$active:$sub" in active:running) ;; failed:*|inactive:*|*:failed|*:dead) safe_stop "service failed during wrapper-to-Python transition" ;; *) bounded_run sudo -n sleep 1; continue ;; esac
+    pid="$(read_property MainPID "$SERVICE")"; case "$pid" in 0) bounded_run sudo -n sleep 1; continue ;; *[!0-9]*|'') safe_stop "MainPID is malformed during transition" ;; esac
+    if ! directory_exists "/proc/$pid"; then bounded_run sudo -n sleep 1; continue; fi
+    if ! assert_complete_runtime_argv "$pid"; then bounded_run sudo -n sleep 1; continue; fi
+    collect_approved_runtime_pids; test -z "$WRAPPER_PIDS" || { bounded_run sudo -n sleep 1; continue; }; return 0
   done
   safe_stop "hard 30-second transition proof timed out"
 }
 
 assert_post_start() {
-  assert_effective_unit_identity; assert_active_state active; MAIN_PID="$(read_property MainPID "$SERVICE")"; assert_nonzero_pid "$MAIN_PID"; test -d "/proc/$MAIN_PID" || safe_stop "MainPID does not exist"
+  assert_effective_unit_identity; assert_active_state active; MAIN_PID="$(read_property MainPID "$SERVICE")"; assert_nonzero_pid "$MAIN_PID"; require_directory "/proc/$MAIN_PID" || safe_stop "MainPID does not exist"
   assert_complete_runtime_argv "$MAIN_PID" || safe_stop "MainPID does not satisfy the exact 17-entry argv contract"
   collect_dedicated_user_pids; test "$(line_count "$DEDICATED_PIDS")" = 1 || safe_stop "expected exactly one traderassist process"; test "$(sole_pid "$DEDICATED_PIDS")" = "$MAIN_PID" || safe_stop "dedicated PID is not MainPID"
-  assert_active_service_cgroup; test -d "$SERVICE_CGROUP_DIR" || safe_stop "service cgroup does not exist"; bounded_capture runtime_cgroup sudo -n cat "/proc/$MAIN_PID/cgroup"; test "$runtime_cgroup" = "0::$SERVICE_CGROUP" || safe_stop "MainPID cgroup differs"; bounded_capture cgroup_pids sudo -n cat "$SERVICE_CGROUP_DIR/cgroup.procs"; test "$cgroup_pids" = "$MAIN_PID" || safe_stop "cgroup does not contain exactly MainPID"
+  assert_active_service_cgroup; require_directory "$SERVICE_CGROUP_DIR" || safe_stop "service cgroup does not exist"; bounded_capture runtime_cgroup sudo -n cat "/proc/$MAIN_PID/cgroup"; test "$runtime_cgroup" = "0::$SERVICE_CGROUP" || safe_stop "MainPID cgroup differs"; bounded_capture cgroup_pids sudo -n cat "$SERVICE_CGROUP_DIR/cgroup.procs"; test "$cgroup_pids" = "$MAIN_PID" || safe_stop "cgroup does not contain exactly MainPID"
   collect_approved_runtime_pids; test -z "$WRAPPER_PIDS" || safe_stop "wrapper remains after exec"; test "$(line_count "$PYTHON_PIDS")" = 1 || safe_stop "expected exactly one Python runtime"; test "$(sole_pid "$PYTHON_PIDS")" = "$MAIN_PID" || safe_stop "Python PID is not MainPID"
 }
 
@@ -712,11 +865,19 @@ assert_final_state() {
   assert_effective_unit_identity; assert_active_state inactive; test "$(read_property MainPID "$SERVICE")" = 0 || safe_stop "MainPID is not 0 in final state"; test "$(read_property UnitFileState "$SERVICE")" = disabled || safe_stop "UnitFileState is not disabled"; assert_no_lifecycle_job; assert_inactive_service_cgroup; collect_approved_runtime_pids; test -z "$WRAPPER_PIDS$PYTHON_PIDS" || safe_stop "runtime remains in final state"; collect_dedicated_user_pids; test -z "$DEDICATED_PIDS" || safe_stop "traderassist process remains in final state"
 }
 
-stop_disable_and_verify_final_state() { bounded_run sudo -n systemctl stop "$SERVICE"; bounded_run sudo -n systemctl disable "$SERVICE"; assert_final_state; }
+stop_disable_and_verify_final_state() {
+  bounded_run sudo -n systemctl stop "$SERVICE"
+  bounded_capture_status disable_output '0' sudo -n systemctl disable "$SERVICE"
+  # systemctl disable commonly reports removed links; successful text is
+  # non-authoritative and must not be treated as a failure.
+  assert_final_state
+}
 credential_rollback() { stop_disable_and_verify_final_state; bounded_run sudo -n rm -f /etc/trader-assist-v0/credentials/notification.json; bounded_run sudo -n rm -f /etc/trader-assist-v0/activation-permit; printf 'PASS: credential rollback removed credential and activation permit after final-state proof\n'; }
 deployment_rollback() { stop_disable_and_verify_final_state; bounded_run sudo -n rm -f /etc/trader-assist-v0/activation-permit; bounded_run sudo -n rm /etc/systemd/system/trader-assist-v0-public.service; bounded_run sudo -n systemctl daemon-reload; printf 'PASS: deployment rollback removed permit and unit after final-state proof\n'; }
 uninstall_runtime() { stop_disable_and_verify_final_state; bounded_run sudo -n rm -f /etc/trader-assist-v0/credentials/notification.json; bounded_run sudo -n rm -f /etc/trader-assist-v0/activation-permit; bounded_run sudo -n rm /etc/systemd/system/trader-assist-v0-public.service; bounded_run sudo -n systemctl daemon-reload; bounded_run sudo -n rm -rf /etc/trader-assist-v0; bounded_run sudo -n rm -rf /var/lib/trader-assist-v0; bounded_run sudo -n rm -rf /opt/trader-assist-v0; if ! bounded_best_effort sudo -n userdel traderassist; then printf 'WARNING: traderassist user cleanup failed after successful proof-bearing removal\n' >&2; fi; if ! bounded_best_effort sudo -n groupdel traderassist; then printf 'WARNING: traderassist group cleanup failed after successful proof-bearing removal\n' >&2; fi; printf 'PASS: uninstall removed unit and deployment paths after final-state proof; user/group cleanup is best effort only\n'; }
-controlled_restart() { assert_post_start; ORIGINAL_PID="$MAIN_PID"; ORIGINAL_CONTROL_GROUP="$SERVICE_CGROUP"; bounded_capture ORIGINAL_START_TICKS sudo -n awk '{ print $22 }' "/proc/$ORIGINAL_PID/stat"; case "$ORIGINAL_START_TICKS" in ''|*[!0-9]*) safe_stop "original start ticks are invalid" ;; esac; printf 'EVIDENCE: original_pid=%s original_start_ticks=%s\n' "$ORIGINAL_PID" "$ORIGINAL_START_TICKS"; bounded_run sudo -n systemctl stop "$SERVICE"; test ! -e "/proc/$ORIGINAL_PID" || safe_stop "original PID remains after stop"; assert_cgroup_absent_or_empty "$ORIGINAL_CONTROL_GROUP"; assert_pre_start; bounded_run sudo -n systemctl start "$SERVICE"; stabilize_post_start; assert_post_start; test "$MAIN_PID" != "$ORIGINAL_PID" || safe_stop "new MainPID equals original PID"; printf 'PASS: controlled restart recorded new_pid=%s; original identity was absent before start, so no overlap was observed\n' "$MAIN_PID"; }
+controlled_restart() { assert_post_start; ORIGINAL_PID="$MAIN_PID"; ORIGINAL_CONTROL_GROUP="$SERVICE_CGROUP"; bounded_capture ORIGINAL_START_TICKS sudo -n awk '{ print $22 }' "/proc/$ORIGINAL_PID/stat"; case "$ORIGINAL_START_TICKS" in ''|*[!0-9]*) safe_stop "original start ticks are invalid" ;; esac; printf 'EVIDENCE: original_pid=%s original_start_ticks=%s\n' "$ORIGINAL_PID" "$ORIGINAL_START_TICKS"; bounded_run sudo -n systemctl stop "$SERVICE"; ! path_exists "/proc/$ORIGINAL_PID" || safe_stop "original PID remains after stop"; assert_cgroup_absent_or_empty "$ORIGINAL_CONTROL_GROUP"; assert_pre_start; bounded_run sudo -n systemctl start "$SERVICE"; stabilize_post_start; assert_post_start; test "$MAIN_PID" != "$ORIGINAL_PID" || safe_stop "new MainPID equals original PID"; printf 'PASS: controlled restart recorded new_pid=%s; original identity was absent before start, so no overlap was observed\n' "$MAIN_PID"; }
+
+preflight_supported_host
 
 case "$OPERATION" in
   pre-start) assert_pre_start; printf 'PASS: effective unit verified; inactive; MainPID=0; no job, cgroup, runtime, or traderassist process\n' ;;
@@ -750,26 +911,34 @@ command requires `SAFE_STOP` before deployment, runtime activation, or
 continued smoke. Stop the workflow and obtain Project Control and Engineering
 Optimization review.
 
-This proof is restricted to supported systemd Linux hosts with unified cgroup
-v2 and the explicitly reviewed manager and executable-property serialization
-used by the block. Unknown fields, a different serialization, truncated or
-partial manager output, malformed command records, or any ambiguous result
-requires `SAFE_STOP`. In particular, an unrelated transient unit is not
-exempt: it can pass only after complete inspection of all seven executable
-properties and every command record. The proof is bounded operational evidence,
-not a mathematical singleton guarantee. It does not universally detect
-malicious root activity, copied or disguised implementations, unrelated UIDs,
-every PID reuse, every race, or arbitrary alternate implementations. It adds
-no wrapper lock, Python lock, PID-file authority, or Unix-socket authority.
+Supported-host limitations are explicit: this proof requires Ubuntu 22.04+ (or
+an equivalent systemd Linux), unified cgroup v2, GNU `timeout` with the
+reviewed process-group behavior, `busctl --json=short`, a reachable system
+D-Bus and systemd manager, `/usr/bin/python3`, and exactly the reviewed
+`a(sasbttttuii)` Exec D-Bus signature. An unsupported D-Bus or JSON
+representation, a different signature, unknown or extra typed field,
+truncated record, relative or ambiguous executable representation, failed
+canonicalization, or partial manager response is outside the supported-host
+proof and requires `SAFE_STOP`; no dependency is installed automatically.
+The typed `GetUnit` lookup may load unit metadata into systemd, but it does not
+authorize, start, enable, stop, restart, or otherwise activate a runtime.
+
+An unrelated transient unit is not exempt: it can pass only after complete
+typed inspection of all seven executable properties and every command record.
+The proof is bounded operational evidence, not a mathematical singleton
+guarantee or a detector for arbitrarily obfuscated malicious root-controlled
+implementations, copied/disguised implementations, unrelated UIDs, every PID
+reuse, or every race. It adds no wrapper lock, Python lock, PID-file authority,
+or Unix-socket authority.
 
 The transition check proves only the approved wrapper-to-Python exec transition
 and exact process identity; it is not application `READY`. It may inspect the
 credential-path identity but never prints credential content, authorization
 values, the complete environment, or the complete argv. Static CI does not
-exercise a real systemd manager, privileged boundaries, cgroup allocation,
-transient services, live exec transition, restart, or timeout behavior.
-Supported-host evidence remains a later separately authorized gate: this
-runbook grants no AWS, deployment, runtime, or smoke authority.
+execute real systemd, D-Bus, sudo, cgroup, transient-service, runtime, live
+exec-transition, restart, or timeout behavior. Supported-host proof remains a
+later separately authorized operational gate: this repair grants no AWS,
+deployment, runtime, or smoke authority.
 
 Concurrent execution can cause SQLite write contention, delayed writes,
 database-locked operational failures, competing runtime-session records,
