@@ -23,14 +23,14 @@ PROGRAM_TASK_ID = "V0-FLP1B0B-CAPTURE-NOW-AUTHORITY-AMENDMENT"
 PROGRAM_BASE_SHA = "78d2d37bfe5a4f3f1d382a2a96e57896ae9676ae"
 CURRENT_STATE_BASE_SHA = "681397395957dacbcc9f8a80816d14bb8c4603b2"
 CURRENT_ACTIVE_TASK_ID = "NONE"
-COMPLETED_IMPLEMENTATION = "V0-FL-R3-P3B-RESTRICTED-PUBLIC-RUNTIME-COMPOSITION"
-COMPLETED_IMPLEMENTATION_PR = 37
+COMPLETED_IMPLEMENTATION = "V0-FL-R3-SECURE-SECRET-INGRESS"
+COMPLETED_IMPLEMENTATION_PR = 40
 LAST_LEASE_ID = "PR22_FINAL_REPAIR_WRITE_LEASE_ID_UNRESOLVED"
 LAST_LEASE_TYPE = "PR22_FINAL_REPAIR_WRITE_LEASE_TYPE_UNRESOLVED"
 FASTSAFE_CONTROL_CONTRACT_ID = "FASTSAFE-V1-2026-07"
 ENGINEERING_TRACK_ID = "ENGINEERING-AUTOMATION-TRACK-V1-2026-07"
-NEXT_GATE = "V0-FL-R3-P4-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE"
-NEXT_GATE_STATUS = "ENGINEERING_ELIGIBLE_PENDING_PROJECT_CONTROL_ACTIVATION"
+NEXT_GATE = "V0-FL-R3-P4B-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE-ACTIVATION"
+NEXT_GATE_STATUS = "USER_RUNTIME_AND_SMOKE_AUTHORIZATION_REQUIRED_BEFORE_PROJECT_CONTROL_ACTIVATION"
 AUTHORITY_HASH = "0e327e566589d8030ff00d4d009eb4b6827679ab508133d66840b2c245dc53df"
 SOURCE_CATALOG_HASH = "0ca27f650f399f8fa481ad9421eab4183c1c13812c71dfa8daaf878719bd99b7"
 COMMIT_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -50,6 +50,9 @@ FUTURE_R1_MARKERS = {
 EXPECTED_CHANGED_FILES = {
     "governance/V0_FAST_LAUNCH_PROGRAM.json",
     "governance/PROJECT_STATE.json",
+    "governance/TRADER_ASSIST_ENGINEERING_OPTIMIZATION_SUCCESSOR_HANDOFF_V2_2026-07-22.md",
+    "governance/TRADER_ASSIST_ENGINEERING_WORKFLOW_V3_2026-07-22.md",
+    "governance/TRAE_IDE_SOLO_DIRECT_ACTIVATION_PREFLIGHT_2026-07-22.md",
     "schemas/governance/V0FastLaunchProgram.schema.json",
     "tests/test_v0_fast_launch_governance_state.py",
     "tests/test_v0_t2_eth_public_capture_runtime.py",
@@ -58,6 +61,9 @@ EXPECTED_CHANGED_FILES = {
 EXPECTED_COMMITTED_STATUS_MAP = {
     "governance/V0_FAST_LAUNCH_PROGRAM.json": "M",
     "governance/PROJECT_STATE.json": "M",
+    "governance/TRADER_ASSIST_ENGINEERING_OPTIMIZATION_SUCCESSOR_HANDOFF_V2_2026-07-22.md": "A",
+    "governance/TRADER_ASSIST_ENGINEERING_WORKFLOW_V3_2026-07-22.md": "A",
+    "governance/TRAE_IDE_SOLO_DIRECT_ACTIVATION_PREFLIGHT_2026-07-22.md": "A",
     "schemas/governance/V0FastLaunchProgram.schema.json": "M",
     "tests/test_v0_fast_launch_governance_state.py": "M",
     "tests/test_v0_t2_eth_public_capture_runtime.py": "M",
@@ -141,11 +147,11 @@ def test_program_provenance_and_current_state_are_distinct() -> None:
     }
 
 
-def test_p3b_closeout_and_p4_eligibility_state() -> None:
+def test_pr39_pr40_closeout_and_p4b_gate_preparation_state() -> None:
     program = _load_json(PROGRAM_PATH)
     state = _load_json(STATE_PATH)
 
-    # P3B is the latest completed implementation.
+    # PR40 is the latest completed implementation, with PR39 and PR40 evidence.
     assert state["last_completed_implementation"] == COMPLETED_IMPLEMENTATION
     assert state["last_completed_implementation_pr"] == COMPLETED_IMPLEMENTATION_PR
     assert program["authority"]["last_completed_implementation"] == COMPLETED_IMPLEMENTATION
@@ -154,7 +160,27 @@ def test_p3b_closeout_and_p4_eligibility_state() -> None:
         == COMPLETED_IMPLEMENTATION_PR
     )
 
-    # P4 is selected as the next gate but not activated.
+    expected_evidence = [
+        {
+            "task_id": "V0-FL-R3-P4A-LOCAL-DEPLOYMENT-PACKAGE-AND-NON_AWS-SUPERVISED-SMOKE",
+            "pull_request": 39,
+            "reviewed_head": "cd17ecdaebd80d8315638927a658dd56772440ca",
+            "merge_sha": "b85ea870676ef2fa398ca3707832dda42509b93b",
+            "post_merge_ci_run_id": 29807839442,
+        },
+        {
+            "task_id": COMPLETED_IMPLEMENTATION,
+            "pull_request": COMPLETED_IMPLEMENTATION_PR,
+            "reviewed_head": "9a9c674f1447c9f864c270a5130f353b4a07a2de",
+            "merge_sha": "f18338c2630feafd49e377397183a93f2e7f48a4",
+            "post_merge_ci": "V0 contracts CI / Run 252 / SUCCESS",
+            "post_merge_ci_run_id": 29851016977,
+        },
+    ]
+    assert state["accepted_evidence"] == expected_evidence
+    assert program["authority"]["accepted_evidence"] == expected_evidence
+
+    # P4B is selected only for gate preparation; it is not activated.
     assert state["next_gate"] == NEXT_GATE
     assert state["next_gate_status"] == NEXT_GATE_STATUS
     assert program["authority"]["next_gate"] == NEXT_GATE
@@ -163,7 +189,7 @@ def test_p3b_closeout_and_p4_eligibility_state() -> None:
     assert program["review_finalization_policy"]["next_gate"] == NEXT_GATE
     assert program["recursive_rotation"]["post_merge_next_gate"] == NEXT_GATE
 
-    # P4 activation authorities remain disabled.
+    # P4B runtime and smoke authorities remain disabled.
     for field in (
         "runtime_started",
         "t2_runtime_started",
@@ -183,7 +209,7 @@ def test_p3b_closeout_and_p4_eligibility_state() -> None:
     ):
         assert program["authority"][field] is False
 
-    # Transition is eligible pending project-control activation.
+    # Transition eligibility means gate preparation only, never runtime or smoke.
     assert state["transition_eligible"] is True
     assert program["authority"]["transition_eligible"] is True
 
@@ -289,6 +315,12 @@ def test_schema_rejects_stale_pr25_and_active_authority_values() -> None:
     assert isinstance(state_schema, dict)
     candidate = deepcopy(_load_json(STATE_PATH))
     candidate["active_task_id"] = COMPLETED_IMPLEMENTATION
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(state_schema).validate(candidate)
+
+    candidate = deepcopy(_load_json(STATE_PATH))
+    candidate["accepted_evidence"][1]["post_merge_ci_run_id"] = 0
 
     with pytest.raises(ValidationError):
         Draft202012Validator(state_schema).validate(candidate)
@@ -463,6 +495,15 @@ def test_schema_rejects_stale_program_authority_values(
         Draft202012Validator(schema).validate(candidate)
 
 
+def test_schema_rejects_rewritten_accepted_evidence() -> None:
+    schema = _load_json(SCHEMA_PATH)
+    candidate = deepcopy(_load_json(PROGRAM_PATH))
+    candidate["authority"]["accepted_evidence"][0]["merge_sha"] = "0" * 40
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(candidate)
+
+
 def test_root_policy_objects_are_explicitly_future_r1_bound() -> None:
     program = _load_json(PROGRAM_PATH)
 
@@ -629,15 +670,19 @@ def test_docs_share_capture_now_semantics() -> None:
 
 def test_exact_changed_file_scope_and_forbidden_boundaries() -> None:
     changed = EXPECTED_CHANGED_FILES
-    assert len(changed) == 5
+    assert len(changed) == 8
     assert changed == {
         "governance/V0_FAST_LAUNCH_PROGRAM.json",
         "governance/PROJECT_STATE.json",
+        "governance/TRADER_ASSIST_ENGINEERING_OPTIMIZATION_SUCCESSOR_HANDOFF_V2_2026-07-22.md",
+        "governance/TRADER_ASSIST_ENGINEERING_WORKFLOW_V3_2026-07-22.md",
+        "governance/TRAE_IDE_SOLO_DIRECT_ACTIVATION_PREFLIGHT_2026-07-22.md",
         "schemas/governance/V0FastLaunchProgram.schema.json",
         "tests/test_v0_fast_launch_governance_state.py",
         "tests/test_v0_t2_eth_public_capture_runtime.py",
     }
     assert set(EXPECTED_COMMITTED_STATUS_MAP) == changed
+    assert tuple(EXPECTED_COMMITTED_STATUS_MAP.values()).count("A") == 3
     assert tuple(EXPECTED_COMMITTED_STATUS_MAP.values()).count("M") == 5
     assert not _scope_boundary_errors(changed)
 

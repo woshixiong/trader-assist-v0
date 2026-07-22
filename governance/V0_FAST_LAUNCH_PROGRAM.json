@@ -9,10 +9,27 @@
   "authority": {
     "fastsafe_control_contract_id": "FASTSAFE-V1-2026-07",
     "engineering_track_id": "ENGINEERING-AUTOMATION-TRACK-V1-2026-07",
-    "next_gate": "V0-FL-R3-P4-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE",
-    "next_gate_status": "ENGINEERING_ELIGIBLE_PENDING_PROJECT_CONTROL_ACTIVATION",
-    "last_completed_implementation": "V0-FL-R3-P3B-RESTRICTED-PUBLIC-RUNTIME-COMPOSITION",
-    "last_completed_implementation_pr": 37,
+    "next_gate": "V0-FL-R3-P4B-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE-ACTIVATION",
+    "next_gate_status": "USER_RUNTIME_AND_SMOKE_AUTHORIZATION_REQUIRED_BEFORE_PROJECT_CONTROL_ACTIVATION",
+    "last_completed_implementation": "V0-FL-R3-SECURE-SECRET-INGRESS",
+    "last_completed_implementation_pr": 40,
+    "accepted_evidence": [
+      {
+        "task_id": "V0-FL-R3-P4A-LOCAL-DEPLOYMENT-PACKAGE-AND-NON_AWS-SUPERVISED-SMOKE",
+        "pull_request": 39,
+        "reviewed_head": "cd17ecdaebd80d8315638927a658dd56772440ca",
+        "merge_sha": "b85ea870676ef2fa398ca3707832dda42509b93b",
+        "post_merge_ci_run_id": 29807839442
+      },
+      {
+        "task_id": "V0-FL-R3-SECURE-SECRET-INGRESS",
+        "pull_request": 40,
+        "reviewed_head": "9a9c674f1447c9f864c270a5130f353b4a07a2de",
+        "merge_sha": "f18338c2630feafd49e377397183a93f2e7f48a4",
+        "post_merge_ci": "V0 contracts CI / Run 252 / SUCCESS",
+        "post_merge_ci_run_id": 29851016977
+      }
+    ],
     "last_policy_state_pr": 15,
     "rate_limit_status": "UNRESOLVED_OFFICIAL_LIMIT",
     "live_transport_authorized": false,
@@ -45,7 +62,7 @@
     "exchange_execution_authorized": false,
     "runtime_started": false,
     "scope": "CAPTURE_CONTRACT_SCHEMA_GOVERNANCE_ONLY",
-    "next_runtime_gate": "V0-FL-R3-P4-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE",
+    "next_runtime_gate": "V0-FL-R3-P4B-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE-ACTIVATION",
     "forbidden_capabilities": [
       "API_WALLET",
       "PRIVATE_KEY",
@@ -451,13 +468,13 @@
     "separate_project_control_finalization_authorization_required": true,
     "pre_finalization_base_head_state_reverification_required": true,
     "unresolved_blocker_prevents_merge": true,
-    "next_gate": "V0-FL-R3-P4-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE"
+    "next_gate": "V0-FL-R3-P4B-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE-ACTIVATION"
   },
   "recursive_rotation": {
     "required": true,
     "next_window_role": "V0 Fast Launch project-control successor",
     "next_window_permission": "STRICT_READ_ONLY",
-    "post_merge_next_gate": "V0-FL-R3-P4-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE",
+    "post_merge_next_gate": "V0-FL-R3-P4B-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE-ACTIVATION",
     "handoff_required_fields": [
       "CURRENT_WINDOW_ROLE",
       "REPOSITORY",
