@@ -271,18 +271,14 @@ The example file fails closed and is incapable of activating the runtime unchang
 
 ## 10. Default-Off Proof
 
-Before creating the activation permit, verify the service is inactive:
-
-```bash
-sudo systemctl is-active trader-assist-v0-public.service
-```
-
-Expected output: `inactive`.
+After Section 12 installs the unit, the installed and pre-start verifiers must
+pass before the operator creates the activation permit. A `SAFE_STOP` is a
+fail-closed result, not a prompt to inspect unrelated services.
 
 ## 11. Activation Permit Boundary
 
 The service uses `ConditionPathExists=/etc/trader-assist-v0/activation-permit` to remain
-default-off. The permit file must be created by the operator:
+default-off. Create the permit only after the Section 12 verifier proofs pass:
 
 ```bash
 sudo touch /etc/trader-assist-v0/activation-permit
@@ -299,18 +295,45 @@ Install the systemd unit:
 ```bash
 sudo cp deploy/p4a/systemd/trader-assist-v0-public.service /etc/systemd/system/
 sudo systemctl daemon-reload
+sudo /opt/trader-assist-v0/scripts/p4a/verify_first_launch_runtime_state.sh installed
+sudo /opt/trader-assist-v0/scripts/p4a/verify_first_launch_runtime_state.sh pre-start
+```
+
+The runtime verifier is strictly read-only and considers only the approved
+unit, dedicated user, approved runtime process contract, and that unit's
+control group. It has exactly four modes: `installed`, `pre-start`,
+`post-start`, and `final-state`.
+
+For the database, select exactly one pre-start evidence phase. The verifier
+parses the environment as inert text and opens SQLite only in read-only mode.
+
+```bash
+# Existing reviewed database
+sudo /opt/trader-assist-v0/venv/bin/python /opt/trader-assist-v0/scripts/p4a/verify_first_launch_database.py existing-before-smoke
+
+# Fresh database path before first start
+sudo /opt/trader-assist-v0/venv/bin/python /opt/trader-assist-v0/scripts/p4a/verify_first_launch_database.py fresh-pre-start
 ```
 
 ## 13. Start Procedure
 
 ```bash
+sudo /opt/trader-assist-v0/scripts/p4a/verify_first_launch_runtime_state.sh pre-start
 sudo systemctl start trader-assist-v0-public.service
+sudo /opt/trader-assist-v0/scripts/p4a/verify_first_launch_runtime_state.sh post-start
+```
+
+For a fresh path, record creation immediately after `post-start`:
+
+```bash
+sudo /opt/trader-assist-v0/venv/bin/python /opt/trader-assist-v0/scripts/p4a/verify_first_launch_database.py fresh-post-creation
 ```
 
 ## 14. Stop Procedure
 
 ```bash
 sudo systemctl stop trader-assist-v0-public.service
+sudo /opt/trader-assist-v0/scripts/p4a/verify_first_launch_runtime_state.sh pre-start
 ```
 
 ## 15. Controlled Restart Procedure
@@ -319,7 +342,9 @@ Exactly one controlled restart is permitted:
 
 ```bash
 sudo systemctl stop trader-assist-v0-public.service
+sudo /opt/trader-assist-v0/scripts/p4a/verify_first_launch_runtime_state.sh pre-start
 sudo systemctl start trader-assist-v0-public.service
+sudo /opt/trader-assist-v0/scripts/p4a/verify_first_launch_runtime_state.sh post-start
 ```
 
 ## 16. Status Procedure
@@ -355,18 +380,13 @@ sudo journalctl -u trader-assist-v0-public.service \
   --no-pager > /tmp/trader-assist-v0-journal-evidence.txt
 ```
 
-## 19. Read-Only SQLite Health Queries
+## 19. Read-Only SQLite Health Evidence
 
-Using Python stdlib only (no external tools required):
+At the end of observation, record the final phase. On success, stdout is the
+single JSON object that is copied directly to the applicable manifest field.
 
 ```bash
-sudo -u traderassist /opt/trader-assist-v0/venv/bin/python -c "
-import sqlite3
-conn = sqlite3.connect('file:/var/lib/trader-assist-v0/runtime.db?mode=ro', uri=True)
-print('journal_mode:', conn.execute('PRAGMA journal_mode').fetchone()[0])
-print('integrity_check:', conn.execute('PRAGMA integrity_check').fetchone()[0])
-conn.close()
-"
+sudo /opt/trader-assist-v0/venv/bin/python /opt/trader-assist-v0/scripts/p4a/verify_first_launch_database.py final-post-smoke
 ```
 
 ## 20. READY Verification
@@ -399,37 +419,49 @@ returns `inactive`.
 
 ## 24. Rollback
 
-To roll back the deployment:
+The required proof order is stop, disable, final-state verifier, final database
+evidence, then deletion. A failed proof ends the block before any deletion.
 
 ```bash
+set -euo pipefail
 sudo systemctl stop trader-assist-v0-public.service
 sudo systemctl disable trader-assist-v0-public.service
+sudo /opt/trader-assist-v0/scripts/p4a/verify_first_launch_runtime_state.sh final-state
+sudo /opt/trader-assist-v0/venv/bin/python /opt/trader-assist-v0/scripts/p4a/verify_first_launch_database.py final-post-smoke
+sudo rm -f /etc/trader-assist-v0/credentials/notification.json
+sudo rm -f /etc/trader-assist-v0/activation-permit
 sudo rm /etc/systemd/system/trader-assist-v0-public.service
 sudo systemctl daemon-reload
-sudo rm -f /etc/trader-assist-v0/activation-permit
 ```
 
 ## 25. Uninstall
 
 ```bash
-sudo systemctl stop trader-assist-v0-public.service || true
-sudo systemctl disable trader-assist-v0-public.service || true
+set -euo pipefail
+sudo systemctl stop trader-assist-v0-public.service
+sudo systemctl disable trader-assist-v0-public.service
+sudo /opt/trader-assist-v0/scripts/p4a/verify_first_launch_runtime_state.sh final-state
+sudo /opt/trader-assist-v0/venv/bin/python /opt/trader-assist-v0/scripts/p4a/verify_first_launch_database.py final-post-smoke
 sudo rm /etc/systemd/system/trader-assist-v0-public.service
 sudo systemctl daemon-reload
 sudo rm -rf /etc/trader-assist-v0
 sudo rm -rf /var/lib/trader-assist-v0
 sudo rm -rf /opt/trader-assist-v0
+```
+
+Only after the proof-bearing block above completes may optional account cleanup
+be attempted. Cleanup warnings do not change the accepted rollback result.
+
+```bash
 sudo userdel traderassist || true
 sudo groupdel traderassist || true
 ```
 
 ## 26. Proof That No Runtime Remains
 
-```bash
-sudo systemctl is-active trader-assist-v0-public.service || echo "inactive"
-pgrep -f run_restricted_public_runtime.sh || echo "no wrapper process"
-pgrep -f run_first_launch_public_runtime.py || echo "no Python process"
-```
+The final-state verifier in Sections 24 and 25 is the required read-only proof.
+It checks only the authorized unit, dedicated user, approved wrapper and
+entrypoint, and its control group; it does not audit unrelated services.
 
 ## 27. P4-A / P4-B Separation
 

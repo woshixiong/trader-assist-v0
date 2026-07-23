@@ -35,9 +35,12 @@ ALLOWED_FILES = {
     "deploy/p4a/config/risk-configuration.json.example",
     "deploy/p4a/credentials/notification-credential.json.example",
     "scripts/p4a/run_restricted_public_runtime.sh",
+    "scripts/p4a/verify_first_launch_runtime_state.sh",
+    "scripts/p4a/verify_first_launch_database.py",
     "deploy/p4a/evidence/supervised-smoke-manifest-v1.json.example",
     "docs/operations/V0_FL_R3_P4A_LOCAL_DEPLOYMENT.md",
     "tests/test_p4a_local_deployment_package.py",
+    "tests/test_p4a_operational_verifiers.py",
 }
 
 PROHIBITED_PREFIXES = (
@@ -121,7 +124,7 @@ def test_exact_eight_file_scope() -> None:
         f"Missing: {ALLOWED_FILES - found}. "
         f"Extra: {found - ALLOWED_FILES}"
     )
-    assert len(found) == 8, f"Expected 8 files, got {len(found)}"
+    assert len(found) == 11, f"Expected 11 files, got {len(found)}"
 
 
 # ---------------------------------------------------------------------------
@@ -938,10 +941,11 @@ MANDATORY_MANIFEST_FIELDS = {
     "post_restart_ready_timestamp",
     "post_restart_observation_start",
     "post_restart_observation_end",
-    "sqlite_file_metadata",
     "sqlite_integrity_evidence",
-    "sqlite_journal_mode",
-    "sqlite_schema_version",
+    "existing_before_smoke_database_evidence",
+    "fresh_pre_start_database_evidence",
+    "fresh_post_creation_database_evidence",
+    "final_post_smoke_database_evidence",
     "health_events",
     "bounded_journald_evidence",
     "effective_network_destination_evidence",
@@ -962,6 +966,9 @@ def test_evidence_manifest_no_real_identifiers(evidence_manifest: dict[str, Any]
     for key, value in evidence_manifest.items():
         if key in ("manifest_version",):
             continue
+        if key.endswith("_database_evidence"):
+            assert value is None
+            continue
         assert isinstance(value, str), f"Field {key} must be a string placeholder"
         # All placeholder values should be PLACEHOLDER or clearly not real
         assert value == "PLACEHOLDER" or "PLACEHOLDER" in value, (
@@ -974,6 +981,13 @@ def test_evidence_manifest_valid_json() -> None:
     parsed = json.loads(raw)
     assert isinstance(parsed, dict)
     assert len(parsed) >= 30, f"Expected at least 30 fields, got {len(parsed)}"
+
+
+def test_manifest_uses_only_supported_database_evidence_fields(
+    evidence_manifest: dict[str, Any],
+) -> None:
+    unsupported = {"sqlite_file_metadata", "sqlite_journal_mode", "sqlite_schema_version"}
+    assert not unsupported & set(evidence_manifest)
 
 
 # ---------------------------------------------------------------------------
