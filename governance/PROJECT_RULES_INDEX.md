@@ -63,6 +63,8 @@ No item may disappear merely because it is not a current First Launch blocker.
 - `governance/TRADER_ASSIST_ENGINEERING_OPTIMIZATION_SUCCESSOR_HANDOFF_V2_2026-07-22.md`;
 - `governance/ENGINEERING_WORKFLOW_MODEL_ROUTING_AND_RESOURCE_POLICY_V1.md`.
 
+Workflow V3 supplies the persistent workflow architecture. Its date-bound transition narrative, including the former PR #40 transition section, is historical after that transition completed. Current task, next gate, active PR, branch, base/head, mode, and authority state must come from live GitHub objects, current merged Project State, and the current accepted stage packet—not from a stale transition paragraph.
+
 Additional merged references:
 
 - `governance/FASTSAFE_V1_MASTER_CONTROL_CONTRACT.md`;
