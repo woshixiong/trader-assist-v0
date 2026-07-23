@@ -676,14 +676,40 @@ get_loaded_unit_object() {
   parse_typed_scalar "$object_json" o object
 }
 
-load_concrete_unit_object() {
-  unit="$1"; require_service_name "$unit"
-  if ! bounded_capture_may_fail object_json sudo -n "$BUSCTL_BIN" --system --json=short call \
+acquire_authorized_unit_object() {
+  # State-aware acquisition for the exact authorized service only.
+  # Attempt bounded Manager.GetUnit first.  When GetUnit returns only a
+  # normal not-loaded/not-found acquisition result, fall back to bounded
+  # metadata-only Manager.LoadUnit for exactly the authorized service.
+  # Never call LoadUnit for an unrelated service.  Timeout, forced kill,
+  # permission failure, malformed response, or any ambiguous D-Bus result
+  # is a SAFE_STOP.  LoadUnit is metadata-only and is never combined with
+  # Start/Stop/Restart/Reload, enable/disable/mask/unmask, preset mutation,
+  # daemon-reload, or unit-file mutation.
+  if bounded_capture_may_fail object_json sudo -n "$BUSCTL_BIN" --system --json=short call \
     org.freedesktop.systemd1 /org/freedesktop/systemd1 \
-    org.freedesktop.systemd1.Manager LoadUnit s "$unit"; then
-    safe_stop "SAFE_STOP_CODE: CONCRETE_UNIT_LOADUNIT_FAILED"
+    org.freedesktop.systemd1.Manager GetUnit s "$SERVICE"; then
+    parse_typed_scalar "$object_json" o object
+    return
   fi
-  parse_typed_scalar "$object_json" o object
+  # Distinguish a normal not-loaded/not-found GetUnit response from
+  # permission failure or malformed output.  Timeout and forced kill are
+  # already SAFE_STOP inside bounded_capture_may_fail.  Only the normal
+  # acquisition-miss class may fall back to exact LoadUnit.
+  case "$object_json" in
+    *"is not loaded"*|*"not found"*|*"No such unit"*)
+      if ! bounded_capture_may_fail object_json sudo -n "$BUSCTL_BIN" --system --json=short call \
+        org.freedesktop.systemd1 /org/freedesktop/systemd1 \
+        org.freedesktop.systemd1.Manager LoadUnit s "$SERVICE"; then
+        safe_stop "SAFE_STOP_CODE: AUTHORIZED_LOADUNIT_FAILED"
+      fi
+      parse_typed_scalar "$object_json" o object
+      return
+      ;;
+    *)
+      safe_stop "SAFE_STOP_CODE: AUTHORIZED_GETUNIT_AMBIGUOUS_FAILURE"
+      ;;
+  esac
 }
 
 get_canonical_id() {
@@ -744,19 +770,8 @@ assert_no_lifecycle_job() {
 
 collect_manager_units() {
   bounded_capture loaded sudo -n systemctl list-units --type=service --all --no-legend --plain --no-pager
-  bounded_capture files sudo -n systemctl list-unit-files --type=service --no-legend --no-pager
   loaded_units="$(printf '%s\n' "$loaded" | awk 'NF { if ($1 !~ /^[A-Za-z0-9@_.-]+\\.service$/) exit 2; print $1 }' | LC_ALL=C sort -u)" || safe_stop "loaded service-unit enumeration is malformed"
-  unit_files="$(printf '%s\n' "$files" | awk 'NF { if ((NF != 2 && NF != 3) || $1 !~ /^[A-Za-z0-9@_.-]+\\.service$/) exit 2; print $1 " " $2 }' | LC_ALL=C sort -u)" || safe_stop "unit-file enumeration is malformed"
-  test -n "$loaded_units$unit_files" || safe_stop "service-unit discovery is empty"
-}
-
-is_bare_template_definition() { [[ "$1" =~ ^[A-Za-z0-9_.-]+@\.service$ ]]; }
-
-require_unit_file_state() {
-  case "$1" in
-    alias|disabled|enabled|enabled-runtime|generated|indirect|linked|linked-runtime|masked|masked-runtime|static|transient) ;;
-    *) safe_stop "unsupported unit-file state" ;;
-  esac
+  test -n "$loaded_units" || safe_stop "manager-loaded service-unit discovery is empty"
 }
 
 resolve_and_inspect_canonical() {
@@ -801,7 +816,7 @@ resolve_and_inspect_canonical() {
 }
 
 assert_authorized_identity() {
-  authorized_object="$(get_loaded_unit_object "$SERVICE")"
+  authorized_object="$(acquire_authorized_unit_object)"
   authorized_id="$(get_canonical_id "$authorized_object")"
   test "$authorized_id" = "$SERVICE" || safe_stop "authorized typed canonical Id is not exact"
   test "$(read_typed_load_state "$authorized_object")" = loaded || safe_stop "authorized typed LoadState is not loaded"
@@ -816,29 +831,13 @@ assert_manager_known_executables() {
   declare -A canonical_object_by_id=()
   declare -A canonical_id_by_object=()
   declare -A inspected_object=()
-  declare -A loaded_resolved=()
   while IFS= read -r candidate; do
     test -n "$candidate" || continue
     require_service_name "$candidate"
     object_path="$(get_loaded_unit_object "$candidate")"
-    loaded_resolved["$candidate"]=1
     resolve_and_inspect_canonical "$candidate" "$object_path"
   done <<EOF
 $loaded_units
-EOF
-  while IFS=' ' read -r candidate unit_file_state; do
-    test -n "$candidate" || continue
-    require_service_name "$candidate"
-    require_unit_file_state "$unit_file_state"
-    if [[ -v "loaded_resolved[$candidate]" ]]; then continue; fi
-    if is_bare_template_definition "$candidate"; then
-      # UNINSTANTIATED_TEMPLATE_DEFINITION: never invent an instance with LoadUnit.
-      continue
-    fi
-    object_path="$(load_concrete_unit_object "$candidate")"
-    resolve_and_inspect_canonical "$candidate" "$object_path"
-  done <<EOF
-$unit_files
 EOF
 }
 
@@ -852,10 +851,10 @@ preflight_supported_host() {
     org.freedesktop.systemd1 /org/freedesktop/systemd1 \
     org.freedesktop.DBus.Peer Ping
   parse_manager_ping "$manager_ping"
-  preflight_object="$(get_loaded_unit_object "$SERVICE")"
-  preflight_id="$(get_canonical_id "$preflight_object")"
-  test "$preflight_id" = "$SERVICE" || safe_stop "authorized typed canonical Id is not exact"
-  inspect_exec_properties "$preflight_object" authorized
+  # The same state-aware authorized acquisition helper used by the authorized
+  # identity assertion: GetUnit first, then exact metadata-only LoadUnit when
+  # the authorized service is not yet manager-loaded.
+  assert_authorized_identity
 }
 
 line_count() { printf '%s\n' "$1" | awk 'NF { n++ } END { print n+0 }'; }
@@ -1030,40 +1029,51 @@ representation, a different signature, unknown or extra typed field,
 truncated record, relative or ambiguous executable representation, failed
 canonicalization, or partial manager response is outside the supported-host
 proof and requires `SAFE_STOP`; no dependency is installed automatically.
-`GetUnit` resolves only an already manager-loaded Unit object; it does not load
-arbitrary unit metadata. The proof first resolves every manager-loaded service
-(including inactive, transient, masked, alias, and instantiated-template
-objects) with `GetUnit`. It then resolves every not-yet-loaded concrete
-unit-file identity with bounded `LoadUnit`, including disabled, static,
-generated, and masked files. A `LoadUnit` may create a manager-resident
-metadata object that systemd can later garbage-collect; this reviewed metadata
-acquisition is permitted and is not runtime activation. The proof never pairs
-it with Start/Stop/Restart/Reload, enable/disable/mask/unmask, preset mutation,
-daemon-reload, or unit-file mutation. A loaded `GetUnit` failure is
-`SAFE_STOP_CODE: LOADED_UNIT_GETUNIT_FAILED`; an eligible concrete `LoadUnit`
-failure is `SAFE_STOP_CODE: CONCRETE_UNIT_LOADUNIT_FAILED`.
-There is deliberately no weaker masked-unit shortcut: an unloaded masked
-concrete file is accepted only after `LoadUnit` returns a complete typed object
-and the same full inspection succeeds; otherwise it SAFE_STOPs.
+`GetUnit` resolves only an already manager-loaded Unit object; it does not
+load arbitrary unit metadata. Every manager-loaded service (including
+inactive, transient, alias, and instantiated-template objects) is discovered
+through `systemctl list-units --type=service --all`, resolved with bounded
+`GetUnit`, and fully inspected. Unrelated dormant unit files that are not
+manager-loaded are not globally audited by this MVP proof.
 
-A bare `name@.service` is classified as an
-`UNINSTANTIATED_TEMPLATE_DEFINITION`, not passed to `LoadUnit`, and never
-treated as a current concrete live authority. Every loaded concrete instance
-such as `name@instance.service` is discovered through the manager-loaded set,
-resolved with `GetUnit`, and fully inspected. A later loaded instance is caught
-by the same pre-start, post-start, restart, and final-state proof; this runbook
-does not claim that a dormant bare template is itself a running authority.
-Malformed template identities, unsupported unit-file states, alias/object-path
-or alias/Id conflicts, and contradictory loaded-versus-unit-file evidence
-require `SAFE_STOP`.
+The exact authorized service `trader-assist-v0-public.service` is acquired with
+a single state-aware helper used by both supported-host preflight and the
+authorized identity assertion. The helper first attempts bounded `GetUnit`;
+when GetUnit returns only a normal not-loaded/not-found acquisition result, it
+falls back to bounded metadata-only `LoadUnit` for exactly the authorized
+service and no other. Timeout, forced kill, permission failure, malformed
+response, or any ambiguous D-Bus result is a `SAFE_STOP`. A missing authorized
+unit is `SAFE_STOP_CODE: AUTHORIZED_LOADUNIT_FAILED`; an ambiguous GetUnit
+failure is `SAFE_STOP_CODE: AUTHORIZED_GETUNIT_AMBIGUOUS_FAILURE`.
+`LoadUnit` is metadata-only and is never combined with Start/Stop/Restart/
+Reload, enable/disable/mask/unmask, preset mutation, daemon-reload, or
+unit-file mutation. After acquisition the authorized unit must have canonical
+`Unit.Id` exactly `trader-assist-v0-public.service`, `FragmentPath` exactly
+`/etc/systemd/system/trader-assist-v0-public.service`, `Transient` false,
+`DropInPaths` empty, `ExecStart` exactly the approved wrapper with one-element
+argv, and all other six Exec properties empty; any deviation is a `SAFE_STOP`.
+A masked authorized unit is rejected by the same `LoadState` and
+`FragmentPath` checks. The authorized service need not be manager-loaded
+before first pre-start verification; the state-aware helper acquires it
+whether initially loaded or unloaded.
+
+A loaded concrete template instance such as `name@instance.service` is
+discovered through the manager-loaded set, resolved with `GetUnit`, and fully
+inspected. A later loaded alternate service remains visible to the same
+loaded-unit inspection. Malformed template identities, alias/object-path or
+alias/Id conflicts require `SAFE_STOP`. Installing a dormant alternate Trader
+Assist unit as root is outside the supported operating contract; any live
+alternate Trader Assist process remains subject to the process, argv, and
+cgroup evidence below.
 
 An unrelated transient unit is not exempt: it can pass only after complete
 typed inspection of all seven executable properties and every command record.
-The proof is bounded operational evidence, not a mathematical singleton
-guarantee or a detector for arbitrarily obfuscated malicious root-controlled
-implementations, copied/disguised implementations, unrelated UIDs, every PID
-reuse, or every race. It adds no wrapper lock, Python lock, PID-file authority,
-or Unix-socket authority.
+The proof is an MVP singleton proof for a dedicated clean First Launch systemd
+host, not a universal systemd compliance engine. It is bounded operational
+evidence, not a mathematical singleton guarantee or a detector for arbitrarily
+obfuscated malicious root-controlled implementations, copied/disguised
+implementations, unrelated UIDs, every PID reuse, or every race. It adds no
+wrapper lock, Python lock, PID-file authority, or Unix-socket authority.
 
 The transition check proves only the approved wrapper-to-Python exec transition
 and exact process identity; it is not application `READY`. It may inspect the
