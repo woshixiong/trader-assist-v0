@@ -35,9 +35,12 @@ ALLOWED_FILES = {
     "deploy/p4a/config/risk-configuration.json.example",
     "deploy/p4a/credentials/notification-credential.json.example",
     "scripts/p4a/run_restricted_public_runtime.sh",
+    "scripts/p4a/verify_first_launch_runtime_state.sh",
+    "scripts/p4a/verify_first_launch_database.py",
     "deploy/p4a/evidence/supervised-smoke-manifest-v1.json.example",
     "docs/operations/V0_FL_R3_P4A_LOCAL_DEPLOYMENT.md",
     "tests/test_p4a_local_deployment_package.py",
+    "tests/test_p4a_operational_verifiers.py",
 }
 
 PROHIBITED_PREFIXES = (
@@ -82,20 +85,15 @@ PROHIBITED_CONTENT_PATTERNS: list[re.Pattern[str]] = [
 # Exact-scope constants (ER-06)
 # ---------------------------------------------------------------------------
 
-EXACT_BASE = "b85ea870676ef2fa398ca3707832dda42509b93b"
-EXACT_SCOPE_BRANCH = "feature/v0-fl-r3-secure-secret-ingress"
+EXACT_BASE = "6b658fdfc34eac2a9376d0947e058d3fe77470b5"
+EXACT_SCOPE_BRANCH = "feature/v0-fl-r3-p4b-dedicated-host-verifiers"
 
 EXPECTED_EXACT_SCOPE: set[tuple[str, str]] = {
-    ("A", "deploy/p4a/credentials/notification-credential.json.example"),
+    ("A", "scripts/p4a/verify_first_launch_database.py"),
+    ("A", "scripts/p4a/verify_first_launch_runtime_state.sh"),
+    ("A", "tests/test_p4a_operational_verifiers.py"),
     ("M", "deploy/p4a/evidence/supervised-smoke-manifest-v1.json.example"),
-    ("M", "deploy/p4a/systemd/trader-assist-v0-public.env.example"),
-    ("M", "deploy/p4a/systemd/trader-assist-v0-public.service"),
     ("M", "docs/operations/V0_FL_R3_P4A_LOCAL_DEPLOYMENT.md"),
-    ("M", "scripts/p4a/run_restricted_public_runtime.sh"),
-    ("M", "scripts/run_first_launch_public_runtime.py"),
-    ("M", "src/trader_assist_v0/runtime/first_launch_notification.py"),
-    ("M", "tests/test_first_launch_notification.py"),
-    ("M", "tests/test_first_launch_public_runtime.py"),
     ("M", "tests/test_p4a_local_deployment_package.py"),
 }
 
@@ -113,15 +111,15 @@ def _collect_p4a_files() -> set[str]:
     return found
 
 
-def test_exact_eight_file_scope() -> None:
-    """All eight authorized files exist and no extra files are present."""
+def test_operational_package_assets_exist() -> None:
+    """All retained and verifier assets required by the runbook exist."""
     found = _collect_p4a_files()
     assert found == ALLOWED_FILES, (
-        f"Expected exactly 8 files, got {len(found)}. "
+        f"Expected exactly {len(ALLOWED_FILES)} files, got {len(found)}. "
         f"Missing: {ALLOWED_FILES - found}. "
         f"Extra: {found - ALLOWED_FILES}"
     )
-    assert len(found) == 8, f"Expected 8 files, got {len(found)}"
+    assert len(found) == len(ALLOWED_FILES)
 
 
 # ---------------------------------------------------------------------------
@@ -925,11 +923,16 @@ MANDATORY_MANIFEST_FIELDS = {
     "service_unit_sha256",
     "environment_template_sha256",
     "notification_credential_example_sha256",
+    "runtime_verifier_sha256",
+    "database_verifier_sha256",
     "redacted_effective_configuration",
     "runtime_user",
     "runtime_group",
     "ownership_and_path_modes",
     "process_identity",
+    "installed_state_evidence",
+    "pre_start_state_evidence",
+    "post_start_state_evidence",
     "initial_ready_timestamp",
     "initial_observation_start",
     "initial_observation_end",
@@ -940,6 +943,10 @@ MANDATORY_MANIFEST_FIELDS = {
     "post_restart_observation_end",
     "sqlite_file_metadata",
     "sqlite_integrity_evidence",
+    "existing_before_smoke_database_evidence",
+    "fresh_pre_start_database_evidence",
+    "fresh_post_creation_database_evidence",
+    "final_post_smoke_database_evidence",
     "sqlite_journal_mode",
     "sqlite_schema_version",
     "health_events",
@@ -1331,7 +1338,7 @@ def _exact_scope_active() -> bool:
 
 
 def test_exact_scope_relative_to_base() -> None:
-    """When active on the exact branch or PR, require exactly the 7 A paths.
+    """When active on the exact branch or PR, require exactly six paths.
 
     Skips main, post-merge push, unrelated branches and unrelated PRs.
     """

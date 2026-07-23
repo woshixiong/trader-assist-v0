@@ -187,26 +187,9 @@ sudo mv /etc/trader-assist-v0/credentials/notification.json.new \
 
 ## 5d. Credential Rollback
 
-To roll back the credential:
-
-```bash
-# Stop the service
-sudo systemctl stop trader-assist-v0-public.service
-
-# Remove or invalidate the source credential
-sudo rm -f /etc/trader-assist-v0/credentials/notification.json
-
-# Remove the activation permit when appropriate
-sudo rm -f /etc/trader-assist-v0/activation-permit
-
-# Verify no service process remains
-sudo systemctl is-active trader-assist-v0-public.service || echo "inactive"
-pgrep -f run_restricted_public_runtime.sh || echo "no wrapper process"
-pgrep -f run_first_launch_public_runtime.py || echo "no Python process"
-
-# Verify the runtime credential directory is inactive
-# (systemd cleans up $CREDENTIALS_DIRECTORY when the service stops)
-```
+Credential removal is performed only after the final-state verifier passes in
+the ordered rollback procedure in Section 24.  Do not use a direct wrapper or
+Python invocation as an operational substitute for the systemd unit.
 
 ## 6. SQLite State Directory
 
@@ -269,20 +252,19 @@ sudo chmod 600 /etc/trader-assist-v0/risk-configuration.json
 Edit `/etc/trader-assist-v0/risk-configuration.json` with reviewed operator values.
 The example file fails closed and is incapable of activating the runtime unchanged.
 
-## 10. Default-Off Proof
+## 10. Default-Off Requirement
 
-Before creating the activation permit, verify the service is inactive:
-
-```bash
-sudo systemctl is-active trader-assist-v0-public.service
-```
-
-Expected output: `inactive`.
+The service must remain default-off before the operator creates an activation
+permit. After unit installation in Section 12, run the installed and pre-start
+verifiers before creating or using the permit. A verifier `SAFE_STOP` is
+evidence that the dedicated host is not in an approved state.
 
 ## 11. Activation Permit Boundary
 
 The service uses `ConditionPathExists=/etc/trader-assist-v0/activation-permit` to remain
-default-off. The permit file must be created by the operator:
+default-off. Complete Section 12 and obtain both verifier `PASS` results
+before creating the permit below. The permit file must be created by the
+operator:
 
 ```bash
 sudo touch /etc/trader-assist-v0/activation-permit
@@ -299,18 +281,53 @@ Install the systemd unit:
 ```bash
 sudo cp deploy/p4a/systemd/trader-assist-v0-public.service /etc/systemd/system/
 sudo systemctl daemon-reload
+sudo /opt/trader-assist-v0/scripts/p4a/verify_first_launch_runtime_state.sh installed
+sudo /opt/trader-assist-v0/scripts/p4a/verify_first_launch_runtime_state.sh pre-start
 ```
+
+The verifier is read-only. It validates only
+`trader-assist-v0-public.service`: reviewed and installed unit equality,
+owner/mode, exact fragment, no drop-ins, dedicated User/Group, and
+`systemd-analyze verify`. It does not audit unrelated services or mutate any
+lifecycle state.
+
+## 12a. Database Evidence Selection
+
+Use the database verifier, never an inline SQLite program. It parses
+`public.env` as inert text and opens SQLite read-only. Choose exactly one
+pre-start path:
+
+```bash
+# Existing reviewed database
+sudo /opt/trader-assist-v0/venv/bin/python /opt/trader-assist-v0/scripts/p4a/verify_first_launch_database.py existing-before-smoke
+
+# Fresh approved database path, before the first start
+sudo /opt/trader-assist-v0/venv/bin/python /opt/trader-assist-v0/scripts/p4a/verify_first_launch_database.py fresh-pre-start
+```
+
+The fresh path must be absent at this point. The existing path must have
+exactly one `ok` integrity result. Record the selected phase and result in the
+evidence manifest without recording credential contents.
 
 ## 13. Start Procedure
 
 ```bash
+sudo /opt/trader-assist-v0/scripts/p4a/verify_first_launch_runtime_state.sh pre-start
 sudo systemctl start trader-assist-v0-public.service
+sudo /opt/trader-assist-v0/scripts/p4a/verify_first_launch_runtime_state.sh post-start
+```
+
+For a fresh database, immediately record creation evidence:
+
+```bash
+sudo /opt/trader-assist-v0/venv/bin/python /opt/trader-assist-v0/scripts/p4a/verify_first_launch_database.py fresh-post-creation
 ```
 
 ## 14. Stop Procedure
 
 ```bash
 sudo systemctl stop trader-assist-v0-public.service
+sudo /opt/trader-assist-v0/scripts/p4a/verify_first_launch_runtime_state.sh pre-start
 ```
 
 ## 15. Controlled Restart Procedure
@@ -319,7 +336,9 @@ Exactly one controlled restart is permitted:
 
 ```bash
 sudo systemctl stop trader-assist-v0-public.service
+sudo /opt/trader-assist-v0/scripts/p4a/verify_first_launch_runtime_state.sh pre-start
 sudo systemctl start trader-assist-v0-public.service
+sudo /opt/trader-assist-v0/scripts/p4a/verify_first_launch_runtime_state.sh post-start
 ```
 
 ## 16. Status Procedure
@@ -355,18 +374,13 @@ sudo journalctl -u trader-assist-v0-public.service \
   --no-pager > /tmp/trader-assist-v0-journal-evidence.txt
 ```
 
-## 19. Read-Only SQLite Health Queries
+## 19. Read-Only SQLite Health Evidence
 
-Using Python stdlib only (no external tools required):
+At the end of the observation period, run the final evidence phase. This is
+read-only and requires exactly one `ok` integrity result.
 
 ```bash
-sudo -u traderassist /opt/trader-assist-v0/venv/bin/python -c "
-import sqlite3
-conn = sqlite3.connect('file:/var/lib/trader-assist-v0/runtime.db?mode=ro', uri=True)
-print('journal_mode:', conn.execute('PRAGMA journal_mode').fetchone()[0])
-print('integrity_check:', conn.execute('PRAGMA integrity_check').fetchone()[0])
-conn.close()
-"
+sudo /opt/trader-assist-v0/venv/bin/python /opt/trader-assist-v0/scripts/p4a/verify_first_launch_database.py final-post-smoke
 ```
 
 ## 20. READY Verification
@@ -399,14 +413,19 @@ returns `inactive`.
 
 ## 24. Rollback
 
-To roll back the deployment:
+The required order is stop → disable → final-state PASS → delete credential,
+permit, unit, or deployment files. Do not delete any deployment asset before
+the final-state proof succeeds.
 
 ```bash
 sudo systemctl stop trader-assist-v0-public.service
 sudo systemctl disable trader-assist-v0-public.service
+sudo /opt/trader-assist-v0/scripts/p4a/verify_first_launch_runtime_state.sh final-state
+sudo /opt/trader-assist-v0/venv/bin/python /opt/trader-assist-v0/scripts/p4a/verify_first_launch_database.py final-post-smoke
+sudo rm -f /etc/trader-assist-v0/credentials/notification.json
+sudo rm -f /etc/trader-assist-v0/activation-permit
 sudo rm /etc/systemd/system/trader-assist-v0-public.service
 sudo systemctl daemon-reload
-sudo rm -f /etc/trader-assist-v0/activation-permit
 ```
 
 ## 25. Uninstall
@@ -414,6 +433,7 @@ sudo rm -f /etc/trader-assist-v0/activation-permit
 ```bash
 sudo systemctl stop trader-assist-v0-public.service || true
 sudo systemctl disable trader-assist-v0-public.service || true
+sudo /opt/trader-assist-v0/scripts/p4a/verify_first_launch_runtime_state.sh final-state
 sudo rm /etc/systemd/system/trader-assist-v0-public.service
 sudo systemctl daemon-reload
 sudo rm -rf /etc/trader-assist-v0
@@ -425,11 +445,10 @@ sudo groupdel traderassist || true
 
 ## 26. Proof That No Runtime Remains
 
-```bash
-sudo systemctl is-active trader-assist-v0-public.service || echo "inactive"
-pgrep -f run_restricted_public_runtime.sh || echo "no wrapper process"
-pgrep -f run_first_launch_public_runtime.py || echo "no Python process"
-```
+Section 24's `final-state` verifier is the required proof. It confirms the
+authorized unit is inactive and disabled, has MainPID 0 and no lifecycle job,
+and that the dedicated user, wrapper, entrypoint, and authorized cgroup are
+absent or empty.
 
 ## 27. P4-A / P4-B Separation
 
@@ -469,10 +488,11 @@ LOCAL/NON_AWS SMOKE IS NOT AUTHORIZED BY THIS WRITE LEASE.
 
 ## 30. Service Validation
 
-Validate the systemd unit syntax:
+The installed-state verifier performs the required systemd syntax validation,
+exact unit comparison, and installed-unit authority checks:
 
 ```bash
-sudo systemd-analyze verify /etc/systemd/system/trader-assist-v0-public.service
+sudo /opt/trader-assist-v0/scripts/p4a/verify_first_launch_runtime_state.sh installed
 ```
 
 LOCAL/NON_AWS SMOKE IS NOT AUTHORIZED BY THIS WRITE LEASE.
