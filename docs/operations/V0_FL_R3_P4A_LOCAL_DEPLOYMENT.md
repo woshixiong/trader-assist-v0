@@ -375,11 +375,6 @@ if ! "$BUSCTL_BIN" --help 2>&1 | grep -F -- '--json' >/dev/null; then
 fi
 test -x "$SYSTEM_PYTHON" || safe_stop "supported host lacks the reviewed executable-property parser"
 sudo -v || safe_stop "cannot refresh sudo credentials before proof"
-if ! sudo -n "$BUSCTL_BIN" --system --json=short call \
-  org.freedesktop.systemd1 /org/freedesktop/systemd1 \
-  org.freedesktop.DBus.Peer Ping >/dev/null; then
-  safe_stop "system bus or systemd manager is unreachable"
-fi
 
 # NONINTERACTIVE_PROOF (inside the hard cap). This outer timeout deliberately
 # does not use --foreground: GNU timeout owns the proof command process group.
@@ -427,6 +422,24 @@ bounded_capture() {
     *) safe_stop "bounded command failed or returned partial output" ;;
   esac
   printf -v "$destination" '%s' "$output"
+}
+
+# Preserve the hard timeout classification while allowing the acquisition
+# caller to attach its reviewed, source-specific SAFE_STOP code to a normal
+# D-Bus method failure.
+bounded_capture_may_fail() {
+  destination="$1"; shift
+  remaining="$(remaining_seconds)"
+  command_seconds=$((remaining - 1))
+  set +e
+  output="$("$TIMEOUT_BIN" --foreground --signal=TERM --kill-after=1s "${command_seconds}s" "$@" 2>&1)"
+  command_status=$?
+  set -e
+  case "$command_status" in
+    124|137) safe_stop "hard 30-second transition-proof timeout or forced kill" ;;
+  esac
+  printf -v "$destination" '%s' "$output"
+  return "$command_status"
 }
 
 bounded_run() {
@@ -589,17 +602,45 @@ except Exception:
 if not isinstance(document, dict) or set(document) != {"type", "data"}:
     raise SystemExit(1)
 value = document["data"]
-if document["type"] != expected_type or not isinstance(value, str):
+if document["type"] != expected_type:
     raise SystemExit(1)
 if kind == "object":
-    valid = re.fullmatch(r"/(?:[A-Za-z0-9_]+/)*[A-Za-z0-9_]+", value) is not None
+    valid = isinstance(value, str) and re.fullmatch(r"/(?:[A-Za-z0-9_]+/)*[A-Za-z0-9_]+", value) is not None
 elif kind == "service":
-    valid = re.fullmatch(r"[A-Za-z0-9@_.-]+\\.service", value) is not None
+    valid = isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9@_.-]+\\.service", value) is not None
+elif kind == "load-state":
+    valid = value == "loaded"
+elif kind == "transient":
+    valid = type(value) is bool
+    value = "yes" if value is True else "no"
+elif kind == "fragment":
+    valid = isinstance(value, str) and "\n" not in value and "\r" not in value
+elif kind == "dropins":
+    valid = isinstance(value, list) and all(isinstance(item, str) and "\n" not in item and "\r" not in item for item in value)
+    value = "empty" if valid and not value else "present"
 else:
     valid = False
 if not valid:
     raise SystemExit(1)
 sys.stdout.write(value)
+'
+
+DBUS_PING_PARSER='import json, os
+raw = os.environ["PING_JSON"]
+def reject_pairs(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError()
+        result[key] = value
+    return result
+try:
+    raw.encode("utf-8", "strict")
+    document = json.loads(raw, object_pairs_hook=reject_pairs)
+except Exception:
+    raise SystemExit(1)
+if document != {"type": "", "data": []}:
+    raise SystemExit(1)
 '
 
 parse_typed_scalar() {
@@ -611,15 +652,37 @@ parse_typed_scalar() {
   printf '%s' "$scalar_output"
 }
 
-require_service_name() {
-  [[ "$1" =~ ^[A-Za-z0-9@_.-]+\.service$ ]] || safe_stop "manager returned a non-service identity"
+parse_manager_ping() {
+  json_value="$1"
+  bounded_capture parser_output sudo -n /usr/bin/env PING_JSON="$json_value" \
+    "$SYSTEM_PYTHON" -c "$DBUS_PING_PARSER"
+  test -z "$parser_output" || safe_stop "manager Ping parser emitted unexpected output"
 }
 
-get_unit_object() {
+require_service_name() {
+  [[ "$1" =~ ^[A-Za-z0-9@_.-]+\.service$ ]] || safe_stop "manager returned a non-service identity"
+  if [[ "$1" == *"@"* ]]; then
+    [[ "$1" =~ ^[A-Za-z0-9_.-]+@([A-Za-z0-9_.-]+)?\.service$ ]] || safe_stop "manager returned a malformed template identity"
+  fi
+}
+
+get_loaded_unit_object() {
   unit="$1"; require_service_name "$unit"
-  bounded_capture object_json sudo -n "$BUSCTL_BIN" --system --json=short call \
+  if ! bounded_capture_may_fail object_json sudo -n "$BUSCTL_BIN" --system --json=short call \
     org.freedesktop.systemd1 /org/freedesktop/systemd1 \
-    org.freedesktop.systemd1.Manager GetUnit s "$unit"
+    org.freedesktop.systemd1.Manager GetUnit s "$unit"; then
+    safe_stop "SAFE_STOP_CODE: LOADED_UNIT_GETUNIT_FAILED"
+  fi
+  parse_typed_scalar "$object_json" o object
+}
+
+load_concrete_unit_object() {
+  unit="$1"; require_service_name "$unit"
+  if ! bounded_capture_may_fail object_json sudo -n "$BUSCTL_BIN" --system --json=short call \
+    org.freedesktop.systemd1 /org/freedesktop/systemd1 \
+    org.freedesktop.systemd1.Manager LoadUnit s "$unit"; then
+    safe_stop "SAFE_STOP_CODE: CONCRETE_UNIT_LOADUNIT_FAILED"
+  fi
   parse_typed_scalar "$object_json" o object
 }
 
@@ -629,6 +692,18 @@ get_canonical_id() {
     org.freedesktop.systemd1 "$object_path" org.freedesktop.systemd1.Unit Id
   parse_typed_scalar "$id_json" s service
 }
+
+read_typed_unit_property() {
+  object_path="$1"; property="$2"; expected_type="$3"; scalar_kind="$4"
+  bounded_capture property_json sudo -n "$BUSCTL_BIN" --system --json=short get-property \
+    org.freedesktop.systemd1 "$object_path" org.freedesktop.systemd1.Unit "$property"
+  parse_typed_scalar "$property_json" "$expected_type" "$scalar_kind"
+}
+
+read_typed_load_state() { read_typed_unit_property "$1" LoadState s load-state; }
+read_typed_transient() { read_typed_unit_property "$1" Transient b transient; }
+read_typed_fragment_path() { read_typed_unit_property "$1" FragmentPath s fragment; }
+read_typed_dropins() { read_typed_unit_property "$1" DropInPaths as dropins; }
 
 parse_exec_property() {
   json_value="$1"; mode="$2"; property="$3"
@@ -670,18 +745,69 @@ assert_no_lifecycle_job() {
 collect_manager_units() {
   bounded_capture loaded sudo -n systemctl list-units --type=service --all --no-legend --plain --no-pager
   bounded_capture files sudo -n systemctl list-unit-files --type=service --no-legend --no-pager
-  manager_units="$(printf '%s\n%s\n' "$loaded" "$files" | awk 'NF { if ($1 !~ /^[A-Za-z0-9@_.-]+\\.service$/) exit 2; print $1 }' | LC_ALL=C sort -u)" || safe_stop "manager service enumeration is malformed"
-  test -n "$manager_units" || safe_stop "manager-known service-unit list is empty"
+  loaded_units="$(printf '%s\n' "$loaded" | awk 'NF { if ($1 !~ /^[A-Za-z0-9@_.-]+\\.service$/) exit 2; print $1 }' | LC_ALL=C sort -u)" || safe_stop "loaded service-unit enumeration is malformed"
+  unit_files="$(printf '%s\n' "$files" | awk 'NF { if ((NF != 2 && NF != 3) || $1 !~ /^[A-Za-z0-9@_.-]+\\.service$/) exit 2; print $1 " " $2 }' | LC_ALL=C sort -u)" || safe_stop "unit-file enumeration is malformed"
+  test -n "$loaded_units$unit_files" || safe_stop "service-unit discovery is empty"
+}
+
+is_bare_template_definition() { [[ "$1" =~ ^[A-Za-z0-9_.-]+@\.service$ ]]; }
+
+require_unit_file_state() {
+  case "$1" in
+    alias|disabled|enabled|enabled-runtime|generated|indirect|linked|linked-runtime|masked|masked-runtime|static|transient) ;;
+    *) safe_stop "unsupported unit-file state" ;;
+  esac
+}
+
+resolve_and_inspect_canonical() {
+  candidate="$1"; object_path="$2"
+  require_service_name "$candidate"
+  canonical_id="$(get_canonical_id "$object_path")"
+  # Assign before every map and deduplication branch so ordering cannot change
+  # authorized, unrelated, transient, or alias classification.
+  if test "$canonical_id" = "$SERVICE"; then canonical_mode=authorized; else canonical_mode=other; fi
+  if [[ -v "canonical_object_by_id[$canonical_id]" ]]; then
+    test "${canonical_object_by_id[$canonical_id]}" = "$object_path" || safe_stop "aliases with one canonical Id resolved to different D-Bus object paths"
+  else
+    canonical_object_by_id["$canonical_id"]="$object_path"
+  fi
+  if [[ -v "canonical_id_by_object[$object_path]" ]]; then
+    test "${canonical_id_by_object[$object_path]}" = "$canonical_id" || safe_stop "one D-Bus object path returned conflicting canonical Ids"
+  else
+    canonical_id_by_object["$object_path"]="$canonical_id"
+  fi
+  canonical_load="$(read_typed_load_state "$object_path")"
+  test "$canonical_load" = loaded || safe_stop "canonical typed LoadState is unsupported"
+  canonical_transient="$(read_typed_transient "$object_path")"
+  canonical_fragment="$(read_typed_fragment_path "$object_path")"
+  canonical_dropins="$(read_typed_dropins "$object_path")"
+  if test "$canonical_mode" = authorized; then
+    test "$canonical_fragment" = "$AUTHORIZED_FRAGMENT" || safe_stop "authorized canonical FragmentPath conflicts"
+    test "$canonical_transient" = no || safe_stop "authorized typed Transient is not no"
+    test "$canonical_dropins" = empty || safe_stop "authorized typed DropInPaths is not empty"
+  else
+    case "$canonical_transient" in
+      yes) : ;; # Empty FragmentPath is valid only after complete inspection.
+      no) test -n "$canonical_fragment" || safe_stop "non-transient loaded unit has no reliable FragmentPath" ;;
+      *) safe_stop "canonical typed Transient is unsupported" ;;
+    esac
+  fi
+  if [[ -v "inspected_object[$object_path]" ]]; then
+    test "${inspected_object[$object_path]}" = "$canonical_id" || safe_stop "deduplicated object has ambiguous canonical identity"
+    return 0
+  fi
+  inspected_object["$object_path"]="$canonical_id"
+  inspect_exec_properties "$object_path" "$canonical_mode"
 }
 
 assert_authorized_identity() {
-  test "$(read_property LoadState "$SERVICE")" = loaded || safe_stop "authorized LoadState is not loaded"
-  test "$(read_property FragmentPath "$SERVICE")" = "$AUTHORIZED_FRAGMENT" || safe_stop "authorized FragmentPath is not exact"
-  test "$(read_property Transient "$SERVICE")" = no || safe_stop "authorized Transient is not no"
-  test -z "$(read_property DropInPaths "$SERVICE")" || safe_stop "authorized DropInPaths is not empty"
-  authorized_object="$(get_unit_object "$SERVICE")"
+  authorized_object="$(get_loaded_unit_object "$SERVICE")"
   authorized_id="$(get_canonical_id "$authorized_object")"
   test "$authorized_id" = "$SERVICE" || safe_stop "authorized typed canonical Id is not exact"
+  test "$(read_typed_load_state "$authorized_object")" = loaded || safe_stop "authorized typed LoadState is not loaded"
+  test "$(read_typed_fragment_path "$authorized_object")" = "$AUTHORIZED_FRAGMENT" || safe_stop "authorized typed FragmentPath is not exact"
+  test "$(read_typed_transient "$authorized_object")" = no || safe_stop "authorized typed Transient is not no"
+  test "$(read_typed_dropins "$authorized_object")" = empty || safe_stop "authorized typed DropInPaths is not empty"
   inspect_exec_properties "$authorized_object" authorized
 }
 
@@ -690,59 +816,43 @@ assert_manager_known_executables() {
   declare -A canonical_object_by_id=()
   declare -A canonical_id_by_object=()
   declare -A inspected_object=()
+  declare -A loaded_resolved=()
   while IFS= read -r candidate; do
+    test -n "$candidate" || continue
     require_service_name "$candidate"
-    object_path="$(get_unit_object "$candidate")"
-    canonical_id="$(get_canonical_id "$object_path")"
-    # Mode is assigned before object-path deduplication, so enumeration order
-    # cannot change authorized, unrelated, transient, or alias classification.
-    if test "$canonical_id" = "$SERVICE"; then canonical_mode=authorized; else canonical_mode=other; fi
-    if [[ -v "canonical_object_by_id[$canonical_id]" ]]; then
-      test "${canonical_object_by_id[$canonical_id]}" = "$object_path" || safe_stop "aliases with one canonical Id resolved to different D-Bus object paths"
-    else
-      canonical_object_by_id["$canonical_id"]="$object_path"
-    fi
-    if [[ -v "canonical_id_by_object[$object_path]" ]]; then
-      test "${canonical_id_by_object[$object_path]}" = "$canonical_id" || safe_stop "one D-Bus object path returned conflicting canonical Ids"
-    else
-      canonical_id_by_object["$object_path"]="$canonical_id"
-    fi
-    canonical_load="$(read_property LoadState "$canonical_id")"
-    test "$canonical_load" = loaded || safe_stop "canonical service is not loaded"
-    canonical_transient="$(read_property Transient "$canonical_id")"
-    case "$canonical_transient" in yes|no) ;; *) safe_stop "canonical Transient is unknown" ;; esac
-    canonical_fragment="$(read_property FragmentPath "$canonical_id")"
-    if test "$canonical_mode" = authorized; then
-      test "$canonical_fragment" = "$AUTHORIZED_FRAGMENT" || safe_stop "authorized canonical FragmentPath conflicts"
-    else
-      case "$canonical_transient" in
-        yes) : ;; # Empty FragmentPath is valid only after complete inspection.
-        no) test -n "$canonical_fragment" || safe_stop "non-transient loaded unit has no reliable FragmentPath" ;;
-      esac
-    fi
-    if [[ -v "inspected_object[$object_path]" ]]; then
-      test "${inspected_object[$object_path]}" = "$canonical_id" || safe_stop "deduplicated object has ambiguous canonical identity"
+    object_path="$(get_loaded_unit_object "$candidate")"
+    loaded_resolved["$candidate"]=1
+    resolve_and_inspect_canonical "$candidate" "$object_path"
+  done <<EOF
+$loaded_units
+EOF
+  while IFS=' ' read -r candidate unit_file_state; do
+    test -n "$candidate" || continue
+    require_service_name "$candidate"
+    require_unit_file_state "$unit_file_state"
+    if [[ -v "loaded_resolved[$candidate]" ]]; then continue; fi
+    if is_bare_template_definition "$candidate"; then
+      # UNINSTANTIATED_TEMPLATE_DEFINITION: never invent an instance with LoadUnit.
       continue
     fi
-    inspected_object["$object_path"]="$canonical_id"
-    inspect_exec_properties "$object_path" "$canonical_mode"
+    object_path="$(load_concrete_unit_object "$candidate")"
+    resolve_and_inspect_canonical "$candidate" "$object_path"
   done <<EOF
-$manager_units
+$unit_files
 EOF
 }
 
 assert_effective_unit_identity() { assert_authorized_identity; assert_manager_known_executables; }
 
 preflight_supported_host() {
-  # The interactive sudo refresh and tool checks happened outside the cap.
-  # This noninteractive, bounded check proves that the system bus and manager
-  # are reachable, then requires every reviewed Exec property to have the
-  # exact typed signature and authorized-service contract before any lifecycle
-  # proof can proceed.
+  # This is the first real manager operation. Interactive sudo preparation and
+  # local capability checks are outside the cap; Ping and all evidence are in
+  # the outer process group and remaining-budget boundary.
   bounded_capture manager_ping sudo -n "$BUSCTL_BIN" --system --json=short call \
     org.freedesktop.systemd1 /org/freedesktop/systemd1 \
     org.freedesktop.DBus.Peer Ping
-  preflight_object="$(get_unit_object "$SERVICE")"
+  parse_manager_ping "$manager_ping"
+  preflight_object="$(get_loaded_unit_object "$SERVICE")"
   preflight_id="$(get_canonical_id "$preflight_object")"
   test "$preflight_id" = "$SERVICE" || safe_stop "authorized typed canonical Id is not exact"
   inspect_exec_properties "$preflight_object" authorized
@@ -920,8 +1030,32 @@ representation, a different signature, unknown or extra typed field,
 truncated record, relative or ambiguous executable representation, failed
 canonicalization, or partial manager response is outside the supported-host
 proof and requires `SAFE_STOP`; no dependency is installed automatically.
-The typed `GetUnit` lookup may load unit metadata into systemd, but it does not
-authorize, start, enable, stop, restart, or otherwise activate a runtime.
+`GetUnit` resolves only an already manager-loaded Unit object; it does not load
+arbitrary unit metadata. The proof first resolves every manager-loaded service
+(including inactive, transient, masked, alias, and instantiated-template
+objects) with `GetUnit`. It then resolves every not-yet-loaded concrete
+unit-file identity with bounded `LoadUnit`, including disabled, static,
+generated, and masked files. A `LoadUnit` may create a manager-resident
+metadata object that systemd can later garbage-collect; this reviewed metadata
+acquisition is permitted and is not runtime activation. The proof never pairs
+it with Start/Stop/Restart/Reload, enable/disable/mask/unmask, preset mutation,
+daemon-reload, or unit-file mutation. A loaded `GetUnit` failure is
+`SAFE_STOP_CODE: LOADED_UNIT_GETUNIT_FAILED`; an eligible concrete `LoadUnit`
+failure is `SAFE_STOP_CODE: CONCRETE_UNIT_LOADUNIT_FAILED`.
+There is deliberately no weaker masked-unit shortcut: an unloaded masked
+concrete file is accepted only after `LoadUnit` returns a complete typed object
+and the same full inspection succeeds; otherwise it SAFE_STOPs.
+
+A bare `name@.service` is classified as an
+`UNINSTANTIATED_TEMPLATE_DEFINITION`, not passed to `LoadUnit`, and never
+treated as a current concrete live authority. Every loaded concrete instance
+such as `name@instance.service` is discovered through the manager-loaded set,
+resolved with `GetUnit`, and fully inspected. A later loaded instance is caught
+by the same pre-start, post-start, restart, and final-state proof; this runbook
+does not claim that a dormant bare template is itself a running authority.
+Malformed template identities, unsupported unit-file states, alias/object-path
+or alias/Id conflicts, and contradictory loaded-versus-unit-file evidence
+require `SAFE_STOP`.
 
 An unrelated transient unit is not exempt: it can pass only after complete
 typed inspection of all seven executable properties and every command record.
