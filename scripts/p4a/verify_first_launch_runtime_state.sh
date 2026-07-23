@@ -76,7 +76,9 @@ cgroup_is_empty() {
 process_matches() {
     local needle="$1" pid user args
     while read -r pid user args; do
-        [[ "$args" == *"$needle"* ]] && printf '%s %s\n' "$pid" "$user"
+        if [[ "$args" == *"$needle"* ]]; then
+            printf '%s %s\n' "$pid" "$user"
+        fi
     done < <(ps -eo pid=,user=,args=)
 }
 
@@ -126,8 +128,11 @@ assert_pre_start() {
 }
 
 read_argv() {
-    local pid="$1"
-    mapfile -d '' -t ACTUAL_ARGV < "$PROC_ROOT/$pid/cmdline" || die "cannot inspect authorized process argv"
+    local pid="$1" arg
+    ACTUAL_ARGV=()
+    while IFS= read -r -d '' arg; do
+        ACTUAL_ARGV+=("$arg")
+    done < "$PROC_ROOT/$pid/cmdline" || die "cannot inspect authorized process argv"
     [[ ${#ACTUAL_ARGV[@]} -eq 17 ]] || die "authorized process argv length mismatch"
     [[ "${ACTUAL_ARGV[0]}" == "$APPROVED_PYTHON" && "${ACTUAL_ARGV[1]}" == "$APPROVED_ENTRYPOINT" ]] || die "authorized process executable contract mismatch"
     [[ "${ACTUAL_ARGV[2]}" == "--enable-restricted-public-runtime" && "${ACTUAL_ARGV[3]}" == "--mode" && "${ACTUAL_ARGV[4]}" == "RESTRICTED_PUBLIC_LIVE_SHADOW" ]] || die "authorized process mode contract mismatch"
@@ -137,7 +142,7 @@ read_argv() {
 }
 
 assert_post_start() {
-    local deadline pid executable group users wrappers entries cgroup_pids=()
+    local deadline pid executable group users wrappers entries cgroup_pid cgroup_pids=()
     read_public_env
     deadline=$((SECONDS + WAIT_SECONDS))
     while [[ "$(value ActiveState)" != "active" || "$(value MainPID)" == "0" ]]; do
@@ -158,7 +163,9 @@ assert_post_start() {
     [[ "${entries%% *}" == "$pid" && "$(printf '%s\n' "$entries" | sed '/^$/d' | wc -l | tr -d ' ')" == "1" ]] || die "approved entrypoint is not exactly main PID"
     group="$(control_group)"
     [[ -f "$group/cgroup.procs" ]] || die "authorized cgroup unavailable"
-    mapfile -t cgroup_pids < "$group/cgroup.procs"
+    while IFS= read -r cgroup_pid || [[ -n "$cgroup_pid" ]]; do
+        [[ -z "$cgroup_pid" ]] || cgroup_pids+=("$cgroup_pid")
+    done < "$group/cgroup.procs"
     [[ ${#cgroup_pids[@]} -eq 1 && "${cgroup_pids[0]}" == "$pid" ]] || die "authorized cgroup does not contain exactly main PID"
 }
 

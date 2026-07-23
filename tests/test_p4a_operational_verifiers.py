@@ -51,30 +51,57 @@ def runtime(tmp_path: Path) -> dict[str, object]:
     }
     for old, new in replacements.items():
         text = text.replace(old, new)
+    text = text.replace(
+        "metadata=\"$(stat -c '%U:%G:%a' \"$INSTALLED_UNIT\")\" || die \"cannot inspect installed unit metadata\"",
+        "metadata=\"${STAT_VALUE:-root:root:644}\"",
+    )
+    text = text.replace(
+        "source_hash=\"$(sha256sum \"$SOURCE_UNIT\" | awk '{print $1}')\" || die \"cannot hash reviewed source unit\"",
+        "source_hash=good",
+    )
+    text = text.replace(
+        "installed_hash=\"$(sha256sum \"$INSTALLED_UNIT\" | awk '{print $1}')\" || die \"cannot hash installed unit\"",
+        "installed_hash=\"${INSTALLED_HASH:-good}\"",
+    )
+    text = text.replace(
+        'value() { systemctl show "$SERVICE" --property="$1" --value; }',
+        '''value() {
+    case "$1" in
+        FragmentPath) printf '%s\\n' "${SHOW_FRAGMENT:-$INSTALLED_UNIT}" ;;
+        DropInPaths) printf '%s\\n' "${SHOW_DROPINS:-}" ;;
+        User) printf '%s\\n' "${SHOW_USER:-traderassist}" ;;
+        Group) printf '%s\\n' "${SHOW_GROUP:-traderassist}" ;;
+        Id) printf '%s\\n' "${SHOW_ID:-trader-assist-v0-public.service}" ;;
+        ActiveState) printf '%s\\n' "${SHOW_ACTIVE:-inactive}" ;;
+        MainPID) printf '%s\\n' "${SHOW_PID:-0}" ;;
+        SubState) printf '%s\\n' "${SHOW_SUB:-running}" ;;
+        UnitFileState) printf '%s\\n' "${SHOW_UNIT_FILE:-disabled}" ;;
+        ControlGroup) printf '%s\\n' /system.slice/trader-assist-v0-public.service ;;
+    esac
+}''',
+    )
+    text = text.replace(
+        'systemd-analyze verify "$INSTALLED_UNIT" >/dev/null || die "systemd unit verification failed"',
+        '[[ "${VERIFY_FAIL:-0}" == 0 ]] || die "systemd unit verification failed"',
+    )
+    text = text.replace(
+        'jobs="$(systemctl list-jobs --no-legend --no-pager)" || die "cannot inspect authorized unit jobs"',
+        'jobs="${SHOW_JOBS:-}"',
+    )
+    text = text.replace(
+        'done < <(ps -eo pid=,user=,args=)',
+        'done <<< "${PS_LINES:-}"',
+    )
+    text = text.replace(
+        'users="$(ps -u "$APPROVED_USER" -o pid=)" || die "cannot inspect dedicated user processes"',
+        'users="${PS_USER_PIDS:-}"',
+    )
+    text = text.replace(
+        'executable="$(readlink -f "$PROC_ROOT/$pid/exe")" || die "cannot inspect authorized process executable"',
+        'executable="${FAKE_EXE:-$APPROVED_PYTHON}"',
+    )
     script.write_text(text)
     script.chmod(0o755)
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    _command(
-        bin_dir / "systemctl",
-        """if [ "$1" = show ]; then
-  case "${2#--property=}" in
-    FragmentPath) printf '%s\\n' "${SHOW_FRAGMENT:-$FAKE_INSTALLED_UNIT}";; DropInPaths) printf '%s\\n' "${SHOW_DROPINS:-}";;
-    User) printf '%s\\n' "${SHOW_USER:-traderassist}";; Group) printf '%s\\n' "${SHOW_GROUP:-traderassist}";;
-    Id) printf '%s\\n' "${SHOW_ID:-trader-assist-v0-public.service}";; ActiveState) printf '%s\\n' "${SHOW_ACTIVE:-inactive}";;
-    MainPID) printf '%s\\n' "${SHOW_PID:-0}";; SubState) printf '%s\\n' "${SHOW_SUB:-running}";;
-    UnitFileState) printf '%s\\n' "${SHOW_UNIT_FILE:-disabled}";; ControlGroup) printf '%s\\n' /system.slice/trader-assist-v0-public.service;;
-  esac
-elif [ "$1" = list-jobs ]; then printf '%s\\n' "${SHOW_JOBS:-}"; else exit 1; fi""",
-    )
-    _command(bin_dir / "systemd-analyze", "[ \"${VERIFY_FAIL:-0}\" = 0 ]")
-    _command(bin_dir / "sha256sum", "if [ \"$1\" = \"$FAKE_INSTALLED_UNIT\" ] && [ \"${BAD_HASH:-0}\" = 1 ]; then echo bad; else echo good; fi")
-    _command(bin_dir / "stat", "printf '%s\\n' \"${STAT_VALUE:-root:root:644}\"")
-    _command(
-        bin_dir / "ps",
-        """if [ "$1" = -u ]; then printf '%s\\n' "${PS_USER_PIDS:-}"; else printf '%s\\n' "${PS_LINES:-}"; fi""",
-    )
-    _command(bin_dir / "readlink", "printf '%s\\n' \"${FAKE_EXE:-/opt/trader-assist-v0/venv/bin/python}\"")
     return {
         "script": script,
         "source": source,
@@ -82,7 +109,6 @@ elif [ "$1" = list-jobs ]; then printf '%s\\n' "${SHOW_JOBS:-}"; else exit 1; fi
         "env": public_env,
         "proc": proc,
         "cgroup": cgroup,
-        "bin": bin_dir,
     }
 
 
@@ -90,8 +116,6 @@ def _run_runtime(runtime: dict[str, object], mode: str, **overrides: str) -> sub
     env = dict(os.environ)
     env.update(
         {
-            "PATH": f"{runtime['bin']}:{env.get('PATH', '/usr/bin:/bin')}",
-            "FAKE_INSTALLED_UNIT": str(runtime["installed"]),
         }
     )
     env.update(overrides)
@@ -135,8 +159,10 @@ def test_runtime_positive_nonrunning_modes(runtime: dict[str, object], mode: str
 
 def test_runtime_post_start_positive(runtime: dict[str, object]) -> None:
     proc = runtime["proc"]
-    assert isinstance(proc, Path)
+    cgroup = runtime["cgroup"]
+    assert isinstance(proc, Path) and isinstance(cgroup, Path)
     (proc / "cmdline").write_bytes(_post_argv())
+    (cgroup / "cgroup.procs").write_text("101\n")
     result = _run_runtime(
         runtime, "post-start", SHOW_ACTIVE="active", SHOW_PID="101", SHOW_SUB="running",
         PS_USER_PIDS="101",
@@ -151,7 +177,7 @@ def test_runtime_post_start_positive(runtime: dict[str, object]) -> None:
 @pytest.mark.parametrize(
     ("mode", "overrides"),
     [
-        ("installed", {"BAD_HASH": "1"}),
+        ("installed", {"INSTALLED_HASH": "bad"}),
         ("installed", {"STAT_VALUE": "root:root:600"}),
         ("installed", {"SHOW_FRAGMENT": "/wrong.service"}),
         ("installed", {"SHOW_USER": "root"}), ("installed", {"SHOW_GROUP": "root"}),
