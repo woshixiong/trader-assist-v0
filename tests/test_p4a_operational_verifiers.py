@@ -52,15 +52,18 @@ def runtime(tmp_path: Path) -> dict[str, object]:
     for old, new in replacements.items():
         text = text.replace(old, new)
     text = text.replace(
-        "metadata=\"$(stat -c '%U:%G:%a' \"$INSTALLED_UNIT\")\" || die \"cannot inspect installed unit metadata\"",
+        "metadata=\"$(stat -c '%U:%G:%a' \"$INSTALLED_UNIT\")\" "
+        "|| die \"cannot inspect installed unit metadata\"",
         "metadata=\"${STAT_VALUE:-root:root:644}\"",
     )
     text = text.replace(
-        "source_hash=\"$(sha256sum \"$SOURCE_UNIT\" | awk '{print $1}')\" || die \"cannot hash reviewed source unit\"",
+        "source_hash=\"$(sha256sum \"$SOURCE_UNIT\" | awk '{print $1}')\" "
+        "|| die \"cannot hash reviewed source unit\"",
         "source_hash=good",
     )
     text = text.replace(
-        "installed_hash=\"$(sha256sum \"$INSTALLED_UNIT\" | awk '{print $1}')\" || die \"cannot hash installed unit\"",
+        "installed_hash=\"$(sha256sum \"$INSTALLED_UNIT\" | awk '{print $1}')\" "
+        "|| die \"cannot hash installed unit\"",
         "installed_hash=\"${INSTALLED_HASH:-good}\"",
     )
     text = text.replace(
@@ -81,11 +84,13 @@ def runtime(tmp_path: Path) -> dict[str, object]:
 }''',
     )
     text = text.replace(
-        'systemd-analyze verify "$INSTALLED_UNIT" >/dev/null || die "systemd unit verification failed"',
+        'systemd-analyze verify "$INSTALLED_UNIT" >/dev/null '
+        '|| die "systemd unit verification failed"',
         '[[ "${VERIFY_FAIL:-0}" == 0 ]] || die "systemd unit verification failed"',
     )
     text = text.replace(
-        'jobs="$(systemctl list-jobs --no-legend --no-pager)" || die "cannot inspect authorized unit jobs"',
+        'jobs="$(systemctl list-jobs --no-legend --no-pager)" '
+        '|| die "cannot inspect authorized unit jobs"',
         'jobs="${SHOW_JOBS:-}"',
     )
     text = text.replace(
@@ -93,11 +98,13 @@ def runtime(tmp_path: Path) -> dict[str, object]:
         'done <<< "${PS_LINES:-}"',
     )
     text = text.replace(
-        'users="$(ps -u "$APPROVED_USER" -o pid=)" || die "cannot inspect dedicated user processes"',
+        'users="$(ps -u "$APPROVED_USER" -o pid=)" '
+        '|| die "cannot inspect dedicated user processes"',
         'users="${PS_USER_PIDS:-}"',
     )
     text = text.replace(
-        'executable="$(readlink -f "$PROC_ROOT/$pid/exe")" || die "cannot inspect authorized process executable"',
+        'executable="$(readlink -f "$PROC_ROOT/$pid/exe")" '
+        '|| die "cannot inspect authorized process executable"',
         'executable="${FAKE_EXE:-$APPROVED_PYTHON}"',
     )
     script.write_text(text)
@@ -112,7 +119,9 @@ def runtime(tmp_path: Path) -> dict[str, object]:
     }
 
 
-def _run_runtime(runtime: dict[str, object], mode: str, **overrides: str) -> subprocess.CompletedProcess[str]:
+def _run_runtime(
+    runtime: dict[str, object], mode: str, **overrides: str
+) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
     env.update(
         {
@@ -194,7 +203,9 @@ def test_runtime_post_start_positive(runtime: dict[str, object]) -> None:
         ("final-state", {"SHOW_UNIT_FILE": "enabled"}), ("final-state", {"PS_USER_PIDS": "77"}),
     ],
 )
-def test_runtime_negative_matrix(runtime: dict[str, object], mode: str, overrides: dict[str, str]) -> None:
+def test_runtime_negative_matrix(
+    runtime: dict[str, object], mode: str, overrides: dict[str, str]
+) -> None:
     result = _run_runtime(runtime, mode, **overrides)
     assert result.returncode == 1
     assert "SAFE_STOP:" in result.stderr
@@ -231,13 +242,18 @@ def test_runtime_missing_unit_and_cgroup_fail(runtime: dict[str, object]) -> Non
                 "SHOW_ACTIVE": "active",
                 "SHOW_PID": "101",
                 "PS_USER_PIDS": "101",
-                "PS_LINES": "101 traderassist wrapper /scripts/p4a/run_restricted_public_runtime.sh",
+                "PS_LINES": (
+                    "101 traderassist wrapper "
+                    "/scripts/p4a/run_restricted_public_runtime.sh"
+                ),
             },
             _post_argv(),
         ),
     ],
 )
-def test_runtime_post_start_negative_matrix(runtime: dict[str, object], overrides: dict[str, str], argv: bytes) -> None:
+def test_runtime_post_start_negative_matrix(
+    runtime: dict[str, object], overrides: dict[str, str], argv: bytes
+) -> None:
     proc = runtime["proc"]
     assert isinstance(proc, Path)
     (proc / "cmdline").write_bytes(argv)
@@ -286,7 +302,9 @@ def database(tmp_path: Path) -> dict[str, object]:
     return {"module": _database_module(), "root": root, "env": env_file, "db": db}
 
 
-@pytest.mark.parametrize("phase", ["existing-before-smoke", "fresh-post-creation", "final-post-smoke"])
+@pytest.mark.parametrize(
+    "phase", ["existing-before-smoke", "fresh-post-creation", "final-post-smoke"]
+)
 def test_database_existing_phases(database: dict[str, object], phase: str) -> None:
     db = database["db"]
     assert isinstance(db, Path)
@@ -314,7 +332,9 @@ def test_database_rejects_bad_assignment(database: dict[str, object], content: s
         database["module"].verify("fresh-pre-start", env_file, database["root"])
 
 
-def test_database_rejects_escape_symlink_nonregular_and_integrity(database: dict[str, object]) -> None:
+def test_database_rejects_escape_symlink_nonregular_and_integrity(
+    database: dict[str, object],
+) -> None:
     module = database["module"]
     root = database["root"]
     env_file = database["env"]
