@@ -679,8 +679,11 @@ get_loaded_unit_object() {
 acquire_authorized_unit_object() {
   # State-aware acquisition for the exact authorized service only.
   # Attempt bounded Manager.GetUnit first.  When GetUnit returns only a
-  # normal not-loaded/not-found acquisition result, fall back to bounded
-  # metadata-only Manager.LoadUnit for exactly the authorized service.
+  # reviewed exact normal acquisition miss, fall back to bounded metadata-only
+  # Manager.LoadUnit for exactly the authorized service.  The only accepted
+  # miss is the single-line literal "Unit trader-assist-v0-public.service not
+  # loaded."; no generic "not loaded", "not found", or other D-Bus failure
+  # text is an acquisition miss.
   # Never call LoadUnit for an unrelated service.  Timeout, forced kill,
   # permission failure, malformed response, or any ambiguous D-Bus result
   # is a SAFE_STOP.  LoadUnit is metadata-only and is never combined with
@@ -692,12 +695,11 @@ acquire_authorized_unit_object() {
     parse_typed_scalar "$object_json" o object
     return
   fi
-  # Distinguish a normal not-loaded/not-found GetUnit response from
-  # permission failure or malformed output.  Timeout and forced kill are
-  # already SAFE_STOP inside bounded_capture_may_fail.  Only the normal
-  # acquisition-miss class may fall back to exact LoadUnit.
+  # Timeout and forced kill are already SAFE_STOP inside
+  # bounded_capture_may_fail.  The exact-service-bound, single-line reviewed
+  # miss below is the only class permitted to fall back to exact LoadUnit.
   case "$object_json" in
-    *"is not loaded"*|*"not found"*|*"No such unit"*)
+    "Unit trader-assist-v0-public.service not loaded.")
       if ! bounded_capture_may_fail object_json sudo -n "$BUSCTL_BIN" --system --json=short call \
         org.freedesktop.systemd1 /org/freedesktop/systemd1 \
         org.freedesktop.systemd1.Manager LoadUnit s "$SERVICE"; then
@@ -1039,12 +1041,14 @@ manager-loaded are not globally audited by this MVP proof.
 The exact authorized service `trader-assist-v0-public.service` is acquired with
 a single state-aware helper used by both supported-host preflight and the
 authorized identity assertion. The helper first attempts bounded `GetUnit`;
-when GetUnit returns only a normal not-loaded/not-found acquisition result, it
-falls back to bounded metadata-only `LoadUnit` for exactly the authorized
-service and no other. Timeout, forced kill, permission failure, malformed
-response, or any ambiguous D-Bus result is a `SAFE_STOP`. A missing authorized
-unit is `SAFE_STOP_CODE: AUTHORIZED_LOADUNIT_FAILED`; an ambiguous GetUnit
-failure is `SAFE_STOP_CODE: AUTHORIZED_GETUNIT_AMBIGUOUS_FAILURE`.
+it falls back to bounded metadata-only `LoadUnit` only when the entire captured
+failure is the reviewed, exact-service-bound, single-line literal `Unit
+trader-assist-v0-public.service not loaded.` No prefix, suffix, multiline
+output, generic “not loaded”/“not found” text, or unrelated-service failure is
+accepted. Timeout, forced kill, permission failure, malformed response, or any
+ambiguous D-Bus result is a `SAFE_STOP`. A missing authorized unit is
+`SAFE_STOP_CODE: AUTHORIZED_LOADUNIT_FAILED`; an ambiguous GetUnit failure is
+`SAFE_STOP_CODE: AUTHORIZED_GETUNIT_AMBIGUOUS_FAILURE`.
 `LoadUnit` is metadata-only and is never combined with Start/Stop/Restart/
 Reload, enable/disable/mask/unmask, preset mutation, daemon-reload, or
 unit-file mutation. After acquisition the authorized unit must have canonical
