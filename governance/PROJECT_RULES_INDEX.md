@@ -63,6 +63,8 @@ No item may disappear merely because it is not a current First Launch blocker.
 - `governance/TRADER_ASSIST_ENGINEERING_OPTIMIZATION_SUCCESSOR_HANDOFF_V2_2026-07-22.md`;
 - `governance/ENGINEERING_WORKFLOW_MODEL_ROUTING_AND_RESOURCE_POLICY_V1.md`.
 
+The current resource policy contains the binding practical auxiliary-system and human-machine allocation rule. Every future First Launch, V0, and mainline task must compare automation cost and complexity against safe operator judgment, an existing platform function, a simpler interface, and a bounded bypass before creating a new subsystem.
+
 Workflow V3 supplies the persistent workflow architecture. Its date-bound transition narrative, including the former PR #40 transition section, is historical after that transition completed. Current task, next gate, active PR, branch, base/head, mode, and authority state must come from live GitHub objects, current merged Project State, and the current accepted stage packet—not from a stale transition paragraph.
 
 Additional merged references:
@@ -77,6 +79,35 @@ Historical Draft inputs requiring reconciliation rather than blind reuse:
 - PR #35 — First Launch product baseline, deferred capability registry, and post-launch decision gate.
 
 After this consolidation is accepted, PR #33 and PR #35 must be reviewed for supersession or bounded content migration. They must not remain competing authorities indefinitely.
+
+## 4.1 Practical product-development invariant
+
+Trader Assist is built first as a practical assistant for an experienced trader, not as an institution-grade autonomous platform.
+
+All planning must apply this order:
+
+```text
+CURRENT USER VALUE
+→ SIMPLEST ADEQUATE CONTROL
+→ HUMAN-MACHINE RESPONSIBILITY SPLIT
+→ MINIMUM RELIABLE IMPLEMENTATION
+→ REAL-OPERATION EVIDENCE
+→ LATER AUTOMATION AND HARDENING
+```
+
+A complex problem may not receive open-ended investment merely because it exists. Before implementation, the owning authority must determine:
+
+- whether the problem must be solved in the current phase;
+- the exact blocking detail;
+- the smallest direct fix;
+- a simpler alternative;
+- a safe human-assisted control;
+- a safe bypass or deferral;
+- the future trigger that makes full automation mandatory.
+
+Human judgment is an accepted current-phase system component when execution is manual, the status and decision surface are explicit, and failure cannot automatically create a position. It may not replace hard controls once account or exchange-write authority is introduced.
+
+Features with no current operational value are prohibited from the active queue merely because they may become useful in a later automated phase.
 
 ## 5. GitHub persistence rule
 
@@ -108,6 +139,8 @@ Persistent decisions must be written to versioned GitHub governance documents, i
 - prior V0 plans and current mainline architecture.
 
 The Product Function and Priority window must produce `V0_PRODUCT_SCOPE_DECISION_V1` before Engineering Optimization may create V0 implementation packages.
+
+The V0 and mainline intake must explicitly preserve the practical human-machine invariant. It must not assume that every manual decision is technical debt or that full automation is automatically the next priority.
 
 ## 7. Precedence and conflict handling
 
