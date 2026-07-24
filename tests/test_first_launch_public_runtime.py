@@ -42,6 +42,7 @@ from trader_assist_v0.runtime.first_launch_public_runtime import (
     RuntimeHealthState,
     RuntimeNotActivatedError,
     RuntimeShutdownError,
+    StatusSnapshotPublicationError,
 )
 from trader_assist_v0.runtime.first_launch_runtime_store import RuntimeStore
 
@@ -573,17 +574,32 @@ def test_status_publication_failure_is_not_silently_successful(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runtime, store, _, _ = _make_runtime(tmp_path)
+    snapshot_path = tmp_path / "status.json"
     try:
-        runtime.activate(now=NOW)
         from trader_assist_v0.runtime import first_launch_public_runtime as runtime_module
 
-        def _replace_failure(_source: str, _destination: Path) -> None:
-            raise OSError("injected replacement failure")
+        _warmup_to_active(runtime, now=NOW)
+        _recover_to_ready(runtime, now=NOW)
+        assert json.loads(snapshot_path.read_text(encoding="utf-8"))["state"] == "READY"
+
+        real_replace = runtime_module.os.replace
+
+        def _replace_failure(source: str, destination: Path) -> None:
+            payload = Path(source).read_text(encoding="utf-8")
+            if '"state":"NOT_READY"' in payload:
+                raise OSError("injected status replacement failure")
+            real_replace(source, destination)
 
         monkeypatch.setattr(runtime_module.os, "replace", _replace_failure)
-        with pytest.raises(OSError, match="injected replacement failure"):
-            runtime.begin_warmup(connection_id="conn", now=NOW)
+        with pytest.raises(
+            StatusSnapshotPublicationError, match="status snapshot publication failed"
+        ):
+            runtime.accept_public_frame(
+                frame_text=_context_frame("not-a-price"), now=NOW
+            )
+        assert not snapshot_path.exists()
         assert not list(tmp_path.glob(".status-*.tmp"))
+        assert runtime.is_ready is False
     finally:
         store.close()
 
@@ -1249,6 +1265,59 @@ def test_ga05_first_connection_reaches_ready_via_transport_loop(tmp_path: Path) 
             assert exit_code == 0
 
         asyncio.run(_test())
+    finally:
+        store.close()
+
+
+def test_status_publication_failure_stops_transport_without_reconnect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, store, _, _ = _make_runtime_short_reconnect(tmp_path)
+    snapshot_path = tmp_path / "status.json"
+    try:
+        from trader_assist_v0.runtime import first_launch_public_runtime as runtime_module
+
+        runtime.activate(now=NOW)
+        frames = [
+            *_ack_and_context_frames(),
+            _context_frame("not-a-price"),
+        ]
+        factory = _FakeWebSocketFactory()
+        factory.enqueue(_FakeWebSocket(frames))
+        status_messages: list[str] = []
+        real_replace = runtime_module.os.replace
+        failed = False
+
+        def _fail_not_ready_once(source: str, destination: Path) -> None:
+            nonlocal failed
+            payload = Path(source).read_text(encoding="utf-8")
+            if not failed and '"state":"NOT_READY"' in payload:
+                assert json.loads(snapshot_path.read_text(encoding="utf-8"))["state"] == "READY"
+                failed = True
+                raise OSError("injected status replacement failure")
+            real_replace(source, destination)
+
+        monkeypatch.setattr(runtime_module.os, "replace", _fail_not_ready_once)
+
+        async def _test() -> None:
+            exit_code = await _SCRIPT_MODULE._run_transport(
+                runtime=runtime,
+                recover_snapshot=_recovery_frames,
+                websocket_factory=factory,
+                websocket_url="wss://test",
+                status=status_messages.append,
+                shutdown_event=asyncio.Event(),
+            )
+            assert exit_code == 1
+
+        asyncio.run(_test())
+        assert failed is True
+        assert len(factory.created) == 1
+        assert runtime._reconnect_attempt == 0
+        assert not snapshot_path.exists()
+        assert not list(tmp_path.glob(".status-*.tmp"))
+        assert runtime.is_ready is False
+        assert status_messages == ["ERROR status snapshot publication failed"]
     finally:
         store.close()
 

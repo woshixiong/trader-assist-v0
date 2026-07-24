@@ -124,6 +124,10 @@ class HealthTransitionViolation(RestrictedRuntimeError):
     """Raised when a health transition is illegal."""
 
 
+class StatusSnapshotPublicationError(RestrictedRuntimeError):
+    """The fail-closed local status snapshot could not be published."""
+
+
 class RuntimeHealthState(StrEnum):
     STARTING = "STARTING"
     WARMING = "WARMING"
@@ -409,11 +413,19 @@ class RestrictedPublicRuntime:
                 temporary_file.write("\n")
             os.replace(temporary_path, status_path)
             temporary_path = None
+        except OSError as exc:
+            try:
+                status_path.unlink()
+            except (FileNotFoundError, OSError):
+                pass
+            raise StatusSnapshotPublicationError(
+                "status snapshot publication failed"
+            ) from exc
         finally:
             if temporary_path is not None:
                 try:
                     os.unlink(temporary_path)
-                except FileNotFoundError:
+                except OSError:
                     pass
 
     def activate(self, *, now: datetime) -> str:
@@ -980,9 +992,11 @@ class RestrictedPublicRuntime:
                 reason="PUBLIC_FRAME_REJECTED",
                 now=now,
             )
-        except BaseException:
-            # The original exception must remain visible; suppress any
-            # secondary failure from the durable health-event record.
+        except StatusSnapshotPublicationError:
+            raise
+        except Exception:
+            # Preserve the original malformed-frame exception when recording
+            # the ordinary secondary withdrawal failure did not succeed.
             pass
 
     def shutdown(self, *, now: datetime) -> None:

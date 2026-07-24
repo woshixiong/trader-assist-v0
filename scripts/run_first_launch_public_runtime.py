@@ -51,6 +51,7 @@ from trader_assist_v0.runtime.first_launch_notification import (
 from trader_assist_v0.runtime.first_launch_public_runtime import (
     RestrictedPublicRuntime,
     RestrictedPublicRuntimeConfig,
+    StatusSnapshotPublicationError,
 )
 from trader_assist_v0.runtime.first_launch_runtime_store import RuntimeStore
 
@@ -485,6 +486,9 @@ async def _run_transport(
                     # fail-closed without attempting another connection.
                     status("ERROR reconnect budget exhausted")
                     return 1
+        except StatusSnapshotPublicationError:
+            status("ERROR status snapshot publication failed")
+            return 1
         except Exception as exc:
             status(f"ERROR begin_connection: {type(exc).__name__}")
             return 1
@@ -496,6 +500,9 @@ async def _run_transport(
                 raw_metadata=raw_metadata,
                 now=_utc_now(),
             )
+        except StatusSnapshotPublicationError:
+            status("ERROR status snapshot publication failed")
+            return 1
         except Exception as exc:
             status(f"ERROR snapshot recovery: {type(exc).__name__}")
             runtime.mark_disconnected(now=_utc_now(), reason="snapshot-recovery-failure")
@@ -522,6 +529,9 @@ async def _run_transport(
             # the reconnect branch below is skipped. Cleanup is performed by
             # run_runtime's nested finally block (runtime.shutdown + store.close).
             raise
+        except StatusSnapshotPublicationError:
+            status("ERROR status snapshot publication failed")
+            return 1
         except Exception as exc:
             status(f"ERROR websocket: {type(exc).__name__}")
             runtime.mark_disconnected(now=_utc_now(), reason=f"websocket-{type(exc).__name__}")
@@ -581,6 +591,8 @@ async def _frame_loop(
                 continue
             try:
                 runtime.accept_public_frame(frame_text=frame, now=_utc_now())
+            except StatusSnapshotPublicationError:
+                raise
             except Exception as exc:
                 status(f"ERROR accept_public_frame: {type(exc).__name__}")
                 runtime.mark_disconnected(now=_utc_now(), reason="frame-error")
