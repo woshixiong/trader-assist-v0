@@ -51,12 +51,14 @@ from trader_assist_v0.runtime.first_launch_notification import (
 from trader_assist_v0.runtime.first_launch_public_runtime import (
     RestrictedPublicRuntime,
     RestrictedPublicRuntimeConfig,
+    StatusSnapshotPublicationError,
 )
 from trader_assist_v0.runtime.first_launch_runtime_store import RuntimeStore
 
 _RUNTIME_MODE: Final[Literal["RESTRICTED_PUBLIC_LIVE_SHADOW"]] = (
     "RESTRICTED_PUBLIC_LIVE_SHADOW"
 )
+_STATUS_SNAPSHOT_PATH: Final[Path] = Path("/run/trader-assist-v0/status.json")
 _HTTP_INFO_URL: Final[str] = "https://api.hyperliquid.xyz/info"
 _WEBSOCKET_URL: Final[str] = "wss://api.hyperliquid.xyz/ws"
 _HTTP_TIMEOUT_SECONDS: Final[float] = 15.0
@@ -399,6 +401,7 @@ def validate_configuration(args: CliArguments) -> tuple[
         notification_config=notification_config,
         acknowledgement_timeout_seconds=args.acknowledgement_timeout_seconds,
         session_timeout_seconds=args.session_timeout_seconds,
+        status_snapshot_path=_STATUS_SNAPSHOT_PATH,
     )
     return risk_configuration, notification_config, runtime_config
 
@@ -483,6 +486,9 @@ async def _run_transport(
                     # fail-closed without attempting another connection.
                     status("ERROR reconnect budget exhausted")
                     return 1
+        except StatusSnapshotPublicationError:
+            status("ERROR status snapshot publication failed")
+            return 1
         except Exception as exc:
             status(f"ERROR begin_connection: {type(exc).__name__}")
             return 1
@@ -494,6 +500,9 @@ async def _run_transport(
                 raw_metadata=raw_metadata,
                 now=_utc_now(),
             )
+        except StatusSnapshotPublicationError:
+            status("ERROR status snapshot publication failed")
+            return 1
         except Exception as exc:
             status(f"ERROR snapshot recovery: {type(exc).__name__}")
             runtime.mark_disconnected(now=_utc_now(), reason="snapshot-recovery-failure")
@@ -520,6 +529,9 @@ async def _run_transport(
             # the reconnect branch below is skipped. Cleanup is performed by
             # run_runtime's nested finally block (runtime.shutdown + store.close).
             raise
+        except StatusSnapshotPublicationError:
+            status("ERROR status snapshot publication failed")
+            return 1
         except Exception as exc:
             status(f"ERROR websocket: {type(exc).__name__}")
             runtime.mark_disconnected(now=_utc_now(), reason=f"websocket-{type(exc).__name__}")
@@ -579,6 +591,8 @@ async def _frame_loop(
                 continue
             try:
                 runtime.accept_public_frame(frame_text=frame, now=_utc_now())
+            except StatusSnapshotPublicationError:
+                raise
             except Exception as exc:
                 status(f"ERROR accept_public_frame: {type(exc).__name__}")
                 runtime.mark_disconnected(now=_utc_now(), reason="frame-error")

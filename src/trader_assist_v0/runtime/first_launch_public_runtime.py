@@ -34,6 +34,9 @@ No AWS access. No LIVE_SHADOW activation. No account or exchange writes.
 
 from __future__ import annotations
 
+import json
+import os
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -98,6 +101,7 @@ _HTTP_OPERATION_CANDLE_SNAPSHOT: Final[Literal["candleSnapshot"]] = "candleSnaps
 _HTTP_OPERATION_METADATA: Final[Literal["metaAndAssetCtxs"]] = "metaAndAssetCtxs"
 _SOURCE_ID_HTTP: Final[str] = "hyperliquid-public-http"
 _SOURCE_ID_WS: Final[str] = "hyperliquid-public-websocket"
+_STATUS_SNAPSHOT_PATH: Final[Path] = Path("/run/trader-assist-v0/status.json")
 
 
 class RestrictedRuntimeError(RuntimeError):
@@ -118,6 +122,10 @@ class RuntimeShutdownError(RestrictedRuntimeError):
 
 class HealthTransitionViolation(RestrictedRuntimeError):
     """Raised when a health transition is illegal."""
+
+
+class StatusSnapshotPublicationError(RestrictedRuntimeError):
+    """The fail-closed local status snapshot could not be published."""
 
 
 class RuntimeHealthState(StrEnum):
@@ -212,6 +220,7 @@ class RestrictedPublicRuntimeConfig:
     session_timeout_seconds: float = 21600.0
     reconnect_delays_seconds: tuple[float, ...] = _DEFAULT_RECONNECT_DELAYS
     sz_decimals: int = 3
+    status_snapshot_path: Path = _STATUS_SNAPSHOT_PATH
 
     def __post_init__(self) -> None:
         if not isinstance(self.database_path, Path):
@@ -250,6 +259,8 @@ class RestrictedPublicRuntimeConfig:
                 raise RestrictedRuntimeError("reconnect delay is invalid")
         if type(self.sz_decimals) is not int or self.sz_decimals < 0 or self.sz_decimals > 8:
             raise RestrictedRuntimeError("sz_decimals is invalid")
+        if not isinstance(self.status_snapshot_path, Path):
+            raise RestrictedRuntimeError("status snapshot path must be a Path")
 
 
 UtcClock = Callable[[], datetime]
@@ -300,6 +311,7 @@ class RestrictedPublicRuntime:
     _protocol: PublicRuntimeProtocol = field(init=False)
     _connection_id: str = field(init=False, default="")
     _last_evaluated_5m_identity: tuple[str, str, int] | None = field(init=False, default=None)
+    _last_active_context_at: datetime | None = field(init=False, default=None)
     _reconnect_attempt: int = field(init=False, default=0)
     _shutdown: bool = field(init=False, default=False)
 
@@ -365,6 +377,56 @@ class RestrictedPublicRuntime:
             reason=reason,
             now=now,
         )
+        self._publish_status_snapshot()
+
+    def _publish_status_snapshot(self) -> None:
+        """Atomically replace the bounded local status snapshot.
+
+        The configured path is injected only by tests; the production entrypoint
+        pins it to the approved systemd runtime directory.
+        """
+        snapshot = {
+            "pid": os.getpid(),
+            "session_id": self.session_id,
+            "state": self._health_state.value,
+            "last_active_context_at": (
+                None
+                if self._last_active_context_at is None
+                else self._last_active_context_at.isoformat()
+            ),
+            "mode": _RUNTIME_MODE,
+            "scope": _SCOPE,
+        }
+        status_path = self.config.status_snapshot_path
+        temporary_path: str | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=status_path.parent,
+                prefix=".status-",
+                suffix=".tmp",
+                delete=False,
+            ) as temporary_file:
+                temporary_path = temporary_file.name
+                json.dump(snapshot, temporary_file, separators=(",", ":"), ensure_ascii=True)
+                temporary_file.write("\n")
+            os.replace(temporary_path, status_path)
+            temporary_path = None
+        except OSError as exc:
+            try:
+                status_path.unlink()
+            except (FileNotFoundError, OSError):
+                pass
+            raise StatusSnapshotPublicationError(
+                "status snapshot publication failed"
+            ) from exc
+        finally:
+            if temporary_path is not None:
+                try:
+                    os.unlink(temporary_path)
+                except OSError:
+                    pass
 
     def activate(self, *, now: datetime) -> str:
         """Activate the runtime: record the session and transition to STARTING.
@@ -402,6 +464,7 @@ class RestrictedPublicRuntime:
             reason="activate",
             now=timestamp,
         )
+        self._publish_status_snapshot()
         return session_id
 
     def begin_warmup(self, *, connection_id: str, now: datetime) -> tuple[str, str, str]:
@@ -595,8 +658,10 @@ class RestrictedPublicRuntime:
         context = context_from_websocket(frame_text, evidence)
         self._market_data.accept_context(context)
         self._context_series.accept(context)
+        self._last_active_context_at = timestamp
         if not self.is_ready:
             self._try_promote_to_ready(now=timestamp)
+        self._publish_status_snapshot()
         return None
 
     def _try_promote_to_ready(self, *, now: datetime) -> None:
@@ -874,6 +939,7 @@ class RestrictedPublicRuntime:
         self._connection_id = connection_id
         self._market_data.begin_connection()
         self._last_evaluated_5m_identity = None
+        self._last_active_context_at = None
         self._protocol = PublicRuntimeProtocol(
             connection_id=connection_id,
             utc_now=self.utc_now,
@@ -926,9 +992,11 @@ class RestrictedPublicRuntime:
                 reason="PUBLIC_FRAME_REJECTED",
                 now=now,
             )
-        except BaseException:
-            # The original exception must remain visible; suppress any
-            # secondary failure from the durable health-event record.
+        except StatusSnapshotPublicationError:
+            raise
+        except Exception:
+            # Preserve the original malformed-frame exception when recording
+            # the ordinary secondary withdrawal failure did not succeed.
             pass
 
     def shutdown(self, *, now: datetime) -> None:
