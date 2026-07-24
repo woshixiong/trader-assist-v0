@@ -75,13 +75,21 @@ The status surface answers only whether current system signals may be relied upo
 
 Current First Launch does not require new stop, rollback, uninstall, self-healing, dashboard, complete process-transition proof, generalized audit, or automatic notification-expiry products.
 
+`REQUIRED` for the current First Launch planning, successor-window intake, and operator preparation:
+
+- `governance/PRACTICAL_HUMAN_MACHINE_ENGINEERING_LESSONS_AND_HANDOFF_V1.md`;
+- `governance/FIRST_LAUNCH_OPERATOR_COMMANDS_V1.md`.
+
+The lessons/handoff document preserves the PR #45 task-design failure, the human-machine allocation correction, the mandatory complex-problem decision method, and the successor Engineering Optimization intake. The operator command document is the canonical source copy for daily status checks and the shortest supported recovery sequence.
+
 ## 4. Engineering and Agent rules
 
 `REQUIRED` for Engineering Optimization, Project Control, Writer, and Reviewer contexts:
 
 - `governance/TRADER_ASSIST_ENGINEERING_WORKFLOW_V3_2026-07-22.md`;
 - `governance/TRADER_ASSIST_ENGINEERING_OPTIMIZATION_SUCCESSOR_HANDOFF_V2_2026-07-22.md`;
-- `governance/ENGINEERING_WORKFLOW_MODEL_ROUTING_AND_RESOURCE_POLICY_V1.md`.
+- `governance/ENGINEERING_WORKFLOW_MODEL_ROUTING_AND_RESOURCE_POLICY_V1.md`;
+- `governance/PRACTICAL_HUMAN_MACHINE_ENGINEERING_LESSONS_AND_HANDOFF_V1.md` during First Launch and every later task involving automation, operational complexity, or human-machine responsibility.
 
 The current resource policy contains the binding practical auxiliary-system and human-machine allocation rule. Every future First Launch, V0, and mainline task must compare automation cost and complexity against safe operator judgment, an existing platform function, a simpler interface, and a bounded bypass before creating a new subsystem.
 
@@ -153,6 +161,7 @@ Persistent decisions must be written to versioned GitHub governance documents, i
 
 - `governance/V0_PRE_DEVELOPMENT_PRODUCT_PLANNING_INTAKE_V1.md`;
 - `governance/PROJECT_THREE_PHASE_PLAN_AND_DEFERRED_REGISTER_V1.md`;
+- `governance/PRACTICAL_HUMAN_MACHINE_ENGINEERING_LESSONS_AND_HANDOFF_V1.md`;
 - First Launch final baseline and residual report;
 - Workstream A Minimum V0 transition package;
 - Gate B real-operation evidence;
