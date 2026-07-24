@@ -14,12 +14,12 @@ All planning must be organized into exactly three top-level parts:
 
 The separation is a scheduling boundary, not a deletion boundary.
 
-A finding may leave PART A only when either:
+A finding may leave PART A when:
 
-- it is proven not to affect current correctness, authority safety, runtime reliability, rollback, or required product fields; and
-- it is entered into PART B with an ID, source, risk, trigger, owner, and acceptance criteria.
+- it is proven not to affect the current supported product boundary or a concrete current safety invariant; and
+- it is either unnecessary under the current human-controlled boundary or entered into PART B with an ID, source, risk, trigger, owner, and acceptance criteria.
 
-No proven current safety blocker may be deferred.
+No proven current safety blocker may be deferred. Audit completeness, future automated-execution requirements, and institution-grade operational hardening are not automatically current safety blockers.
 
 ---
 
@@ -32,9 +32,10 @@ First Launch remains a restricted public-data, human-controlled signal viability
 - ETH is the primary traded asset;
 - public market data only;
 - FAST and STANDARD signal paths remain visible under their accepted contracts;
-- complete TradePlan fields remain mandatory;
+- complete human-readable TradePlan fields remain mandatory;
 - account equity and per-trade risk remain explicit external inputs;
-- execution remains human manual;
+- execution remains human manual and discretionary;
+- the experienced operator may accept, reject, ignore, or independently override every recommendation;
 - no account, wallet, private-key, signing, nonce, order-write, cancellation, or automatic SL/TP authority;
 - no autonomous trading;
 - one supported dedicated host and one bounded public runtime.
@@ -43,65 +44,133 @@ Any change to these boundaries requires Product Authority, Engineering Optimizat
 
 ## A2. Current engineering critical path
 
-Project Control must always reverify the exact live state. The current closure model is:
+Project Control must always reverify the exact live state. The former PR #45 consolidated six-file verifier/evidence route is superseded and must not be reactivated.
+
+The current closure model is:
 
 ```text
-bounded final implementation closure
-→ independent final re-intake
-→ normal publication to a Draft PR
+verify live GitHub state and freeze the superseded PR #45 route
+→ issue one executable FIRST_LAUNCH_SIMPLE_STATUS_V1 task
+→ create a clean small branch from the accepted main baseline
+→ implement one minimal runtime health/freshness producer and one read-only status command
+→ run focused deterministic tests
+→ publish one small Draft PR
 → exact-head CI
-→ independent Review A and Review B in parallel
-→ one reconciliation
-→ at most one bounded consolidated repair when a real blocker exists
-→ disposable supported-host gate
-→ independent Review C
-→ consolidated final authority request
-→ Mark Ready / merge decision
-→ post-merge CI
-→ separately authorized deployment and supervised smoke
+→ one focused independent code/operations Review
+→ at most one bounded repair for a proven supported-path blocker
+→ merge decision and post-merge CI
+→ separately authorized supported-host deployment
+→ one real-host status, signal-display, restart, and bounded-log qualification
+→ configure the final Mac Terminal shortcuts and deliver the exact operator command list
 → accepted real operation
 ```
 
+The status command has one product question:
+
+```text
+MAY THE OPERATOR RELY ON CURRENT SYSTEM SIGNALS?
+```
+
+Its required results are:
+
+- `READY` — current system signals may be considered, subject to human judgment;
+- `NOT_READY` — ignore system signals and recheck later;
+- `STATUS_UNKNOWN` — ignore system signals and escalate if persistent.
+
+Ordinary NOT_READY does not require service stop. Persistent failure uses the existing systemd restart command. Restart failure uses one bounded journal command and targeted diagnosis.
+
+Forbidden scope expansion before First Launch:
+
+- systemd `Type=notify` integration;
+- startup wrapper/env/Bash/Python race reconstruction;
+- complete argv/process-identity evidence protocols;
+- automated stop, rollback, uninstall, self-healing, or dashboard products;
+- 34-field evidence-producer frameworks;
+- pre-commit mega-bundles or generalized audit systems;
+- notification-expiry automation that duplicates rapid human time/price validation;
+- features with no current operational value.
+
 Forbidden shortcuts:
 
-- publication after a failed re-intake;
-- ignoring a supported-path blocker;
-- treating static fixtures as host proof;
-- starting runtime or smoke before exact authority;
-- using deadline pressure to waive rollback, credential, process-identity, database-integrity, or final-state evidence.
+- ignoring a proven supported-path blocker;
+- treating static fixtures as real-host proof;
+- starting deployment or runtime before exact authority;
+- weakening the no-account/no-exchange-write boundary;
+- presenting ambiguous status or omitting the operator action;
+- allowing the minimal status task to absorb deferred monitoring, audit, rollback, or future automated-trading requirements.
 
 ## A3. First Launch completion criteria
 
 Before accepted real operation, the project must have:
 
-- accepted exact code and documentation scope;
-- no unresolved Blocker or High finding;
+- accepted exact code and documentation scope for `FIRST_LAUNCH_SIMPLE_STATUS_V1`;
+- no unresolved Blocker or High finding within that supported scope;
 - no supported-path acceptance-blocking Medium finding;
 - successful exact-head CI;
-- accepted independent code/security/operations Reviews required by the stage;
-- supported-host evidence;
+- accepted focused independent Review;
+- deterministic deployment and exact-SHA/clean-checkout binding;
 - credential preparation and validation without secret disclosure;
-- deterministic deployment and exact-SHA binding;
-- bounded start, READY, observation, restart, stop, disable, final-state, database, rollback, and uninstall evidence;
-- explicit operator authority checkpoints;
-- post-merge CI;
-- a final evidence bundle;
+- one real-host qualification proving the service, current process, health snapshot, READY state, approved mode/scope, and market-data freshness are coherently reported;
+- a simple status result that always tells the operator whether current signals may be relied upon;
+- human-visible actionable signal output that prominently includes direction, speed, setup type, created time, expiry time, reference or mark price, entry zone, planned entry, chase limit, stop, TP1, TP2, quantity, notional, planned risk, manual execution, and NOT_SUBMITTED status;
+- confirmation that FAST remains valid for 180 seconds and STANDARD for 900 seconds under the existing contract;
+- confirmation that the operator can rapidly compare signal price/time with the live market and reject stale or moved-away opportunities;
+- an exact daily and recovery command list;
+- a short recovery route: recheck → existing systemd restart → bounded journal output → engineering escalation;
+- Mac Terminal shortcut configuration included in the launch task list and completed before routine daily use, without creating a new UI or service;
 - no account or exchange-write authority introduced.
+
+The following are not First Launch completion requirements under the current human-controlled boundary:
+
+- automatic service stop on NOT_READY;
+- complete rollback or uninstall automation;
+- complete process-transition proof;
+- complete audit manifest or review-bundle framework;
+- automatic notification expiry suppression;
+- web dashboard, phone app, or FinalShell-specific integration;
+- autonomous recovery.
 
 ## A4. Current parallel non-code work
 
 The following may run in parallel but must not mutate the active code branch or block the code critical path:
 
-- Workstream A: Minimum V0 transition design;
-- Workstream B: post-merge deployment/smoke late-binding preparation;
+- preparation of the exact operator command list;
+- preparation of the Mac Terminal SSH/function configuration with real values supplied at deployment time;
+- preparation of focused Review criteria;
 - deferred-register and product-planning intake maintenance;
 - exact-head Review packet preparation while CI runs.
 
+Minimum V0 transition work and post-launch architecture work remain deferred unless separately reactivated.
+
 ## A5. Resource constraint
 
-Codex is reserved for proven code-critical work. Documentation, status consolidation, planning, read-only Review, and deferred-register maintenance must use ordinary ChatGPT or TRAE where appropriate.
+Codex is reserved for the small proven code-critical status task. Documentation, command-list preparation, planning, read-only Review, and deferred-register maintenance must use ordinary ChatGPT or TRAE where appropriate.
 
-Open-ended repair loops, low-granularity prompts, one-finding-per-commit work, and speculative hardening are prohibited.
+Open-ended repair loops, additive task-packet revisions, speculative hardening, and implementation prompts that cannot be stated clearly and concisely are prohibited.
+
+If two substantive task-packet Reviews fail, the task returns to necessity, blocking detail, direct solution, alternative, human-assisted control, and bypass analysis. It does not receive another additive packet revision.
+
+## A6. Human-machine operating model
+
+Software responsibilities:
+
+- continuously collect and validate public ETH market data;
+- calculate signals and complete TradePlans;
+- preserve the manual-only and NOT_SUBMITTED boundaries;
+- expose a simple current usability result;
+- expose signal time, price, entry, risk, and invalidation information.
+
+Operator responsibilities:
+
+- periodically refresh status during active trading;
+- ignore all system signals when status is not READY or is unknown;
+- compare signal creation/expiry and reference price with the live market;
+- reject moved-away, stale, contextually weak, or personally unsuitable trades;
+- decide whether, when, and how to execute manually;
+- continue discretionary trading independently when the assistant is unavailable;
+- use restart and bounded-log commands only when persistent failure requires recovery or diagnosis.
+
+This allocation is an intentional First Launch product design, not unfinished automation. Before automatic or one-click execution is introduced, every operator-dependent safety control must be re-evaluated and replaced where automatic financial exposure could otherwise occur.
 
 ---
 
@@ -403,7 +472,7 @@ Only after the product decision may Engineering Optimization define:
 - rollout and rollback;
 - authority gates.
 
-No one-finding-per-task, one-file-per-Writer, or speculative framework expansion is allowed.
+Every V0 and mainline task must first apply the practical problem sequence: necessity, blocking detail, smallest direct fix, alternative, human-assisted control, and safe bypass. No one-finding-per-task, one-file-per-Writer, speculative framework expansion, or open-ended investment into a deeply entangled problem is allowed.
 
 ## C4. V0 and mainline execution
 
@@ -419,6 +488,8 @@ Priorities must be evidence- and dependency-driven. Likely early domains include
 - complementary strategies only if product evidence supports them;
 - credential and order-lifecycle safety before any exchange write;
 - shared architecture only after repeated accepted duplication.
+
+The experienced operator remains part of the product design even as automation increases. Human judgment must not be removed merely to satisfy architectural purity; it is replaced only where measured value and automatic financial exposure justify a harder machine control.
 
 ## C5. Governance closure after launch
 
