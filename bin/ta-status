@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/opt/trader-assist-v0/venv/bin/python
 """Read the bounded First Launch status snapshot without opening a database."""
 
 from __future__ import annotations

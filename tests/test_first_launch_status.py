@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.machinery
 import importlib.util
 import json
+import stat
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -17,6 +18,12 @@ assert _SPEC is not None
 _STATUS = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _STATUS
 _LOADER.exec_module(_STATUS)
+
+
+def test_status_command_pins_supported_runtime_interpreter() -> None:
+    lines = _STATUS_COMMAND.read_text(encoding="utf-8").splitlines()
+    assert lines[0] == "#!/opt/trader-assist-v0/venv/bin/python"
+    assert _STATUS_COMMAND.stat().st_mode & stat.S_IXUSR
 
 
 def _systemctl(*, active_state: str = "active", main_pid: str = "4321") -> str:
