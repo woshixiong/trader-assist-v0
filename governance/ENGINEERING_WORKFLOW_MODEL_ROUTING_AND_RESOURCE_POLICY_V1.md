@@ -6,9 +6,9 @@
 
 ## 1. Objective
 
-Deliver the largest safe coherent engineering objective with one primary Writer, exact scope, exact-head verification, independent Review, and bounded repair while minimizing user handoffs, elapsed time, and paid/limited model quota.
+Deliver the smallest adequate and safely coherent engineering objective with one primary Writer, exact scope, exact-head verification, independent Review, and bounded repair while minimizing user handoffs, elapsed time, and paid/limited model quota.
 
-Speed is obtained through correct granularity, parallel read-only work, reuse, and elimination of duplicate work. Safety or quality gates are not removed for speed.
+Speed is obtained through correct granularity, legitimate human-machine allocation, parallel read-only work, reuse, and elimination of duplicate work. Safety or quality gates are not removed for speed, but work with no current operational value must not be built merely because it may matter in a later automation phase.
 
 ## 2. Authority windows
 
@@ -90,6 +90,71 @@ Split a stage only when it crosses:
 - incompatible Writer ownership;
 - dependency/workflow changes;
 - an unreviewable allowlist or diff boundary.
+
+## 4.1 Practical auxiliary-system and human-machine allocation
+
+Trader Assist is a practical decision-support system for an experienced operator. Planning must optimize the complete human-machine system, not software in isolation.
+
+The governing product objective is:
+
+```text
+SIMPLEST ADEQUATE METHOD
+→ FASTEST RELIABLE USER VALUE
+→ STABLE SUPPORTED WORKFLOW
+→ EVIDENCE-DRIVEN LATER AUTOMATION
+```
+
+Before assigning a difficult implementation task, Engineering Optimization must answer:
+
+1. **Necessity:** What concrete current failure does the work prevent, and is it required in the current product phase?
+2. **Blocking detail:** Which exact detail creates the obstacle?
+3. **Direct solution:** What is the smallest direct correction?
+4. **Alternative:** Can a different interface, boundary, or existing platform function solve it more simply?
+5. **Human-assisted control:** Can an experienced operator perform a simple, explicit, low-friction check or decision safely?
+6. **Bypass:** Can the obstacle leave the current critical path without weakening a concrete supported-path safety invariant?
+
+A safe human-assisted control is preferred over disproportionate automation when all of the following are true:
+
+- no exchange order is submitted automatically;
+- no account, wallet, private-key, signing, or nonce authority exists;
+- the operator-facing result and required action are simple and unambiguous;
+- the action is low-frequency or naturally aligned with normal trading supervision;
+- omission or delay cannot automatically create or enlarge a position;
+- the system clearly states when its output must not be relied upon;
+- a normal recovery or escalation path exists.
+
+Human participation may provide current-phase value through:
+
+- discretionary acceptance or rejection of every signal;
+- rapid comparison of signal time, reference price, current market price, entry zone, chase limit, stop, targets, and risk;
+- ignoring all system output while status is not READY or is unknown;
+- continuing independent discretionary trading while the assistant is unavailable;
+- periodic status refresh during active trading;
+- normal systemd restart after persistent failure;
+- bounded log capture for targeted engineering diagnosis;
+- market-context judgment that the encoded strategy does not yet model.
+
+Human participation must not be used to excuse:
+
+- hidden or ambiguous system state;
+- repeated interpretation of shell, procfs, cgroup, or systemd races;
+- timing-critical low-level recovery steps;
+- frequent manual work that materially interferes with trading;
+- automatic exchange-write risk;
+- missing hard risk controls after automatic or one-click execution is introduced.
+
+For the current First Launch boundary, ordinary NOT_READY means the operator ignores system signals and rechecks later. It does not by itself require a new stop feature. Existing systemd restart and bounded journal commands are the preferred low-cost recovery path before any new self-healing product is considered.
+
+Before automatic execution is introduced, planning must re-evaluate every human-assisted control. Automatic order safety may not depend solely on the operator noticing a fault in time.
+
+Every launch runbook must include:
+
+- a concise human-machine responsibility matrix;
+- exact daily commands;
+- exact status meanings;
+- the shortest supported recovery sequence;
+- the escalation threshold;
+- no placeholder hostnames, paths, users, or service names in the final operator copy.
 
 ## 5. Model and harness routing
 
