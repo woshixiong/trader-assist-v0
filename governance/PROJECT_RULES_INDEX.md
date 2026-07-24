@@ -55,6 +55,26 @@ The project must always distinguish:
 
 No item may disappear merely because it is not a current First Launch blocker.
 
+## 3.1 Current reviewed First Launch route
+
+The active planning direction is the minimum practical human-controlled route defined in the three-phase plan:
+
+```text
+freeze the superseded PR #45 consolidated route
+→ one FIRST_LAUNCH_SIMPLE_STATUS_V1 task on a clean small branch
+→ one minimal runtime health/data-freshness producer
+→ one read-only operator status command
+→ focused tests and one focused independent Review
+→ exact-head CI
+→ supported-host deployment and real-host qualification
+→ Mac Terminal shortcut configuration and exact operator command list
+→ accepted real operation
+```
+
+The status surface answers only whether current system signals may be relied upon. Ordinary NOT_READY means ignore signals and recheck later. Persistent failure uses existing systemd restart; restart failure uses one bounded journal command and targeted engineering diagnosis.
+
+Current First Launch does not require new stop, rollback, uninstall, self-healing, dashboard, complete process-transition proof, generalized audit, or automatic notification-expiry products.
+
 ## 4. Engineering and Agent rules
 
 `REQUIRED` for Engineering Optimization, Project Control, Writer, and Reviewer contexts:
