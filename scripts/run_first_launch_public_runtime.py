@@ -57,6 +57,7 @@ from trader_assist_v0.runtime.first_launch_runtime_store import RuntimeStore
 _RUNTIME_MODE: Final[Literal["RESTRICTED_PUBLIC_LIVE_SHADOW"]] = (
     "RESTRICTED_PUBLIC_LIVE_SHADOW"
 )
+_STATUS_SNAPSHOT_PATH: Final[Path] = Path("/run/trader-assist-v0/status.json")
 _HTTP_INFO_URL: Final[str] = "https://api.hyperliquid.xyz/info"
 _WEBSOCKET_URL: Final[str] = "wss://api.hyperliquid.xyz/ws"
 _HTTP_TIMEOUT_SECONDS: Final[float] = 15.0
@@ -399,6 +400,7 @@ def validate_configuration(args: CliArguments) -> tuple[
         notification_config=notification_config,
         acknowledgement_timeout_seconds=args.acknowledgement_timeout_seconds,
         session_timeout_seconds=args.session_timeout_seconds,
+        status_snapshot_path=_STATUS_SNAPSHOT_PATH,
     )
     return risk_configuration, notification_config, runtime_config
 

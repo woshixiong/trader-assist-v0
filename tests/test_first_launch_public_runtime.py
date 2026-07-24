@@ -95,6 +95,7 @@ def _runtime_config(tmp_path: Path) -> RestrictedPublicRuntimeConfig:
         database_path=tmp_path / "runtime.db",
         risk_configuration=_risk_configuration(),
         notification_config=_notification_config(),
+        status_snapshot_path=tmp_path / "status.json",
     )
 
 
@@ -506,6 +507,83 @@ def test_reconnect_budget_exhausted_returns_none(tmp_path: Path) -> None:
         runtime.mark_disconnected(now=NOW, reason="test")
         result = runtime.begin_reconnect(connection_id="conn", now=NOW)
         assert result is None
+    finally:
+        store.close()
+
+
+def test_status_snapshot_tracks_only_accepted_active_context(tmp_path: Path) -> None:
+    runtime, store, _, _ = _make_runtime(tmp_path)
+    snapshot_path = tmp_path / "status.json"
+    try:
+        runtime.activate(now=NOW)
+        activated = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        assert set(activated) == {
+            "pid",
+            "session_id",
+            "state",
+            "last_active_context_at",
+            "mode",
+            "scope",
+        }
+        assert activated["state"] == "STARTING"
+        assert activated["last_active_context_at"] is None
+
+        runtime.begin_warmup(connection_id="conn-test", now=NOW)
+        for spec in REQUIRED_PUBLIC_SUBSCRIPTIONS:
+            runtime.accept_acknowledgement(frame_text=_ack_frame(spec.subscription), now=NOW)
+        runtime.recover_public_snapshot(
+            raw_5m=_snapshot_json([_candle_obj(i) for i in range(64)]),
+            raw_15m=_snapshot_json([_candle_obj(i, interval="15m") for i in range(20)]),
+            raw_metadata=_metadata_json(),
+            now=NOW,
+        )
+        recovered = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        assert recovered["last_active_context_at"] is None
+
+        runtime.accept_public_frame(frame_text=_context_frame(), now=NOW)
+        accepted = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        assert accepted["state"] == "READY"
+        assert accepted["last_active_context_at"] == NOW.isoformat()
+
+        later = NOW + timedelta(seconds=1)
+        runtime.accept_public_frame(
+            frame_text=json.dumps(
+                {"channel": "candle", "data": _candle_obj(63)}, separators=(",", ":")
+            ),
+            now=later,
+        )
+        after_candle = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        assert after_candle["last_active_context_at"] == NOW.isoformat()
+
+        with pytest.raises(ValueError):
+            runtime.accept_public_frame(frame_text=_context_frame("not-a-price"), now=later)
+        rejected = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        assert rejected["last_active_context_at"] == NOW.isoformat()
+
+        runtime.mark_disconnected(now=later, reason="test")
+        runtime.begin_reconnect(connection_id="conn-reconnect", now=later)
+        reconnecting = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        assert reconnecting["state"] == "WARMING"
+        assert reconnecting["last_active_context_at"] is None
+    finally:
+        store.close()
+
+
+def test_status_publication_failure_is_not_silently_successful(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, store, _, _ = _make_runtime(tmp_path)
+    try:
+        runtime.activate(now=NOW)
+        from trader_assist_v0.runtime import first_launch_public_runtime as runtime_module
+
+        def _replace_failure(_source: str, _destination: Path) -> None:
+            raise OSError("injected replacement failure")
+
+        monkeypatch.setattr(runtime_module.os, "replace", _replace_failure)
+        with pytest.raises(OSError, match="injected replacement failure"):
+            runtime.begin_warmup(connection_id="conn", now=NOW)
+        assert not list(tmp_path.glob(".status-*.tmp"))
     finally:
         store.close()
 
@@ -1051,6 +1129,7 @@ def _make_runtime_short_reconnect(
         risk_configuration=_risk_configuration(),
         notification_config=_notification_config(),
         reconnect_delays_seconds=reconnect_delays,
+        status_snapshot_path=tmp_path / "status.json",
     )
     runtime = RestrictedPublicRuntime(
         config=config,
@@ -1603,8 +1682,10 @@ def test_ga05_task_cancel_propagates_and_durable_cleanup(tmp_path: Path) -> None
 
     original_store = _SCRIPT_MODULE.RuntimeStore
     original_runtime = _SCRIPT_MODULE.RestrictedPublicRuntime
+    original_status_snapshot_path = _SCRIPT_MODULE._STATUS_SNAPSHOT_PATH
     _SCRIPT_MODULE.RuntimeStore = _CloseTrackingStore
     _SCRIPT_MODULE.RestrictedPublicRuntime = _ShutdownTrackingRuntime
+    _SCRIPT_MODULE._STATUS_SNAPSHOT_PATH = tmp_path / "status.json"
 
     runtime_ref: list[_ShutdownTrackingRuntime] = []
     store_ref: list[_CloseTrackingStore] = []
@@ -1725,6 +1806,7 @@ def test_ga05_task_cancel_propagates_and_durable_cleanup(tmp_path: Path) -> None
     finally:
         _SCRIPT_MODULE.RuntimeStore = original_store
         _SCRIPT_MODULE.RestrictedPublicRuntime = original_runtime
+        _SCRIPT_MODULE._STATUS_SNAPSHOT_PATH = original_status_snapshot_path
         _ShutdownTrackingRuntime.__init__ = original_runtime_init  # type: ignore[assignment]
         _CloseTrackingStore.open = original_store_open  # type: ignore[assignment]
 
