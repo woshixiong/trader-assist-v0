@@ -9,10 +9,10 @@
   "authority": {
     "fastsafe_control_contract_id": "FASTSAFE-V1-2026-07",
     "engineering_track_id": "ENGINEERING-AUTOMATION-TRACK-V1-2026-07",
-    "next_gate": "V0-FL-R3-P4B-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE-ACTIVATION",
-    "next_gate_status": "USER_RUNTIME_AND_SMOKE_AUTHORIZATION_REQUIRED_BEFORE_PROJECT_CONTROL_ACTIVATION",
-    "last_completed_implementation": "V0-FL-R3-SECURE-SECRET-INGRESS",
-    "last_completed_implementation_pr": 40,
+    "next_gate": "FIRST_LAUNCH_SUPPORTED_HOST_DEPLOYMENT_AND_QUALIFICATION_PACKET_V1",
+    "next_gate_status": "PLANNING_AUTHORIZED__HOST_ACCESS_NOT_AUTHORIZED__DEPLOYMENT_NOT_AUTHORIZED__RUNTIME_AND_SMOKE_NOT_AUTHORIZED",
+    "last_completed_implementation": "FIRST_LAUNCH_SIMPLE_STATUS_V1",
+    "last_completed_implementation_pr": 46,
     "accepted_evidence": [
       {
         "task_id": "V0-FL-R3-P4A-LOCAL-DEPLOYMENT-PACKAGE-AND-NON_AWS-SUPERVISED-SMOKE",
@@ -28,6 +28,16 @@
         "merge_sha": "f18338c2630feafd49e377397183a93f2e7f48a4",
         "post_merge_ci": "V0 contracts CI / Run 252 / SUCCESS",
         "post_merge_ci_run_id": 29851016977
+      },
+      {
+        "task_id": "FIRST_LAUNCH_SIMPLE_STATUS_V1",
+        "pull_request": 46,
+        "reviewed_head": "3e616d146e8bc6dd3db83fcb2b3a0453eb976096",
+        "merge_sha": "414bb1df413ab877856a7aa3bb25e7b262aeab4a",
+        "exact_head_ci": "V0 contracts CI / Run 282 / SUCCESS",
+        "exact_head_ci_run_id": 30130875992,
+        "post_merge_ci": "V0 contracts CI / Run 30131815661 / SUCCESS",
+        "post_merge_ci_run_id": 30131815661
       }
     ],
     "last_policy_state_pr": 15,
@@ -62,7 +72,7 @@
     "exchange_execution_authorized": false,
     "runtime_started": false,
     "scope": "CAPTURE_CONTRACT_SCHEMA_GOVERNANCE_ONLY",
-    "next_runtime_gate": "V0-FL-R3-P4B-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE-ACTIVATION",
+    "next_runtime_gate": "FIRST_LAUNCH_SUPPORTED_HOST_DEPLOYMENT_AND_QUALIFICATION_PACKET_V1",
     "forbidden_capabilities": [
       "API_WALLET",
       "PRIVATE_KEY",
@@ -468,13 +478,13 @@
     "separate_project_control_finalization_authorization_required": true,
     "pre_finalization_base_head_state_reverification_required": true,
     "unresolved_blocker_prevents_merge": true,
-    "next_gate": "V0-FL-R3-P4B-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE-ACTIVATION"
+    "next_gate": "FIRST_LAUNCH_SUPPORTED_HOST_DEPLOYMENT_AND_QUALIFICATION_PACKET_V1"
   },
   "recursive_rotation": {
     "required": true,
     "next_window_role": "V0 Fast Launch project-control successor",
     "next_window_permission": "STRICT_READ_ONLY",
-    "post_merge_next_gate": "V0-FL-R3-P4B-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE-ACTIVATION",
+    "post_merge_next_gate": "FIRST_LAUNCH_SUPPORTED_HOST_DEPLOYMENT_AND_QUALIFICATION_PACKET_V1",
     "handoff_required_fields": [
       "CURRENT_WINDOW_ROLE",
       "REPOSITORY",

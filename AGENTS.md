@@ -12,3 +12,4 @@
 10. Do not commit raw market/account data, databases, logs, virtual environments, caches, secrets, source archives, or real account identifiers.
 11. No direct commits to `main`, no force-push after review begins, no auto-merge, and no shared-history rewrite.
 12. Every completion report lists exact changed files, commands/tests actually observed, artifacts/hashes, residual risks, rollback, issue/PR, and merge state.
+13. Successor windows read `governance/PROJECT_RULES_INDEX.md`, `governance/PROJECT_STATE.json`, `governance/V0_FAST_LAUNCH_PROGRAM.json`, and `governance/POST_PR46_FIRST_LAUNCH_STATE_AND_NEXT_GATE_V1.md` after this file, then resolve live GitHub and CI state before acting.

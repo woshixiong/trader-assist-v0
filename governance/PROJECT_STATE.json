@@ -6,9 +6,9 @@
   "fastsafe_control_contract_id": "FASTSAFE-V1-2026-07",
   "engineering_track_id": "ENGINEERING-AUTOMATION-TRACK-V1-2026-07",
   "state_kind": "SAFE_STOP_SNAPSHOT",
-  "state_base_sha": "681397395957dacbcc9f8a80816d14bb8c4603b2",
-  "last_completed_implementation": "V0-FL-R3-SECURE-SECRET-INGRESS",
-  "last_completed_implementation_pr": 40,
+  "state_base_sha": "414bb1df413ab877856a7aa3bb25e7b262aeab4a",
+  "last_completed_implementation": "FIRST_LAUNCH_SIMPLE_STATUS_V1",
+  "last_completed_implementation_pr": 46,
   "accepted_evidence": [
     {
       "task_id": "V0-FL-R3-P4A-LOCAL-DEPLOYMENT-PACKAGE-AND-NON_AWS-SUPERVISED-SMOKE",
@@ -24,6 +24,16 @@
       "merge_sha": "f18338c2630feafd49e377397183a93f2e7f48a4",
       "post_merge_ci": "V0 contracts CI / Run 252 / SUCCESS",
       "post_merge_ci_run_id": 29851016977
+    },
+    {
+      "task_id": "FIRST_LAUNCH_SIMPLE_STATUS_V1",
+      "pull_request": 46,
+      "reviewed_head": "3e616d146e8bc6dd3db83fcb2b3a0453eb976096",
+      "merge_sha": "414bb1df413ab877856a7aa3bb25e7b262aeab4a",
+      "exact_head_ci": "V0 contracts CI / Run 282 / SUCCESS",
+      "exact_head_ci_run_id": 30130875992,
+      "post_merge_ci": "V0 contracts CI / Run 30131815661 / SUCCESS",
+      "post_merge_ci_run_id": 30131815661
     }
   ],
   "last_policy_state_pr": 15,
@@ -47,8 +57,8 @@
   "mainnet_execution_authorized": false,
   "flp1_implementation_authorized": false,
   "rate_limit_status": "UNRESOLVED_OFFICIAL_LIMIT",
-  "next_gate": "V0-FL-R3-P4B-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE-ACTIVATION",
-  "next_gate_status": "USER_RUNTIME_AND_SMOKE_AUTHORIZATION_REQUIRED_BEFORE_PROJECT_CONTROL_ACTIVATION",
+  "next_gate": "FIRST_LAUNCH_SUPPORTED_HOST_DEPLOYMENT_AND_QUALIFICATION_PACKET_V1",
+  "next_gate_status": "PLANNING_AUTHORIZED__HOST_ACCESS_NOT_AUTHORIZED__DEPLOYMENT_NOT_AUTHORIZED__RUNTIME_AND_SMOKE_NOT_AUTHORIZED",
   "conflict_state": "OFFICIAL_SOURCE_VARIANT_CONFLICT_DETECTED",
   "supersession_state": "EFFECTIVE_VARIANT_UNDETERMINED",
   "authority_hash": "0e327e566589d8030ff00d4d009eb4b6827679ab508133d66840b2c245dc53df",

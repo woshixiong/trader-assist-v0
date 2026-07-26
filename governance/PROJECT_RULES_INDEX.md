@@ -1,0 +1,22 @@
+# Project Rules Index
+
+Successor windows read the following order before acting:
+
+1. `AGENTS.md`
+2. `governance/PROJECT_RULES_INDEX.md`
+3. `governance/PROJECT_STATE.json`
+4. `governance/V0_FAST_LAUNCH_PROGRAM.json`
+5. `governance/POST_PR46_FIRST_LAUNCH_STATE_AND_NEXT_GATE_V1.md`
+6. `governance/TRADER_ASSIST_ENGINEERING_WORKFLOW_V3_2026-07-22.md`
+7. current live GitHub and CI state
+
+Live GitHub objects override stale chat snapshots and stale PR-body snapshots. Future
+windows must resolve live GitHub state before relying on historical text.
+
+PR #35 and PR #44 are salvage inputs, not merged authority. PR #42, PR #43, and PR
+#45 are superseded.
+
+No governance file independently grants host, deployment, runtime, smoke, account, or
+exchange-write authority. Product authority, engineering authority, and Project Control
+execution authority remain separate. A document may record an approved direction without
+activating execution authority.
