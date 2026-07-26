@@ -55,17 +55,33 @@ The item must not displace:
 It may be scheduled only after higher-value work is complete or when an activation condition is
 met.
 
-## 4. Low-cost alternatives before permanent development
+## 4. Minimum recovery preparation is separate
+
+Deferring the complete automation does not mean waiting until a disaster to create every
+recovery prerequisite.
+
+Before accepted real operation, the project must establish the small recovery anchors defined
+in:
+
+`governance/FIRST_LAUNCH_MINIMUM_RECOVERY_READINESS_V1.md`
+
+Those anchors include cloud-account recovery access, an external credential source, an exact
+release/path card, an approved SQLite-consistent backup method, one verified backup, and an
+explicit snapshot-or-rebuild decision.
+
+This is operational preparation, not activation of the automated qualification backlog.
+
+## 5. Low-cost alternatives before permanent development
 
 Until the backlog item is activated, use the least expensive adequate method for each event.
 
-### 4.1 Migration or major redeployment
+### 5.1 Migration or major redeployment
 
 Use one temporary host-specific command bundle generated for the exact host and exact release
 SHA. It should cover read-only host checks, exact-SHA deployment, service verification,
 `ta-status`, one controlled restart and final closeout.
 
-### 4.2 Disaster recovery
+### 5.2 Disaster recovery
 
 Use a small recovery card based on existing assets:
 
@@ -73,14 +89,14 @@ Use a small recovery card based on existing assets:
 - current P4A deployment runbook;
 - systemd unit and wrapper already in the repository;
 - secure credential-ingress procedure;
-- SQLite backup or restore procedure where applicable;
+- verified SQLite backup or restore procedure;
 - cloud-provider instance or volume snapshot when separately configured and authorized;
 - fixed-host command bundle generated for the recovery event.
 
 Provider snapshots or images can reduce restoration time without requiring a custom host-audit
 framework. Their retention, encryption, testing and cost must be evaluated separately.
 
-### 4.3 Repeated but still infrequent events
+### 5.3 Repeated but still infrequent events
 
 Prefer, in order:
 
@@ -94,7 +110,7 @@ Prefer, in order:
 The temporary solution must remain host-specific, visible to the operator and discarded or
 archived as non-product material after use.
 
-## 5. Activation conditions
+## 6. Activation conditions
 
 A new implementation may be proposed when at least one of the following becomes true:
 
@@ -110,7 +126,7 @@ A new implementation may be proposed when at least one of the following becomes 
 An activation condition permits research and cost-benefit analysis only. Implementation still
 requires a new explicit user authorization, bounded file scope and commit budget.
 
-## 6. Required route when activated
+## 7. Required route when activated
 
 Do not resume or patch PR #48.
 
@@ -129,7 +145,7 @@ The historical two-script proposal remains a candidate, not a predetermined solu
 - `scripts/p4a/first_launch_supported_host_preflight.sh`;
 - `scripts/p4a/capture_first_launch_journal_evidence.sh`.
 
-## 7. Preserved research archive
+## 8. Preserved research archive
 
 The complete research package consists of:
 
@@ -145,7 +161,7 @@ The complete research package consists of:
 No historical code needs to be copied into main to preserve it; Git and PR #48 already retain
 the exact commits and review state.
 
-## 8. Rules that remain unchanged
+## 9. Rules that remain unchanged
 
 - Efficiency comes before perfection after the minimum real safety boundary is preserved.
 - Low-frequency work should use existing commands, checklists or temporary scripts first.
@@ -153,7 +169,7 @@ the exact commits and review state.
 - After both fail, stop patching and replace the route.
 - No host, deployment, runtime, smoke, account or exchange-write authority is implied.
 
-## 9. Authority
+## 10. Authority
 
 This ruling authorizes backlog and documentation synchronization only.
 
@@ -165,6 +181,7 @@ It does not authorize:
 - host access or SSH;
 - deployment or recovery execution;
 - snapshot creation;
+- database backup execution;
 - service mutation;
 - credentials;
 - runtime or smoke;
