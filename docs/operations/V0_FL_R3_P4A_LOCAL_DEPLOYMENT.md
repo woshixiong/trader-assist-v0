@@ -1,5 +1,13 @@
 # V0 FL R3 P4A Local Deployment Runbook
 
+## 0. First Launch authority and supported-host packet
+
+This runbook is reused by the First Launch supported-host deployment and
+qualification packet:
+`docs/operations/FIRST_LAUNCH_SUPPORTED_HOST_DEPLOYMENT_AND_QUALIFICATION_PACKET_V1.md`.
+Host access, deployment, runtime, and supervised smoke remain separately
+authorized. This runbook does not grant any of those authorities.
+
 ## 1. Prerequisites
 
 - A systemd-based Linux distribution (Ubuntu 22.04+ or equivalent).
@@ -40,6 +48,9 @@ test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"
 
 # Verify clean tree
 test -z "$(git status --porcelain)"
+
+# Verify the operator status command is present and executable
+test -x /opt/trader-assist-v0/bin/ta-status
 
 sudo chown -R root:root /opt/trader-assist-v0
 ```
@@ -325,18 +336,19 @@ sudo systemctl start trader-assist-v0-public.service
 ## 16. Status Procedure
 
 ```bash
-sudo systemctl status trader-assist-v0-public.service
+sudo /opt/trader-assist-v0/bin/ta-status
 ```
+
+Exit-code meanings:
+
+- `READY` — exit 0 — signals may be considered.
+- `NOT_READY` — exit 1 — ignore system signals.
+- `STATUS_UNKNOWN` — exit 2 — ignore system signals and investigate if persistent.
 
 ## 17. Journald Observation
 
-View runtime logs:
-
-```bash
-sudo journalctl -u trader-assist-v0-public.service -f
-```
-
-View bounded recent logs:
+Use the bounded journal command only when `ta-status` remains non-`READY`
+after the one supported controlled restart:
 
 ```bash
 sudo journalctl -u trader-assist-v0-public.service --since "30 minutes ago" --no-pager
@@ -371,11 +383,14 @@ conn.close()
 
 ## 20. READY Verification
 
-The runtime is READY when the journal shows the session activation message:
+The runtime is READY only when the primary status command returns `READY`
+with exit code 0:
 
+```bash
+sudo /opt/trader-assist-v0/bin/ta-status
 ```
-session=<uuid> mode=RESTRICTED_PUBLIC_LIVE_SHADOW scope=ETH_ONLY
-```
+
+Do not use a journal session message as primary READY proof.
 
 ## 21. STOPPING Verification
 
@@ -446,6 +461,11 @@ deployment, or runtime is included.
 ## 29. Future Smoke Plan
 
 LOCAL/NON_AWS SMOKE IS NOT AUTHORIZED BY THIS WRITE LEASE.
+
+The preserved 30+30-minute qualification structure, its 60-minute target and
+90-minute maximum, and final stopped/disabled/no-process proof are governed by
+the supported-host packet. Host access, deployment, runtime, and smoke remain
+separately authorized.
 
 The future smoke plan must specify:
 
