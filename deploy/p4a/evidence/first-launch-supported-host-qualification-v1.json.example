@@ -1,13 +1,20 @@
 {
   "manifest_version": "v1",
   "task_id": "FIRST_LAUNCH_SUPPORTED_HOST_DEPLOYMENT_AND_QUALIFICATION_PACKET_V1",
-  "authorized_deployment_sha": "PLACEHOLDER",
+  "host_profile_result": "PLACEHOLDER",
   "os_version": "PLACEHOLDER",
   "architecture": "PLACEHOLDER",
   "kernel_version": "PLACEHOLDER",
-  "python_version": "PLACEHOLDER",
+  "git_version": "PLACEHOLDER",
+  "git_result": "PLACEHOLDER",
   "systemd_version": "PLACEHOLDER",
+  "systemd_analyze_result": "PLACEHOLDER",
+  "disk_capacity_result": "PLACEHOLDER",
+  "memory_capacity_result": "PLACEHOLDER",
+  "approved_python_bin": "PLACEHOLDER",
+  "python_version": "PLACEHOLDER",
   "unit_verify_result": "PLACEHOLDER",
+  "authorized_deployment_sha": "PLACEHOLDER",
   "deployed_head": "PLACEHOLDER",
   "clean_tree_result": "PLACEHOLDER",
   "service_unit_sha256": "PLACEHOLDER",
@@ -15,19 +22,54 @@
   "ownership_and_modes_result": "PLACEHOLDER",
   "credential_ingress_result": "PLACEHOLDER",
   "default_off_result": "PLACEHOLDER",
-  "initial_ready_output": "PLACEHOLDER",
-  "initial_window_start": "PLACEHOLDER",
-  "initial_window_end": "PLACEHOLDER",
+  "initial_status_checks": [
+    {
+      "point": "START",
+      "timestamp": "PLACEHOLDER",
+      "full_ta_status_output": "PLACEHOLDER",
+      "exit_code": "PLACEHOLDER"
+    },
+    {
+      "point": "MIDPOINT",
+      "timestamp": "PLACEHOLDER",
+      "full_ta_status_output": "PLACEHOLDER",
+      "exit_code": "PLACEHOLDER"
+    },
+    {
+      "point": "END",
+      "timestamp": "PLACEHOLDER",
+      "full_ta_status_output": "PLACEHOLDER",
+      "exit_code": "PLACEHOLDER"
+    }
+  ],
   "controlled_restart_result": "PLACEHOLDER",
-  "post_restart_ready_output": "PLACEHOLDER",
-  "post_restart_window_start": "PLACEHOLDER",
-  "post_restart_window_end": "PLACEHOLDER",
+  "post_restart_status_checks": [
+    {
+      "point": "START",
+      "timestamp": "PLACEHOLDER",
+      "full_ta_status_output": "PLACEHOLDER",
+      "exit_code": "PLACEHOLDER"
+    },
+    {
+      "point": "MIDPOINT",
+      "timestamp": "PLACEHOLDER",
+      "full_ta_status_output": "PLACEHOLDER",
+      "exit_code": "PLACEHOLDER"
+    },
+    {
+      "point": "END",
+      "timestamp": "PLACEHOLDER",
+      "full_ta_status_output": "PLACEHOLDER",
+      "exit_code": "PLACEHOLDER"
+    }
+  ],
   "sqlite_integrity_result": "PLACEHOLDER",
-  "bounded_journal_sha256": "PLACEHOLDER",
+  "bounded_journal_sanitized_sha256": "PLACEHOLDER",
   "evidence_secret_scan_result": "PLACEHOLDER",
-  "final_service_state": "PLACEHOLDER",
+  "final_active_state": "PLACEHOLDER",
+  "final_enabled_state": "PLACEHOLDER",
   "final_runtime_process_result": "PLACEHOLDER",
   "qualification_result": "PLACEHOLDER",
   "unresolved_limitations": "PLACEHOLDER",
-  "manifest_sha256": "PLACEHOLDER"
+  "evidence_bundle_sha256": "PLACEHOLDER"
 }

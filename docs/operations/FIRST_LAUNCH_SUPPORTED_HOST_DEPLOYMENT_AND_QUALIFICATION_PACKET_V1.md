@@ -47,39 +47,122 @@ unreconciled result permits no new risk.
 
 ## 4. PHASE 0 — READ_ONLY_HOST_PREFLIGHT
 
-Run the following commands only after separate host-access authorization. They
-read the specified host facts, do not print environment variables,
-configuration, or credential contents, and do not install, create, modify,
-start, or stop anything.
+Run this one self-contained procedure only after separate host-access
+authorization. It reads the specified host facts and paths only; it does not
+install, mutate, start, stop, access credentials, print configuration, or
+inspect PID 1. Its failure and unknown flags are monotonic, so a later success
+cannot overwrite an earlier failure. It prints exactly one final classification.
 
+<!-- PHASE0_HOST_PREFLIGHT_BEGIN -->
 ```bash
-cat /etc/os-release
-uname -m
-uname -r
-systemctl --version
-PYTHON_BIN="$(command -v python3 || true)"
-if test -z "$PYTHON_BIN"; then
-  printf 'PYTHON_NOT_FOUND\n'
-else
-  printf 'PYTHON_BIN=%s\n' "$PYTHON_BIN"
-  "$PYTHON_BIN" - <<'PY'
-import platform
-import sys
+set -u
 
-print("PYTHON_VERSION=" + platform.python_version())
-raise SystemExit(0 if sys.version_info >= (3, 12) else 1)
-PY
+SERVICE_UNIT="/etc/systemd/system/trader-assist-v0-public.service"
+FAIL=0
+UNKNOWN=0
+
+mark_fail() { FAIL=1; }
+mark_unknown() { UNKNOWN=1; }
+
+require_command() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    printf '%s_MISSING\n' "$2"
+    mark_fail
+    return
+  fi
+  printf '%s_PRESENT\n' "$2"
+}
+
+require_command python3 PYTHON3
+APPROVED_PYTHON_BIN="$(command -v python3 || true)"
+if test -z "$APPROVED_PYTHON_BIN"; then
+  printf 'APPROVED_PYTHON_BIN=UNAVAILABLE\n'
+  printf 'APPROVED_PYTHON_VERSION=UNAVAILABLE\n'
+  mark_fail
+elif test "${APPROVED_PYTHON_BIN#/}" = "$APPROVED_PYTHON_BIN" || \
+  test ! -x "$APPROVED_PYTHON_BIN"; then
+  printf 'APPROVED_PYTHON_BIN=INVALID\n'
+  printf 'APPROVED_PYTHON_VERSION=UNAVAILABLE\n'
+  mark_fail
+else
+  printf 'APPROVED_PYTHON_BIN=%s\n' "$APPROVED_PYTHON_BIN"
+  if APPROVED_PYTHON_VERSION="$("$APPROVED_PYTHON_BIN" -c \
+    'import platform; print(platform.python_version())' 2>/dev/null)"; then
+    printf 'APPROVED_PYTHON_VERSION=%s\n' "$APPROVED_PYTHON_VERSION"
+  else
+    printf 'APPROVED_PYTHON_VERSION=UNAVAILABLE\n'
+    mark_fail
+  fi
+  if ! "$APPROVED_PYTHON_BIN" -c \
+    'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)' \
+    >/dev/null 2>&1; then
+    mark_fail
+  fi
 fi
-git --version
-systemd-analyze --version
-df -h / /opt /etc /var/lib
-grep '^MemAvailable:' /proc/meminfo
+
+require_command git GIT
+if ! GIT_VERSION="$(git --version 2>/dev/null)"; then
+  printf 'GIT_RESULT=FAIL\n'
+  mark_fail
+else
+  printf 'GIT_VERSION=%s\n' "$GIT_VERSION"
+  printf 'GIT_RESULT=PASS\n'
+fi
+
+require_command systemctl SYSTEMCTL
+if ! SYSTEMD_VERSION="$(systemctl --version 2>/dev/null)"; then
+  printf 'SYSTEMD_VERSION=UNAVAILABLE\n'
+  mark_fail
+else
+  printf 'SYSTEMD_VERSION=%s\n' "$SYSTEMD_VERSION"
+fi
+
+require_command systemd-analyze SYSTEMD_ANALYZE
+if ! systemd-analyze --version >/dev/null 2>&1; then
+  printf 'SYSTEMD_ANALYZE_RESULT=FAIL\n'
+  mark_fail
+else
+  printf 'SYSTEMD_ANALYZE_RESULT=PASS\n'
+fi
+
+if OS_VERSION="$(grep '^PRETTY_NAME=' /etc/os-release 2>/dev/null)"; then
+  printf 'OS_VERSION=%s\n' "$OS_VERSION"
+else
+  printf 'OS_VERSION=UNAVAILABLE\n'
+  mark_unknown
+fi
+if ARCHITECTURE="$(uname -m 2>/dev/null)"; then
+  printf 'ARCHITECTURE=%s\n' "$ARCHITECTURE"
+else
+  printf 'ARCHITECTURE=UNAVAILABLE\n'
+  mark_unknown
+fi
+if KERNEL_VERSION="$(uname -r 2>/dev/null)"; then
+  printf 'KERNEL_VERSION=%s\n' "$KERNEL_VERSION"
+else
+  printf 'KERNEL_VERSION=UNAVAILABLE\n'
+  mark_unknown
+fi
+
+if DISK_CAPACITY_RESULT="$(df -Pk / 2>/dev/null)" && test -n "$DISK_CAPACITY_RESULT"; then
+  printf 'DISK_CAPACITY_RESULT=%s\n' "$DISK_CAPACITY_RESULT"
+else
+  printf 'DISK_CAPACITY_RESULT=UNRESOLVED\n'
+  mark_unknown
+fi
+if MEMORY_CAPACITY_RESULT="$(grep '^MemAvailable:' /proc/meminfo 2>/dev/null)" && \
+  test -n "$MEMORY_CAPACITY_RESULT"; then
+  printf 'MEMORY_CAPACITY_RESULT=%s\n' "$MEMORY_CAPACITY_RESULT"
+else
+  printf 'MEMORY_CAPACITY_RESULT=UNRESOLVED\n'
+  mark_unknown
+fi
 
 for path in \
   /opt/trader-assist-v0 \
   /etc/trader-assist-v0 \
   /var/lib/trader-assist-v0 \
-  /etc/systemd/system/trader-assist-v0-public.service; do
+  "$SERVICE_UNIT"; do
   if test -e "$path"; then
     printf 'PRESENT %s\n' "$path"
   else
@@ -87,34 +170,45 @@ for path in \
   fi
 done
 
-if test -e /etc/systemd/system/trader-assist-v0-public.service; then
-  sudo systemd-analyze verify /etc/systemd/system/trader-assist-v0-public.service
+if test -e "$SERVICE_UNIT"; then
+  if systemd-analyze verify "$SERVICE_UNIT" >/dev/null 2>&1; then
+    printf 'UNIT_VERIFY_RESULT=PASS\n'
+  else
+    printf 'UNIT_VERIFY_RESULT=FAIL\n'
+    mark_fail
+  fi
 else
-  printf 'UNIT_NOT_PRESENT_PRE_DEPLOYMENT\n'
+  printf 'UNIT_VERIFY_RESULT=NOT_PRESENT_PRE_DEPLOYMENT\n'
+fi
+
+if test "$FAIL" -ne 0; then
+  printf 'HOST_PROFILE_FAIL\n'
+  exit 1
+elif test "$UNKNOWN" -ne 0; then
+  printf 'HOST_PROFILE_UNKNOWN\n'
+  exit 2
+else
+  printf 'HOST_PROFILE_PASS\n'
+  exit 0
 fi
 ```
+<!-- PHASE0_HOST_PREFLIGHT_END -->
 
-Classify the result as follows:
+`HOST_PROFILE_PASS` has exit code 0, `HOST_PROFILE_FAIL` has exit code 1, and
+`HOST_PROFILE_UNKNOWN` has exit code 2. Missing `python3`, Python below 3.12,
+missing Git, missing `systemctl`, missing `systemd-analyze`, or failed
+verification of an already present unit is a fail-closed `HOST_PROFILE_FAIL`.
+Unresolved disk or memory collection is `HOST_PROFILE_UNKNOWN`; it never
+permits deployment. The observed nonzero capacity values are evidence only;
+the separately authorized deployment decision confirms they remain sufficient
+for its selected SHA.
 
-- `HOST_PROFILE_PASS`: every required platform capability is present; Python
-  is 3.12 or newer; disk and memory are adequate for the existing runtime; and
-  either the unit is not yet present before deployment or every present unit
-  validates successfully.
-- `HOST_PROFILE_FAIL`: `python3` is missing, Python is below 3.12, systemd or
-  `systemd-analyze` is unavailable, the profile is incompatible, or a present
-  unit fails `systemd-analyze verify`. These conditions fail closed.
-- `HOST_PROFILE_UNKNOWN`: the authorized read-only evidence cannot establish a
-  required fact. Do not proceed until separately authorized targeted
-  diagnosis resolves it.
-
-Path absence is recorded for Phase 1 planning; it never authorizes creating a
-path. A unit that is present but cannot be validated is incompatible and is a
-`HOST_PROFILE_FAIL`.
-
-Record the resolved absolute `PYTHON_BIN` path and the reported Python version
-as preflight evidence. Phase 1 must use that same separately approved
-interpreter path to create the virtual environment. A different interpreter
-path requires revalidation; it must never be silently substituted.
+`APPROVED_PYTHON_BIN` must be an absolute executable path and is the exact
+interpreter approved during preflight. Record it, `APPROVED_PYTHON_VERSION`,
+and every result in the qualification evidence. The later deployment
+authorization must explicitly supply that exact absolute path. A different
+interpreter path requires a new preflight; it must never be silently
+substituted.
 
 ## 5. PHASE 1 — DEPLOYMENT
 
@@ -126,8 +220,8 @@ planning branch SHA.
 
 The authorized deployment must use a detached checkout with exact `HEAD`
 equality and a clean repository, install only the hashed runtime lock without
-an editable install, use the same separately approved `PYTHON_BIN` path
-recorded in preflight, retain the root-owned source installation and existing
+an editable install, use the exact authorization-supplied
+`APPROVED_PYTHON_BIN` path recorded in preflight, retain the root-owned source installation and existing
 `LoadCredential` path, and preserve the default-off activation permit. Verify
 the service unit before activation. Credentials must not enter Git,
 environment variables, process argv, journals, or qualification evidence.
@@ -173,8 +267,11 @@ finalization gate.
 ## 7. PHASE 2 — RUNTIME_AND_QUALIFICATION
 
 Run this procedure only after separate runtime and supervised-smoke
-authorization. It is manual, single-host, single-process, ETH-only, and has
-no automatic retry or self-healing.
+authorization. It is manual, single-host, single-process, and ETH-only. There
+is no automatic systemd service restart, automatic host repair, automatic
+deployment, or unbounded autonomous recovery. The existing bounded
+public-transport reconnect and durable-notification retry remain; exactly one
+operator-controlled service restart is supported.
 
 1. Prove the service is default-off.
 2. Validate the installed unit with `systemd-analyze verify`.
@@ -193,7 +290,7 @@ no automatic retry or self-healing.
 12. Target a total observation time of 60 minutes. The maximum bounded extension is 90 minutes.
 13. Perform one read-only SQLite integrity check using the existing P4A
     runbook command.
-14. Capture only a bounded redacted journal segment and record its SHA-256.
+14. Capture only a bounded sanitized journal segment and record its SHA-256.
 15. Verify no credential or token appears in evidence.
 16. Finish with the service stopped, disabled, and with no runtime process
     remaining.
@@ -202,6 +299,56 @@ no automatic retry or self-healing.
 Every scheduled status result must be `READY`; any other classification fails
 that qualification attempt. The start, midpoint, and end status captures are
 mandatory for both 30-minute windows.
+
+The qualification manifest records `initial_status_checks` and
+`post_restart_status_checks`, each containing exactly three entries in this
+order: `START`, `MIDPOINT`, and `END`. Every entry contains exactly `point`,
+`timestamp`, `full_ta_status_output`, and `exit_code`.
+
+At closeout, run this read-only check after the service is stopped:
+
+```bash
+systemctl is-enabled trader-assist-v0-public.service
+```
+
+Record `final_active_state`, `final_enabled_state`, and
+`final_runtime_process_result` separately. The required values prove inactive,
+disabled, and no runtime process remaining. `systemctl start` does not enable
+the unit; an enabled result fails qualification.
+
+For the one authorized bounded journal interval only, use this sequence. It
+does not print matches or put secret values in argv:
+
+```bash
+umask 077
+JOURNAL_EVIDENCE_DIR="$(mktemp -d)"
+RAW_JOURNAL="$JOURNAL_EVIDENCE_DIR/raw-journal.txt"
+SANITIZED_JOURNAL="$JOURNAL_EVIDENCE_DIR/sanitized-journal.txt"
+
+sudo journalctl -u trader-assist-v0-public.service \
+  --since "$AUTHORIZED_JOURNAL_SINCE" --until "$AUTHORIZED_JOURNAL_UNTIL" \
+  --no-pager > "$RAW_JOURNAL"
+chmod 0600 "$RAW_JOURNAL"
+
+if grep -Eqi 'Authorization|Bearer|api_key|token|secret|webhook|-----BEGIN [A-Z ]*PRIVATE KEY-----' \
+  "$RAW_JOURNAL"; then
+  rm -f "$RAW_JOURNAL"
+  rmdir "$JOURNAL_EVIDENCE_DIR"
+  printf 'EVIDENCE_SECRET_SCAN_RESULT=FAIL\n'
+  exit 1
+fi
+printf 'EVIDENCE_SECRET_SCAN_RESULT=PASS\n'
+cp "$RAW_JOURNAL" "$SANITIZED_JOURNAL"
+chmod 0600 "$SANITIZED_JOURNAL"
+SANITIZED_JOURNAL_SHA256="$(sha256sum "$SANITIZED_JOURNAL" | awk '{print $1}')"
+rm -f "$RAW_JOURNAL"
+printf 'BOUNDED_JOURNAL_SANITIZED_SHA256=%s\n' "$SANITIZED_JOURNAL_SHA256"
+```
+
+The raw artifact is never accepted evidence and is deleted after sanitization;
+only the sanitized artifact is hashed. `evidence_bundle_sha256` is the
+SHA-256 of a separately assembled sanitized evidence bundle, not a hash of a
+JSON manifest containing its own hash.
 
 ## 8. Qualification acceptance
 
@@ -213,6 +360,9 @@ mandatory for both 30-minute windows.
   is violated.
 - `QUALIFICATION_INCOMPLETE`: the authorized attempt ends without all
   mandatory evidence. It is not a pass and does not activate real operation.
+
+The `qualification_result` evidence field has exactly three allowed operational
+values: `PASS`, `FAIL`, and `INCOMPLETE`.
 
 ## 9. Human-machine responsibility matrix
 

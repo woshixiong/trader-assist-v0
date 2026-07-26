@@ -34,7 +34,15 @@ or any non-exact ref is prohibited.
 Set the authorized SHA and install the repository at the exact commit:
 
 ```bash
+set -euo pipefail
+
 AUTHORIZED_SHA="<full 40-character SHA authorized by Project Control>"
+APPROVED_PYTHON_BIN="<exact absolute path approved by Phase 0 and separately authorized>"
+test -n "$AUTHORIZED_SHA"
+test "${#AUTHORIZED_SHA}" -eq 40
+test -n "$APPROVED_PYTHON_BIN"
+case "$APPROVED_PYTHON_BIN" in /*) ;; *) echo "FAIL: approved Python path must be absolute"; exit 1;; esac
+test -x "$APPROVED_PYTHON_BIN"
 
 sudo mkdir -p /opt/trader-assist-v0
 sudo git clone https://github.com/woshixiong/trader-assist-v0.git /opt/trader-assist-v0
@@ -65,29 +73,36 @@ project.  The project is imported exclusively via the forced `PYTHONPATH`
 (see Section 8 and the wrapper), never via site-packages.
 
 ```bash
-PYTHON_BIN="$(command -v python3)"
-test -n "$PYTHON_BIN"
+set -euo pipefail
 
-"$PYTHON_BIN" - <<'PY'
+APPROVED_PYTHON_BIN="<exact absolute path approved by Phase 0 and separately authorized>"
+test -n "$APPROVED_PYTHON_BIN"
+case "$APPROVED_PYTHON_BIN" in /*) ;; *) echo "FAIL: approved Python path must be absolute"; exit 1;; esac
+test -x "$APPROVED_PYTHON_BIN"
+
+"$APPROVED_PYTHON_BIN" - <<'PY'
 import sys
 
 raise SystemExit(0 if sys.version_info >= (3, 12) else 1)
 PY
 
 cd /opt/trader-assist-v0
-sudo "$PYTHON_BIN" -m venv venv
+sudo "$APPROVED_PYTHON_BIN" -m venv venv
 sudo venv/bin/pip install --require-hashes -r requirements-runtime.lock
 ```
 
-`PYTHON_BIN` must be the same separately approved interpreter path recorded by
-the supported-host preflight. A different path requires revalidation and must
-not be silently substituted.
+`APPROVED_PYTHON_BIN` is supplied by the separate deployment authorization and
+must equal the exact absolute path recorded by Phase 0. Deployment performs no
+Python rediscovery. A different path requires revalidation and must not be
+silently substituted.
 
 Verify `trader_assist_v0` imports exclusively from
 `/opt/trader-assist-v0/src/trader_assist_v0` and that the import fails if it
 would resolve from site-packages or another checkout:
 
 ```bash
+set -euo pipefail
+
 # Positive: with forced PYTHONPATH, import must resolve from /opt/src
 sudo PYTHONPATH=/opt/trader-assist-v0/src /opt/trader-assist-v0/venv/bin/python -c "
 import os, trader_assist_v0
@@ -98,9 +113,12 @@ print('OK: import source verified')
 "
 
 # Negative: without PYTHONPATH, import must fail (not installed in site-packages)
-sudo /opt/trader-assist-v0/venv/bin/python -c "import trader_assist_v0" \
-  && { echo 'FAIL: import succeeded without PYTHONPATH'; exit 1; } \
-  || echo 'OK: import correctly fails without PYTHONPATH'
+if sudo /opt/trader-assist-v0/venv/bin/python -c "import trader_assist_v0"; then
+  echo 'FAIL: import succeeded without PYTHONPATH'
+  exit 1
+else
+  echo 'OK: import correctly fails without PYTHONPATH'
+fi
 ```
 
 ## 5. Configuration Directory
