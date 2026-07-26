@@ -7,11 +7,12 @@ Successor windows read the following order before acting:
 3. `governance/PROJECT_STATE.json`
 4. `governance/V0_FAST_LAUNCH_PROGRAM.json`
 5. `governance/POST_PR46_FIRST_LAUNCH_STATE_AND_NEXT_GATE_V1.md`
-6. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_LOWEST_PRIORITY_BACKLOG_RULING_V1.md`
-7. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_FAILURE_AND_DEFERRED_WORK_V1.md`
-8. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_AUTOMATION_ABANDONMENT_RULING_V1.md`
-9. `governance/TRADER_ASSIST_ENGINEERING_WORKFLOW_V3_2026-07-22.md`
-10. current live GitHub and CI state
+6. `governance/FIRST_LAUNCH_MINIMUM_RECOVERY_READINESS_V1.md`
+7. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_LOWEST_PRIORITY_BACKLOG_RULING_V1.md`
+8. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_FAILURE_AND_DEFERRED_WORK_V1.md`
+9. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_AUTOMATION_ABANDONMENT_RULING_V1.md`
+10. `governance/TRADER_ASSIST_ENGINEERING_WORKFLOW_V3_2026-07-22.md`
+11. current live GitHub and CI state
 
 Live GitHub objects override stale chat snapshots and stale PR-body snapshots. Future windows
 must resolve live GitHub state before relying on historical text.
@@ -51,6 +52,21 @@ Use this preferred order:
 
 A normal repair plus one exceptional repair is the maximum for one bounded design route. If
 both fail, do not continue iterative patching. Reduce scope or start a clean replacement.
+
+## Current First Launch recovery boundary
+
+Deferring PR #48-style automation does not permit deferring all recovery preparation.
+
+Before accepted real operation, complete the minimum recovery-readiness anchors:
+
+- independent cloud-account recovery access;
+- external recoverable notification-credential source;
+- exact release and non-secret path card;
+- approved SQLite-consistent backup and restore method;
+- one verified post-qualification SQLite backup;
+- explicit provider-snapshot or rebuild-only decision.
+
+Event-specific recovery commands and complete automation may remain deferred.
 
 ## Current host-qualification direction
 
