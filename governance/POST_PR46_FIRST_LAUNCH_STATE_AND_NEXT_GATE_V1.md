@@ -53,38 +53,58 @@ Detailed history remains in
 
 ## Current backlog ruling
 
-The automated host qualification capability is used mainly during:
-
-- host migration;
-- major-version full redeployment;
-- disaster recovery or complete host replacement;
-- repeated deployments;
-- multi-host or multi-operator operation;
-- materially higher account or exchange authority;
-- retained-evidence or compliance requirements.
-
-These events are currently infrequent, so the capability is not active First Launch scope and
-must not consume current development capacity.
-
-Current status:
+The automated host qualification capability remains at the last priority in the future backlog:
 
 `DEFERRED_LOWEST_PRIORITY__NO_CURRENT_IMPLEMENTATION_AUTHORITY`
 
-The capability remains at the last priority in the future backlog. It may be researched when
-higher-priority work is complete or when a real activation condition exists, but implementation
-requires a fresh user authorization and a clean replacement task from the then-current main.
+It is useful mainly for host migration, major-version full redeployment, disaster recovery,
+repeated deployments, multiple hosts or operators, higher account or exchange authority, and
+retained-evidence or compliance requirements.
+
+It must not consume current First Launch capacity. Future implementation requires a fresh
+cost-benefit review, explicit user authorization and a clean replacement task from then-current
+main. PR #48 must not be resumed.
 
 The binding disposition is in
 `governance/FIRST_LAUNCH_HOST_QUALIFICATION_LOWEST_PRIORITY_BACKLOG_RULING_V1.md`.
 The previous permanent-abandonment ruling is retained only as a superseded historical record.
 
+## Minimum pre-launch recovery readiness
+
+The complete PR #48-style automation is deferred, but recovery preparation cannot be deferred
+entirely until after a disaster.
+
+Before accepted real operation, establish the following minimum recovery anchors:
+
+1. cloud-account access and recovery remain available independently of the host;
+2. the notification credential has an approved recoverable source outside the host;
+3. the deployed exact SHA, service name, fixed Python path and important filesystem paths are
+   recorded without secret values;
+4. the SQLite database has a defined safe backup and restore method;
+5. after qualification and before accepted real operation, one backup is created and verified
+   by opening the backup read-only and running an integrity check;
+6. the default recovery strategy is recorded as exact-SHA rebuild plus secure credential and
+   database restoration;
+7. a provider snapshot or image is an optional recovery-speed layer, not the only recovery
+   source.
+
+The items above are a small operational safety gate, not a new product feature or verifier
+framework.
+
+Event-specific migration or recovery commands, permanent automation, scheduled snapshot
+automation, multi-host support and a full second-host restore drill may wait until a real event
+or later backlog activation.
+
+The binding minimum is documented in
+`governance/FIRST_LAUNCH_MINIMUM_RECOVERY_READINESS_V1.md`.
+
 ## Current minimum First Launch direction
 
 Do not develop another repository qualification feature before First Launch.
 
-At the actual deployment event, prepare one temporary, host-specific, visible command bundle
-for one fixed supported host and one exact deployment SHA. The user executes bounded blocks
-under step-by-step guidance and returns non-secret outputs before proceeding.
+At the deployment event, prepare one temporary, host-specific, visible command bundle for one
+fixed supported host and one exact deployment SHA. The user executes bounded blocks under
+step-by-step guidance and returns non-secret outputs before proceeding.
 
 The session relies on the existing P4A deployment runbook, the merged `ta-status` command, one
 controlled restart and direct operator confirmation of the minimum acceptance conditions.
@@ -106,33 +126,37 @@ Minimum operator acceptance conditions:
 Bounded journal output is for targeted diagnosis only when readiness remains abnormal. It is
 not a mandatory retained or hashed First Launch qualification artifact.
 
-## Low-cost alternatives for later deployment events
+## Reorganized remaining First Launch P0 sequence
 
-Before activating the backlog item, use the least expensive adequate option:
-
-1. existing P4A runbook and exact commands;
-2. a short migration or recovery checklist;
-3. a temporary host-specific script generated for the event;
-4. repository-based recreation from an exact approved commit;
-5. cloud-provider instance or volume snapshot where separately evaluated and authorized;
-6. secure restoration of credentials and database backups;
-7. provider-native or maintained external tools before custom framework development.
-
-These alternatives can support migration, major redeployment and disaster recovery without
-requiring the full PR #48-style automation.
-
-## Updated remaining First Launch P0 sequence
-
-1. Canonical state synchronization — complete through PR #47.
-2. PR #48 qualification-automation V1 — failed and frozen; no further repair.
-3. At the actual deployment event, identify and approve one fixed host profile.
-4. Separately authorize read-only host confirmation.
-5. Generate one temporary host-specific, exact-SHA command bundle.
+1. Finalize the documentation-only PR #49 decision package:
+   - verify its exact-head CI and independent documentation review;
+   - merge only under separate user authorization;
+   - do not merge PR #48.
+2. Complete the minimum recovery-readiness decisions that do not require host mutation:
+   - confirm cloud-account recovery access;
+   - confirm an external recoverable credential source;
+   - choose exact-SHA rebuild as the default recovery route;
+   - approve the small SQLite backup/restore method;
+   - decide whether a provider snapshot will be used as an optional speed layer.
+3. Identify and approve one fixed First Launch host profile.
+4. Separately authorize and perform read-only host confirmation.
+5. Generate one temporary host-specific, exact-SHA deployment and qualification command bundle.
 6. Separately authorize deployment.
-7. Separately authorize runtime and supervised public smoke.
-8. Perform the 3+3 `ta-status` qualification and one controlled restart.
-9. Finalize the exact Mac Terminal shortcut and operator command card.
-10. Reach the separate accepted-real-operation gate.
+7. Deploy the exact approved SHA and verify clean tree, fixed Python, hashed runtime
+   dependencies, configuration paths, secure credential ingress, default-off state, systemd
+   unit and executable `ta-status`.
+8. Separately authorize runtime and supervised public smoke.
+9. Perform the initial 3-check `READY` window, exactly one controlled restart and the second
+   3-check `READY` window.
+10. Stop and close out the qualification run; confirm inactive, disabled and no remaining
+    runtime process.
+11. Create the first verified SQLite backup and, if separately selected, a provider snapshot.
+12. Finalize the Mac Terminal shortcut and concise operator command card.
+13. Complete the separate accepted-real-operation review and user authorization.
+
+PR #42, PR #43, PR #44 and PR #45 cleanup is governance housekeeping and must not block the
+deployment critical path. PR #48 remains frozen and may be closed later under separate
+authorization.
 
 ## Lowest-priority future backlog
 
@@ -168,11 +192,11 @@ is prohibited. Reduce scope or create a clean replacement route.
 
 The canonical JSON state still names
 `FIRST_LAUNCH_SUPPORTED_HOST_DEPLOYMENT_AND_QUALIFICATION_PACKET_V1`. This document records
-the later failed-route and backlog decision without silently rewriting strict JSON, Schema or
-evidence bindings.
+the later failed-route, minimum recovery-readiness and backlog decisions without silently
+rewriting strict JSON, Schema or evidence bindings.
 
-Current practical next work occurs at the separately authorized fixed-host deployment session,
-not through additional qualification-feature development.
+Current practical next work is the documentation-only PR #49 finalization decision followed by
+the separately authorized fixed-host preflight and deployment session.
 
 `PLANNING_AUTHORIZED__HOST_ACCESS_NOT_AUTHORIZED__DEPLOYMENT_NOT_AUTHORIZED__RUNTIME_AND_SMOKE_NOT_AUTHORIZED`
 
@@ -186,6 +210,7 @@ Planning authority does not activate execution authority.
 - PR #44: salvage input / not merged authority
 - PR #45: superseded and rejected implementation route
 - PR #48: frozen failed-design and historical research reference / no fourth commit
+- PR #49: documentation-only current decision package / Draft until separately finalized
 
 ## Deferred complexity
 
