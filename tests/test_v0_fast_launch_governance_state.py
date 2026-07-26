@@ -21,16 +21,19 @@ SCHEMA_PATH = ROOT / "schemas" / "governance" / "V0FastLaunchProgram.schema.json
 
 PROGRAM_TASK_ID = "V0-FLP1B0B-CAPTURE-NOW-AUTHORITY-AMENDMENT"
 PROGRAM_BASE_SHA = "78d2d37bfe5a4f3f1d382a2a96e57896ae9676ae"
-CURRENT_STATE_BASE_SHA = "681397395957dacbcc9f8a80816d14bb8c4603b2"
+CURRENT_STATE_BASE_SHA = "414bb1df413ab877856a7aa3bb25e7b262aeab4a"
 CURRENT_ACTIVE_TASK_ID = "NONE"
-COMPLETED_IMPLEMENTATION = "V0-FL-R3-SECURE-SECRET-INGRESS"
-COMPLETED_IMPLEMENTATION_PR = 40
+COMPLETED_IMPLEMENTATION = "FIRST_LAUNCH_SIMPLE_STATUS_V1"
+COMPLETED_IMPLEMENTATION_PR = 46
 LAST_LEASE_ID = "PR22_FINAL_REPAIR_WRITE_LEASE_ID_UNRESOLVED"
 LAST_LEASE_TYPE = "PR22_FINAL_REPAIR_WRITE_LEASE_TYPE_UNRESOLVED"
 FASTSAFE_CONTROL_CONTRACT_ID = "FASTSAFE-V1-2026-07"
 ENGINEERING_TRACK_ID = "ENGINEERING-AUTOMATION-TRACK-V1-2026-07"
-NEXT_GATE = "V0-FL-R3-P4B-SINGLE-INSTANCE-DEPLOYMENT-AND-SUPERVISED-PUBLIC-SMOKE-ACTIVATION"
-NEXT_GATE_STATUS = "USER_RUNTIME_AND_SMOKE_AUTHORIZATION_REQUIRED_BEFORE_PROJECT_CONTROL_ACTIVATION"
+NEXT_GATE = "FIRST_LAUNCH_SUPPORTED_HOST_DEPLOYMENT_AND_QUALIFICATION_PACKET_V1"
+NEXT_GATE_STATUS = (
+    "PLANNING_AUTHORIZED__HOST_ACCESS_NOT_AUTHORIZED__DEPLOYMENT_NOT_AUTHORIZED__"
+    "RUNTIME_AND_SMOKE_NOT_AUTHORIZED"
+)
 AUTHORITY_HASH = "0e327e566589d8030ff00d4d009eb4b6827679ab508133d66840b2c245dc53df"
 SOURCE_CATALOG_HASH = "0ca27f650f399f8fa481ad9421eab4183c1c13812c71dfa8daaf878719bd99b7"
 COMMIT_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -48,22 +51,22 @@ FUTURE_R1_MARKERS = {
 }
 
 EXPECTED_CHANGED_FILES = {
+    "AGENTS.md",
+    "governance/POST_PR46_FIRST_LAUNCH_STATE_AND_NEXT_GATE_V1.md",
+    "governance/PROJECT_RULES_INDEX.md",
     "governance/V0_FAST_LAUNCH_PROGRAM.json",
     "governance/PROJECT_STATE.json",
-    "governance/TRADER_ASSIST_ENGINEERING_OPTIMIZATION_SUCCESSOR_HANDOFF_V2_2026-07-22.md",
-    "governance/TRADER_ASSIST_ENGINEERING_WORKFLOW_V3_2026-07-22.md",
-    "governance/TRAE_IDE_SOLO_DIRECT_ACTIVATION_PREFLIGHT_2026-07-22.md",
     "schemas/governance/V0FastLaunchProgram.schema.json",
     "tests/test_v0_fast_launch_governance_state.py",
     "tests/test_v0_t2_eth_public_capture_runtime.py",
 }
 
 EXPECTED_COMMITTED_STATUS_MAP = {
+    "AGENTS.md": "M",
+    "governance/POST_PR46_FIRST_LAUNCH_STATE_AND_NEXT_GATE_V1.md": "A",
+    "governance/PROJECT_RULES_INDEX.md": "A",
     "governance/V0_FAST_LAUNCH_PROGRAM.json": "M",
     "governance/PROJECT_STATE.json": "M",
-    "governance/TRADER_ASSIST_ENGINEERING_OPTIMIZATION_SUCCESSOR_HANDOFF_V2_2026-07-22.md": "A",
-    "governance/TRADER_ASSIST_ENGINEERING_WORKFLOW_V3_2026-07-22.md": "A",
-    "governance/TRAE_IDE_SOLO_DIRECT_ACTIVATION_PREFLIGHT_2026-07-22.md": "A",
     "schemas/governance/V0FastLaunchProgram.schema.json": "M",
     "tests/test_v0_fast_launch_governance_state.py": "M",
     "tests/test_v0_t2_eth_public_capture_runtime.py": "M",
@@ -147,11 +150,11 @@ def test_program_provenance_and_current_state_are_distinct() -> None:
     }
 
 
-def test_pr39_pr40_closeout_and_p4b_gate_preparation_state() -> None:
+def test_pr39_pr40_pr46_closeout_and_next_gate_planning_state() -> None:
     program = _load_json(PROGRAM_PATH)
     state = _load_json(STATE_PATH)
 
-    # PR40 is the latest completed implementation, with PR39 and PR40 evidence.
+    # PR46 is the latest completed implementation, with PR39, PR40, and PR46 evidence.
     assert state["last_completed_implementation"] == COMPLETED_IMPLEMENTATION
     assert state["last_completed_implementation_pr"] == COMPLETED_IMPLEMENTATION_PR
     assert program["authority"]["last_completed_implementation"] == COMPLETED_IMPLEMENTATION
@@ -169,18 +172,28 @@ def test_pr39_pr40_closeout_and_p4b_gate_preparation_state() -> None:
             "post_merge_ci_run_id": 29807839442,
         },
         {
-            "task_id": COMPLETED_IMPLEMENTATION,
-            "pull_request": COMPLETED_IMPLEMENTATION_PR,
+            "task_id": "V0-FL-R3-SECURE-SECRET-INGRESS",
+            "pull_request": 40,
             "reviewed_head": "9a9c674f1447c9f864c270a5130f353b4a07a2de",
             "merge_sha": "f18338c2630feafd49e377397183a93f2e7f48a4",
             "post_merge_ci": "V0 contracts CI / Run 252 / SUCCESS",
             "post_merge_ci_run_id": 29851016977,
         },
+        {
+            "task_id": COMPLETED_IMPLEMENTATION,
+            "pull_request": COMPLETED_IMPLEMENTATION_PR,
+            "reviewed_head": "3e616d146e8bc6dd3db83fcb2b3a0453eb976096",
+            "merge_sha": "414bb1df413ab877856a7aa3bb25e7b262aeab4a",
+            "exact_head_ci": "V0 contracts CI / Run 282 / SUCCESS",
+            "exact_head_ci_run_id": 30130875992,
+            "post_merge_ci": "V0 contracts CI / Run 30131815661 / SUCCESS",
+            "post_merge_ci_run_id": 30131815661,
+        },
     ]
     assert state["accepted_evidence"] == expected_evidence
     assert program["authority"]["accepted_evidence"] == expected_evidence
 
-    # P4B is selected only for gate preparation; it is not activated.
+    # The next gate is planning only; it is not activated for execution.
     assert state["next_gate"] == NEXT_GATE
     assert state["next_gate_status"] == NEXT_GATE_STATUS
     assert program["authority"]["next_gate"] == NEXT_GATE
@@ -189,7 +202,7 @@ def test_pr39_pr40_closeout_and_p4b_gate_preparation_state() -> None:
     assert program["review_finalization_policy"]["next_gate"] == NEXT_GATE
     assert program["recursive_rotation"]["post_merge_next_gate"] == NEXT_GATE
 
-    # P4B runtime and smoke authorities remain disabled.
+    # Runtime and smoke authorities remain disabled.
     for field in (
         "runtime_started",
         "t2_runtime_started",
@@ -320,7 +333,7 @@ def test_schema_rejects_stale_pr25_and_active_authority_values() -> None:
         Draft202012Validator(state_schema).validate(candidate)
 
     candidate = deepcopy(_load_json(STATE_PATH))
-    candidate["accepted_evidence"][1]["post_merge_ci_run_id"] = 0
+    candidate["accepted_evidence"][2]["post_merge_ci_run_id"] = 0
 
     with pytest.raises(ValidationError):
         Draft202012Validator(state_schema).validate(candidate)
@@ -672,18 +685,18 @@ def test_exact_changed_file_scope_and_forbidden_boundaries() -> None:
     changed = EXPECTED_CHANGED_FILES
     assert len(changed) == 8
     assert changed == {
+        "AGENTS.md",
+        "governance/POST_PR46_FIRST_LAUNCH_STATE_AND_NEXT_GATE_V1.md",
+        "governance/PROJECT_RULES_INDEX.md",
         "governance/V0_FAST_LAUNCH_PROGRAM.json",
         "governance/PROJECT_STATE.json",
-        "governance/TRADER_ASSIST_ENGINEERING_OPTIMIZATION_SUCCESSOR_HANDOFF_V2_2026-07-22.md",
-        "governance/TRADER_ASSIST_ENGINEERING_WORKFLOW_V3_2026-07-22.md",
-        "governance/TRAE_IDE_SOLO_DIRECT_ACTIVATION_PREFLIGHT_2026-07-22.md",
         "schemas/governance/V0FastLaunchProgram.schema.json",
         "tests/test_v0_fast_launch_governance_state.py",
         "tests/test_v0_t2_eth_public_capture_runtime.py",
     }
     assert set(EXPECTED_COMMITTED_STATUS_MAP) == changed
-    assert tuple(EXPECTED_COMMITTED_STATUS_MAP.values()).count("A") == 3
-    assert tuple(EXPECTED_COMMITTED_STATUS_MAP.values()).count("M") == 5
+    assert tuple(EXPECTED_COMMITTED_STATUS_MAP.values()).count("A") == 2
+    assert tuple(EXPECTED_COMMITTED_STATUS_MAP.values()).count("M") == 6
     assert not _scope_boundary_errors(changed)
 
 
@@ -1055,7 +1068,7 @@ def _check_pr_scope(base_sha: str) -> int:
             print(f"boundary error: {error}", file=sys.stderr)
         return 1
 
-    print(f"PR scope check passed: {len(snapshot.committed)} files (0 A, 5 M)")
+    print(f"PR scope check passed: {len(snapshot.committed)} files (2 A, 6 M)")
     return 0
 
 
