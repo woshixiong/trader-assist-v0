@@ -32,12 +32,14 @@ Therefore, the project may defer automation but may not defer all recovery ancho
 
 ### 3.1 Administrative recovery access
 
-Confirm that the cloud account can be recovered without relying on the running host.
+Confirm that the AWS and GitHub accounts can be recovered without relying on the running host.
 
 At minimum:
 
 - account login is available;
-- MFA recovery material is available through an approved secure method;
+- MFA is enabled;
+- recovery methods or codes are stored through an approved secure method;
+- daily administration does not depend on an AWS root access key;
 - the operator can recreate a host or restore a snapshot;
 - SSH access can be re-established for a replacement host.
 
@@ -107,7 +109,27 @@ Choose one of:
 A snapshot is not the only backup and does not replace GitHub, credential recovery or database
 backup.
 
-## 4. What may wait until the event
+## 4. Related minimum host-security baseline
+
+Recovery readiness is only one part of launch safety.
+
+Before deployment or accepted real operation, the separately authorized fixed-host preflight
+must also verify the minimum host-security baseline:
+
+- supported Ubuntu LTS and current security patches;
+- automatic security updates enabled or an explicit manual patch policy;
+- no unplanned automatic reboot;
+- SSH key-based access and no routine root login;
+- Lightsail IPv4 and IPv6 firewalls expose only required ingress;
+- SSH is restricted to the operator source IP or an approved browser-SSH route;
+- system time is synchronized;
+- sufficient disk space and journal retention for bounded diagnosis;
+- static IP is selected when stable administrative addressing is required.
+
+These checks should be performed as one small read-only or controlled host-preflight session.
+They do not authorize a generalized verifier framework.
+
+## 5. What may wait until the event
 
 The following do not need to be built before First Launch:
 
@@ -123,11 +145,11 @@ The following do not need to be built before First Launch:
 At a real migration, major redeployment or disaster-recovery event, generate a temporary,
 host-specific command bundle from the then-current exact release and actual target host.
 
-## 5. Minimum verification level
+## 6. Minimum verification level
 
 Before accepted real operation, the recovery-readiness gate is PASS only when:
 
-1. cloud-account recovery access is confirmed;
+1. AWS and GitHub recovery access is confirmed;
 2. the external credential source is confirmed;
 3. the exact release and path card is complete;
 4. the SQLite backup method is approved;
@@ -136,7 +158,7 @@ Before accepted real operation, the recovery-readiness gate is PASS only when:
 
 A full second-host recovery exercise is not required for this First Launch gate.
 
-## 6. Maintenance after launch
+## 7. Maintenance after launch
 
 Use the minimum adequate policy:
 
@@ -146,7 +168,7 @@ Use the minimum adequate policy:
 - reconsider snapshots when the host changes materially;
 - activate the lowest-priority automation backlog only when repeated use proves net value.
 
-## 7. Authority
+## 8. Authority
 
 This document records preparation requirements only.
 
@@ -154,6 +176,8 @@ It does not authorize:
 
 - cloud-account access;
 - host access or SSH;
+- firewall or SSH changes;
+- operating-system updates;
 - snapshot creation;
 - database access or copying;
 - credential access;
