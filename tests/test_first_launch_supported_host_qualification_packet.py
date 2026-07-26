@@ -132,6 +132,35 @@ def test_packet_has_four_separately_authorized_phases() -> None:
     assert "never activates a later phase" in packet
 
 
+def test_packet_uses_installed_systemd_control_utility_for_version() -> None:
+    packet = _packet()
+    assert "systemctl --version" in packet
+    assert "systemd --version" not in packet
+    assert "systemd-analyze --version" in packet
+
+
+def test_packet_and_runbook_bind_one_validated_python_interpreter() -> None:
+    packet = _packet()
+    runbook = RUNBOOK_PATH.read_text(encoding="utf-8")
+    for content in (packet, runbook):
+        assert "PYTHON_BIN" in content
+        assert "sys.version_info >= (3, 12)" in content
+    assert 'sudo "$PYTHON_BIN" -m venv venv' in runbook
+    assert "sudo python3.12 -m venv venv" not in runbook
+    assert "PYTHON_BIN=%s" in packet
+    assert "PYTHON_VERSION=" in packet
+    normalized_packet = " ".join(packet.split())
+    assert "same separately approved interpreter path" in normalized_packet
+    assert "requires revalidation" in normalized_packet
+
+
+def test_runbook_requires_systemd_analyze_and_fails_closed() -> None:
+    runbook = RUNBOOK_PATH.read_text(encoding="utf-8")
+    assert "`systemd-analyze` is required for unit validation" in runbook
+    assert "optional but recommended" not in runbook
+    assert "absence fails the supported-host preflight closed" in " ".join(runbook.split())
+
+
 def test_packet_has_status_meanings_recovery_and_bounded_journal() -> None:
     packet = _packet()
     assert "sudo /opt/trader-assist-v0/bin/ta-status" in packet

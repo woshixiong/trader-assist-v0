@@ -56,8 +56,20 @@ start, or stop anything.
 cat /etc/os-release
 uname -m
 uname -r
-systemd --version
-python3 --version
+systemctl --version
+PYTHON_BIN="$(command -v python3 || true)"
+if test -z "$PYTHON_BIN"; then
+  printf 'PYTHON_NOT_FOUND\n'
+else
+  printf 'PYTHON_BIN=%s\n' "$PYTHON_BIN"
+  "$PYTHON_BIN" - <<'PY'
+import platform
+import sys
+
+print("PYTHON_VERSION=" + platform.python_version())
+raise SystemExit(0 if sys.version_info >= (3, 12) else 1)
+PY
+fi
 git --version
 systemd-analyze --version
 df -h / /opt /etc /var/lib
@@ -88,8 +100,8 @@ Classify the result as follows:
   is 3.12 or newer; disk and memory are adequate for the existing runtime; and
   either the unit is not yet present before deployment or every present unit
   validates successfully.
-- `HOST_PROFILE_FAIL`: Python is missing or below 3.12; systemd or
-  `systemd-analyze` is unavailable; the profile is incompatible; or a present
+- `HOST_PROFILE_FAIL`: `python3` is missing, Python is below 3.12, systemd or
+  `systemd-analyze` is unavailable, the profile is incompatible, or a present
   unit fails `systemd-analyze verify`. These conditions fail closed.
 - `HOST_PROFILE_UNKNOWN`: the authorized read-only evidence cannot establish a
   required fact. Do not proceed until separately authorized targeted
@@ -98,6 +110,11 @@ Classify the result as follows:
 Path absence is recorded for Phase 1 planning; it never authorizes creating a
 path. A unit that is present but cannot be validated is incompatible and is a
 `HOST_PROFILE_FAIL`.
+
+Record the resolved absolute `PYTHON_BIN` path and the reported Python version
+as preflight evidence. Phase 1 must use that same separately approved
+interpreter path to create the virtual environment. A different interpreter
+path requires revalidation; it must never be silently substituted.
 
 ## 5. PHASE 1 — DEPLOYMENT
 
@@ -109,7 +126,8 @@ planning branch SHA.
 
 The authorized deployment must use a detached checkout with exact `HEAD`
 equality and a clean repository, install only the hashed runtime lock without
-an editable install, retain the root-owned source installation and existing
+an editable install, use the same separately approved `PYTHON_BIN` path
+recorded in preflight, retain the root-owned source installation and existing
 `LoadCredential` path, and preserve the default-off activation permit. Verify
 the service unit before activation. Credentials must not enter Git,
 environment variables, process argv, journals, or qualification evidence.

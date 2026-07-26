@@ -13,7 +13,8 @@ authorized. This runbook does not grant any of those authorities.
 - A systemd-based Linux distribution (Ubuntu 22.04+ or equivalent).
 - Python 3.12+ installed.
 - Git installed.
-- `systemd-analyze` available for unit validation (optional but recommended).
+- `systemd-analyze` is required for unit validation. Its absence fails the
+  supported-host preflight closed.
 
 ## 2. Dedicated User
 
@@ -64,10 +65,23 @@ project.  The project is imported exclusively via the forced `PYTHONPATH`
 (see Section 8 and the wrapper), never via site-packages.
 
 ```bash
+PYTHON_BIN="$(command -v python3)"
+test -n "$PYTHON_BIN"
+
+"$PYTHON_BIN" - <<'PY'
+import sys
+
+raise SystemExit(0 if sys.version_info >= (3, 12) else 1)
+PY
+
 cd /opt/trader-assist-v0
-sudo python3.12 -m venv venv
+sudo "$PYTHON_BIN" -m venv venv
 sudo venv/bin/pip install --require-hashes -r requirements-runtime.lock
 ```
+
+`PYTHON_BIN` must be the same separately approved interpreter path recorded by
+the supported-host preflight. A different path requires revalidation and must
+not be silently substituted.
 
 Verify `trader_assist_v0` imports exclusively from
 `/opt/trader-assist-v0/src/trader_assist_v0` and that the import fails if it
