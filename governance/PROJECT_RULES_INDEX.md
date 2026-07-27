@@ -25,6 +25,46 @@ No governance file independently grants host, deployment, runtime, smoke, accoun
 exchange-write authority. Product authority, engineering authority and Project Control
 execution authority remain separate.
 
+## Mandatory product-function decision gate
+
+Engineering Optimization owns feasibility, decomposition, cost, risk, reliability, testing,
+review and implementation-path analysis. It does not own product-function selection.
+
+Before a task contract, branch, Writer assignment or implementation is authorized, Engineering
+Optimization must identify every decision point that could change:
+
+- the operator's normal workflow or number of required actions;
+- notification channel, delivery semantics or device availability;
+- user interface, dashboard, Terminal interaction or mobile access;
+- the market, account, strategy, risk or execution information shown to the user;
+- human confirmation, rejection, expiry or approval behavior;
+- account, order, cancellation, protective-order or automatic-trading authority;
+- deployment topology, third-party service dependency or recurring operating burden;
+- which current work is temporary, reusable, deferred, replaced or part of the future product path.
+
+For each such point, Engineering Optimization must return a compact decision packet containing:
+
+1. the exact product question;
+2. the smallest viable options;
+3. implementation and calendar cost;
+4. reliability, security and maintenance tradeoffs;
+5. reuse value and expected replacement cost;
+6. effect on the First Launch, V0 and mainline critical paths;
+7. its engineering recommendation, explicitly labeled as non-authoritative.
+
+The packet is routed to Product Function and Priority Control. Development may proceed only after
+an explicit product-direction ruling is returned and recorded. Project Control may execute the
+accepted direction but may not infer or choose one.
+
+A pure defect correction that preserves already accepted product behavior does not require a new
+product decision. Any behavior, workflow, channel, authority, external dependency or future-path
+change does.
+
+If a product decision point is discovered after work begins, the active lane must safe-stop,
+preserve the current evidence and return the decision point before further implementation. Sunk
+engineering effort, an existing partial implementation or launch pressure does not authorize an
+implicit product decision.
+
 ## Efficiency-first rule
 
 Efficiency is the primary optimization target after the minimum real safety boundary is
@@ -93,3 +133,43 @@ or patch PR #48.
 The former permanent-abandonment ruling is superseded but retained as historical decision
 context. The failed implementation, review findings, RR-01 through RR-08 and proposed two-script
 architecture remain preserved for future research.
+
+## Notification and operator-access deferred-options register
+
+Current user direction:
+
+- do not authorize a custom Terminal notification implementation during the immediate First
+  Launch finalization merely to avoid a maintained external relay;
+- do not spend additional First Launch time selecting or designing the final V0 notification,
+  mobile-access or execution-confirmation architecture;
+- preserve the current durable notification/outbox work and record future options for later
+  product planning;
+- the user will provide separate research before any later implementation decision;
+- automatic invocation of existing `ta-status` or equivalent health/freshness checks is a future
+  candidate, not current implementation authority.
+
+Recorded options, with no selection or implementation authority:
+
+1. maintained external relay to a desktop/mobile messaging endpoint for the fastest First Launch
+   activation;
+2. automatic Mac Terminal monitoring that invokes the existing status command and displays local
+   desktop notifications while the user is trading on the computer;
+3. local or self-hosted operator dashboard reusing durable notification data;
+4. private desktop-and-mobile web/PWA access for V0 monitoring;
+5. authenticated human confirm/reject/expiry flow that is separate from notification delivery;
+6. confirmed-order execution with server-side revalidation, idempotency and audit evidence;
+7. higher-authority automatic trading with independent runtime, risk, execution and emergency
+   controls;
+8. direct maintained provider adapters where they reduce risk and maintenance compared with a
+   generic relay.
+
+Future product planning must keep these meanings separate:
+
+- notification delivered or displayed;
+- operator viewed or acknowledged;
+- operator approved or rejected a specific plan;
+- server accepted an execution authorization;
+- order submission, acknowledgement, fill and protective-action state.
+
+No current `DELIVERED`, Terminal output, webhook success or message receipt may be reinterpreted
+as trading approval or exchange-write authority.
