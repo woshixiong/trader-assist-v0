@@ -134,6 +134,70 @@ The former permanent-abandonment ruling is superseded but retained as historical
 context. The failed implementation, review findings, RR-01 through RR-08 and proposed two-script
 architecture remain preserved for future research.
 
+## Current First Launch notification direction
+
+The user has selected a maintained external relay as the temporary fastest First Launch route.
+The currently expected chain is:
+
+`Trader Assist durable outbox -> Pipedream HTTPS trigger -> private Discord webhook/channel`
+
+This is a temporary First Launch activation decision. It is not the selected V0 or mainline
+notification, mobile-access or execution-confirmation architecture.
+
+The temporary relay must satisfy all of the following:
+
+1. Pipedream must complete the downstream Discord send before returning a success response to
+   Trader Assist. A default or early `200 OK` before downstream success is prohibited.
+2. When the Discord send fails, the workflow must not return a success response. The Trader Assist
+   notification must remain retryable rather than being falsely recorded as delivered.
+3. The Pipedream trigger, Discord webhook and any authorization values are credentials. They must
+   not enter Git history, PR text, screenshots, logs, shell history or ordinary evidence bundles.
+4. Use a private Discord server/channel and a dedicated webhook with the smallest practical scope.
+   Preserve a recoverable external credential source and a revoke/rotate procedure.
+5. The payload remains restricted to the already-approved public-data TradePlan and operator card.
+   It must contain no exchange account, wallet, private key, signing, nonce or order-write data.
+6. One controlled end-to-end test must prove the actual success path. One controlled failure test
+   must prove that a downstream Discord failure is not acknowledged as successful delivery.
+7. `DELIVERED` under this temporary route means only that the configured relay completed the
+   accepted downstream send. It does not prove that the operator viewed, approved or traded it.
+8. Stage 4F, runtime, smoke and credential installation remain separately authorized operations.
+   Selecting the route does not itself authorize those actions.
+
+## Low-cost automatic `ta-status` candidate
+
+The proposed automatic refresh does not mean a new notification system and does not mean simulated
+keyboard input. It means one operator-started Terminal session periodically executes the already
+accepted `ta-status` command and displays the latest health and data-freshness result.
+
+The smallest future form is:
+
+- one persistent SSH/Terminal session rather than opening a new SSH connection for every poll;
+- a bounded interval such as 5-10 seconds, subject to later product and operations review;
+- manual start and stop by the operator;
+- display of the existing `READY`, `NOT_READY` or `STATUS_UNKNOWN` result and reason;
+- no server runtime-code, strategy, notification-outbox or trading-authority change.
+
+Potential benefits:
+
+- removes repeated manual typing while the operator is already trading on the computer;
+- keeps health and freshness continuously visible when a Discord notification arrives;
+- can expose stale data, disconnects and service failures sooner;
+- has very low implementation and maintenance cost if kept as an operator shortcut.
+
+Limitations:
+
+- it is not a notification transport and cannot replace Pipedream or Discord;
+- it does not prove that a specific notification was delivered or viewed;
+- it is not trading approval or execution authorization;
+- it does not replace 3+3 readiness observations, controlled restart evidence or formal smoke;
+- aggressive polling or repeated SSH handshakes are prohibited.
+
+Current status:
+
+`DEFERRED_CANDIDATE__NO_CURRENT_IMPLEMENTATION_AUTHORITY__NOT_A_FIRST_LAUNCH_BLOCKER`
+
+The user will provide separate research before any implementation decision.
+
 ## Notification and operator-access deferred-options register
 
 Current user direction:
@@ -148,19 +212,19 @@ Current user direction:
 - automatic invocation of existing `ta-status` or equivalent health/freshness checks is a future
   candidate, not current implementation authority.
 
-Recorded options, with no selection or implementation authority:
+Recorded options, with no V0/mainline selection or implementation authority:
 
 1. maintained external relay to a desktop/mobile messaging endpoint for the fastest First Launch
    activation;
-2. automatic Mac Terminal monitoring that invokes the existing status command and displays local
-   desktop notifications while the user is trading on the computer;
-3. local or self-hosted operator dashboard reusing durable notification data;
-4. private desktop-and-mobile web/PWA access for V0 monitoring;
-5. authenticated human confirm/reject/expiry flow that is separate from notification delivery;
-6. confirmed-order execution with server-side revalidation, idempotency and audit evidence;
-7. higher-authority automatic trading with independent runtime, risk, execution and emergency
+2. bounded automatic Mac Terminal health/freshness monitoring using the existing status command;
+3. custom Mac Terminal notification and local desktop notification;
+4. local or self-hosted operator dashboard reusing durable notification data;
+5. private desktop-and-mobile web/PWA access for V0 monitoring;
+6. authenticated human confirm/reject/expiry flow that is separate from notification delivery;
+7. confirmed-order execution with server-side revalidation, idempotency and audit evidence;
+8. higher-authority automatic trading with independent runtime, risk, execution and emergency
    controls;
-8. direct maintained provider adapters where they reduce risk and maintenance compared with a
+9. direct maintained provider adapters where they reduce risk and maintenance compared with a
    generic relay.
 
 Future product planning must keep these meanings separate:
@@ -173,3 +237,18 @@ Future product planning must keep these meanings separate:
 
 No current `DELIVERED`, Terminal output, webhook success or message receipt may be reinterpreted
 as trading approval or exchange-write authority.
+
+## Current unresolved register
+
+The following remain open and require their own accepted authority or later product decision:
+
+1. configure and validate the temporary Pipedream-to-Discord workflow and its failure semantics;
+2. create, preserve, install and validate the real notification credential without disclosure;
+3. authorize and complete Stage 4F runtime, notification smoke, 3+3 checks, one controlled restart
+   and final inactive/disabled/no-process closeout;
+4. finish the minimum SQLite backup, off-host verification, recovery card and snapshot-or-rebuild
+   closeout required before accepted real operation;
+5. independently review and later decide Mark Ready and merge for this governance Draft PR;
+6. revisit automatic `ta-status`, final notification architecture, desktop/mobile access, human
+   confirmation and execution only after Product Function and Priority Control accepts a later
+   decision packet.
