@@ -93,6 +93,23 @@ Use this preferred order:
 A normal repair plus one exceptional repair is the maximum for one bounded design route. If
 both fail, do not continue iterative patching. Reduce scope or start a clean replacement.
 
+## Today-first launch scheduling rule
+
+The user has fixed the immediate objective as completing First Launch within the current day.
+
+Current priority:
+
+`FIRST_LAUNCH_ACTIVATION_P0__NO_NEW_ONE_DAY_OR_LONGER_DEVELOPMENT_ON_CRITICAL_PATH`
+
+Any new task expected to require one calendar day or more must be moved after First Launch unless
+it is demonstrated to be a direct launch safety blocker. Deferred work is retained; it is not
+abandoned.
+
+The minimum local automatic `ta-status` shortcut may be prepared only because it is bounded to
+approximately 20-45 minutes, uses the already accepted command and is not a launch blocker. If
+Pipedream, Discord, credential ingress, Stage 4F, smoke or recovery closeout encounters delay, the
+shortcut moves immediately after First Launch.
+
 ## Current First Launch recovery boundary
 
 Deferring PR #48-style automation does not permit deferring all recovery preparation.
@@ -163,69 +180,101 @@ The temporary relay must satisfy all of the following:
 8. Stage 4F, runtime, smoke and credential installation remain separately authorized operations.
    Selecting the route does not itself authorize those actions.
 
-## Low-cost automatic `ta-status` candidate
+## Selected minimum automatic `ta-status` shortcut
 
-The proposed automatic refresh does not mean a new notification system and does not mean simulated
-keyboard input. It means one operator-started Terminal session periodically executes the already
-accepted `ta-status` command and displays the latest health and data-freshness result.
+The user has selected the minimum automatic refresh form because it reduces repeated manual work
+and reduces the risk of forgetting to refresh.
 
-The smallest future form is:
+Decision:
 
-- one persistent SSH/Terminal session rather than opening a new SSH connection for every poll;
-- a bounded interval such as 5-10 seconds, subject to later product and operations review;
-- manual start and stop by the operator;
-- display of the existing `READY`, `NOT_READY` or `STATUS_UNKNOWN` result and reason;
-- no server runtime-code, strategy, notification-outbox or trading-authority change.
+`USER_SELECTED__OPTIONAL_SAME_DAY_OPERATOR_SHORTCUT__NOT_A_LAUNCH_BLOCKER`
 
-Potential benefits:
+The minimum form is not a new notification system and does not mean simulated keyboard input. It
+is one operator-started Mac Terminal shortcut that:
 
-- removes repeated manual typing while the operator is already trading on the computer;
-- keeps health and freshness continuously visible when a Discord notification arrives;
-- can expose stale data, disconnects and service failures sooner;
-- has very low implementation and maintenance cost if kept as an operator shortcut.
+- establishes one persistent SSH/Terminal session;
+- periodically executes the already accepted remote `ta-status` command;
+- uses a bounded interval, initially 5-10 seconds;
+- displays the current refresh timestamp;
+- displays the existing `READY`, `NOT_READY` or `STATUS_UNKNOWN` result and reason;
+- keeps exit codes 0, 1 and 2 as normal classifications rather than terminating the loop;
+- stops manually with `Ctrl+C`;
+- overwrites or clears any old `READY` result if SSH, sudo or command execution stops;
+- displays an unmistakable fail-closed stopped message such as
+  `STATUS MONITOR STOPPED | IGNORE SYSTEM SIGNALS`.
 
-Limitations:
+The minimum shortcut must not:
 
-- it is not a notification transport and cannot replace Pipedream or Discord;
-- it does not prove that a specific notification was delivered or viewed;
-- it is not trading approval or execution authorization;
-- it does not replace 3+3 readiness observations, controlled restart evidence or formal smoke;
-- aggressive polling or repeated SSH handshakes are prohibited.
+- modify server runtime code, strategy, notification outbox or trading authority;
+- add a server daemon or systemd service;
+- add macOS login auto-start or LaunchAgent;
+- add background autonomous reconnection;
+- add desktop notification;
+- require a product-code PR merely to create the local shortcut;
+- replace Pipedream, Discord, Stage 4F, smoke, 3+3 checks or one controlled restart.
 
-Current status:
+Expected work:
 
-`DEFERRED_CANDIDATE__NO_CURRENT_IMPLEMENTATION_AUTHORITY__NOT_A_FIRST_LAUNCH_BLOCKER`
+- command or shell-function preparation: about 5-15 minutes;
+- local setup and operator-card integration: about 5-15 minutes;
+- controlled validation on the approved host: about 10-20 minutes;
+- total active time: approximately 20-45 minutes.
 
-The user will provide separate research before any implementation decision.
+Scheduling:
+
+- prepare only after the primary Pipedream/Discord launch path is moving normally, or in parallel
+  without consuming the critical operator;
+- do not hold First Launch acceptance for this shortcut;
+- if the main launch path slips, move this item immediately after First Launch.
+
+## Post-First-Launch formal automatic-status backlog
+
+The expanded formal version is retained for later development and is not abandoned.
+
+Backlog status:
+
+`POST_FIRST_LAUNCH_BACKLOG__NO_CURRENT_CRITICAL_PATH_AUTHORITY`
+
+Candidate capabilities to evaluate later:
+
+1. a repository-backed and tested `ta-watch` script;
+2. automatic start at macOS login;
+3. LaunchAgent lifecycle management;
+4. background operation;
+5. bounded automatic SSH reconnection;
+6. Mac sleep/wake recovery;
+7. stale-screen detection and explicit last-success age;
+8. single-instance locking;
+9. local desktop notification on state transition;
+10. structured local logs with retention limits and no secrets;
+11. installation, upgrade, uninstall and rollback procedures;
+12. test coverage for READY, NOT_READY, STATUS_UNKNOWN, SSH failure, sudo failure, sleep/wake and
+    reconnect behavior;
+13. operator documentation and support boundary;
+14. later evaluation of whether a dashboard or private web/PWA replaces the Terminal watcher.
+
+Before activating this backlog, Product Function and Priority Control must determine which
+capabilities are actually required. Engineering Optimization must then compare the smallest
+script, provider-native tooling and any maintained open-source alternative. The formal version
+must not be assumed to require all listed capabilities.
 
 ## Notification and operator-access deferred-options register
-
-Current user direction:
-
-- do not authorize a custom Terminal notification implementation during the immediate First
-  Launch finalization merely to avoid a maintained external relay;
-- do not spend additional First Launch time selecting or designing the final V0 notification,
-  mobile-access or execution-confirmation architecture;
-- preserve the current durable notification/outbox work and record future options for later
-  product planning;
-- the user will provide separate research before any later implementation decision;
-- automatic invocation of existing `ta-status` or equivalent health/freshness checks is a future
-  candidate, not current implementation authority.
 
 Recorded options, with no V0/mainline selection or implementation authority:
 
 1. maintained external relay to a desktop/mobile messaging endpoint for the fastest First Launch
    activation;
-2. bounded automatic Mac Terminal health/freshness monitoring using the existing status command;
-3. custom Mac Terminal notification and local desktop notification;
-4. local or self-hosted operator dashboard reusing durable notification data;
-5. private desktop-and-mobile web/PWA access for V0 monitoring;
-6. authenticated human confirm/reject/expiry flow that is separate from notification delivery;
-7. confirmed-order execution with server-side revalidation, idempotency and audit evidence;
-8. higher-authority automatic trading with independent runtime, risk, execution and emergency
+2. the selected bounded minimum Mac Terminal health/freshness shortcut;
+3. the post-First-Launch formal automatic-status backlog;
+4. custom Mac Terminal notification and local desktop notification;
+5. local or self-hosted operator dashboard reusing durable notification data;
+6. private desktop-and-mobile web/PWA access for V0 monitoring;
+7. authenticated human confirm/reject/expiry flow that is separate from notification delivery;
+8. confirmed-order execution with server-side revalidation, idempotency and audit evidence;
+9. higher-authority automatic trading with independent runtime, risk, execution and emergency
    controls;
-9. direct maintained provider adapters where they reduce risk and maintenance compared with a
-   generic relay.
+10. direct maintained provider adapters where they reduce risk and maintenance compared with a
+    generic relay.
 
 Future product planning must keep these meanings separate:
 
@@ -238,17 +287,43 @@ Future product planning must keep these meanings separate:
 No current `DELIVERED`, Terminal output, webhook success or message receipt may be reinterpreted
 as trading approval or exchange-write authority.
 
-## Current unresolved register
+## Current unresolved and backlog register
 
-The following remain open and require their own accepted authority or later product decision:
+### Immediate First Launch P0
 
-1. configure and validate the temporary Pipedream-to-Discord workflow and its failure semantics;
-2. create, preserve, install and validate the real notification credential without disclosure;
-3. authorize and complete Stage 4F runtime, notification smoke, 3+3 checks, one controlled restart
-   and final inactive/disabled/no-process closeout;
-4. finish the minimum SQLite backup, off-host verification, recovery card and snapshot-or-rebuild
-   closeout required before accepted real operation;
-5. independently review and later decide Mark Ready and merge for this governance Draft PR;
-6. revisit automatic `ta-status`, final notification architecture, desktop/mobile access, human
-   confirmation and execution only after Product Function and Priority Control accepts a later
-   decision packet.
+1. configure and validate the temporary Pipedream-to-Discord workflow;
+2. prove that Discord success occurs before Pipedream returns 2xx;
+3. prove that controlled downstream Discord failure is not acknowledged as successful delivery;
+4. create, preserve, install and validate the real notification credential without disclosure;
+5. authorize and complete Stage 4F runtime and notification smoke;
+6. complete the initial 3 `ta-status` READY observations;
+7. perform exactly one controlled restart;
+8. complete the post-restart 3 READY observations;
+9. close out inactive, disabled and no-runtime-process state;
+10. create and verify the minimum SQLite backup outside the single-host failure boundary;
+11. finish the recovery card and snapshot-or-rebuild decision;
+12. complete accepted-real-operation review and explicit user authorization.
+
+### Optional same-day, non-blocking
+
+13. prepare the minimum local `ta-watch` or equivalent shortcut;
+14. validate READY, NOT_READY, STATUS_UNKNOWN and SSH-failure behavior;
+15. add the one-command startup instruction to the Mac operator command card.
+
+### Governance and window transition
+
+16. independently review PR #51 at its current exact Head;
+17. decide Mark Ready and merge only under later separate user authorization;
+18. start a fresh Project Control window using the current handoff;
+19. start a fresh Engineering Optimization window using the current handoff.
+
+### Post-First-Launch backlog
+
+20. evaluate and schedule the formal automatic-status capabilities listed above;
+21. revisit the final V0 notification and provider architecture;
+22. revisit desktop/mobile access and dashboard/PWA options;
+23. revisit authenticated human confirmation and expiry;
+24. later evaluate confirmed-order execution and automatic trading under separate risk and
+    authority design;
+25. retain the PR #48 replacement host-qualification research at lowest priority;
+26. address other deferred V0 and mainline work only through the product-decision gate.
