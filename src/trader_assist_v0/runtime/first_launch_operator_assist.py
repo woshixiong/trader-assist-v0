@@ -245,9 +245,9 @@ def _validate_context_payload(payload: dict[str, object]) -> None:
         _wire_non_negative_integer(source_time, "context time")
 
 
-def _public_data_parts(
+def _public_identity_parts(
     value: object,
-) -> tuple[Literal["candle", "activeAssetCtx"], dict[str, object], int | None]:
+) -> tuple[Literal["candle", "activeAssetCtx"], dict[str, object]]:
     if type(value) is not dict or set(value) != {"channel", "data"}:
         raise ValueError("public frame shape is invalid")
     document = cast(dict[str, object], value)
@@ -257,11 +257,11 @@ def _public_data_parts(
         raise ValueError("public frame channel is invalid")
     payload = cast(dict[str, object], data)
     if channel == "candle":
-        close_time = _validate_candle_payload(payload)
-    else:
-        _validate_context_payload(payload)
-        close_time = None
-    return cast(Literal["candle", "activeAssetCtx"], channel), payload, close_time
+        if payload.get("s") != "ETH" or payload.get("i") not in {"5m", "15m"}:
+            raise ValueError("candle identity is invalid")
+    elif payload.get("coin") != "ETH":
+        raise ValueError("active asset identity is invalid")
+    return cast(Literal["candle", "activeAssetCtx"], channel), payload
 
 
 @dataclass
@@ -418,16 +418,20 @@ class PublicRuntimeProtocol:
                     self._state = PublicSessionState.ACTIVE
                 return None
             try:
-                _public_data_parts(value)
+                channel, payload = _public_identity_parts(value)
+                if channel == "candle":
+                    _validate_candle_payload(payload)
+                else:
+                    _validate_context_payload(payload)
             except ValueError as exc:
                 self._failed(ProtocolAcknowledgementError, str(exc))
                 raise AssertionError("unreachable") from exc
             # Hyperliquid may interleave authorized public data with subscription
-            # responses.  Before all acknowledgements arrive, validate and ignore
+            # responses. Before all acknowledgements arrive, validate and ignore
             # those frames without issuing sequence or market-data authority.
             return None
         try:
-            channel, _payload, close_time = _public_data_parts(value)
+            channel, payload = _public_identity_parts(value)
         except ValueError as exc:
             self._failed(PublicFrameError, str(exc))
             raise AssertionError("unreachable") from exc
@@ -436,10 +440,18 @@ class PublicRuntimeProtocol:
         except ValueError as exc:
             self._failed(PublicFrameError, str(exc))
             raise AssertionError("unreachable") from exc
-        if close_time is not None and close_time >= int(received_at.timestamp() * 1000):
-            # A structurally valid current candle is ordinary non-authoritative
-            # transport traffic until its inclusive close timestamp has passed.
-            return None
+        if channel == "candle":
+            try:
+                close_time = _validate_candle_payload(payload)
+            except ValueError:
+                # Preserve the established protocol/runtime layering: malformed
+                # authorized-identity frames continue to the market-data parser,
+                # which withdraws READY and fails closed with its original error.
+                close_time = None
+            if close_time is not None and close_time >= int(received_at.timestamp() * 1000):
+                # A structurally valid current candle is ordinary non-authoritative
+                # transport traffic until its inclusive close timestamp has passed.
+                return None
         self._receive_sequence += 1
         return AcceptedPublicFrame(
             frame,
