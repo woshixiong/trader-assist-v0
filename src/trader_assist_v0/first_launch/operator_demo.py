@@ -68,7 +68,7 @@ def _candle(
                 "s": "ETH",
                 "i": interval,
                 "t": actual,
-                "T": actual + width,
+                "T": actual + width - 1,
                 "o": str(values[0]),
                 "h": str(max(values[1], values[0], values[3])),
                 "l": str(min(values[2], values[0], values[3])),

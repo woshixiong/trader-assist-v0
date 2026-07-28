@@ -84,7 +84,7 @@ def _candle(
                 "s": "ETH",
                 "i": interval,
                 "t": actual_open_time,
-                "T": actual_open_time + width,
+                "T": actual_open_time + width - 1,
                 "o": str(open_value),
                 "h": str(high_value),
                 "l": str(low_value),
@@ -897,6 +897,32 @@ def test_v3_trade_plan_accepts_matching_issued_overlay_reference() -> None:
     configuration, volatility, overlay, summary = _v3_plan_inputs(output, reference)
     plan = _build_v3_plan(output, reference, configuration, volatility, overlay, summary)
     assert plan.reference == overlay.reference_price == reference
+
+
+def test_v3_inclusive_candle_close_contract_matches_parser_authority() -> None:
+    output = _confirmed(SetupFamily.SWEEP_RECLAIM, Side.LONG, True)
+    candles, candles_15m = _history(SetupFamily.SWEEP_RECLAIM, Side.LONG, True)
+    assert candles[-1].close_time_ms - candles[-1].open_time_ms == 299_999
+    assert candles_15m[-1].close_time_ms - candles_15m[-1].open_time_ms == 899_999
+    volatility = wilder_atr14(candles)
+    assert volatility.candle_cutoff_close_time_ms == candles[-1].close_time_ms
+    with pytest.raises(PlanError, match="VOLATILITY_SNAPSHOT_AUTHORITY_INVALID"):
+        _validated_volatility_snapshot(
+            _coherently_rehash_volatility(
+                volatility,
+                candle_cutoff_close_time_ms=volatility.candle_cutoff_close_time_ms + 1,
+            )
+        )
+    reference = output.raw_entry_low
+    overlay = apply_volatility_overlay(output, volatility, candles, reference)
+    configuration, _, _, summary = _v3_plan_inputs(output, reference)
+    plan = _build_v3_plan(output, reference, configuration, volatility, overlay, summary)
+    assert plan.candle_cutoff_close_time_ms == candles[-1].close_time_ms
+    with pytest.raises(PlanError, match="TRADE_PLAN_CANDLE_CUTOFF_INVALID"):
+        _coherently_rehashed_plan(
+            plan,
+            candle_cutoff_close_time_ms=plan.candle_cutoff_close_time_ms + 1,
+        )
 
 
 def test_v3_build_rejects_issued_overlay_with_mismatched_reference() -> None:
