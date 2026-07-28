@@ -121,7 +121,7 @@ class VolatilitySnapshot:
             or len(self.candle_identities) != 64
             or len(self.candle_hashes) != 64
             or self.candle_cutoff_identity != self.candle_identities[-1]
-            or self.candle_cutoff_close_time_ms != self.candle_cutoff_identity[2] + 300_000
+            or self.candle_cutoff_close_time_ms != self.candle_cutoff_identity[2] + 300_000 - 1
             or any(identity[0:2] != ("ETH", "5m") for identity in self.candle_identities)
             or any(
                 right[2] - left[2] != 300_000 for left, right in pairwise(self.candle_identities)
@@ -1392,7 +1392,8 @@ class TradePlan:
             raise PlanError("TRADE_PLAN_OVERLAY_CORRESPONDENCE_INVALID")
         if (
             self.candle_cutoff_identity != self.decision_trigger_identity
-            or self.candle_cutoff_close_time_ms != self.decision_trigger_open_time_ms + 300_000
+            or self.candle_cutoff_close_time_ms
+            != self.decision_trigger_open_time_ms + 300_000 - 1
         ):
             raise PlanError("TRADE_PLAN_CANDLE_CUTOFF_INVALID")
         expected_signal = _hash(

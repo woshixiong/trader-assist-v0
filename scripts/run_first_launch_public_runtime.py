@@ -62,6 +62,11 @@ _STATUS_SNAPSHOT_PATH: Final[Path] = Path("/run/trader-assist-v0/status.json")
 _HTTP_INFO_URL: Final[str] = "https://api.hyperliquid.xyz/info"
 _WEBSOCKET_URL: Final[str] = "wss://api.hyperliquid.xyz/ws"
 _HTTP_TIMEOUT_SECONDS: Final[float] = 15.0
+_CANDLE_INTERVAL_MILLISECONDS: Final[dict[str, int]] = {
+    "5m": 5 * 60_000,
+    "15m": 15 * 60_000,
+}
+_CANDLE_SNAPSHOT_LIMITS: Final[dict[str, int]] = {"5m": 64, "15m": 32}
 _DISPATCH_INTERVAL_SECONDS: Final[float] = 5.0
 _FRAME_BUFFER_SIZE: Final[int] = 1
 _MAX_CREDENTIAL_FILE_SIZE: Final[int] = 4096
@@ -448,9 +453,31 @@ class HttpSnapshotRecovery(Protocol):
     def __call__(self) -> tuple[str, str, str]: ...
 
 
+def _closed_candle_snapshot_request(
+    interval: Literal["5m", "15m"], *, now: datetime
+) -> dict[str, object]:
+    """Build one bounded Hyperliquid request containing only closed ETH candles."""
+    if type(now) is not datetime or now.tzinfo is not UTC:
+        raise ValueError("snapshot time must be a UTC datetime")
+    width_ms = _CANDLE_INTERVAL_MILLISECONDS[interval]
+    limit = _CANDLE_SNAPSHOT_LIMITS[interval]
+    now_ms = int(now.timestamp() * 1000)
+    current_open_ms = (now_ms // width_ms) * width_ms
+    return {
+        "type": "candleSnapshot",
+        "req": {
+            "coin": "ETH",
+            "interval": interval,
+            "startTime": current_open_ms - (limit * width_ms),
+            "endTime": current_open_ms - 1,
+        },
+    }
+
+
 def recover_public_snapshot_default() -> tuple[str, str, str]:
-    """Recover the ETH 5m, 15m, and metadata snapshot via the public HTTP endpoint."""
+    """Recover bounded closed ETH 5m/15m candles and metadata from public HTTP."""
     context = ssl.create_default_context()
+    snapshot_now = _utc_now()
 
     def post(body: dict[str, object]) -> str:
         request = Request(
@@ -462,8 +489,8 @@ def recover_public_snapshot_default() -> tuple[str, str, str]:
         with urlopen(request, timeout=_HTTP_TIMEOUT_SECONDS, context=context) as response:
             return cast(bytes, response.read()).decode("utf-8")
 
-    raw_5m = post({"type": "candleSnapshot", "req": {"coin": "ETH", "interval": "5m"}})
-    raw_15m = post({"type": "candleSnapshot", "req": {"coin": "ETH", "interval": "15m"}})
+    raw_5m = post(_closed_candle_snapshot_request("5m", now=snapshot_now))
+    raw_15m = post(_closed_candle_snapshot_request("15m", now=snapshot_now))
     raw_metadata = post({"type": "metaAndAssetCtxs"})
     return raw_5m, raw_15m, raw_metadata
 

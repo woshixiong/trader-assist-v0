@@ -185,7 +185,7 @@ def _candle_obj(
         "s": "ETH",
         "i": interval,
         "t": open_time,
-        "T": open_time + width,
+        "T": open_time + width - 1,
         "o": open_price,
         "h": high,
         "l": low,
@@ -3388,3 +3388,104 @@ def test_fr06_o_nofollow_open_flag_is_enforced(
     )
     # Verify successful load
     assert config.webhook_url == "https://hooks.example.com/eth-notify"
+
+
+# ============================================================
+# Hyperliquid candleSnapshot contract
+# ============================================================
+
+
+def test_public_snapshot_requests_exact_closed_candle_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module_name = "test_first_launch_public_runtime_entrypoint"
+    spec = importlib.util.spec_from_file_location(module_name, _SCRIPT)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+
+    snapshot_now = datetime(2026, 7, 14, 12, 7, 30, tzinfo=UTC)
+    clock_calls = 0
+    payloads: list[dict[str, object]] = []
+    response_bodies = iter((b"[]", b"[]", b"{}"))
+
+    def fixed_now() -> datetime:
+        nonlocal clock_calls
+        clock_calls += 1
+        return snapshot_now
+
+    class Response:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return self._body
+
+    def fake_urlopen(
+        request: object, *, timeout: float, context: object
+    ) -> Response:
+        assert timeout == 15.0
+        assert context is not None
+        data = request.data  # type: ignore[attr-defined]
+        assert isinstance(data, bytes)
+        payload = json.loads(data.decode("utf-8"))
+        assert isinstance(payload, dict)
+        payloads.append(payload)
+        return Response(next(response_bodies))
+
+    monkeypatch.setattr(module, "_utc_now", fixed_now)
+    monkeypatch.setattr(module, "urlopen", fake_urlopen)
+
+    assert module.recover_public_snapshot_default() == ("[]", "[]", "{}")
+    assert clock_calls == 1
+
+    now_ms = int(snapshot_now.timestamp() * 1000)
+    width_5m = 5 * 60_000
+    width_15m = 15 * 60_000
+    open_5m = (now_ms // width_5m) * width_5m
+    open_15m = (now_ms // width_15m) * width_15m
+
+    assert payloads == [
+        {
+            "type": "candleSnapshot",
+            "req": {
+                "coin": "ETH",
+                "interval": "5m",
+                "startTime": open_5m - (64 * width_5m),
+                "endTime": open_5m - 1,
+            },
+        },
+        {
+            "type": "candleSnapshot",
+            "req": {
+                "coin": "ETH",
+                "interval": "15m",
+                "startTime": open_15m - (32 * width_15m),
+                "endTime": open_15m - 1,
+            },
+        },
+        {"type": "metaAndAssetCtxs"},
+    ]
+
+
+def test_closed_candle_snapshot_request_rejects_non_utc_time() -> None:
+    module_name = "test_first_launch_public_runtime_entrypoint_non_utc"
+    spec = importlib.util.spec_from_file_location(module_name, _SCRIPT)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+
+    with pytest.raises(ValueError, match="UTC datetime"):
+        module._closed_candle_snapshot_request(
+            "5m", now=datetime(2026, 7, 14, 12, 0)
+        )

@@ -85,7 +85,7 @@ def _candle(
                 "s": "ETH",
                 "i": interval,
                 "t": actual_open_time,
-                "T": actual_open_time + width,
+                "T": actual_open_time + width - 1,
                 "o": str(open_value),
                 "h": str(high_value),
                 "l": str(low_value),
