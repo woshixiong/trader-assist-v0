@@ -590,6 +590,7 @@ class RestrictedPublicRuntime:
         update that did not produce a new closed 5m identity.
         """
         timestamp = self._validate_now(now)
+        frame_timestamp = timestamp
         if self._connection_id == "":
             raise RuntimeNotActivatedError("warmup has not begun")
         if self._shutdown:
@@ -601,10 +602,11 @@ class RestrictedPublicRuntime:
             frame = self._protocol.accept_frame(frame_text)
             if frame is None:
                 return None
+            frame_timestamp = _frame_received_at(frame)
             if frame.channel == "candle":
-                return self._accept_candle_frame(frame, timestamp)
+                return self._accept_candle_frame(frame, frame_timestamp)
             if frame.channel == "activeAssetCtx":
-                self._accept_context_frame(frame, timestamp)
+                self._accept_context_frame(frame, frame_timestamp)
                 return None
             return None
         except BaseException:
@@ -614,7 +616,7 @@ class RestrictedPublicRuntime:
             # re-raised.  is_ready must never be true when parsing failed.
             # Do not depend on the CLI frame loop to call mark_disconnected
             # after the fact; do not swallow the original exception.
-            self._withdraw_on_frame_rejection(timestamp)
+            self._withdraw_on_frame_rejection(frame_timestamp)
             raise
 
     def _accept_candle_frame(
@@ -1029,6 +1031,10 @@ class RestrictedPublicRuntime:
 
 def _frame_text(frame: AcceptedPublicFrame) -> str:
     return frame.raw_text
+
+
+def _frame_received_at(frame: AcceptedPublicFrame) -> datetime:
+    return frame.received_at
 
 
 def _frame_sequence(frame: AcceptedPublicFrame) -> int:
