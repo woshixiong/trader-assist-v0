@@ -11,8 +11,9 @@ Successor windows read the following order before acting:
 7. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_LOWEST_PRIORITY_BACKLOG_RULING_V1.md`
 8. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_FAILURE_AND_DEFERRED_WORK_V1.md`
 9. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_AUTOMATION_ABANDONMENT_RULING_V1.md`
-10. `governance/TRADER_ASSIST_ENGINEERING_WORKFLOW_V3_2026-07-22.md`
-11. current live GitHub and CI state
+10. `governance/FIRST_LAUNCH_EXTERNAL_CONTRACT_AND_PREDEPLOYMENT_VALIDATION_STANDARD_V1.md`
+11. `governance/TRADER_ASSIST_ENGINEERING_WORKFLOW_V3_2026-07-22.md`
+12. current live GitHub and CI state
 
 Live GitHub objects override stale chat snapshots and stale PR-body snapshots. Future windows
 must resolve live GitHub state before relying on historical text.
@@ -52,6 +53,26 @@ Use this preferred order:
 
 A normal repair plus one exceptional repair is the maximum for one bounded design route. If
 both fail, do not continue iterative patching. Reduce scope or start a clean replacement.
+
+## External-contract and predeployment rule
+
+Any change involving an external API, protocol field, timestamp boundary, canonical payload or
+hash, persistence authority, credential/runtime integration, notification delivery or another
+foundational shared contract must follow
+`FIRST_LAUNCH_EXTERNAL_CONTRACT_AND_PREDEPLOYMENT_VALIDATION_STANDARD_V1.md`.
+
+The mandatory sequence is:
+
+1. obtain bounded real external-contract evidence;
+2. derive one canonical realistic fixture;
+3. complete a repository-wide semantic impact map before repair commits;
+4. implement one coherent scope instead of serial speculative patches;
+5. run affected tests and the full local/static gate set before remote movement;
+6. require exact-head CI and independent review;
+7. complete a no-write supported-host rehearsal before accepted real operation.
+
+Focused tests, green CI or fail-closed deployment behavior do not independently waive another
+gate. Deployment must not be the first real end-to-end integration test.
 
 ## Current First Launch recovery boundary
 
