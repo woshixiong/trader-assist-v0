@@ -66,6 +66,8 @@ _DISPATCH_INTERVAL_SECONDS: Final[float] = 5.0
 _FRAME_BUFFER_SIZE: Final[int] = 1
 _MAX_CREDENTIAL_FILE_SIZE: Final[int] = 4096
 _CREDENTIAL_VERSION: Final[int] = 1
+_SYSTEMD_NOTIFICATION_CREDENTIAL_NAME: Final[str] = "notification.json"
+_POSIX_ACCESS_ACL_XATTR: Final[str] = "system.posix_acl_access"
 _CREDENTIAL_TOP_LEVEL_KEYS: Final[set[str]] = {
     "version",
     "webhook_url",
@@ -136,6 +138,34 @@ class CliArguments:
         )
 
 
+def _is_current_systemd_notification_credential(credential_path: Path) -> bool:
+    """Return whether the path is the current process's named systemd credential."""
+    raw_credentials_directory = os.environ.get("CREDENTIALS_DIRECTORY")
+    if not raw_credentials_directory:
+        return False
+    credentials_directory = Path(raw_credentials_directory)
+    if not credentials_directory.is_absolute():
+        return False
+    try:
+        credentials_directory = credentials_directory.resolve(strict=True)
+    except OSError:
+        return False
+    return (
+        credential_path.parent == credentials_directory
+        and credential_path.name == _SYSTEMD_NOTIFICATION_CREDENTIAL_NAME
+    )
+
+
+def _credential_has_posix_access_acl(credential_path: Path) -> bool:
+    """Return whether the non-symlink credential path has a POSIX access ACL."""
+    try:
+        return _POSIX_ACCESS_ACL_XATTR in os.listxattr(
+            credential_path, follow_symlinks=False
+        )
+    except (AttributeError, OSError, TypeError):
+        return False
+
+
 def _load_credential_file(
     credential_path: Path, timeout_seconds: float
 ) -> NotificationConfig:
@@ -186,11 +216,19 @@ def _load_credential_file(
         if not stat.S_ISREG(fd_stat.st_mode):
             raise CredentialFileError("credential file is not a regular file")
 
-        # Check permissions via fstat: group and other must not have any access
-        if fd_stat.st_mode & (
+        group_bits = fd_stat.st_mode & (
             stat.S_IRGRP | stat.S_IWGRP | stat.S_IXGRP
-            | stat.S_IROTH | stat.S_IWOTH | stat.S_IXOTH
-        ):
+        )
+        other_bits = fd_stat.st_mode & (
+            stat.S_IROTH | stat.S_IWOTH | stat.S_IXOTH
+        )
+        systemd_acl_mask_read = (
+            group_bits == stat.S_IRGRP
+            and other_bits == 0
+            and _is_current_systemd_notification_credential(credential_path)
+            and _credential_has_posix_access_acl(credential_path)
+        )
+        if other_bits or (group_bits and not systemd_acl_mask_read):
             raise CredentialFileError("credential file has group or other access bits")
 
         # Check owner via fstat: must be root or effective user
