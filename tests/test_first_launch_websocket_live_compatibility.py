@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Literal
 
 import pytest
@@ -10,7 +11,6 @@ import pytest
 from trader_assist_v0.runtime.first_launch_operator_assist import (
     REQUIRED_PUBLIC_SUBSCRIPTIONS,
     ProtocolAcknowledgementError,
-    PublicFrameError,
     PublicRuntimeProtocol,
     PublicSessionState,
 )
@@ -191,28 +191,39 @@ def test_active_protocol_ignores_open_candles_without_sequence_or_state_change()
     assert protocol.state is PublicSessionState.ACTIVE
 
 
-def test_malformed_open_candle_after_activation_remains_fail_closed() -> None:
-    protocol = _active_protocol(NOW)
+def test_malformed_open_candle_after_activation_withdraws_ready(
+    tmp_path: Path,
+) -> None:
+    runtime, store, _, _ = _make_runtime(tmp_path)
+    snapshot_path = tmp_path / "status.json"
+    try:
+        _warmup_to_active(runtime, now=NOW)
+        _recover_to_ready(runtime, now=NOW)
+        assert runtime.is_ready is True
 
-    with pytest.raises(PublicFrameError):
-        protocol.accept_frame(
-            _candle_frame(
-                NOW,
-                interval="5m",
-                open_candle=True,
-                volume="-1",
+        with pytest.raises(ValueError):
+            runtime.accept_public_frame(
+                frame_text=_candle_frame(
+                    NOW,
+                    interval="5m",
+                    open_candle=True,
+                    volume="-1",
+                ),
+                now=NOW,
             )
-        )
 
-    assert protocol.state is PublicSessionState.FAILED
-    assert protocol.receive_sequence == 3
+        rejected = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        assert runtime.is_ready is False
+        assert rejected["state"] == "NOT_READY"
+    finally:
+        store.close()
 
 
 def test_ready_runtime_ignores_open_candles_without_withdrawing_ready(
-    tmp_path: object,
+    tmp_path: Path,
 ) -> None:
-    runtime, store, _, _ = _make_runtime(tmp_path)  # type: ignore[arg-type]
-    snapshot_path = tmp_path / "status.json"  # type: ignore[operator]
+    runtime, store, _, _ = _make_runtime(tmp_path)
+    snapshot_path = tmp_path / "status.json"
     try:
         _warmup_to_active(runtime, now=NOW)
         _recover_to_ready(runtime, now=NOW)
