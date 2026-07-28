@@ -50,7 +50,7 @@ def _candle(interval: Literal["5m", "15m"], offset: int) -> Candle:
             "data": {
                 "s": "ETH",
                 "i": interval,
-                "t": close_time - width,
+                "t": close_time - width + 1,
                 "T": close_time,
                 "o": "100",
                 "h": "102",
@@ -134,7 +134,7 @@ def test_raw_evidence_constructor_and_factory_are_fail_closed() -> None:
 
 def test_lower_parsers_bind_raw_text_hash_and_operation() -> None:
     candle = (
-        '{"channel":"candle","data":{"s":"ETH","i":"5m","t":0,"T":300000,'
+        '{"channel":"candle","data":{"s":"ETH","i":"5m","t":0,"T":299999,'
         '"o":"1","h":"2","l":"1","c":"2","v":"3","n":0}}'
     )
     evidence = _evidence(candle)
@@ -312,7 +312,7 @@ def test_direct_or_modified_normalized_objects_are_not_ingestable() -> None:
 def test_primary_ingest_and_reconnect_paths_retain_evidence_validation() -> None:
     raw = (
         '{"channel":"candle","data":{"s":"ETH","i":"5m","t":0,'
-        '"T":300000,"o":"1","h":"2","l":"1","c":"2","v":"3","n":0}}'
+        '"T":299999,"o":"1","h":"2","l":"1","c":"2","v":"3","n":0}}'
     )
     data = EthMarketData()
     data.begin_connection()
@@ -349,7 +349,7 @@ def test_primary_ingest_and_reconnect_paths_retain_evidence_validation() -> None
 def test_live_and_replay_normalization_are_identical() -> None:
     raw = (
         '{"channel":"candle","data":{"s":"ETH","i":"5m","t":1000,'
-        '"T":301000,"o":"1","h":"2","l":"1","c":"2","v":"3","n":0}}'
+        '"T":300999,"o":"1","h":"2","l":"1","c":"2","v":"3","n":0}}'
     )
     live_data = EthMarketData()
     replay_data = EthMarketData()
@@ -408,7 +408,7 @@ def test_closed_websocket_and_snapshot_candles_require_valid_trade_counts(
     candle = {
         "s": "ETH",
         "i": "5m",
-        "t": close_time - 300_000,
+        "t": close_time - 300_000 + 1,
         "T": close_time,
         "o": "1",
         "h": "2",
@@ -442,7 +442,7 @@ def test_invalid_or_missing_trade_count_is_rejected_before_issuance(
     candle: dict[str, object] = {
         "s": "ETH",
         "i": "5m",
-        "t": close_time - 300_000,
+        "t": close_time - 300_000 + 1,
         "T": close_time,
         "o": "1",
         "h": "2",
@@ -492,7 +492,7 @@ def test_open_websocket_candle_raises_control_flow_exception_and_ingest_ignores_
     candle = {
         "s": "ETH",
         "i": "5m",
-        "t": close_time - 300_000,
+        "t": close_time - 300_000 + 1,
         "T": close_time,
         "o": "1",
         "h": "2",
@@ -551,7 +551,7 @@ def test_snapshot_order_and_interval_are_fail_closed_without_repair() -> None:
     first = {
         "s": "ETH",
         "i": "5m",
-        "t": close_time - 600_000,
+        "t": close_time - 600_000 + 1,
         "T": close_time - 300_000,
         "o": "1",
         "h": "2",
@@ -560,7 +560,7 @@ def test_snapshot_order_and_interval_are_fail_closed_without_repair() -> None:
         "v": "3",
         "n": 0,
     }
-    second = {**first, "t": close_time - 300_000, "T": close_time}
+    second = {**first, "t": close_time - 300_000 + 1, "T": close_time}
     ordered = json.dumps([first, second], separators=(",", ":"))
     unsorted = json.dumps([second, first], separators=(",", ":"))
     wrong_interval = json.dumps([{**first, "i": "15m"}], separators=(",", ":"))
@@ -591,7 +591,7 @@ def _snapshot_candle(close_time: int, *, n: object = 0, interval: str = "5m") ->
     return {
         "s": "ETH",
         "i": interval,
-        "t": close_time - width,
+        "t": close_time - width + 1,
         "T": close_time,
         "o": "1",
         "h": "2",
@@ -776,3 +776,49 @@ def test_existing_outcome_reader_fails_closed_on_open_candle_evidence() -> None:
     )
     with pytest.raises(OutcomeError, match="CANDLE_EVIDENCE_INVALID"):
         read_candle_evidence(payload)
+
+
+def test_hyperliquid_inclusive_close_boundary_is_required() -> None:
+    for interval, width in (("5m", 300_000), ("15m", 900_000)):
+        good_raw = json.dumps(
+            {
+                "channel": "candle",
+                "data": {
+                    "s": "ETH",
+                    "i": interval,
+                    "t": 0,
+                    "T": width - 1,
+                    "o": "1",
+                    "h": "2",
+                    "l": "1",
+                    "c": "2",
+                    "v": "3",
+                    "n": 0,
+                },
+            },
+            separators=(",", ":"),
+        )
+        candle = candle_from_websocket(good_raw, _evidence(good_raw))
+        assert candle.open_time_ms == 0
+        assert candle.close_time_ms == width - 1
+
+        legacy_raw = json.dumps(
+            {
+                "channel": "candle",
+                "data": {
+                    "s": "ETH",
+                    "i": interval,
+                    "t": 0,
+                    "T": width,
+                    "o": "1",
+                    "h": "2",
+                    "l": "1",
+                    "c": "2",
+                    "v": "3",
+                    "n": 0,
+                },
+            },
+            separators=(",", ":"),
+        )
+        with pytest.raises(MarketDataError, match="interval boundary"):
+            candle_from_websocket(legacy_raw, _evidence(legacy_raw))

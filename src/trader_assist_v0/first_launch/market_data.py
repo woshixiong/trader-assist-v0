@@ -538,7 +538,7 @@ def _candle_from_public_object(
     open_time = _integer(data.get("t"), "candle open time")
     close_time = _integer(data.get("T"), "candle close time")
     _integer(data.get("n"), "candle trade count")
-    if close_time - open_time != INTERVAL_MILLISECONDS[interval]:
+    if close_time - open_time != INTERVAL_MILLISECONDS[interval] - 1:
         raise MarketDataError("candle interval boundary is invalid")
     candle = Candle(
         interval=interval,
