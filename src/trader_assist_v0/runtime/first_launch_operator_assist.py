@@ -14,7 +14,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Any, Final, Literal, cast
 
@@ -37,6 +37,13 @@ MonotonicClock = Callable[[], float]
 
 _EMISSION_HASH_DOMAIN: Final = b"trader-assist-v0/first-launch/lifecycle-emission/v1"
 _SETUP_ID_RE: Final = re.compile(r"^[0-9a-f]{64}$")
+_CANDLE_INTERVAL_MILLISECONDS: Final[dict[str, int]] = {
+    "5m": 5 * 60_000,
+    "15m": 15 * 60_000,
+}
+_CANDLE_REQUIRED_KEYS: Final[frozenset[str]] = frozenset(
+    {"t", "T", "s", "i", "o", "h", "l", "c", "v", "n"}
+)
 
 
 class OperatorAssistRuntimeError(RuntimeError):
@@ -167,6 +174,94 @@ def _finite_positive(value: object) -> float:
     if not math.isfinite(result) or result <= 0:
         raise ValueError("timeout must be a finite positive number")
     return result
+
+
+def _wire_decimal(
+    value: object,
+    name: str,
+    *,
+    positive: bool = False,
+    non_negative: bool = False,
+) -> Decimal:
+    if type(value) is not str or not value or value.strip() != value:
+        raise ValueError(f"{name} must be a base-10 decimal string")
+    if "e" in value.lower():
+        raise ValueError(f"{name} must not use exponent notation")
+    try:
+        result = Decimal(value)
+    except InvalidOperation as exc:
+        raise ValueError(f"{name} is not decimal") from exc
+    if not result.is_finite():
+        raise ValueError(f"{name} must be finite")
+    if positive and result <= 0:
+        raise ValueError(f"{name} must be positive")
+    if non_negative and result < 0:
+        raise ValueError(f"{name} must be non-negative")
+    return result
+
+
+def _wire_non_negative_integer(value: object, name: str) -> int:
+    if type(value) is not int or value < 0:
+        raise ValueError(f"{name} must be a non-negative integer")
+    return value
+
+
+def _validate_candle_payload(payload: dict[str, object]) -> int:
+    if not _CANDLE_REQUIRED_KEYS.issubset(payload):
+        raise ValueError("candle frame is incomplete")
+    if payload.get("s") != "ETH":
+        raise ValueError("candle identity is invalid")
+    interval = payload.get("i")
+    if type(interval) is not str or interval not in _CANDLE_INTERVAL_MILLISECONDS:
+        raise ValueError("candle interval is invalid")
+    open_time = _wire_non_negative_integer(payload.get("t"), "candle open time")
+    close_time = _wire_non_negative_integer(payload.get("T"), "candle close time")
+    _wire_non_negative_integer(payload.get("n"), "candle trade count")
+    if close_time - open_time != _CANDLE_INTERVAL_MILLISECONDS[interval] - 1:
+        raise ValueError("candle interval boundary is invalid")
+    open_price = _wire_decimal(payload.get("o"), "open", positive=True)
+    high = _wire_decimal(payload.get("h"), "high", positive=True)
+    low = _wire_decimal(payload.get("l"), "low", positive=True)
+    close = _wire_decimal(payload.get("c"), "close", positive=True)
+    _wire_decimal(payload.get("v"), "volume", non_negative=True)
+    if low > min(open_price, close) or high < max(open_price, close):
+        raise ValueError("candle OHLC range is invalid")
+    return close_time
+
+
+def _validate_context_payload(payload: dict[str, object]) -> None:
+    if payload.get("coin") != "ETH":
+        raise ValueError("active asset identity is invalid")
+    nested = payload.get("ctx")
+    context = cast(dict[str, object], nested) if type(nested) is dict else payload
+    _wire_decimal(context.get("markPx"), "markPx", positive=True)
+    mid = context.get("midPx")
+    if mid is not None:
+        _wire_decimal(mid, "midPx", positive=True)
+    _wire_decimal(context.get("openInterest"), "openInterest", non_negative=True)
+    _wire_decimal(context.get("funding"), "funding")
+    source_time = context.get("time")
+    if source_time is not None:
+        _wire_non_negative_integer(source_time, "context time")
+
+
+def _public_identity_parts(
+    value: object,
+) -> tuple[Literal["candle", "activeAssetCtx"], dict[str, object]]:
+    if type(value) is not dict or set(value) != {"channel", "data"}:
+        raise ValueError("public frame shape is invalid")
+    document = cast(dict[str, object], value)
+    channel = document["channel"]
+    data = document["data"]
+    if channel not in {"candle", "activeAssetCtx"} or type(data) is not dict:
+        raise ValueError("public frame channel is invalid")
+    payload = cast(dict[str, object], data)
+    if channel == "candle":
+        if payload.get("s") != "ETH" or payload.get("i") not in {"5m", "15m"}:
+            raise ValueError("candle identity is invalid")
+    elif payload.get("coin") != "ETH":
+        raise ValueError("active asset identity is invalid")
+    return cast(Literal["candle", "activeAssetCtx"], channel), payload
 
 
 @dataclass
@@ -305,43 +400,65 @@ class PublicRuntimeProtocol:
             self._failed(error, "public frame is malformed")
             raise AssertionError("unreachable") from exc
         if acknowledgement_phase:
+            if (
+                type(value) is dict
+                and set(value) == {"channel", "data"}
+                and value.get("channel") == "subscriptionResponse"
+            ):
+                try:
+                    identity = self._acknowledgement_identity(value)
+                except ValueError as exc:
+                    self._failed(ProtocolAcknowledgementError, str(exc))
+                    raise AssertionError("unreachable") from exc
+                if identity in self._acknowledged:
+                    self._failed(ProtocolAcknowledgementError, "duplicate acknowledgement")
+                self._receive_sequence += 1
+                self._acknowledged.add(identity)
+                if len(self._acknowledged) == len(REQUIRED_PUBLIC_SUBSCRIPTIONS):
+                    self._state = PublicSessionState.ACTIVE
+                return None
             try:
-                identity = self._acknowledgement_identity(value)
+                channel, payload = _public_identity_parts(value)
+                if channel == "candle":
+                    _validate_candle_payload(payload)
+                else:
+                    _validate_context_payload(payload)
             except ValueError as exc:
                 self._failed(ProtocolAcknowledgementError, str(exc))
                 raise AssertionError("unreachable") from exc
-            if identity in self._acknowledged:
-                self._failed(ProtocolAcknowledgementError, "duplicate acknowledgement")
-            self._receive_sequence += 1
-            self._acknowledged.add(identity)
-            if len(self._acknowledged) == len(REQUIRED_PUBLIC_SUBSCRIPTIONS):
-                self._state = PublicSessionState.ACTIVE
+            # Hyperliquid may interleave authorized public data with subscription
+            # responses. Before all acknowledgements arrive, validate and ignore
+            # those frames without issuing sequence or market-data authority.
             return None
-        if type(value) is not dict or set(value) != {"channel", "data"}:
-            self._failed(PublicFrameError, "public frame shape is invalid")
-        document = cast(dict[str, object], value)
-        channel = document["channel"]
-        data = document["data"]
-        if channel not in {"candle", "activeAssetCtx"} or type(data) is not dict:
-            self._failed(PublicFrameError, "public frame channel is invalid")
-        payload = cast(dict[str, object], data)
-        if channel == "candle":
-            if payload.get("s") != "ETH" or payload.get("i") not in {"5m", "15m"}:
-                self._failed(PublicFrameError, "candle identity is invalid")
-        elif payload.get("coin") != "ETH":
-            self._failed(PublicFrameError, "active asset identity is invalid")
+        try:
+            channel, payload = _public_identity_parts(value)
+        except ValueError as exc:
+            self._failed(PublicFrameError, str(exc))
+            raise AssertionError("unreachable") from exc
         try:
             received_at = _exact_utc(self.utc_now(), "UTC clock is invalid")
         except ValueError as exc:
             self._failed(PublicFrameError, str(exc))
             raise AssertionError("unreachable") from exc
+        if channel == "candle":
+            try:
+                close_time = _validate_candle_payload(payload)
+            except ValueError:
+                # Preserve the established protocol/runtime layering: malformed
+                # authorized-identity frames continue to the market-data parser,
+                # which withdraws READY and fails closed with its original error.
+                close_time = None
+            if close_time is not None and close_time >= int(received_at.timestamp() * 1000):
+                # A structurally valid current candle is ordinary non-authoritative
+                # transport traffic until its inclusive close timestamp has passed.
+                return None
         self._receive_sequence += 1
         return AcceptedPublicFrame(
             frame,
             received_at,
             self._receive_sequence,
             self.connection_id,
-            cast(Literal["candle", "activeAssetCtx"], channel),
+            channel,
         )
 
     def check_timeout(self) -> None:
