@@ -137,6 +137,7 @@ class AcceptedPublicFrame:
     receive_sequence: int
     connection_id: str
     channel: Literal["candle", "activeAssetCtx"]
+    authoritative: bool = True
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -452,6 +453,18 @@ class PublicRuntimeProtocol:
                 # A structurally valid current candle is ordinary non-authoritative
                 # transport traffic until its inclusive close timestamp has passed.
                 return None
+            if close_time is not None:
+                # A closed candle is only a refresh trigger until the runtime
+                # confirms its canonical content through bounded public HTTP
+                # recovery.  It intentionally consumes no authority sequence.
+                return AcceptedPublicFrame(
+                    frame,
+                    received_at,
+                    self._receive_sequence,
+                    self.connection_id,
+                    channel,
+                    authoritative=False,
+                )
         self._receive_sequence += 1
         return AcceptedPublicFrame(
             frame,
@@ -460,6 +473,13 @@ class PublicRuntimeProtocol:
             self.connection_id,
             channel,
         )
+
+    def allocate_authoritative_sequence(self) -> int:
+        """Allocate one sequence only when a frame has become authority."""
+        if self._state is not PublicSessionState.ACTIVE:
+            raise SessionStateError("session is not active")
+        self._receive_sequence += 1
+        return self._receive_sequence
 
     def check_timeout(self) -> None:
         self._enforce_timeout()

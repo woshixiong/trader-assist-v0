@@ -42,20 +42,22 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Final, Literal
+from typing import Final, Literal, cast
 from uuid import uuid4
 
 from trader_assist_v0.contracts.common import canonical_json_bytes
 from trader_assist_v0.first_launch.configuration import RiskConfiguration
 from trader_assist_v0.first_launch.market_data import (
+    Candle,
     DataQualityState,
     EthMarketData,
+    MarketDataError,
     StrategySnapshot,
-    candle_from_websocket,
     candles_from_snapshot,
     context_from_websocket,
     evidence_from_raw,
     metadata_from_info,
+    websocket_candle_identity,
 )
 from trader_assist_v0.first_launch.operator_review import (
     build_operator_card,
@@ -126,6 +128,18 @@ class HealthTransitionViolation(RestrictedRuntimeError):
 
 class StatusSnapshotPublicationError(RestrictedRuntimeError):
     """The fail-closed local status snapshot could not be published."""
+
+
+class RuntimeRecoveryRequired(RestrictedRuntimeError):
+    """The transport must close and recover rather than discard more frames."""
+
+
+class CandleConflictRecoveryRequired(RuntimeRecoveryRequired):
+    """A finalized candle identity changed and requires a fresh recovery."""
+
+
+class CandleConfirmationRecoveryRequired(RuntimeRecoveryRequired):
+    """A closed-candle HTTP confirmation was unavailable or unstable."""
 
 
 class RuntimeHealthState(StrEnum):
@@ -278,6 +292,14 @@ class EvaluationOutcome:
     publication_bundle: PublicationBundleRecord | None
     notification_result: NotificationDeliveryResult | None
     skipped_reason: str
+
+
+@dataclass(frozen=True)
+class CandleRefreshTrigger:
+    """A non-authoritative closed WebSocket identity awaiting HTTP confirmation."""
+
+    frame: AcceptedPublicFrame
+    identity: tuple[str, str, int]
 
 
 @dataclass
@@ -576,12 +598,19 @@ class RestrictedPublicRuntime:
             raw_15m, evidence_15m, requested_interval="15m"
         )
         metadata = metadata_from_info(raw_metadata, evidence_metadata)
-        self._market_data.accept_metadata(metadata)
-        self._market_data.recover_snapshot("5m", candles_5m)
-        self._market_data.recover_snapshot("15m", candles_15m)
+        try:
+            self._market_data.accept_metadata(metadata)
+            self._market_data.recover_snapshot("5m", candles_5m)
+            self._market_data.recover_snapshot("15m", candles_15m)
+        except Exception as exc:
+            if str(exc) == "CANDLE_CONFLICT":
+                self._raise_candle_conflict(now=timestamp)
+            raise
         self._try_promote_to_ready(now=timestamp)
 
-    def accept_public_frame(self, *, frame_text: str, now: datetime) -> EvaluationOutcome | None:
+    def accept_public_frame(
+        self, *, frame_text: str, now: datetime
+    ) -> CandleRefreshTrigger | EvaluationOutcome | None:
         """Accept one public WebSocket frame and drive one evaluation cycle.
 
         Returns an ``EvaluationOutcome`` if the frame produced a new triggered
@@ -595,6 +624,8 @@ class RestrictedPublicRuntime:
             raise RuntimeNotActivatedError("warmup has not begun")
         if self._shutdown:
             raise RuntimeShutdownError("runtime has been shut down")
+        if self._health_state is RuntimeHealthState.NOT_READY:
+            raise RuntimeRecoveryRequired("runtime requires transport recovery")
         if self._health_state in _BLOCKING_HEALTH_STATES:
             return None
         try:
@@ -621,7 +652,7 @@ class RestrictedPublicRuntime:
 
     def _accept_candle_frame(
         self, frame: AcceptedPublicFrame, timestamp: datetime
-    ) -> EvaluationOutcome | None:
+    ) -> CandleRefreshTrigger:
         frame_text = _frame_text(frame)
         evidence = evidence_from_raw(
             frame_text,
@@ -631,19 +662,88 @@ class RestrictedPublicRuntime:
             connection_id=_frame_connection_id(frame),
             source_id=_SOURCE_ID_WS,
         )
-        candle = candle_from_websocket(frame_text, evidence)
-        result = self._market_data.accept_candle(candle)
+        return CandleRefreshTrigger(
+            frame=frame,
+            identity=websocket_candle_identity(frame_text, evidence),
+        )
+
+    def confirm_candle_refresh(
+        self,
+        *,
+        trigger: CandleRefreshTrigger,
+        raw_first: str,
+        raw_second: str,
+        now: datetime,
+    ) -> EvaluationOutcome | None:
+        """Issue authority only after two bounded HTTP snapshots agree exactly."""
+        timestamp = self._validate_now(now)
+        if self._shutdown:
+            raise RuntimeShutdownError("runtime has been shut down")
+        if self._health_state in _BLOCKING_HEALTH_STATES:
+            raise RuntimeRecoveryRequired("runtime requires transport recovery")
+        if type(trigger) is not CandleRefreshTrigger or trigger.frame.authoritative:
+            raise RestrictedRuntimeError("candle refresh trigger is invalid")
+        if trigger.frame.connection_id != self._connection_id:
+            raise RuntimeRecoveryRequired("candle refresh belongs to a stale connection")
+        try:
+            first = self._snapshot_candle_for_identity(
+                raw_text=raw_first,
+                identity=trigger.identity,
+                received_at=timestamp,
+                receive_sequence=self._protocol.receive_sequence,
+            )
+            second = self._snapshot_candle_for_identity(
+                raw_text=raw_second,
+                identity=trigger.identity,
+                received_at=timestamp,
+                receive_sequence=self._protocol.receive_sequence,
+            )
+            if first.canonical_hash != second.canonical_hash:
+                raise MarketDataError("CANDLE_CONFIRMATION_UNSTABLE")
+            existing = self._market_data.candles[second.interval].get(second.open_time_ms)
+            if existing is not None:
+                if existing.canonical_hash != second.canonical_hash:
+                    raise MarketDataError("CANDLE_CONFLICT")
+                return None
+            confirmed = self._snapshot_candle_for_identity(
+                raw_text=raw_second,
+                identity=trigger.identity,
+                received_at=timestamp,
+                receive_sequence=self._protocol.allocate_authoritative_sequence(),
+            )
+            result = self._market_data.accept_candle(confirmed)
+        except Exception as exc:
+            if str(exc) == "CANDLE_CONFLICT":
+                self._raise_candle_conflict(now=timestamp)
+            self._fail_closed("CANDLE_CONFIRMATION_FAILED", now=timestamp)
+            raise CandleConfirmationRecoveryRequired("candle HTTP confirmation failed") from exc
         if result == "CONFLICT":
-            self._fail_closed("CANDLE_CONFLICT", now=timestamp)
-            return None
-        if result == "DUPLICATE":
-            return None
-        if candle.interval != "5m":
-            return None
-        if not self.is_ready:
-            self._try_promote_to_ready(now=timestamp)
+            self._raise_candle_conflict(now=timestamp)
+        if result == "DUPLICATE" or confirmed.interval != "5m" or not self.is_ready:
             return None
         return self._evaluate_new_closed_5m(timestamp)
+
+    def _snapshot_candle_for_identity(
+        self,
+        *,
+        raw_text: str,
+        identity: tuple[str, str, int],
+        received_at: datetime,
+        receive_sequence: int,
+    ) -> Candle:
+        interval = cast(Literal["5m", "15m"], identity[1])
+        evidence = evidence_from_raw(
+            raw_text,
+            operation=_HTTP_OPERATION_CANDLE_SNAPSHOT,
+            received_at=received_at,
+            receive_sequence=receive_sequence,
+            connection_id=self._connection_id,
+            source_id=_SOURCE_ID_HTTP,
+        )
+        for candle in candles_from_snapshot(raw_text, evidence, requested_interval=interval):
+            if candle.identity == identity:
+                return candle
+        raise MarketDataError("CANDLE_CONFIRMATION_MISSING")
 
     def _accept_context_frame(
         self, frame: AcceptedPublicFrame, timestamp: datetime
@@ -958,15 +1058,15 @@ class RestrictedPublicRuntime:
     def _fail_closed(self, reason: str, *, now: datetime) -> None:
         if self._shutdown:
             return
-        if self._health_state not in (
-            RuntimeHealthState.READY,
-            RuntimeHealthState.WARMING,
-            RuntimeHealthState.DEGRADED,
-        ):
+        if self._health_state in (RuntimeHealthState.STOPPING, RuntimeHealthState.STOPPED):
             return
         self._transition_health(
             to=RuntimeHealthState.NOT_READY, reason=reason, now=now
         )
+
+    def _raise_candle_conflict(self, *, now: datetime) -> None:
+        self._fail_closed("CANDLE_CONFLICT", now=now)
+        raise CandleConflictRecoveryRequired("CANDLE_CONFLICT")
 
     def _withdraw_on_frame_rejection(self, now: datetime) -> None:
         """GA-02: atomically withdraw to a blocking non-ready state on frame rejection.

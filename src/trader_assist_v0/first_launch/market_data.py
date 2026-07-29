@@ -608,6 +608,19 @@ def candle_from_websocket(raw_text: str, evidence: RawEvidence) -> Candle:
     return _issue_closed_candle(_candle_from_public_object(message["data"], evidence=evidence))
 
 
+def websocket_candle_identity(raw_text: str, evidence: RawEvidence) -> tuple[str, str, int]:
+    """Validate a WebSocket candle only far enough to obtain its refresh identity.
+
+    This deliberately does not issue a ``Candle``.  A closed WebSocket frame is
+    a bounded HTTP refresh trigger, not market-data authority.
+    """
+    _bound_evidence(raw_text, evidence, "WebSocket")
+    message = _strict_object(raw_text)
+    if message.get("channel") != "candle" or type(message.get("data")) is not dict:
+        raise MarketDataError("expected a candle WebSocket envelope")
+    return _candle_from_public_object(message["data"], evidence=evidence).identity
+
+
 def context_from_websocket(raw_text: str, evidence: RawEvidence) -> ActiveAssetContext:
     _bound_evidence(raw_text, evidence, "WebSocket")
     message = _strict_object(raw_text)
@@ -697,7 +710,8 @@ class EthMarketData:
         if any(_validated_candle(candle).interval != interval for candle in recovered):
             raise MarketDataError("snapshot interval does not match its authority")
         for candle in recovered:
-            self.accept_candle(candle)
+            if self.accept_candle(candle) == "CONFLICT":
+                raise MarketDataError("CANDLE_CONFLICT")
 
     def accept_context(self, context: ActiveAssetContext) -> None:
         context = _validated_context(context)

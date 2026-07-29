@@ -20,6 +20,7 @@ from trader_assist_v0.runtime.first_launch_operator_assist import (
     PublicRuntimeProtocol,
     PublicSessionState,
 )
+from trader_assist_v0.runtime.first_launch_public_runtime import CandleRefreshTrigger
 
 
 def _acknowledgement(subscription: object) -> str:
@@ -213,7 +214,9 @@ def test_active_protocol_ignores_open_candles_without_sequence_or_state_change()
     )
     assert accepted is not None
     assert accepted.channel == "candle"
-    assert accepted.receive_sequence == 4
+    assert accepted.authoritative is False
+    assert accepted.receive_sequence == 3
+    assert protocol.allocate_authoritative_sequence() == 4
     assert protocol.state is PublicSessionState.ACTIVE
 
 
@@ -301,9 +304,18 @@ def test_runtime_uses_protocol_receipt_time_at_millisecond_close_boundary(
         clock["now"] = protocol_received_at
 
         runtime.accept_public_frame(frame_text=_context_frame(), now=caller_now)
-        runtime.accept_public_frame(
-            frame_text=_candle_frame_at_close(open_time_ms=next_open_time_ms),
+        frame_text = _candle_frame_at_close(open_time_ms=next_open_time_ms)
+        trigger = runtime.accept_public_frame(
+            frame_text=frame_text,
             now=caller_now,
+        )
+        assert type(trigger) is CandleRefreshTrigger
+        snapshot = json.dumps([json.loads(frame_text)["data"]], separators=(",", ":"))
+        runtime.confirm_candle_refresh(
+            trigger=trigger,
+            raw_first=snapshot,
+            raw_second=snapshot,
+            now=protocol_received_at,
         )
 
         after = json.loads(snapshot_path.read_text(encoding="utf-8"))

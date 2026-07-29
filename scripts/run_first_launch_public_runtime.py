@@ -49,6 +49,9 @@ from trader_assist_v0.runtime.first_launch_notification import (
     NotificationDispatcher,
 )
 from trader_assist_v0.runtime.first_launch_public_runtime import (
+    CandleConfirmationRecoveryRequired,
+    CandleConflictRecoveryRequired,
+    CandleRefreshTrigger,
     RestrictedPublicRuntime,
     RestrictedPublicRuntimeConfig,
     StatusSnapshotPublicationError,
@@ -68,6 +71,7 @@ _CANDLE_INTERVAL_MILLISECONDS: Final[dict[str, int]] = {
 }
 _CANDLE_SNAPSHOT_LIMITS: Final[dict[str, int]] = {"5m": 64, "15m": 32}
 _DISPATCH_INTERVAL_SECONDS: Final[float] = 5.0
+_CANDLE_CONFIRMATION_SETTLE_SECONDS: Final[float] = 1.0
 _FRAME_BUFFER_SIZE: Final[int] = 1
 _MAX_CREDENTIAL_FILE_SIZE: Final[int] = 4096
 _CREDENTIAL_VERSION: Final[int] = 1
@@ -535,6 +539,7 @@ async def _run_transport(
     first_connection = True
     while not shutdown_event.is_set():
         connection_id = f"conn-{int(_utc_now().timestamp() * 1000)}"
+        reconnecting = not first_connection
         try:
             requests: tuple[str, str, str] | None
             if first_connection:
@@ -543,6 +548,7 @@ async def _run_transport(
                 )
                 first_connection = False
             else:
+                status("EVENT reconnect-attempt")
                 requests = runtime.begin_reconnect(
                     connection_id=connection_id, now=_utc_now()
                 )
@@ -583,6 +589,8 @@ async def _run_transport(
                 await _frame_loop(
                     runtime=runtime,
                     websocket=websocket,
+                    recover_snapshot=recover_snapshot,
+                    reconnecting=reconnecting,
                     shutdown_event=shutdown_event,
                     status=status,
                 )
@@ -597,8 +605,15 @@ async def _run_transport(
         except StatusSnapshotPublicationError:
             status("ERROR status snapshot publication failed")
             return 1
+        except CandleConflictRecoveryRequired:
+            status("EVENT finalized-candle-conflict")
+            runtime.mark_disconnected(now=_utc_now(), reason="candle-conflict")
+        except CandleConfirmationRecoveryRequired:
+            status("EVENT candle-confirmation-failed")
+            runtime.mark_disconnected(now=_utc_now(), reason="candle-confirmation-failed")
         except Exception as exc:
             status(f"ERROR websocket: {type(exc).__name__}")
+            status("EVENT disconnect")
             runtime.mark_disconnected(now=_utc_now(), reason=f"websocket-{type(exc).__name__}")
         if not shutdown_event.is_set():
             await _bounded_reconnect_wait(runtime, shutdown_event)
@@ -638,12 +653,15 @@ async def _frame_loop(
     *,
     runtime: RestrictedPublicRuntime,
     websocket: WebSocketConnection,
+    recover_snapshot: HttpSnapshotRecovery,
+    reconnecting: bool,
     shutdown_event: asyncio.Event,
     status: Callable[[str], None],
 ) -> None:
     dispatch_task = asyncio.create_task(
         _dispatch_loop(runtime=runtime, shutdown_event=shutdown_event)
     )
+    ready_announced = False
     try:
         while not shutdown_event.is_set():
             try:
@@ -655,11 +673,37 @@ async def _frame_loop(
             if not frame:
                 continue
             try:
-                runtime.accept_public_frame(frame_text=frame, now=_utc_now())
+                result = runtime.accept_public_frame(frame_text=frame, now=_utc_now())
+                if type(result) is CandleRefreshTrigger:
+                    status(
+                        "EVENT candle-refresh-trigger "
+                        f"interval={result.identity[1]} open_time_ms={result.identity[2]}"
+                    )
+                    raw_5m_first, raw_15m_first, _ = recover_snapshot()
+                    await asyncio.sleep(_CANDLE_CONFIRMATION_SETTLE_SECONDS)
+                    raw_5m_second, raw_15m_second, _ = recover_snapshot()
+                    raw_first = raw_5m_first if result.identity[1] == "5m" else raw_15m_first
+                    raw_second = raw_5m_second if result.identity[1] == "5m" else raw_15m_second
+                    runtime.confirm_candle_refresh(
+                        trigger=result,
+                        raw_first=raw_first,
+                        raw_second=raw_second,
+                        now=_utc_now(),
+                    )
+                    status(
+                        "EVENT candle-finalized "
+                        f"interval={result.identity[1]} open_time_ms={result.identity[2]}"
+                    )
+                if reconnecting and runtime.is_ready and not ready_announced:
+                    status("EVENT reconnect-success")
+                    ready_announced = True
             except StatusSnapshotPublicationError:
+                raise
+            except (CandleConflictRecoveryRequired, CandleConfirmationRecoveryRequired):
                 raise
             except Exception as exc:
                 status(f"ERROR accept_public_frame: {type(exc).__name__}")
+                status("EVENT disconnect")
                 runtime.mark_disconnected(now=_utc_now(), reason="frame-error")
                 return
     finally:
@@ -787,7 +831,7 @@ def main(argv: tuple[str, ...] | None = None) -> int:
             args=args,
             recover_snapshot=recover_public_snapshot_default,
             websocket_factory=_default_websocket_factory,
-            status=lambda message: print(message),
+            status=lambda message: print(message, flush=True),
         )
 
     try:

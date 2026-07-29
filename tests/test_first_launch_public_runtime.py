@@ -37,10 +37,13 @@ from trader_assist_v0.runtime.first_launch_operator_assist import (
     OperatorAssistRuntimeError,
 )
 from trader_assist_v0.runtime.first_launch_public_runtime import (
+    CandleConflictRecoveryRequired,
+    CandleRefreshTrigger,
     RestrictedPublicRuntime,
     RestrictedPublicRuntimeConfig,
     RuntimeHealthState,
     RuntimeNotActivatedError,
+    RuntimeRecoveryRequired,
     RuntimeShutdownError,
     StatusSnapshotPublicationError,
 )
@@ -1102,9 +1105,8 @@ def test_ga02_interval_mismatch_withdraws_ready(tmp_path: Path) -> None:
 def test_ga02_publication_blocked_during_disconnect(tmp_path: Path) -> None:
     """GA-02: after a malformed frame withdraws READY, no further frame can produce a publication.
 
-    The runtime stays in a blocking non-ready state. ``accept_public_frame``
-    returns ``None`` for any subsequent frame because the health state is in
-    ``_BLOCKING_HEALTH_STATES``.
+    The runtime raises a transport-visible recovery requirement instead of
+    silently discarding subsequent recovery frames while still active.
     """
     runtime, store, _, _ = _establish_ready(tmp_path)
     try:
@@ -1112,12 +1114,81 @@ def test_ga02_publication_blocked_during_disconnect(tmp_path: Path) -> None:
         with pytest.raises((ValueError, OperatorAssistRuntimeError)):
             runtime.accept_public_frame(frame_text="{not json", now=NOW)
         assert runtime.is_ready is False
-        # A subsequent valid context frame must not produce an evaluation
-        result = runtime.accept_public_frame(frame_text=_context_frame("101"), now=NOW)
-        assert result is None
+        # A subsequent valid context frame must force transport recovery.
+        with pytest.raises(RuntimeRecoveryRequired):
+            runtime.accept_public_frame(frame_text=_context_frame("101"), now=NOW)
         pubs, outbox = _row_counts(store)
         assert pubs == 0
         assert outbox == 0
+    finally:
+        store.close()
+
+
+def _closed_candle_frame(candle: dict[str, object]) -> str:
+    return json.dumps({"channel": "candle", "data": candle}, separators=(",", ":"))
+
+
+def test_route_b_confirms_closed_candle_once_after_two_stable_snapshots(tmp_path: Path) -> None:
+    runtime, store, _, _ = _establish_ready(tmp_path)
+    later = NOW + timedelta(minutes=5)
+    runtime.utc_now = lambda: later
+    runtime._protocol.utc_now = runtime.utc_now
+    try:
+        target = _candle_obj(64)
+        frame = _closed_candle_frame(target)
+        before_sequence = runtime._protocol.receive_sequence
+        trigger = runtime.accept_public_frame(frame_text=frame, now=later)
+        assert type(trigger) is CandleRefreshTrigger
+        assert runtime._protocol.receive_sequence == before_sequence
+        assert target["t"] not in runtime._market_data.candles["5m"]
+        pubs_before, outbox_before = _row_counts(store)
+
+        stable = _snapshot_json([_candle_obj(index) for index in range(1, 65)])
+        outcome = runtime.confirm_candle_refresh(
+            trigger=trigger, raw_first=stable, raw_second=stable, now=later
+        )
+        assert outcome is not None
+        assert runtime._protocol.receive_sequence == before_sequence + 1
+        assert target["t"] in runtime._market_data.candles["5m"]
+        assert _row_counts(store) == (pubs_before, outbox_before)
+
+        repeated = runtime.accept_public_frame(frame_text=frame, now=later)
+        assert type(repeated) is CandleRefreshTrigger
+        assert runtime.confirm_candle_refresh(
+            trigger=repeated, raw_first=stable, raw_second=stable, now=later
+        ) is None
+        assert runtime._protocol.receive_sequence == before_sequence + 1
+    finally:
+        store.close()
+
+
+def test_route_b_finalized_conflict_is_transport_visible_and_fail_closed(tmp_path: Path) -> None:
+    runtime, store, _, _ = _establish_ready(tmp_path)
+    try:
+        existing = max(
+            runtime._market_data.candles["5m"].values(), key=lambda item: item.open_time_ms
+        )
+        frame = _closed_candle_frame(_candle_obj(63))
+        trigger = runtime.accept_public_frame(frame_text=frame, now=NOW)
+        assert type(trigger) is CandleRefreshTrigger
+        conflicting = [_candle_obj(index) for index in range(64)]
+        conflicting[-1]["c"] = "99.5"
+        conflicting[-1]["l"] = "99"
+        assert existing.open_time_ms == conflicting[-1]["t"]
+        with pytest.raises(CandleConflictRecoveryRequired, match="CANDLE_CONFLICT"):
+            runtime.confirm_candle_refresh(
+                trigger=trigger,
+                raw_first=_snapshot_json(conflicting),
+                raw_second=_snapshot_json(conflicting),
+                now=NOW,
+            )
+        assert runtime.health_state is RuntimeHealthState.NOT_READY
+        assert any(
+            event.reason == "CANDLE_CONFLICT"
+            for event in store.list_health_events(session_id=runtime.session_id)
+        )
+        with pytest.raises(RuntimeRecoveryRequired):
+            runtime.accept_public_frame(frame_text=_context_frame(), now=NOW)
     finally:
         store.close()
 
@@ -1265,6 +1336,65 @@ def test_ga05_first_connection_reaches_ready_via_transport_loop(tmp_path: Path) 
             assert exit_code == 0
 
         asyncio.run(_test())
+    finally:
+        store.close()
+
+
+def test_route_b_conflict_closes_websocket_recovers_and_restores_ready(tmp_path: Path) -> None:
+    runtime, store, _, _ = _make_runtime_short_reconnect(tmp_path)
+    try:
+        runtime.activate(now=NOW)
+        shutdown_event = asyncio.Event()
+        conflicting = [_candle_obj(index) for index in range(64)]
+        conflicting[-1]["c"] = "99.5"
+        recovery_calls = 0
+
+        def recover() -> tuple[str, str, str]:
+            nonlocal recovery_calls
+            recovery_calls += 1
+            if recovery_calls in (2, 3):
+                return _snapshot_json(conflicting), _recovery_frames()[1], _metadata_json()
+            return _recovery_frames()
+
+        first = _FakeWebSocket(
+            [*_ack_and_context_frames(), _closed_candle_frame(_candle_obj(63))]
+        )
+        second = _FakeWebSocket(_ack_and_context_frames(), shutdown_event=shutdown_event)
+        factory = _FakeWebSocketFactory()
+        factory.enqueue(first)
+        factory.enqueue(second)
+        status_messages: list[str] = []
+
+        async def _test() -> None:
+            task = asyncio.create_task(
+                _SCRIPT_MODULE._run_transport(
+                    runtime=runtime,
+                    recover_snapshot=recover,
+                    websocket_factory=factory,
+                    websocket_url="wss://test",
+                    status=status_messages.append,
+                    shutdown_event=shutdown_event,
+                )
+            )
+            for _ in range(500):
+                if len(factory.created) == 2 and runtime.is_ready:
+                    break
+                await asyncio.sleep(0.01)
+            assert len(factory.created) == 2
+            assert runtime.is_ready is True
+            shutdown_event.set()
+            assert await asyncio.wait_for(task, timeout=10.0) == 0
+
+        asyncio.run(_test())
+        assert first.closed is True
+        assert recovery_calls >= 4
+        assert "EVENT finalized-candle-conflict" in status_messages
+        assert "EVENT reconnect-attempt" in status_messages
+        assert "EVENT reconnect-success" in status_messages
+        assert any(
+            event.reason == "CANDLE_CONFLICT"
+            for event in store.list_health_events(session_id=runtime.session_id)
+        )
     finally:
         store.close()
 
