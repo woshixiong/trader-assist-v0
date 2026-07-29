@@ -11,6 +11,7 @@ import pytest
 from tests.test_first_launch_public_runtime import (
     NOW,
     _make_runtime,
+    _post_snapshot_json,
     _recover_to_ready,
     _warmup_to_active,
 )
@@ -310,18 +311,23 @@ def test_runtime_uses_protocol_receipt_time_at_millisecond_close_boundary(
             now=caller_now,
         )
         assert type(trigger) is CandleRefreshTrigger
-        snapshot = json.dumps([json.loads(frame_text)["data"]], separators=(",", ":"))
+        candle = json.loads(frame_text)["data"]
         runtime.confirm_candle_refresh(
-            trigger=trigger,
-            raw_first=snapshot,
-            raw_second=snapshot,
-            now=protocol_received_at,
+                trigger=trigger,
+                raw_first=_post_snapshot_json(candle, 41),
+                raw_second=_post_snapshot_json(candle, 42),
+                first_request_id=41,
+                second_request_id=42,
+                first_completed_at=protocol_received_at,
+                second_completed_at=protocol_received_at + timedelta(seconds=1),
+                first_completed_monotonic=4.0,
+                second_completed_monotonic=5.0,
         )
 
         after = json.loads(snapshot_path.read_text(encoding="utf-8"))
         accepted = runtime._market_data.candles["5m"][next_open_time_ms]
         assert accepted.close_time_ms == close_time_ms
-        assert accepted.evidence.received_at == protocol_received_at
+        assert accepted.evidence.received_at == protocol_received_at + timedelta(seconds=1)
         assert runtime.is_ready is True
         assert runtime.health_state.value == "READY"
         assert runtime._protocol.state is PublicSessionState.ACTIVE

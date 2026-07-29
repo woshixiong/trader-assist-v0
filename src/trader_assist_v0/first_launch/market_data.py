@@ -621,6 +621,96 @@ def websocket_candle_identity(raw_text: str, evidence: RawEvidence) -> tuple[str
     return _candle_from_public_object(message["data"], evidence=evidence).identity
 
 
+def websocket_candle_trigger(
+    raw_text: str, evidence: RawEvidence
+) -> tuple[tuple[str, str, int], str]:
+    """Return a validated non-authoritative identity and normalized fingerprint."""
+    _bound_evidence(raw_text, evidence, "WebSocket")
+    message = _strict_object(raw_text)
+    if message.get("channel") != "candle" or type(message.get("data")) is not dict:
+        raise MarketDataError("expected a candle WebSocket envelope")
+    data = message["data"]
+    candle = _candle_from_public_object(data, evidence=evidence)
+    payload = {
+        "s": ETH,
+        "i": candle.interval,
+        "t": candle.open_time_ms,
+        "T": candle.close_time_ms,
+        "o": str(candle.open),
+        "h": str(candle.high),
+        "l": str(candle.low),
+        "c": str(candle.close),
+        "v": str(candle.volume),
+        "n": data["n"],
+    }
+    return candle.identity, hashlib.sha256(canonical_json_bytes(payload)).hexdigest()
+
+
+def target_candle_from_snapshot(
+    raw_text: str,
+    evidence: RawEvidence,
+    *,
+    requested_interval: Literal["5m", "15m"],
+) -> Candle:
+    """Issue exactly one requested target from a target-only candleSnapshot response."""
+    payload = _strict_json(raw_text)
+    if type(payload) is not list or len(payload) != 1:
+        raise MarketDataError("target candle snapshot must contain exactly one candle")
+    if type(payload[0]) is not dict or set(payload[0]) != {
+        "s", "i", "t", "T", "o", "h", "l", "c", "v", "n"
+    }:
+        raise MarketDataError("target candle has unsupported fields")
+    candles = candles_from_snapshot(raw_text, evidence, requested_interval=requested_interval)
+    if len(candles) != 1:
+        raise MarketDataError("target candle snapshot does not contain one closed candle")
+    return candles[0]
+
+
+def target_candle_from_post_response(
+    raw_text: str,
+    evidence: RawEvidence,
+    *,
+    request_id: int,
+    requested_interval: Literal["5m", "15m"],
+) -> Candle:
+    """Issue one exact target directly from its correlated WebSocket post envelope."""
+    _bound_evidence(raw_text, evidence, "WebSocketPostCandleSnapshot")
+    if type(request_id) is not int or isinstance(request_id, bool) or request_id < 0:
+        raise MarketDataError("post request id is invalid")
+    message = _strict_object(raw_text)
+    if set(message) != {"channel", "data"} or message["channel"] != "post":
+        raise MarketDataError("post response wrapper is invalid")
+    data = message["data"]
+    if type(data) is not dict or set(data) != {"id", "response"}:
+        raise MarketDataError("post response data is invalid")
+    response_id = data["id"]
+    if (
+        type(response_id) is not int
+        or response_id < 0
+        or response_id != request_id
+        or type(data["response"]) is not dict
+    ):
+        raise MarketDataError("post response id is invalid")
+    response = data["response"]
+    if set(response) != {"type", "payload"} or response["type"] != "info":
+        raise MarketDataError("post response type is invalid")
+    payload = response["payload"]
+    if type(payload) is not dict or set(payload) != {"type", "data"}:
+        raise MarketDataError("post response payload is invalid")
+    if payload["type"] != "candleSnapshot" or type(payload["data"]) is not list:
+        raise MarketDataError("post candle snapshot is invalid")
+    candles = payload["data"]
+    if len(candles) != 1 or type(candles[0]) is not dict:
+        raise MarketDataError("post candle snapshot must contain exactly one target")
+    if set(candles[0]) != {"s", "i", "t", "T", "o", "h", "l", "c", "v", "n"}:
+        raise MarketDataError("post target candle has unsupported fields")
+    return _issue_closed_candle(
+        _candle_from_public_object(
+            candles[0], evidence=evidence, requested_interval=requested_interval
+        )
+    )
+
+
 def context_from_websocket(raw_text: str, evidence: RawEvidence) -> ActiveAssetContext:
     _bound_evidence(raw_text, evidence, "WebSocket")
     message = _strict_object(raw_text)
@@ -684,6 +774,8 @@ class EthMarketData:
         self.disconnected = False
         self.candles = {"5m": {}, "15m": {}}
         self.active_context = None
+        self.invalid_reason = None
+        self.conflicts.clear()
 
     def mark_disconnected(self) -> None:
         self.disconnected = True
