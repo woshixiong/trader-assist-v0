@@ -11,8 +11,9 @@ Successor windows read the following order before acting:
 7. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_LOWEST_PRIORITY_BACKLOG_RULING_V1.md`
 8. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_FAILURE_AND_DEFERRED_WORK_V1.md`
 9. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_AUTOMATION_ABANDONMENT_RULING_V1.md`
-10. `governance/TRADER_ASSIST_ENGINEERING_WORKFLOW_V3_2026-07-22.md`
-11. current live GitHub and CI state
+10. `governance/ENGINEERING_STAGE_EXECUTION_AND_TASK_ALLOCATION_STANDARD_V1.md`
+11. `governance/TRADER_ASSIST_ENGINEERING_WORKFLOW_V3_2026-07-22.md`
+12. current live GitHub and CI state
 
 Live GitHub objects override stale chat snapshots and stale PR-body snapshots. Future windows
 must resolve live GitHub state before relying on historical text.
@@ -24,6 +25,51 @@ merged authority and has no fourth-commit authority.
 No governance file independently grants host, deployment, runtime, smoke, account or
 exchange-write authority. Product authority, engineering authority and Project Control
 execution authority remain separate.
+
+## Stage execution and task-allocation rule
+
+All future engineering tasks must follow
+`ENGINEERING_STAGE_EXECUTION_AND_TASK_ALLOCATION_STANDARD_V1.md` after it is merged.
+
+Before issuing a task, Project Control must verify that the assigned execution environment has
+all capabilities required by the task. Local code implementation, full tests, commit and push
+must not be assigned to a Connector-only chat window.
+
+Use this default structure:
+
+```text
+ONE COHERENT STAGE
+→ CAPABILITY-MATCHED PROJECT CONTROL AND WRITER
+→ CONTINUOUS IMPLEMENTATION AND LOCAL GATES
+→ NORMAL COMMIT AND PUSH
+→ EXACT-HEAD CI
+→ INDEPENDENT READ-ONLY REVIEW
+→ AT MOST ONE CONSOLIDATED REPAIR
+→ SEPARATE USER AUTHORITY GATES
+```
+
+Do not use the user as a routine message bus. Do not split ordinary stage-internal work by file,
+function, command, test, lint finding or Reviewer finding.
+
+Mark Ready, merge, deployment, activation, credentials, account access and exchange writes
+remain separate user authority gates.
+
+## External and foundational contract rule
+
+Changes involving external APIs, WebSocket frames, timestamps, protocol fields, canonical
+payloads, hashes, persistence or shared invariants must include, where applicable:
+
+1. bounded real read-only contract evidence;
+2. one canonical realistic fixture;
+3. a repository-wide semantic impact map;
+4. one coherent implementation;
+5. affected and full local gates before remote movement;
+6. exact-head CI;
+7. independent review;
+8. a no-write supported-host rehearsal before accepted real operation.
+
+Focused tests, green CI or fail-closed deployment behavior do not independently waive another
+gate. Deployment must not be the first real end-to-end integration test.
 
 ## Efficiency-first rule
 
