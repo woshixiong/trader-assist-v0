@@ -13,6 +13,7 @@ Covers Section 16 categories A-E (Runtime composition):
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import importlib.util
 import json
 import os
@@ -20,13 +21,20 @@ import stat
 import subprocess
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
 from trader_assist_v0.first_launch.configuration import RiskConfiguration
+from trader_assist_v0.first_launch.market_data import (
+    MarketDataError,
+    RawEvidence,
+    evidence_from_raw,
+    target_candle_from_post_response,
+)
 from trader_assist_v0.runtime.first_launch_notification import (
     HttpResponse,
     NotificationConfig,
@@ -37,10 +45,14 @@ from trader_assist_v0.runtime.first_launch_operator_assist import (
     OperatorAssistRuntimeError,
 )
 from trader_assist_v0.runtime.first_launch_public_runtime import (
+    CandleConfirmationRecoveryRequired,
+    CandleConflictRecoveryRequired,
+    CandleRefreshTrigger,
     RestrictedPublicRuntime,
     RestrictedPublicRuntimeConfig,
     RuntimeHealthState,
     RuntimeNotActivatedError,
+    RuntimeRecoveryRequired,
     RuntimeShutdownError,
     StatusSnapshotPublicationError,
 )
@@ -197,6 +209,33 @@ def _candle_obj(
 
 def _snapshot_json(candles: list[dict[str, object]]) -> str:
     return json.dumps(candles, separators=(",", ":"))
+
+
+def _post_snapshot_json(candle: dict[str, object], request_id: int) -> str:
+    return json.dumps(
+        {
+            "channel": "post",
+            "data": {
+                "id": request_id,
+                "response": {
+                    "type": "info",
+                    "payload": {"type": "candleSnapshot", "data": [candle]},
+                },
+            },
+        },
+        separators=(",", ":"),
+    )
+
+
+def _post_response_evidence(raw_text: str, *, received_at: datetime = NOW) -> RawEvidence:
+    return evidence_from_raw(
+        raw_text,
+        operation="WebSocketPostCandleSnapshot",
+        received_at=received_at,
+        receive_sequence=1,
+        connection_id="conn-test",
+        source_id="hyperliquid-public-websocket",
+    )
 
 
 def _metadata_json() -> str:
@@ -424,6 +463,300 @@ def test_accept_public_frame_before_warmup_rejected(tmp_path: Path) -> None:
         runtime.activate(now=NOW)
         with pytest.raises(RuntimeNotActivatedError):
             runtime.accept_public_frame(frame_text=_context_frame(), now=NOW)
+    finally:
+        store.close()
+
+
+def test_route_b_binds_the_exact_transport_receipt_clock_pair(tmp_path: Path) -> None:
+    runtime, store, _, _ = _establish_ready(tmp_path)
+    try:
+        candle = _candle_obj(64)
+        receipt_at = datetime.fromtimestamp((int(candle["T"]) + 1) / 1000, tz=UTC)
+        receipt_monotonic = 1234.5
+        trigger = runtime.accept_public_frame(
+            frame_text=_closed_candle_frame(candle),
+            now=receipt_at + timedelta(days=3),
+            received_at=receipt_at,
+            received_monotonic=receipt_monotonic,
+        )
+        assert type(trigger) is CandleRefreshTrigger
+        assert trigger.frame.received_at == receipt_at
+        assert trigger.received_at == receipt_at
+        assert trigger.received_monotonic == receipt_monotonic
+        assert trigger.eligible_at_monotonic == receipt_monotonic + 3.0
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize(
+    "received_at,received_monotonic",
+    [
+        (NOW.replace(tzinfo=None), 1.0),
+        (NOW, True),
+        (NOW, "1.0"),
+        (NOW, float("nan")),
+        (NOW, float("inf")),
+        (NOW, float("-inf")),
+    ],
+)
+def test_route_b_rejects_invalid_explicit_receipt_evidence_before_authority(
+    tmp_path: Path, received_at: datetime, received_monotonic: object
+) -> None:
+    runtime, store, _, _ = _establish_ready(tmp_path)
+    try:
+        before_sequence = runtime._protocol.receive_sequence
+        with pytest.raises(OperatorAssistRuntimeError):
+            runtime.accept_public_frame(
+                frame_text=_closed_candle_frame(_candle_obj(64)),
+                now=NOW,
+                received_at=received_at,
+                received_monotonic=received_monotonic,
+            )
+        assert runtime._protocol.receive_sequence == before_sequence
+        assert runtime._candle_candidates == {}
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("invalid_id", [True, False, 7.0, "7", -1, 8, None])
+def test_target_candle_from_post_response_rejects_invalid_response_id_types(
+    invalid_id: object,
+) -> None:
+    raw = _post_snapshot_json(_candle_obj(64), 7)
+    document = json.loads(raw)
+    document["data"]["id"] = invalid_id
+    invalid_raw = json.dumps(document, separators=(",", ":"))
+    with pytest.raises(MarketDataError, match="post response id is invalid"):
+        target_candle_from_post_response(
+            invalid_raw,
+            _post_response_evidence(invalid_raw),
+            request_id=7,
+            requested_interval="5m",
+        )
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda document: document["data"].pop("id"),
+        lambda document: document.__setitem__("extra", True),
+        lambda document: document["data"].__setitem__("extra", True),
+        lambda document: document["data"].__setitem__("response", []),
+    ],
+)
+def test_target_candle_from_post_response_rejects_malformed_response_wrapper(
+    mutate: Callable[[dict[str, object]], object],
+) -> None:
+    document = json.loads(_post_snapshot_json(_candle_obj(64), 7))
+    assert type(document) is dict
+    mutate(document)
+    invalid_raw = json.dumps(document, separators=(",", ":"))
+    with pytest.raises(MarketDataError):
+        target_candle_from_post_response(
+            invalid_raw,
+            _post_response_evidence(invalid_raw),
+            request_id=7,
+            requested_interval="5m",
+        )
+
+
+def test_target_candle_from_post_response_accepts_exact_numeric_response_id() -> None:
+    source_candle = _candle_obj(64)
+    raw = _post_snapshot_json(source_candle, 7)
+    candle = target_candle_from_post_response(
+        raw,
+        _post_response_evidence(
+            raw,
+            received_at=datetime.fromtimestamp((int(source_candle["T"]) + 1) / 1000, tz=UTC),
+        ),
+        request_id=7,
+        requested_interval="5m",
+    )
+    assert candle.identity == ("ETH", "5m", source_candle["t"])
+
+
+def test_route_b_candidate_generations_supersede_and_coalesce_exact_duplicates(
+    tmp_path: Path,
+) -> None:
+    runtime, store, _, _ = _establish_ready(tmp_path)
+    try:
+        later = NOW + timedelta(minutes=5)
+        runtime.utc_now = lambda: later
+        runtime._protocol.utc_now = runtime.utc_now
+        first = _candle_obj(64)
+        second = {**first, "c": "100.5"}
+        third = {**first, "c": "101.0"}
+        trigger_a = runtime.accept_public_frame(
+            frame_text=_closed_candle_frame(first), now=later
+        )
+        assert type(trigger_a) is CandleRefreshTrigger
+        for _ in range(20):
+            assert (
+                runtime.accept_public_frame(
+                    frame_text=_closed_candle_frame(first), now=later
+                )
+                is None
+            )
+        trigger_b = runtime.accept_public_frame(
+            frame_text=_closed_candle_frame(second), now=later
+        )
+        trigger_c = runtime.accept_public_frame(
+            frame_text=_closed_candle_frame(third), now=later
+        )
+        assert type(trigger_b) is CandleRefreshTrigger
+        assert type(trigger_c) is CandleRefreshTrigger
+        assert (trigger_a.generation, trigger_b.generation, trigger_c.generation) == (1, 2, 3)
+        assert runtime._candle_candidates == {"5m": trigger_c}
+        before_sequence = runtime._protocol.receive_sequence
+        assert runtime.confirm_candle_refresh(
+            trigger=trigger_a,
+            raw_first=_post_snapshot_json(third, 1),
+            raw_second=_post_snapshot_json(third, 2),
+            first_request_id=1,
+            second_request_id=2,
+            first_completed_at=later,
+            second_completed_at=later + timedelta(seconds=1),
+            first_completed_monotonic=4.0,
+            second_completed_monotonic=5.0,
+        ) == "STALE"
+        assert runtime.confirm_candle_refresh(
+            trigger=trigger_b,
+            raw_first=_post_snapshot_json(third, 3),
+            raw_second=_post_snapshot_json(third, 4),
+            first_request_id=3,
+            second_request_id=4,
+            first_completed_at=later,
+            second_completed_at=later + timedelta(seconds=1),
+            first_completed_monotonic=4.0,
+            second_completed_monotonic=5.0,
+        ) == "STALE"
+        assert runtime.confirm_candle_refresh(
+            trigger=trigger_c,
+            raw_first=_post_snapshot_json(third, 5),
+            raw_second=_post_snapshot_json(third, 6),
+            first_request_id=5,
+            second_request_id=6,
+            first_completed_at=later,
+            second_completed_at=later + timedelta(seconds=1),
+            first_completed_monotonic=4.0,
+            second_completed_monotonic=5.0,
+        ) == "ADMITTED"
+        assert runtime._protocol.receive_sequence == before_sequence + 1
+    finally:
+        store.close()
+
+
+def test_route_b_rejects_stale_connection_confirmation_without_authority(
+    tmp_path: Path,
+) -> None:
+    runtime, store, _, _ = _establish_ready(tmp_path)
+    try:
+        later = NOW + timedelta(minutes=5)
+        runtime.utc_now = lambda: later
+        runtime._protocol.utc_now = runtime.utc_now
+        target = _candle_obj(64)
+        stale = runtime.accept_public_frame(
+            frame_text=_closed_candle_frame(target), now=later
+        )
+        assert type(stale) is CandleRefreshTrigger
+        runtime.mark_disconnected(now=later, reason="test-disconnect")
+        runtime.begin_reconnect(connection_id="conn-fresh", now=later)
+        for spec in REQUIRED_PUBLIC_SUBSCRIPTIONS:
+            runtime.accept_acknowledgement(frame_text=_ack_frame(spec.subscription), now=later)
+        runtime.recover_public_snapshot(
+            raw_5m=_snapshot_json([_candle_obj(i) for i in range(64)]),
+            raw_15m=_snapshot_json([_candle_obj(i, interval="15m") for i in range(20)]),
+            raw_metadata=_metadata_json(),
+            now=later,
+        )
+        runtime.accept_public_frame(frame_text=_context_frame(), now=later)
+        before_sequence = runtime._protocol.receive_sequence
+        assert runtime.confirm_candle_refresh(
+            trigger=stale,
+            raw_first=_snapshot_json([target]),
+            raw_second=_snapshot_json([target]),
+            first_completed_at=later,
+            second_completed_at=later + timedelta(seconds=1),
+            first_completed_monotonic=4.0,
+            second_completed_monotonic=5.0,
+        ) == "STALE"
+        assert runtime._protocol.receive_sequence == before_sequence
+    finally:
+        store.close()
+
+
+def test_route_b_changed_candidate_after_admission_is_finalized_conflict(
+    tmp_path: Path,
+) -> None:
+    runtime, store, _, _ = _establish_ready(tmp_path)
+    try:
+        later = NOW + timedelta(minutes=5)
+        runtime.utc_now = lambda: later
+        runtime._protocol.utc_now = runtime.utc_now
+        original = _candle_obj(64)
+        first = runtime.accept_public_frame(
+            frame_text=_closed_candle_frame(original), now=later
+        )
+        assert type(first) is CandleRefreshTrigger
+        runtime.confirm_candle_refresh(
+            trigger=first,
+                raw_first=_post_snapshot_json(original, 11),
+                raw_second=_post_snapshot_json(original, 12),
+                first_request_id=11,
+                second_request_id=12,
+            first_completed_at=later,
+            second_completed_at=later + timedelta(seconds=1),
+            first_completed_monotonic=4.0,
+            second_completed_monotonic=5.0,
+        )
+        changed = {**original, "c": "100.5"}
+        revised = runtime.accept_public_frame(
+            frame_text=_closed_candle_frame(changed), now=later
+        )
+        assert type(revised) is CandleRefreshTrigger
+        with pytest.raises(CandleConflictRecoveryRequired, match="CANDLE_CONFLICT"):
+            runtime.confirm_candle_refresh(
+                trigger=revised,
+                raw_first=_post_snapshot_json(changed, 13),
+                raw_second=_post_snapshot_json(changed, 14),
+                first_request_id=13,
+                second_request_id=14,
+                first_completed_at=later,
+                second_completed_at=later + timedelta(seconds=1),
+                first_completed_monotonic=4.0,
+                second_completed_monotonic=5.0,
+            )
+        assert runtime.health_state is RuntimeHealthState.NOT_READY
+    finally:
+        store.close()
+
+
+def test_route_b_requires_monotonic_observation_gap_before_authority(
+    tmp_path: Path,
+) -> None:
+    runtime, store, _, _ = _establish_ready(tmp_path)
+    try:
+        later = NOW + timedelta(minutes=5)
+        runtime.utc_now = lambda: later
+        runtime._protocol.utc_now = runtime.utc_now
+        target = _candle_obj(64)
+        trigger = runtime.accept_public_frame(
+            frame_text=_closed_candle_frame(target), now=later
+        )
+        assert type(trigger) is CandleRefreshTrigger
+        before_sequence = runtime._protocol.receive_sequence
+        with pytest.raises(CandleConfirmationRecoveryRequired):
+            runtime.confirm_candle_refresh(
+                trigger=trigger,
+                raw_first=_snapshot_json([target]),
+                raw_second=_snapshot_json([target]),
+                first_completed_at=later,
+                second_completed_at=later + timedelta(milliseconds=999),
+                first_completed_monotonic=10.0,
+                second_completed_monotonic=10.999,
+            )
+        assert runtime.health_state is RuntimeHealthState.NOT_READY
+        assert runtime._protocol.receive_sequence == before_sequence
     finally:
         store.close()
 
@@ -1102,9 +1435,8 @@ def test_ga02_interval_mismatch_withdraws_ready(tmp_path: Path) -> None:
 def test_ga02_publication_blocked_during_disconnect(tmp_path: Path) -> None:
     """GA-02: after a malformed frame withdraws READY, no further frame can produce a publication.
 
-    The runtime stays in a blocking non-ready state. ``accept_public_frame``
-    returns ``None`` for any subsequent frame because the health state is in
-    ``_BLOCKING_HEALTH_STATES``.
+    The runtime raises a transport-visible recovery requirement instead of
+    silently discarding subsequent recovery frames while still active.
     """
     runtime, store, _, _ = _establish_ready(tmp_path)
     try:
@@ -1112,12 +1444,92 @@ def test_ga02_publication_blocked_during_disconnect(tmp_path: Path) -> None:
         with pytest.raises((ValueError, OperatorAssistRuntimeError)):
             runtime.accept_public_frame(frame_text="{not json", now=NOW)
         assert runtime.is_ready is False
-        # A subsequent valid context frame must not produce an evaluation
-        result = runtime.accept_public_frame(frame_text=_context_frame("101"), now=NOW)
-        assert result is None
+        # A subsequent valid context frame must force transport recovery.
+        with pytest.raises(RuntimeRecoveryRequired):
+            runtime.accept_public_frame(frame_text=_context_frame("101"), now=NOW)
         pubs, outbox = _row_counts(store)
         assert pubs == 0
         assert outbox == 0
+    finally:
+        store.close()
+
+
+def _closed_candle_frame(candle: dict[str, object]) -> str:
+    return json.dumps({"channel": "candle", "data": candle}, separators=(",", ":"))
+
+
+def test_route_b_confirms_closed_candle_once_after_two_stable_snapshots(tmp_path: Path) -> None:
+    runtime, store, _, _ = _establish_ready(tmp_path)
+    later = NOW + timedelta(minutes=5)
+    runtime.utc_now = lambda: later
+    runtime._protocol.utc_now = runtime.utc_now
+    try:
+        target = _candle_obj(64)
+        frame = _closed_candle_frame(target)
+        before_sequence = runtime._protocol.receive_sequence
+        trigger = runtime.accept_public_frame(frame_text=frame, now=later)
+        assert type(trigger) is CandleRefreshTrigger
+        assert runtime._protocol.receive_sequence == before_sequence
+        assert target["t"] not in runtime._market_data.candles["5m"]
+        pubs_before, outbox_before = _row_counts(store)
+
+        stable_first = _post_snapshot_json(target, 21)
+        stable_second = _post_snapshot_json(target, 22)
+        outcome = runtime.confirm_candle_refresh(
+            trigger=trigger,
+            raw_first=stable_first,
+            raw_second=stable_second,
+            first_request_id=21,
+            second_request_id=22,
+            first_completed_at=later,
+            second_completed_at=later + timedelta(seconds=1),
+            first_completed_monotonic=4.0,
+            second_completed_monotonic=5.0,
+        )
+        assert outcome == "ADMITTED"
+        assert runtime._protocol.receive_sequence == before_sequence + 1
+        assert target["t"] in runtime._market_data.candles["5m"]
+        assert _row_counts(store) == (pubs_before, outbox_before)
+
+        repeated = runtime.accept_public_frame(frame_text=frame, now=later)
+        assert repeated is None
+        assert runtime._protocol.receive_sequence == before_sequence + 1
+    finally:
+        store.close()
+
+
+def test_route_b_finalized_conflict_is_transport_visible_and_fail_closed(tmp_path: Path) -> None:
+    runtime, store, _, _ = _establish_ready(tmp_path)
+    try:
+        existing = max(
+            runtime._market_data.candles["5m"].values(), key=lambda item: item.open_time_ms
+        )
+        frame = _closed_candle_frame(_candle_obj(63))
+        trigger = runtime.accept_public_frame(frame_text=frame, now=NOW)
+        assert type(trigger) is CandleRefreshTrigger
+        conflicting = [_candle_obj(index) for index in range(64)]
+        conflicting[-1]["c"] = "99.5"
+        conflicting[-1]["l"] = "99"
+        assert existing.open_time_ms == conflicting[-1]["t"]
+        with pytest.raises(CandleConflictRecoveryRequired, match="CANDLE_CONFLICT"):
+            runtime.confirm_candle_refresh(
+                trigger=trigger,
+                raw_first=_post_snapshot_json(conflicting[-1], 31),
+                raw_second=_post_snapshot_json(conflicting[-1], 32),
+                first_request_id=31,
+                second_request_id=32,
+                first_completed_at=NOW,
+                second_completed_at=NOW + timedelta(seconds=1),
+                first_completed_monotonic=4.0,
+                second_completed_monotonic=5.0,
+            )
+        assert runtime.health_state is RuntimeHealthState.NOT_READY
+        assert any(
+            event.reason == "CANDLE_CONFLICT"
+            for event in store.list_health_events(session_id=runtime.session_id)
+        )
+        with pytest.raises(RuntimeRecoveryRequired):
+            runtime.accept_public_frame(frame_text=_context_frame(), now=NOW)
     finally:
         store.close()
 
@@ -1166,25 +1578,52 @@ class _FakeWebSocket:
         *,
         disconnect_after: int | None = None,
         shutdown_event: asyncio.Event | None = None,
+        post_candles: list[dict[str, object]] | None = None,
     ) -> None:
         self._frames = list(frames)
         self._pos = 0
-        self._disconnect_after = (
-            disconnect_after if disconnect_after is not None else len(frames)
-        )
+        self._disconnect_after = disconnect_after
         self._shutdown_event = shutdown_event
+        self._post_candles = list(post_candles or [])
+        self._frame_available = asyncio.Event()
         self.sent: list[str] = []
         self.closed = False
 
     async def send(self, message: str) -> None:
         self.sent.append(message)
+        envelope = json.loads(message)
+        if envelope.get("method") != "post" or not self._post_candles:
+            return
+        candle = self._post_candles.pop(0)
+        self._frames.append(
+            json.dumps(
+                {
+                    "channel": "post",
+                    "data": {
+                        "id": envelope["id"],
+                        "response": {
+                            "type": "info",
+                            "payload": {"type": "candleSnapshot", "data": [candle]},
+                        },
+                    },
+                },
+                separators=(",", ":"),
+            )
+        )
+        self._frame_available.set()
 
     async def recv(self) -> str | bytes:
-        if self._pos >= self._disconnect_after:
-            if self._shutdown_event is not None:
-                await asyncio.wait_for(self._shutdown_event.wait(), timeout=30.0)
-                raise ConnectionError("shutdown")
+        if self._disconnect_after is not None and self._pos >= self._disconnect_after:
             raise ConnectionError("simulated disconnect")
+        if self._pos >= len(self._frames):
+            if self._shutdown_event is not None:
+                while self._pos >= len(self._frames):
+                    if self._shutdown_event.is_set():
+                        raise ConnectionError("shutdown")
+                    await asyncio.wait_for(self._frame_available.wait(), timeout=30.0)
+                    self._frame_available.clear()
+            else:
+                raise ConnectionError("simulated disconnect")
         frame = self._frames[self._pos]
         self._pos += 1
         return frame
@@ -1211,6 +1650,134 @@ class _FakeWebSocketFactory:
         return ws
 
 
+@dataclass
+class _ControlledPost:
+    candle: dict[str, object] | None
+    send_gate: asyncio.Event = field(default_factory=asyncio.Event)
+    response_gate: asyncio.Event = field(default_factory=asyncio.Event)
+    error: Exception | None = None
+
+    @classmethod
+    def immediate(cls, candle: dict[str, object]) -> _ControlledPost:
+        plan = cls(candle)
+        plan.send_gate.set()
+        plan.response_gate.set()
+        return plan
+
+
+class _ReceiptClock:
+    """A deterministic receipt clock that advances only after a post response."""
+
+    def __init__(self, received_at: datetime) -> None:
+        self.received_at = received_at
+        self.monotonic_value = 0.0
+        self._advance_after_sample = False
+
+    def utc_now(self) -> datetime:
+        return self.received_at
+
+    def monotonic_now(self) -> float:
+        result = self.monotonic_value
+        if self._advance_after_sample:
+            self.monotonic_value += 1.0
+            self._advance_after_sample = False
+        return result
+
+    def advance_after_receipt(self) -> None:
+        self._advance_after_sample = True
+
+
+class _ControlledWebSocket:
+    """Queue/barrier WebSocket for deterministic single-owner transport tests."""
+
+    def __init__(self, *, clock: _ReceiptClock, post_plans: list[_ControlledPost]) -> None:
+        self.clock = clock
+        self._post_plans = list(post_plans)
+        self._inbound: asyncio.Queue[tuple[str, asyncio.Event]] = asyncio.Queue()
+        self._last_processed: asyncio.Event | None = None
+        self.recv_calls = 0
+        self.recv_owners = 0
+        self.recv_owner_max = 0
+        self.post_count = 0
+        self.response_count = 0
+        self.sent: list[str] = []
+        self.post_started: asyncio.Queue[int] = asyncio.Queue()
+        self.response_enqueued: asyncio.Queue[asyncio.Event] = asyncio.Queue()
+        self.closed = False
+
+    async def push(self, frame: str) -> asyncio.Event:
+        processed = asyncio.Event()
+        await self._inbound.put((frame, processed))
+        return processed
+
+    async def send(self, message: str) -> None:
+        self.sent.append(message)
+        envelope = json.loads(message)
+        if envelope.get("method") != "post":
+            return
+        if not self._post_plans:
+            raise AssertionError("unexpected post request")
+        plan = self._post_plans.pop(0)
+        self.post_count += 1
+        self.post_started.put_nowait(self.post_count)
+        await plan.send_gate.wait()
+        if plan.error is not None:
+            raise plan.error
+        await plan.response_gate.wait()
+        if plan.candle is None:
+            return
+        response = json.dumps(
+            {
+                "channel": "post",
+                "data": {
+                    "id": envelope["id"],
+                    "response": {
+                        "type": "info",
+                        "payload": {"type": "candleSnapshot", "data": [plan.candle]},
+                    },
+                },
+            },
+            separators=(",", ":"),
+        )
+        processed = await self.push(response)
+        self.response_enqueued.put_nowait(processed)
+
+    async def recv(self) -> str:
+        self.recv_owners += 1
+        self.recv_owner_max = max(self.recv_owner_max, self.recv_owners)
+        assert self.recv_owners == 1
+        self.recv_calls += 1
+        if self._last_processed is not None:
+            self._last_processed.set()
+            self._last_processed = None
+        try:
+            frame, processed = await self._inbound.get()
+            self._last_processed = processed
+            if '"channel":"post"' in frame:
+                self.response_count += 1
+                self.clock.advance_after_receipt()
+            return frame
+        finally:
+            self.recv_owners -= 1
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+async def _wait_for_post(ws: _ControlledWebSocket, count: int) -> None:
+    while ws.post_count < count:
+        await asyncio.wait_for(ws.post_started.get(), timeout=3.0)
+
+
+async def _stop_frame_loop(
+    task: asyncio.Task[None], ws: _ControlledWebSocket, shutdown_event: asyncio.Event
+) -> None:
+    shutdown_event.set()
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=3.0)
+
+
 def _recovery_frames() -> tuple[str, str, str]:
     """Return valid snapshot recovery data for the fake recover_snapshot."""
     candles_5m = [_candle_obj(i) for i in range(64)]
@@ -1220,6 +1787,490 @@ def _recovery_frames() -> tuple[str, str, str]:
         _snapshot_json(candles_15m),
         _metadata_json(),
     )
+
+
+def test_r3_a_supersession_result_uses_real_frame_loop_and_zero_stale_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, store, _, _ = _establish_ready(tmp_path)
+    try:
+        original = _candle_obj(64)
+        revision_b = {**original, "c": "100.5"}
+        revision_c = {**original, "c": "101.0"}
+        clock = _ReceiptClock(
+            datetime.fromtimestamp((int(original["T"]) + 4_000) / 1000, tz=UTC)
+        )
+        monkeypatch.setattr(_SCRIPT_MODULE, "_utc_now", clock.utc_now)
+        monkeypatch.setattr(_SCRIPT_MODULE, "_monotonic_now", clock.monotonic_now)
+        first = _ControlledPost(original)
+        websocket = _ControlledWebSocket(
+            clock=clock,
+            post_plans=[
+                first,
+                _ControlledPost.immediate(revision_c),
+                _ControlledPost.immediate(revision_c),
+            ],
+        )
+        shutdown_event = asyncio.Event()
+        before_sequence = runtime._protocol.receive_sequence
+
+        async def exercise() -> None:
+            task = asyncio.create_task(
+                _SCRIPT_MODULE._frame_loop(
+                    runtime=runtime,
+                    websocket=websocket,
+                    recover_snapshot=_recovery_frames,
+                    reconnecting=False,
+                    shutdown_event=shutdown_event,
+                    status=lambda _message: None,
+                )
+            )
+            await websocket.push(_closed_candle_frame(original))
+            await _wait_for_post(websocket, 1)
+            processed_b = await websocket.push(_closed_candle_frame(revision_b))
+            await asyncio.wait_for(processed_b.wait(), timeout=3.0)
+            processed_c = await websocket.push(_closed_candle_frame(revision_c))
+            await asyncio.wait_for(processed_c.wait(), timeout=3.0)
+            first.send_gate.set()
+            first.response_gate.set()
+            await _wait_for_post(websocket, 3)
+            final_processed: asyncio.Event | None = None
+            for _ in range(3):
+                final_processed = await asyncio.wait_for(
+                    websocket.response_enqueued.get(), timeout=3.0
+                )
+            assert final_processed is not None
+            await asyncio.wait_for(final_processed.wait(), timeout=3.0)
+            await _stop_frame_loop(task, websocket, shutdown_event)
+
+        asyncio.run(exercise())
+        assert websocket.recv_owner_max == 1
+        assert websocket.post_count == 3
+        assert runtime._protocol.receive_sequence == before_sequence + 1
+        assert runtime._candle_candidates["5m"].fingerprint != ""
+        assert runtime._market_data.candles["5m"][int(original["t"])].canonical_hash
+    finally:
+        store.close()
+
+
+def test_r3_a_supersession_stale_send_exception_has_zero_authority_side_effects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, store, _, _ = _establish_ready(tmp_path)
+    try:
+        original = _candle_obj(64)
+        revision_b = {**original, "c": "100.5"}
+        revision_c = {**original, "c": "101.0"}
+        clock = _ReceiptClock(
+            datetime.fromtimestamp((int(original["T"]) + 4_000) / 1000, tz=UTC)
+        )
+        monkeypatch.setattr(_SCRIPT_MODULE, "_utc_now", clock.utc_now)
+        monkeypatch.setattr(_SCRIPT_MODULE, "_monotonic_now", clock.monotonic_now)
+        first = _ControlledPost(None, error=ConnectionError("stale send"))
+        websocket = _ControlledWebSocket(
+            clock=clock,
+            post_plans=[
+                first,
+                _ControlledPost.immediate(revision_c),
+                _ControlledPost.immediate(revision_c),
+            ],
+        )
+        shutdown_event = asyncio.Event()
+        before_sequence = runtime._protocol.receive_sequence
+
+        async def exercise() -> None:
+            task = asyncio.create_task(
+                _SCRIPT_MODULE._frame_loop(
+                    runtime=runtime,
+                    websocket=websocket,
+                    recover_snapshot=_recovery_frames,
+                    reconnecting=False,
+                    shutdown_event=shutdown_event,
+                    status=lambda _message: None,
+                )
+            )
+            await websocket.push(_closed_candle_frame(original))
+            await _wait_for_post(websocket, 1)
+            processed_b = await websocket.push(_closed_candle_frame(revision_b))
+            await asyncio.wait_for(processed_b.wait(), timeout=3.0)
+            processed_c = await websocket.push(_closed_candle_frame(revision_c))
+            await asyncio.wait_for(processed_c.wait(), timeout=3.0)
+            first.send_gate.set()
+            await _wait_for_post(websocket, 3)
+            final_processed: asyncio.Event | None = None
+            for _ in range(2):
+                final_processed = await asyncio.wait_for(
+                    websocket.response_enqueued.get(), timeout=3.0
+                )
+            assert final_processed is not None
+            await asyncio.wait_for(final_processed.wait(), timeout=3.0)
+            await _stop_frame_loop(task, websocket, shutdown_event)
+
+        asyncio.run(exercise())
+        assert websocket.recv_owner_max == 1
+        assert websocket.post_count == 3
+        assert runtime._protocol.receive_sequence == before_sequence + 1
+        assert int(original["t"]) in runtime._market_data.candles["5m"]
+    finally:
+        store.close()
+
+
+def test_r3_b_duplicate_storm_is_conflated_in_the_real_frame_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, store, _, _ = _establish_ready(tmp_path)
+    try:
+        candle = _candle_obj(64)
+        clock = _ReceiptClock(datetime.fromtimestamp((int(candle["T"]) + 4_000) / 1000, tz=UTC))
+        monkeypatch.setattr(_SCRIPT_MODULE, "_utc_now", clock.utc_now)
+        monkeypatch.setattr(_SCRIPT_MODULE, "_monotonic_now", clock.monotonic_now)
+        websocket = _ControlledWebSocket(
+            clock=clock,
+            post_plans=[_ControlledPost.immediate(candle), _ControlledPost.immediate(candle)],
+        )
+        shutdown_event = asyncio.Event()
+        before_sequence = runtime._protocol.receive_sequence
+
+        async def exercise() -> None:
+            task = asyncio.create_task(
+                _SCRIPT_MODULE._frame_loop(
+                    runtime=runtime,
+                    websocket=websocket,
+                    recover_snapshot=_recovery_frames,
+                    reconnecting=False,
+                    shutdown_event=shutdown_event,
+                    status=lambda _message: None,
+                )
+            )
+            for _ in range(8):
+                processed = await websocket.push(_closed_candle_frame(candle))
+                await asyncio.wait_for(processed.wait(), timeout=3.0)
+            await _wait_for_post(websocket, 2)
+            final_processed = await asyncio.wait_for(websocket.response_enqueued.get(), timeout=3.0)
+            final_processed = await asyncio.wait_for(websocket.response_enqueued.get(), timeout=3.0)
+            await asyncio.wait_for(final_processed.wait(), timeout=3.0)
+            await _stop_frame_loop(task, websocket, shutdown_event)
+
+        asyncio.run(exercise())
+        assert websocket.recv_owner_max == 1
+        assert websocket.post_count == 2
+        assert runtime._protocol.receive_sequence == before_sequence + 1
+        assert len(runtime._candle_candidates) == 1
+    finally:
+        store.close()
+
+
+def test_r3_c_cross_interval_fairness_retains_15m_while_5m_is_superseded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, store, _, _ = _establish_ready(tmp_path)
+    try:
+        first_5m = _candle_obj(64)
+        revised_5m = {**first_5m, "c": "101.0"}
+        target_15m = _candle_obj(20, interval="15m")
+        clock = _ReceiptClock(
+            datetime.fromtimestamp(
+                (max(int(first_5m["T"]), int(target_15m["T"])) + 4_000) / 1000,
+                tz=UTC,
+            )
+        )
+        monkeypatch.setattr(_SCRIPT_MODULE, "_utc_now", clock.utc_now)
+        monkeypatch.setattr(_SCRIPT_MODULE, "_monotonic_now", clock.monotonic_now)
+        first = _ControlledPost(first_5m)
+        websocket = _ControlledWebSocket(
+            clock=clock,
+            post_plans=[
+                first,
+                _ControlledPost.immediate(target_15m),
+                _ControlledPost.immediate(target_15m),
+                _ControlledPost.immediate(revised_5m),
+                _ControlledPost.immediate(revised_5m),
+            ],
+        )
+        shutdown_event = asyncio.Event()
+        before_sequence = runtime._protocol.receive_sequence
+
+        async def exercise() -> None:
+            task = asyncio.create_task(
+                _SCRIPT_MODULE._frame_loop(
+                    runtime=runtime,
+                    websocket=websocket,
+                    recover_snapshot=_recovery_frames,
+                    reconnecting=False,
+                    shutdown_event=shutdown_event,
+                    status=lambda _message: None,
+                )
+            )
+            await websocket.push(_closed_candle_frame(first_5m))
+            await _wait_for_post(websocket, 1)
+            processed_15m = await websocket.push(_closed_candle_frame(target_15m))
+            await asyncio.wait_for(processed_15m.wait(), timeout=3.0)
+            processed_5m = await websocket.push(_closed_candle_frame(revised_5m))
+            await asyncio.wait_for(processed_5m.wait(), timeout=3.0)
+            first.send_gate.set()
+            first.response_gate.set()
+            await _wait_for_post(websocket, 5)
+            final_processed: asyncio.Event | None = None
+            for _ in range(5):
+                final_processed = await asyncio.wait_for(
+                    websocket.response_enqueued.get(), timeout=3.0
+                )
+            assert final_processed is not None
+            await asyncio.wait_for(final_processed.wait(), timeout=3.0)
+            await _stop_frame_loop(task, websocket, shutdown_event)
+
+        asyncio.run(exercise())
+        assert websocket.recv_owner_max == 1
+        assert websocket.post_count == 5
+        assert len(runtime._candle_candidates) == 2
+        assert runtime._protocol.receive_sequence == before_sequence + 2
+        assert int(revised_5m["t"]) in runtime._market_data.candles["5m"]
+        assert int(target_15m["t"]) in runtime._market_data.candles["15m"]
+    finally:
+        store.close()
+
+
+def test_r3_d_transport_response_ids_ignore_unknown_duplicate_and_expired_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, store, _, _ = _establish_ready(tmp_path)
+    try:
+        candle = _candle_obj(64)
+        clock = _ReceiptClock(datetime.fromtimestamp((int(candle["T"]) + 4_000) / 1000, tz=UTC))
+        monkeypatch.setattr(_SCRIPT_MODULE, "_utc_now", clock.utc_now)
+        monkeypatch.setattr(_SCRIPT_MODULE, "_monotonic_now", clock.monotonic_now)
+        websocket = _ControlledWebSocket(
+            clock=clock,
+            post_plans=[_ControlledPost(None), _ControlledPost(None)],
+        )
+        for plan in websocket._post_plans:
+            plan.send_gate.set()
+            plan.response_gate.set()
+        shutdown_event = asyncio.Event()
+        before_sequence = runtime._protocol.receive_sequence
+
+        def response(request_id: object) -> str:
+            return json.dumps(
+                {
+                    "channel": "post",
+                    "data": {
+                        "id": request_id,
+                        "response": {
+                            "type": "info",
+                            "payload": {"type": "candleSnapshot", "data": [candle]},
+                        },
+                    },
+                },
+                separators=(",", ":"),
+            )
+
+        async def exercise() -> None:
+            task = asyncio.create_task(
+                _SCRIPT_MODULE._frame_loop(
+                    runtime=runtime,
+                    websocket=websocket,
+                    recover_snapshot=_recovery_frames,
+                    reconnecting=False,
+                    shutdown_event=shutdown_event,
+                    status=lambda _message: None,
+                )
+            )
+            await websocket.push(_closed_candle_frame(candle))
+            await _wait_for_post(websocket, 1)
+            for invalid_id in (True, 7.0, "7", -1, 999_999):
+                processed = await websocket.push(response(invalid_id))
+                await asyncio.wait_for(processed.wait(), timeout=3.0)
+                assert websocket.post_count == 1
+                assert runtime._protocol.receive_sequence == before_sequence
+            first_id = json.loads(websocket.sent[0])["id"]
+            processed = await websocket.push(response(first_id))
+            await asyncio.wait_for(processed.wait(), timeout=3.0)
+            await _wait_for_post(websocket, 2)
+            second_id = json.loads(websocket.sent[1])["id"]
+            processed = await websocket.push(response(second_id))
+            await asyncio.wait_for(processed.wait(), timeout=3.0)
+            assert runtime._protocol.receive_sequence == before_sequence + 1
+            processed = await websocket.push(response(second_id))
+            await asyncio.wait_for(processed.wait(), timeout=3.0)
+            assert runtime._protocol.receive_sequence == before_sequence + 1
+            await _stop_frame_loop(task, websocket, shutdown_event)
+
+        asyncio.run(exercise())
+        assert websocket.recv_owner_max == 1
+        assert websocket.post_count == 2
+    finally:
+        store.close()
+
+
+def test_r3_e_blocked_send_times_out_without_an_orphan_coordinator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, store, _, _ = _establish_ready(tmp_path)
+    try:
+        candle = _candle_obj(64)
+        clock = _ReceiptClock(datetime.fromtimestamp((int(candle["T"]) + 4_000) / 1000, tz=UTC))
+        monkeypatch.setattr(_SCRIPT_MODULE, "_utc_now", clock.utc_now)
+        monkeypatch.setattr(_SCRIPT_MODULE, "_monotonic_now", clock.monotonic_now)
+        websocket = _ControlledWebSocket(clock=clock, post_plans=[_ControlledPost(candle)])
+        shutdown_event = asyncio.Event()
+
+        async def exercise() -> None:
+            task = asyncio.create_task(
+                _SCRIPT_MODULE._frame_loop(
+                    runtime=runtime,
+                    websocket=websocket,
+                    recover_snapshot=_recovery_frames,
+                    reconnecting=False,
+                    shutdown_event=shutdown_event,
+                    status=lambda _message: None,
+                )
+            )
+            await websocket.push(_closed_candle_frame(candle))
+            await _wait_for_post(websocket, 1)
+            with pytest.raises(CandleConfirmationRecoveryRequired, match="timed out"):
+                await asyncio.wait_for(task, timeout=5.0)
+            assert not any(
+                "confirmation_coordinator" in item.get_coro().__qualname__
+                for item in asyncio.all_tasks()
+                if not item.done()
+            )
+
+        asyncio.run(exercise())
+        assert websocket.post_count == 1
+        assert websocket.recv_owner_max == 1
+    finally:
+        store.close()
+
+
+def test_r3_e_shutdown_cancels_outstanding_waiter_without_recovery_event(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, store, _, _ = _establish_ready(tmp_path)
+    try:
+        candle = _candle_obj(64)
+        clock = _ReceiptClock(datetime.fromtimestamp((int(candle["T"]) + 4_000) / 1000, tz=UTC))
+        monkeypatch.setattr(_SCRIPT_MODULE, "_utc_now", clock.utc_now)
+        monkeypatch.setattr(_SCRIPT_MODULE, "_monotonic_now", clock.monotonic_now)
+        websocket = _ControlledWebSocket(clock=clock, post_plans=[_ControlledPost(candle)])
+        shutdown_event = asyncio.Event()
+        status: list[str] = []
+
+        async def exercise() -> None:
+            task = asyncio.create_task(
+                _SCRIPT_MODULE._frame_loop(
+                    runtime=runtime,
+                    websocket=websocket,
+                    recover_snapshot=_recovery_frames,
+                    reconnecting=False,
+                    shutdown_event=shutdown_event,
+                    status=status.append,
+                )
+            )
+            await websocket.push(_closed_candle_frame(candle))
+            await _wait_for_post(websocket, 1)
+            shutdown_event.set()
+            await websocket.push(_context_frame())
+            await asyncio.wait_for(task, timeout=3.0)
+
+        asyncio.run(exercise())
+        assert websocket.post_count == 1
+        assert "EVENT candle-confirmation-failed" not in status
+        assert "EVENT reconnect-attempt" not in status
+    finally:
+        store.close()
+
+
+def test_r3_f_extra_target_key_fails_closed_through_the_real_b2_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, store, _, _ = _establish_ready(tmp_path)
+    try:
+        target = _candle_obj(64)
+        candle = {**target, "extra": "rejected"}
+        clock = _ReceiptClock(datetime.fromtimestamp((int(target["T"]) + 4_000) / 1000, tz=UTC))
+        monkeypatch.setattr(_SCRIPT_MODULE, "_utc_now", clock.utc_now)
+        monkeypatch.setattr(_SCRIPT_MODULE, "_monotonic_now", clock.monotonic_now)
+        websocket = _ControlledWebSocket(
+            clock=clock,
+            post_plans=[_ControlledPost.immediate(candle), _ControlledPost.immediate(candle)],
+        )
+        shutdown_event = asyncio.Event()
+
+        async def exercise() -> None:
+            task = asyncio.create_task(
+                _SCRIPT_MODULE._frame_loop(
+                    runtime=runtime,
+                    websocket=websocket,
+                    recover_snapshot=_recovery_frames,
+                    reconnecting=False,
+                    shutdown_event=shutdown_event,
+                    status=lambda _message: None,
+                )
+            )
+            await websocket.push(_closed_candle_frame(target))
+            await _wait_for_post(websocket, 2)
+            with pytest.raises(CandleConfirmationRecoveryRequired):
+                await asyncio.wait_for(task, timeout=3.0)
+
+        asyncio.run(exercise())
+        assert websocket.post_count == 2
+        assert runtime._protocol.receive_sequence == 4
+    finally:
+        store.close()
+
+
+def test_r3_f_n_only_revision_is_duplicate_authority_without_a_new_sequence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, store, _, _ = _establish_ready(tmp_path)
+    try:
+        original = _candle_obj(64)
+        n_only = {**original, "n": 1}
+        clock = _ReceiptClock(datetime.fromtimestamp((int(original["T"]) + 4_000) / 1000, tz=UTC))
+        monkeypatch.setattr(_SCRIPT_MODULE, "_utc_now", clock.utc_now)
+        monkeypatch.setattr(_SCRIPT_MODULE, "_monotonic_now", clock.monotonic_now)
+        websocket = _ControlledWebSocket(
+            clock=clock,
+            post_plans=[
+                _ControlledPost.immediate(original),
+                _ControlledPost.immediate(original),
+                _ControlledPost.immediate(n_only),
+                _ControlledPost.immediate(n_only),
+            ],
+        )
+        shutdown_event = asyncio.Event()
+        before_sequence = runtime._protocol.receive_sequence
+
+        async def exercise() -> None:
+            task = asyncio.create_task(
+                _SCRIPT_MODULE._frame_loop(
+                    runtime=runtime,
+                    websocket=websocket,
+                    recover_snapshot=_recovery_frames,
+                    reconnecting=False,
+                    shutdown_event=shutdown_event,
+                    status=lambda _message: None,
+                )
+            )
+            await websocket.push(_closed_candle_frame(original))
+            await _wait_for_post(websocket, 2)
+            second_response = await asyncio.wait_for(websocket.response_enqueued.get(), timeout=3.0)
+            second_response = await asyncio.wait_for(websocket.response_enqueued.get(), timeout=3.0)
+            await asyncio.wait_for(second_response.wait(), timeout=3.0)
+            processed = await websocket.push(_closed_candle_frame(n_only))
+            await asyncio.wait_for(processed.wait(), timeout=3.0)
+            await _wait_for_post(websocket, 4)
+            fourth_response = await asyncio.wait_for(websocket.response_enqueued.get(), timeout=3.0)
+            fourth_response = await asyncio.wait_for(websocket.response_enqueued.get(), timeout=3.0)
+            await asyncio.wait_for(fourth_response.wait(), timeout=3.0)
+            await _stop_frame_loop(task, websocket, shutdown_event)
+
+        asyncio.run(exercise())
+        assert websocket.post_count == 4
+        assert runtime._protocol.receive_sequence == before_sequence + 1
+        assert runtime.health_state is RuntimeHealthState.READY
+    finally:
+        store.close()
 
 
 def _ack_and_context_frames() -> list[str]:
@@ -1267,6 +2318,188 @@ def test_ga05_first_connection_reaches_ready_via_transport_loop(tmp_path: Path) 
         asyncio.run(_test())
     finally:
         store.close()
+
+
+def test_route_b_conflict_closes_websocket_recovers_and_restores_ready(tmp_path: Path) -> None:
+    runtime, store, _, _ = _make_runtime_short_reconnect(tmp_path)
+    try:
+        runtime.activate(now=NOW)
+        shutdown_event = asyncio.Event()
+        conflicting = [_candle_obj(index) for index in range(64)]
+        conflicting[-1]["c"] = "99.5"
+        recovery_calls = 0
+
+        def recover() -> tuple[str, str, str]:
+            nonlocal recovery_calls
+            recovery_calls += 1
+            if recovery_calls in (2, 3):
+                return _snapshot_json(conflicting), _recovery_frames()[1], _metadata_json()
+            return _recovery_frames()
+
+        first = _FakeWebSocket(
+            [*_ack_and_context_frames(), _closed_candle_frame(_candle_obj(63))],
+            shutdown_event=shutdown_event,
+            post_candles=[conflicting[-1], conflicting[-1]],
+        )
+        second = _FakeWebSocket(_ack_and_context_frames(), shutdown_event=shutdown_event)
+        factory = _FakeWebSocketFactory()
+        factory.enqueue(first)
+        factory.enqueue(second)
+        status_messages: list[str] = []
+
+        async def _test() -> None:
+            task = asyncio.create_task(
+                _SCRIPT_MODULE._run_transport(
+                    runtime=runtime,
+                    recover_snapshot=recover,
+                    websocket_factory=factory,
+                    websocket_url="wss://test",
+                    status=status_messages.append,
+                    shutdown_event=shutdown_event,
+                )
+            )
+            for _ in range(500):
+                if len(factory.created) == 2 and runtime.is_ready:
+                    break
+                await asyncio.sleep(0.01)
+            assert len(factory.created) == 2
+            assert runtime.is_ready is True
+            shutdown_event.set()
+            assert await asyncio.wait_for(task, timeout=10.0) == 0
+
+        asyncio.run(_test())
+        assert first.closed is True
+        assert recovery_calls >= 2
+        post_requests = [
+            json.loads(message) for message in first.sent if '"method":"post"' in message
+        ]
+        assert len(post_requests) == 2
+        assert [request["request"]["payload"]["req"] for request in post_requests] == [
+            {
+                "coin": "ETH",
+                "interval": "5m",
+                "startTime": conflicting[-1]["t"],
+                "endTime": conflicting[-1]["T"],
+            }
+        ] * 2
+        assert "EVENT finalized-candle-conflict" in status_messages
+        assert "EVENT disconnect" in status_messages
+        assert "EVENT reconnect-attempt" in status_messages
+        assert "EVENT reconnect-success" in status_messages
+        assert any(
+            event.reason == "CANDLE_CONFLICT"
+            for event in store.list_health_events(session_id=runtime.session_id)
+        )
+    finally:
+        store.close()
+
+
+def test_route_b_confirmation_failure_emits_recovery_events_and_reconnects(
+    tmp_path: Path,
+) -> None:
+    runtime, store, _, _ = _make_runtime_short_reconnect(tmp_path)
+    try:
+        runtime.activate(now=NOW)
+        shutdown_event = asyncio.Event()
+        target = _candle_obj(63)
+        changed = {**target, "c": "100.5"}
+        first = _FakeWebSocket(
+            [*_ack_and_context_frames(), _closed_candle_frame(target)],
+            shutdown_event=shutdown_event,
+            post_candles=[target, changed],
+        )
+        second = _FakeWebSocket(_ack_and_context_frames(), shutdown_event=shutdown_event)
+        factory = _FakeWebSocketFactory()
+        factory.enqueue(first)
+        factory.enqueue(second)
+        messages: list[str] = []
+
+        async def _test() -> None:
+            task = asyncio.create_task(
+                _SCRIPT_MODULE._run_transport(
+                    runtime=runtime,
+                    recover_snapshot=_recovery_frames,
+                    websocket_factory=factory,
+                    websocket_url="wss://test",
+                    status=messages.append,
+                    shutdown_event=shutdown_event,
+                )
+            )
+            for _ in range(1200):
+                if len(factory.created) == 2 and runtime.is_ready:
+                    break
+                await asyncio.sleep(0.01)
+            assert len(factory.created) == 2, messages
+            assert runtime.is_ready
+            shutdown_event.set()
+            assert await asyncio.wait_for(task, timeout=10.0) == 0
+
+        asyncio.run(_test())
+        assert sum('"method":"post"' in message for message in first.sent) == 2
+        assert messages.index("EVENT candle-confirmation-failed") < messages.index(
+            "EVENT disconnect"
+        ) < messages.index("EVENT reconnect-attempt")
+        assert first.closed is True
+    finally:
+        store.close()
+
+
+def test_route_b_confirmation_holds_without_blocking_context_or_shutdown(
+    tmp_path: Path,
+) -> None:
+    runtime, store, _, _ = _make_runtime_short_reconnect(tmp_path)
+    try:
+        runtime.activate(now=NOW)
+        shutdown_event = asyncio.Event()
+        first = _FakeWebSocket(
+            [
+                *_ack_and_context_frames(),
+                _closed_candle_frame(_candle_obj(63)),
+                _context_frame("101"),
+            ],
+            shutdown_event=shutdown_event,
+        )
+        factory = _FakeWebSocketFactory()
+        factory.enqueue(first)
+        messages: list[str] = []
+
+        async def _test() -> None:
+            task = asyncio.create_task(
+                _SCRIPT_MODULE._run_transport(
+                    runtime=runtime,
+                    recover_snapshot=_recovery_frames,
+                    websocket_factory=factory,
+                    websocket_url="wss://test",
+                    status=messages.append,
+                    shutdown_event=shutdown_event,
+                )
+            )
+            for _ in range(100):
+                context = runtime._market_data.active_context
+                if context is not None and context.mark_px == Decimal("101"):
+                    break
+                await asyncio.sleep(0.01)
+            assert runtime._market_data.active_context is not None
+            assert runtime._market_data.active_context.mark_px == Decimal("101")
+            assert "EVENT candle-refresh-trigger interval=5m open_time_ms=" in "\n".join(
+                messages
+            )
+            assert sum('"method":"post"' in message for message in first.sent) <= 1
+            shutdown_event.set()
+            assert await asyncio.wait_for(task, timeout=10.0) == 0
+
+        asyncio.run(_test())
+        assert first.closed is True
+        assert sum('"method":"post"' in message for message in first.sent) <= 1
+    finally:
+        store.close()
+
+
+def test_route_b_confirmation_bounds_are_fixed_by_contract() -> None:
+    assert _SCRIPT_MODULE._CANDLE_BOUNDARY_HOLD_SECONDS == 3.0
+    assert _SCRIPT_MODULE._CANDLE_CONFIRMATION_GAP_SECONDS == 1.0
+    assert _SCRIPT_MODULE._CANDLE_CONFIRMATION_REQUEST_TIMEOUT_SECONDS == 3.0
+    assert _SCRIPT_MODULE._CANDLE_CONFIRMATION_DEADLINE_SECONDS == 8.0
 
 
 def test_status_publication_failure_stops_transport_without_reconnect(

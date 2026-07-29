@@ -11,6 +11,7 @@ import pytest
 from tests.test_first_launch_public_runtime import (
     NOW,
     _make_runtime,
+    _post_snapshot_json,
     _recover_to_ready,
     _warmup_to_active,
 )
@@ -20,6 +21,7 @@ from trader_assist_v0.runtime.first_launch_operator_assist import (
     PublicRuntimeProtocol,
     PublicSessionState,
 )
+from trader_assist_v0.runtime.first_launch_public_runtime import CandleRefreshTrigger
 
 
 def _acknowledgement(subscription: object) -> str:
@@ -213,7 +215,9 @@ def test_active_protocol_ignores_open_candles_without_sequence_or_state_change()
     )
     assert accepted is not None
     assert accepted.channel == "candle"
-    assert accepted.receive_sequence == 4
+    assert accepted.authoritative is False
+    assert accepted.receive_sequence == 3
+    assert protocol.allocate_authoritative_sequence() == 4
     assert protocol.state is PublicSessionState.ACTIVE
 
 
@@ -301,15 +305,29 @@ def test_runtime_uses_protocol_receipt_time_at_millisecond_close_boundary(
         clock["now"] = protocol_received_at
 
         runtime.accept_public_frame(frame_text=_context_frame(), now=caller_now)
-        runtime.accept_public_frame(
-            frame_text=_candle_frame_at_close(open_time_ms=next_open_time_ms),
+        frame_text = _candle_frame_at_close(open_time_ms=next_open_time_ms)
+        trigger = runtime.accept_public_frame(
+            frame_text=frame_text,
             now=caller_now,
+        )
+        assert type(trigger) is CandleRefreshTrigger
+        candle = json.loads(frame_text)["data"]
+        runtime.confirm_candle_refresh(
+                trigger=trigger,
+                raw_first=_post_snapshot_json(candle, 41),
+                raw_second=_post_snapshot_json(candle, 42),
+                first_request_id=41,
+                second_request_id=42,
+                first_completed_at=protocol_received_at,
+                second_completed_at=protocol_received_at + timedelta(seconds=1),
+                first_completed_monotonic=4.0,
+                second_completed_monotonic=5.0,
         )
 
         after = json.loads(snapshot_path.read_text(encoding="utf-8"))
         accepted = runtime._market_data.candles["5m"][next_open_time_ms]
         assert accepted.close_time_ms == close_time_ms
-        assert accepted.evidence.received_at == protocol_received_at
+        assert accepted.evidence.received_at == protocol_received_at + timedelta(seconds=1)
         assert runtime.is_ready is True
         assert runtime.health_state.value == "READY"
         assert runtime._protocol.state is PublicSessionState.ACTIVE

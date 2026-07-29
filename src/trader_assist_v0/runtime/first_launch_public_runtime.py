@@ -35,6 +35,7 @@ No AWS access. No LIVE_SHADOW activation. No account or exchange writes.
 from __future__ import annotations
 
 import json
+import math
 import os
 import tempfile
 from collections.abc import Callable
@@ -42,20 +43,24 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Final, Literal
+from typing import Final, Literal, cast
 from uuid import uuid4
 
 from trader_assist_v0.contracts.common import canonical_json_bytes
 from trader_assist_v0.first_launch.configuration import RiskConfiguration
 from trader_assist_v0.first_launch.market_data import (
+    INTERVAL_MILLISECONDS,
+    Candle,
     DataQualityState,
     EthMarketData,
+    MarketDataError,
     StrategySnapshot,
-    candle_from_websocket,
     candles_from_snapshot,
     context_from_websocket,
     evidence_from_raw,
     metadata_from_info,
+    target_candle_from_post_response,
+    websocket_candle_trigger,
 )
 from trader_assist_v0.first_launch.operator_review import (
     build_operator_card,
@@ -97,11 +102,16 @@ _RUNTIME_MODE: Final[Literal["RESTRICTED_PUBLIC_LIVE_SHADOW"]] = (
 _SCOPE: Final[Literal["ETH_ONLY"]] = "ETH_ONLY"
 _DEFAULT_RECONNECT_DELAYS: Final[tuple[float, ...]] = (1.0, 2.0, 4.0, 8.0, 16.0, 30.0)
 _MAX_RECONNECT_ATTEMPTS: Final[int] = len(_DEFAULT_RECONNECT_DELAYS)
+_WS_POST_OPERATION_CANDLE_SNAPSHOT: Final[Literal["WebSocketPostCandleSnapshot"]] = (
+    "WebSocketPostCandleSnapshot"
+)
 _HTTP_OPERATION_CANDLE_SNAPSHOT: Final[Literal["candleSnapshot"]] = "candleSnapshot"
 _HTTP_OPERATION_METADATA: Final[Literal["metaAndAssetCtxs"]] = "metaAndAssetCtxs"
-_SOURCE_ID_HTTP: Final[str] = "hyperliquid-public-http"
 _SOURCE_ID_WS: Final[str] = "hyperliquid-public-websocket"
+_SOURCE_ID_HTTP: Final[str] = "hyperliquid-public-http"
 _STATUS_SNAPSHOT_PATH: Final[Path] = Path("/run/trader-assist-v0/status.json")
+_BOUNDARY_HOLD_MILLISECONDS: Final[int] = 3000
+_OBSERVATION_GAP_SECONDS: Final[float] = 1.0
 
 
 class RestrictedRuntimeError(RuntimeError):
@@ -126,6 +136,18 @@ class HealthTransitionViolation(RestrictedRuntimeError):
 
 class StatusSnapshotPublicationError(RestrictedRuntimeError):
     """The fail-closed local status snapshot could not be published."""
+
+
+class RuntimeRecoveryRequired(RestrictedRuntimeError):
+    """The transport must close and recover rather than discard more frames."""
+
+
+class CandleConflictRecoveryRequired(RuntimeRecoveryRequired):
+    """A finalized candle identity changed and requires a fresh recovery."""
+
+
+class CandleConfirmationRecoveryRequired(RuntimeRecoveryRequired):
+    """A closed-candle HTTP confirmation was unavailable or unstable."""
 
 
 class RuntimeHealthState(StrEnum):
@@ -280,6 +302,20 @@ class EvaluationOutcome:
     skipped_reason: str
 
 
+@dataclass(frozen=True)
+class CandleRefreshTrigger:
+    """A non-authoritative closed WebSocket identity awaiting WS-post confirmation."""
+
+    frame: AcceptedPublicFrame
+    identity: tuple[str, str, int]
+    fingerprint: str
+    generation: int
+    connection_id: str
+    received_at: datetime
+    received_monotonic: float
+    eligible_at_monotonic: float
+
+
 @dataclass
 class RestrictedPublicRuntime:
     """One default-off restricted public First Launch runtime process.
@@ -312,6 +348,10 @@ class RestrictedPublicRuntime:
     _connection_id: str = field(init=False, default="")
     _last_evaluated_5m_identity: tuple[str, str, int] | None = field(init=False, default=None)
     _last_active_context_at: datetime | None = field(init=False, default=None)
+    _candle_candidates: dict[str, CandleRefreshTrigger] = field(init=False, default_factory=dict)
+    _admitted_candidate_fingerprints: dict[str, tuple[tuple[str, str, int], str]] = field(
+        init=False, default_factory=dict
+    )
     _reconnect_attempt: int = field(init=False, default=0)
     _shutdown: bool = field(init=False, default=False)
 
@@ -331,6 +371,41 @@ class RestrictedPublicRuntime:
     @property
     def is_shutdown(self) -> bool:
         return self._shutdown
+
+    def is_current_candle_trigger(self, trigger: CandleRefreshTrigger) -> bool:
+        """Return whether a transport-held candidate still owns confirmation authority."""
+        return (
+            self.owns_candle_trigger(trigger)
+            and not self._shutdown
+            and self._health_state not in _BLOCKING_HEALTH_STATES
+        )
+
+    def owns_candle_trigger(self, trigger: CandleRefreshTrigger) -> bool:
+        """Return whether the connection still owns a candidate, even after fail-closed."""
+        return (
+            type(trigger) is CandleRefreshTrigger
+            and trigger.connection_id == self._connection_id
+            and self._candle_candidates.get(trigger.identity[1]) == trigger
+        )
+
+    def next_candle_confirmation_candidate(
+        self, *, prefer_other_than: str | None
+    ) -> CandleRefreshTrigger | None:
+        """Choose a bounded current candidate with deterministic two-interval fairness."""
+        candidates = tuple(
+            candidate
+            for interval in ("5m", "15m")
+            if (candidate := self._candle_candidates.get(interval)) is not None
+            and self.is_current_candle_trigger(candidate)
+            and self._admitted_candidate_fingerprints.get(interval)
+            != (candidate.identity, candidate.fingerprint)
+        )
+        if not candidates:
+            return None
+        for candidate in candidates:
+            if candidate.identity[1] != prefer_other_than:
+                return candidate
+        return candidates[0]
 
     @property
     def acknowledged_subscriptions(self) -> frozenset[str]:
@@ -483,6 +558,8 @@ class RestrictedPublicRuntime:
         if self._connection_id != "":
             raise RestrictedRuntimeError("warmup has already begun")
         self._connection_id = connection_id
+        self._candle_candidates.clear()
+        self._admitted_candidate_fingerprints.clear()
         self._market_data.begin_connection()
         self._protocol = PublicRuntimeProtocol(
             connection_id=connection_id,
@@ -576,12 +653,24 @@ class RestrictedPublicRuntime:
             raw_15m, evidence_15m, requested_interval="15m"
         )
         metadata = metadata_from_info(raw_metadata, evidence_metadata)
-        self._market_data.accept_metadata(metadata)
-        self._market_data.recover_snapshot("5m", candles_5m)
-        self._market_data.recover_snapshot("15m", candles_15m)
+        try:
+            self._market_data.accept_metadata(metadata)
+            self._market_data.recover_snapshot("5m", candles_5m)
+            self._market_data.recover_snapshot("15m", candles_15m)
+        except Exception as exc:
+            if str(exc) == "CANDLE_CONFLICT":
+                self._raise_candle_conflict(now=timestamp)
+            raise
         self._try_promote_to_ready(now=timestamp)
 
-    def accept_public_frame(self, *, frame_text: str, now: datetime) -> EvaluationOutcome | None:
+    def accept_public_frame(
+        self,
+        *,
+        frame_text: str,
+        now: datetime,
+        received_at: datetime | None = None,
+        received_monotonic: object | None = None,
+    ) -> CandleRefreshTrigger | EvaluationOutcome | None:
         """Accept one public WebSocket frame and drive one evaluation cycle.
 
         Returns an ``EvaluationOutcome`` if the frame produced a new triggered
@@ -595,11 +684,17 @@ class RestrictedPublicRuntime:
             raise RuntimeNotActivatedError("warmup has not begun")
         if self._shutdown:
             raise RuntimeShutdownError("runtime has been shut down")
+        if self._health_state is RuntimeHealthState.NOT_READY:
+            raise RuntimeRecoveryRequired("runtime requires transport recovery")
         if self._health_state in _BLOCKING_HEALTH_STATES:
             return None
         try:
             self._protocol.check_timeout()
-            frame = self._protocol.accept_frame(frame_text)
+            frame = self._protocol.accept_frame(
+                frame_text,
+                received_at=received_at,
+                received_monotonic=received_monotonic,
+            )
             if frame is None:
                 return None
             frame_timestamp = _frame_received_at(frame)
@@ -621,7 +716,7 @@ class RestrictedPublicRuntime:
 
     def _accept_candle_frame(
         self, frame: AcceptedPublicFrame, timestamp: datetime
-    ) -> EvaluationOutcome | None:
+    ) -> CandleRefreshTrigger | None:
         frame_text = _frame_text(frame)
         evidence = evidence_from_raw(
             frame_text,
@@ -631,19 +726,160 @@ class RestrictedPublicRuntime:
             connection_id=_frame_connection_id(frame),
             source_id=_SOURCE_ID_WS,
         )
-        candle = candle_from_websocket(frame_text, evidence)
-        result = self._market_data.accept_candle(candle)
+        identity, fingerprint = websocket_candle_trigger(frame_text, evidence)
+        interval = identity[1]
+        current = self._candle_candidates.get(interval)
+        if current is not None and identity[2] < current.identity[2]:
+            return None
+        if (
+            current is not None
+            and current.identity == identity
+            and current.fingerprint == fingerprint
+        ):
+            return None
+        admitted = self._admitted_candidate_fingerprints.get(interval)
+        if admitted == (identity, fingerprint):
+            return None
+        generation = 1 if current is None else current.generation + 1
+        received_monotonic = _frame_received_monotonic(frame)
+        boundary_ms = identity[2] + INTERVAL_MILLISECONDS[interval]
+        hold_seconds = (
+            boundary_ms + _BOUNDARY_HOLD_MILLISECONDS - int(timestamp.timestamp() * 1000)
+        ) / 1000
+        eligible_at_monotonic = received_monotonic + max(
+            0.0, hold_seconds
+        )
+        trigger = CandleRefreshTrigger(
+            frame,
+            identity,
+            fingerprint,
+            generation,
+            self._connection_id,
+            timestamp,
+            received_monotonic,
+            eligible_at_monotonic,
+        )
+        self._candle_candidates[interval] = trigger
+        return trigger
+
+    def confirm_candle_refresh(
+        self,
+        *,
+        trigger: CandleRefreshTrigger,
+        raw_first: str,
+        raw_second: str,
+        first_completed_at: datetime,
+        second_completed_at: datetime,
+        first_completed_monotonic: float,
+        second_completed_monotonic: float,
+        first_request_id: int = 0,
+        second_request_id: int = 0,
+    ) -> Literal["ADMITTED", "DUPLICATE_AUTHORITY", "STALE"]:
+        """Issue authority only after the current generation's WS-post evidence agrees."""
+        first_timestamp = self._validate_now(first_completed_at)
+        second_timestamp = self._validate_now(second_completed_at)
+        if self._shutdown:
+            raise RuntimeShutdownError("runtime has been shut down")
+        if self._health_state in _BLOCKING_HEALTH_STATES:
+            raise RuntimeRecoveryRequired("runtime requires transport recovery")
+        if type(trigger) is not CandleRefreshTrigger or trigger.frame.authoritative:
+            raise RestrictedRuntimeError("candle refresh trigger is invalid")
+        current = self._candle_candidates.get(trigger.identity[1])
+        if trigger.connection_id != self._connection_id or current != trigger:
+            return "STALE"
+        if (
+            type(first_completed_monotonic) not in {int, float}
+            or isinstance(first_completed_monotonic, bool)
+            or type(second_completed_monotonic) not in {int, float}
+            or isinstance(second_completed_monotonic, bool)
+            or not math.isfinite(first_completed_monotonic)
+            or not math.isfinite(second_completed_monotonic)
+            or first_completed_monotonic < trigger.eligible_at_monotonic
+            or second_completed_monotonic < first_completed_monotonic + _OBSERVATION_GAP_SECONDS
+            or second_timestamp < first_timestamp
+        ):
+            self._fail_closed("CANDLE_CONFIRMATION_FAILED", now=second_timestamp)
+            raise CandleConfirmationRecoveryRequired("candle observations are too close")
+        try:
+            first = self._post_candle_for_identity(
+                raw_text=raw_first,
+                identity=trigger.identity,
+                received_at=first_timestamp,
+                receive_sequence=self._protocol.receive_sequence,
+                request_id=first_request_id,
+            )
+            second = self._post_candle_for_identity(
+                raw_text=raw_second,
+                identity=trigger.identity,
+                received_at=second_timestamp,
+                receive_sequence=self._protocol.receive_sequence,
+                request_id=second_request_id,
+            )
+            if first.canonical_hash != second.canonical_hash:
+                raise MarketDataError("CANDLE_CONFIRMATION_UNSTABLE")
+            existing = self._market_data.candles[second.interval].get(second.open_time_ms)
+            if existing is not None:
+                if existing.canonical_hash != second.canonical_hash:
+                    raise MarketDataError("CANDLE_CONFLICT")
+                self._admitted_candidate_fingerprints[second.interval] = (
+                    second.identity,
+                    trigger.fingerprint,
+                )
+                return "DUPLICATE_AUTHORITY"
+            if self._candle_candidates.get(trigger.identity[1]) != trigger:
+                return "STALE"
+            confirmed = self._post_candle_for_identity(
+                raw_text=raw_second,
+                identity=trigger.identity,
+                received_at=second_timestamp,
+                receive_sequence=self._protocol.allocate_authoritative_sequence(),
+                request_id=second_request_id,
+            )
+            result = self._market_data.accept_candle(confirmed)
+        except Exception as exc:
+            if str(exc) == "CANDLE_CONFLICT":
+                self._raise_candle_conflict(now=second_timestamp)
+            self._fail_closed("CANDLE_CONFIRMATION_FAILED", now=second_timestamp)
+            raise CandleConfirmationRecoveryRequired("candle HTTP confirmation failed") from exc
         if result == "CONFLICT":
-            self._fail_closed("CANDLE_CONFLICT", now=timestamp)
-            return None
+            self._raise_candle_conflict(now=second_timestamp)
+        self._admitted_candidate_fingerprints[confirmed.interval] = (
+            confirmed.identity,
+            trigger.fingerprint,
+        )
         if result == "DUPLICATE":
-            return None
-        if candle.interval != "5m":
-            return None
-        if not self.is_ready:
-            self._try_promote_to_ready(now=timestamp)
-            return None
-        return self._evaluate_new_closed_5m(timestamp)
+            return "DUPLICATE_AUTHORITY"
+        if confirmed.interval == "5m" and self.is_ready:
+            self._evaluate_new_closed_5m(second_timestamp)
+        return "ADMITTED"
+
+    def _post_candle_for_identity(
+        self,
+        *,
+        raw_text: str,
+        identity: tuple[str, str, int],
+        received_at: datetime,
+        receive_sequence: int,
+        request_id: int,
+    ) -> Candle:
+        interval = cast(Literal["5m", "15m"], identity[1])
+        evidence = evidence_from_raw(
+            raw_text,
+            operation=_WS_POST_OPERATION_CANDLE_SNAPSHOT,
+            received_at=received_at,
+            receive_sequence=receive_sequence,
+            connection_id=self._connection_id,
+            source_id=_SOURCE_ID_WS,
+        )
+        candle = target_candle_from_post_response(
+            raw_text,
+            evidence,
+            request_id=request_id,
+            requested_interval=interval,
+        )
+        if candle.identity != identity:
+            raise MarketDataError("CANDLE_CONFIRMATION_WRONG_TARGET")
+        return candle
 
     def _accept_context_frame(
         self, frame: AcceptedPublicFrame, timestamp: datetime
@@ -939,6 +1175,8 @@ class RestrictedPublicRuntime:
             return None
         self._reconnect_attempt += 1
         self._connection_id = connection_id
+        self._candle_candidates.clear()
+        self._admitted_candidate_fingerprints.clear()
         self._market_data.begin_connection()
         self._last_evaluated_5m_identity = None
         self._last_active_context_at = None
@@ -958,15 +1196,15 @@ class RestrictedPublicRuntime:
     def _fail_closed(self, reason: str, *, now: datetime) -> None:
         if self._shutdown:
             return
-        if self._health_state not in (
-            RuntimeHealthState.READY,
-            RuntimeHealthState.WARMING,
-            RuntimeHealthState.DEGRADED,
-        ):
+        if self._health_state in (RuntimeHealthState.STOPPING, RuntimeHealthState.STOPPED):
             return
         self._transition_health(
             to=RuntimeHealthState.NOT_READY, reason=reason, now=now
         )
+
+    def _raise_candle_conflict(self, *, now: datetime) -> None:
+        self._fail_closed("CANDLE_CONFLICT", now=now)
+        raise CandleConflictRecoveryRequired("CANDLE_CONFLICT")
 
     def _withdraw_on_frame_rejection(self, now: datetime) -> None:
         """GA-02: atomically withdraw to a blocking non-ready state on frame rejection.
@@ -1035,6 +1273,10 @@ def _frame_text(frame: AcceptedPublicFrame) -> str:
 
 def _frame_received_at(frame: AcceptedPublicFrame) -> datetime:
     return frame.received_at
+
+
+def _frame_received_monotonic(frame: AcceptedPublicFrame) -> float:
+    return frame.received_monotonic
 
 
 def _frame_sequence(frame: AcceptedPublicFrame) -> int:

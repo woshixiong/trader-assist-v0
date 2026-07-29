@@ -49,6 +49,9 @@ from trader_assist_v0.runtime.first_launch_notification import (
     NotificationDispatcher,
 )
 from trader_assist_v0.runtime.first_launch_public_runtime import (
+    CandleConfirmationRecoveryRequired,
+    CandleConflictRecoveryRequired,
+    CandleRefreshTrigger,
     RestrictedPublicRuntime,
     RestrictedPublicRuntimeConfig,
     StatusSnapshotPublicationError,
@@ -62,6 +65,10 @@ _STATUS_SNAPSHOT_PATH: Final[Path] = Path("/run/trader-assist-v0/status.json")
 _HTTP_INFO_URL: Final[str] = "https://api.hyperliquid.xyz/info"
 _WEBSOCKET_URL: Final[str] = "wss://api.hyperliquid.xyz/ws"
 _HTTP_TIMEOUT_SECONDS: Final[float] = 15.0
+_CANDLE_CONFIRMATION_REQUEST_TIMEOUT_SECONDS: Final[float] = 3.0
+_CANDLE_CONFIRMATION_DEADLINE_SECONDS: Final[float] = 8.0
+_CANDLE_BOUNDARY_HOLD_SECONDS: Final[float] = 3.0
+_CANDLE_CONFIRMATION_GAP_SECONDS: Final[float] = 1.0
 _CANDLE_INTERVAL_MILLISECONDS: Final[dict[str, int]] = {
     "5m": 5 * 60_000,
     "15m": 15 * 60_000,
@@ -506,6 +513,22 @@ class WebSocketConnection(Protocol):
 WebSocketFactory = Callable[[str], Awaitable[WebSocketConnection]]
 
 
+@dataclass(frozen=True)
+class _PostObservation:
+    raw_text: str
+    request_id: int
+    completed_at: datetime
+    completed_monotonic: float
+
+
+@dataclass(frozen=True)
+class _OutstandingPost:
+    request_id: int
+    connection_id: str
+    trigger: CandleRefreshTrigger
+    waiter: asyncio.Future[_PostObservation]
+
+
 def _utc_now() -> datetime:
     return datetime.now(tz=UTC)
 
@@ -535,6 +558,7 @@ async def _run_transport(
     first_connection = True
     while not shutdown_event.is_set():
         connection_id = f"conn-{int(_utc_now().timestamp() * 1000)}"
+        reconnecting = not first_connection
         try:
             requests: tuple[str, str, str] | None
             if first_connection:
@@ -543,13 +567,14 @@ async def _run_transport(
                 )
                 first_connection = False
             else:
+                status("EVENT reconnect-attempt")
                 requests = runtime.begin_reconnect(
                     connection_id=connection_id, now=_utc_now()
                 )
                 if requests is None:
                     # Reconnect budget exhausted or runtime shutdown; stop
                     # fail-closed without attempting another connection.
-                    status("ERROR reconnect budget exhausted")
+                    status("EVENT reconnect-budget-exhausted")
                     return 1
         except StatusSnapshotPublicationError:
             status("ERROR status snapshot publication failed")
@@ -583,6 +608,8 @@ async def _run_transport(
                 await _frame_loop(
                     runtime=runtime,
                     websocket=websocket,
+                    recover_snapshot=recover_snapshot,
+                    reconnecting=reconnecting,
                     shutdown_event=shutdown_event,
                     status=status,
                 )
@@ -597,8 +624,17 @@ async def _run_transport(
         except StatusSnapshotPublicationError:
             status("ERROR status snapshot publication failed")
             return 1
+        except CandleConflictRecoveryRequired:
+            status("EVENT finalized-candle-conflict")
+            status("EVENT disconnect")
+            runtime.mark_disconnected(now=_utc_now(), reason="candle-conflict")
+        except CandleConfirmationRecoveryRequired:
+            status("EVENT candle-confirmation-failed")
+            status("EVENT disconnect")
+            runtime.mark_disconnected(now=_utc_now(), reason="candle-confirmation-failed")
         except Exception as exc:
             status(f"ERROR websocket: {type(exc).__name__}")
+            status("EVENT disconnect")
             runtime.mark_disconnected(now=_utc_now(), reason=f"websocket-{type(exc).__name__}")
         if not shutdown_event.is_set():
             await _bounded_reconnect_wait(runtime, shutdown_event)
@@ -638,31 +674,236 @@ async def _frame_loop(
     *,
     runtime: RestrictedPublicRuntime,
     websocket: WebSocketConnection,
+    recover_snapshot: HttpSnapshotRecovery,
+    reconnecting: bool,
     shutdown_event: asyncio.Event,
     status: Callable[[str], None],
 ) -> None:
     dispatch_task = asyncio.create_task(
         _dispatch_loop(runtime=runtime, shutdown_event=shutdown_event)
     )
+    ready_announced = False
+    candidate_event = asyncio.Event()
+    outstanding: _OutstandingPost | None = None
+    next_request_id = int(_utc_now().timestamp() * 1000)
+
+    async def wait_current(trigger: CandleRefreshTrigger, until: float) -> bool:
+        """Wait without blocking receipt; return false if a newer candidate arrives."""
+        while runtime.is_current_candle_trigger(trigger):
+            remaining = until - _monotonic_now()
+            if remaining <= 0:
+                return True
+            candidate_event.clear()
+            try:
+                await asyncio.wait_for(candidate_event.wait(), timeout=remaining)
+            except TimeoutError:
+                return runtime.is_current_candle_trigger(trigger)
+        return False
+
+    async def post_observation(
+        trigger: CandleRefreshTrigger, *, cycle_deadline: float
+    ) -> _PostObservation | None:
+        nonlocal outstanding, next_request_id
+        if not runtime.is_current_candle_trigger(trigger) or shutdown_event.is_set():
+            return None
+        next_request_id += 1
+        waiter: asyncio.Future[_PostObservation] = asyncio.get_running_loop().create_future()
+        slot = _OutstandingPost(next_request_id, trigger.connection_id, trigger, waiter)
+        outstanding = slot
+        interval = cast(Literal["5m", "15m"], trigger.identity[1])
+        close_time_ms = trigger.identity[2] + _CANDLE_INTERVAL_MILLISECONDS[interval] - 1
+        envelope = {
+            "method": "post",
+            "id": slot.request_id,
+            "request": {
+                "type": "info",
+                "payload": {
+                    "type": "candleSnapshot",
+                    "req": {
+                        "coin": "ETH",
+                        "interval": interval,
+                        "startTime": trigger.identity[2],
+                        "endTime": close_time_ms,
+                    },
+                },
+            },
+        }
+        try:
+            request_deadline = min(
+                cycle_deadline, _monotonic_now() + _CANDLE_CONFIRMATION_REQUEST_TIMEOUT_SECONDS
+            )
+            remaining = request_deadline - _monotonic_now()
+            if remaining <= 0:
+                raise CandleConfirmationRecoveryRequired("candle post request deadline exceeded")
+            await asyncio.wait_for(
+                websocket.send(json.dumps(envelope, separators=(",", ":"))), timeout=remaining
+            )
+            remaining = request_deadline - _monotonic_now()
+            if remaining <= 0:
+                raise CandleConfirmationRecoveryRequired("candle post request deadline exceeded")
+            return await asyncio.wait_for(
+                waiter, timeout=remaining
+            )
+        except TimeoutError as exc:
+            if runtime.is_current_candle_trigger(trigger) and not shutdown_event.is_set():
+                raise CandleConfirmationRecoveryRequired("candle post request timed out") from exc
+            return None
+        finally:
+            if outstanding is slot:
+                outstanding = None
+            if not waiter.done():
+                waiter.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await waiter
+
+    async def confirmation_coordinator() -> None:
+        last_interval: str | None = None
+        while not shutdown_event.is_set():
+            trigger = runtime.next_candle_confirmation_candidate(prefer_other_than=last_interval)
+            if trigger is None:
+                candidate_event.clear()
+                await candidate_event.wait()
+                continue
+            last_interval = trigger.identity[1]
+            if not await wait_current(trigger, trigger.eligible_at_monotonic):
+                continue
+            cycle_deadline = _monotonic_now() + _CANDLE_CONFIRMATION_DEADLINE_SECONDS
+            try:
+                first = await post_observation(trigger, cycle_deadline=cycle_deadline)
+                if first is None or not runtime.is_current_candle_trigger(trigger):
+                    continue
+                if not await wait_current(
+                    trigger, first.completed_monotonic + _CANDLE_CONFIRMATION_GAP_SECONDS
+                ):
+                    continue
+                if _monotonic_now() >= cycle_deadline:
+                    raise CandleConfirmationRecoveryRequired(
+                        "candle confirmation deadline exceeded"
+                    )
+                second = await post_observation(trigger, cycle_deadline=cycle_deadline)
+                if second is None or not runtime.is_current_candle_trigger(trigger):
+                    continue
+                if _monotonic_now() >= cycle_deadline:
+                    raise CandleConfirmationRecoveryRequired(
+                        "candle confirmation deadline exceeded"
+                    )
+                disposition = runtime.confirm_candle_refresh(
+                    trigger=trigger,
+                    raw_first=first.raw_text,
+                    raw_second=second.raw_text,
+                    first_request_id=first.request_id,
+                    second_request_id=second.request_id,
+                    first_completed_at=first.completed_at,
+                    second_completed_at=second.completed_at,
+                    first_completed_monotonic=first.completed_monotonic,
+                    second_completed_monotonic=second.completed_monotonic,
+                )
+                if disposition == "ADMITTED":
+                    status(
+                        "EVENT candle-finalized "
+                        f"interval={trigger.identity[1]} open_time_ms={trigger.identity[2]}"
+                    )
+            except (CandleConfirmationRecoveryRequired, CandleConflictRecoveryRequired):
+                if runtime.owns_candle_trigger(trigger) and not shutdown_event.is_set():
+                    raise
+            except Exception as exc:
+                if runtime.is_current_candle_trigger(trigger) and not shutdown_event.is_set():
+                    raise CandleConfirmationRecoveryRequired(
+                        "candle post confirmation failed"
+                    ) from exc
+
+    coordinator = asyncio.create_task(confirmation_coordinator())
+
     try:
         while not shutdown_event.is_set():
-            try:
-                frame = await asyncio.wait_for(websocket.recv(), timeout=1.0)
-            except TimeoutError:
+            if coordinator.done():
+                exception = coordinator.exception()
+                if exception is not None:
+                    raise exception
+                return
+            recv_task = asyncio.create_task(websocket.recv())
+            done, _ = await asyncio.wait(
+                {recv_task, coordinator}, timeout=1.0, return_when=asyncio.FIRST_COMPLETED
+            )
+            if coordinator in done:
+                if not recv_task.done():
+                    recv_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await recv_task
+                exception = coordinator.exception()
+                if exception is not None:
+                    raise exception
+                return
+            if recv_task not in done:
+                recv_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await recv_task
                 continue
+            frame = recv_task.result()
             if isinstance(frame, bytes):
                 frame = frame.decode("utf-8")
             if not frame:
                 continue
+            received_at = _utc_now()
+            received_monotonic = _monotonic_now()
             try:
-                runtime.accept_public_frame(frame_text=frame, now=_utc_now())
+                envelope = json.loads(frame)
+            except json.JSONDecodeError:
+                envelope = None
+            if (
+                type(envelope) is dict
+                and envelope.get("channel") == "post"
+                and type(envelope.get("data")) is dict
+            ):
+                data = envelope["data"]
+                request_id = data.get("id")
+                if (
+                    outstanding is not None
+                    and type(request_id) is int
+                    and request_id == outstanding.request_id
+                    and outstanding.connection_id == outstanding.trigger.connection_id
+                    and not outstanding.waiter.done()
+                ):
+                    outstanding.waiter.set_result(
+                        _PostObservation(
+                            frame,
+                            outstanding.request_id,
+                            received_at,
+                            received_monotonic,
+                        )
+                    )
+                continue
+            try:
+                result = runtime.accept_public_frame(
+                    frame_text=frame,
+                    now=received_at,
+                    received_at=received_at,
+                    received_monotonic=received_monotonic,
+                )
+                if type(result) is CandleRefreshTrigger:
+                    status(
+                        "EVENT candle-refresh-trigger "
+                        f"interval={result.identity[1]} open_time_ms={result.identity[2]}"
+                    )
+                    candidate_event.set()
+                if reconnecting and runtime.is_ready and not ready_announced:
+                    status("EVENT reconnect-success")
+                    ready_announced = True
             except StatusSnapshotPublicationError:
+                raise
+            except (CandleConflictRecoveryRequired, CandleConfirmationRecoveryRequired):
                 raise
             except Exception as exc:
                 status(f"ERROR accept_public_frame: {type(exc).__name__}")
+                status("EVENT disconnect")
                 runtime.mark_disconnected(now=_utc_now(), reason="frame-error")
                 return
     finally:
+        if outstanding is not None and not outstanding.waiter.done():
+            outstanding.waiter.cancel()
+        coordinator.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await coordinator
         dispatch_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await dispatch_task
@@ -787,7 +1028,7 @@ def main(argv: tuple[str, ...] | None = None) -> int:
             args=args,
             recover_snapshot=recover_public_snapshot_default,
             websocket_factory=_default_websocket_factory,
-            status=lambda message: print(message),
+            status=lambda message: print(message, flush=True),
         )
 
     try:

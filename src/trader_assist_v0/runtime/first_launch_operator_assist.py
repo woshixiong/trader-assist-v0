@@ -134,9 +134,11 @@ _TERMINAL_SESSION_STATES = frozenset(
 class AcceptedPublicFrame:
     raw_text: str
     received_at: datetime
+    received_monotonic: float
     receive_sequence: int
     connection_id: str
     channel: Literal["candle", "activeAssetCtx"]
+    authoritative: bool = True
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -315,6 +317,28 @@ class PublicRuntimeProtocol:
             raise SessionStateError("monotonic clock is invalid")
         return result
 
+    @staticmethod
+    def _receipt_monotonic(value: object) -> float:
+        if type(value) not in {int, float} or isinstance(value, bool):
+            raise ValueError("receipt monotonic clock is invalid")
+        result = float(cast(int | float, value))
+        if not math.isfinite(result):
+            raise ValueError("receipt monotonic clock is invalid")
+        return result
+
+    def _receipt_evidence(
+        self, *, received_at: datetime | None, received_monotonic: object | None
+    ) -> tuple[datetime, float]:
+        """Return one validated receipt pair, sampling only for legacy callers."""
+        if (received_at is None) != (received_monotonic is None):
+            raise ValueError("receipt evidence must be paired")
+        if received_at is None:
+            return _exact_utc(self.utc_now(), "UTC clock is invalid"), self._monotonic_sample()
+        return (
+            _exact_utc(received_at, "receipt UTC clock is invalid"),
+            self._receipt_monotonic(received_monotonic),
+        )
+
     def _enforce_timeout(self) -> None:
         if self._state in _TERMINAL_SESSION_STATES:
             raise SessionStateError("session is terminal")
@@ -384,7 +408,13 @@ class PublicRuntimeProtocol:
                 return spec.identity
         raise ValueError("acknowledgement subscription is unknown")
 
-    def accept_frame(self, frame: str | bytes) -> AcceptedPublicFrame | None:
+    def accept_frame(
+        self,
+        frame: str | bytes,
+        *,
+        received_at: datetime | None = None,
+        received_monotonic: object | None = None,
+    ) -> AcceptedPublicFrame | None:
         if self._state is PublicSessionState.NEW:
             self._state = PublicSessionState.FAILED
             raise SessionStateError("session has not started")
@@ -436,7 +466,9 @@ class PublicRuntimeProtocol:
             self._failed(PublicFrameError, str(exc))
             raise AssertionError("unreachable") from exc
         try:
-            received_at = _exact_utc(self.utc_now(), "UTC clock is invalid")
+            receipt_at, receipt_monotonic = self._receipt_evidence(
+                received_at=received_at, received_monotonic=received_monotonic
+            )
         except ValueError as exc:
             self._failed(PublicFrameError, str(exc))
             raise AssertionError("unreachable") from exc
@@ -448,18 +480,39 @@ class PublicRuntimeProtocol:
                 # authorized-identity frames continue to the market-data parser,
                 # which withdraws READY and fails closed with its original error.
                 close_time = None
-            if close_time is not None and close_time >= int(received_at.timestamp() * 1000):
+            if close_time is not None and close_time >= int(receipt_at.timestamp() * 1000):
                 # A structurally valid current candle is ordinary non-authoritative
                 # transport traffic until its inclusive close timestamp has passed.
                 return None
+            if close_time is not None:
+                # A closed candle is only a refresh trigger until the runtime
+                # confirms its canonical content through bounded public HTTP
+                # recovery.  It intentionally consumes no authority sequence.
+                return AcceptedPublicFrame(
+                    frame,
+                    receipt_at,
+                    receipt_monotonic,
+                    self._receive_sequence,
+                    self.connection_id,
+                    channel,
+                    authoritative=False,
+                )
         self._receive_sequence += 1
         return AcceptedPublicFrame(
             frame,
-            received_at,
+            receipt_at,
+            receipt_monotonic,
             self._receive_sequence,
             self.connection_id,
             channel,
         )
+
+    def allocate_authoritative_sequence(self) -> int:
+        """Allocate one sequence only when a frame has become authority."""
+        if self._state is not PublicSessionState.ACTIVE:
+            raise SessionStateError("session is not active")
+        self._receive_sequence += 1
+        return self._receive_sequence
 
     def check_timeout(self) -> None:
         self._enforce_timeout()
