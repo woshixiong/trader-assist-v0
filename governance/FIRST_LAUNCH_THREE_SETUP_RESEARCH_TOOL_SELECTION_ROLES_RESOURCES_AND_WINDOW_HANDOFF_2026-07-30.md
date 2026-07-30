@@ -9,17 +9,15 @@
 
 本文不授权生产修改、部署、重启、账户访问、签名、交易所写入、自动下单、Mark Ready 或 merge。
 
----
-
 ## 1. 本轮任务核心
 
 本轮不是发明策略，也不是寻找历史收益最高的参数组合。
 
 本轮要把三种成熟的主观交易机制转换为因果、可重复、可回测、可植入 First Launch 的量化合同：
 
-1. `SWEEP_RECLAIM`：流动性清扫后未被市场接受，重新收回关键边界；
-2. `BREAKOUT_RETEST`：关键边界突破、被市场接受、回踩确认后延续；
-3. `RANGE_EDGE_REJECTION`：稳定震荡区间边缘拒绝与均值回归。
+1. `SWEEP_RECLAIM`：流动性清扫、止损或强平触发后，价格未被市场接受在边界外并重新收回；
+2. `BREAKOUT_RETEST`：关键边界有效突破、被市场接受、回踩确认后延续；
+3. `RANGE_EDGE_REJECTION`：稳定震荡区间边缘拒绝与向区间内部均值回归。
 
 `FAST` 与 `STANDARD` 对所有适用 Setup 均保留在研究和回测中。最终按 Setup 分别决定保留 FAST、STANDARD 或两者。
 
@@ -34,8 +32,6 @@
 → 联合回测与交互分析
 → 最小生产候选
 ```
-
----
 
 ## 2. 回测工具最终裁决
 
@@ -75,15 +71,7 @@
 - 输出标准化候选记录；
 - 进行简单 market-event 归并。
 
-它不负责：
-
-- 撮合；
-- 账户资金；
-- 交易手续费引擎；
-- 收益曲线；
-- 最大回撤；
-- 图表；
-- 参数优化。
+它不负责撮合、账户资金、手续费引擎、收益曲线、最大回撤、图表或参数优化。
 
 这属于“有限本地回测的策略判定层”，不是自研回测平台。
 
@@ -153,8 +141,6 @@ RESULT_MAPPING_AND_REPORT_EXPORT
 - 优先复用生产纯函数；
 - 不复制一套独立策略实现。
 
----
-
 ## 3. “Trader Assist 专属”内容的价值裁决
 
 “专属”本身没有价值。只有表达真实经济机制、实际人工执行方式、生产一致性或统计正确性的专属内容才保留。
@@ -202,29 +188,17 @@ RESULT_MAPPING_AND_REPORT_EXPORT
 
 这些通过生产代码回归和部署验收验证，不塞入策略回测。
 
----
-
 ## 4. 数据路线
 
 ### 4.1 Hyperliquid 精确场地近期证据
 
-使用 Hyperliquid 官方可获得的近期 5m / 15m K 线进行：
-
-- venue 时间语义校验；
-- 近期成交量和价格行为 sanity check；
-- First Launch 最终候选的近期场地验证。
+使用 Hyperliquid 官方可获得的近期 5m / 15m K 线进行 venue 时间语义校验、近期成交量和价格行为 sanity check，以及 First Launch 最终候选的近期场地验证。
 
 Hyperliquid candle 历史窗口有限，因此不能单独用于覆盖大量 regime。
 
 ### 4.2 长历史代理证据
 
-使用 Binance 或 Bybit ETH perpetual 1m / 5m / 15m 长历史覆盖：
-
-- RANGE；
-- DIRECTIONAL_UP；
-- DIRECTIONAL_DOWN；
-- TRANSITION；
-- EXTREME VOLATILITY。
+使用 Binance 或 Bybit ETH perpetual 1m / 5m / 15m 长历史覆盖 RANGE、DIRECTIONAL_UP、DIRECTIONAL_DOWN、TRANSITION 和 EXTREME VOLATILITY。
 
 代理数据只证明交易机制在相近市场中的稳健性，不用于声称 Hyperliquid 精确收益。
 
@@ -245,8 +219,6 @@ HYPERLIQUID_EXACT_RECENT_EVIDENCE
 - 使用保守 Stop-first；
 - 单独报告数量和影响。
 
----
-
 ## 5. 成本和人工执行合同
 
 默认研究模型：
@@ -260,95 +232,35 @@ HYPERLIQUID_EXACT_RECENT_EVIDENCE
 
 实际费率和延迟可在合同冻结前替换，但不得在看到回测收益后选择最有利值。
 
----
-
 ## 6. 角色与职责
 
 ### 6.1 策略优化窗口
 
-负责：
+负责外部成熟研究、三 Setup 经济机制、两层 Environment / Event 模型、完整因果量化合同、FAST / STANDARD、触发与失效、反例和交互、候选预注册以及回测输入与结果解释。
 
-- 外部成熟研究；
-- 三 Setup 经济机制；
-- 两层 Environment / Event 模型；
-- 三 Setup 完整因果量化合同；
-- FAST / STANDARD；
-- 触发、失效、止损、目标、expiry 和成本；
-- 候选预注册；
-- 反例和交互矩阵；
-- 回测输入与结果解释。
-
-不负责：
-
-- 具体工程任务派发；
-- 工具安装；
-- 生产修改；
-- 部署、Mark Ready 或 merge。
+不负责具体工程任务派发、工具安装、生产修改、部署、Mark Ready 或 merge。
 
 ### 6.2 产品功能规划窗口
 
-负责：
-
-- 策略与 First Launch / V0 的产品定位；
-- 人类交易员使用流程；
-- 信号卡片中 Setup / confirmation mode 的产品表达；
-- TAKEN / SKIPPED 和结果证据需求；
-- 生产准入与失败后的产品裁决；
-- 与策略优化、工程优化共同确认策略—产品—框架对接。
+负责策略与 First Launch / V0 的产品定位、人类交易员使用流程、信号展示、TAKEN / SKIPPED / outcome 证据、产品准入与失败处理，并与策略优化、工程优化共同确认策略—产品—框架对接。
 
 ### 6.3 工程优化窗口
 
-负责：
+负责最小开发路径、技术路线、当前策略纯函数可复用性、有限本地 runner 与 Freqtrade 的最薄适配、Backtesting.py 可选复核条件、数据、许可证、文件范围、依赖和停止条件。
 
-- 最小开发路径与技术路线；
-- 当前策略纯函数可复用性；
-- 有限本地 runner 与 Freqtrade 的最薄适配；
-- Backtesting.py 可选复核条件；
-- 数据、许可证、文件范围、依赖和停止条件；
-- 不触碰生产架构的可行性；
-- 向总控输出可执行技术方案。
-
-不负责：
-
-- 具体任务派发；
-- 擅自确定策略参数；
-- 修改产品范围；
-- 直接部署。
+不负责具体任务派发、擅自确定策略参数、修改产品范围或直接部署。
 
 ### 6.4 总控窗口
 
-是唯一任务派发者，负责：
-
-- 接收三个上层窗口的冻结输入；
-- 建立任务包、阶段、分支、Writer、Reviewer、CI 和部署顺序；
-- 向 Codex CLI、数据准备、Reviewer 和部署窗口派发；
-- 控制权限、停止条件和证据闭环。
+是唯一任务派发者，负责接收三个上层窗口的冻结输入，并向 Codex CLI、数据准备、Reviewer、CI 和部署窗口派发。
 
 ### 6.5 Codex CLI / 执行者
 
-只能由总控派发，负责：
-
-- 隔离环境；
-- 数据准备；
-- 最薄适配；
-- 联合回测；
-- 结果导出；
-- 获得 GO 后的最小 strategy-only patch。
+只能由总控派发，负责隔离环境、数据准备、最薄适配、联合回测、结果导出以及获得 GO 后的最小 strategy-only patch。
 
 ### 6.6 独立 Reviewer
 
-只能由总控派发，负责：
-
-- 因果性；
-- v0.1 parity；
-- 时间对齐；
-- raw candidate 完整性；
-- FAST / STANDARD 实际触发；
-- 成本与路径模型；
-- 结果可重复性；
-- 是否发生隐藏调参或选择偏差。
-
----
+只能由总控派发，负责因果性、v0.1 parity、时间对齐、raw candidate 完整性、FAST / STANDARD 实际触发、成本与路径模型、结果可重复性，以及是否发生隐藏调参或选择偏差。
 
 ## 7. 当前资源状态
 
@@ -381,8 +293,6 @@ HYPERLIQUID_EXACT_RECENT_EVIDENCE
 - 交易账户访问；
 - 生产服务器写权限。
 
----
-
 ## 8. 两个前置工作包
 
 ### 工作包 A：三 Setup 策略研究与量化合同
@@ -411,8 +321,6 @@ RANGE_FAST_STANDARD
 ALL_RAW_CANDIDATES_NO_ARBITRATION
 COMBINED_EXACT_POLICY
 ```
-
----
 
 ## 9. 后续顺序
 
