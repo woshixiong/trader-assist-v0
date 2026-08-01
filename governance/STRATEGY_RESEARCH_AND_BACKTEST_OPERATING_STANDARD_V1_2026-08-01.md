@@ -689,7 +689,45 @@ future Setup research
 
 ---
 
-## 15. 最终状态
+## 15. 当前窗口补充指令
+
+### 15.1 Product Optimization
+
+当前任务仅新增以下核对，不扩大产品功能：
+
+- 确认所有 WATCH/SETUP_READY 可以留存，但 Top-N 只限制通知；
+- 确认 Candidate、SETUP_READY、正式 Signal/TradePlan 的语义不会混淆；
+- 确认 T/S/R 仍是一项快速操作；
+- 确认研究字段主要后台自动记录，不增加交易员实时填写负担；
+- 确认未来报告需要支持 Scanner、Setup、人类判断和 Outcome 的对照。
+
+不要求当前产品窗口设计完整研究 Dashboard、Trial Registry UI 或高级统计报告。
+
+### 15.2 Engineering Optimization
+
+当前任务必须把外部研究建议分为：
+
+```text
+CURRENT_RELEASE_REQUIRED
+CURRENT_RELEASE_ONLY_IF_NEAR_ZERO_COST
+POST_FIRST_LAUNCH_RESEARCH
+```
+
+工程估算不得把四个 comparator、完整 Trial Registry、跨资产聚类、PBO/Deflated Sharpe、walk-forward 或新研究平台计入本轮默认实现。
+
+工程需要单独报告：
+
+- 当前发布最低证据增量的 exact file scope；
+- 每项增量是否复用现有数据；
+- 删除该项会失去什么验证能力；
+- 它对开发、测试和部署时间的边际影响；
+- Scanner/三 Setup 的主关键路径是否受影响。
+
+若某项证据能力显著延长当前发布，应降级为 post-First-Launch，除非它是因果正确、候选留存或基本验证不可缺少的底线。
+
+---
+
+## 16. 最终状态
 
 ```text
 FUTURE_RESEARCH_STANDARD_CREATED = YES
