@@ -239,4 +239,49 @@ EXCHANGE_WRITE_AUTHORITY = NO
 TASK_DISPATCH_AUTHORITY = PROJECT_CONTROL_ONLY
 ```
 
+## 11. 下一次部署强制可靠性阻断项
+
+当前生产已经确认存在 WebSocket 重连预算按进程生命周期错误累计的问题。服务已通过人工受控重启恢复，因此不安排当前生产服务器直改或单独 hotfix；但该缺陷必须在本次功能发布的最终生产部署前完成源码修复、事故回归测试、完整 CI、独立 Review 和合并。
+
+权威任务记录：
+
+```text
+governance/FIRST_LAUNCH_RECONNECT_BUDGET_RESET_NEXT_DEPLOYMENT_BLOCKER_2026-08-02.md
+```
+
+固定身份：
+
+```text
+TASK_ID = FIRST_LAUNCH_RECONNECT_BUDGET_RESET
+PRIORITY = P1_PRODUCTION_RELIABILITY
+RELEASE_GATE = NEXT_DEPLOYMENT_BLOCKER
+```
+
+最小范围：
+
+```text
+1 个 runtime 源码文件
+1 个主要测试文件
+可选 1 个简短 runbook 更新
+```
+
+必须保持：
+
+```text
+连续恢复失败达到预算后仍 fail closed
+成功完整恢复 READY 后重连计数归零
+历史成功重连不消耗下一次独立事故的预算
+```
+
+最终 release candidate 必须包含：
+
+```text
+RECONNECT_BUDGET_RESET_TEST=PASS
+CONSECUTIVE_FAILURE_BUDGET=PASS
+SUCCESSFUL_READY_RESET=PASS
+FULL_CI=PASS
+```
+
+该任务可与 Three Setup / Scanner 功能开发并行，但必须在最终 integration 和部署 Gate 前闭合。预计新增工作量为 2–4 person-hours，不得扩大为新的连接管理框架。
+
 本文只固定计划，不授权代码修改、回测执行、依赖安装、部署、重启、permit 修改、Mark Ready、merge、账户访问、签名或下单。
