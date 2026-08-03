@@ -6,7 +6,10 @@
 **关联 Draft PR：** `#52`  
 **状态：** `PLANNING_ONLY / NON_EXECUTABLE / MASTER_BACKLOG_INDEX`  
 **任务派发权威：** `PROJECT_CONTROL_ONLY`  
-**优先级：** 本文件取代与其冲突的 `FIRST_LAUNCH_CURRENT_MASTER_TASK_REGISTER_AND_EXECUTION_ORDER_2026-08-03.md`；旧文件中不冲突的待办和部署前阻断继续有效。
+**当前文档入口：** `FIRST_LAUNCH_CURRENT_AUTHORITY_INDEX_AND_SUPERSESSION_MAP_R1_2026-08-03.md`  
+**策略机器权威：** `FIRST_LAUNCH_CURRENT_RELEASE_MACHINE_EXECUTABLE_STRATEGY_PACKAGE_R1_2026-08-03.md`  
+**架构权威：** `FIRST_LAUNCH_MULTI_ASSET_PARALLEL_REPLACEMENT_ARCHITECTURE_DECISION_R1_2026-08-03.md`  
+**优先级：** 本文件只管理任务和顺序，不得覆盖上述策略、架构和权威索引。
 
 ---
 
@@ -24,11 +27,12 @@ AS_CURRENT_RELEASE_PREDEPLOYMENT_HARD_GATE
 ```text
 STRATEGY RESEARCH OPTIMIZATION
 → MINIMUM CORRECTNESS VALIDATION
-→ SCANNER + EVIDENCE + SHADOW PIPELINE
+→ UNIFIED MULTI_ASSET SHADOW SIGNAL SYSTEM
+→ SCANNER + COMPLETE EVIDENCE PIPELINE
 → CLOSE PREDEPLOYMENT OPERATIONS BLOCKERS
-→ HUMAN-CONTROLLED DEPLOYMENT
+→ HUMAN_CONTROLLED DEPLOYMENT
 → SHADOW FORWARD VALIDATION
-→ EVIDENCE-TRIGGERED LIMITED STRATEGY REVISION
+→ EVIDENCE_TRIGGERED LIMITED STRATEGY REVISION
 → RAPID REDEPLOYMENT
 → REPEAT AS JUSTIFIED
 ```
@@ -38,258 +42,109 @@ STRATEGY RESEARCH OPTIMIZATION
 ```text
 RAPID_ITERATION = CORE_PROJECT_METHOD
 SMALL_BATCH_CHANGE = REQUIRED
-HUMAN_FINAL_DECISION = YES
-MANUAL_EXECUTION = YES
+HUMAN_FINAL_DECISION = REQUIRED
 AUTO_TRADE = NO
-EXCHANGE_WRITE_AUTHORITY = ABSENT
-COMPLETE_EVIDENCE = REQUIRED
-ROLLBACK = REQUIRED
+ALL_ELIGIBLE_MARKETS_CAN_RECEIVE_FULL_SIGNAL = YES
 ```
 
 ---
 
-## 2. 当前上线前唯一主线
+## 2. 当前发布关键路径
 
-### P0 — 上线前策略研究冻结
+1. Strategy Optimization 完成当前机器策略包与权威清理；
+2. Engineering Optimization 核验真实代码、复用点和最小实现路线；
+3. Project Control 派发：
+   - 新统一多资产 Shadow Signal System；
+   - Scanner Stage A/B/C；
+   - Candidate / Signal / Plan / ShadowOrder / T-S-R / Outcome / Export；
+   - 最小正确性门禁；
+   - reconnect-budget；
+   - 主机外备份和恢复；
+4. CI、独立 Review、回滚、部署和 Smoke；
+5. 上线后根据实际 Scanner 和证据质量决定何时复核，不预设固定天数或样本数；
+6. 只在证据支持时进行有限、版本化调整。
 
-由 Strategy Optimization 完成最多 1～2 轮研究优化，输出最合理的上线前研究候选。
+---
 
-状态要求：
-
-```text
-MACHINE_EXECUTABLE = YES
-NO_OBVIOUS_INTERNAL_CONTRADICTION = YES
-OBSERVED_FACTS_ONLY = YES
-PROFITABILITY_PROVEN = NO_CLAIM
-PARAMETERS_OPTIMAL = NO_CLAIM
-```
-
-### P1 — 最小正确性验证
-
-只验证：
-
-- 确定性 Fixture；
-- closed-and-received-only；
-- no-lookahead；
-- 状态确认/失效/取代；
-- slow STANDARD；
-- dedup；
-- re-entry；
-- Entry/Stop/Target/ShadowOrder 一致；
-- 小段近期数据 Smoke；
-- 回滚能力。
-
-不建设长期回测平台，不运行正式三轮历史回测。
-
-权威：
-
-- `STRATEGY_RESEARCH_DISCOVERY_AND_CONVERGENCE_PLAYBOOK_V5_2026-08-03.md`
-- `FIRST_LAUNCH_SHADOW_FORWARD_VALIDATION_AND_RAPID_ITERATION_PLAN_R1_2026-08-03.md`
-
-### P2 — Scanner Lite R3
-
-保留：
+## 3. 新旧系统关系
 
 ```text
-SCANNER_BIAS = HIGH_RECALL
-UNIVERSE = ALL_ELIGIBLE_HYPERLIQUID_PERPS
-WATCH_AND_SETUP_READY = REQUIRED
-ALL_CANDIDATES_RETAINED = YES
-TOP_N_LIMITS_NOTIFICATION_ONLY = YES
-AUTO_TRADE = NO
-AUTO_ASSET_SWITCH = NO
-SCANNER_FAILURE_ISOLATION = REQUIRED
+LEGACY_ETH_RUNTIME
+= FROZEN FALLBACK / ROLLBACK / COMPARATOR
+
+NEW_MULTI_ASSET_SYSTEM
+= ETH + ALL ELIGIBLE HYPERLIQUID PERPS
+= SAME FULL SIGNAL FIELDS
+= NOT_SUBMITTED SHADOW AUTHORITY
+= HUMAN FINAL DECISION
 ```
 
-### P3 — 候选、影子、标注和 Outcome 闭环
+当前不对旧 ETH Runtime、TradePlan Hash 或 runtime.db 做侵入式多资产迁移。
 
-上线前必须补齐：
+---
 
-- Scan/Candidate 稳定身份；
-- WATCH、SETUP_READY、正式 Signal 和拒绝原因留存；
-- Candidate/Signal/TradePlan 权威分离；
-- T/S/R 快速人工标注；
-- 30/60/120m 自动 MFE/MAE；
-- Plan 级 TP/Stop/1R/1.5R/2R；
-- 版本化批量导出；
-- 数据完整性报告；
-- Candidate→Signal→Plan→Annotation→Outcome 关联。
+## 4. 当前必须完成
 
-不建设：
+- 新资产无关 MarketIdentity、ClosedBar、Strategy State、PlanDraft；
+- 当前机器策略包的 Sweep、Breakout Micro FAST、state-driven STANDARD、Range Edge Rejection；
+- Scanner R3 全市场发现与候选分层；
+- 所有 WATCH/Candidate 自动留存；
+- Scanner SETUP_READY 进入完整三 Setup evaluator；
+- Formal Setup 生成完整 Shadow TradePlan / ShadowOrder；
+- 所有资产输出 Entry、Chase、Stop、TP、1%/2% 参考金额；
+- T/S/R；
+- 30/60/120m Outcome；
+- 一键导出和完整性报告；
+- failure isolation；
+- reconnect-budget；
+- off-host backup and recovery；
+- CI、Review、Rollback、Deploy、Smoke。
 
-- Dashboard；
-- 完整 paper trading；
-- 自动撮合；
-- 账户模拟；
-- 通用 Trial 平台；
-- 实时动态退出系统。
+---
 
-### P4 — 部署前可靠性和灾难恢复阻断
+## 5. 当前不做
 
-下一次生产部署前仍必须完成：
+- 完整历史回测；
+- 长期回测平台；
+- Nautilus/Freqtrade/vectorbt/Backtrader 接入；
+- 自动交易；
+- 账户或签名接入；
+- 多资产组合资金仲裁；
+- 动态退出引擎；
+- Discord Bot；
+- 第四 Setup；
+- OI/funding/L2 硬触发；
+- 旧 ETH Schema 多资产迁移；
+- 旧 ETH 下线。
+
+---
+
+## 6. 部署前阻断
 
 ```text
 OPS-1 = FIRST_LAUNCH_RECONNECT_BUDGET_RESET
 OPS-2 = TRADER_ASSIST_OFF_HOST_BACKUP_AND_LIGHTSAIL_SNAPSHOT_RETIREMENT
 ```
 
-Lightsail 快照在恢复门禁和单独授权前不得删除。
-
-### P5 — 最终集成、Review、部署和 Smoke
-
-要求：
-
-- exact release SHA；
-- full CI；
-- 独立 Review；
-- deployment backup；
-- rollback target；
-- Scanner 故障隔离；
-- no exchange write authority；
-- ShadowOrder 仍为 NOT_SUBMITTED；
-- 部署后健康和通知 Smoke；
-- 生产旧版本可恢复。
+部署前必须完成修复、测试和恢复门禁。Lightsail 快照不得在恢复门禁通过前删除。
 
 ---
 
-## 3. 上线后前向验证
+## 7. 上线后条件性 Backlog
 
-上线后不预设固定优化日期、候选数量或第二轮具体方案。
+`LONG_TERM_BACKTEST_ARCHITECTURE_REEVALUATION` 仅在以下条件出现时重新讨论：
 
-流程：
+- 前向样本过慢；
+- 需要同时比较大量参数；
+- 需要研究罕见历史行情；
+- 准备自动交易或提高资金规模；
+- 需要组合级风险验证；
+- 每次修改等待真实样本的时间不可接受。
 
-```text
-RUN
-→ USER REPORTS ACTUAL SCANNER THROUGHPUT AND DATA QUALITY
-→ EXPORT VERSIONED EVIDENCE PACKAGE
-→ STRATEGY OPTIMIZATION REVIEW
-→ CONTINUE_COLLECTING | LIMITED_CHANGE | ROLLBACK
-```
-
-必须分析：
-
-- 所有被保留候选，不只 TAKEN；
-- T/S/R 和可选原因；
-- 自动 Outcome；
-- WATCH→SETUP_READY；
-- Scanner Candidate→Formal Signal；
-- Setup、方向、HTF、波动率、流动性和资产类别分层；
-- 不同策略/参数/Release 版本严格分离。
+旧 ETH 运行时下线同样需要另行授权和完整门禁。
 
 ---
 
-## 4. 上线后每轮快速迭代
+## 8. 权限边界
 
-每轮根据问题类型分级：
-
-### 参数/阈值修改
-
-```text
-EXPECTED_TOTAL = 4.5～12.5 person-hours
-EXPECTED_ELAPSED = approximately 0.5～1.5 workdays
-```
-
-### 局部机器语义修改
-
-```text
-EXPECTED_TOTAL = 8～21 person-hours
-EXPECTED_ELAPSED = approximately 1～3 workdays
-```
-
-### 架构或数据链缺陷
-
-必须单独工程立项，不得混入普通策略迭代估算。
-
-完成首版数据闭环以后，不应每轮重复开发导出、标注、Outcome 或基础部署流程。
-
----
-
-## 5. 长期回测架构
-
-保留为本轮成功部署后的高优先级专项，但当前不继续讨论或实施。
-
-```text
-TASK = LONG_TERM_REUSABLE_BACKTEST_ARCHITECTURE
-STATUS = DEFERRED_UNTIL_CURRENT_RELEASE_DEPLOYED
-```
-
-当前研究方向保留：
-
-```text
-MATURE_ENGINE
-+ ENGINE_AGNOSTIC_STRATEGY_KERNEL
-+ THIN_ADAPTERS
-+ PROJECT_SPECIFIC_EVIDENCE
-+ MINIMAL_DETERMINISTIC_ORACLE
-```
-
-部署后重新评估：
-
-- NautilusTrader compatibility Spike；
-- 数据目录和 Manifest；
-- Strategy Kernel；
-- Backtest/Shadow/Live Adapter；
-- 复用当前前向证据作为 Golden Fixtures；
-- 长期开发时间和维护成本。
-
-该专项不得重新进入当前上线关键路径。
-
----
-
-## 6. 仍然保留的后续任务
-
-以下任务没有取消：
-
-- Three Setup 根据前向证据继续版本化优化；
-- Scanner Lite R3 后续参数优化；
-- Point-in-time Universe 和全候选证据；
-- T/S/R、Outcome、No-Signal 证明；
-- ShadowOrder 与实际人工成交匹配；
-- 长期回测架构；
-- 半自动执行研究；
-- 动态持仓和退出研究；
-- 多标的正式 Setup 运行；
-- 运维、备份、恢复和成本优化。
-
-所有任务必须按 Project Control 的单一路径派发。
-
----
-
-## 7. 当前禁止事项
-
-当前治理记录不授权：
-
-- 代码修改；
-- 分支创建；
-- 依赖安装；
-- Scanner 实施；
-- 部署；
-- 服务重启；
-- permit 修改；
-- 账户访问；
-- 私钥或签名；
-- 交易所写入；
-- 自动下单；
-- Mark Ready；
-- merge。
-
----
-
-## 8. 当前最终执行顺序
-
-```text
-1. Strategy Optimization freezes predeployment candidate
-2. Engineering Optimization produces minimum-release route
-3. Product Optimization confirms T/S/R and evidence UX only where needed
-4. Project Control dispatches implementation
-5. Minimum correctness validation passes
-6. Scanner and evidence pipeline pass
-7. Reconnect and backup/DR blockers pass
-8. Full CI and independent review pass
-9. Controlled deployment and smoke
-10. Shadow forward validation begins
-11. User reports actual throughput and qualitative feedback
-12. Versioned export and Strategy Optimization review
-13. Continue, limited revision, or rollback
-14. Long-term reusable backtest architecture discussion reopens after deployment
-```
+本文件不授权代码修改、工程派发、依赖安装、部署、重启、permit 修改、快照删除、账户访问、签名、交易所写入、自动下单、PR Mark Ready 或 Merge。
