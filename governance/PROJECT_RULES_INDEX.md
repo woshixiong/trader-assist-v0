@@ -53,6 +53,87 @@ Use this preferred order:
 A normal repair plus one exceptional repair is the maximum for one bounded design route. If
 both fail, do not continue iterative patching. Reduce scope or start a clean replacement.
 
+## Mature-solution-first and cumulative-delivery rule
+
+The project must not spend its limited engineering capacity rebuilding mature generic
+infrastructure when a maintained external solution can satisfy the current authority,
+correctness, operational, licensing and lifecycle requirements.
+
+The fixed solution hierarchy is:
+
+```text
+REUSE MATURE MAINTAINED SOLUTION
+→ USE PROVIDER-NATIVE CAPABILITY
+→ ADD THE THINNEST PRACTICAL ADAPTER
+→ IMPLEMENT SMALL PROJECT-OWNED DOMAIN LOGIC
+→ BUILD CUSTOM INFRASTRUCTURE ONLY AS A DOCUMENTED LAST RESORT
+```
+
+Before authorizing custom infrastructure, the current engineering stage must identify the
+relevant external tools, frameworks, libraries, provider-native capabilities or proven design
+patterns and record:
+
+- the exact candidates reviewed;
+- the capability that can be reused;
+- the remaining fit gap;
+- data-correctness and authority implications;
+- operational and deployment implications;
+- license and maintenance implications;
+- the smallest bounded spike that can confirm or reject the candidate;
+- why custom development remains necessary if every acceptable candidate is rejected.
+
+A mature external solution that passes those gates must be reused rather than reimplemented.
+External adoption must remain bounded by thin project adapters so that project-owned contracts
+and proprietary strategy logic are not surrendered to a framework.
+
+Project-owned development and research capacity should be concentrated on the project's unique
+advantages:
+
+- Scanner and market-selection logic;
+- Setup and Market Event semantics;
+- asset-neutral Strategy Kernel;
+- PlanDraft / TradeIntent;
+- strategy evidence, T/S/R and Outcome;
+- strategy research, validation and rapid iteration.
+
+Generic high-difficulty infrastructure work is prohibited unless a bounded spike demonstrates
+that no acceptable maintained solution exists and the capability is necessary for the current
+approved stage. Technical difficulty, novelty or architectural ambition are not product value by
+themselves.
+
+Development investment must also be proportional to expected reuse. Prefer work that can remain
+valid across shadow validation, human-confirmed execution and future automated execution. For a
+one-time or low-frequency task, use an existing command, checklist, temporary script or maintained
+external tool instead of creating permanent product-grade automation.
+
+The fixed delivery loop is:
+
+```text
+TEST SMALL
+→ OBSERVE REAL EVIDENCE
+→ REVIEW
+→ DECIDE
+→ IMPLEMENT THE MINIMUM COHERENT CHANGE
+→ FORWARD VALIDATE
+→ ITERATE
+```
+
+Do not attempt to build a perfect system or complete trading engine in one stage. Each stage should
+close only a small number of high-certainty uncertainties, preserve the reusable results, and avoid
+large speculative commitments. Major investment before a bounded spike is prohibited. Multiple
+small, independently validated capabilities should accumulate into the larger system without
+requiring broad rewrites.
+
+Every proposed stage must answer:
+
+- Does a mature maintained solution already exist?
+- What is the thinnest integration that preserves project authority?
+- Must this capability be built now?
+- Will the result remain reusable in later stages?
+- Can a smaller spike close the uncertainty first?
+- Does the work create a new long-term maintenance burden?
+- Is the work primarily advancing proprietary strategy value or rebuilding generic infrastructure?
+
 ## Current First Launch recovery boundary
 
 Deferring PR #48-style automation does not permit deferring all recovery preparation.
