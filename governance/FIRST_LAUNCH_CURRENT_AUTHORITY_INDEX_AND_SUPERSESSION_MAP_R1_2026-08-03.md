@@ -1,11 +1,11 @@
 # First Launch 当前权威索引与取代关系 R1
 
 **记录 ID：** `TA-FIRST-LAUNCH-CURRENT-AUTHORITY-INDEX-R1-2026-08-03`  
-**日期：** `2026-08-03`  
+**日期：** `2026-08-04`  
 **仓库：** `woshixiong/trader-assist-v0`  
 **关联 Draft PR：** `#52`  
 **状态：** `CURRENT AUTHORITY ENTRY / NON-EXECUTABLE / NON-AUTHORIZING`  
-**用途：** 本文件是当前策略、Scanner、Universe、前向验证、工程顺序和运维阻断的唯一文档入口。旧文件继续保留审计价值，但不得通过旧结论覆盖本索引列出的当前权威。
+**用途：** 本文件是当前策略、Scanner、Universe、相关样本统计、前向验证、工程顺序和运维阻断的唯一文档入口。旧文件继续保留审计价值，但不得通过旧结论覆盖本索引列出的当前权威。
 
 ---
 
@@ -22,29 +22,32 @@
 3. `FIRST_LAUNCH_UNIVERSE_REFRESH_AND_EXPANDING_CAPACITY_SPIKE_DECISION_R1_2026-08-03.md`
    - 当前 Universe Refresh、API/服务器容量实测、自动扩张测试、Active Event 资源模型和正式影子样本边界最高权威。固定 Top-100、固定 30/50、固定 Active Event 上限等旧设想均被其取代。
 
-4. `FIRST_LAUNCH_MULTI_ASSET_PARALLEL_REPLACEMENT_ARCHITECTURE_DECISION_R1_2026-08-03.md`
+4. `FIRST_LAUNCH_CORRELATED_SIGNAL_CLUSTERING_BACKTEST_AND_EXECUTION_EXPOSURE_GOVERNANCE_R1_2026-08-04.md`
+   - 当前高相关信号归组、独立样本解释、回测/前向验证/回撤统计和未来半自动或自动交易相关暴露控制的最高权威。所有合格 ShadowOrder 继续保留，但不得把高度同步信号全部当作独立策略证据或独立风险预算。
+
+5. `FIRST_LAUNCH_MULTI_ASSET_PARALLEL_REPLACEMENT_ARCHITECTURE_DECISION_R1_2026-08-03.md`
    - 当前多资产迁移、旧 ETH 保底、新系统边界和长期替代路线最高架构权威。
 
-5. `FIRST_LAUNCH_INTRADAY_ENTRY_STRATEGY_PRE_BACKTEST_FREEZE_R5_2026-08-02.md`
+6. `FIRST_LAUNCH_INTRADAY_ENTRY_STRATEGY_PRE_BACKTEST_FREEZE_R5_2026-08-02.md`
    - 当前三 Setup 的策略机制、因果原则和研究父合同；其中仍为描述性或与第 1/2 项冲突的内容，以机器包为准。
 
-6. `FIRST_LAUNCH_SESSION_MOMENTUM_BREAKOUT_SCANNER_LITE_R3_FINAL_PARAMETER_AND_DELIVERY_FREEZE_2026-08-01.md`
+7. `FIRST_LAUNCH_SESSION_MOMENTUM_BREAKOUT_SCANNER_LITE_R3_FINAL_PARAMETER_AND_DELIVERY_FREEZE_2026-08-01.md`
    - Scanner 的动量、结构、WATCH/SETUP_READY 和产品边界权威；其持续全市场扫描、Universe 数量或资源分配如与第 3 项冲突，以第 3 项为准。
 
-7. `STRATEGY_RESEARCH_DISCOVERY_AND_CONVERGENCE_PLAYBOOK_V5_2026-08-03.md`
+8. `STRATEGY_RESEARCH_DISCOVERY_AND_CONVERGENCE_PLAYBOOK_V5_2026-08-03.md`
    - 小批量、快速前向验证、证据驱动和防止无限开发循环的方法权威。
 
-8. `FIRST_LAUNCH_SHADOW_FORWARD_VALIDATION_AND_RAPID_ITERATION_PLAN_R1_2026-08-03.md`
-   - 上线前最小正确性门禁、上线后前向验证、T/S/R、Outcome、导出和多轮迭代流程权威。
+9. `FIRST_LAUNCH_SHADOW_FORWARD_VALIDATION_AND_RAPID_ITERATION_PLAN_R1_2026-08-03.md`
+   - 上线前最小正确性门禁、上线后前向验证、T/S/R、Outcome、导出和多轮迭代流程权威；其样本独立性和回撤统计必须服从第 4 项。
 
-9. `FIRST_LAUNCH_CURRENT_MASTER_TASK_REGISTER_AND_EXECUTION_ORDER_R2_2026-08-03.md`
-   - 当前执行顺序和 Backlog 入口；不得改写上层策略、Universe 或架构语义。
+10. `FIRST_LAUNCH_CURRENT_MASTER_TASK_REGISTER_AND_EXECUTION_ORDER_R2_2026-08-03.md`
+   - 当前执行顺序和 Backlog 入口；不得改写上层策略、Universe、相关风险或架构语义。
 
-10. 部署前运维阻断文件：
+11. 部署前运维阻断文件：
    - `FIRST_LAUNCH_RECONNECT_BUDGET_RESET_NEXT_DEPLOYMENT_BLOCKER_2026-08-02.md`
    - `TRADER_ASSIST_OFF_HOST_BACKUP_AND_LIGHTSAIL_SNAPSHOT_RETIREMENT_NEXT_DEPLOYMENT_SCOPE_2026-08-02.md`
 
-11. 三 Setup R1/R1.1/R1.2、旧最小上线记录、Pre-Backtest R2/R3/R4、Scanner R1/R2、旧产品与工程计划：
+12. 三 Setup R1/R1.1/R1.2、旧最小上线记录、Pre-Backtest R2/R3/R4、Scanner R1/R2、旧产品与工程计划：
    - `HISTORICAL_REFERENCE_ONLY`；仅在上述当前权威没有覆盖且不冲突时提供背景。
 
 ---
@@ -58,10 +61,11 @@ STRATEGY MACHINE SEMANTICS FREEZE
 → ENGINEERING FINAL ROUTE
 → MINIMUM CORRECTNESS VALIDATION
 → UNIFIED MULTI_ASSET SHADOW SIGNAL SYSTEM
-→ SCANNER + COMPLETE EVIDENCE
+→ SCANNER + COMPLETE EVIDENCE + CORRELATION CLUSTERS
 → PREDEPLOYMENT OPERATIONS BLOCKERS
 → HUMAN-CONTROLLED DEPLOYMENT
 → SHADOW FORWARD VALIDATION
+→ CLUSTER-NORMALIZED REVIEW
 → EVIDENCE-TRIGGERED LIMITED REVISION
 → RAPID REDEPLOYMENT
 ```
@@ -75,6 +79,11 @@ HUMAN_FINAL_DECISION = YES
 FUTURE_AUTOMATED_TRADING_GRADE_MARKET_ELIGIBILITY = REQUIRED
 ALL_APPROVED_MARKETS_CAN_RECEIVE_FULL_SIGNAL = YES
 ALL_APPROVED_FULLY_QUALIFIED_SETUPS_CAN_RECEIVE_SHADOW_PLAN = YES
+KEEP_ALL_APPROVED_FORMAL_SIGNALS = YES
+RAW_CORRELATED_SIGNALS_ARE_INDEPENDENT_SAMPLES = NO
+CLUSTER_NORMALIZED_PRIMARY_RESEARCH_METRICS = YES
+CLUSTER_NORMALIZED_DRAWDOWN_REVIEW = REQUIRED
+FUTURE_CORRELATED_EXPOSURE_GATE = REQUIRED
 ```
 
 ---
@@ -97,7 +106,10 @@ ALL_APPROVED_FULLY_QUALIFIED_SETUPS_CAN_RECEIVE_SHADOW_PLAN = YES
 - 容量测试固定使用成交量前 100；
 - 最终 Universe 预设为 30、50、100 或其他拍脑袋数量；
 - Active Formal Event 预设为 12、24 或其他固定容量；
-- 达到运行阈值后可以随机忽略后续 Approved Market 的 Event。
+- 达到运行阈值后可以随机忽略后续 Approved Market 的 Event；
+- 多个高度相关市场的同步 ShadowOrder 可以全部当作独立策略证据；
+- Raw ShadowOrder Count 可以直接代表独立样本数量；
+- 未来自动交易可以对同一 Exposure Cluster 的多个市场分别使用完整单笔风险预算而无需组合相关门禁。
 
 ---
 
@@ -107,6 +119,7 @@ ALL_APPROVED_FULLY_QUALIFIED_SETUPS_CAN_RECEIVE_SHADOW_PLAN = YES
 - Range：当前仍只有 `RANGE_EDGE_REJECTION`，不新增 Range STANDARD；但价格带、双边交易、HTF 仅归因和事实失效采用当前机器包。
 - Scanner `RETEST_WINDOW_BARS=1..12`：只属于 Scanner 候选路径；不得让正式 R5 STANDARD 因 Scanner 窗口结束而经济失效。
 - Scanner 的全市场发现：重新定位为周期性全市场 metadata/context Refresh，不再代表日常对全市场抓 Candle、Book 或运行完整 Scanner。
+- 所有 Approved Formal Signal、ShadowOrder 和 Outcome 仍完整保存；相关聚类只改变独立样本解释、聚合权重、展示优先级和未来组合风险权限。
 - 旧 Outcome、ShadowOrder、RuntimeStore、通知和哈希实现：可作为实现模式与保底路径；不得把 ETH Literal 和旧 Authority 约束复制为新多资产合同。
 - 长期回测架构：状态为 `CONDITIONAL_FUTURE_REEVALUATION`，不是当前固定任务。
 
@@ -136,7 +149,42 @@ Universe 外市场不得进入日常 Candle/BBO/Scanner/Event/ShadowOrder 处理
 
 ---
 
-## 6. 新旧系统关系
+## 6. 相关信号、研究统计和未来暴露
+
+```text
+RAW MARKET-LEVEL RESULTS
++ SETUP RESEARCH CLUSTERS
++ EXPOSURE CLUSTERS
++ LEADER-ONLY SENSITIVITY
+```
+
+必须同时保留。
+
+研究主口径：
+
+```text
+CLUSTER_NORMALIZED METRICS AND DRAWDOWN
+```
+
+Raw 结果用于市场适配性和完整审计，不得被描述为全部独立样本。
+
+未来任何半自动或自动交易系统必须采用：
+
+```text
+ONE_NEW_POSITION_PER_EXPOSURE_CLUSTER
+```
+
+或经过单独冻结的：
+
+```text
+SHARED_RISK_BUDGET_PER_EXPOSURE_CLUSTER
+```
+
+在组合风险合同建立前，默认安全路线为一个 Exposure Cluster 只允许一个新仓位。
+
+---
+
+## 7. 新旧系统关系
 
 ```text
 LEGACY_ETH_RUNTIME
@@ -163,7 +211,7 @@ SINGLE_ACTIVE_NOTIFICATION_AUTHORITY
 
 ---
 
-## 7. PR #52 的解释规则
+## 8. PR #52 的解释规则
 
 PR #52 继续保持：
 
