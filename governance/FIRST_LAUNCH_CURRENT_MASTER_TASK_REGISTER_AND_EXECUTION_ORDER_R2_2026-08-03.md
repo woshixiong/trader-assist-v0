@@ -1,7 +1,7 @@
 # First Launch 当前总任务登记表与执行顺序 R2
 
 **记录 ID：** `TA-FIRST-LAUNCH-CURRENT-MASTER-TASK-REGISTER-R2-2026-08-03`  
-**日期：** `2026-08-03`  
+**日期：** `2026-08-04`  
 **仓库：** `woshixiong/trader-assist-v0`  
 **关联 Draft PR：** `#52`  
 **状态：** `PLANNING_ONLY / NON_EXECUTABLE / MASTER_BACKLOG_INDEX`  
@@ -10,8 +10,9 @@
 **策略精度最高权威：** `FIRST_LAUNCH_CURRENT_RELEASE_MACHINE_EXECUTABLE_STRATEGY_PACKAGE_R1_1_FINAL_PRECISION_CLOSURE_2026-08-03.md`  
 **策略主体权威：** `FIRST_LAUNCH_CURRENT_RELEASE_MACHINE_EXECUTABLE_STRATEGY_PACKAGE_R1_2026-08-03.md`  
 **Universe/容量权威：** `FIRST_LAUNCH_UNIVERSE_REFRESH_AND_EXPANDING_CAPACITY_SPIKE_DECISION_R1_2026-08-03.md`  
+**相关信号与未来暴露权威：** `FIRST_LAUNCH_CORRELATED_SIGNAL_CLUSTERING_BACKTEST_AND_EXECUTION_EXPOSURE_GOVERNANCE_R1_2026-08-04.md`  
 **架构权威：** `FIRST_LAUNCH_MULTI_ASSET_PARALLEL_REPLACEMENT_ARCHITECTURE_DECISION_R1_2026-08-03.md`  
-**优先级：** 本文件只管理任务和顺序，不得覆盖上述策略、Universe、架构和权威索引。
+**优先级：** 本文件只管理任务和顺序，不得覆盖上述策略、Universe、相关风险、架构和权威索引。
 
 ---
 
@@ -33,11 +34,12 @@ STRATEGY MACHINE SEMANTICS FREEZE
 → ENGINEERING FINAL ROUTE
 → MINIMUM CORRECTNESS VALIDATION
 → UNIFIED MULTI_ASSET SHADOW SIGNAL SYSTEM
-→ SCANNER + COMPLETE EVIDENCE PIPELINE
+→ SCANNER + COMPLETE EVIDENCE + CORRELATION CLUSTERS
 → CLOSE PREDEPLOYMENT OPERATIONS BLOCKERS
-→ HUMAN_CONTROLLED DEPLOYMENT
+→ HUMAN-CONTROLLED DEPLOYMENT
 → SHADOW FORWARD VALIDATION
-→ EVIDENCE_TRIGGERED LIMITED STRATEGY REVISION
+→ CLUSTER-NORMALIZED REVIEW
+→ EVIDENCE-TRIGGERED LIMITED STRATEGY REVISION
 → RAPID REDEPLOYMENT
 → REPEAT AS JUSTIFIED
 ```
@@ -51,6 +53,10 @@ HUMAN_FINAL_DECISION = REQUIRED
 AUTO_TRADE = NO
 FUTURE_AUTOMATED_TRADING_GRADE_MARKET_ELIGIBILITY = REQUIRED
 ALL_APPROVED_MARKETS_CAN_RECEIVE_FULL_SIGNAL = YES
+KEEP_ALL_APPROVED_FORMAL_SIGNALS = YES
+RAW_CORRELATED_SIGNALS_ARE_INDEPENDENT_SAMPLES = NO
+CLUSTER_NORMALIZED_PRIMARY_RESEARCH_METRICS = YES
+FUTURE_CORRELATED_EXPOSURE_GATE = REQUIRED
 ```
 
 ---
@@ -74,6 +80,7 @@ GLOBAL MARKET SNAPSHOT
 → FIRST FAILURE
 → BOUNDARY CONVERGENCE
 → QUALITY DISTRIBUTION
+→ CORRELATION DATA AVAILABILITY/COST
 → SAFE CAPACITY
 ```
 
@@ -87,7 +94,8 @@ GLOBAL MARKET SNAPSHOT
 - 不安装依赖；
 - 不修改生产代码、数据库、服务或 permit；
 - 区分 Global Snapshot、Cold Bootstrap、Steady State、Candidate/Event/Outcome/Recovery Stress；
-- 输出真实 API、WebSocket、CPU、内存、延迟和数据库结果。
+- 输出真实 API、WebSocket、CPU、内存、延迟和数据库结果；
+- 验证 14 日 5m 相关性输入、最少 500 个配对 Return、相关矩阵计算成本和确定性重现能力。
 
 只有完成该实测，Strategy Optimization 才冻结 `MULTI_ASSET_UNIVERSE_ELIGIBILITY_R1`，Engineering Optimization 才重新形成最终工程工作包和工期。
 
@@ -95,8 +103,8 @@ GLOBAL MARKET SNAPSHOT
 
 ## 3. 当前发布关键路径
 
-1. Strategy Optimization 已完成机器策略包和文档权威清理；
-2. Engineering Optimization 执行或安排只读 Universe/Capacity Spike；
+1. Strategy Optimization 已完成机器策略包、Universe/容量语义、相关样本治理和文档权威清理；
+2. Engineering Optimization 执行或安排只读 Universe/Capacity Spike，并回收相关性数据可得性与计算成本；
 3. Strategy Optimization 根据真实质量分布与安全容量冻结精确 Universe Eligibility；
 4. Engineering Optimization 核验真实代码、复用点和最小实现路线；
 5. Project Control 派发：
@@ -104,11 +112,13 @@ GLOBAL MARKET SNAPSHOT
    - 周期性 versioned Universe Refresh；
    - Scanner Stage A/B/C；
    - Candidate / Signal / Plan / ShadowOrder / T-S-R / Outcome / Export；
+   - Setup Research Cluster / Exposure Cluster；
+   - Raw / Cluster-normalized / Leader-only 统计和回撤；
    - 最小正确性门禁；
    - reconnect-budget；
    - 主机外备份和恢复；
 6. CI、独立 Review、回滚、部署和 Smoke；
-7. 上线后根据实际 Scanner 和证据质量决定何时复核，不预设固定天数或样本数；
+7. 上线后根据实际 Scanner、Cluster 压缩率和证据质量决定何时复核，不预设固定天数或样本数；
 8. 只在证据支持时进行有限、版本化调整。
 
 ---
@@ -184,11 +194,19 @@ USER_REVIEW_TARGET = 5–10 MINUTES
 - 所有 Approved Market 输出 Entry、Chase、Stop、TP、1%/2% 参考金额；
 - T/S/R；
 - 30/60/120m Outcome；
+- 14 日 5m 相关性输入与确定性 Cluster Identity；
+- Setup Research Cluster；
+- Exposure Cluster；
+- Raw market-level、Cluster-normalized、Leader-only 三套统计；
+- Raw、Cluster-normalized、Leader-only 三套回撤报告；
+- Correlation Unknown 和 Cluster Compression Ratio；
 - 一键导出和完整性报告；
 - failure isolation；
 - reconnect-budget；
 - off-host backup and recovery；
 - CI、Review、Rollback、Deploy、Smoke。
+
+所有 Approved Formal Signal、ShadowOrder 和 Outcome 必须完整保留。相关聚类不得删除市场级证据。
 
 ---
 
@@ -200,6 +218,7 @@ USER_REVIEW_TARGET = 5–10 MINUTES
 - 自动交易；
 - 账户或签名接入；
 - 多资产组合资金仲裁；
+- 真实 Exposure Cluster 下单门禁实现；
 - 动态退出引擎；
 - Discord Bot；
 - 第四 Setup；
@@ -208,7 +227,8 @@ USER_REVIEW_TARGET = 5–10 MINUTES
 - 旧 ETH 下线；
 - 日常持续触碰全交易所所有市场；
 - 固定 Top-100 或固定 30/50 Universe；
-- 未经实测的 Active Event 上限。
+- 未经实测的 Active Event 上限；
+- 把多个高度相关 ShadowOrder 全部解释成独立策略证据。
 
 ---
 
@@ -236,7 +256,21 @@ OPS-2 = TRADER_ASSIST_OFF_HOST_BACKUP_AND_LIGHTSAIL_SNAPSHOT_RETIREMENT
 
 旧 ETH 运行时下线同样需要另行授权和完整门禁。
 
-周期性 Universe Refresh、Universe Turnover、自动 Apply 安全性和质量变化本身属于上线后的持续验证对象。
+周期性 Universe Refresh、Universe Turnover、自动 Apply 安全性、质量变化、Cluster Compression、同步成功/失败和 Cluster-normalized 回撤本身属于上线后的持续验证对象。
+
+未来半自动或自动交易阶段必须独立冻结并实现：
+
+```text
+ONE_NEW_POSITION_PER_EXPOSURE_CLUSTER
+```
+
+或：
+
+```text
+SHARED_RISK_BUDGET_PER_EXPOSURE_CLUSTER
+```
+
+在组合风险合同完成前，默认安全路线为一个 Exposure Cluster 只允许一个新仓位；当前不授权真实交易实现。
 
 ---
 
