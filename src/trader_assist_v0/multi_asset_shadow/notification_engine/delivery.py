@@ -59,17 +59,12 @@ class WebhookDeliveryAdapter:
 
     def deliver(self, envelope: MessageEnvelope) -> WebhookResponse:
         payload = json.dumps(
-            {
-                "content": envelope.content,
-                "idempotency_key": envelope.idempotency_key,
-                "kind": envelope.kind.value,
-                "schema_version": envelope.schema_version,
-            },
+            {"content": envelope.content},
             ensure_ascii=True,
             separators=(",", ":"),
             sort_keys=True,
         ).encode("utf-8")
-        headers = {"Content-Type": "application/json", "Idempotency-Key": envelope.idempotency_key}
+        headers = {"Content-Type": "application/json"}
         if self._config.authorization_header_name is not None:
             headers[self._config.authorization_header_name] = (
                 self._config.authorization_header_value or ""

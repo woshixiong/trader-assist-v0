@@ -17,6 +17,7 @@ from trader_assist_v0.multi_asset_shadow.models import RegistryTier
 class NotificationKind(StrEnum):
     FORMAL_SIGNAL = "FORMAL_SIGNAL"
     WATCH = "WATCH"
+    WATCH_NEW_MARKET = "WATCH_NEW_MARKET"
     RESEARCH_FAILED_BREAKOUT = "RESEARCH_FAILED_BREAKOUT"
 
 
@@ -47,21 +48,31 @@ def _price(value: Decimal | None, field: str, *, required: bool) -> None:
         raise NotificationContractError(f"{field} must be a positive finite Decimal")
 
 
+def _finite_decimal(value: Decimal, field: str) -> None:
+    if type(value) is not Decimal or not value.is_finite():
+        raise NotificationContractError(f"{field} must be a finite Decimal")
+
+
+_SETUP_FAMILIES = frozenset({"SWEEP_RECLAIM", "BREAKOUT_RETEST", "RANGE_EDGE_REJECTION"})
+_BREAKOUT_MODES = frozenset({"MICRO_FAST", "STANDARD"})
+_DIRECTIONAL_SIDES = frozenset({"LONG", "SHORT"})
+
+
 @dataclass(frozen=True)
 class SignalNotificationView:
     """The small, immutable projection needed by a human manual trader.
 
     ``FORMAL_SIGNAL`` carries a reviewed plan projection but is always marked
-    ``NOT_SUBMITTED``. ``WATCH`` and research evidence are explicitly barred
-    from carrying actionable entry/stop/target values.
+    ``NOT_SUBMITTED``. Scanner observations use ``ScannerWatchNotificationView``
+    so they cannot acquire plan fields by accident.
     """
 
     kind: NotificationKind
     market_display: str
     tier: RegistryTier
     setup_family: str
-    setup_mode: str
-    side: str | None
+    setup_mode: str | None
+    side: str
     signal_time: datetime
     planned_entry: Decimal | None
     stop: Decimal | None
@@ -83,7 +94,6 @@ class SignalNotificationView:
         for field in (
             "market_display",
             "setup_family",
-            "setup_mode",
             "htf_relation",
             "zone_context",
             "reference_risk_sizing",
@@ -94,27 +104,95 @@ class SignalNotificationView:
         ):
             _non_empty(getattr(self, field), field)
         _utc(self.signal_time, "signal_time")
+        if self.kind is not NotificationKind.FORMAL_SIGNAL:
+            raise NotificationContractError("SignalNotificationView is only for FORMAL_SIGNAL")
+        if self.setup_family not in _SETUP_FAMILIES:
+            raise NotificationContractError("setup_family is not an approved formal family")
+        if self.setup_family == "BREAKOUT_RETEST":
+            if self.setup_mode not in _BREAKOUT_MODES:
+                raise NotificationContractError(
+                    "BREAKOUT_RETEST requires an approved breakout mode"
+                )
+        elif self.setup_mode is not None:
+            raise NotificationContractError("non-breakout setups cannot carry a breakout mode")
+        if self.side not in _DIRECTIONAL_SIDES:
+            raise NotificationContractError("formal signal side must be LONG or SHORT")
         if self.submission_status != "NOT_SUBMITTED":
             raise NotificationContractError("notification submission status must be NOT_SUBMITTED")
         if self.shadow_order_id is not None:
             _non_empty(self.shadow_order_id, "shadow_order_id")
         if self.session_warning is not None:
             _non_empty(self.session_warning, "session_warning")
-        if self.kind is NotificationKind.FORMAL_SIGNAL:
-            _non_empty(self.side or "", "side")
-            _non_empty(self.entry_quality or "", "entry_quality")
-            for field in ("planned_entry", "stop", "tp1"):
-                _price(getattr(self, field), field, required=True)
-            _price(self.tp2, "tp2", required=False)
-            return
-        if any(value is not None for value in (self.planned_entry, self.stop, self.tp1, self.tp2)):
-            raise NotificationContractError(
-                "non-formal notifications cannot carry actionable prices"
-            )
-        if self.entry_quality is not None or self.side is not None:
-            raise NotificationContractError(
-                "non-formal notifications cannot carry side or entry quality"
-            )
+        _non_empty(self.entry_quality or "", "entry_quality")
+        for field in ("planned_entry", "stop", "tp1"):
+            _price(getattr(self, field), field, required=True)
+        _price(self.tp2, "tp2", required=False)
+
+
+@dataclass(frozen=True)
+class ScannerWatchNotificationView:
+    """Immutable scanner-only observation with no trade-plan fields.
+
+    A directional ``WATCH`` must name ``LONG`` or ``SHORT``. A
+    ``WATCH_NEW_MARKET`` may omit a direction while the scanner is still
+    establishing a candidate. The distinct shape prevents watch messages from
+    ever carrying a planned entry, risk control, target, or order reference.
+    """
+
+    kind: NotificationKind
+    market_display: str
+    tier: RegistryTier
+    side: str | None
+    observation_time: datetime
+    return_15m: Decimal
+    return_30m: Decimal
+    return_60m: Decimal
+    rank: int
+    move_atr: Decimal
+    relative_volume: Decimal
+    prior_level: str
+    distance_to_level: Decimal
+    liquidity_summary: str
+    scanner_r3_state: str
+    session: str
+    scanner_parameter_version: str
+    watch_id: str
+    do_not_chase: bool = False
+
+    def __post_init__(self) -> None:
+        if self.kind not in {NotificationKind.WATCH, NotificationKind.WATCH_NEW_MARKET}:
+            raise NotificationContractError("ScannerWatchNotificationView requires a watch kind")
+        for field in (
+            "market_display",
+            "prior_level",
+            "liquidity_summary",
+            "scanner_r3_state",
+            "session",
+            "scanner_parameter_version",
+            "watch_id",
+        ):
+            _non_empty(getattr(self, field), field)
+        _utc(self.observation_time, "observation_time")
+        for field in (
+            "return_15m",
+            "return_30m",
+            "return_60m",
+            "move_atr",
+            "relative_volume",
+            "distance_to_level",
+        ):
+            _finite_decimal(getattr(self, field), field)
+        if type(self.rank) is not int or self.rank < 1:
+            raise NotificationContractError("rank must be a positive integer")
+        if self.kind is NotificationKind.WATCH and self.side not in _DIRECTIONAL_SIDES:
+            raise NotificationContractError("directional WATCH side must be LONG or SHORT")
+        if self.kind is NotificationKind.WATCH_NEW_MARKET and self.side is not None:
+            if self.side not in _DIRECTIONAL_SIDES:
+                raise NotificationContractError(
+                    "WATCH_NEW_MARKET side must be LONG, SHORT, or absent"
+                )
+        if type(self.do_not_chase) is not bool:
+            raise NotificationContractError("do_not_chase must be bool")
 
 
 @dataclass(frozen=True)
