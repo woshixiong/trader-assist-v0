@@ -911,9 +911,26 @@ class RestrictedPublicRuntime:
         snapshot = self._market_data.strategy_snapshot(now)
         if snapshot.quality.state is DataQualityState.READY:
             if self._health_state is not RuntimeHealthState.READY:
-                self._transition_health(
-                    to=RuntimeHealthState.READY, reason="ready-authority", now=now
-                )
+                try:
+                    self._transition_health(
+                        to=RuntimeHealthState.READY, reason="ready-authority", now=now
+                    )
+                except StatusSnapshotPublicationError:
+                    # READY is not authoritative until its status snapshot is
+                    # published.  _transition_health intentionally records before
+                    # publication, so compensate the in-memory/durable authority
+                    # without attempting another snapshot (the original failure
+                    # must remain visible and a broken target must not cause an
+                    # unbounded publication loop).
+                    self._health_state = RuntimeHealthState.NOT_READY
+                    self.store.record_health_event(
+                        session_id=self.session_id,
+                        from_state=RuntimeHealthState.READY.value,
+                        to_state=RuntimeHealthState.NOT_READY.value,
+                        reason="READY_STATUS_PUBLICATION_FAILED",
+                        now=now,
+                    )
+                    raise
                 # ``_transition_health`` publishes the local READY snapshot.
                 # Reset only after that publication returns successfully: a
                 # merely connected socket, partial warm-up, or an unpublished

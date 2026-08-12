@@ -914,6 +914,33 @@ def test_ready_status_publication_failure_does_not_reset_reconnect_budget(
         with pytest.raises(StatusSnapshotPublicationError):
             runtime.accept_public_frame(frame_text=_context_frame(), now=NOW)
         assert runtime._reconnect_attempt == 1
+        assert runtime.health_state is RuntimeHealthState.NOT_READY
+        assert runtime.is_ready is False
+        assert not (tmp_path / "status.json").exists()
+        health_events = store.list_health_events(session_id=runtime.session_id)
+        assert any(event.to_state == "READY" for event in health_events)
+        assert any(
+            event.to_state == "NOT_READY"
+            and event.reason == "READY_STATUS_PUBLICATION_FAILED"
+            for event in health_events
+        )
+
+        # A later complete recovery remains possible.  Only this successful
+        # READY publication restores the reconnect budget.
+        monkeypatch.setattr(runtime_module.os, "replace", real_replace)
+        runtime.mark_disconnected(now=NOW, reason="retry-after-publication-failure")
+        assert runtime.begin_reconnect(connection_id="conn-second", now=NOW) is not None
+        for spec in REQUIRED_PUBLIC_SUBSCRIPTIONS:
+            runtime.accept_acknowledgement(frame_text=_ack_frame(spec.subscription), now=NOW)
+        runtime.recover_public_snapshot(
+            raw_5m=_snapshot_json([_candle_obj(i) for i in range(64)]),
+            raw_15m=_snapshot_json([_candle_obj(i, interval="15m") for i in range(20)]),
+            raw_metadata=_metadata_json(),
+            now=NOW,
+        )
+        runtime.accept_public_frame(frame_text=_context_frame(), now=NOW)
+        assert runtime.is_ready is True
+        assert runtime._reconnect_attempt == 0
     finally:
         store.close()
 
