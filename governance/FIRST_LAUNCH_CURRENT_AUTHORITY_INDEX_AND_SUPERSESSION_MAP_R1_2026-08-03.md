@@ -26,6 +26,7 @@
 
 5. `FIRST_LAUNCH_POST_LAUNCH_STRATEGY_RESEARCH_AND_SHADOW_EVIDENCE_BACKLOG_R1_2026-08-12.md`
    - 当前上线后策略研究与 Shadow Evidence 最高 Backlog 权威。固定 `FAILED_ACCEPTED_BREAKOUT / FAILED_IMPULSE`、Per-Market Timeframe Profile、Sector/Peer Relative Strength、Event Regime、Cash Open、Logical Exit、Probe→Add 和 Cross-Market Soft Score 的研究入口；当前发布不得据此增加正式策略逻辑。
+   - `R4 = EVENT REGIME` 的当前 Scheduled U.S. Macro 子研究合同为：`FIRST_LAUNCH_SCHEDULED_US_MACRO_EVENT_STRATEGY_RESEARCH_AND_FUTURE_AUTOMATION_BACKLOG_R1_2026-08-12.md`。该子合同初始聚焦 CPI / NFP / PCE，允许并行历史/离线研究，但不改变 R1–R3 顺序、不改变当前 Machine Strategy、不扩大当前发布范围，也不授权自动交易。
 
 6. `FIRST_LAUNCH_MULTI_ASSET_PARALLEL_REPLACEMENT_ARCHITECTURE_DECISION_R1_2026-08-03.md`
    - 旧 ETH fallback 与新多资产并行替代架构权威。
@@ -111,6 +112,14 @@ PER_MARKET_STABLE_TIMEFRAME_PROFILE
 ```
 
 Engineering 不得自行实现第二 Profile 或动态切换。
+
+Scheduled U.S. Macro Event 子研究未来如需研究 `T+1s / T+5s / T+10s / 10–60s Micro-Pause`，允许在独立未来研究阶段评估：
+
+```text
+EVENT-WINDOW HIGH-RES DATA ONLY
+```
+
+该研究需求不得修改当前发布的 5m-only Strategy Route，也不得恢复全市场持续 tick/sub-second 平台。
 
 ---
 
@@ -219,6 +228,15 @@ R8 = CROSS-MARKET CONFIRMATION SOFT SCORE
 FAILED_ACCEPTED_BREAKOUT_RESEARCH = HIGH_PRIORITY
 FAILED_ACCEPTED_BREAKOUT_LIVE_SIGNAL_THIS_RELEASE = NO
 SHADOW_DATA_AS_PRIMARY_NEXT_STRATEGY_RESEARCH_SOURCE = YES
+
+SCHEDULED_US_MACRO_EVENT_RESEARCH = YES
+SCHEDULED_US_MACRO_EVENT_PARENT = R4_EVENT_REGIME
+SCHEDULED_US_MACRO_EVENT_INITIAL_FAMILIES = CPI_NFP_PCE
+SCHEDULED_US_MACRO_EVENT_HIGH_PRODUCT_VALUE = YES
+SCHEDULED_US_MACRO_EVENT_PARALLEL_OFFLINE_RESEARCH = YES
+SCHEDULED_US_MACRO_EVENT_CURRENT_RELEASE_IMPLEMENTATION = NO
+SCHEDULED_US_MACRO_EVENT_FOURTH_SETUP_THIS_RELEASE = NO
+SCHEDULED_US_MACRO_EVENT_AUTO_TRADE_THIS_RELEASE = NO
 ```
 
 ---
@@ -257,4 +275,4 @@ DOCUMENTATION_ONLY
 
 旧文档或评论如与本索引冲突，以本索引和第 1 节当前权威为准。
 
-本文件不授权代码修改、依赖安装、部署、重启、permit 修改、账户访问、签名、交易所写入、自动下单、Mark Ready 或 Merge。
+本文件不授权代码修改、依赖安装、数据订阅购买、部署、重启、permit 修改、账户访问、签名、交易所写入、自动下单、Mark Ready 或 Merge。
