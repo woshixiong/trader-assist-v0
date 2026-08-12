@@ -11,6 +11,7 @@ from trader_assist_v0.multi_asset_shadow.strategy_kernel import (
     EventStatus,
     HtfRelation,
     MarketEvent,
+    RetestType,
     ScannerCandidate,
     ScannerChase,
     ScannerLinkage,
@@ -284,7 +285,7 @@ def test_scanner_expiry_does_not_economically_expire_formal_standard() -> None:
         pullback_started=True,
         impulse_extreme=Decimal("97"),
         pullback_extreme=Decimal("99.2"),
-        retest_mode=SetupMode.STANDARD_DEEP,
+        retest_type=RetestType.DEEP,
         retest_seen_bar_time_ms=previous.open_time_ms,
         target_reference=TargetReference(TargetKind.OPEN_SPACE_REFERENCE, None),
     )
@@ -318,6 +319,7 @@ def test_scanner_expiry_does_not_economically_expire_formal_standard() -> None:
     decision = next(
         item for item in result.decisions if item.decision is DecisionKind.FORMAL_SETUP_CONFIRMED
     )
-    assert decision.setup_mode is SetupMode.STANDARD_DEEP
+    assert decision.setup_mode is SetupMode.STANDARD
+    assert decision.retest_type is RetestType.DEEP
     assert decision.scanner_linkage is not None
     assert decision.scanner_linkage.state is ScannerState.EXPIRED_NO_RETEST

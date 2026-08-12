@@ -14,7 +14,9 @@ from trader_assist_v0.multi_asset_shadow.strategy_kernel import (
     EventLedger,
     EventStatus,
     HtfRelation,
+    KernelInputError,
     MarketEvent,
+    RetestType,
     SetupFamily,
     SetupMode,
     Side,
@@ -181,11 +183,18 @@ def test_sweep_long_and_short_exact_confirmation_and_terms(
         item for item in result.decisions if item.decision is DecisionKind.FORMAL_SETUP_CONFIRMED
     )
     assert formal.setup_family is SetupFamily.SWEEP_RECLAIM
-    assert formal.setup_mode is SetupMode.SWEEP_RECLAIM
+    assert formal.setup_mode is None
+    assert formal.retest_type is None
     assert formal.a5_event == Decimal("2")
     assert formal.m20_event == Decimal("10")
     assert formal.structural_stop == expected_stop
     assert formal.zone_snapshot is source_zone
+    with pytest.raises(KernelInputError, match="non-breakout"):
+        replace(
+            formal,
+            setup_mode=SetupMode.STANDARD,
+            retest_type=RetestType.DEEP,
+        )
     with pytest.raises(AttributeError):
         formal.reason = "MUTATION_PROHIBITED"  # type: ignore[misc]
 
@@ -271,16 +280,27 @@ def test_breakout_micro_long_and_short_mode_priority(
         item for item in result.decisions if item.decision is DecisionKind.FORMAL_SETUP_CONFIRMED
     )
     assert formal.setup_mode is SetupMode.MICRO_FAST
+    assert formal.retest_type is None
+    with pytest.raises(KernelInputError, match="MICRO_FAST"):
+        replace(formal, retest_type=RetestType.DEEP)
     assert formal.structural_stop == expected_stop
-    assert len([item for item in result.ledger.events if item.status is EventStatus.CONFIRMED]) == 1
+    later = bar(confirmation.open_time_ms // 300_000 + 1)
+    rerun = evaluate(later, result.ledger)
+    entitlements = [
+        item
+        for item in (*result.decisions, *rerun.decisions)
+        if item.decision is DecisionKind.FORMAL_SETUP_CONFIRMED
+        and item.market_event_id == active.market_event_id
+    ]
+    assert len(entitlements) == 1
 
 
 @pytest.mark.parametrize(
-    ("side", "mode", "source_zone", "pullback", "previous", "confirmation"),
+    ("side", "retest_type", "source_zone", "pullback", "previous", "confirmation"),
     (
         (
             Side.LONG,
-            SetupMode.STANDARD_DEEP,
+            RetestType.DEEP,
             RESISTANCE,
             "110.8",
             bar(30, open_="111.2", high="111.4", low="110.8", close="111"),
@@ -288,7 +308,7 @@ def test_breakout_micro_long_and_short_mode_priority(
         ),
         (
             Side.LONG,
-            SetupMode.STANDARD_SHALLOW,
+            RetestType.SHALLOW,
             RESISTANCE,
             "111.5",
             bar(30, open_="111.9", high="112", low="111.5", close="111.7"),
@@ -296,7 +316,7 @@ def test_breakout_micro_long_and_short_mode_priority(
         ),
         (
             Side.SHORT,
-            SetupMode.STANDARD_DEEP,
+            RetestType.DEEP,
             SUPPORT,
             "99.2",
             bar(30, open_="99", high="99.2", low="98.5", close="98.8"),
@@ -304,7 +324,7 @@ def test_breakout_micro_long_and_short_mode_priority(
         ),
         (
             Side.SHORT,
-            SetupMode.STANDARD_SHALLOW,
+            RetestType.SHALLOW,
             SUPPORT,
             "98.5",
             bar(30, open_="98.4", high="98.5", low="98", close="98.3"),
@@ -314,7 +334,7 @@ def test_breakout_micro_long_and_short_mode_priority(
 )
 def test_breakout_standard_deep_shallow_long_short(
     side: Side,
-    mode: SetupMode,
+    retest_type: RetestType,
     source_zone: ZoneSnapshot,
     pullback: str,
     previous: Bar,
@@ -345,7 +365,7 @@ def test_breakout_standard_deep_shallow_long_short(
         pullback_started=True,
         impulse_extreme=Decimal("113") if side is Side.LONG else Decimal("97"),
         pullback_extreme=Decimal(pullback),
-        retest_mode=mode,
+        retest_type=retest_type,
         retest_seen_bar_time_ms=previous.open_time_ms,
         target_reference=TargetReference(TargetKind.OPEN_SPACE_REFERENCE, None),
     )
@@ -353,8 +373,21 @@ def test_breakout_standard_deep_shallow_long_short(
     formal = next(
         item for item in result.decisions if item.decision is DecisionKind.FORMAL_SETUP_CONFIRMED
     )
-    assert formal.setup_mode is mode
+    assert formal.setup_mode is SetupMode.STANDARD
+    assert formal.retest_type is retest_type
+    assert formal.reason == f"BREAKOUT_STANDARD_CONFIRMED_{retest_type.value}_RETEST"
+    with pytest.raises(KernelInputError, match="requires MICRO_FAST or typed STANDARD"):
+        replace(formal, retest_type=None)
     assert formal.breakout_linkage is not None
+    later = bar(confirmation.open_time_ms // 300_000 + 1)
+    rerun = evaluate(later, result.ledger)
+    entitlements = [
+        item
+        for item in (*result.decisions, *rerun.decisions)
+        if item.decision is DecisionKind.FORMAL_SETUP_CONFIRMED
+        and item.market_event_id == active.market_event_id
+    ]
+    assert len(entitlements) == 1
 
 
 def test_accepted_reentry_invalidates_breakout_and_routes_new_opposite_sweep() -> None:
@@ -421,7 +454,8 @@ def test_range_long_and_short_exact_wick_true_range_formulas(
     )
     formal = next(item for item in result.decisions if item.reason == reason)
     assert formal.side is side
-    assert formal.setup_mode is SetupMode.RANGE_EDGE_REJECTION
+    assert formal.setup_mode is None
+    assert formal.retest_type is None
     assert formal.target_reference is not None
     assert formal.target_reference.price == Decimal("105")
     rerun = evaluate_strategy(
@@ -535,3 +569,5 @@ def test_frozen_fixture_and_formal_setup_count_exactly_three() -> None:
         SetupFamily.RANGE_EDGE_REJECTION,
     }
     assert all("FAILED_ACCEPTED_BREAKOUT" not in item.value for item in SetupFamily)
+    assert set(SetupMode) == {SetupMode.MICRO_FAST, SetupMode.STANDARD}
+    assert set(RetestType) == {RetestType.DEEP, RetestType.SHALLOW}

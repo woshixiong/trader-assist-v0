@@ -35,6 +35,7 @@ from .types import (
     KernelInputError,
     KernelResult,
     MarketEvent,
+    RetestType,
     ScannerLinkage,
     SetupFamily,
     SetupMode,
@@ -86,6 +87,9 @@ def _decision(
         market_id=event.market_id,
         setup_family=event.setup_family,
         setup_mode=event.formal_mode,
+        retest_type=(
+            event.retest_type if event.formal_mode is SetupMode.STANDARD else None
+        ),
         side=event.side,
         decision=kind,
         reason=reason,
@@ -253,7 +257,6 @@ def _progress_sweep(event: MarketEvent, bar: Bar) -> tuple[MarketEvent, Strategy
             status=EventStatus.CONFIRMED,
             transition="FORMAL_SETUP_CONFIRMED",
             latest_bar=bar,
-            formal_mode=SetupMode.SWEEP_RECLAIM,
         )
         return updated, _decision(
             updated,
@@ -435,7 +438,7 @@ def _standard_terms(
 
 def _qualify_retest(
     event: MarketEvent, bar: Bar, pullback_extreme: Decimal
-) -> SetupMode | None:
+) -> RetestType | None:
     if event.impulse_extreme is None:
         raise KernelInputError("breakout impulse extreme is missing")
     a5 = event.a5_event
@@ -470,9 +473,9 @@ def _qualify_retest(
             and Decimal("0.25") <= ratio <= Decimal("0.60")
         )
     if deep:
-        return SetupMode.STANDARD_DEEP
+        return RetestType.DEEP
     if shallow:
-        return SetupMode.STANDARD_SHALLOW
+        return RetestType.SHALLOW
     return None
 
 
@@ -502,7 +505,7 @@ def _progress_breakout(
         )
         if pullback_start:
             pullback_extreme = bar.low if event.side is Side.LONG else bar.high
-            mode = _qualify_retest(event, bar, pullback_extreme)
+            retest_type = _qualify_retest(event, bar, pullback_extreme)
             return (
                 event.evolve(
                     latest_bar=bar,
@@ -512,8 +515,10 @@ def _progress_breakout(
                     previous_low=bar.low,
                     pullback_started=True,
                     pullback_extreme=pullback_extreme,
-                    retest_mode=mode,
-                    retest_seen_bar_time_ms=bar.open_time_ms if mode is not None else None,
+                    retest_type=retest_type,
+                    retest_seen_bar_time_ms=(
+                        bar.open_time_ms if retest_type is not None else None
+                    ),
                 ),
                 None,
             )
@@ -562,13 +567,13 @@ def _progress_breakout(
         else max(event.pullback_extreme, bar.high)
     )
     qualified = _qualify_retest(event, bar, pullback_extreme)
-    mode = event.retest_mode
+    retest_type = event.retest_type
     seen_time = event.retest_seen_bar_time_ms
-    if qualified is SetupMode.STANDARD_DEEP:
-        mode = qualified
-        seen_time = seen_time if event.retest_mode is qualified else bar.open_time_ms
-    elif mode is None and qualified is SetupMode.STANDARD_SHALLOW:
-        mode = qualified
+    if qualified is RetestType.DEEP:
+        retest_type = qualified
+        seen_time = seen_time if event.retest_type is qualified else bar.open_time_ms
+    elif retest_type is None and qualified is RetestType.SHALLOW:
+        retest_type = qualified
         seen_time = bar.open_time_ms
     after_retest = seen_time is not None and bar.open_time_ms > seen_time
     confirms = (
@@ -576,15 +581,15 @@ def _progress_breakout(
         if event.side is Side.LONG
         else bar.close < event.previous_low
     )
-    if mode is not None and after_retest and confirms:
+    if retest_type is not None and after_retest and confirms:
         ideal_low, ideal_high, chase, stop = _standard_terms(event, pullback_extreme)
         updated = event.evolve(
             status=EventStatus.CONFIRMED,
             transition="FORMAL_SETUP_CONFIRMED",
             latest_bar=bar,
-            formal_mode=mode,
+            formal_mode=SetupMode.STANDARD,
             pullback_extreme=pullback_extreme,
-            retest_mode=mode,
+            retest_type=retest_type,
             retest_seen_bar_time_ms=seen_time,
             ideal_entry_low=ideal_low,
             ideal_entry_high=ideal_high,
@@ -592,9 +597,9 @@ def _progress_breakout(
             structural_stop=stop,
         )
         reason = (
-            "BREAKOUT_STANDARD_DEEP_CONFIRMED"
-            if mode is SetupMode.STANDARD_DEEP
-            else "BREAKOUT_STANDARD_SHALLOW_CONFIRMED"
+            "BREAKOUT_STANDARD_CONFIRMED_DEEP_RETEST"
+            if retest_type is RetestType.DEEP
+            else "BREAKOUT_STANDARD_CONFIRMED_SHALLOW_RETEST"
         )
         return updated, _decision(
             updated,
@@ -610,7 +615,7 @@ def _progress_breakout(
             previous_high=bar.high,
             previous_low=bar.low,
             pullback_extreme=pullback_extreme,
-            retest_mode=mode,
+            retest_type=retest_type,
             retest_seen_bar_time_ms=seen_time,
         ),
         None,
@@ -708,7 +713,6 @@ def _new_range(
         m20_event=m20,
         htf_relation=relation,
         scanner_linkage=scanner_linkage,
-        formal_mode=SetupMode.RANGE_EDGE_REJECTION,
         ideal_entry_low=ideal_low,
         ideal_entry_high=ideal_high,
         chase_limit=chase,

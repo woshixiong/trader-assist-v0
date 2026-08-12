@@ -41,11 +41,17 @@ class SetupFamily(StrEnum):
 
 
 class SetupMode(StrEnum):
-    SWEEP_RECLAIM = "SWEEP_RECLAIM"
+    """External confirmation modes for Breakout Retest only."""
+
     MICRO_FAST = "MICRO_FAST"
-    STANDARD_DEEP = "STANDARD_DEEP"
-    STANDARD_SHALLOW = "STANDARD_SHALLOW"
-    RANGE_EDGE_REJECTION = "RANGE_EDGE_REJECTION"
+    STANDARD = "STANDARD"
+
+
+class RetestType(StrEnum):
+    """Internal STANDARD retest classification exposed separately from mode."""
+
+    DEEP = "DEEP"
+    SHALLOW = "SHALLOW"
 
 
 class DecisionKind(StrEnum):
@@ -269,6 +275,7 @@ class StrategyDecision:
     market_id: str
     setup_family: SetupFamily
     setup_mode: SetupMode | None
+    retest_type: RetestType | None
     side: Side
     decision: DecisionKind
     reason: str
@@ -290,6 +297,23 @@ class StrategyDecision:
     parameter_version: str = PARAMETER_VERSION
     scanner_version: str = SCANNER_VERSION
     schema_version: str = SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        if self.decision is not DecisionKind.FORMAL_SETUP_CONFIRMED:
+            if self.setup_mode is not None or self.retest_type is not None:
+                raise KernelInputError("non-formal decisions cannot expose confirmation mode")
+            return
+        if self.setup_family is not SetupFamily.BREAKOUT_RETEST:
+            if self.setup_mode is not None or self.retest_type is not None:
+                raise KernelInputError("non-breakout decisions cannot expose breakout mode")
+            return
+        if self.setup_mode is SetupMode.MICRO_FAST:
+            if self.retest_type is not None:
+                raise KernelInputError("MICRO_FAST cannot expose a STANDARD retest type")
+            return
+        if self.setup_mode is SetupMode.STANDARD and isinstance(self.retest_type, RetestType):
+            return
+        raise KernelInputError("formal Breakout Retest requires MICRO_FAST or typed STANDARD")
 
 
 @dataclass(frozen=True)
@@ -321,7 +345,7 @@ class MarketEvent:
     pullback_started: bool = False
     impulse_extreme: Decimal | None = None
     pullback_extreme: Decimal | None = None
-    retest_mode: SetupMode | None = None
+    retest_type: RetestType | None = None
     retest_seen_bar_time_ms: int | None = None
     formal_mode: SetupMode | None = None
     ideal_entry_low: Decimal | None = None
