@@ -19,6 +19,7 @@ from .models import (
     MessageEnvelope,
     NotificationContractError,
     NotificationKind,
+    ScannerWatchNotificationView,
     SignalNotificationView,
 )
 from .outbox import NotificationPublisher, OutboxPort
@@ -36,6 +37,7 @@ __all__ = [
     "OutboxDispatcher",
     "OutboxPort",
     "RetryPolicy",
+    "ScannerWatchNotificationView",
     "SignalNotificationView",
     "WebhookConfig",
     "WebhookDeliveryAdapter",

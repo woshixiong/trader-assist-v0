@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -15,6 +16,7 @@ from trader_assist_v0.multi_asset_shadow.notification_engine import (
     NotificationPublisher,
     OutboxDispatcher,
     RetryPolicy,
+    ScannerWatchNotificationView,
     SignalNotificationView,
     WebhookConfig,
     WebhookDeliveryAdapter,
@@ -31,7 +33,7 @@ def formal(
     *,
     tier: RegistryTier = RegistryTier.P0,
     family: str = "SWEEP_RECLAIM",
-    mode: str = "FAST",
+    mode: str | None = None,
     side: str = "LONG",
     tp2: Decimal | None = Decimal("110"),
     session_warning: str | None = None,
@@ -61,27 +63,29 @@ def formal(
     )
 
 
-def non_formal(kind: NotificationKind) -> SignalNotificationView:
-    return SignalNotificationView(
+def scanner_watch(
+    *, kind: NotificationKind = NotificationKind.WATCH, side: str | None = "LONG"
+) -> ScannerWatchNotificationView:
+    return ScannerWatchNotificationView(
         kind=kind,
         market_display="ETH-PERP",
         tier=RegistryTier.P2,
-        setup_family="BREAKOUT_RETEST",
-        setup_mode="MICRO",
-        side=None,
-        signal_time=NOW,
-        planned_entry=None,
-        stop=None,
-        tp1=None,
-        tp2=None,
-        entry_quality=None,
-        htf_relation="mixed",
-        zone_context="range high",
-        reference_risk_sizing="not applicable",
-        liquidity_attribution="scanner evidence only",
-        strategy_version="FL-MA-PRICE-ACTION-v0.1",
-        parameter_version="2026-08-03-r1",
-        signal_id=f"{kind.value.lower()}-001",
+        side=side,
+        observation_time=NOW,
+        return_15m=Decimal("1.25"),
+        return_30m=Decimal("2.50"),
+        return_60m=Decimal("-0.75"),
+        rank=3,
+        move_atr=Decimal("1.4"),
+        relative_volume=Decimal("2.1"),
+        prior_level="3,500.00 range high",
+        distance_to_level=Decimal("0.35"),
+        liquidity_summary="bid liquidity stable; ask sweep observed",
+        scanner_r3_state="R3_WATCH",
+        session="US overlap",
+        scanner_parameter_version="scanner-r3 / 2026-08-03-r1",
+        watch_id=f"candidate-watch-{kind.value.lower()}-001",
+        do_not_chase=True,
     )
 
 
@@ -89,19 +93,19 @@ def non_formal(kind: NotificationKind) -> SignalNotificationView:
 @pytest.mark.parametrize(
     ("family", "mode", "side"),
     [
-        ("SWEEP_RECLAIM", "FAST", "LONG"),
-        ("BREAKOUT_RETEST", "MICRO", "SHORT"),
+        ("SWEEP_RECLAIM", None, "LONG"),
+        ("BREAKOUT_RETEST", "MICRO_FAST", "SHORT"),
         ("BREAKOUT_RETEST", "STANDARD", "LONG"),
-        ("RANGE_EDGE_REJECTION", "STANDARD", "SHORT"),
+        ("RANGE_EDGE_REJECTION", None, "SHORT"),
     ],
 )
 def test_every_tier_and_setup_family_receives_a_formal_signal(
-    tier: RegistryTier, family: str, mode: str, side: str
+    tier: RegistryTier, family: str, mode: str | None, side: str
 ) -> None:
     rendered = format_notification(formal(tier=tier, family=family, mode=mode, side=side))
     assert "FORMAL SIGNAL — MANUAL REVIEW REQUIRED" in rendered
     assert f"Tier: {tier.value}" in rendered
-    assert f"Setup: {family} / {mode}" in rendered
+    assert f"Setup: {family}" + (f" / {mode}" if mode is not None else "") in rendered
     assert f"Side: {side}" in rendered
     assert "NOT_SUBMITTED — NO ORDER SENT" in rendered
 
@@ -116,21 +120,54 @@ def test_formatter_is_deterministic_and_handles_missing_optional_tp2_and_session
     assert "Reference risk sizing: reference-only: 1% / 2% shadow bands" in rendered
 
 
-def test_watch_and_research_evidence_are_visually_and_semantically_non_actionable() -> None:
-    watch = format_notification(non_formal(NotificationKind.WATCH))
-    research = format_notification(non_formal(NotificationKind.RESEARCH_FAILED_BREAKOUT))
+def test_directional_scanner_watch_is_complete_and_visibly_non_actionable() -> None:
+    watch = format_notification(scanner_watch())
     assert watch.startswith("WATCH — NOT ACTIONABLE")
-    assert "No entry, stop, target, or order instruction." in watch
+    assert "NOT_YET_SETUP_CONFIRMED" in watch
+    for field in (
+        "Market: ETH-PERP",
+        "Tier: P2",
+        "Side: LONG",
+        "Observation time:",
+        "15m return: 1.25",
+        "30m return: 2.50",
+        "60m return: -0.75",
+        "Rank: 3",
+        "Move ATR: 1.4",
+        "Relative volume: 2.1",
+        "Prior level: 3,500.00 range high",
+        "Distance to level: 0.35",
+        "Liquidity: bid liquidity stable; ask sweep observed",
+        "Scanner R3 state: R3_WATCH",
+        "Session: US overlap",
+        "Scanner / parameters: scanner-r3 / 2026-08-03-r1",
+        "Watch ID: candidate-watch-watch-001",
+        "DO_NOT_CHASE",
+    ):
+        assert field in watch
     assert "FORMAL SIGNAL" not in watch
-    assert research.startswith("RESEARCH / FAILED_BREAKOUT EVIDENCE — NOT ACTIONABLE")
-    assert "not a Formal Signal or order instruction" in research
+    for forbidden in ("Planned entry", "Stop:", "TP1", "TP2", "ShadowOrder", "order instruction"):
+        assert forbidden not in watch
 
 
-def test_non_formal_notification_rejects_actionable_fields() -> None:
-    with pytest.raises(ValueError, match="cannot carry actionable prices"):
-        SignalNotificationView(
-            **{**non_formal(NotificationKind.WATCH).__dict__, "planned_entry": Decimal("100")}
-        )
+def test_watch_new_market_allows_no_side_but_directional_watch_does_not() -> None:
+    watch = format_notification(scanner_watch(kind=NotificationKind.WATCH_NEW_MARKET, side=None))
+    assert "Side:" not in watch
+    with pytest.raises(ValueError, match="directional WATCH side"):
+        scanner_watch(side=None)
+
+
+@pytest.mark.parametrize("mode", ["STANDARD_DEEP", "STANDARD_SHALLOW", "FAST", "MICRO"])
+def test_formal_contract_rejects_unapproved_breakout_modes(mode: str) -> None:
+    with pytest.raises(ValueError, match="approved breakout mode"):
+        formal(family="BREAKOUT_RETEST", mode=mode)
+
+
+def test_formal_contract_rejects_fake_non_breakout_mode_and_unknown_family() -> None:
+    with pytest.raises(ValueError, match="non-breakout setups"):
+        formal(family="SWEEP_RECLAIM", mode="STANDARD")
+    with pytest.raises(ValueError, match="approved formal family"):
+        formal(family="UNKNOWN", mode=None)
 
 
 def test_idempotency_is_deterministic_and_does_not_depend_on_formatting_time() -> None:
@@ -255,8 +292,15 @@ def test_webhook_seam_is_injected_and_does_not_leak_secret_into_message_or_confi
     assert result[0].transition.state is DeliveryState.DELIVERED
     payload = client.calls[0]["payload"]
     assert isinstance(payload, bytes)
+    assert json.loads(payload) == {"content": build_envelope(view=formal(), created_at=NOW).content}
     assert b"never-in-content" not in payload
     assert b"notifications.example.test" not in payload
+    assert b"idempotency_key" not in payload
+    assert b"schema_version" not in payload
+    assert b"kind" not in payload
+    headers = client.calls[0]["headers"]
+    assert isinstance(headers, dict)
+    assert "Idempotency-Key" not in headers
     assert "never-in-content" not in repr(dispatcher._adapter._config)  # type: ignore[attr-defined]
     assert len(client.calls) == 1  # fake client only: no real network transport is constructed.
     assert outbox.completed[0][1].response_status == 200
