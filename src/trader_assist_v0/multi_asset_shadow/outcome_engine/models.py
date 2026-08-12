@@ -331,6 +331,8 @@ class PathEvaluation:
     two_r_hit: bool
     time_to_one_r_ms: int | None
     max_mfe_before_stop: Decimal
+    max_profit_giveback: Decimal
+    return_to_entry_after_profit: bool
 
 
 @dataclass(frozen=True)
@@ -361,6 +363,7 @@ class FormalShadowOutcome:
     original_deadline_ms: int
     required_end_ms: int
     path_maturity_status: MaturityStatus
+    unresolved: bool
     horizons: tuple[HorizonMetrics, ...]
     path: PathEvaluation
     time_to_retest_ms: int | None
