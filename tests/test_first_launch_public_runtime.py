@@ -27,6 +27,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from websockets.exceptions import ConnectionClosedOK
 
 from trader_assist_v0.first_launch.configuration import RiskConfiguration
 from trader_assist_v0.first_launch.market_data import (
@@ -827,12 +828,117 @@ def test_reconnect_returns_subscription_requests(tmp_path: Path) -> None:
         store.close()
 
 
-def test_reconnect_budget_exhausted_returns_none(tmp_path: Path) -> None:
+def test_initial_startup_does_not_consume_reconnect_budget(tmp_path: Path) -> None:
     runtime, store, _, _ = _make_runtime(tmp_path)
     try:
         _warmup_to_active(runtime, now=NOW)
         _recover_to_ready(runtime, now=NOW)
-        # Exhaust all reconnect attempts
+        assert runtime._reconnect_attempt == 0
+        assert runtime.next_reconnect_delay_seconds == runtime.config.reconnect_delays_seconds[0]
+    finally:
+        store.close()
+
+
+def test_partial_recovery_does_not_reset_reconnect_budget(tmp_path: Path) -> None:
+    runtime, store, _, _ = _make_runtime(tmp_path)
+    try:
+        _warmup_to_active(runtime, now=NOW)
+        _recover_to_ready(runtime, now=NOW)
+        runtime.mark_disconnected(now=NOW, reason="test")
+        runtime.begin_reconnect(connection_id="conn-reconnect", now=NOW)
+        for spec in REQUIRED_PUBLIC_SUBSCRIPTIONS:
+            runtime.accept_acknowledgement(frame_text=_ack_frame(spec.subscription), now=NOW)
+        runtime.recover_public_snapshot(
+            raw_5m=_snapshot_json([_candle_obj(i) for i in range(64)]),
+            raw_15m=_snapshot_json([_candle_obj(i, interval="15m") for i in range(20)]),
+            raw_metadata=_metadata_json(),
+            now=NOW,
+        )
+        assert runtime.health_state is RuntimeHealthState.WARMING
+        assert runtime._reconnect_attempt == 1
+    finally:
+        store.close()
+
+
+def test_completed_recovery_resets_prior_consecutive_failures(tmp_path: Path) -> None:
+    runtime, store, _, _ = _make_runtime(tmp_path)
+    try:
+        _warmup_to_active(runtime, now=NOW)
+        _recover_to_ready(runtime, now=NOW)
+        for connection_id in ("conn-first", "conn-second"):
+            runtime.mark_disconnected(now=NOW, reason="test")
+            assert runtime.begin_reconnect(connection_id=connection_id, now=NOW) is not None
+        assert runtime._reconnect_attempt == 2
+        for spec in REQUIRED_PUBLIC_SUBSCRIPTIONS:
+            runtime.accept_acknowledgement(frame_text=_ack_frame(spec.subscription), now=NOW)
+        runtime.recover_public_snapshot(
+            raw_5m=_snapshot_json([_candle_obj(i) for i in range(64)]),
+            raw_15m=_snapshot_json([_candle_obj(i, interval="15m") for i in range(20)]),
+            raw_metadata=_metadata_json(),
+            now=NOW,
+        )
+        runtime.accept_public_frame(frame_text=_context_frame(), now=NOW)
+        assert runtime.is_ready is True
+        assert runtime._reconnect_attempt == 0
+    finally:
+        store.close()
+
+
+def test_ready_status_publication_failure_does_not_reset_reconnect_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, store, _, _ = _make_runtime(tmp_path)
+    try:
+        from trader_assist_v0.runtime import first_launch_public_runtime as runtime_module
+
+        _warmup_to_active(runtime, now=NOW)
+        _recover_to_ready(runtime, now=NOW)
+        runtime.mark_disconnected(now=NOW, reason="test")
+        runtime.begin_reconnect(connection_id="conn-reconnect", now=NOW)
+        for spec in REQUIRED_PUBLIC_SUBSCRIPTIONS:
+            runtime.accept_acknowledgement(frame_text=_ack_frame(spec.subscription), now=NOW)
+        runtime.recover_public_snapshot(
+            raw_5m=_snapshot_json([_candle_obj(i) for i in range(64)]),
+            raw_15m=_snapshot_json([_candle_obj(i, interval="15m") for i in range(20)]),
+            raw_metadata=_metadata_json(),
+            now=NOW,
+        )
+        real_replace = runtime_module.os.replace
+
+        def fail_ready_snapshot(source: str, destination: Path) -> None:
+            if '"state":"READY"' in Path(source).read_text(encoding="utf-8"):
+                raise OSError("injected READY snapshot publication failure")
+            real_replace(source, destination)
+
+        monkeypatch.setattr(runtime_module.os, "replace", fail_ready_snapshot)
+        with pytest.raises(StatusSnapshotPublicationError):
+            runtime.accept_public_frame(frame_text=_context_frame(), now=NOW)
+        assert runtime._reconnect_attempt == 1
+    finally:
+        store.close()
+
+
+def test_ordinary_ready_update_does_not_reset_reconnect_budget(tmp_path: Path) -> None:
+    runtime, store, _, _ = _make_runtime(tmp_path)
+    try:
+        _warmup_to_active(runtime, now=NOW)
+        _recover_to_ready(runtime, now=NOW)
+        # A READY context update is not a recovery completion transition.
+        runtime._reconnect_attempt = 1
+        runtime.accept_public_frame(frame_text=_context_frame("101"), now=NOW)
+        assert runtime.is_ready is True
+        assert runtime._reconnect_attempt == 1
+    finally:
+        store.close()
+
+
+def test_consecutive_incomplete_reconnects_exhaust_budget(tmp_path: Path) -> None:
+    runtime, store, _, _ = _make_runtime(tmp_path)
+    try:
+        _warmup_to_active(runtime, now=NOW)
+        _recover_to_ready(runtime, now=NOW)
+        # Do not complete recovery between reconnect attempts. The counter is
+        # therefore consecutive and must still fail closed at the fixed limit.
         for _ in runtime.config.reconnect_delays_seconds:
             runtime.mark_disconnected(now=NOW, reason="test")
             result = runtime.begin_reconnect(connection_id="conn", now=NOW)
@@ -1577,12 +1683,14 @@ class _FakeWebSocket:
         frames: list[str],
         *,
         disconnect_after: int | None = None,
+        disconnect_error: Exception | None = None,
         shutdown_event: asyncio.Event | None = None,
         post_candles: list[dict[str, object]] | None = None,
     ) -> None:
         self._frames = list(frames)
         self._pos = 0
         self._disconnect_after = disconnect_after
+        self._disconnect_error = disconnect_error
         self._shutdown_event = shutdown_event
         self._post_candles = list(post_candles or [])
         self._frame_available = asyncio.Event()
@@ -1614,6 +1722,8 @@ class _FakeWebSocket:
 
     async def recv(self) -> str | bytes:
         if self._disconnect_after is not None and self._pos >= self._disconnect_after:
+            if self._disconnect_error is not None:
+                raise self._disconnect_error
             raise ConnectionError("simulated disconnect")
         if self._pos >= len(self._frames):
             if self._shutdown_event is not None:
@@ -2605,8 +2715,9 @@ def test_ga05_disconnect_then_reconnect_uses_begin_reconnect(tmp_path: Path) -> 
                     break
                 await asyncio.sleep(0.01)
             assert runtime.is_ready is True
-            # begin_reconnect was used (reconnect_attempt > 0)
-            assert runtime._reconnect_attempt >= 1
+            # Full recovery reached READY and published its status snapshot,
+            # so the consecutive unsuccessful-recovery budget was reset.
+            assert runtime._reconnect_attempt == 0
             # begin_warmup was NOT called a second time: _connection_id changed
             assert len(factory.created) == 2
             # Shutdown cleanly
@@ -2680,39 +2791,42 @@ def test_ga05_reconnect_requires_fresh_snapshot_and_acks(tmp_path: Path) -> None
         store.close()
 
 
-def test_ga05_budget_exhaustion_exits_fail_closed(tmp_path: Path) -> None:
+def test_ga05_continuous_recovery_failures_exhaust_budget(tmp_path: Path) -> None:
     """GA-05: exhausting the reconnect budget stops fail-closed (exit code 1)."""
-    # Only 1 reconnect delay: first reconnect succeeds, second fails
+    # Only one reconnect delay. Snapshot recovery keeps failing, so no
+    # complete recovery can reset the budget before the next reconnect.
     runtime, store, _, _ = _make_runtime_short_reconnect(
         tmp_path, reconnect_delays=(0.001,)
     )
     try:
         runtime.activate(now=NOW)
         shutdown_event = asyncio.Event()
-
-        # First connection: 3 acks + context → READY, then disconnect
-        ws1 = _FakeWebSocket(_ack_and_context_frames(), disconnect_after=4)
-        # Second connection (reconnect): 3 acks + context → READY, then disconnect
-        ws2 = _FakeWebSocket(_ack_and_context_frames(), disconnect_after=4)
         factory = _FakeWebSocketFactory()
-        factory.enqueue(ws1)
-        factory.enqueue(ws2)
+        recovery_calls = 0
+
+        def recovery_fails() -> tuple[str, str, str]:
+            nonlocal recovery_calls
+            recovery_calls += 1
+            raise RuntimeError("simulated snapshot recovery failure")
 
         async def _test() -> None:
             exit_code = await _SCRIPT_MODULE._run_transport(
                 runtime=runtime,
-                recover_snapshot=_recovery_frames,
+                recover_snapshot=recovery_fails,
                 websocket_factory=factory,
                 websocket_url="wss://test",
                 status=lambda msg: None,
                 shutdown_event=shutdown_event,
             )
-            # Budget exhausted: first reconnect used the only delay, second
-            # begin_reconnect returned None → exit 1.
+            # First failure is on initial recovery. The first reconnect also
+            # fails; the next reconnect is denied by the unchanged budget.
             assert exit_code == 1
             assert runtime.is_ready is False
+            assert runtime._reconnect_attempt == 1
 
         asyncio.run(_test())
+        assert recovery_calls == 2
+        assert factory.created == []
     finally:
         store.close()
 
@@ -2792,12 +2906,13 @@ def test_ga05_no_duplicate_session_or_publication_on_reconnect(tmp_path: Path) -
                     break
                 await asyncio.sleep(0.01)
             assert runtime.is_ready is True
-            # Wait for disconnect + reconnect
+            # Wait for disconnect + complete reconnect recovery.
             for _ in range(400):
-                if runtime.is_ready and runtime._reconnect_attempt >= 1:
+                if len(factory.created) == 2 and runtime.is_ready:
                     break
                 await asyncio.sleep(0.01)
-            assert runtime._reconnect_attempt >= 1
+            assert len(factory.created) == 2
+            assert runtime._reconnect_attempt == 0
             # Session identity is unchanged
             assert runtime.session_id == session_id
             sessions = store.list_runtime_sessions()
@@ -2810,6 +2925,57 @@ def test_ga05_no_duplicate_session_or_publication_on_reconnect(tmp_path: Path) -
             await asyncio.wait_for(transport_task, timeout=10.0)
 
         asyncio.run(_test())
+    finally:
+        store.close()
+
+
+def test_ga05_repeated_connection_closed_ok_recoveries_reset_budget(
+    tmp_path: Path,
+) -> None:
+    """Seven completed normal-close recoveries stay inside a one-attempt budget."""
+    runtime, store, _, _ = _make_runtime_short_reconnect(
+        tmp_path, reconnect_delays=(0.001,)
+    )
+    try:
+        runtime.activate(now=NOW)
+        shutdown_event = asyncio.Event()
+        factory = _FakeWebSocketFactory()
+        for _ in range(7):
+            factory.enqueue(
+                _FakeWebSocket(
+                    _ack_and_context_frames(),
+                    disconnect_after=4,
+                    disconnect_error=ConnectionClosedOK(None, None),
+                )
+            )
+        final_socket = _FakeWebSocket(
+            _ack_and_context_frames(), shutdown_event=shutdown_event
+        )
+        factory.enqueue(final_socket)
+
+        async def _test() -> None:
+            task = asyncio.create_task(
+                _SCRIPT_MODULE._run_transport(
+                    runtime=runtime,
+                    recover_snapshot=_recovery_frames,
+                    websocket_factory=factory,
+                    websocket_url="wss://test",
+                    status=lambda _message: None,
+                    shutdown_event=shutdown_event,
+                )
+            )
+            for _ in range(2_000):
+                if len(factory.created) == 8 and runtime.is_ready:
+                    break
+                await asyncio.sleep(0.01)
+            assert len(factory.created) == 8
+            assert runtime.is_ready is True
+            assert runtime._reconnect_attempt == 0
+            shutdown_event.set()
+            assert await asyncio.wait_for(task, timeout=10.0) == 0
+
+        asyncio.run(_test())
+        assert final_socket.closed is True
     finally:
         store.close()
 
