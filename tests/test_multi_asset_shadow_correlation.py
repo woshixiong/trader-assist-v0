@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from fractions import Fraction
 from math import sqrt
 
 import pytest
@@ -89,7 +91,9 @@ def _signal(
     spread: str = "2",
     day_notional: str = "1000",
     oi: str = "500",
-    outcome_r: str = "1",
+    outcome_r: str | None = "1",
+    outcome_mfe: str | None = None,
+    outcome_mae: str | None = None,
 ) -> ShadowSignal:
     return ShadowSignal(
         shadow_order_id=shadow_order_id,
@@ -99,11 +103,13 @@ def _signal(
         confirmed_at=confirmed_at,
         strategy_version="FL-MA-PRICE-ACTION-v0.1",
         parameter_version="2026-08-03-r1",
-        depth=Decimal(depth),
-        spread_bps=Decimal(spread),
-        day_notional=Decimal(day_notional),
+        p10_weak_depth_10bps=Decimal(depth),
+        p95_spread_bps=Decimal(spread),
+        exchange_day_notional=Decimal(day_notional),
         oi_notional=Decimal(oi),
-        outcome_r=Decimal(outcome_r),
+        outcome_r=None if outcome_r is None else Decimal(outcome_r),
+        outcome_mfe=None if outcome_mfe is None else Decimal(outcome_mfe),
+        outcome_mae=None if outcome_mae is None else Decimal(outcome_mae),
     )
 
 
@@ -160,6 +166,35 @@ def test_fourteen_day_cut_excludes_older_returns() -> None:
     assert pair.window_start == EVENT - timedelta(days=14)
     assert pair.window_end == EVENT
     assert pair.pearson is not None and pair.pearson > PRIMARY_THRESHOLD
+
+
+@pytest.mark.parametrize(
+    ("market_id", "observation_index", "evidence_field"),
+    (
+        ("a", 0, "left_previous_candle_hash"),
+        ("a", 1, "left_current_candle_hash"),
+        ("b", 0, "right_previous_candle_hash"),
+        ("b", 1, "right_current_candle_hash"),
+    ),
+)
+def test_correlation_data_hash_binds_all_four_return_candle_hash_positions(
+    market_id: str, observation_index: int, evidence_field: str
+) -> None:
+    signals = (_signal("one", "a"), _signal("two", "b"))
+    history = _history(("a", "a"), ("b", "b"))
+    baseline = build_correlation_report(signals, history).pairwise_correlations[0]
+    changed_market = list(history[market_id])
+    changed_market[observation_index] = replace(
+        changed_market[observation_index], source_candle_hash="f" * 64
+    )
+    attacked_history = dict(history)
+    attacked_history[market_id] = tuple(changed_market)
+    attacked = build_correlation_report(signals, attacked_history).pairwise_correlations[0]
+
+    assert baseline.pearson == attacked.pearson
+    assert baseline.paired_return_count == attacked.paired_return_count
+    assert baseline.correlation_data_hash != attacked.correlation_data_hash
+    assert getattr(attacked.paired_return_evidence[0], evidence_field) == "f" * 64
 
 
 def test_primary_and_sensitivity_thresholds_use_the_same_engine() -> None:
@@ -238,9 +273,107 @@ def test_deterministic_leader_market_id_fallback_and_report_counts() -> None:
     assert report.leader_only.leader_only_count == 1
     assert report.leader_only.leaders[0].market_id == "a"
     assert {member.member_weight for member in report.cluster_normalized.members} == {
-        Decimal(1) / Decimal(3)
+        Fraction(1, 3)
     }
+    assert sum(
+        (member.member_weight for member in report.cluster_normalized.members), Fraction()
+    ) == Fraction(1)
+    assert all(
+        member.raw_market_evidence.shadow_order_id == member.shadow_order_id
+        for member in report.cluster_normalized.members
+    )
     assert report.cluster_compression_ratio == Decimal(1) / Decimal(3)
+
+
+def test_cluster_metrics_are_deterministic_and_missing_outcomes_remain_unavailable() -> None:
+    signals = (
+        _signal("a", "a", outcome_r="2", outcome_mfe="3", outcome_mae="-0.5"),
+        _signal("b", "b", outcome_r="-1", outcome_mfe="0.5", outcome_mae="-2"),
+        _signal("c", "c", outcome_r=None, outcome_mfe=None, outcome_mae=None),
+    )
+    report = build_correlation_report(
+        signals, _history(("a", "a"), ("b", "b"), ("c", "a"))
+    )
+    metrics = report.exposure_clusters[0].research_metrics
+    assert metrics.mean_r == Decimal("0.5")
+    assert metrics.median_r == Decimal("0.5")
+    assert metrics.best_r == Decimal("2")
+    assert metrics.worst_r == Decimal("-1")
+    assert metrics.mean_mfe == Decimal("1.75")
+    assert metrics.mean_mae == Decimal("-1.25")
+    assert metrics.member_count == 3
+    assert metrics.win_loss_dispersion is not None
+    assert metrics.win_loss_dispersion.win_count == 1
+    assert metrics.win_loss_dispersion.loss_count == 1
+    assert metrics.win_loss_dispersion.breakeven_count == 0
+    assert metrics.win_loss_dispersion.unavailable_count == 1
+
+    unavailable = build_correlation_report(
+        (_signal("a", "a", outcome_r=None), _signal("b", "b", outcome_r=None)),
+        _history(("a", "a"), ("b", "b")),
+    ).exposure_clusters[0].research_metrics
+    assert unavailable.mean_r is None
+    assert unavailable.median_r is None
+    assert unavailable.best_r is None
+    assert unavailable.worst_r is None
+    assert unavailable.mean_mfe is None
+    assert unavailable.mean_mae is None
+    assert unavailable.win_loss_dispersion is None
+
+
+def test_three_research_performance_views_have_r_equity_and_drawdown() -> None:
+    two_thirds = Decimal(2) / Decimal(3)
+    negative_third = Decimal(-1) / Decimal(3)
+    normalized_total = two_thirds + negative_third
+    report = build_correlation_report(
+        (
+            _signal("a", "a", outcome_r="2"),
+            _signal("b", "b", outcome_r="-1"),
+            _signal("c", "c", outcome_r=None),
+        ),
+        _history(("a", "a"), ("b", "b"), ("c", "a")),
+    )
+    raw = report.raw_market_level
+    assert raw.ordered_r_observations == (Decimal(2), Decimal(-1))
+    assert raw.cumulative_r_equity_curve == (Decimal(2), Decimal(1))
+    assert raw.r_space_drawdown == (Decimal(0), Decimal(1))
+
+    normalized = report.cluster_normalized
+    assert normalized.ordered_r_observations == (two_thirds, negative_third)
+    assert normalized.cumulative_r_equity_curve == (two_thirds, normalized_total)
+    assert normalized.r_space_drawdown == (
+        Decimal(0),
+        two_thirds - normalized_total,
+    )
+    assert normalized.members[2].weighted_outcome_r is None
+
+    leader = report.leader_only
+    assert leader.ordered_r_observations == (Decimal(2),)
+    assert leader.cumulative_r_equity_curve == (Decimal(2),)
+    assert leader.r_space_drawdown == (Decimal(0),)
+
+
+def test_leader_uses_exact_five_field_order() -> None:
+    signals = (
+        _signal("depth-loses", "b", depth="99", spread="1", day_notional="9999", oi="9999"),
+        _signal("spread-loses", "c", depth="100", spread="3", day_notional="9999", oi="9999"),
+        _signal("notional-loses", "d", depth="100", spread="2", day_notional="999", oi="9999"),
+        _signal("oi-loses", "e", depth="100", spread="2", day_notional="1000", oi="499"),
+        _signal("lexical-loses", "z", depth="100", spread="2", day_notional="1000", oi="500"),
+        _signal("winner", "a", depth="100", spread="2", day_notional="1000", oi="500"),
+    )
+    report = build_correlation_report(
+        signals,
+        _history(
+            ("a", "a"),
+            ("b", "a"),
+            ("c", "a"),
+            ("d", "a"),
+            ("e", "a"),
+            ("z", "a"),
+        ),
+    )
+    assert report.leader_only.leaders[0].shadow_order_id == "winner"
 
 
 def test_report_is_order_invariant() -> None:
