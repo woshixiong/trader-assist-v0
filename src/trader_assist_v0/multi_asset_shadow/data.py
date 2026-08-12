@@ -18,7 +18,7 @@ from typing import cast
 
 from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
 
-from .models import ClosedBar, MarketLifecycle, RegistryMarket
+from .models import ClosedBar, MarketLifecycle, RegistryMarket, RegistryVersion
 from .registry import MarketRegistryManager
 
 _FIVE_MINUTES_MS = 300_000
@@ -190,10 +190,10 @@ class MultiAssetDataAuthority:
         self._restore()
 
     def _restore(self) -> None:
-        active = self.registry.active()
-        if active is None:
+        registry = self.registry.active() or self.registry.pending_version()
+        if registry is None:
             return
-        for market in active.markets:
+        for market in registry.markets:
             last = self.store.last_open(market.identity.market_id)
             if last is not None:
                 self._last_open[market.identity.market_id] = last
@@ -238,6 +238,10 @@ class MultiAssetDataAuthority:
         )
         return fingerprint
 
+    def discard_ws_candidate(self, *, market_id: str, open_time_ms: int) -> None:
+        """Forget a superseded runtime candidate without creating evidence."""
+        self._candidates.pop((market_id, open_time_ms), None)
+
     def confirm_ws_candidate(
         self,
         *,
@@ -247,7 +251,10 @@ class MultiAssetDataAuthority:
         snapshot: Sequence[object],
         stable_snapshot: Sequence[object],
         received_at: datetime,
-        hold_ms: int = 1_000,
+        hold_ms: int = 3_000,
+        first_observed_monotonic: float | None = None,
+        second_observed_monotonic: float | None = None,
+        observation_gap_ms: int = 1_000,
     ) -> ClosedBar | None:
         """Admit a websocket candidate only after exact stable REST finality."""
         candidate = self._candidates.get((market.identity.market_id, open_time_ms))
@@ -255,11 +262,18 @@ class MultiAssetDataAuthority:
             raise DataRouteError("stale or superseded candle candidate")
         if candidate.fingerprint != candidate_fingerprint:
             raise DataRouteError("stale or superseded candle candidate")
-        if (
+        if observation_gap_ms < 0 or (
             received_at.tzinfo is None
             or int(received_at.timestamp() * 1000) < open_time_ms + _FIVE_MINUTES_MS + hold_ms
         ):
             return None
+        if (
+            first_observed_monotonic is None
+            or second_observed_monotonic is None
+            or second_observed_monotonic < first_observed_monotonic
+            or (second_observed_monotonic - first_observed_monotonic) * 1000 < observation_gap_ms
+        ):
+            raise DataRouteError("targeted REST confirmation observation gap is insufficient")
         matches = [
             item for item in snapshot if isinstance(item, dict) and item.get("t") == open_time_ms
         ]
@@ -325,14 +339,12 @@ class MultiAssetDataAuthority:
         if prior is not None and bar.open_time_ms > prior + _FIVE_MINUTES_MS:
             self._failed.add(bar.market_id)
             raise DataRouteError("closed 5m gap detected")
-        active = self.registry.active()
-        version = active.version if active is not None else "UNBOUND_WARMUP"
-        content_hash = active.content_hash if active is not None else "0" * 64
+        binding = self._binding_registry(market)
         try:
             inserted = self.store.put(
                 bar,
-                registry_version=version,
-                registry_content_hash=content_hash,
+                registry_version=binding.version,
+                registry_content_hash=binding.content_hash,
                 finality_identity=finality_identity,
             )
         except DataRouteError:
@@ -343,12 +355,30 @@ class MultiAssetDataAuthority:
         )
         if not inserted:
             return None
-        self._persist_aggregates(bar)
+        self._persist_aggregates(
+            bar, binding_version=binding.version, binding_hash=binding.content_hash
+        )
         admission = Closed5mAdmission(bar=bar, issuer=self.registry._boundary_issuer)
         self.registry._apply_admitted(admission)
         return bar
 
-    def _persist_aggregates(self, bar: ClosedBar) -> None:
+    def _binding_registry(self, market: RegistryMarket) -> RegistryVersion:
+        """Return the exact validated Registry version that authorized acquisition."""
+        active = self.registry.active()
+        if active is not None and any(
+            item.identity.market_id == market.identity.market_id for item in active.markets
+        ):
+            return active
+        pending = self.registry.pending_version()
+        if pending is not None and any(
+            item.identity.market_id == market.identity.market_id for item in pending.markets
+        ):
+            return pending
+        raise DataRouteError("market is not authorized by an active or pending Registry")
+
+    def _persist_aggregates(
+        self, bar: ClosedBar, *, binding_version: str, binding_hash: str
+    ) -> None:
         all_five = self.store.bars(bar.market_id)
         for minutes, count in ((15, 3), (60, 12)):
             window = tuple(item for item in all_five if item.open_time_ms <= bar.open_time_ms)[
@@ -356,11 +386,10 @@ class MultiAssetDataAuthority:
             ]
             if len(window) == count and window[0].open_time_ms % (minutes * 60_000) == 0:
                 aggregate = aggregate_closed_5m(window, minutes=minutes)
-                active = self.registry.active()
                 self.store.put(
                     aggregate,
-                    registry_version=active.version if active else "UNBOUND_WARMUP",
-                    registry_content_hash=active.content_hash if active else "0" * 64,
+                    registry_version=binding_version,
+                    registry_content_hash=binding_hash,
                     finality_identity=aggregate.provenance_hash,
                 )
 

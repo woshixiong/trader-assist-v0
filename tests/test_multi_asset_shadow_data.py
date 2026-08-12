@@ -128,7 +128,9 @@ def test_ws_candidate_requires_final_stable_rest_and_real_end_minus_one_geometry
             candidate_fingerprint=fingerprint,
             snapshot=[payload],
             stable_snapshot=[payload],
-            received_at=datetime.fromtimestamp(300.5, UTC),
+            received_at=datetime.fromtimestamp(302.5, UTC),
+            first_observed_monotonic=1,
+            second_observed_monotonic=2,
         )
         is None
     )
@@ -138,10 +140,29 @@ def test_ws_candidate_requires_final_stable_rest_and_real_end_minus_one_geometry
         candidate_fingerprint=fingerprint,
         snapshot=[payload],
         stable_snapshot=[payload],
-        received_at=datetime.fromtimestamp(301, UTC),
+            received_at=datetime.fromtimestamp(303, UTC),
+            first_observed_monotonic=1,
+            second_observed_monotonic=2,
     )
     assert admitted is not None and admitted.close_time_ms == 299_999
     assert authority.registry.active() is not None and authority.registry.active().version == "one"
+
+
+def test_finality_authority_rejects_two_rest_observations_without_real_gap(tmp_path: Path) -> None:
+    authority, market = _authority(tmp_path)
+    payload = _payload(0)
+    fingerprint = authority.offer_ws_candidate(market=market, payload=payload, received_at=NOW)
+    with pytest.raises(DataRouteError, match="observation gap"):
+        authority.confirm_ws_candidate(
+            market=market,
+            open_time_ms=0,
+            candidate_fingerprint=fingerprint,
+            snapshot=[payload],
+            stable_snapshot=[payload],
+            received_at=datetime.fromtimestamp(303, UTC),
+            first_observed_monotonic=1,
+            second_observed_monotonic=1.5,
+        )
 
 
 def test_conflict_and_gap_are_isolated_and_backfill_recovers(tmp_path: Path) -> None:

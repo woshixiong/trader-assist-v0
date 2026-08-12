@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import ROUND_DOWN, Decimal
 from enum import StrEnum
+from itertools import pairwise
 
 STRATEGY_VERSION = "FL-MA-PRICE-ACTION-v0.1"
 PARAMETER_VERSION = "2026-08-03-r1"
@@ -48,8 +49,10 @@ class PlanningError(ValueError):
 class PublicBbo:
     best_bid: Decimal
     best_ask: Decimal
-    age_seconds: Decimal
+    age_seconds: Decimal = Decimal("0")
     observed_at_ms: int = 0
+    market_id: str = ""
+    coin: str = ""
 
     @property
     def spread_bps(self) -> Decimal:
@@ -105,10 +108,11 @@ class LiquidityAssessment:
     provenance_hash: str
 
     def fresh_for(
-        self, *, market_id: str, side: Side, now_ms: int, max_age_ms: int = 10_000
+        self, *, market_id: str, coin: str, side: Side, now_ms: int, max_age_ms: int = 10_000
     ) -> bool:
         return (
             self.market_id == market_id
+            and self.coin == coin
             and self.side is side
             and self.reference_notional_usd == PRIMARY_REFERENCE_NOTIONAL_USD
             and self.sufficient_depth
@@ -181,6 +185,13 @@ def minimum_tick(price: Decimal, *, max_decimals: int, significant_figures: int 
     """Return the provider's smallest legal increment at this price magnitude."""
     if price <= 0 or not price.is_finite():
         raise PlanningError("price precision input is invalid")
+    if max_decimals < 0 or significant_figures <= 0:
+        raise PlanningError("price precision input is invalid")
+    # Hyperliquid's five-significant-figure limit does not remove the legal
+    # integer price exception.  At a legal integral price the next minimum
+    # increment is one, including high BTC-like prices.
+    if price == price.to_integral_value():
+        return Decimal(1)
     decimal_quantum = Decimal(1).scaleb(-max_decimals)
     significant_quantum = Decimal(1).scaleb(price.adjusted() - significant_figures + 1)
     return max(decimal_quantum, significant_quantum)
@@ -200,7 +211,24 @@ def assess_l2(
     """Consume provider levels to exactly the frozen $1,000 quote reference."""
     if best_bid <= 0 or best_ask <= best_bid or observed_at_ms < 0:
         raise PlanningError("invalid BBO")
-    usable = tuple((price, size) for price, size in levels if price > 0 and size > 0)
+    if not market_id or not coin or not provenance_hash:
+        raise PlanningError("L2 identity is invalid")
+    if any(
+        not price.is_finite() or not size.is_finite() or price <= 0 or size <= 0
+        for price, size in levels
+    ):
+        raise PlanningError("L2 levels are invalid")
+    if side is Side.LONG and (
+        any(price < best_ask for price, _ in levels)
+        or any(right[0] < left[0] for left, right in pairwise(levels))
+    ):
+        raise PlanningError("L2 ask levels are not ordered outward")
+    if side is Side.SHORT and (
+        any(price > best_bid for price, _ in levels)
+        or any(right[0] > left[0] for left, right in pairwise(levels))
+    ):
+        raise PlanningError("L2 bid levels are not ordered outward")
+    usable = levels
     remaining = PRIMARY_REFERENCE_NOTIONAL_USD
     quote = Decimal()
     base = Decimal()
@@ -234,7 +262,10 @@ def assess_l2(
         )
     vwap = quote / base
     touch = best_ask if side is Side.LONG else best_bid
-    slippage = abs(vwap - touch) / touch * Decimal("10000")
+    directional = (vwap - touch) if side is Side.LONG else (touch - vwap)
+    if directional < 0:
+        raise PlanningError("L2 VWAP direction is impossible")
+    slippage = directional / touch * Decimal("10000")
     return LiquidityAssessment(
         market_id,
         coin,
@@ -252,16 +283,29 @@ def assess_l2(
 
 
 def make_plan(inputs: PlanInputs, bbo: PublicBbo) -> PlanDraft | PlanRejection:
-    if bbo.age_seconds > Decimal("10") or bbo.observed_at_ms > inputs.now_ms:
+    if inputs.liquidity is None:
+        return PlanRejection.LIQUIDITY_HARD_LIMIT
+    if bbo.market_id != inputs.market_id or bbo.coin != inputs.liquidity.coin:
+        return PlanRejection.BBO_INVALID_OR_STALE
+    if not (0 <= inputs.now_ms - bbo.observed_at_ms <= 10_000):
         return PlanRejection.BBO_INVALID_OR_STALE
     try:
         spread_bps = bbo.spread_bps
     except PlanningError:
         return PlanRejection.BBO_INVALID_OR_STALE
-    if inputs.cost_model is None or inputs.liquidity is None:
+    if inputs.cost_model is None:
         return PlanRejection.LIQUIDITY_HARD_LIMIT
     if not inputs.liquidity.fresh_for(
-        market_id=inputs.market_id, side=inputs.side, now_ms=inputs.now_ms
+        market_id=inputs.market_id,
+        coin=bbo.coin,
+        side=inputs.side,
+        now_ms=inputs.now_ms,
+    ):
+        return PlanRejection.LIQUIDITY_HARD_LIMIT
+    if (
+        inputs.liquidity.best_bid != bbo.best_bid
+        or inputs.liquidity.best_ask != bbo.best_ask
+        or inputs.liquidity.observed_at_ms != bbo.observed_at_ms
     ):
         return PlanRejection.LIQUIDITY_HARD_LIMIT
     if (

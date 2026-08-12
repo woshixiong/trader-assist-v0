@@ -12,6 +12,7 @@ import ssl
 from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
+from itertools import pairwise
 from typing import Protocol, cast
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -146,8 +147,19 @@ class HyperliquidPublicClient:
             raise PublicDataError("public L2 levels are invalid") from exc
         if not bids or not asks:
             raise PublicDataError("public L2 book is incomplete")
+        if any(
+            not price.is_finite() or not size.is_finite() or price <= 0 or size <= 0
+            for price, size in bids + asks
+        ):
+            raise PublicDataError("public L2 book has invalid price or size")
+        if any(right[0] > left[0] for left, right in pairwise(bids)):
+            raise PublicDataError("public L2 bids are not ordered outward")
+        if any(right[0] < left[0] for left, right in pairwise(asks)):
+            raise PublicDataError("public L2 asks are not ordered outward")
         best_bid = bids[0][0]
         best_ask = asks[0][0]
+        if best_bid >= best_ask:
+            raise PublicDataError("public L2 book is crossed")
         return assess_l2(
             market_id=market_id,
             coin=coin,

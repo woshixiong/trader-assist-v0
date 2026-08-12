@@ -143,3 +143,20 @@ def test_disabled_market_can_only_reenter_warming_not_active(tmp_path: Path) -> 
         "two", initial.markets[0].identity.market_id, MarketLifecycle.WARMING, now=NOW
     )
     assert successor.markets[0].lifecycle is MarketLifecycle.WARMING
+
+
+def test_add_new_rejects_duplicate_and_forces_warming(tmp_path: Path) -> None:
+    subject = manager(tmp_path)
+    initial = registry("one", market(lifecycle=MarketLifecycle.ACTIVE))
+    subject.stage(initial)
+    subject.request_apply("one")
+    admit(subject, tmp_path, initial.markets[0])
+    added = subject.add_new(
+        version="two",
+        now=NOW,
+        market=market("ETH", lifecycle=MarketLifecycle.ACTIVE),
+    )
+    eth = next(item for item in added.markets if item.display == "ETH")
+    assert eth.lifecycle is MarketLifecycle.WARMING
+    with pytest.raises(RegistryError, match="new canonical"):
+        subject.add_new(version="three", now=NOW, market=market())

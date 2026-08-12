@@ -244,6 +244,53 @@ class MarketRegistryManager:
         self.stage(candidate)
         return candidate
 
+    def lifecycle_successor(
+        self,
+        *,
+        version: str,
+        updates: dict[str, MarketLifecycle],
+        now: datetime,
+    ) -> RegistryVersion:
+        """Stage one batched, one-step lifecycle successor.
+
+        A lifecycle change is still activated only by the opaque admitted-bar
+        capability.  Batching avoids one Registry version per healthy market.
+        """
+        active = self.active()
+        if active is None:
+            raise RegistryError("no active registry")
+        if self.versions.joinpath(f"{version}.json").exists():
+            raise RegistryError("new lifecycle version already exists")
+        unknown = set(updates)
+        markets: list[RegistryMarket] = []
+        for market in active.markets:
+            lifecycle = updates.get(market.identity.market_id)
+            if lifecycle is None:
+                markets.append(market)
+                continue
+            unknown.discard(market.identity.market_id)
+            if lifecycle not in _LIFECYCLE_NEXT[market.lifecycle]:
+                raise RegistryError(
+                    "illegal market lifecycle transition: "
+                    f"{market.lifecycle.value} -> {lifecycle.value}"
+                )
+            markets.append(market.model_copy(update={"lifecycle": lifecycle}))
+        if unknown:
+            raise RegistryError("market is not in active registry")
+        candidate = RegistryVersion.create(version=version, created_at=now, markets=tuple(markets))
+        self.stage(candidate)
+        return candidate
+
+    def add_new(self, *, version: str, now: datetime, market: RegistryMarket) -> RegistryVersion:
+        """Stage a validated new identity, always from WARMING."""
+        active = self.active()
+        if active is None:
+            raise RegistryError("no active registry")
+        if any(item.identity.market_id == market.identity.market_id for item in active.markets):
+            raise RegistryError("ADD requires a new canonical market identity")
+        warming = market.model_copy(update={"lifecycle": MarketLifecycle.WARMING})
+        return self.successor(version=version, now=now, update_market=warming)
+
     def successor(
         self,
         *,

@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+import pytest
+
 from trader_assist_v0.multi_asset_shadow.planning import (
     CostModel,
     EntryQuality,
     LiquidityAssessment,
     PlanInputs,
+    PlanningError,
     PlanRejection,
     PublicBbo,
     Side,
@@ -33,6 +36,16 @@ def liquidity(side: Side, *, slippage: str = "1") -> LiquidityAssessment:
     )
 
 
+def bbo(bid: str, ask: str, *, observed_at_ms: int = 1_000) -> PublicBbo:
+    return PublicBbo(
+        Decimal(bid),
+        Decimal(ask),
+        observed_at_ms=observed_at_ms,
+        market_id="market",
+        coin="BTC",
+    )
+
+
 def costs() -> CostModel:
     return CostModel("r1", Decimal("4.5"), Decimal("2"), Decimal("5"))
 
@@ -51,7 +64,7 @@ def test_long_plan_uses_current_ask_and_is_never_submitted() -> None:
             cost_model=costs(),
             now_ms=1_001,
         ),
-        PublicBbo(Decimal("100.80"), Decimal("101"), Decimal("1")),
+        bbo("100.80", "101"),
     )
     assert not isinstance(plan, PlanRejection)
     assert plan.planned_entry == Decimal("101")
@@ -73,12 +86,9 @@ def test_short_chase_and_liquidity_gates_fail_closed() -> None:
         cost_model=costs(),
         now_ms=1_001,
     )
+    assert make_plan(inputs, bbo("97.80", "98")) is PlanRejection.LIQUIDITY_HARD_LIMIT
     assert (
-        make_plan(inputs, PublicBbo(Decimal("97.80"), Decimal("98"), Decimal("1")))
-        is PlanRejection.CHASE_LIMIT_EXCEEDED
-    )
-    assert (
-        make_plan(inputs, PublicBbo(Decimal("99.80"), Decimal("100"), Decimal("11")))
+        make_plan(inputs, bbo("99.80", "100", observed_at_ms=-10_000))
         is PlanRejection.BBO_INVALID_OR_STALE
     )
 
@@ -133,13 +143,47 @@ def test_l2_hard_gate_consumes_1000_and_does_not_use_cost_model_default() -> Non
         now_ms=1_001,
     )
     assert (
-        make_plan(missing, PublicBbo(Decimal("99"), Decimal("100"), Decimal("1")))
+        make_plan(missing, bbo("99", "100"))
         is PlanRejection.LIQUIDITY_HARD_LIMIT
     )
 
 
 def test_price_precision_has_positive_variable_tick_and_never_improves_touch() -> None:
     assert minimum_tick(Decimal("0.001234"), max_decimals=4) > 0
-    assert minimum_tick(Decimal("123456"), max_decimals=4) > minimum_tick(
-        Decimal("12"), max_decimals=4
+    assert minimum_tick(Decimal("123456"), max_decimals=4) == Decimal("1")
+    assert minimum_tick(Decimal("99999.9"), max_decimals=1) == Decimal("1")
+    assert minimum_tick(Decimal("100000.1"), max_decimals=1) == Decimal("10")
+
+
+def test_bbo_l2_identity_timestamp_and_order_authorities_fail_closed() -> None:
+    inputs = PlanInputs(
+        market_id="market",
+        side=Side.LONG,
+        ideal_entry_low=Decimal("99"),
+        ideal_entry_high=Decimal("101"),
+        chase_limit=Decimal("102"),
+        structural_stop=Decimal("98"),
+        structural_target=Decimal("105"),
+        liquidity=liquidity(Side.LONG),
+        cost_model=costs(),
+        now_ms=20_000,
     )
+    assert (
+        make_plan(inputs, bbo("100.80", "101", observed_at_ms=1_000))
+        is PlanRejection.BBO_INVALID_OR_STALE
+    )
+    assert (
+        make_plan(inputs, bbo("100.80", "101", observed_at_ms=19_999))
+        is PlanRejection.LIQUIDITY_HARD_LIMIT
+    )
+    with pytest.raises(PlanningError, match="ordered"):
+        assess_l2(
+            market_id="market",
+            coin="BTC",
+            side=Side.LONG,
+            observed_at_ms=1,
+            best_bid=Decimal("99"),
+            best_ask=Decimal("100"),
+            levels=((Decimal("101"), Decimal("10")), (Decimal("100"), Decimal("10"))),
+            provenance_hash="a" * 64,
+        )

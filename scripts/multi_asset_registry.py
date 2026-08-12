@@ -102,8 +102,8 @@ def main() -> int:
     if arguments.command == "add":
         if arguments.file is None or arguments.version is None:
             parser.error("--file (one RegistryMarket) and --version are required")
-        candidate = manager.successor(
-            version=arguments.version, now=datetime.now(UTC), update_market=_market(arguments.file)
+        candidate = manager.add_new(
+            version=arguments.version, now=datetime.now(UTC), market=_market(arguments.file)
         )
         print(candidate.model_dump_json())
         return 0
