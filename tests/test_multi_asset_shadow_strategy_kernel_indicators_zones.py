@@ -212,12 +212,14 @@ def test_htf_momentum_down_neutral_and_structure_range_transition() -> None:
     assert transitioning.structure is HtfStructure.TRANSITION
 
 
-def _zone_bars() -> tuple[Bar, ...]:
+def _zone_bars(
+    *, high_reaction_indices: frozenset[int] = frozenset({16, 20, 24})
+) -> tuple[Bar, ...]:
     values: list[Bar] = []
     # Alternating, separated reactions near two centers.  Their one-bar
     # move-away is large enough for qualification at the causal confirmation.
     for index in range(40):
-        high = Decimal("106") if index in {16, 20, 24} else Decimal("103")
+        high = Decimal("106") if index in high_reaction_indices else Decimal("103")
         low = Decimal("94") if index in {18, 22, 26} else Decimal("97")
         close = Decimal("100")
         values.append(
@@ -247,6 +249,41 @@ def test_zone_engine_qualifies_reactions_clusters_geometry_quality_and_snapshot_
     aged = (*_zone_bars(), *(bar(40 + index, interval="15m") for index in range(25)))
     stale_book = build_zone_book(aged, minimum_tick=Decimal("0.1"))
     assert all(not zone.active_for_new_event for zone in stale_book.zones)
+
+
+@pytest.mark.parametrize(
+    ("expected_quality", "high_reaction_indices"),
+    (
+        (ZoneQuality.ZQ2, frozenset({20, 24})),
+        (ZoneQuality.ZQ3, frozenset({16, 20, 24})),
+    ),
+)
+@pytest.mark.parametrize(
+    ("extra_bars", "age", "eligible"),
+    ((9, 23, True), (10, 24, True), (11, 25, False)),
+)
+def test_zone_latest_reaction_age_boundary_retains_evidence_but_gates_new_events(
+    extra_bars: int,
+    age: int,
+    eligible: bool,
+    expected_quality: ZoneQuality,
+    high_reaction_indices: frozenset[int],
+) -> None:
+    source = _zone_bars(high_reaction_indices=high_reaction_indices)
+    bars = (*source, *(bar(40 + index, interval="15m") for index in range(extra_bars)))
+    book = build_zone_book(bars, minimum_tick=Decimal("0.1"))
+    high_zone = next(zone for zone in book.zones if zone.zone_type is ZoneType.HIGH)
+
+    assert len(bars) - 1 - high_zone.latest_reaction_bar_index == age
+    assert high_zone.quality is expected_quality
+    assert high_zone.reaction_count == expected_quality.rank
+    assert high_zone.active_for_new_event is eligible
+    assert high_zone.member_reaction_ids
+    assert all(
+        any(reaction.reaction_id == reaction_id for reaction in book.reactions)
+        for reaction_id in high_zone.member_reaction_ids
+    )
+    assert (book.active_resistance is high_zone) is eligible
 
 
 def test_zone_lookback_excludes_old_reactions_without_changing_past_output() -> None:
