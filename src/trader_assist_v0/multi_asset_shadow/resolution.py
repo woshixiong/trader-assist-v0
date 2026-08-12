@@ -57,7 +57,12 @@ def _requests() -> tuple[UniverseRequest, ...]:
             UniverseRequest("SPCX", RegistryTier.P0, AssetClass.EQUITY, "xyz", "xyz:SPCX"),
             UniverseRequest("XYZ100", RegistryTier.P0, AssetClass.INDEX, "xyz", "xyz:XYZ100"),
             UniverseRequest("SP500", RegistryTier.P0, AssetClass.INDEX, "xyz", "xyz:SP500"),
-            UniverseRequest("WTIOIL", RegistryTier.P1, AssetClass.COMMODITY, "xyz", "xyz:WTIOIL"),
+            # User-facing WTIOIL is the live builder contract CL.  Do not
+            # resolve this from prose alone: the resolver still requires the
+            # exact official xyz:CL metadata record.
+            UniverseRequest(
+                "WTIOIL", RegistryTier.P1, AssetClass.COMMODITY, "xyz", "xyz:CL", ("CL",)
+            ),
         ]
     )
     p1 = "SILVER NVDA DRAM BRENTOIL INTC PLTR SMSN GOOGL TSLA AMD MSTR COIN EWY".split()
@@ -119,11 +124,7 @@ def resolve_initial_40(
         try:
             size_decimals = int(cast(int | str, raw["szDecimals"]))
             raw_max_leverage = raw.get("maxLeverage")
-            max_leverage = (
-                None
-                if raw_max_leverage is None
-                else Decimal(str(raw_max_leverage))
-            )
+            max_leverage = None if raw_max_leverage is None else Decimal(str(raw_max_leverage))
             market = RegistryMarket(
                 display=request.display,
                 aliases=request.aliases,

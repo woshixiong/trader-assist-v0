@@ -32,8 +32,9 @@ class EntryQuality(StrEnum):
 
 
 class PlanRejection(StrEnum):
-    BBO_INVALID = "BBO_INVALID"
-    BBO_STALE = "BBO_STALE"
+    # This is one machine-contract value in R1/R1.1.  Keep invalid and stale
+    # detail in logs/evidence, not in a second incompatible decision value.
+    BBO_INVALID_OR_STALE = "BBO_INVALID_OR_STALE"
     LIQUIDITY_HARD_LIMIT = "LIQUIDITY_HARD_LIMIT"
     CHASE_LIMIT_EXCEEDED = "CHASE_LIMIT_EXCEEDED"
     TARGET_FEASIBILITY_FAILED = "TARGET_FEASIBILITY_FAILED"
@@ -48,6 +49,7 @@ class PublicBbo:
     best_bid: Decimal
     best_ask: Decimal
     age_seconds: Decimal
+    observed_at_ms: int = 0
 
     @property
     def spread_bps(self) -> Decimal:
@@ -64,22 +66,70 @@ class PublicBbo:
 class CostModel:
     """Versioned cost authority; no account-specific fee state is involved."""
 
-    version: str = "2026-08-03-r1"
-    fee_bps_per_side: Decimal = Decimal("4.5")
-    slippage_bps_per_side: Decimal = Decimal("2.0")
-    stress_slippage_bps_per_side: Decimal = Decimal("5.0")
+    version: str
+    fee_bps_per_side: Decimal
+    slippage_bps_per_side: Decimal
+    stress_slippage_bps_per_side: Decimal
+
+    def __post_init__(self) -> None:
+        if not self.version or any(
+            value < 0
+            for value in (
+                self.fee_bps_per_side,
+                self.slippage_bps_per_side,
+                self.stress_slippage_bps_per_side,
+            )
+        ):
+            raise PlanningError("cost configuration is invalid")
+
+
+@dataclass(frozen=True)
+class LiquidityAssessment:
+    """Immutable on-demand L2 evidence for the $1,000 hard gate.
+
+    The configured 2 bps is intentionally absent: it is a planning cost
+    assumption, while this is an observed book-execution result.
+    """
+
+    market_id: str
+    coin: str
+    side: Side
+    observed_at_ms: int
+    best_bid: Decimal
+    best_ask: Decimal
+    reference_notional_usd: Decimal
+    depth_consumed: tuple[tuple[Decimal, Decimal], ...]
+    executable_price: Decimal | None
+    one_way_slippage_bps: Decimal | None
+    sufficient_depth: bool
+    provenance_hash: str
+
+    def fresh_for(
+        self, *, market_id: str, side: Side, now_ms: int, max_age_ms: int = 10_000
+    ) -> bool:
+        return (
+            self.market_id == market_id
+            and self.side is side
+            and self.reference_notional_usd == PRIMARY_REFERENCE_NOTIONAL_USD
+            and self.sufficient_depth
+            and self.executable_price is not None
+            and self.one_way_slippage_bps is not None
+            and 0 <= now_ms - self.observed_at_ms <= max_age_ms
+        )
 
 
 @dataclass(frozen=True)
 class PlanInputs:
+    market_id: str
     side: Side
     ideal_entry_low: Decimal
     ideal_entry_high: Decimal
     chase_limit: Decimal
     structural_stop: Decimal
     structural_target: Decimal
-    observed_primary_one_way_slippage_bps: Decimal = Decimal("0")
-    cost_model: CostModel = CostModel()
+    liquidity: LiquidityAssessment | None
+    cost_model: CostModel | None
+    now_ms: int
     # Perp API legal-price authority: MAX_DECIMALS(6) - szDecimals,
     # constrained further by five significant figures (integer exception).
     price_max_decimals: int = 6
@@ -127,22 +177,111 @@ def round_provider_perp_price(
     return decimal_limited.quantize(max(decimal_quantum, significant_quantum), rounding=ROUND_DOWN)
 
 
+def minimum_tick(price: Decimal, *, max_decimals: int, significant_figures: int = 5) -> Decimal:
+    """Return the provider's smallest legal increment at this price magnitude."""
+    if price <= 0 or not price.is_finite():
+        raise PlanningError("price precision input is invalid")
+    decimal_quantum = Decimal(1).scaleb(-max_decimals)
+    significant_quantum = Decimal(1).scaleb(price.adjusted() - significant_figures + 1)
+    return max(decimal_quantum, significant_quantum)
+
+
+def assess_l2(
+    *,
+    market_id: str,
+    coin: str,
+    side: Side,
+    observed_at_ms: int,
+    best_bid: Decimal,
+    best_ask: Decimal,
+    levels: tuple[tuple[Decimal, Decimal], ...],
+    provenance_hash: str,
+) -> LiquidityAssessment:
+    """Consume provider levels to exactly the frozen $1,000 quote reference."""
+    if best_bid <= 0 or best_ask <= best_bid or observed_at_ms < 0:
+        raise PlanningError("invalid BBO")
+    usable = tuple((price, size) for price, size in levels if price > 0 and size > 0)
+    remaining = PRIMARY_REFERENCE_NOTIONAL_USD
+    quote = Decimal()
+    base = Decimal()
+    consumed: list[tuple[Decimal, Decimal]] = []
+    for price, size in usable:
+        available = price * size
+        take = min(available, remaining)
+        if take <= 0:
+            continue
+        quantity = take / price
+        quote += take
+        base += quantity
+        consumed.append((price, quantity))
+        remaining -= take
+        if remaining == 0:
+            break
+    if remaining > 0 or base == 0:
+        return LiquidityAssessment(
+            market_id,
+            coin,
+            side,
+            observed_at_ms,
+            best_bid,
+            best_ask,
+            PRIMARY_REFERENCE_NOTIONAL_USD,
+            tuple(consumed),
+            None,
+            None,
+            False,
+            provenance_hash,
+        )
+    vwap = quote / base
+    touch = best_ask if side is Side.LONG else best_bid
+    slippage = abs(vwap - touch) / touch * Decimal("10000")
+    return LiquidityAssessment(
+        market_id,
+        coin,
+        side,
+        observed_at_ms,
+        best_bid,
+        best_ask,
+        PRIMARY_REFERENCE_NOTIONAL_USD,
+        tuple(consumed),
+        vwap,
+        slippage,
+        True,
+        provenance_hash,
+    )
+
+
 def make_plan(inputs: PlanInputs, bbo: PublicBbo) -> PlanDraft | PlanRejection:
-    if bbo.age_seconds > Decimal("10"):
-        return PlanRejection.BBO_STALE
+    if bbo.age_seconds > Decimal("10") or bbo.observed_at_ms > inputs.now_ms:
+        return PlanRejection.BBO_INVALID_OR_STALE
     try:
         spread_bps = bbo.spread_bps
     except PlanningError:
-        return PlanRejection.BBO_INVALID
-    if spread_bps > HARD_MAX_SPREAD_BPS or (
-        inputs.observed_primary_one_way_slippage_bps > HARD_MAX_PRIMARY_ONE_WAY_SLIPPAGE_BPS
+        return PlanRejection.BBO_INVALID_OR_STALE
+    if inputs.cost_model is None or inputs.liquidity is None:
+        return PlanRejection.LIQUIDITY_HARD_LIMIT
+    if not inputs.liquidity.fresh_for(
+        market_id=inputs.market_id, side=inputs.side, now_ms=inputs.now_ms
     ):
         return PlanRejection.LIQUIDITY_HARD_LIMIT
+    if (
+        spread_bps > HARD_MAX_SPREAD_BPS
+        or inputs.liquidity.one_way_slippage_bps is None
+        or inputs.liquidity.one_way_slippage_bps > HARD_MAX_PRIMARY_ONE_WAY_SLIPPAGE_BPS
+    ):
+        return PlanRejection.LIQUIDITY_HARD_LIMIT
+    touch = bbo.best_ask if inputs.side is Side.LONG else bbo.best_bid
     entry = round_provider_perp_price(
-        bbo.best_ask if inputs.side is Side.LONG else bbo.best_bid,
+        touch,
         max_decimals=inputs.price_max_decimals,
         significant_figures=inputs.price_max_significant_figures,
     )
+    # ROUND_DOWN would improve a long price.  Do not invent a better fill;
+    # display the observed legal provider touch when that happens.
+    if inputs.side is Side.LONG and entry < touch:
+        entry = touch
+    if inputs.side is Side.SHORT and entry > touch:
+        entry = touch
     if inputs.side is Side.LONG:
         within_chase, stop_valid = entry <= inputs.chase_limit, inputs.structural_stop < entry
         tp1 = entry + (entry - inputs.structural_stop)

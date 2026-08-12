@@ -19,6 +19,7 @@ from urllib.request import Request, urlopen
 from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
 
 from .models import RegistryMarket
+from .planning import LiquidityAssessment, Side, assess_l2
 
 INFO_URL = "https://api.hyperliquid.xyz/info"
 _ALLOWED_TYPES = frozenset(
@@ -127,6 +128,36 @@ class HyperliquidPublicClient:
 
     def l2_book(self, *, coin: str) -> object:
         return self.request({"type": "l2Book", "coin": coin})
+
+    def liquidity_assessment(
+        self, *, market_id: str, coin: str, side: Side, response: object
+    ) -> LiquidityAssessment:
+        """Parse one official on-demand L2 response into immutable hard-gate evidence."""
+        if not isinstance(response, dict) or response.get("coin") != coin:
+            raise PublicDataError("public L2 response identity is invalid")
+        observed = response.get("time")
+        levels = response.get("levels")
+        if not isinstance(observed, int) or not isinstance(levels, list) or len(levels) != 2:
+            raise PublicDataError("public L2 response shape is invalid")
+        try:
+            bids = tuple((Decimal(str(item["px"])), Decimal(str(item["sz"]))) for item in levels[0])
+            asks = tuple((Decimal(str(item["px"])), Decimal(str(item["sz"]))) for item in levels[1])
+        except (KeyError, TypeError, ArithmeticError, ValueError) as exc:
+            raise PublicDataError("public L2 levels are invalid") from exc
+        if not bids or not asks:
+            raise PublicDataError("public L2 book is incomplete")
+        best_bid = bids[0][0]
+        best_ask = asks[0][0]
+        return assess_l2(
+            market_id=market_id,
+            coin=coin,
+            side=side,
+            observed_at_ms=observed,
+            best_bid=best_bid,
+            best_ask=best_ask,
+            levels=asks if side is Side.LONG else bids,
+            provenance_hash=sha256_hex(canonical_json_bytes(response)),
+        )
 
 
 class OfficialMetadataValidator:

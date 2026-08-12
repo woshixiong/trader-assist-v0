@@ -14,10 +14,14 @@ import tempfile
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from trader_assist_v0.contracts.common import canonical_json_bytes
 
-from .models import ClosedBar, MarketLifecycle, RegistryMarket, RegistryVersion
+from .models import MarketLifecycle, RegistryMarket, RegistryVersion
+
+if TYPE_CHECKING:
+    from .data import Closed5mAdmission
 
 
 class RegistryError(ValueError):
@@ -35,7 +39,8 @@ _LIFECYCLE_NEXT: dict[MarketLifecycle, frozenset[MarketLifecycle]] = {
     MarketLifecycle.ACTIVE: frozenset({MarketLifecycle.DRAINING}),
     MarketLifecycle.DRAINING: frozenset({MarketLifecycle.OUTCOMES_COMPLETE}),
     MarketLifecycle.OUTCOMES_COMPLETE: frozenset({MarketLifecycle.DISABLED}),
-    MarketLifecycle.DISABLED: frozenset(),
+    # Re-enabling never resurrects an ACTIVE market; it restarts readiness.
+    MarketLifecycle.DISABLED: frozenset({MarketLifecycle.WARMING}),
 }
 
 
@@ -70,6 +75,9 @@ class MarketRegistryManager:
         self.pointer = root / "current.json"
         self.pending = root / "pending.json"
         self.history = root / "history"
+        # Capability identity is intentionally process-local.  A Registry
+        # operation never accepts a generic candle as time authority.
+        self._boundary_issuer = object()
 
     def _decode(self, raw: bytes) -> RegistryVersion:
         try:
@@ -174,29 +182,36 @@ class MarketRegistryManager:
         self._assert_prior_validation(candidate)
         return candidate
 
-    def apply_at_closed_5m(self, version: str, *, boundary: ClosedBar) -> RegistryVersion:
-        """Atomically activate only from a data-route-admitted closed 5m bar."""
-        if boundary.interval != "5m" or boundary.close_time_ms % 300_000 != 0:
-            raise RegistryError("registry activation requires an admitted closed 5m boundary")
-        candidate = self.request_apply(version)
+    def _apply_admitted(self, admission: Closed5mAdmission) -> RegistryVersion | None:
+        """Consume one provider-issued boundary capability exactly once.
+
+        This deliberately has no ``ClosedBar`` parameter and no public
+        counterpart.  The data authority verifies provider finality and calls
+        it through this narrow capability seam.
+        """
+        issuer = getattr(admission, "_issuer", None)
+        if (
+            issuer is not self._boundary_issuer
+            or not getattr(admission, "_consume", lambda: False)()
+        ):
+            raise RegistryError(
+                "registry activation requires provider admitted boundary capability"
+            )
+        candidate = self.pending_version()
+        if candidate is None:
+            return None
         prior = self.active()
         prior_pointer = self.pointer.read_bytes() if self.pointer.exists() else None
         pointer = {"version": candidate.version, "content_hash": candidate.content_hash}
         _write_atomic(self.pointer, canonical_json_bytes(pointer))
         if prior is not None and prior_pointer is not None:
-            stamp = boundary.received_at.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
+            stamp = admission.bar.received_at.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
             _write_atomic(self.history / f"{stamp}-{prior.version}.json", prior_pointer)
         try:
             self.pending.unlink()
         except FileNotFoundError:
             pass
         return candidate
-
-    def apply_pending_at_closed_5m(self, *, boundary: ClosedBar) -> RegistryVersion | None:
-        candidate = self.pending_version()
-        if candidate is None:
-            return None
-        return self.apply_at_closed_5m(candidate.version, boundary=boundary)
 
     def rollback_request(self, version: str) -> RegistryVersion:
         return self.request_apply(version)
@@ -225,6 +240,40 @@ class MarketRegistryManager:
                 markets.append(market)
         if not found:
             raise RegistryError("market is not in active registry")
+        candidate = RegistryVersion.create(version=version, created_at=now, markets=tuple(markets))
+        self.stage(candidate)
+        return candidate
+
+    def successor(
+        self,
+        *,
+        version: str,
+        now: datetime,
+        update_market: RegistryMarket | None = None,
+        remove_market_id: str | None = None,
+    ) -> RegistryVersion:
+        """Stage a deterministic add/replace/remove successor without activation."""
+        active = self.active()
+        if active is None:
+            raise RegistryError("no active registry")
+        if self.versions.joinpath(f"{version}.json").exists():
+            raise RegistryError("new registry version already exists")
+        markets = list(active.markets)
+        if remove_market_id is not None:
+            markets = [m for m in markets if m.identity.market_id != remove_market_id]
+        if update_market is not None:
+            existing = next(
+                (
+                    index
+                    for index, item in enumerate(markets)
+                    if item.identity.market_id == update_market.identity.market_id
+                ),
+                None,
+            )
+            if existing is None:
+                markets.append(update_market)
+            else:
+                markets[existing] = update_market
         candidate = RegistryVersion.create(version=version, created_at=now, markets=tuple(markets))
         self.stage(candidate)
         return candidate

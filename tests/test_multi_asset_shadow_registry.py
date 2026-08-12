@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
 from trader_assist_v0.contracts.common import sha256_hex
+from trader_assist_v0.multi_asset_shadow.data import ClosedBarStore, MultiAssetDataAuthority
 from trader_assist_v0.multi_asset_shadow.models import (
     AssetClass,
-    ClosedBar,
     MarketIdentity,
     MarketLifecycle,
     RegistryMarket,
@@ -49,19 +48,30 @@ def manager(path: Path, valid: bool = True) -> MarketRegistryManager:
     return MarketRegistryManager(path, metadata_validator=lambda _: valid)
 
 
-def boundary(value: RegistryMarket) -> ClosedBar:
-    return ClosedBar.create(
-        market_id=value.identity.market_id,
-        open_time_ms=0,
-        close_time_ms=300_000,
-        open=Decimal("100"),
-        high=Decimal("101"),
-        low=Decimal("99"),
-        close=Decimal("100"),
-        volume=Decimal("1"),
-        source_id="test",
-        provenance_hash=sha256_hex(b"boundary"),
-        received_at=NOW,
+def provider_candle(value: RegistryMarket, open_ms: int = 0) -> dict[str, object]:
+    return {
+        "i": "5m",
+        "s": value.identity.coin,
+        "t": open_ms,
+        "T": open_ms + 299_999,
+        "o": "100",
+        "h": "101",
+        "l": "99",
+        "c": "100",
+        "v": "1",
+    }
+
+
+def admit(
+    subject: MarketRegistryManager, path: Path, value: RegistryMarket, open_ms: int = 0
+) -> None:
+    authority = MultiAssetDataAuthority(
+        store=ClosedBarStore(path / "evidence.db"), registry=subject
+    )
+    authority.admit_rest_history(
+        market=value,
+        snapshot=[provider_candle(value, open_ms)],
+        received_at=datetime.fromtimestamp((open_ms + 301_000) / 1000, UTC),
     )
 
 
@@ -72,17 +82,15 @@ def test_validate_request_and_data_boundary_apply_are_atomic(tmp_path: Path) -> 
     subject.stage(one)
     subject.stage(two)
     subject.request_apply("one")
-    assert subject.apply_pending_at_closed_5m(boundary=boundary(one.markets[0])).version == "one"
-    with pytest.raises(RegistryError, match="closed 5m boundary"):
-        subject.apply_at_closed_5m(
-            "two",
-            boundary=boundary(two.markets[0]).model_copy(update={"interval": "15m"}),
-        )
+    admit(subject, tmp_path, one.markets[0])
     assert subject.active() is not None and subject.active().version == "one"
+    with pytest.raises(AttributeError):
+        subject.apply_at_closed_5m()  # type: ignore[attr-defined]
     subject.request_apply("two")
-    assert subject.apply_pending_at_closed_5m(boundary=boundary(two.markets[0])).version == "two"
+    admit(subject, tmp_path, two.markets[0], 300_000)
+    assert subject.active() is not None and subject.active().version == "two"
     subject.rollback_request("one")
-    assert subject.apply_pending_at_closed_5m(boundary=boundary(one.markets[0])).version == "one"
+    admit(subject, tmp_path, one.markets[0], 600_000)
     assert subject.active() is not None and subject.active().version == "one"
 
 
@@ -91,7 +99,7 @@ def test_invalid_candidate_keeps_previous_active_version(tmp_path: Path) -> None
     initial = registry("one", market())
     subject.stage(initial)
     subject.request_apply("one")
-    subject.apply_pending_at_closed_5m(boundary=boundary(initial.markets[0]))
+    admit(subject, tmp_path, initial.markets[0])
     invalid_path = tmp_path / "versions" / "two.json"
     invalid_path.parent.mkdir(exist_ok=True)
     invalid_path.write_text("{}", encoding="utf-8")
@@ -113,9 +121,25 @@ def test_lifecycle_update_is_immutable_and_does_not_change_event_expiry(tmp_path
     initial = registry("one", market(lifecycle=MarketLifecycle.ACTIVE))
     subject.stage(initial)
     subject.request_apply("one")
-    subject.apply_pending_at_closed_5m(boundary=boundary(initial.markets[0]))
+    admit(subject, tmp_path, initial.markets[0])
     successor = subject.lifecycle_update(
         "two", initial.markets[0].identity.market_id, MarketLifecycle.DRAINING, now=NOW
     )
     assert successor.markets[0].lifecycle is MarketLifecycle.DRAINING
     assert subject.active() is not None and subject.active().version == "one"
+
+
+def test_disabled_market_can_only_reenter_warming_not_active(tmp_path: Path) -> None:
+    subject = manager(tmp_path)
+    initial = registry("one", market(lifecycle=MarketLifecycle.DISABLED))
+    subject.stage(initial)
+    subject.request_apply("one")
+    admit(subject, tmp_path, initial.markets[0])
+    with pytest.raises(RegistryError, match="illegal"):
+        subject.lifecycle_update(
+            "bad", initial.markets[0].identity.market_id, MarketLifecycle.ACTIVE, now=NOW
+        )
+    successor = subject.lifecycle_update(
+        "two", initial.markets[0].identity.market_id, MarketLifecycle.WARMING, now=NOW
+    )
+    assert successor.markets[0].lifecycle is MarketLifecycle.WARMING
