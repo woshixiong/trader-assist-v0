@@ -97,14 +97,12 @@ def _profit_path_statistics(
 
         established_peak = max(prior_peak_favorable, opening_favorable)
         if established_peak > 0:
-            established_peak_price = (
-                entry + established_peak if side is Side.LONG else entry - established_peak
-            )
-            giveback = (
-                established_peak_price - worst_later_price
+            retained_favorable = (
+                max(Decimal(), worst_later_price - entry)
                 if side is Side.LONG
-                else worst_later_price - established_peak_price
+                else max(Decimal(), entry - worst_later_price)
             )
+            giveback = established_peak - min(established_peak, retained_favorable)
             max_giveback = max(max_giveback, giveback)
             returned_to_entry = returned_to_entry or crosses_entry
         prior_peak_favorable = max(established_peak, favorable)
