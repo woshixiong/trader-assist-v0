@@ -1,47 +1,47 @@
 # First Launch 当前总任务登记表与执行顺序 R2
 
 **记录 ID：** `TA-FIRST-LAUNCH-CURRENT-MASTER-TASK-REGISTER-R2-2026-08-03`  
-**日期：** `2026-08-04`  
+**更新日期：** `2026-08-12`  
 **仓库：** `woshixiong/trader-assist-v0`  
 **关联 Draft PR：** `#52`  
 **状态：** `PLANNING_ONLY / NON_EXECUTABLE / MASTER_BACKLOG_INDEX`  
 **任务派发权威：** `PROJECT_CONTROL_ONLY`  
 **当前文档入口：** `FIRST_LAUNCH_CURRENT_AUTHORITY_INDEX_AND_SUPERSESSION_MAP_R1_2026-08-03.md`  
+**当前快速路线：** `FIRST_LAUNCH_MANUAL_40_MARKET_REGISTRY_FAST_ROUTE_AND_TIMEFRAME_PROFILE_BACKLOG_R1_2026-08-12.md`  
 **策略精度最高权威：** `FIRST_LAUNCH_CURRENT_RELEASE_MACHINE_EXECUTABLE_STRATEGY_PACKAGE_R1_1_FINAL_PRECISION_CLOSURE_2026-08-03.md`  
 **策略主体权威：** `FIRST_LAUNCH_CURRENT_RELEASE_MACHINE_EXECUTABLE_STRATEGY_PACKAGE_R1_2026-08-03.md`  
-**Universe/容量权威：** `FIRST_LAUNCH_UNIVERSE_REFRESH_AND_EXPANDING_CAPACITY_SPIKE_DECISION_R1_2026-08-03.md`  
-**相关信号与未来暴露权威：** `FIRST_LAUNCH_CORRELATED_SIGNAL_CLUSTERING_BACKTEST_AND_EXECUTION_EXPOSURE_GOVERNANCE_R1_2026-08-04.md`  
-**架构权威：** `FIRST_LAUNCH_MULTI_ASSET_PARALLEL_REPLACEMENT_ARCHITECTURE_DECISION_R1_2026-08-03.md`  
-**优先级：** 本文件只管理任务和顺序，不得覆盖上述策略、Universe、相关风险、架构和权威索引。
+**相关信号与未来暴露权威：** `FIRST_LAUNCH_CORRELATED_SIGNAL_CLUSTERING_BACKTEST_AND_EXECUTION_EXPOSURE_GOVERNANCE_R1_2026-08-04.md`
 
 ---
 
 ## 1. 当前核心决策
 
-取消：
+当前发布不再采用高成本的全市场自动 Universe / 扩张容量路线。
+
+固定：
 
 ```text
-COMPLETE_THREE_ROUND_HISTORICAL_BACKTEST
-AS_CURRENT_RELEASE_PREDEPLOYMENT_HARD_GATE
+MANUALLY_MAINTAINED_VERSIONED_MARKET_REGISTRY = YES
+INITIAL_MARKET_COUNT = 40
+HOT_ADD_REMOVE_TIER_CHANGE = REQUIRED
+FULL_EXCHANGE_DYNAMIC_DISCOVERY = NO
+EXPANDING_CAPACITY_HARNESS = CANCELLED_FOR_CURRENT_RELEASE
+AUTOMATIC_UNIVERSE_SCORING = NO
 ```
 
-采用：
+当前方法：
 
 ```text
-STRATEGY MACHINE SEMANTICS FREEZE
-→ READ-ONLY UNIVERSE + CAPACITY SPIKE
-→ EXACT UNIVERSE ELIGIBILITY FREEZE
-→ ENGINEERING FINAL ROUTE
-→ MINIMUM CORRECTNESS VALIDATION
-→ UNIFIED MULTI_ASSET SHADOW SIGNAL SYSTEM
-→ SCANNER + COMPLETE EVIDENCE + CORRELATION CLUSTERS
-→ CLOSE PREDEPLOYMENT OPERATIONS BLOCKERS
-→ HUMAN-CONTROLLED DEPLOYMENT
-→ SHADOW FORWARD VALIDATION
-→ CLUSTER-NORMALIZED REVIEW
-→ EVIDENCE-TRIGGERED LIMITED STRATEGY REVISION
-→ RAPID REDEPLOYMENT
-→ REPEAT AS JUSTIFIED
+FIXED 40-MARKET REGISTRY
+→ 5m PUBLIC DATA
+→ LOCAL 15m / 1h CAUSAL AGGREGATION
+→ ASSET-NEUTRAL THREE-SETUP KERNEL
+→ FORMAL SIGNAL
+→ NOT_SUBMITTED SHADOW ORDER
+→ ON-DEMAND 1m OUTCOME
+→ T/S/R + EVIDENCE + EXPORT
+→ CORRELATION CLUSTERS
+→ FAST SHADOW FORWARD VALIDATION
 ```
 
 固定原则：
@@ -51,226 +51,229 @@ RAPID_ITERATION = CORE_PROJECT_METHOD
 SMALL_BATCH_CHANGE = REQUIRED
 HUMAN_FINAL_DECISION = REQUIRED
 AUTO_TRADE = NO
-FUTURE_AUTOMATED_TRADING_GRADE_MARKET_ELIGIBILITY = REQUIRED
-ALL_APPROVED_MARKETS_CAN_RECEIVE_FULL_SIGNAL = YES
-KEEP_ALL_APPROVED_FORMAL_SIGNALS = YES
+ALL_TIERS_FULL_STRATEGY = YES
+ALL_TIERS_FORMAL_SIGNAL_NOTIFICATION = YES
+ALL_TIERS_SHADOW_ORDER = YES
+ALL_TIERS_OUTCOME = YES
 RAW_CORRELATED_SIGNALS_ARE_INDEPENDENT_SAMPLES = NO
 CLUSTER_NORMALIZED_PRIMARY_RESEARCH_METRICS = YES
-FUTURE_CORRELATED_EXPOSURE_GATE = REQUIRED
 ```
 
 ---
 
-## 2. 当前第一阻塞任务：Universe 与容量实测
-
-当前不得继续冻结或估算：
+## 2. 当前时间周期语义
 
 ```text
-FINAL_APPROVED_UNIVERSE_COUNT
-FINAL_VOLUME/OI/DEPTH/SPREAD/REGULARITY_THRESHOLDS
-MAX_ACTIVE_FORMAL_EVENTS
+RAW_STRATEGY_CANDLE_FEED = 5m ONLY
+SIGNAL_BASE_TIMEFRAME = 5m
+STRUCTURE_TIMEFRAME = 15m LOCAL_FROM_5m
+CONTEXT_TIMEFRAME = 1h LOCAL_FROM_5m
+OUTCOME_PATH_TIMEFRAME = 1m ON DEMAND
 ```
 
-必须先完成：
+当前所有市场只使用一个有效 Profile：
 
 ```text
-GLOBAL MARKET SNAPSHOT
-→ ORDERED CAPACITY CANDIDATE POOL
-→ 8/16/32/64/128/... EXPANDING TEST
-→ FIRST FAILURE
-→ BOUNDARY CONVERGENCE
-→ QUALITY DISTRIBUTION
-→ CORRELATION DATA AVAILABILITY/COST
-→ SAFE CAPACITY
+FAST_5M_PROFILE
+Execution = 5m
+Structure = 15m
+Context = 1h
 ```
 
-固定 Top-100 测试法和预设 30/50/100 Universe 均已取消。
-
-容量实测必须：
-
-- 在目标 AWS 或严格等价环境；
-- 与生产服务隔离；
-- 只使用公共只读数据；
-- 不安装依赖；
-- 不修改生产代码、数据库、服务或 permit；
-- 区分 Global Snapshot、Cold Bootstrap、Steady State、Candidate/Event/Outcome/Recovery Stress；
-- 输出真实 API、WebSocket、CPU、内存、延迟和数据库结果；
-- 验证 14 日 5m 相关性输入、最少 500 个配对 Return、相关矩阵计算成本和确定性重现能力。
-
-只有完成该实测，Strategy Optimization 才冻结 `MULTI_ASSET_UNIVERSE_ELIGIBILITY_R1`，Engineering Optimization 才重新形成最终工程工作包和工期。
+本轮明确不开发实时动态周期切换。
 
 ---
 
 ## 3. 当前发布关键路径
 
-1. Strategy Optimization 已完成机器策略包、Universe/容量语义、相关样本治理和文档权威清理；
-2. Engineering Optimization 执行或安排只读 Universe/Capacity Spike，并回收相关性数据可得性与计算成本；
-3. Strategy Optimization 根据真实质量分布与安全容量冻结精确 Universe Eligibility；
-4. Engineering Optimization 核验真实代码、复用点和最小实现路线；
-5. Project Control 派发：
-   - 新统一多资产 Shadow Signal System；
-   - 周期性 versioned Universe Refresh；
-   - Scanner Stage A/B/C；
-   - Candidate / Signal / Plan / ShadowOrder / T-S-R / Outcome / Export；
-   - Setup Research Cluster / Exposure Cluster；
-   - Raw / Cluster-normalized / Leader-only 统计和回撤；
-   - 最小正确性门禁；
-   - reconnect-budget；
-   - 主机外备份和恢复；
-6. CI、独立 Review、回滚、部署和 Smoke；
-7. 上线后根据实际 Scanner、Cluster 压缩率和证据质量决定何时复核，不预设固定天数或样本数；
-8. 只在证据支持时进行有限、版本化调整。
+1. Engineering Optimization 核验当前代码、Git 状态和最小复用点；
+2. Project Control 派发人工热插拔 Market Registry；
+3. 实现资产无关 5m 数据路径与 MarketIdentity；
+4. 实现 5m → 15m / 1h 严格因果聚合；
+5. 复用当前机器策略包，实现资产无关三 Setup Kernel；
+6. P0/P1/P2 全部运行完整策略、Formal Signal、ShadowOrder、Outcome；
+7. BBO/L2 采用按需获取；
+8. 正式 ShadowOrder 才开启/回补 1m Outcome Path；
+9. 实现 T/S/R、Evidence、Export；
+10. 实现 Setup Research Cluster / Exposure Cluster 证据与统计；
+11. 统一 Discord Signal Notification，带 Tier / Execution Eligibility；
+12. 手续费 Micro Guard 仅在包含测试总增量 `<=90 minutes` 时加入，否则延期；
+13. 做固定 40 市场 30–60 分钟轻量 Load Smoke，不再建设 Expansion Capacity Harness；
+14. 完成 reconnect-budget、off-host backup/recovery 等运维阻断；
+15. CI、独立 Review、Rollback、Deploy、Smoke、Cutover；
+16. 开始 Shadow Forward Validation 和证据驱动快速迭代。
 
 ---
 
-## 4. 新旧系统关系
+## 4. 当前必须完成
 
-```text
-LEGACY_ETH_RUNTIME
-= FROZEN FALLBACK / ROLLBACK / COMPARATOR
-
-NEW_MULTI_ASSET_SYSTEM
-= ETH + ALL APPROVED HYPERLIQUID PERPS
-= SAME FULL SIGNAL FIELDS
-= NOT_SUBMITTED SHADOW AUTHORITY
-= HUMAN FINAL DECISION
-```
-
-当前不对旧 ETH Runtime、TradePlan Hash 或 runtime.db 做侵入式多资产迁移。
-
-通知采用：
-
-```text
-PARALLEL_INSTALLED
-SINGLE_ACTIVE_NOTIFICATION_AUTHORITY
-```
-
-正式切换后，新系统是唯一活动通知来源，旧 ETH 服务停止/禁用并保留回滚材料。
-
----
-
-## 5. Universe Refresh 固定要求
-
-Universe 不得硬编码在源码中。
-
-目标流程：
-
-```text
-AUTO REFRESH
-→ VALIDATE
-→ DIFF
-→ VERSIONED CANDIDATE
-→ ATOMIC APPLY
-→ HOT RELOAD ON NEXT CLOSED 5M
-```
-
-不得要求修改代码、Git commit、完整 CI、重新部署或重启整个系统。
-
-前两次：
-
-```text
-AUTO_REFRESH = YES
-AUTO_APPLY = NO
-USER_REVIEW_TARGET = 5–10 MINUTES
-```
-
-稳定并授权后可自动 Apply；异常时保留上一有效版本。
-
-初始周期候选为 7 天，但须依据至少四次 Turnover 数据再决定维持 7 天或调整至 14 天。该周期目前不是永久参数。
-
----
-
-## 6. 当前必须完成
-
-容量实测完成后，本轮必须实施：
-
-- 新资产无关 MarketIdentity、ClosedBar、Strategy State、PlanDraft；
-- 当前机器策略包的 Sweep、Breakout Micro FAST、state-driven STANDARD、Range Edge Rejection；
-- versioned Universe Refresh 和原子切换；
-- Scanner 只处理 Approved Universe；
-- 所有 Approved WATCH/Candidate 自动留存；
-- Scanner SETUP_READY 进入完整三 Setup evaluator；
-- Formal Setup 生成完整 Shadow TradePlan / ShadowOrder；
-- 所有 Approved Market 输出 Entry、Chase、Stop、TP、1%/2% 参考金额；
+- versioned/manual Market Registry；
+- Hot Add/Remove/Tier Change；
+- 新市场 metadata validate + 5m warmup + safe closed-5m activation；
+- 删除市场停止新 Candidate/Event，但历史 Shadow Outcome drain；
+- 资产无关 MarketIdentity / ClosedBar / Strategy State / PlanDraft；
+- 5m 唯一原始策略 Candle；
+- 本地 15m/1h 聚合；
+- Sweep Reclaim；
+- Breakout Micro FAST；
+- Breakout STANDARD；
+- Range Edge Rejection；
+- P0/P1/P2 完整 Signal；
+- NOT_SUBMITTED ShadowOrder；
+- On-demand BBO/L2；
+- On-demand 1m Outcome；
 - T/S/R；
 - 30/60/120m Outcome；
-- 14 日 5m 相关性输入与确定性 Cluster Identity；
-- Setup Research Cluster；
-- Exposure Cluster；
-- Raw market-level、Cluster-normalized、Leader-only 三套统计；
-- Raw、Cluster-normalized、Leader-only 三套回撤报告；
-- Correlation Unknown 和 Cluster Compression Ratio；
-- 一键导出和完整性报告；
-- failure isolation；
+- Correlation Cluster Evidence；
+- Raw / Cluster-normalized / Leader-only 统计；
+- Evidence Export；
+- Unified Notification；
+- 40-market Load Smoke；
 - reconnect-budget；
-- off-host backup and recovery；
+- off-host backup/recovery；
 - CI、Review、Rollback、Deploy、Smoke。
-
-所有 Approved Formal Signal、ShadowOrder 和 Outcome 必须完整保留。相关聚类不得删除市场级证据。
 
 ---
 
-## 7. 当前不做
+## 5. 手续费当前边界
 
-- 完整历史回测；
-- 长期回测平台；
-- Nautilus/Freqtrade/vectorbt/Backtrader 接入；
+本轮只允许可选的极小 Fee Guard：
+
+```text
+OPTIONAL_MICRO_FEE_GUARD
+TOTAL_INCREMENTAL_ENGINEERING_TIME_INCLUDING_TESTS <= 90 MINUTES
+```
+
+允许：
+
+- 读取现有 HIP-3 metadata `growthMode`；
+- 保存 growth mode / fee class / observed-at；
+- P0 HIP-3 非 Growth Mode 时 `FEE_EXECUTION_BLOCKED`；
+- Shadow Research 继续。
+
+如果 Engineering 核验超过 90 分钟：
+
+```text
+DEFER_TO_POST_FIRST_LAUNCH_COST_MODEL_R2
+```
+
+当前不做：`userFees`、账户级费率、TT/MT/MM 完整模型、自动 maker/taker routing、自动 fee-based market switching。
+
+---
+
+## 6. 当前明确不做
+
+- 全交易所自动发现；
+- 自动 Universe Scoring；
+- Expansion Capacity Harness；
+- 自动全市场 Universe Refresh；
+- 实时 Dynamic Timeframe Switching；
+- 第二个有效 Timeframe Profile；
+- 全市场持续 1m；
+- 全市场永久 BBO/L2；
+- 独立持续 15m API Feed；
+- 独立持续 1h API Feed；
 - 自动交易；
 - 账户或签名接入；
 - 多资产组合资金仲裁；
-- 真实 Exposure Cluster 下单门禁实现；
-- 动态退出引擎；
-- Discord Bot；
 - 第四 Setup；
-- OI/funding 作为 Setup 硬触发；
-- 旧 ETH Schema 多资产迁移；
-- 旧 ETH 下线；
-- 日常持续触碰全交易所所有市场；
-- 固定 Top-100 或固定 30/50 Universe；
-- 未经实测的 Active Event 上限；
-- 把多个高度相关 ShadowOrder 全部解释成独立策略证据。
+- 动态退出引擎；
+- 大型外部交易框架接入；
+- 把高度相关 ShadowOrder 全部解释成独立策略证据。
 
 ---
 
-## 8. 部署前阻断
+## 7. 部署前阻断
 
 ```text
 OPS-1 = FIRST_LAUNCH_RECONNECT_BUDGET_RESET
 OPS-2 = TRADER_ASSIST_OFF_HOST_BACKUP_AND_LIGHTSAIL_SNAPSHOT_RETIREMENT
 ```
 
-部署前必须完成修复、测试和恢复门禁。Lightsail 快照不得在恢复门禁通过前删除。
+正式部署前必须完成恢复和回滚门禁。
 
 ---
 
-## 9. 上线后条件性 Backlog
+## 8. Post-Launch / V0.2 条件性 Backlog：Per-Market Stable Timeframe Profile
 
-`LONG_TERM_BACKTEST_ARCHITECTURE_REEVALUATION` 仅在以下条件出现时重新讨论：
+该项必须保留，防止后续遗漏：
 
-- 前向样本过慢；
-- 需要同时比较大量参数；
-- 需要研究罕见历史行情；
-- 准备自动交易或提高资金规模；
-- 需要组合级风险验证；
-- 每次修改等待真实样本的时间不可接受。
+```text
+BACKLOG_ID = PER_MARKET_STABLE_TIMEFRAME_PROFILE
+STAGE = POST_FIRST_LAUNCH / V0.2 STRATEGY OPTIMIZATION
+STATUS = CONDITIONAL
+CURRENT_IMPLEMENTATION = NO
+```
 
-旧 ETH 运行时下线同样需要另行授权和完整门禁。
+目标不是实时动态切换，而是在真实证据支持后，为某些市场选择一个稳定、版本化的 Timeframe Profile。
 
-周期性 Universe Refresh、Universe Turnover、自动 Apply 安全性、质量变化、Cluster Compression、同步成功/失败和 Cluster-normalized 回撤本身属于上线后的持续验证对象。
+当前 Profile：
 
-未来半自动或自动交易阶段必须独立冻结并实现：
+```text
+FAST_INTRADAY_PROFILE
+Execution = 5m
+Structure = 15m
+Context = 1h
+```
+
+未来候选（仅研究示例，不授权参数）：
+
+```text
+SLOW_INTRADAY_PROFILE
+Execution = 15m
+Structure = 1h
+Context = 4h
+```
+
+只有前向证据出现以下任一情况才重新打开：
+
+- 某些市场长期 5m 噪声过高；
+- 5m 成本后 Net Edge 持续显著差；
+- 当前结构周期造成长期 Entry/Stop/Target 经济性恶化；
+- Shadow/Offline 对照持续证明稳定较慢 Profile 改善 Net Expectancy、回撤或执行可靠性；
+- 某类资产长期产生大量低价值/重复 Formal Signal。
+
+启动时必须先由 Strategy Optimization 做版本化研究，不能由 Engineering 自行切换周期。
+
+Registry 可以现在低成本预留：
+
+```text
+timeframe_profile = FAST_5M
+```
+
+但当前只允许这一个有效值，不得因此提前实现多 Profile 行为分支。
+
+---
+
+## 9. 其他未来条件性 Backlog
+
+### Cost Model R2
+
+可研究：
+
+- `userFees`；
+- actual account fee tier；
+- TT/MT/MM；
+- Gross/Net Expectancy；
+- Cost / Opportunity Ratio。
+
+### Correlated Execution Risk
+
+自动交易前必须实现：
 
 ```text
 ONE_NEW_POSITION_PER_EXPOSURE_CLUSTER
 ```
 
-或：
+或另行冻结：
 
 ```text
 SHARED_RISK_BUDGET_PER_EXPOSURE_CLUSTER
 ```
 
-在组合风险合同完成前，默认安全路线为一个 Exposure Cluster 只允许一个新仓位；当前不授权真实交易实现。
+### Long-term Backtest Architecture
+
+仅在前向样本过慢、需要大量参数比较、罕见历史行情、自动交易/资金规模提升或组合级风险验证时重新评估。
 
 ---
 
