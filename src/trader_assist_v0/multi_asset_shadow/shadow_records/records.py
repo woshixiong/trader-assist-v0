@@ -31,6 +31,29 @@ class HumanReviewAction(StrEnum):
     REJECTED = "REJECTED"
 
 
+_SKIPPED_REASON_CODES = frozenset(
+    {
+        "NOT_SEEN_IN_TIME",
+        "NO_CAPACITY",
+        "CONFLICTING_POSITION",
+        "PERSONAL_AVAILABILITY",
+        "OTHER_NON_STRATEGY",
+    }
+)
+_REJECTED_REASON_CODES = frozenset(
+    {
+        "STRUCTURE_CONFLICT",
+        "ENTRY_TOO_LATE",
+        "CHASE_EXCEEDED",
+        "LIQUIDITY_POOR",
+        "RISK_REWARD_INSUFFICIENT",
+        "DATA_QUALITY",
+        "SIGNAL_LOGIC_ERROR",
+        "OTHER_STRATEGY_REASON",
+    }
+)
+
+
 def _canonical_mapping(value: Mapping[str, object], *, field: str) -> str:
     if not isinstance(value, Mapping) or not value:
         raise RecordError(f"{field} must be a non-empty mapping")
@@ -181,14 +204,13 @@ class CandidateTransition(ImmutableRecord):
 
 class MarketEvent(ImmutableRecord):
     record_type = "market_event"
-    required_fields = frozenset({"candidate_id", "market_id", "event_kind", "event_time"})
+    required_fields = frozenset({"market_id", "event_kind", "event_time"})
 
 
 class FormalSignal(ImmutableRecord):
     record_type = "formal_signal"
     required_fields = frozenset(
         {
-            "candidate_id",
             "market_event_id",
             "market_id",
             "setup_family",
@@ -211,6 +233,11 @@ class FormalSignal(ImmutableRecord):
             raise RecordError("formal_signal setup_family is not an authorized family")
         if payload.get("tier") not in {"P0", "P1", "P2"}:
             raise RecordError("formal_signal tier must be P0, P1, or P2")
+        if payload.get("setup_family") == "BREAKOUT_RETEST" and payload.get("setup_mode") not in {
+            "MICRO_FAST",
+            "STANDARD",
+        }:
+            raise RecordError("breakout formal_signal setup_mode is not authorized")
 
 
 class PlanRecord(ImmutableRecord):
@@ -270,8 +297,22 @@ class HumanReview(ImmutableRecord):
 
     @classmethod
     def validate_payload(cls, payload: Mapping[str, object]) -> None:
-        if payload.get("action") not in {item.value for item in HumanReviewAction}:
+        action = payload.get("action")
+        if action not in {item.value for item in HumanReviewAction}:
             raise RecordError("human_review action must be TAKEN, SKIPPED, or REJECTED")
+        reason_code = payload.get("reason_code")
+        if reason_code is None:
+            return
+        if not isinstance(reason_code, str):
+            raise RecordError("human_review reason_code must be a string when present")
+        if action == HumanReviewAction.SKIPPED and reason_code not in _SKIPPED_REASON_CODES:
+            raise RecordError("human_review skipped reason_code is not authorized")
+        if action == HumanReviewAction.REJECTED and reason_code not in _REJECTED_REASON_CODES:
+            raise RecordError("human_review rejected reason_code is not authorized")
+        if action == HumanReviewAction.TAKEN and reason_code in (
+            _SKIPPED_REASON_CODES | _REJECTED_REASON_CODES
+        ):
+            raise RecordError("human_review taken cannot use skipped or rejected reason_code")
 
 
 class OutcomeEnvelope(ImmutableRecord):
