@@ -8,6 +8,7 @@
 **任务派发权威：** `PROJECT_CONTROL_ONLY`  
 **当前文档入口：** `FIRST_LAUNCH_CURRENT_AUTHORITY_INDEX_AND_SUPERSESSION_MAP_R1_2026-08-03.md`  
 **当前快速路线：** `FIRST_LAUNCH_MANUAL_40_MARKET_REGISTRY_FAST_ROUTE_AND_TIMEFRAME_PROFILE_BACKLOG_R1_2026-08-12.md`  
+**上线后策略研究：** `FIRST_LAUNCH_POST_LAUNCH_STRATEGY_RESEARCH_AND_SHADOW_EVIDENCE_BACKLOG_R1_2026-08-12.md`  
 **策略精度最高权威：** `FIRST_LAUNCH_CURRENT_RELEASE_MACHINE_EXECUTABLE_STRATEGY_PACKAGE_R1_1_FINAL_PRECISION_CLOSURE_2026-08-03.md`  
 **策略主体权威：** `FIRST_LAUNCH_CURRENT_RELEASE_MACHINE_EXECUTABLE_STRATEGY_PACKAGE_R1_2026-08-03.md`  
 **相关信号与未来暴露权威：** `FIRST_LAUNCH_CORRELATED_SIGNAL_CLUSTERING_BACKTEST_AND_EXECUTION_EXPOSURE_GOVERNANCE_R1_2026-08-04.md`
@@ -42,6 +43,7 @@ FIXED 40-MARKET REGISTRY
 → T/S/R + EVIDENCE + EXPORT
 → CORRELATION CLUSTERS
 → FAST SHADOW FORWARD VALIDATION
+→ POST-LAUNCH STRATEGY EVIDENCE REVIEW
 ```
 
 固定原则：
@@ -57,6 +59,7 @@ ALL_TIERS_SHADOW_ORDER = YES
 ALL_TIERS_OUTCOME = YES
 RAW_CORRELATED_SIGNALS_ARE_INDEPENDENT_SAMPLES = NO
 CLUSTER_NORMALIZED_PRIMARY_RESEARCH_METRICS = YES
+CURRENT_RELEASE_NEW_FORMAL_SETUP = 0
 ```
 
 ---
@@ -94,14 +97,15 @@ Context = 1h
 6. P0/P1/P2 全部运行完整策略、Formal Signal、ShadowOrder、Outcome；
 7. BBO/L2 采用按需获取；
 8. 正式 ShadowOrder 才开启/回补 1m Outcome Path；
-9. 实现 T/S/R、Evidence、Export；
+9. 实现 T/S/R、Evidence、Export，并保证后续 Strategy Research 所需关键路径可离线重建；
 10. 实现 Setup Research Cluster / Exposure Cluster 证据与统计；
 11. 统一 Discord Signal Notification，带 Tier / Execution Eligibility；
 12. 手续费 Micro Guard 仅在包含测试总增量 `<=90 minutes` 时加入，否则延期；
 13. 做固定 40 市场 30–60 分钟轻量 Load Smoke，不再建设 Expansion Capacity Harness；
 14. 完成 reconnect-budget、off-host backup/recovery 等运维阻断；
 15. CI、独立 Review、Rollback、Deploy、Smoke、Cutover；
-16. 开始 Shadow Forward Validation 和证据驱动快速迭代。
+16. 开始 Shadow Forward Validation；
+17. 利用真实 Shadow/Candidate/Outcome 数据进入证据驱动策略优化，而不是上线前继续增加策略范围。
 
 ---
 
@@ -124,6 +128,10 @@ Context = 1h
 - On-demand 1m Outcome；
 - T/S/R；
 - 30/60/120m Outcome；
+- Scanner WATCH / SETUP_READY / FAILED_BREAKOUT_SWEEP_WATCH Evidence；
+- Breakout/Sweep/Retest 关键 Transition 与 Candle Identity；
+- 当前策略已经计算的 ATR / Volume / CLV / Zone / HTF / Relative Strength / Session Evidence；
+- `return_inside_range` / `failed_breakout` 等 Outcome 可导出；
 - Correlation Cluster Evidence；
 - Raw / Cluster-normalized / Leader-only 统计；
 - Evidence Export；
@@ -132,6 +140,8 @@ Context = 1h
 - reconnect-budget；
 - off-host backup/recovery；
 - CI、Review、Rollback、Deploy、Smoke。
+
+如果某个未来研究所需关键量可由以上原始 Evidence 离线确定性重建，不得为它新增实时运行逻辑。只有无法重建的关键原始值允许增加最小 Evidence 字段。
 
 ---
 
@@ -177,7 +187,12 @@ DEFER_TO_POST_FIRST_LAUNCH_COST_MODEL_R2
 - 账户或签名接入；
 - 多资产组合资金仲裁；
 - 第四 Setup；
-- 动态退出引擎；
+- Failed Accepted Breakout 正式反向 Signal；
+- Event-specific Strategy Parameters；
+- Cash Open 独立 Setup；
+- Probe/Add Position Engine；
+- 动态 Logical Exit Engine；
+- Cross-Market Hard Gate；
 - 大型外部交易框架接入；
 - 把高度相关 ShadowOrder 全部解释成独立策略证据。
 
@@ -245,7 +260,94 @@ timeframe_profile = FAST_5M
 
 ---
 
-## 9. 其他未来条件性 Backlog
+## 9. Post-Launch Strategy Research Backlog
+
+最高研究文档：
+
+`FIRST_LAUNCH_POST_LAUNCH_STRATEGY_RESEARCH_AND_SHADOW_EVIDENCE_BACKLOG_R1_2026-08-12.md`
+
+当前冻结优先级：
+
+```text
+R1 = FAILED_ACCEPTED_BREAKOUT / FAILED_IMPULSE
+R2 = PER_MARKET_STABLE_TIMEFRAME_PROFILE
+R3 = SECTOR / PEER RELATIVE STRENGTH
+R4 = EVENT REGIME
+R5 = CASH OPEN / OPENING REPRICING
+R6 = LOGICAL INVALIDATION EXIT
+R7 = PROBE → ADD
+R8 = CROSS-MARKET CONFIRMATION SOFT SCORE
+```
+
+### R1 — Failed Accepted Breakout / Failed Impulse
+
+当前最重要的新策略研究项目。
+
+研究样本包括：
+
+- 所有 Breakout Micro FAST Formal ShadowOrder；
+- 所有 Breakout Standard Formal ShadowOrder；
+- `FAILED_BREAKOUT_SWEEP_WATCH`；
+- Accepted Re-entry invalidated Breakout；
+- 可关联的后续反向 Sweep / Formal Event。
+
+必须同时研究成功 Breakout 对照组，不能只看止损订单。
+
+目标：判断 `Accepted Breakout → Impulse → Return Into Value → Failed Reclaim → Reverse Breakdown` 是否可以被因果、可重复识别，并且反向交易是否在 Cluster-normalized 后仍有正的研究价值。
+
+只有 Evidence 支持时，未来优先考虑作为：
+
+```text
+SWEEP_RECLAIM.FAILURE_MODE
+= IMMEDIATE_SWEEP | FAILED_ACCEPTED_BREAKOUT
+```
+
+而不是第四 Setup。
+
+### 其他研究
+
+- Sector/Peer Relative Strength：利用固定 40 市场和 Scanner 已有 Relative Strength 数据离线研究；
+- Event Regime：优先人工/离线事件标签，不建设自动经济日历；
+- Cash Open：复用 Scanner Session Tag；
+- Logical Exit：用 1m Shadow path 比较结构失效退出 vs 当前 Stop；
+- Probe/Add：用 1m Shadow path 离线模拟，不建设多腿仓位引擎；
+- Cross-Market Confirmation：只研究 Soft Score，不作为当前 Formal Signal Hard Gate。
+
+---
+
+## 10. 下一轮 Strategy Optimization 触发
+
+不预设固定日期或固定 ShadowOrder 数量。
+
+当真实 Evidence 足以回答至少一个明确问题时再启动，例如：
+
+- Failed Accepted Breakout 重复出现；
+- 某类市场 5m Profile 持续表现异常；
+- Peer Relative Strength 稳定区分成功与失败；
+- Event/Cash Open 标签下收益分布出现稳定差异；
+- Logical Exit / Probe-Add 离线模拟出现一致改善。
+
+下一轮必须同时审查：
+
+```text
+RAW_SAMPLE_COUNT
+INDEPENDENT_CLUSTER_COUNT
+MARKET_DIVERSITY
+SETUP_MODE_DISTRIBUTION
+P0/P1/P2_DISTRIBUTION
+GROSS_OUTCOME
+NET_OUTCOME_IF_AVAILABLE
+MFE_MAE
+DRAWDOWN
+CORRELATION_COMPRESSION
+DATA_COMPLETENESS
+```
+
+不得仅凭少量人工印象升级正式策略。
+
+---
+
+## 11. 其他未来条件性 Backlog
 
 ### Cost Model R2
 
@@ -277,6 +379,6 @@ SHARED_RISK_BUDGET_PER_EXPOSURE_CLUSTER
 
 ---
 
-## 10. 权限边界
+## 12. 权限边界
 
 本文件不授权代码修改、工程派发、依赖安装、部署、重启、permit 修改、快照删除、账户访问、签名、交易所写入、自动下单、PR Mark Ready 或 Merge。
