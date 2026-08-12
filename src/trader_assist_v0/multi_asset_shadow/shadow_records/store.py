@@ -100,11 +100,11 @@ class EvidenceStore:
                 ) STRICT;
                 CREATE TABLE IF NOT EXISTS market_events (
                     record_id TEXT PRIMARY KEY NOT NULL REFERENCES immutable_records(record_id),
-                    candidate_id TEXT NOT NULL REFERENCES candidates(record_id)
+                    candidate_id TEXT REFERENCES candidates(record_id)
                 ) STRICT;
                 CREATE TABLE IF NOT EXISTS formal_signals (
                     record_id TEXT PRIMARY KEY NOT NULL REFERENCES immutable_records(record_id),
-                    candidate_id TEXT NOT NULL REFERENCES candidates(record_id),
+                    candidate_id TEXT REFERENCES candidates(record_id),
                     market_event_id TEXT NOT NULL REFERENCES market_events(record_id),
                     provenance_id TEXT NOT NULL REFERENCES provenance_records(record_id)
                 ) STRICT;
@@ -199,7 +199,7 @@ class EvidenceStore:
         columns = ("record_id",) + _LINK_COLUMNS[record.record_type]
         values = (
             record.record_id,
-            *(payload[name] for name in _LINK_COLUMNS[record.record_type]),
+            *(payload.get(name) for name in _LINK_COLUMNS[record.record_type]),
         )
         placeholders = ", ".join("?" for _ in columns)
         self._connection.execute(
@@ -229,7 +229,7 @@ class EvidenceStore:
                 raise RecordError("candidate scan_id does not match scanner evidence")
         elif record.record_type == "formal_signal":
             event = self._linked_payload(payload["market_event_id"])
-            if event.get("candidate_id") != payload["candidate_id"]:
+            if event.get("candidate_id") != payload.get("candidate_id"):
                 raise RecordError("formal signal market event does not match candidate")
         elif record.record_type == "shadow_order":
             signal = self._linked_payload(payload["signal_id"])

@@ -153,7 +153,7 @@ def _lineage(
         actor="operator-1",
         source="terminal",
         reviewed_at="2026-08-12T00:06:00Z",
-        reason_code="MANUAL_SKIP",
+        reason_code="NO_CAPACITY",
     )
     outcome = OutcomeEnvelope.create(
         identity={"outcome": tag},
@@ -409,3 +409,199 @@ def test_shadow_store_has_no_exchange_write_or_account_surface() -> None:
     public_methods = {name for name in dir(EvidenceStore) if not name.startswith("_")}
     assert public_methods == {"close", "count", "export_hash", "export_jsonl", "get", "write"}
     assert SUBMISSION_STATUS == "NOT_SUBMITTED"
+
+
+def _direct_formal(
+    *, family: str, mode: str = "STANDARD", tag: str
+) -> tuple[ProvenanceRecord, MarketEvent, FormalSignal]:
+    provenance = ProvenanceRecord.create(
+        identity={"direct-provenance": tag},
+        strategy_version="FL-MA-PRICE-ACTION-v0.1",
+        parameter_version="2026-08-03-r1",
+        registry_version="registry-1",
+        registry_hash="r" * 64,
+        cost_model_version="cost-1",
+        release_sha="ed7ab1e2a91265a31e60260502de8fd9d119517c",
+        recorded_at="2026-08-12T00:00:00Z",
+    )
+    event = MarketEvent.create(
+        identity={"direct-event": tag},
+        market_id=f"market-{tag}",
+        event_kind=family,
+        event_time="2026-08-12T00:03:00Z",
+    )
+    signal = FormalSignal.create(
+        identity={"direct-signal": tag},
+        market_event_id=event.record_id,
+        market_id=f"market-{tag}",
+        setup_family=family,
+        setup_mode=mode,
+        side="LONG",
+        approval_status="APPROVED",
+        tier="P0",
+        confirmed_at="2026-08-12T00:04:00Z",
+        provenance_id=provenance.record_id,
+    )
+    return provenance, event, signal
+
+
+@pytest.mark.parametrize(
+    ("family", "mode"),
+    (
+        ("SWEEP_RECLAIM", "STANDARD"),
+        ("BREAKOUT_RETEST", "MICRO_FAST"),
+        ("RANGE_EDGE_REJECTION", "STANDARD"),
+    ),
+    ids=("direct-sweep", "direct-breakout", "direct-range"),
+)
+def test_direct_formal_families_do_not_require_scanner_ancestry(
+    tmp_path: Path, family: str, mode: str
+) -> None:
+    records = _direct_formal(family=family, mode=mode, tag=family.lower())
+    event, signal = records[1:]
+    with EvidenceStore(tmp_path / "shadow-evidence.sqlite") as store:
+        assert store.write(records) == (True, True, True)
+        assert "candidate_id" not in event.payload
+        assert "candidate_id" not in signal.payload
+        assert store.count() == 3
+        assert store._connection.execute("SELECT COUNT(*) FROM candidates").fetchone()[0] == 0
+        assert store._connection.execute("PRAGMA table_info(market_events)").fetchall()[1][3] == 0
+        assert store._connection.execute("PRAGMA table_info(formal_signals)").fetchall()[1][3] == 0
+
+
+def test_scanner_linked_formal_path_is_retained(tmp_path: Path) -> None:
+    records = _lineage()
+    event, signal = records[4:6]
+    assert isinstance(event, MarketEvent) and isinstance(signal, FormalSignal)
+    with EvidenceStore(tmp_path / "shadow-evidence.sqlite") as store:
+        store.write(records[:6])
+        assert event.payload["candidate_id"] == signal.payload["candidate_id"]
+
+
+def test_invalid_supplied_candidate_linkage_fails_closed(tmp_path: Path) -> None:
+    records = _lineage()
+    scanner, candidate, event, provenance = records[1], records[2], records[4], records[0]
+    assert isinstance(scanner, ScannerEvidence)
+    assert isinstance(candidate, Candidate)
+    assert isinstance(event, MarketEvent)
+    assert isinstance(provenance, ProvenanceRecord)
+    other_candidate = Candidate.create(
+        identity={"candidate": "other"},
+        scanner_evidence_id=scanner.record_id,
+        scan_id="scan-1",
+        market_id="market-other",
+        state="SETUP_READY",
+        alert_level="WATCH",
+        created_at="2026-08-12T00:01:00Z",
+    )
+    mismatched_signal = FormalSignal.create(
+        identity={"signal": "mismatched"},
+        candidate_id=other_candidate.record_id,
+        market_event_id=event.record_id,
+        market_id=event.payload["market_id"],
+        setup_family="BREAKOUT_RETEST",
+        setup_mode="MICRO_FAST",
+        side="LONG",
+        approval_status="APPROVED",
+        tier="P0",
+        confirmed_at="2026-08-12T00:04:00Z",
+        provenance_id=provenance.record_id,
+    )
+    with EvidenceStore(tmp_path / "shadow-evidence.sqlite") as store:
+        store.write((provenance, scanner, candidate, other_candidate, event))
+        with pytest.raises(RecordError, match="does not match candidate"):
+            store.write((mismatched_signal,))
+        assert store.get(mismatched_signal.record_id) is None
+
+
+def test_breakout_formal_accepts_only_external_setup_modes() -> None:
+    with pytest.raises(RecordError, match="setup_mode"):
+        _direct_formal(family="BREAKOUT_RETEST", mode="INTERNAL_ONLY", tag="bad-mode")
+
+
+@pytest.mark.parametrize(
+    "reason_code",
+    (
+        "NOT_SEEN_IN_TIME",
+        "NO_CAPACITY",
+        "CONFLICTING_POSITION",
+        "PERSONAL_AVAILABILITY",
+        "OTHER_NON_STRATEGY",
+    ),
+)
+def test_skipped_accepts_only_non_strategy_reasons(reason_code: str) -> None:
+    review = HumanReview.create(
+        identity={"skipped": reason_code},
+        signal_id="s" * 64,
+        shadow_order_id="o" * 64,
+        action=HumanReviewAction.SKIPPED,
+        actor="operator-1",
+        source="terminal",
+        reviewed_at="2026-08-12T00:06:00Z",
+        reason_code=reason_code,
+    )
+    assert review.payload["reason_code"] == reason_code
+    with pytest.raises(RecordError):
+        HumanReview.create(
+            identity={"skipped": "invalid"},
+            signal_id="s" * 64,
+            shadow_order_id="o" * 64,
+            action=HumanReviewAction.SKIPPED,
+            actor="operator-1",
+            source="terminal",
+            reviewed_at="2026-08-12T00:06:00Z",
+            reason_code="STRUCTURE_CONFLICT",
+        )
+
+
+@pytest.mark.parametrize(
+    "reason_code",
+    (
+        "STRUCTURE_CONFLICT",
+        "ENTRY_TOO_LATE",
+        "CHASE_EXCEEDED",
+        "LIQUIDITY_POOR",
+        "RISK_REWARD_INSUFFICIENT",
+        "DATA_QUALITY",
+        "SIGNAL_LOGIC_ERROR",
+        "OTHER_STRATEGY_REASON",
+    ),
+)
+def test_rejected_accepts_only_strategy_reasons(reason_code: str) -> None:
+    review = HumanReview.create(
+        identity={"rejected": reason_code},
+        signal_id="s" * 64,
+        shadow_order_id="o" * 64,
+        action=HumanReviewAction.REJECTED,
+        actor="operator-1",
+        source="terminal",
+        reviewed_at="2026-08-12T00:06:00Z",
+        reason_code=reason_code,
+    )
+    assert review.payload["reason_code"] == reason_code
+    with pytest.raises(RecordError):
+        HumanReview.create(
+            identity={"rejected": "invalid"},
+            signal_id="s" * 64,
+            shadow_order_id="o" * 64,
+            action=HumanReviewAction.REJECTED,
+            actor="operator-1",
+            source="terminal",
+            reviewed_at="2026-08-12T00:06:00Z",
+            reason_code="NO_CAPACITY",
+        )
+
+
+@pytest.mark.parametrize("reason_code", ("NO_CAPACITY", "STRUCTURE_CONFLICT"))
+def test_taken_rejects_skipped_and_rejected_reason_codes(reason_code: str) -> None:
+    with pytest.raises(RecordError):
+        HumanReview.create(
+            identity={"taken": reason_code},
+            signal_id="s" * 64,
+            shadow_order_id="o" * 64,
+            action=HumanReviewAction.TAKEN,
+            actor="operator-1",
+            source="terminal",
+            reviewed_at="2026-08-12T00:06:00Z",
+            reason_code=reason_code,
+        )
