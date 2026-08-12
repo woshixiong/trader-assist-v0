@@ -17,7 +17,7 @@ from pathlib import Path
 
 from trader_assist_v0.contracts.common import canonical_json_bytes
 
-from .models import MarketLifecycle, RegistryMarket, RegistryVersion
+from .models import ClosedBar, MarketLifecycle, RegistryMarket, RegistryVersion
 
 
 class RegistryError(ValueError):
@@ -25,6 +25,18 @@ class RegistryError(ValueError):
 
 
 MetadataValidator = Callable[[RegistryMarket], bool]
+
+_LIFECYCLE_NEXT: dict[MarketLifecycle, frozenset[MarketLifecycle]] = {
+    MarketLifecycle.WARMING: frozenset({MarketLifecycle.HISTORY_READY, MarketLifecycle.DISABLED}),
+    MarketLifecycle.HISTORY_READY: frozenset(
+        {MarketLifecycle.SNAPSHOT_READY, MarketLifecycle.DISABLED}
+    ),
+    MarketLifecycle.SNAPSHOT_READY: frozenset({MarketLifecycle.ACTIVE, MarketLifecycle.DISABLED}),
+    MarketLifecycle.ACTIVE: frozenset({MarketLifecycle.DRAINING}),
+    MarketLifecycle.DRAINING: frozenset({MarketLifecycle.OUTCOMES_COMPLETE}),
+    MarketLifecycle.OUTCOMES_COMPLETE: frozenset({MarketLifecycle.DISABLED}),
+    MarketLifecycle.DISABLED: frozenset(),
+}
 
 
 def _write_atomic(path: Path, content: bytes) -> None:
@@ -54,7 +66,9 @@ class MarketRegistryManager:
         self.root = root
         self._metadata_validator = metadata_validator
         self.versions = root / "versions"
+        self.validations = root / "validations"
         self.pointer = root / "current.json"
+        self.pending = root / "pending.json"
         self.history = root / "history"
 
     def _decode(self, raw: bytes) -> RegistryVersion:
@@ -86,14 +100,37 @@ class MarketRegistryManager:
             raise RegistryError("current registry pointer is invalid") from exc
         if type(version) is not str:
             raise RegistryError("current registry pointer is invalid")
-        return self.load_version(version)
+        if pointer.get("content_hash") is None or type(pointer["content_hash"]) is not str:
+            raise RegistryError("current registry pointer is invalid")
+        active = self.load_version(version)
+        if pointer["content_hash"] != active.content_hash:
+            raise RegistryError("current registry pointer content_hash does not match version")
+        return active
 
     def validate(self, candidate: RegistryVersion) -> None:
         if candidate.schema_version != "1":
             raise RegistryError("unsupported registry schema")
-        for market in candidate.markets:
-            if not self._metadata_validator(market):
-                raise RegistryError(f"official metadata validation failed for {market.display}")
+        try:
+            for market in candidate.markets:
+                if not self._metadata_validator(market):
+                    raise RegistryError(f"REGISTRY_IDENTITY_UNRESOLVED: {market.display}")
+        except RegistryError:
+            raise
+        except Exception as exc:
+            raise RegistryError("REGISTRY_METADATA_VALIDATION_UNAVAILABLE") from exc
+
+    def _validation_path(self, version: str) -> Path:
+        return self.validations / f"{version}.json"
+
+    def _assert_prior_validation(self, candidate: RegistryVersion) -> None:
+        try:
+            evidence = json.loads(
+                self._validation_path(candidate.version).read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError) as exc:
+            raise RegistryError("registry version has no validated metadata evidence") from exc
+        if evidence != {"version": candidate.version, "content_hash": candidate.content_hash}:
+            raise RegistryError("registry validation evidence does not bind version contents")
 
     def stage(self, candidate: RegistryVersion) -> Path:
         self.validate(candidate)
@@ -103,31 +140,66 @@ class MarketRegistryManager:
             raise RegistryError("immutable registry version already exists with different content")
         if not target.exists():
             _write_atomic(target, encoded)
+        _write_atomic(
+            self._validation_path(candidate.version),
+            canonical_json_bytes(
+                {"version": candidate.version, "content_hash": candidate.content_hash}
+            ),
+        )
         return target
 
-    @staticmethod
-    def is_safe_boundary(now: datetime) -> bool:
-        if now.tzinfo is None:
-            raise RegistryError("safe-boundary timestamp must be timezone-aware")
-        instant = now.astimezone(UTC)
-        return instant.second == 0 and instant.microsecond == 0 and instant.minute % 5 == 0
-
-    def apply(self, version: str, *, now: datetime) -> RegistryVersion:
-        if not self.is_safe_boundary(now):
-            raise RegistryError("registry activation is permitted only at a closed 5m boundary")
+    def request_apply(self, version: str) -> RegistryVersion:
+        """Validate a staged version without manufacturing a time boundary."""
         candidate = self.load_version(version)
-        self.validate(candidate)
+        self._assert_prior_validation(candidate)
+        _write_atomic(
+            self.pending,
+            canonical_json_bytes(
+                {"version": candidate.version, "content_hash": candidate.content_hash}
+            ),
+        )
+        return candidate
+
+    def pending_version(self) -> RegistryVersion | None:
+        if not self.pending.exists():
+            return None
+        try:
+            pending = json.loads(self.pending.read_text(encoding="utf-8"))
+            version, content_hash = pending["version"], pending["content_hash"]
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise RegistryError("pending registry pointer is invalid") from exc
+        candidate = self.load_version(version)
+        if content_hash != candidate.content_hash:
+            raise RegistryError("pending registry pointer content_hash does not match version")
+        self._assert_prior_validation(candidate)
+        return candidate
+
+    def apply_at_closed_5m(self, version: str, *, boundary: ClosedBar) -> RegistryVersion:
+        """Atomically activate only from a data-route-admitted closed 5m bar."""
+        if boundary.interval != "5m" or boundary.close_time_ms % 300_000 != 0:
+            raise RegistryError("registry activation requires an admitted closed 5m boundary")
+        candidate = self.request_apply(version)
         prior = self.active()
         prior_pointer = self.pointer.read_bytes() if self.pointer.exists() else None
         pointer = {"version": candidate.version, "content_hash": candidate.content_hash}
         _write_atomic(self.pointer, canonical_json_bytes(pointer))
         if prior is not None and prior_pointer is not None:
-            stamp = now.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
+            stamp = boundary.received_at.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
             _write_atomic(self.history / f"{stamp}-{prior.version}.json", prior_pointer)
+        try:
+            self.pending.unlink()
+        except FileNotFoundError:
+            pass
         return candidate
 
-    def rollback(self, version: str, *, now: datetime) -> RegistryVersion:
-        return self.apply(version, now=now)
+    def apply_pending_at_closed_5m(self, *, boundary: ClosedBar) -> RegistryVersion | None:
+        candidate = self.pending_version()
+        if candidate is None:
+            return None
+        return self.apply_at_closed_5m(candidate.version, boundary=boundary)
+
+    def rollback_request(self, version: str) -> RegistryVersion:
+        return self.request_apply(version)
 
     def lifecycle_update(
         self, version: str, market_id: str, lifecycle: MarketLifecycle, *, now: datetime
@@ -143,6 +215,11 @@ class MarketRegistryManager:
         for market in active.markets:
             if market.identity.market_id == market_id:
                 found = True
+                if lifecycle not in _LIFECYCLE_NEXT[market.lifecycle]:
+                    raise RegistryError(
+                        "illegal market lifecycle transition: "
+                        f"{market.lifecycle.value} -> {lifecycle.value}"
+                    )
                 markets.append(market.model_copy(update={"lifecycle": lifecycle}))
             else:
                 markets.append(market)

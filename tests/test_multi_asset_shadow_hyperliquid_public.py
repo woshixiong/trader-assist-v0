@@ -20,7 +20,7 @@ def test_only_public_info_market_data_request_shapes_are_issued() -> None:
 
     client = HyperliquidPublicClient(post=post)
     client.perp_dexes()
-    client.metadata("MAIN")
+    client.metadata("")
     client.metadata_and_context("xyz")
     client.closed_candles(coin="xyz:XYZ100", interval="5m", start_ms=0, end_ms=300_000)
     client.l2_book(coin="BTC")
@@ -32,6 +32,7 @@ def test_only_public_info_market_data_request_shapes_are_issued() -> None:
         "candleSnapshot",
         "l2Book",
     ]
+    assert "dex" not in seen[1][1]
 
 
 @pytest.mark.parametrize(

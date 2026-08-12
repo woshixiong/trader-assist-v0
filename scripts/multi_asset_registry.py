@@ -1,4 +1,4 @@
-"""Operator-only Registry commands. No network, account, or exchange-write surface."""
+"""Operator Registry control plane; public metadata only and no clock activation."""
 
 from __future__ import annotations
 
@@ -6,40 +6,114 @@ import argparse
 from datetime import UTC, datetime
 from pathlib import Path
 
-from trader_assist_v0.multi_asset_shadow.models import RegistryVersion
+from trader_assist_v0.multi_asset_shadow.hyperliquid_public import (
+    HyperliquidPublicClient,
+    OfficialMetadataValidator,
+)
+from trader_assist_v0.multi_asset_shadow.models import (
+    MarketLifecycle,
+    RegistryTier,
+    RegistryVersion,
+)
 from trader_assist_v0.multi_asset_shadow.registry import MarketRegistryManager
 
 
 def _manager(root: Path) -> MarketRegistryManager:
-    # Validation binds the candidate's identity/hash.  Production wiring supplies
-    # a fresh official metadata validator before stage/apply.
-    return MarketRegistryManager(root, metadata_validator=lambda _: True)
+    # Staging performs a bounded all-perp-metadata identity check.  Atomic
+    # activation later relies on the immutable validation evidence, not a
+    # fragile network call at the 5m boundary.
+    return MarketRegistryManager(
+        root,
+        metadata_validator=OfficialMetadataValidator(HyperliquidPublicClient()),
+    )
+
+
+def _candidate(path: Path) -> RegistryVersion:
+    return RegistryVersion.model_validate_json(path.read_text(encoding="utf-8"))
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("root", type=Path)
-    parser.add_argument("command", choices=("validate", "stage", "status", "apply", "rollback"))
+    parser.add_argument(
+        "command",
+        choices=(
+            "validate",
+            "stage",
+            "status",
+            "apply",
+            "rollback",
+            "add",
+            "remove",
+            "enable",
+            "disable",
+            "tier",
+        ),
+    )
     parser.add_argument("--file", type=Path)
     parser.add_argument("--version")
+    parser.add_argument("--market-id")
+    parser.add_argument("--tier", choices=tuple(item.value for item in RegistryTier))
     arguments = parser.parse_args()
     manager = _manager(arguments.root)
     if arguments.command == "status":
         active = manager.active()
         print("NONE" if active is None else active.model_dump_json())
         return 0
-    if arguments.command in {"validate", "stage"}:
+    if arguments.command in {"validate", "stage", "add"}:
         if arguments.file is None:
             parser.error("--file is required")
-        candidate = RegistryVersion.model_validate_json(arguments.file.read_text(encoding="utf-8"))
+        candidate = _candidate(arguments.file)
         if arguments.command == "validate":
             manager.validate(candidate)
         else:
             manager.stage(candidate)
         return 0
-    if arguments.version is None:
-        parser.error("--version is required")
-    manager.apply(arguments.version, now=datetime.now(UTC).replace(second=0, microsecond=0))
+    if arguments.command in {"apply", "rollback"}:
+        if arguments.version is None:
+            parser.error("--version is required")
+        # This records an eligible pending version only.  The data runtime must
+        # call apply_at_closed_5m with an admitted provider bar.
+        candidate = manager.request_apply(arguments.version)
+        print(candidate.model_dump_json())
+        return 0
+    if arguments.version is None or arguments.market_id is None:
+        parser.error("--version and --market-id are required")
+    active = manager.active()
+    if active is None:
+        parser.error("an active Registry is required")
+    current = next((m for m in active.markets if m.identity.market_id == arguments.market_id), None)
+    if current is None:
+        parser.error("unknown --market-id")
+    if arguments.command == "remove":
+        lifecycle = MarketLifecycle.DRAINING
+    elif arguments.command == "enable":
+        lifecycle = MarketLifecycle.HISTORY_READY
+    elif arguments.command == "disable":
+        lifecycle = MarketLifecycle.DISABLED
+    elif arguments.command == "tier":
+        if arguments.tier is None:
+            parser.error("--tier is required")
+        markets = tuple(
+            m.model_copy(update={"tier": RegistryTier(arguments.tier)}) if m == current else m
+            for m in active.markets
+        )
+        manager.stage(
+            RegistryVersion.create(
+                version=arguments.version,
+                created_at=datetime.now(UTC),
+                markets=markets,
+            )
+        )
+        return 0
+    else:
+        parser.error("add requires --file")
+    manager.lifecycle_update(
+        arguments.version,
+        arguments.market_id,
+        lifecycle,
+        now=datetime.now(UTC),
+    )
     return 0
 
 

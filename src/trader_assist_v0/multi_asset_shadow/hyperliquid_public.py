@@ -11,12 +11,19 @@ import json
 import ssl
 from collections.abc import Mapping
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Protocol, cast
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
+
+from .models import RegistryMarket
+
 INFO_URL = "https://api.hyperliquid.xyz/info"
-_ALLOWED_TYPES = frozenset({"perpDexs", "meta", "metaAndAssetCtxs", "candleSnapshot", "l2Book"})
+_ALLOWED_TYPES = frozenset(
+    {"perpDexs", "allPerpMetas", "meta", "metaAndAssetCtxs", "candleSnapshot", "l2Book"}
+)
 
 
 class PublicDataError(RuntimeError):
@@ -64,6 +71,8 @@ class HyperliquidPublicClient:
         request_type = payload.get("type")
         if request_type == "perpDexs":
             return set(payload) == {"type"}
+        if request_type == "allPerpMetas":
+            return set(payload) == {"type"}
         if request_type in {"meta", "metaAndAssetCtxs"}:
             return set(payload) <= {"type", "dex"} and isinstance(payload.get("dex", ""), str)
         if request_type == "candleSnapshot":
@@ -87,10 +96,21 @@ class HyperliquidPublicClient:
         return self.request({"type": "perpDexs"})
 
     def metadata(self, dex: str) -> object:
-        return self.request({"type": "meta", "dex": dex})
+        # The official API represents the first/native perp DEX as omitted or
+        # empty.  Internal MAIN is deliberately never emitted on the wire.
+        payload: dict[str, object] = {"type": "meta"}
+        if dex != "":
+            payload["dex"] = dex
+        return self.request(payload)
 
     def metadata_and_context(self, dex: str) -> object:
-        return self.request({"type": "metaAndAssetCtxs", "dex": dex})
+        payload: dict[str, object] = {"type": "metaAndAssetCtxs"}
+        if dex != "":
+            payload["dex"] = dex
+        return self.request(payload)
+
+    def all_perp_metas(self) -> object:
+        return self.request({"type": "allPerpMetas"})
 
     def closed_candles(self, *, coin: str, interval: str, start_ms: int, end_ms: int) -> object:
         return self.request(
@@ -107,3 +127,54 @@ class HyperliquidPublicClient:
 
     def l2_book(self, *, coin: str) -> object:
         return self.request({"type": "l2Book", "coin": coin})
+
+
+class OfficialMetadataValidator:
+    """One bounded official metadata snapshot for Registry identity validation."""
+
+    def __init__(self, client: HyperliquidPublicClient) -> None:
+        self._client = client
+        self._records: dict[tuple[str, str], dict[str, object]] | None = None
+
+    def _load(self) -> dict[tuple[str, str], dict[str, object]]:
+        if self._records is not None:
+            return self._records
+        try:
+            dexes = self._client.perp_dexes()
+            metas = self._client.all_perp_metas()
+        except PublicDataError:
+            raise
+        if not isinstance(dexes, list) or not isinstance(metas, list) or len(dexes) != len(metas):
+            raise PublicDataError("official metadata response has incompatible DEX indexes")
+        records: dict[tuple[str, str], dict[str, object]] = {}
+        for index, meta in enumerate(metas):
+            dex = (
+                "MAIN"
+                if index == 0
+                else (dexes[index].get("name") if isinstance(dexes[index], dict) else None)
+            )
+            if not isinstance(dex, str) or not isinstance(meta, dict):
+                raise PublicDataError("official metadata response has invalid DEX identity")
+            universe = meta.get("universe")
+            if not isinstance(universe, list):
+                raise PublicDataError("official metadata response has invalid universe")
+            for raw in universe:
+                if not isinstance(raw, dict) or not isinstance(raw.get("name"), str):
+                    raise PublicDataError("official metadata response has invalid market")
+                records[(dex, raw["name"])] = raw
+        self._records = records
+        return records
+
+    def __call__(self, market: RegistryMarket) -> bool:
+        raw = self._load().get((market.identity.dex, market.identity.coin))
+        if raw is None:
+            return False
+        try:
+            return (
+                market.metadata_hash == sha256_hex(canonical_json_bytes(raw))
+                and raw.get("szDecimals") == market.size_decimals
+                and Decimal(str(raw.get("maxLeverage"))) == market.max_leverage
+                and market.price_max_decimals == 6 - market.size_decimals
+            )
+        except (ArithmeticError, TypeError, ValueError):
+            return False

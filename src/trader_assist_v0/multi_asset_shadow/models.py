@@ -28,7 +28,7 @@ class AssetClass(StrEnum):
     EQUITY = "EQUITY"
     INDEX = "INDEX"
     COMMODITY = "COMMODITY"
-    RWA = "RWA"
+    OTHER = "OTHER"
 
 
 class MarketLifecycle(StrEnum):
@@ -66,6 +66,11 @@ class MarketIdentity(BaseModel):
     def create(cls, *, dex: str, coin: str) -> MarketIdentity:
         return cls(dex=dex, coin=coin, market_id=cls.canonical_market_id(dex=dex, coin=coin))
 
+    @property
+    def provider_dex(self) -> str:
+        """Translate the frozen internal native DEX identity at the API edge."""
+        return "" if self.dex == "MAIN" else self.dex
+
     @model_validator(mode="after")
     def validate_identity(self) -> MarketIdentity:
         if (
@@ -90,8 +95,11 @@ class RegistryMarket(BaseModel):
     identity: MarketIdentity
     asset_class: AssetClass
     size_decimals: int = Field(ge=0, le=18)
-    price_decimals: int = Field(ge=0, le=18)
-    max_leverage: int | None = Field(default=None, ge=1, le=200)
+    # Hyperliquid perps do not publish a fixed tick.  These are the provider
+    # rules required to reproduce a legal planned price deterministically.
+    price_max_significant_figures: int = Field(default=5, ge=1, le=18)
+    price_max_decimals: int = Field(ge=0, le=18)
+    max_leverage: Decimal | None = Field(default=None, gt=0, le=200)
     is_hip3: bool
     market_status: str = Field(min_length=1, max_length=80)
     timeframe_profile: str = "FAST_5M"
@@ -113,6 +121,29 @@ class RegistryMarket(BaseModel):
         if self.display in self.aliases or len(set(self.aliases)) != len(self.aliases):
             raise ValueError("aliases must be unique presentation metadata")
         return self
+
+    def tick_round(self, price: Decimal, *, rounding: str = "ROUND_DOWN") -> Decimal:
+        """Return a legal provider price without pretending a static tick exists.
+
+        Per the official perp rule, a price may have five significant figures
+        and at most ``6 - szDecimals`` decimal places; an integer is always
+        legal.  Rounding down is deterministic and conservative for the
+        planner's displayed entry evidence.
+        """
+        from decimal import ROUND_DOWN
+
+        if not price.is_finite() or price <= 0:
+            raise ValueError("price must be positive and finite")
+        if rounding != "ROUND_DOWN":
+            raise ValueError("only deterministic ROUND_DOWN is supported")
+        decimal_cap = Decimal(1).scaleb(-self.price_max_decimals)
+        decimal_limited = price.quantize(decimal_cap, rounding=ROUND_DOWN)
+        adjusted = decimal_limited.adjusted()
+        significant_quantum = Decimal(1).scaleb(adjusted - self.price_max_significant_figures + 1)
+        rounded = decimal_limited.quantize(
+            max(decimal_cap, significant_quantum), rounding=ROUND_DOWN
+        )
+        return rounded
 
 
 class RegistryVersion(BaseModel):
@@ -145,10 +176,15 @@ class RegistryVersion(BaseModel):
             raise ValueError("created_at must be timezone-aware")
         market_ids = [item.identity.market_id for item in self.markets]
         displays = [item.display for item in self.markets]
+        presentation_ids = [item.display for item in self.markets] + [
+            alias for item in self.markets for alias in item.aliases
+        ]
         if len(market_ids) != len(set(market_ids)):
             raise ValueError("duplicate canonical market identity")
         if len(displays) != len(set(displays)):
             raise ValueError("duplicate display name")
+        if len(presentation_ids) != len(set(presentation_ids)):
+            raise ValueError("display identifiers and aliases must be globally unique")
         expected = self.hash_payload(
             version=self.version, created_at=self.created_at, markets=self.markets
         )
