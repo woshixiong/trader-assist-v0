@@ -87,12 +87,13 @@ class ClosedBarStore:
             else int(bar.received_at.timestamp() * 1000)
         )
         existing = self.connection.execute(
-            "SELECT canonical_hash FROM closed_bars "
+            "SELECT canonical_hash, payload_json FROM closed_bars "
             "WHERE market_id=? AND interval=? AND open_time_ms=?",
             (bar.market_id, bar.interval, bar.open_time_ms),
         ).fetchone()
         if existing is not None:
-            if existing[0] == bar.canonical_hash:
+            prior = ClosedBar.model_validate_json(existing[1])
+            if existing[0] == bar.canonical_hash or _same_candle_contents(prior, bar):
                 return False
             raise DataRouteError("conflicting closed bar identity")
         self.connection.execute(
@@ -129,6 +130,31 @@ class ClosedBarStore:
 
     def close(self) -> None:
         self.connection.close()
+
+
+def _same_candle_contents(left: ClosedBar, right: ClosedBar) -> bool:
+    """Compare final market contents without receipt/source evidence metadata."""
+    return (
+        left.market_id,
+        left.interval,
+        left.open_time_ms,
+        left.close_time_ms,
+        left.open,
+        left.high,
+        left.low,
+        left.close,
+        left.volume,
+    ) == (
+        right.market_id,
+        right.interval,
+        right.open_time_ms,
+        right.close_time_ms,
+        right.open,
+        right.high,
+        right.low,
+        right.close,
+        right.volume,
+    )
 
 
 def _provider_bar(

@@ -151,7 +151,8 @@ async def test_candidate_is_scheduled_nonblocking_and_admits_without_second_ws_m
     runtime, authority, item, _, client = setup(tmp_path, client_values=[[candle("BTC", 0)]])
     await runtime.handle_message(json.dumps({"channel": "candle", "data": candle("BTC", 0)}))
     assert client.calls == []
-    task = runtime._confirmation_tasks[item.identity.market_id]
+    task = runtime._finality.task_for(item.identity.market_id)
+    assert task is not None
     await task
     assert len(client.calls) == 2
     assert authority.store.last_open(item.identity.market_id) == 0
@@ -166,16 +167,19 @@ async def test_finality_gap_change_and_supersession_fail_closed_or_cancel_stale(
         client_values=[[candle("BTC", 0)], [candle("BTC", 0, close="101")]],
     )
     await runtime.handle_message(json.dumps({"channel": "candle", "data": candle("BTC", 0)}))
-    await runtime._confirmation_tasks[item.identity.market_id]
+    task = runtime._finality.task_for(item.identity.market_id)
+    assert task is not None
+    await task
     assert authority.store.bars(item.identity.market_id) == ()
     # A later market generation replaces the only pending task rather than
     # accumulating unbounded candidates for the same market.
     clock.seconds = 603
     await runtime.handle_message(json.dumps({"channel": "candle", "data": candle("BTC", 300_000)}))
-    first = runtime._confirmation_tasks[item.identity.market_id]
+    first = runtime._finality.task_for(item.identity.market_id)
+    assert first is not None
     await runtime.handle_message(json.dumps({"channel": "candle", "data": candle("BTC", 600_000)}))
-    assert first.cancelled() or first.cancelling()
-    assert len(runtime._confirmation_tasks) == 1
+    assert runtime._finality.task_for(item.identity.market_id) is first
+    assert len(runtime._finality.tasks) == 1
 
 
 class Socket:

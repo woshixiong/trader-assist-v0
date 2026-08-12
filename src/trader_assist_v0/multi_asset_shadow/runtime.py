@@ -20,6 +20,16 @@ from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
 from .data import DataRouteError, MultiAssetDataAuthority
+from .finality import (
+    FIVE_MINUTES_MS,
+    MIN_MONOTONIC_CONFIRMATION_GAP_MS,
+    POST_CLOSE_HOLD_MS,
+    TARGET_CONFIRMATIONS,
+    CandidateGeneration,
+    ConfirmationResult,
+    FinalityIdentity,
+    GenerationFinalityAuthority,
+)
 from .hyperliquid_public import HyperliquidPublicClient, PublicDataError
 from .models import MarketLifecycle, RegistryMarket, RegistryVersion
 from .registry import MarketRegistryManager, RegistryError
@@ -27,9 +37,7 @@ from .registry import MarketRegistryManager, RegistryError
 WS_URL = "wss://api.hyperliquid.xyz/ws"
 _MAX_RECONNECTS = 3
 _WARMUP_5M_BARS = 2_304
-_FIVE_MINUTES_MS = 300_000
-_CONFIRM_HOLD_MS = 3_000
-_CONFIRM_OBSERVATION_GAP_MS = 1_000
+_FIVE_MINUTES_MS = FIVE_MINUTES_MS
 _ACK_TIMEOUT_SECONDS = 8.0
 _MAX_CONFIRMATIONS = 4
 
@@ -75,10 +83,14 @@ class MultiAssetPublicRuntime:
         self.sleep = sleep
         self.acknowledgement_timeout_seconds = acknowledgement_timeout_seconds
         self.health = RuntimeHealth()
-        self._confirmation_slots = asyncio.Semaphore(confirmation_concurrency)
-        self._confirmation_tasks: dict[str, asyncio.Task[None]] = {}
-        self._generation: dict[str, int] = {}
-        self._candidate_open: dict[str, int] = {}
+        self._finality = GenerationFinalityAuthority(
+            confirm=self._confirm_generation,
+            discard=self._discard_candidate,
+            mark_failed=self.health.failed_markets.add,
+            now_ms=lambda: int(self.clock().timestamp() * 1000),
+            sleep=self.sleep,
+            confirmation_concurrency=confirmation_concurrency,
+        )
         self._expected_acks: set[str] = set()
 
     def acquisition_registry(self) -> RegistryVersion:
@@ -255,6 +267,7 @@ class MultiAssetPublicRuntime:
                 ):
                     self.health.connection_count = 0
                     self.health.data_ready = False
+                    await self._finality.invalidate_all()
                     if attempt == _MAX_RECONNECTS:
                         return
                     self.health.reconnects += 1
@@ -263,7 +276,7 @@ class MultiAssetPublicRuntime:
                     if websocket is not None:
                         await self._close_socket(websocket)
         finally:
-            await self._cancel_confirmation_tasks()
+            await self._finality.close()
 
     async def _close_socket(self, websocket: Any) -> None:
         close = getattr(websocket, "close", None)
@@ -358,88 +371,71 @@ class MultiAssetPublicRuntime:
             open_ms = payload.get("t")
             if not isinstance(open_ms, int):
                 raise DataRouteError("websocket candle is missing open timestamp")
-            self._schedule_confirmation(market, open_ms, fingerprint)
+            self._finality.offer(
+                market=market, open_time_ms=open_ms, fingerprint=fingerprint
+            )
         except DataRouteError:
             self.health.failed_markets.add(market.identity.market_id)
 
-    def _schedule_confirmation(
-        self, market: RegistryMarket, open_ms: int, fingerprint: str) -> None:
-        market_id = market.identity.market_id
-        prior_open = self._candidate_open.get(market_id)
-        prior = self._confirmation_tasks.get(market_id)
-        if prior_open == open_ms and prior is not None and not prior.done():
-            # Same generation can be repeated by provider; it is idempotent.
-            return
-        if prior is not None and not prior.done():
-            prior.cancel()
-        if prior_open is not None and prior_open != open_ms:
-            self.authority.discard_ws_candidate(market_id=market_id, open_time_ms=prior_open)
-        generation = self._generation.get(market_id, 0) + 1
-        self._generation[market_id] = generation
-        self._candidate_open[market_id] = open_ms
-        task = asyncio.create_task(self._confirm_later(market, open_ms, fingerprint, generation))
-        self._confirmation_tasks[market_id] = task
+    def _discard_candidate(self, identity: FinalityIdentity) -> None:
+        self.authority.discard_ws_candidate(
+            market_id=identity.market_id, open_time_ms=identity.open_time_ms
+        )
 
-    async def _confirm_later(
-        self, market: RegistryMarket, open_ms: int, fingerprint: str, generation: int) -> None:
-        market_id = market.identity.market_id
+    async def _confirm_generation(
+        self, generation: CandidateGeneration
+    ) -> ConfirmationResult:
+        identity = generation.identity
         try:
-            eligible_ms = open_ms + _FIVE_MINUTES_MS + _CONFIRM_HOLD_MS
-            delay = max(0, (eligible_ms - int(self.clock().timestamp() * 1000)) / 1000)
-            if delay:
-                await self.sleep(delay)
-            async with self._confirmation_slots:
-                if self._generation.get(market_id) != generation:
-                    return
-                first_at = self.monotonic()
+            snapshots: list[list[object]] = []
+            observed_at: list[float] = []
+            for index in range(TARGET_CONFIRMATIONS):
+                if index:
+                    await self.sleep(MIN_MONOTONIC_CONFIRMATION_GAP_MS / 1_000)
+                if not self._finality.is_latest(generation):
+                    return ConfirmationResult.STALE
                 snapshot = await asyncio.to_thread(
                     self.client.closed_candles,
-                    coin=market.identity.coin,
+                    coin=generation.market.identity.coin,
                     interval="5m",
-                    start_ms=open_ms,
-                    end_ms=open_ms + _FIVE_MINUTES_MS,
+                    start_ms=identity.open_time_ms,
+                    end_ms=identity.open_time_ms + _FIVE_MINUTES_MS,
                 )
-                await self.sleep(_CONFIRM_OBSERVATION_GAP_MS / 1000)
-                second_at = self.monotonic()
-                stable_snapshot = await asyncio.to_thread(
-                    self.client.closed_candles,
-                    coin=market.identity.coin,
-                    interval="5m",
-                    start_ms=open_ms,
-                    end_ms=open_ms + _FIVE_MINUTES_MS,
-                )
-                if self._generation.get(market_id) != generation:
-                    return
-                if not isinstance(snapshot, list) or not isinstance(stable_snapshot, list):
+                observed_at.append(self.monotonic())
+                if not self._finality.is_latest(generation):
+                    return ConfirmationResult.STALE
+                if not isinstance(snapshot, list):
                     raise DataRouteError("candleSnapshot did not return a list")
-                self.authority.confirm_ws_candidate(
-                    market=market,
-                    open_time_ms=open_ms,
-                    candidate_fingerprint=fingerprint,
-                    snapshot=snapshot,
-                    stable_snapshot=stable_snapshot,
-                    received_at=self.clock(),
-                    hold_ms=_CONFIRM_HOLD_MS,
-                    first_observed_monotonic=first_at,
-                    second_observed_monotonic=second_at,
-                    observation_gap_ms=_CONFIRM_OBSERVATION_GAP_MS,
-                )
-                await self._maybe_stage_lifecycle(snapshot_ready=self.health.data_ready)
+                snapshots.append(snapshot)
+            # Give already-queued WebSocket revisions one event-loop turn to
+            # advance the generation before the synchronous admission section.
+            await asyncio.sleep(0)
+            if not self._finality.is_latest(generation):
+                return ConfirmationResult.STALE
+            self.authority.confirm_ws_candidate(
+                market=generation.market,
+                open_time_ms=identity.open_time_ms,
+                candidate_fingerprint=generation.fingerprint,
+                snapshot=snapshots[0],
+                stable_snapshot=snapshots[1],
+                received_at=self.clock(),
+                hold_ms=POST_CLOSE_HOLD_MS,
+                first_observed_monotonic=observed_at[0],
+                second_observed_monotonic=observed_at[1],
+                observation_gap_ms=MIN_MONOTONIC_CONFIRMATION_GAP_MS,
+            )
+            await self._maybe_stage_lifecycle(snapshot_ready=self.health.data_ready)
+            return ConfirmationResult.COMPLETE
         except asyncio.CancelledError:
             raise
         except (DataRouteError, PublicDataError):
-            self.health.failed_markets.add(market_id)
-        finally:
-            if self._generation.get(market_id) == generation:
-                self._confirmation_tasks.pop(market_id, None)
+            if not self._finality.is_latest(generation):
+                return ConfirmationResult.STALE
+            return ConfirmationResult.FAILED
 
     async def _cancel_confirmation_tasks(self) -> None:
-        tasks = tuple(self._confirmation_tasks.values())
-        self._confirmation_tasks.clear()
-        for task in tasks:
-            task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+        """Compatibility seam for deterministic runtime shutdown tests."""
+        await self._finality.invalidate_all()
 
     async def _maybe_stage_lifecycle(self, *, snapshot_ready: bool) -> None:
         if self.registry.active() is None or self.registry.pending_version() is not None:
