@@ -211,6 +211,34 @@ def test_long_and_short_max_profit_giveback(
 
 
 @pytest.mark.parametrize(
+    ("side", "profit_bar", "through_entry_bar"),
+    (
+        (
+            Side.LONG,
+            _bar(0, open_="101", high="108", low="101", close="107"),
+            _bar(1, open_="107", high="107", low="90", close="94"),
+        ),
+        (
+            Side.SHORT,
+            _bar(0, open_="99", high="99", low="92", close="93"),
+            _bar(1, open_="93", high="110", low="93", close="106"),
+        ),
+    ),
+)
+def test_profit_giveback_is_capped_at_achieved_favorable_excursion(
+    side: Side, profit_bar: OneMinuteBar, through_entry_bar: OneMinuteBar
+) -> None:
+    engine = OutcomeEngine()
+    view = _view(side)
+    engine.attach(view, now_ms=0, recover=False)
+    _admit(engine, (profit_bar, through_entry_bar))
+
+    path = engine.evaluate(view.shadow_order_id, as_of_ms=2 * ONE_MINUTE_MS).path
+
+    assert path.max_profit_giveback == Decimal("8")
+
+
+@pytest.mark.parametrize(
     ("side", "bars"),
     (
         (
@@ -273,21 +301,29 @@ def test_long_and_short_profit_then_return_to_entry(
 
 
 @pytest.mark.parametrize(
-    ("side", "bar"),
+    ("side", "first", "entry_touch"),
     (
-        (Side.LONG, _bar(0, open_="100", high="100", low="99", close="100")),
-        (Side.SHORT, _bar(0, open_="100", high="101", low="100", close="100")),
+        (
+            Side.LONG,
+            _bar(0, open_="99", high="100", low="98", close="99"),
+            _bar(1, open_="99", high="100", low="99", close="100"),
+        ),
+        (
+            Side.SHORT,
+            _bar(0, open_="101", high="102", low="100", close="101"),
+            _bar(1, open_="101", high="101", low="100", close="100"),
+        ),
     ),
 )
 def test_entry_touch_without_prior_profit_does_not_count_as_return(
-    side: Side, bar: OneMinuteBar
+    side: Side, first: OneMinuteBar, entry_touch: OneMinuteBar
 ) -> None:
     engine = OutcomeEngine()
     view = _view(side)
     engine.attach(view, now_ms=0, recover=False)
-    _admit(engine, (bar,))
+    _admit(engine, (first, entry_touch))
 
-    path = engine.evaluate(view.shadow_order_id, as_of_ms=ONE_MINUTE_MS).path
+    path = engine.evaluate(view.shadow_order_id, as_of_ms=2 * ONE_MINUTE_MS).path
 
     assert path.return_to_entry_after_profit is False
 
