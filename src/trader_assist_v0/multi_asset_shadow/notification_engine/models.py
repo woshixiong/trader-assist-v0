@@ -206,8 +206,14 @@ class ResearchNotificationView:
     side: str
     research_id: str
     source_shadow_order_id: str
-    evidence_summary: str
-    outcome_summary: str
+    outcome_id: str
+    failed_transition_ids: tuple[str, ...]
+    path_maturity_status: str
+    required_end_ms: int
+    accepted_reentry_time_ms: int | None
+    reclaim_status: str
+    conflict_count: int
+    has_gap: bool
     strategy_version: str
     parameter_version: str
 
@@ -220,8 +226,9 @@ class ResearchNotificationView:
             "market_display",
             "research_id",
             "source_shadow_order_id",
-            "evidence_summary",
-            "outcome_summary",
+            "outcome_id",
+            "path_maturity_status",
+            "reclaim_status",
             "strategy_version",
             "parameter_version",
         ):
@@ -229,6 +236,24 @@ class ResearchNotificationView:
         _utc(self.evidence_time, "evidence_time")
         if self.side not in _DIRECTIONAL_SIDES:
             raise NotificationContractError("research evidence side must be LONG or SHORT")
+        if (
+            type(self.required_end_ms) is not int
+            or self.required_end_ms < 0
+            or (
+                self.accepted_reentry_time_ms is not None
+                and (
+                    type(self.accepted_reentry_time_ms) is not int
+                    or self.accepted_reentry_time_ms < 0
+                )
+            )
+        ):
+            raise NotificationContractError("research evidence times must be non-negative")
+        if type(self.conflict_count) is not int or self.conflict_count < 0:
+            raise NotificationContractError("research conflict_count must be non-negative")
+        if type(self.has_gap) is not bool:
+            raise NotificationContractError("research has_gap must be bool")
+        if any(type(value) is not str or not value for value in self.failed_transition_ids):
+            raise NotificationContractError("research transition identities are invalid")
 
 
 NotificationView = SignalNotificationView | ScannerWatchNotificationView | ResearchNotificationView

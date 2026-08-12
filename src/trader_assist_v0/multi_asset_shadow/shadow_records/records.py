@@ -186,6 +186,32 @@ class ScannerEvidence(ImmutableRecord):
             "registry_hash",
             "release_sha",
             "universe_snapshot_hash",
+            "runtime_readiness_hash",
+            "ready_universe",
+            "observations_hash",
+            "observations",
+        }
+    )
+
+
+class StrategyEvaluation(ImmutableRecord):
+    """Retained strategy result and continuation checkpoint for one closed boundary."""
+
+    record_type = "strategy_evaluation"
+    required_fields = frozenset(
+        {
+            "evaluation_id",
+            "market_id",
+            "latest_closed_5m_hash",
+            "evaluation_boundary_ms",
+            "registry_version",
+            "registry_hash",
+            "strategy_version",
+            "parameter_version",
+            "input_ledger_hash",
+            "output_ledger_hash",
+            "output_ledger",
+            "decisions",
         }
     )
 
@@ -193,7 +219,19 @@ class ScannerEvidence(ImmutableRecord):
 class Candidate(ImmutableRecord):
     record_type = "candidate"
     required_fields = frozenset(
-        {"scanner_evidence_id", "scan_id", "market_id", "state", "alert_level", "created_at"}
+        {
+            "scanner_evidence_id",
+            "scan_id",
+            "market_id",
+            "state",
+            "alert_level",
+            "created_at",
+            "scanner_version",
+            "parameter_version",
+            "candidate_content",
+            "candidate_content_hash",
+            "transitions",
+        }
     )
 
 
@@ -322,6 +360,42 @@ class OutcomeEnvelope(ImmutableRecord):
     )
 
 
+class OutcomeTransitionEvidence(ImmutableRecord):
+    """Canonical input transition used by the deterministic Outcome Engine."""
+
+    record_type = "outcome_transition"
+    required_fields = frozenset(
+        {
+            "transition_id",
+            "shadow_order_id",
+            "market_id",
+            "kind",
+            "occurred_at_ms",
+            "reference_price",
+            "payload_hash",
+        }
+    )
+
+
+class OutcomeBarEvidence(ImmutableRecord):
+    """One immutable canonical 1m variant; conflicting variants are retained separately."""
+
+    record_type = "outcome_bar"
+    required_fields = frozenset(
+        {
+            "market_id",
+            "open_time_ms",
+            "close_time_ms",
+            "open",
+            "high",
+            "low",
+            "close",
+            "canonical_hash",
+            "source_id",
+        }
+    )
+
+
 class CorrelationIdentifier(ImmutableRecord):
     record_type = "correlation_identifier"
     required_fields = frozenset(
@@ -339,6 +413,7 @@ RECORD_TYPES: dict[str, type[ImmutableRecord]] = {
     for item in (
         ProvenanceRecord,
         ScannerEvidence,
+        StrategyEvaluation,
         Candidate,
         CandidateTransition,
         MarketEvent,
@@ -347,6 +422,8 @@ RECORD_TYPES: dict[str, type[ImmutableRecord]] = {
         ShadowOrder,
         HumanReview,
         OutcomeEnvelope,
+        OutcomeTransitionEvidence,
+        OutcomeBarEvidence,
         CorrelationIdentifier,
         NotificationOutboxReference,
     )

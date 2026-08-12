@@ -10,12 +10,15 @@ from .records import (
     HumanReviewAction,
     MarketEvent,
     NotificationOutboxReference,
+    OutcomeBarEvidence,
     OutcomeEnvelope,
+    OutcomeTransitionEvidence,
     PlanRecord,
     ProvenanceRecord,
     RecordError,
     ScannerEvidence,
     ShadowOrder,
+    StrategyEvaluation,
 )
 from .store import EvidenceStore, RecordConflictError
 
@@ -30,11 +33,14 @@ __all__ = [
     "HumanReviewAction",
     "MarketEvent",
     "NotificationOutboxReference",
+    "OutcomeBarEvidence",
     "OutcomeEnvelope",
+    "OutcomeTransitionEvidence",
     "PlanRecord",
     "ProvenanceRecord",
     "RecordConflictError",
     "RecordError",
     "ScannerEvidence",
     "ShadowOrder",
+    "StrategyEvaluation",
 ]

@@ -28,8 +28,7 @@ class WebhookResponse:
 class WebhookPort(Protocol):
     def post(
         self, *, url: str, payload: bytes, headers: dict[str, str], timeout_seconds: float
-    ) -> WebhookResponse:
-        ...
+    ) -> WebhookResponse: ...
 
 
 @dataclass(frozen=True)
@@ -48,6 +47,11 @@ class WebhookConfig:
             raise ValueError("webhook timeout must be between 1 and 60 seconds")
         if (self.authorization_header_name is None) != (self.authorization_header_value is None):
             raise ValueError("webhook authorization header must be supplied as a pair")
+        if (
+            self.authorization_header_name is not None
+            and self.authorization_header_name.casefold() == "idempotency-key"
+        ):
+            raise ValueError("Idempotency-Key is reserved for internal Evidence authority")
 
 
 class WebhookDeliveryAdapter:

@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
 from trader_assist_v0.multi_asset_shadow.shadow_records import (
     SUBMISSION_STATUS,
     Candidate,
@@ -29,6 +30,15 @@ from trader_assist_v0.multi_asset_shadow.shadow_records import (
 def _lineage(
     *, family: str = "BREAKOUT_RETEST", mode: str = "MICRO_FAST", tier: str = "P0", tag: str = "a"
 ) -> tuple[object, ...]:
+    state = "FAILED_BREAKOUT_SWEEP_WATCH" if family == "BREAKOUT_RETEST" else "SETUP_READY"
+    candidate_content = {
+        "candidate_id": tag,
+        "market_id": f"market-{tag}",
+        "state": state,
+        "scanner_version": "scanner-r3",
+        "parameter_version": "2026-08-03-r1",
+        "transitions": ["WATCH->SETUP_READY"],
+    }
     provenance = ProvenanceRecord.create(
         identity={"release": "ed7ab1e", "strategy": "three-setup-r1"},
         strategy_version="FL-MA-PRICE-ACTION-v0.1",
@@ -40,8 +50,8 @@ def _lineage(
         recorded_at="2026-08-12T00:00:00Z",
     )
     scan = ScannerEvidence.create(
-        identity={"scan": "scan-1"},
-        scan_id="scan-1",
+        identity={"scan": f"scan-{tag}"},
+        scan_id=f"scan-{tag}",
         observed_at="2026-08-12T00:00:00Z",
         scanner_version="scanner-r3",
         parameter_version="2026-08-03-r1",
@@ -49,15 +59,21 @@ def _lineage(
         registry_hash="r" * 64,
         release_sha="ed7ab1e2a91265a31e60260502de8fd9d119517c",
         universe_snapshot_hash="u" * 64,
+        runtime_readiness_hash="t" * 64,
+        ready_universe=[{"market_id": f"market-{tag}", "latest_closed_5m_hash": "b" * 64}],
+        observations_hash="o" * 64,
+        observations=[
+            {"market_id": f"market-{tag}", "metrics": None, "candidate": candidate_content}
+        ],
         eligible_count=40,
         rejected_count=2,
     )
     candidate = Candidate.create(
         identity={"candidate": tag},
         scanner_evidence_id=scan.record_id,
-        scan_id="scan-1",
+        scan_id=f"scan-{tag}",
         market_id=f"market-{tag}",
-        state="FAILED_BREAKOUT_SWEEP_WATCH" if family == "BREAKOUT_RETEST" else "SETUP_READY",
+        state=state,
         alert_level="WATCH",
         created_at="2026-08-12T00:01:00Z",
         scanner_rank=1,
@@ -65,6 +81,14 @@ def _lineage(
         htf_relation="ALIGNED",
         breakout_path="ACCEPTED_REENTRY" if family == "BREAKOUT_RETEST" else "NONE",
         invalidation_reason="ACCEPTED_REENTRY" if family == "BREAKOUT_RETEST" else None,
+        scanner_candidate_id=tag,
+        scanner_version="scanner-r3",
+        parameter_version="2026-08-03-r1",
+        candidate_content=candidate_content,
+        candidate_content_hash=sha256_hex(
+            b"trader-assist-v0/scanner-candidate/v1\0" + canonical_json_bytes(candidate_content)
+        ),
+        transitions=["WATCH->SETUP_READY"],
     )
     transition = CandidateTransition.create(
         identity={"candidate": tag, "transition": "ready"},
@@ -221,6 +245,10 @@ def test_hashes_are_deterministic_and_payload_copies_cannot_mutate_record() -> N
         registry_hash="r" * 64,
         release_sha="s" * 40,
         universe_snapshot_hash="u" * 64,
+        runtime_readiness_hash="t" * 64,
+        ready_universe=[],
+        observations_hash="o" * 64,
+        observations=[],
     )
     second = ScannerEvidence.create(
         identity={"market": "btc", "scan": "same"},
@@ -232,6 +260,10 @@ def test_hashes_are_deterministic_and_payload_copies_cannot_mutate_record() -> N
         scanner_version="r3",
         observed_at="2026-08-12T00:00:00Z",
         scan_id="same",
+        runtime_readiness_hash="t" * 64,
+        ready_universe=[],
+        observations_hash="o" * 64,
+        observations=[],
     )
     assert first == second
     copy = first.payload
@@ -369,18 +401,14 @@ def test_all_families_all_tiers_and_versioned_provenance_are_retained(tmp_path: 
             store.write(group)
         signals = [group[5] for group in groups]
         families = {
-            signal.payload["setup_family"]
-            for signal in signals
-            if isinstance(signal, FormalSignal)
+            signal.payload["setup_family"] for signal in signals if isinstance(signal, FormalSignal)
         }
         assert families == {
             "SWEEP_RECLAIM",
             "BREAKOUT_RETEST",
             "RANGE_EDGE_REJECTION",
         }
-        tiers = {
-            signal.payload["tier"] for signal in signals if isinstance(signal, FormalSignal)
-        }
+        tiers = {signal.payload["tier"] for signal in signals if isinstance(signal, FormalSignal)}
         assert tiers == {
             "P0",
             "P1",
@@ -407,7 +435,15 @@ def test_reopen_and_deterministic_research_export(tmp_path: Path) -> None:
 
 def test_shadow_store_has_no_exchange_write_or_account_surface() -> None:
     public_methods = {name for name in dir(EvidenceStore) if not name.startswith("_")}
-    assert public_methods == {"close", "count", "export_hash", "export_jsonl", "get", "write"}
+    assert public_methods == {
+        "close",
+        "count",
+        "export_hash",
+        "export_jsonl",
+        "get",
+        "publish_formal_bundle",
+        "write",
+    }
     assert SUBMISSION_STATUS == "NOT_SUBMITTED"
 
 
@@ -485,14 +521,45 @@ def test_invalid_supplied_candidate_linkage_fails_closed(tmp_path: Path) -> None
     assert isinstance(candidate, Candidate)
     assert isinstance(event, MarketEvent)
     assert isinstance(provenance, ProvenanceRecord)
+    other_content = {
+        "candidate_id": "other",
+        "market_id": "market-other",
+        "state": "SETUP_READY",
+        "scanner_version": "scanner-r3",
+        "parameter_version": "2026-08-03-r1",
+        "transitions": ["WATCH->SETUP_READY"],
+    }
+    other_scanner = ScannerEvidence.create(
+        identity={"scan": "scan-other"},
+        scan_id="scan-other",
+        observed_at="2026-08-12T00:00:00Z",
+        scanner_version="scanner-r3",
+        parameter_version="2026-08-03-r1",
+        registry_version="registry-1",
+        registry_hash="r" * 64,
+        release_sha="ed7ab1e2a91265a31e60260502de8fd9d119517c",
+        universe_snapshot_hash="u" * 64,
+        runtime_readiness_hash="t" * 64,
+        ready_universe=[],
+        observations_hash="o" * 64,
+        observations=[{"market_id": "market-other", "metrics": None, "candidate": other_content}],
+    )
     other_candidate = Candidate.create(
         identity={"candidate": "other"},
-        scanner_evidence_id=scanner.record_id,
-        scan_id="scan-1",
+        scanner_evidence_id=other_scanner.record_id,
+        scan_id="scan-other",
         market_id="market-other",
         state="SETUP_READY",
         alert_level="WATCH",
         created_at="2026-08-12T00:01:00Z",
+        scanner_candidate_id="other",
+        scanner_version="scanner-r3",
+        parameter_version="2026-08-03-r1",
+        candidate_content=other_content,
+        candidate_content_hash=sha256_hex(
+            b"trader-assist-v0/scanner-candidate/v1\0" + canonical_json_bytes(other_content)
+        ),
+        transitions=["WATCH->SETUP_READY"],
     )
     mismatched_signal = FormalSignal.create(
         identity={"signal": "mismatched"},
@@ -508,7 +575,7 @@ def test_invalid_supplied_candidate_linkage_fails_closed(tmp_path: Path) -> None
         provenance_id=provenance.record_id,
     )
     with EvidenceStore(tmp_path / "shadow-evidence.sqlite") as store:
-        store.write((provenance, scanner, candidate, other_candidate, event))
+        store.write((provenance, scanner, candidate, other_scanner, other_candidate, event))
         with pytest.raises(RecordError, match="does not match candidate"):
             store.write((mismatched_signal,))
         assert store.get(mismatched_signal.record_id) is None

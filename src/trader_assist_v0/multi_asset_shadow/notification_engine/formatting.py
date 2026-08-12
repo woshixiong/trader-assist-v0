@@ -80,8 +80,20 @@ def format_notification(view: NotificationView) -> str:
                 f"Tier: {view.tier.value}",
                 f"Original side: {view.side}",
                 f"Evidence time: {_timestamp(view.evidence_time)}",
-                f"Evidence: {view.evidence_summary}",
-                f"Outcome: {view.outcome_summary}",
+                f"Outcome ID: {view.outcome_id}",
+                "Failed transition IDs: "
+                + (", ".join(view.failed_transition_ids) or "OUTCOME_DERIVED"),
+                f"Path maturity: {view.path_maturity_status}",
+                f"Required end ms: {view.required_end_ms}",
+                "Accepted re-entry time ms: "
+                + (
+                    "NONE"
+                    if view.accepted_reentry_time_ms is None
+                    else str(view.accepted_reentry_time_ms)
+                ),
+                f"Reclaim status: {view.reclaim_status}",
+                f"Conflict count: {view.conflict_count}",
+                f"Gap present: {'YES' if view.has_gap else 'NO'}",
                 f"Strategy / parameters: {view.strategy_version} / {view.parameter_version}",
                 f"Source ShadowOrder ID: {view.source_shadow_order_id}",
                 f"Research ID: {view.research_id}",

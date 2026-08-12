@@ -6,10 +6,15 @@ import json
 import sqlite3
 from collections.abc import Iterable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
 
 from .records import RECORD_TYPES, ImmutableRecord, RecordError
+
+if TYPE_CHECKING:
+    from ..notification_engine import MessageEnvelope
+    from .records import NotificationOutboxReference
 
 SCHEMA_NAME = "multi_asset_shadow_evidence_v1"
 
@@ -21,6 +26,7 @@ class RecordConflictError(RecordError):
 _TABLE_BY_TYPE = {
     "provenance": "provenance_records",
     "scanner_evidence": "scanner_evidence",
+    "strategy_evaluation": "strategy_evaluations",
     "candidate": "candidates",
     "candidate_transition": "candidate_transitions",
     "market_event": "market_events",
@@ -29,6 +35,8 @@ _TABLE_BY_TYPE = {
     "shadow_order": "shadow_orders",
     "human_review": "human_reviews",
     "outcome_envelope": "outcome_envelopes",
+    "outcome_transition": "outcome_transitions",
+    "outcome_bar": "outcome_bars",
     "correlation_identifier": "correlation_identifiers",
     "notification_outbox_reference": "notification_outbox_references",
 }
@@ -36,6 +44,7 @@ _TABLE_BY_TYPE = {
 _LINK_COLUMNS = {
     "provenance": (),
     "scanner_evidence": (),
+    "strategy_evaluation": (),
     "candidate": ("scanner_evidence_id",),
     "candidate_transition": ("candidate_id",),
     "market_event": ("candidate_id",),
@@ -44,6 +53,8 @@ _LINK_COLUMNS = {
     "shadow_order": ("signal_id", "plan_id", "market_event_id", "provenance_id"),
     "human_review": ("signal_id", "shadow_order_id"),
     "outcome_envelope": ("signal_id", "shadow_order_id"),
+    "outcome_transition": ("shadow_order_id",),
+    "outcome_bar": (),
     "correlation_identifier": ("signal_id", "shadow_order_id"),
     "notification_outbox_reference": ("signal_id",),
 }
@@ -90,6 +101,9 @@ class EvidenceStore:
                 CREATE TABLE IF NOT EXISTS scanner_evidence (
                     record_id TEXT PRIMARY KEY NOT NULL REFERENCES immutable_records(record_id)
                 ) STRICT;
+                CREATE TABLE IF NOT EXISTS strategy_evaluations (
+                    record_id TEXT PRIMARY KEY NOT NULL REFERENCES immutable_records(record_id)
+                ) STRICT;
                 CREATE TABLE IF NOT EXISTS candidates (
                     record_id TEXT PRIMARY KEY NOT NULL REFERENCES immutable_records(record_id),
                     scanner_evidence_id TEXT NOT NULL REFERENCES scanner_evidence(record_id)
@@ -129,6 +143,13 @@ class EvidenceStore:
                     record_id TEXT PRIMARY KEY NOT NULL REFERENCES immutable_records(record_id),
                     signal_id TEXT NOT NULL REFERENCES formal_signals(record_id),
                     shadow_order_id TEXT NOT NULL REFERENCES shadow_orders(record_id)
+                ) STRICT;
+                CREATE TABLE IF NOT EXISTS outcome_transitions (
+                    record_id TEXT PRIMARY KEY NOT NULL REFERENCES immutable_records(record_id),
+                    shadow_order_id TEXT NOT NULL REFERENCES shadow_orders(record_id)
+                ) STRICT;
+                CREATE TABLE IF NOT EXISTS outcome_bars (
+                    record_id TEXT PRIMARY KEY NOT NULL REFERENCES immutable_records(record_id)
                 ) STRICT;
                 CREATE TABLE IF NOT EXISTS correlation_identifiers (
                     record_id TEXT PRIMARY KEY NOT NULL REFERENCES immutable_records(record_id),
@@ -192,6 +213,95 @@ class EvidenceStore:
         except sqlite3.IntegrityError as exc:
             raise RecordError("record linkage integrity failure") from exc
 
+    def publish_formal_bundle(
+        self,
+        *,
+        records: Iterable[ImmutableRecord],
+        notification_reference: NotificationOutboxReference,
+        envelope: MessageEnvelope,
+    ) -> bool:
+        """Atomically retain one complete Formal bundle and its pending notification."""
+        from ..notification_engine import NotificationKind
+        from .records import (
+            FormalSignal,
+            MarketEvent,
+            NotificationOutboxReference,
+            PlanRecord,
+            ProvenanceRecord,
+            ShadowOrder,
+        )
+
+        materialized = tuple(records)
+        required_types = {
+            ProvenanceRecord,
+            MarketEvent,
+            FormalSignal,
+            PlanRecord,
+            ShadowOrder,
+        }
+        if {type(record) for record in materialized} != required_types:
+            raise RecordError("formal publication requires one complete typed record bundle")
+        if type(notification_reference) is not NotificationOutboxReference:
+            raise RecordError("formal publication requires a typed outbox reference")
+        if envelope.kind is not NotificationKind.FORMAL_SIGNAL:
+            raise RecordError("formal publication requires a FORMAL_SIGNAL envelope")
+        signal = next(record for record in materialized if isinstance(record, FormalSignal))
+        if notification_reference.payload.get("signal_id") != signal.record_id:
+            raise RecordError("formal outbox reference does not match Formal Signal")
+        if notification_reference.payload.get("publication_id") != envelope.idempotency_key:
+            raise RecordError("formal outbox reference does not match notification envelope")
+
+        connection = self._connection
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            for record in materialized:
+                self._write_one(record)
+            created_at = envelope.created_at.isoformat().replace("+00:00", "Z")
+            inserted = self._insert_outbox(envelope, created_at=created_at)
+            row = connection.execute(
+                """SELECT schema_version, kind, content, created_at
+                   FROM notification_outbox WHERE idempotency_key = ?""",
+                (envelope.idempotency_key,),
+            ).fetchone()
+            if row is None or (
+                row["schema_version"],
+                row["kind"],
+                row["content"],
+                row["created_at"],
+            ) != (
+                envelope.schema_version,
+                envelope.kind.value,
+                envelope.content,
+                created_at,
+            ):
+                raise RecordError(
+                    "notification idempotency identity conflicts with retained content"
+                )
+            self._write_one(notification_reference)
+            connection.commit()
+            return inserted == 0
+        except BaseException:
+            connection.rollback()
+            raise
+
+    def _insert_outbox(self, envelope: MessageEnvelope, *, created_at: str) -> int:
+        return int(
+            self._connection.execute(
+                """INSERT OR IGNORE INTO notification_outbox (
+                    idempotency_key, schema_version, kind, content, created_at,
+                    state, attempt_count, next_attempt_at
+                ) VALUES (?, ?, ?, ?, ?, 'PENDING', 0, ?)""",
+                (
+                    envelope.idempotency_key,
+                    envelope.schema_version,
+                    envelope.kind.value,
+                    envelope.content,
+                    created_at,
+                    created_at,
+                ),
+            ).rowcount
+        )
+
     def _write_one(self, record: ImmutableRecord) -> bool:
         expected = RECORD_TYPES.get(record.record_type)
         if expected is None or type(record) is not expected:
@@ -247,6 +357,35 @@ class EvidenceStore:
             scan = self._linked_payload(payload["scanner_evidence_id"])
             if scan.get("scan_id") != payload["scan_id"]:
                 raise RecordError("candidate scan_id does not match scanner evidence")
+            content = payload["candidate_content"]
+            expected_hash = sha256_hex(
+                b"trader-assist-v0/scanner-candidate/v1\0" + canonical_json_bytes(content)
+            )
+            if payload["candidate_content_hash"] != expected_hash:
+                raise RecordError("candidate content hash is invalid")
+            observations = scan.get("observations")
+            if not isinstance(observations, list) or not any(
+                isinstance(observation, dict)
+                and observation.get("market_id") == payload["market_id"]
+                and observation.get("candidate") == content
+                for observation in observations
+            ):
+                raise RecordError("candidate is absent from retained Scanner observations")
+            if not isinstance(content, dict) or (
+                content.get("candidate_id") != payload.get("scanner_candidate_id")
+                or content.get("market_id") != payload["market_id"]
+                or content.get("state") != payload["state"]
+                or content.get("scanner_version") != payload["scanner_version"]
+                or content.get("parameter_version") != payload["parameter_version"]
+                or content.get("transitions") != payload["transitions"]
+            ):
+                raise RecordError("candidate projection contradicts retained Scanner content")
+        elif record.record_type == "candidate_transition":
+            candidate = self._linked_payload(payload["candidate_id"])
+            transition = f"{payload['from_state']}->{payload['to_state']}"
+            transitions = candidate.get("transitions")
+            if not isinstance(transitions, list) or transition not in transitions:
+                raise RecordError("candidate transition is absent from retained Scanner evidence")
         elif record.record_type == "formal_signal":
             event = self._linked_payload(payload["market_event_id"])
             if event.get("candidate_id") != payload.get("candidate_id"):
@@ -266,6 +405,10 @@ class EvidenceStore:
             shadow = self._linked_payload(payload["shadow_order_id"])
             if shadow.get("signal_id") != payload["signal_id"]:
                 raise RecordError("linked shadow order does not match signal")
+        elif record.record_type == "outcome_transition":
+            shadow = self._linked_payload(payload["shadow_order_id"])
+            if shadow.get("market_id") != payload["market_id"]:
+                raise RecordError("outcome transition does not match ShadowOrder market")
 
     def get(self, record_id: str) -> ImmutableRecord | None:
         row = self._connection.execute(

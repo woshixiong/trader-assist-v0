@@ -14,6 +14,7 @@ from trader_assist_v0.multi_asset_shadow.data import ClosedBarStore, MultiAssetD
 from trader_assist_v0.multi_asset_shadow.integration import (
     CorrelationMarketMetrics,
     CorrelationResearchAdapter,
+    EvaluationReceipt,
     EvidenceOutbox,
     EvidenceOutcomeAdapter,
     FormalizationArtifacts,
@@ -41,8 +42,17 @@ from trader_assist_v0.multi_asset_shadow.notification_engine import (
     build_envelope,
 )
 from trader_assist_v0.multi_asset_shadow.outcome_engine import (
+    FormalShadowView,
     OneMinuteBar,
     OutcomeEngine,
+    OutcomeTransitionView,
+    TransitionKind,
+)
+from trader_assist_v0.multi_asset_shadow.outcome_engine import (
+    SetupFamily as OutcomeSetupFamily,
+)
+from trader_assist_v0.multi_asset_shadow.outcome_engine import (
+    Side as OutcomeSide,
 )
 from trader_assist_v0.multi_asset_shadow.planning import (
     CostModel,
@@ -50,14 +60,21 @@ from trader_assist_v0.multi_asset_shadow.planning import (
     PublicBbo,
 )
 from trader_assist_v0.multi_asset_shadow.registry import MarketRegistryManager
+from trader_assist_v0.multi_asset_shadow.runtime import RuntimeReadinessSnapshot
 from trader_assist_v0.multi_asset_shadow.shadow_records import (
     EvidenceStore,
+    FormalSignal,
     HumanReviewAction,
+    MarketEvent,
+    PlanRecord,
+    ProvenanceRecord,
     ShadowOrder,
 )
 from trader_assist_v0.multi_asset_shadow.strategy_kernel import (
     BreakoutLinkage,
     DecisionKind,
+    EventLedger,
+    EventStatus,
     HtfRelation,
     RetestType,
     ScannerState,
@@ -71,6 +88,9 @@ from trader_assist_v0.multi_asset_shadow.strategy_kernel import (
     ZoneQuality,
     ZoneSnapshot,
     ZoneType,
+)
+from trader_assist_v0.multi_asset_shadow.strategy_kernel import (
+    MarketEvent as KernelMarketEvent,
 )
 from trader_assist_v0.runtime.first_launch_notification import (
     HttpResponse,
@@ -138,6 +158,42 @@ class FakePlanningData:
         )
 
 
+class MutableReadiness:
+    def __init__(
+        self,
+        *,
+        registry: MarketRegistryManager,
+        closed_store: ClosedBarStore,
+        latest_open_ms: int,
+    ) -> None:
+        self.registry = registry
+        self.closed_store = closed_store
+        self.latest_open_ms = latest_open_ms
+        self.connected = True
+        self.failed: set[str] = set()
+
+    def readiness_snapshot(self) -> RuntimeReadinessSnapshot:
+        active = self.registry.active()
+        assert active is not None
+        ready = tuple(
+            market.identity.market_id
+            for market in active.markets
+            if self.connected
+            and market.lifecycle is MarketLifecycle.ACTIVE
+            and market.identity.market_id not in self.failed
+            and self.closed_store.last_open(market.identity.market_id) == self.latest_open_ms
+        )
+        return RuntimeReadinessSnapshot.create(
+            registry_version=active.version,
+            registry_content_hash=active.content_hash,
+            data_ready=self.connected,
+            ready_market_ids=ready,
+            failed_market_ids=tuple(self.failed),
+            latest_closed_5m_open_time_ms=self.latest_open_ms,
+            observed_at_ms=self.latest_open_ms + 300_001,
+        )
+
+
 @dataclass
 class Route:
     market: RegistryMarket
@@ -150,6 +206,7 @@ class Route:
     outcome_provider: FakeOneMinuteProvider
     outcome: OutcomeEngine
     planning: FakePlanningData
+    readiness: MutableReadiness
     coordinator: MultiAssetShadowCoordinator
 
     @property
@@ -158,12 +215,15 @@ class Route:
 
 
 def _market(
-    *, tier: RegistryTier, lifecycle: MarketLifecycle = MarketLifecycle.ACTIVE
+    *,
+    tier: RegistryTier,
+    lifecycle: MarketLifecycle = MarketLifecycle.ACTIVE,
+    coin: str = "BTC",
 ) -> RegistryMarket:
     return RegistryMarket(
-        display="BTC",
+        display=coin,
         tier=tier,
-        identity=MarketIdentity.create(dex="MAIN", coin="BTC"),
+        identity=MarketIdentity.create(dex="MAIN", coin=coin),
         asset_class=AssetClass.CRYPTO,
         size_decimals=5,
         price_max_decimals=1,
@@ -172,16 +232,16 @@ def _market(
         market_status="ACTIVE",
         lifecycle=lifecycle,
         metadata_observed_at=NOW,
-        metadata_hash=sha256_hex(b"BTC-metadata"),
+        metadata_hash=sha256_hex(f"{coin}-metadata".encode()),
     )
 
 
-def _payload(index: int, *, final: bool) -> dict[str, object]:
+def _payload(index: int, *, final: bool, coin: str = "BTC") -> dict[str, object]:
     start = index * 300_000
     baseline_close = "102" if (index // 3) % 2 else "100"
     return {
         "i": "5m",
-        "s": "BTC",
+        "s": coin,
         "t": start,
         "T": start + 299_999,
         "o": "101" if final else "100",
@@ -217,6 +277,11 @@ def _route(
     outcome_provider = FakeOneMinuteProvider()
     outcome = OutcomeEngine(provider=outcome_provider, sink=outcome_adapter)
     planning_data = planning or FakePlanningData()
+    readiness = MutableReadiness(
+        registry=registry,
+        closed_store=closed_store,
+        latest_open_ms=(count - 1) * 300_000,
+    )
     coordinator = MultiAssetShadowCoordinator(
         registry=registry,
         data_authority=data,
@@ -232,6 +297,7 @@ def _route(
             stress_slippage_bps_per_side=Decimal("2"),
         ),
         release_sha=RELEASE_SHA,
+        runtime_readiness=readiness,
     )
     return Route(
         market,
@@ -244,6 +310,7 @@ def _route(
         outcome_provider,
         outcome,
         planning_data,
+        readiness,
         coordinator,
     )
 
@@ -319,20 +386,102 @@ def _direct_decision(
 
 def _formalize(
     route: Route,
-    decision: StrategyDecision,
+    receipt: EvaluationReceipt,
     *,
     candidate_id: str | None = None,
 ) -> FormalizationArtifacts | PlanRejection:
     start_ms = route.latest.close_time_ms + 1
+    formal_ids = tuple(
+        decision_id
+        for decision_id, decision in zip(
+            receipt.decision_ids, receipt.result.decisions, strict=True
+        )
+        if decision.decision is DecisionKind.FORMAL_SETUP_CONFIRMED
+    )
+    assert formal_ids
     return route.coordinator.process_formal_decision(
-        decision=decision,
-        confirmed_bar=route.latest,
+        evaluation_receipt=receipt,
+        decision_id=formal_ids[0],
         now_ms=start_ms + 5_000,
         candidate_id=candidate_id,
         correlation_market_metrics=CorrelationMarketMetrics(
             Decimal("100"), Decimal("2"), Decimal("1000000"), Decimal("500000")
         ),
     )
+
+
+def _persist_breakout_shadow(
+    store: EvidenceStore, *, market_id: str, start_ms: int, tag: str
+) -> ShadowOrder:
+    provenance = ProvenanceRecord.create(
+        identity={"provenance": tag},
+        strategy_version="FL-MA-PRICE-ACTION-v0.1",
+        parameter_version="2026-08-03-r1",
+        registry_version="registry-1",
+        registry_hash="a" * 64,
+        cost_model_version="cost-1",
+        release_sha=RELEASE_SHA,
+        recorded_at="2026-08-13T00:00:00Z",
+    )
+    event = MarketEvent.create(
+        identity={"event": tag},
+        market_id=market_id,
+        event_kind="BREAKOUT_RETEST",
+        event_time="2026-08-13T00:00:00Z",
+    )
+    signal = FormalSignal.create(
+        identity={"signal": tag},
+        market_event_id=event.record_id,
+        market_id=market_id,
+        setup_family="BREAKOUT_RETEST",
+        setup_mode="MICRO_FAST",
+        side="LONG",
+        approval_status="APPROVED",
+        tier="P0",
+        confirmed_at="2026-08-13T00:00:00Z",
+        provenance_id=provenance.record_id,
+    )
+    plan = PlanRecord.create(
+        identity={"plan": tag},
+        signal_id=signal.record_id,
+        planned_entry="100",
+        stop="95",
+        tp1="105",
+        tp2="110",
+        risk_reference_sizing={"reference": "only"},
+        created_at="2026-08-13T00:00:00Z",
+        provenance_id=provenance.record_id,
+    )
+    shadow = ShadowOrder.create(
+        identity={"shadow": tag},
+        signal_id=signal.record_id,
+        plan_id=plan.record_id,
+        market_event_id=event.record_id,
+        market_id=market_id,
+        setup_family="BREAKOUT_RETEST",
+        setup_mode="MICRO_FAST",
+        side="LONG",
+        planned_entry="100",
+        stop="95",
+        tp1="105",
+        tp2="110",
+        risk_reference_sizing={"reference": "only"},
+        provenance_id=provenance.record_id,
+        strategy_version="FL-MA-PRICE-ACTION-v0.1",
+        parameter_version="2026-08-03-r1",
+        registry_version="registry-1",
+        registry_hash="a" * 64,
+        cost_model_version="cost-1",
+        created_at="2026-08-13T00:00:00Z",
+        confirmed_at="2026-08-13T00:00:00Z",
+        submission_status="NOT_SUBMITTED",
+        outcome_start_ms=start_ms,
+        atr="2",
+        zone_low="99",
+        zone_high="101",
+    )
+    store.write((provenance, event, signal, plan, shadow))
+    return shadow
 
 
 def test_finalized_5m_to_direct_formal_shadow_evidence_outbox_and_outcome(tmp_path: Path) -> None:
@@ -342,11 +491,13 @@ def test_finalized_5m_to_direct_formal_shadow_evidence_outbox_and_outcome(tmp_pa
         zone_book=_zones(route.market.identity.market_id),
     )
     decision = next(
-        item for item in result.decisions if item.decision is DecisionKind.FORMAL_SETUP_CONFIRMED
+        item
+        for item in result.result.decisions
+        if item.decision is DecisionKind.FORMAL_SETUP_CONFIRMED
     )
     assert decision.setup_family is SetupFamily.RANGE_EDGE_REJECTION
-    assert len(result.htf_context.__dict__) == 4
-    artifacts = _formalize(route, decision)
+    assert len(result.result.htf_context.__dict__) == 4
+    artifacts = _formalize(route, result)
     assert isinstance(artifacts, FormalizationArtifacts)
     assert "candidate_id" not in artifacts.market_event.payload
     assert "candidate_id" not in artifacts.signal.payload
@@ -362,23 +513,32 @@ def test_finalized_5m_to_direct_formal_shadow_evidence_outbox_and_outcome(tmp_pa
     assert route.planning.calls == ["BBO", "L2"]
     assert route.evidence.get(artifacts.shadow_order.record_id) == artifacts.shadow_order
     assert route.coordinator.human_review_status(artifacts.shadow_order.record_id) == "UNLABELED"
-    research_receipt = route.coordinator.publish_research(
-        ResearchNotificationView(
-            kind=NotificationKind.RESEARCH_FAILED_BREAKOUT,
-            market_display=route.market.display,
-            tier=route.market.tier,
-            evidence_time=NOW + timedelta(hours=6),
-            side="LONG",
-            research_id="failed-breakout-1",
-            source_shadow_order_id=artifacts.shadow_order.record_id,
-            evidence_summary="accepted re-entry evidence",
-            outcome_summary="research-only path",
-            strategy_version="FL-MA-PRICE-ACTION-v0.1",
-            parameter_version="2026-08-03-r1",
+    with pytest.raises(IntegrationError, match="BREAKOUT_RETEST"):
+        route.coordinator.publish_failed_breakout_research(
+            shadow_order_id=artifacts.shadow_order.record_id
         )
-    )
-    assert "NOT A FORMAL SIGNAL" in research_receipt.envelope.content
-    assert "Planned entry:" not in research_receipt.envelope.content
+    with pytest.raises(IntegrationError, match="caller-authored research"):
+        route.coordinator.publish_research(
+            ResearchNotificationView(
+                kind=NotificationKind.RESEARCH_FAILED_BREAKOUT,
+                market_display=route.market.display,
+                tier=route.market.tier,
+                evidence_time=NOW,
+                side="SHORT",
+                research_id="fabricated",
+                source_shadow_order_id=artifacts.shadow_order.record_id,
+                outcome_id="fabricated",
+                failed_transition_ids=(),
+                path_maturity_status="MATURE",
+                required_end_ms=0,
+                accepted_reentry_time_ms=None,
+                reclaim_status="FAILED",
+                conflict_count=0,
+                has_gap=False,
+                strategy_version="wrong",
+                parameter_version="wrong",
+            )
+        )
     review = route.coordinator.record_human_review(
         shadow_order_id=artifacts.shadow_order.record_id,
         action=HumanReviewAction.SKIPPED,
@@ -399,37 +559,17 @@ def test_finalized_5m_to_direct_formal_shadow_evidence_outbox_and_outcome(tmp_pa
     restarted_store.close()
 
 
-@pytest.mark.parametrize(
-    ("tier", "family", "mode", "retest"),
-    (
-        (RegistryTier.P0, SetupFamily.SWEEP_RECLAIM, None, None),
-        (RegistryTier.P1, SetupFamily.BREAKOUT_RETEST, SetupMode.MICRO_FAST, None),
-        (RegistryTier.P2, SetupFamily.BREAKOUT_RETEST, SetupMode.STANDARD, RetestType.DEEP),
-        (RegistryTier.P0, SetupFamily.BREAKOUT_RETEST, SetupMode.STANDARD, RetestType.SHALLOW),
-        (RegistryTier.P1, SetupFamily.RANGE_EDGE_REJECTION, None, None),
-    ),
-)
-def test_all_tiers_three_setups_and_breakout_modes_cross_shared_adapters(
-    tmp_path: Path,
-    tier: RegistryTier,
-    family: SetupFamily,
-    mode: SetupMode | None,
-    retest: RetestType | None,
-) -> None:
+@pytest.mark.parametrize("tier", tuple(RegistryTier))
+def test_all_tiers_cross_shared_adapters(tmp_path: Path, tier: RegistryTier) -> None:
     route = _route(tmp_path, tier=tier)
-    artifacts = _formalize(
-        route,
-        _direct_decision(
-            route.market.identity.market_id,
-            family=family,
-            mode=mode,
-            retest=retest,
-        ),
+    evaluation = route.coordinator.evaluate_finalized_market(
+        market_id=route.market.identity.market_id,
+        zone_book=_zones(route.market.identity.market_id),
     )
+    artifacts = _formalize(route, evaluation)
     assert isinstance(artifacts, FormalizationArtifacts)
     assert artifacts.signal.payload["tier"] == tier.value
-    assert artifacts.signal.payload["setup_family"] == family.value
-    assert artifacts.signal.payload["setup_mode"] == (None if mode is None else mode.value)
+    assert artifacts.signal.payload["setup_family"] == SetupFamily.RANGE_EDGE_REJECTION.value
     rendered = artifacts.outbox_receipt.envelope.content
     assert "STANDARD_DEEP" not in rendered
     assert "STANDARD_SHALLOW" not in rendered
@@ -451,9 +591,15 @@ def test_stale_bbo_spread_and_1000_usd_slippage_fail_closed(
     tmp_path: Path, planning: FakePlanningData, expected: PlanRejection
 ) -> None:
     route = _route(tmp_path, planning=planning)
-    result = _formalize(route, _direct_decision(route.market.identity.market_id))
+    evaluation = route.coordinator.evaluate_finalized_market(
+        market_id=route.market.identity.market_id,
+        zone_book=_zones(route.market.identity.market_id),
+    )
+    result = _formalize(route, evaluation)
     assert result is expected
-    assert route.evidence.count() == 0
+    assert (
+        route.evidence._connection.execute("SELECT COUNT(*) FROM formal_signals").fetchone()[0] == 0
+    )
     assert not route.outcome.attached_shadow_ids
 
 
@@ -461,18 +607,19 @@ def test_scanner_watch_and_directionless_new_market_never_create_shadow_or_1m(
     tmp_path: Path,
 ) -> None:
     route = _route(tmp_path, count=64)
-    observations = route.coordinator.scan_finalized(
+    scan = route.coordinator.scan_finalized(
         {
             route.market.identity.market_id: ScannerPublicSnapshot(
                 current_spread_price=Decimal("0.1"), liquidity_healthy=True
             )
-        }
+        },
+        observed_at=NOW + timedelta(hours=6),
     )
-    candidate = observations[0].candidate
+    candidate = scan.observations[0].candidate
     assert candidate is not None and candidate.state is ScannerState.WATCH_NEW_MARKET
     assert candidate.side is None
     candidate_record = route.coordinator.persist_scanner_candidate(
-        candidate, observed_at=NOW + timedelta(hours=6)
+        receipt=scan, candidate_id=candidate.candidate_id
     )
     directionless = ScannerWatchNotificationView(
         kind=NotificationKind.WATCH_NEW_MARKET,
@@ -495,15 +642,15 @@ def test_scanner_watch_and_directionless_new_market_never_create_shadow_or_1m(
         watch_id=candidate.candidate_id,
     )
     assert not route.coordinator.publish_watch(directionless).coalesced
-    directional = replace(
-        directionless,
-        kind=NotificationKind.WATCH,
-        side="LONG",
-        watch_id="directional-watch",
-    )
-    receipt = route.coordinator.publish_watch(directional)
-    assert "WATCH — NOT ACTIONABLE" in receipt.envelope.content
-    assert "NOT_YET_SETUP_CONFIRMED" in receipt.envelope.content
+    with pytest.raises(IntegrationError, match="ancestry"):
+        route.coordinator.publish_watch(
+            replace(
+                directionless,
+                kind=NotificationKind.WATCH,
+                side="LONG",
+                watch_id="directional-watch",
+            )
+        )
     assert route.evidence.get(candidate_record.record_id) == candidate_record
     assert not route.outcome.attached_shadow_ids
     assert not route.outcome.subscription_requirements
@@ -512,43 +659,323 @@ def test_scanner_watch_and_directionless_new_market_never_create_shadow_or_1m(
     )
 
 
+def test_failed_market_isolated_disconnect_blocks_all_and_readiness_restore_resumes(
+    tmp_path: Path,
+) -> None:
+    markets = (
+        _market(tier=RegistryTier.P0, coin="BTC"),
+        _market(tier=RegistryTier.P1, coin="ETH"),
+    )
+    registry = MarketRegistryManager(tmp_path / "registry", metadata_validator=lambda _: True)
+    version = RegistryVersion.create(version="registry-2", created_at=NOW, markets=markets)
+    registry.stage(version)
+    registry.request_apply(version.version)
+    closed_store = ClosedBarStore(tmp_path / "closed.sqlite")
+    data = MultiAssetDataAuthority(store=closed_store, registry=registry)
+    for market in markets:
+        data.admit_rest_history(
+            market=market,
+            snapshot=[
+                _payload(index, final=index == 63, coin=market.identity.coin) for index in range(64)
+            ],
+            received_at=datetime.fromtimestamp((64 * 300_000 + 1_000) / 1000, UTC),
+        )
+    evidence = EvidenceStore(tmp_path / "evidence.sqlite")
+    outbox = EvidenceOutbox(evidence)
+    adapter = EvidenceOutcomeAdapter(evidence)
+    outcome = OutcomeEngine(sink=adapter)
+    readiness = MutableReadiness(
+        registry=registry, closed_store=closed_store, latest_open_ms=63 * 300_000
+    )
+    coordinator = MultiAssetShadowCoordinator(
+        registry=registry,
+        data_authority=data,
+        evidence=evidence,
+        outbox=outbox,
+        outcome_engine=outcome,
+        outcome_adapter=adapter,
+        planning_data=FakePlanningData(),
+        cost_model=CostModel("cost-1", Decimal(), Decimal(), Decimal("2")),
+        release_sha=RELEASE_SHA,
+        runtime_readiness=readiness,
+    )
+    btc_id, eth_id = (market.identity.market_id for market in markets)
+    readiness.failed.add(btc_id)
+    scan = coordinator.scan_finalized(
+        {eth_id: ScannerPublicSnapshot(Decimal("0.1"), True)},
+        observed_at=NOW + timedelta(hours=6),
+    )
+    assert tuple(item.market_id for item in scan.observations) == (eth_id,)
+    with pytest.raises(IntegrationError, match="readiness"):
+        coordinator.evaluate_finalized_market(market_id=btc_id, zone_book=_zones(btc_id))
+    healthy = coordinator.evaluate_finalized_market(market_id=eth_id, zone_book=_zones(eth_id))
+    assert healthy.market_id == eth_id
+
+    readiness.connected = False
+    with pytest.raises(IntegrationError, match="disconnected"):
+        coordinator.scan_finalized({}, observed_at=NOW + timedelta(hours=6, minutes=5))
+    with pytest.raises(IntegrationError, match="disconnected"):
+        coordinator.evaluate_finalized_market(market_id=eth_id, zone_book=_zones(eth_id))
+
+    readiness.connected = True
+    resumed = coordinator.evaluate_finalized_market(market_id=eth_id, zone_book=_zones(eth_id))
+    assert resumed.latest_closed_5m_hash == healthy.latest_closed_5m_hash
+
+
 def test_optional_candidate_link_validates_and_bad_or_missing_link_fails_closed(
     tmp_path: Path,
 ) -> None:
     route = _route(tmp_path, count=64)
-    observation = route.coordinator.scan_finalized(
+    scan = route.coordinator.scan_finalized(
         {
             route.market.identity.market_id: ScannerPublicSnapshot(
                 current_spread_price=Decimal("0.1"), liquidity_healthy=True
             )
-        }
-    )[0]
+        },
+        observed_at=NOW + timedelta(hours=6),
+    )
+    observation = scan.observations[0]
     assert observation.candidate is not None
     candidate = observation.candidate
     retained = route.coordinator.persist_scanner_candidate(
-        candidate, observed_at=NOW + timedelta(hours=6)
+        receipt=scan, candidate_id=candidate.candidate_id
     )
-    linked = _direct_decision(route.market.identity.market_id, scanner_linkage=candidate.linkage)
+    linked = route.coordinator.evaluate_finalized_market(
+        market_id=route.market.identity.market_id,
+        zone_book=_zones(route.market.identity.market_id),
+        scanner_linkage=candidate.linkage,
+    )
     artifacts = _formalize(route, linked, candidate_id=retained.record_id)
     assert isinstance(artifacts, FormalizationArtifacts)
     assert artifacts.signal.payload["candidate_id"] == retained.record_id
 
     other_route = _route(tmp_path / "bad", count=64)
-    missing = _direct_decision(
-        other_route.market.identity.market_id, scanner_linkage=candidate.linkage
+    missing = other_route.coordinator.evaluate_finalized_market(
+        market_id=other_route.market.identity.market_id,
+        zone_book=_zones(other_route.market.identity.market_id),
+        scanner_linkage=candidate.linkage,
     )
     with pytest.raises(IntegrationError, match="not retained"):
         _formalize(other_route, missing, candidate_id="e" * 64)
     with pytest.raises(IntegrationError, match="requires retained Candidate"):
         _formalize(other_route, missing)
-    assert other_route.evidence.count() == 0
+    assert (
+        other_route.evidence._connection.execute("SELECT COUNT(*) FROM formal_signals").fetchone()[
+            0
+        ]
+        == 0
+    )
+
+
+def test_stale_changed_and_foreign_evaluation_receipts_fail_closed(tmp_path: Path) -> None:
+    route = _route(tmp_path)
+    receipt = route.coordinator.evaluate_finalized_market(
+        market_id=route.market.identity.market_id,
+        zone_book=_zones(route.market.identity.market_id),
+    )
+    changed = replace(
+        receipt,
+        result=replace(
+            receipt.result,
+            decisions=(replace(receipt.result.decisions[0], reason="CHANGED"),),
+        ),
+    )
+    with pytest.raises(IntegrationError, match="content was changed"):
+        _formalize(route, changed)
+    with pytest.raises(IntegrationError, match="contradicts"):
+        _formalize(route, replace(receipt, registry_hash="f" * 64))
+
+    other = _route(tmp_path / "other")
+    with pytest.raises(IntegrationError, match="not retained"):
+        _formalize(other, receipt)
+
+    next_index = 60
+    route.data.admit_rest_history(
+        market=route.market,
+        snapshot=[_payload(next_index, final=False)],
+        received_at=datetime.fromtimestamp(((next_index + 1) * 300_000 + 1_000) / 1000, UTC),
+    )
+    route.readiness.latest_open_ms = next_index * 300_000
+    with pytest.raises(IntegrationError, match="stale"):
+        _formalize(route, receipt)
+
+
+def test_event_ledger_continuation_survives_evidence_reopen(tmp_path: Path) -> None:
+    uninterrupted = _route(tmp_path / "live")
+    restarted = _route(tmp_path / "restart")
+    for route in (uninterrupted, restarted):
+        zone = _zones(route.market.identity.market_id).active_support
+        assert zone is not None
+        latest = route.coordinator._strategy_bar(route.latest)
+        active = KernelMarketEvent(
+            market_event_id="active-sweep",
+            market_id=route.market.identity.market_id,
+            setup_family=SetupFamily.SWEEP_RECLAIM,
+            side=Side.LONG,
+            status=EventStatus.ACTIVE,
+            transition="SWEEP_CANDIDATE_CREATED",
+            zone=zone,
+            created_bar=latest,
+            latest_bar=latest,
+            a5_event=Decimal("1"),
+            m20_event=Decimal("10"),
+            htf_relation=HtfRelation.NEUTRAL,
+            reclaim_candle_high=Decimal("200"),
+            reclaim_candle_low=Decimal("99"),
+            sweep_extreme=Decimal("99"),
+            ideal_entry_low=Decimal("99.55"),
+            ideal_entry_high=Decimal("99.75"),
+            chase_limit=Decimal("99.85"),
+            structural_stop=Decimal("98.9"),
+            target_reference=TargetReference(TargetKind.SOURCE_ZONE_CENTER, zone.center),
+        )
+        route.coordinator._ledgers[route.market.identity.market_id] = EventLedger((active,))
+        checkpoint = route.coordinator.evaluate_finalized_market(
+            market_id=route.market.identity.market_id,
+            zone_book=_zones(route.market.identity.market_id),
+        )
+        assert any(event.status is EventStatus.ACTIVE for event in checkpoint.result.ledger.events)
+
+    restarted.evidence.close()
+    reopened = EvidenceStore(restarted.evidence.path)
+    adapter = EvidenceOutcomeAdapter(reopened)
+    outcome = OutcomeEngine(sink=adapter)
+    restarted.coordinator = MultiAssetShadowCoordinator(
+        registry=restarted.registry,
+        data_authority=restarted.data,
+        evidence=reopened,
+        outbox=EvidenceOutbox(reopened),
+        outcome_engine=outcome,
+        outcome_adapter=adapter,
+        planning_data=restarted.planning,
+        cost_model=CostModel("cost-1", Decimal(), Decimal(), Decimal("2")),
+        release_sha=RELEASE_SHA,
+        runtime_readiness=restarted.readiness,
+    )
+    restarted.evidence = reopened
+    for route in (uninterrupted, restarted):
+        next_index = 60
+        route.data.admit_rest_history(
+            market=route.market,
+            snapshot=[_payload(next_index, final=False)],
+            received_at=datetime.fromtimestamp(((next_index + 1) * 300_000 + 1_000) / 1000, UTC),
+        )
+        route.readiness.latest_open_ms = next_index * 300_000
+    live_result = uninterrupted.coordinator.evaluate_finalized_market(
+        market_id=uninterrupted.market.identity.market_id,
+        zone_book=_zones(uninterrupted.market.identity.market_id),
+    ).result
+    restart_result = restarted.coordinator.evaluate_finalized_market(
+        market_id=restarted.market.identity.market_id,
+        zone_book=_zones(restarted.market.identity.market_id),
+    ).result
+    assert restart_result == live_result
+
+
+def test_scanner_receipt_rejects_fabrication_and_linkage_state_version_market(
+    tmp_path: Path,
+) -> None:
+    route = _route(tmp_path, count=64)
+    scan = route.coordinator.scan_finalized(
+        {route.market.identity.market_id: ScannerPublicSnapshot(Decimal("0.1"), True)},
+        observed_at=NOW + timedelta(hours=6),
+    )
+    candidate = scan.observations[0].candidate
+    assert candidate is not None
+    retained = route.coordinator.persist_scanner_candidate(
+        receipt=scan, candidate_id=candidate.candidate_id
+    )
+    with pytest.raises(IntegrationError, match="not produced"):
+        route.coordinator.persist_scanner_candidate(receipt=scan, candidate_id="fabricated")
+
+    for linkage in (
+        replace(candidate.linkage, state=ScannerState.BREAKOUT_RETEST_READY),
+        replace(candidate.linkage, scanner_version="wrong"),
+    ):
+        with pytest.raises(IntegrationError, match="contradicts"):
+            route.coordinator._candidate_link(
+                _direct_decision(route.market.identity.market_id, scanner_linkage=linkage),
+                retained.record_id,
+            )
+
+    with pytest.raises(IntegrationError, match="contradicts"):
+        route.coordinator._candidate_link(
+            _direct_decision("different-market", scanner_linkage=candidate.linkage),
+            retained.record_id,
+        )
+
+    other = _route(tmp_path / "market", count=64)
+    with pytest.raises(IntegrationError, match="not retained"):
+        other.coordinator._candidate_link(
+            _direct_decision(other.market.identity.market_id, scanner_linkage=candidate.linkage),
+            retained.record_id,
+        )
+
+
+@pytest.mark.parametrize("failure_index", range(1, 7))
+def test_atomic_formal_publication_rolls_back_on_record_boundaries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_index: int
+) -> None:
+    route = _route(tmp_path)
+    evaluation = route.coordinator.evaluate_finalized_market(
+        market_id=route.market.identity.market_id,
+        zone_book=_zones(route.market.identity.market_id),
+    )
+    original = route.evidence._write_one
+    calls = 0
+
+    def fail_on_signal(record: object) -> bool:
+        nonlocal calls
+        calls += 1
+        if calls == failure_index:
+            raise RuntimeError("injected formal boundary")
+        return original(record)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(route.evidence, "_write_one", fail_on_signal)
+    with pytest.raises(RuntimeError, match="injected"):
+        _formalize(route, evaluation)
+    assert (
+        route.evidence._connection.execute("SELECT COUNT(*) FROM formal_signals").fetchone()[0] == 0
+    )
+    assert (
+        route.evidence._connection.execute("SELECT COUNT(*) FROM notification_outbox").fetchone()[0]
+        == 0
+    )
+
+
+def test_atomic_formal_publication_rolls_back_if_outbox_insert_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    route = _route(tmp_path)
+    evaluation = route.coordinator.evaluate_finalized_market(
+        market_id=route.market.identity.market_id,
+        zone_book=_zones(route.market.identity.market_id),
+    )
+
+    def fail_outbox(*_args: object, **_kwargs: object) -> int:
+        raise RuntimeError("injected outbox boundary")
+
+    monkeypatch.setattr(route.evidence, "_insert_outbox", fail_outbox)
+    with pytest.raises(RuntimeError, match="outbox"):
+        _formalize(route, evaluation)
+    assert (
+        route.evidence._connection.execute("SELECT COUNT(*) FROM formal_signals").fetchone()[0] == 0
+    )
+    assert (
+        route.evidence._connection.execute("SELECT COUNT(*) FROM notification_outbox").fetchone()[0]
+        == 0
+    )
 
 
 def test_draining_blocks_new_activity_but_existing_outcome_completes_and_detaches(
     tmp_path: Path,
 ) -> None:
     route = _route(tmp_path)
-    artifacts = _formalize(route, _direct_decision(route.market.identity.market_id))
+    evaluation = route.coordinator.evaluate_finalized_market(
+        market_id=route.market.identity.market_id,
+        zone_book=_zones(route.market.identity.market_id),
+    )
+    artifacts = _formalize(route, evaluation)
     assert isinstance(artifacts, FormalizationArtifacts)
     successor = route.registry.lifecycle_update(
         "registry-draining",
@@ -570,7 +997,7 @@ def test_draining_blocks_new_activity_but_existing_outcome_completes_and_detache
         )
     start = int(artifacts.shadow_order.payload["outcome_start_ms"])
     for index in range(120):
-        route.outcome.admit_bar(
+        route.coordinator.admit_outcome_bar(
             OneMinuteBar.create(
                 market_id=route.market.identity.market_id,
                 open_time_ms=start + index * 60_000,
@@ -607,6 +1034,109 @@ def test_draining_blocks_new_activity_but_existing_outcome_completes_and_detache
     with pytest.raises(CorrelationEngineError, match="every signal market"):
         research.build_report({})
     assert isinstance(reopened.get(artifacts.shadow_order.record_id), ShadowOrder)
+
+
+def test_outcome_evidence_reopens_with_shared_demand_extension_conflict_and_projection(
+    tmp_path: Path,
+) -> None:
+    route = _route(tmp_path)
+    start = route.latest.close_time_ms + 1
+    market_id = route.market.identity.market_id
+    first = _persist_breakout_shadow(
+        route.evidence, market_id=market_id, start_ms=start, tag="first"
+    )
+    second = _persist_breakout_shadow(
+        route.evidence, market_id=market_id, start_ms=start, tag="second"
+    )
+    for shadow in (first, second):
+        route.outcome.attach(
+            FormalShadowView(
+                shadow_order_id=shadow.record_id,
+                market_id=market_id,
+                side=OutcomeSide.LONG,
+                setup_family=OutcomeSetupFamily.BREAKOUT_RETEST,
+                outcome_start_ms=start,
+                planned_entry=Decimal("100"),
+                stop=Decimal("95"),
+                tp1=Decimal("105"),
+                tp2=Decimal("110"),
+                atr=Decimal("2"),
+                zone_low=Decimal("99"),
+                zone_high=Decimal("101"),
+            ),
+            now_ms=start,
+            recover=False,
+        )
+    assert route.outcome.subscription_requirements == (market_id,)
+    with pytest.raises(IntegrationError, match="no retained failed-breakout"):
+        route.coordinator.publish_failed_breakout_research(shadow_order_id=first.record_id)
+    transition = OutcomeTransitionView(
+        transition_id="accepted-reentry",
+        shadow_order_id=first.record_id,
+        market_id=market_id,
+        kind=TransitionKind.ACCEPTED_REENTRY,
+        occurred_at_ms=start + 90 * 60_000,
+        reference_price=Decimal("99.8"),
+    )
+    route.coordinator.admit_outcome_transition(
+        transition, now_ms=transition.occurred_at_ms, recover=False
+    )
+    assert route.outcome.required_window(first.record_id)[1] == start + 210 * 60_000
+
+    for minute in range(210):
+        if minute == 10:  # retained gap remains authoritative on restart
+            continue
+        bar = OneMinuteBar.create(
+            market_id=market_id,
+            open_time_ms=start + minute * 60_000,
+            open=Decimal("100"),
+            high=Decimal("102"),
+            low=Decimal("98"),
+            close=Decimal("99.8"),
+        )
+        route.coordinator.admit_outcome_bar(bar)
+        if minute == 11:
+            route.coordinator.admit_outcome_bar(
+                OneMinuteBar.create(
+                    market_id=market_id,
+                    open_time_ms=bar.open_time_ms,
+                    open=Decimal("100"),
+                    high=Decimal("103"),
+                    low=Decimal("98"),
+                    close=Decimal("100.5"),
+                    source_id="REST_CONFLICT",
+                )
+            )
+    now_ms = start + 211 * 60_000
+    before = route.outcome.tick(now_ms=now_ms)
+    before_by_id = {outcome.shadow_order_id: outcome for outcome in before}
+    assert route.outcome.subscription_requirements == ()
+    assert before_by_id[first.record_id].conflicts
+    assert before_by_id[first.record_id].required_end_ms == start + 210 * 60_000
+    research = route.coordinator.publish_failed_breakout_research(shadow_order_id=first.record_id)
+    assert research.envelope.content.startswith("RESEARCH / FAILED_BREAKOUT EVIDENCE")
+    assert "NOT ACTIONABLE" in research.envelope.content
+    assert all(
+        forbidden not in research.envelope.content
+        for forbidden in ("Planned entry", "Stop:", "TP1:", "TP2:", "quantity", "submit")
+    )
+
+    route.evidence.close()
+    reopened = EvidenceStore(tmp_path / "evidence.sqlite")
+    provider = FakeOneMinuteProvider()
+    adapter = EvidenceOutcomeAdapter(reopened)
+    restored = adapter.restore_engine(now_ms=now_ms, provider=provider)
+    after = tuple(
+        restored.evaluate(identity, as_of_ms=now_ms) for identity in restored.attached_shadow_ids
+    )
+    assert after == before
+    assert restored.subscription_requirements == ()
+    assert provider.subscribed == []
+    assert (
+        reopened._connection.execute("SELECT COUNT(*) FROM outcome_transitions").fetchone()[0] == 1
+    )
+    assert reopened._connection.execute("SELECT COUNT(*) FROM outcome_bars").fetchone()[0] == 210
+    assert before_by_id[first.record_id].failed_breakout
 
 
 def test_durable_outbox_coalesces_reclaims_and_rejects_stale_completion(tmp_path: Path) -> None:
@@ -691,8 +1221,14 @@ def test_mature_https_bridge_keeps_discord_payload_content_only() -> None:
         side="LONG",
         research_id="research-1",
         source_shadow_order_id="shadow-1",
-        evidence_summary="accepted re-entry",
-        outcome_summary="research only",
+        outcome_id="outcome-1",
+        failed_transition_ids=("transition-1",),
+        path_maturity_status="MATURE",
+        required_end_ms=120_000,
+        accepted_reentry_time_ms=60_000,
+        reclaim_status="FAILED",
+        conflict_count=0,
+        has_gap=False,
         strategy_version="FL-MA-PRICE-ACTION-v0.1",
         parameter_version="2026-08-03-r1",
     )
@@ -706,7 +1242,11 @@ def test_mature_https_bridge_keeps_discord_payload_content_only() -> None:
 
 def test_correlation_unavailability_is_not_a_live_formal_gate(tmp_path: Path) -> None:
     route = _route(tmp_path)
-    artifacts = _formalize(route, _direct_decision(route.market.identity.market_id))
+    evaluation = route.coordinator.evaluate_finalized_market(
+        market_id=route.market.identity.market_id,
+        zone_book=_zones(route.market.identity.market_id),
+    )
+    artifacts = _formalize(route, evaluation)
     assert isinstance(artifacts, FormalizationArtifacts)
     assert isinstance(route.evidence.get(artifacts.shadow_order.record_id), ShadowOrder)
     research = CorrelationResearchAdapter(route.evidence)

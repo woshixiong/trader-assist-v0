@@ -138,6 +138,14 @@ class OutcomeEngine:
         state = self._state(shadow_order_id)
         return state.view.outcome_start_ms, self._required_end(state)
 
+    def requires_bar(self, bar: OneMinuteBar) -> bool:
+        """Whether an attached Formal Shadow currently requires this 1m evidence slot."""
+        return any(
+            state.view.market_id == bar.market_id
+            and state.view.outcome_start_ms <= bar.open_time_ms < self._required_end(state)
+            for state in self._states.values()
+        )
+
     def attach(
         self,
         view: FormalShadowView,
@@ -224,6 +232,7 @@ class OutcomeEngine:
         self._conflicts.setdefault(conflict_key, set()).update(
             (existing.canonical_hash, bar.canonical_hash)
         )
+        market_bars[bar.open_time_ms] = min((existing, bar), key=lambda item: item.canonical_hash)
         return AdmissionStatus.CONFLICT
 
     def recover(

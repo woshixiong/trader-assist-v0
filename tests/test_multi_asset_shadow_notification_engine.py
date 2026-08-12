@@ -99,8 +99,14 @@ def research() -> ResearchNotificationView:
         side="LONG",
         research_id="failed-breakout-research-001",
         source_shadow_order_id="shadow-001",
-        evidence_summary="accepted re-entry after failed breakout",
-        outcome_summary="original path stopped first; reverse path remains hypothetical",
+        outcome_id="outcome-001",
+        failed_transition_ids=("failed-transition-001",),
+        path_maturity_status="MATURE",
+        required_end_ms=7_200_000,
+        accepted_reentry_time_ms=180_000,
+        reclaim_status="FAILED",
+        conflict_count=0,
+        has_gap=False,
         strategy_version="FL-MA-PRICE-ACTION-v0.1",
         parameter_version="2026-08-03-r1",
     )
@@ -182,6 +188,8 @@ def test_failed_breakout_research_is_constructible_distinct_and_non_actionable()
     assert "FORMAL SIGNAL — MANUAL REVIEW REQUIRED" not in rendered
     assert "WATCH — NOT ACTIONABLE" not in rendered
     assert {
+        "evidence_summary",
+        "outcome_summary",
         "planned_entry",
         "stop",
         "tp1",
@@ -197,6 +205,16 @@ def test_failed_breakout_research_is_constructible_distinct_and_non_actionable()
     assert envelope.kind is NotificationKind.RESEARCH_FAILED_BREAKOUT
     assert envelope.idempotency_key == build_envelope(view=view, created_at=NOW).idempotency_key
     assert envelope.idempotency_key != build_envelope(view=formal(), created_at=NOW).idempotency_key
+
+
+@pytest.mark.parametrize("name", ("Idempotency-Key", "idempotency-key", "IDEMPOTENCY-KEY"))
+def test_webhook_reserves_internal_idempotency_header(name: str) -> None:
+    with pytest.raises(ValueError, match="reserved"):
+        WebhookConfig(
+            url="https://notifications.example.test/formal",
+            authorization_header_name=name,
+            authorization_header_value="forbidden",
+        )
 
 
 @pytest.mark.parametrize("mode", ["STANDARD_DEEP", "STANDARD_SHALLOW", "FAST", "MICRO"])
