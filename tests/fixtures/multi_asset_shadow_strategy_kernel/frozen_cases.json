@@ -1,0 +1,21 @@
+{
+  "provenance": "Synthetic deterministic strategy-authority examples; no market or account data",
+  "strategy_version": "FL-MA-PRICE-ACTION-v0.1",
+  "parameter_version": "2026-08-03-r1",
+  "scanner_version": "SESSION-MOMENTUM-R3",
+  "zone": {
+    "support_center": "100",
+    "support_low": "99.5",
+    "support_high": "100.5",
+    "resistance_center": "110",
+    "resistance_low": "109.5",
+    "resistance_high": "110.5"
+  },
+  "event_atr": "2",
+  "event_m20": "10",
+  "formal_setups": [
+    "SWEEP_RECLAIM",
+    "BREAKOUT_RETEST",
+    "RANGE_EDGE_REJECTION"
+  ]
+}
