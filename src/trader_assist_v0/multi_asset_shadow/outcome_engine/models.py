@@ -359,6 +359,7 @@ class FailedBreakoutResearch:
 class FormalShadowOutcome:
     shadow_order_id: str
     market_id: str
+    evaluated_at_ms: int
     required_start_ms: int
     original_deadline_ms: int
     required_end_ms: int

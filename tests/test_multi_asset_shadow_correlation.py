@@ -216,8 +216,7 @@ def test_complete_linkage_rejects_pairwise_chain_trap() -> None:
     )
     report = build_correlation_report(signals, _history(("a", "a"), ("b", "b"), ("c", "c")))
     members = [
-        tuple(item.market_id for item in cluster.members)
-        for cluster in report.exposure_clusters
+        tuple(item.market_id for item in cluster.members) for cluster in report.exposure_clusters
     ]
     assert members == [("a", "b"), ("c",)]
     values = {pair.market_ids: pair.pearson for pair in report.pairwise_correlations}
@@ -291,9 +290,7 @@ def test_cluster_metrics_are_deterministic_and_missing_outcomes_remain_unavailab
         _signal("b", "b", outcome_r="-1", outcome_mfe="0.5", outcome_mae="-2"),
         _signal("c", "c", outcome_r=None, outcome_mfe=None, outcome_mae=None),
     )
-    report = build_correlation_report(
-        signals, _history(("a", "a"), ("b", "b"), ("c", "a"))
-    )
+    report = build_correlation_report(signals, _history(("a", "a"), ("b", "b"), ("c", "a")))
     metrics = report.exposure_clusters[0].research_metrics
     assert metrics.mean_r == Decimal("0.5")
     assert metrics.median_r == Decimal("0.5")
@@ -308,10 +305,14 @@ def test_cluster_metrics_are_deterministic_and_missing_outcomes_remain_unavailab
     assert metrics.win_loss_dispersion.breakeven_count == 0
     assert metrics.win_loss_dispersion.unavailable_count == 1
 
-    unavailable = build_correlation_report(
-        (_signal("a", "a", outcome_r=None), _signal("b", "b", outcome_r=None)),
-        _history(("a", "a"), ("b", "b")),
-    ).exposure_clusters[0].research_metrics
+    unavailable = (
+        build_correlation_report(
+            (_signal("a", "a", outcome_r=None), _signal("b", "b", outcome_r=None)),
+            _history(("a", "a"), ("b", "b")),
+        )
+        .exposure_clusters[0]
+        .research_metrics
+    )
     assert unavailable.mean_r is None
     assert unavailable.median_r is None
     assert unavailable.best_r is None
@@ -351,6 +352,57 @@ def test_three_research_performance_views_have_r_equity_and_drawdown() -> None:
     assert leader.ordered_r_observations == (Decimal(2),)
     assert leader.cumulative_r_equity_curve == (Decimal(2),)
     assert leader.r_space_drawdown == (Decimal(0),)
+
+
+def test_raw_performance_equal_time_uses_identity_not_economic_leader_order() -> None:
+    report = build_correlation_report(
+        (
+            _signal("z-rich", "z", depth="999", outcome_r="1"),
+            _signal("a-thin", "a", depth="1", outcome_r="-2"),
+        ),
+        _history(("z", "a"), ("a", "a")),
+    )
+    raw = report.raw_market_level
+    assert tuple(item.shadow_order_id for item in raw.signals) == ("a-thin", "z-rich")
+    assert raw.ordered_r_observations == (Decimal("-2"), Decimal("1"))
+    assert raw.cumulative_r_equity_curve == (Decimal("-2"), Decimal("-1"))
+    assert raw.r_space_drawdown == (Decimal("2"), Decimal("1"))
+
+
+def test_cluster_normalized_performance_uses_member_chronology_not_leader_order() -> None:
+    report = build_correlation_report(
+        (
+            _signal("z-rich", "z", depth="999", outcome_r="1"),
+            _signal("a-thin", "a", depth="1", outcome_r="-2"),
+        ),
+        _history(("z", "a"), ("a", "a")),
+    )
+    normalized = report.cluster_normalized
+    assert tuple(item.shadow_order_id for item in normalized.members) == (
+        "a-thin",
+        "z-rich",
+    )
+    assert normalized.ordered_r_observations == (Decimal("-1"), Decimal("0.5"))
+    assert normalized.cumulative_r_equity_curve == (Decimal("-1"), Decimal("-0.5"))
+    assert normalized.r_space_drawdown == (Decimal("1"), Decimal("0.5"))
+
+
+def test_leader_only_performance_uses_chronology_across_economic_scopes() -> None:
+    report = build_correlation_report(
+        (
+            _signal("z-rich", "z", direction="LONG", depth="999", outcome_r="1"),
+            _signal("a-thin", "a", direction="SHORT", depth="1", outcome_r="-2"),
+        ),
+        _history(("z", "a"), ("a", "a")),
+    )
+    leader = report.leader_only
+    assert tuple(item.shadow_order_id for item in leader.leaders) == (
+        "a-thin",
+        "z-rich",
+    )
+    assert leader.ordered_r_observations == (Decimal("-2"), Decimal("1"))
+    assert leader.cumulative_r_equity_curve == (Decimal("-2"), Decimal("-1"))
+    assert leader.r_space_drawdown == (Decimal("2"), Decimal("1"))
 
 
 def test_leader_uses_exact_five_field_order() -> None:

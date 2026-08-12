@@ -320,6 +320,7 @@ class OutcomeEngine:
         return FormalShadowOutcome(
             shadow_order_id=view.shadow_order_id,
             market_id=view.market_id,
+            evaluated_at_ms=as_of_ms,
             required_start_ms=view.outcome_start_ms,
             original_deadline_ms=view.original_deadline_ms,
             required_end_ms=required_end,

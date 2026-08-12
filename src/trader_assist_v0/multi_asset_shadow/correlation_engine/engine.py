@@ -268,8 +268,9 @@ def _leader_key(signal: ShadowSignal) -> tuple[Decimal, Decimal, Decimal, Decima
 
 def _signal_time_key(
     signal: ShadowSignal,
-) -> tuple[datetime, tuple[Decimal, Decimal, Decimal, Decimal, str], str]:
-    return signal.confirmed_at_utc, _leader_key(signal), signal.shadow_order_id
+) -> tuple[datetime, str]:
+    """Chronological performance/event order with identity-only tie breaking."""
+    return signal.confirmed_at_utc, signal.shadow_order_id
 
 
 def _validate_signals(signals: Sequence[ShadowSignal]) -> tuple[ShadowSignal, ...]:
@@ -604,10 +605,11 @@ def _performance_series(
 
 
 def _raw_report(signals: Sequence[ShadowSignal]) -> RawMarketLevelReport:
+    chronological = tuple(sorted(signals, key=_signal_time_key))
     observations, equity, drawdown = _performance_series(
-        tuple(signal.outcome_r for signal in signals)
+        tuple(signal.outcome_r for signal in chronological)
     )
-    return RawMarketLevelReport(tuple(signals), observations, equity, drawdown)
+    return RawMarketLevelReport(chronological, observations, equity, drawdown)
 
 
 def _normalized_report(exposure_clusters: Sequence[Cluster]) -> ClusterNormalizedReport:
@@ -627,6 +629,12 @@ def _normalized_report(exposure_clusters: Sequence[Cluster]) -> ClusterNormalize
                     raw_market_evidence=signal,
                 )
             )
+    members.sort(
+        key=lambda member: (
+            member.raw_market_evidence.confirmed_at_utc,
+            member.shadow_order_id,
+        )
+    )
     observations, equity, drawdown = _performance_series(
         tuple(member.weighted_outcome_r for member in members)
     )
@@ -636,7 +644,9 @@ def _normalized_report(exposure_clusters: Sequence[Cluster]) -> ClusterNormalize
 
 
 def _leader_report(exposure_clusters: Sequence[Cluster]) -> LeaderOnlyReport:
-    leaders = tuple(cluster.leader for cluster in exposure_clusters)
+    leaders = tuple(
+        sorted((cluster.leader for cluster in exposure_clusters), key=_signal_time_key)
+    )
     observations, equity, drawdown = _performance_series(
         tuple(leader.outcome_r for leader in leaders)
     )

@@ -15,6 +15,7 @@ from trader_assist_v0.multi_asset_shadow.notification_engine import (
     NotificationKind,
     NotificationPublisher,
     OutboxDispatcher,
+    ResearchNotificationView,
     RetryPolicy,
     ScannerWatchNotificationView,
     SignalNotificationView,
@@ -89,6 +90,22 @@ def scanner_watch(
     )
 
 
+def research() -> ResearchNotificationView:
+    return ResearchNotificationView(
+        kind=NotificationKind.RESEARCH_FAILED_BREAKOUT,
+        market_display="BTC-PERP",
+        tier=RegistryTier.P1,
+        evidence_time=NOW,
+        side="LONG",
+        research_id="failed-breakout-research-001",
+        source_shadow_order_id="shadow-001",
+        evidence_summary="accepted re-entry after failed breakout",
+        outcome_summary="original path stopped first; reverse path remains hypothetical",
+        strategy_version="FL-MA-PRICE-ACTION-v0.1",
+        parameter_version="2026-08-03-r1",
+    )
+
+
 @pytest.mark.parametrize("tier", [RegistryTier.P0, RegistryTier.P1, RegistryTier.P2])
 @pytest.mark.parametrize(
     ("family", "mode", "side"),
@@ -155,6 +172,31 @@ def test_watch_new_market_allows_no_side_but_directional_watch_does_not() -> Non
     assert "Side:" not in watch
     with pytest.raises(ValueError, match="directional WATCH side"):
         scanner_watch(side=None)
+
+
+def test_failed_breakout_research_is_constructible_distinct_and_non_actionable() -> None:
+    view = research()
+    rendered = format_notification(view)
+    assert rendered.startswith("RESEARCH / FAILED_BREAKOUT EVIDENCE\nNOT ACTIONABLE")
+    assert "NOT A FORMAL SIGNAL" in rendered
+    assert "FORMAL SIGNAL — MANUAL REVIEW REQUIRED" not in rendered
+    assert "WATCH — NOT ACTIONABLE" not in rendered
+    assert {
+        "planned_entry",
+        "stop",
+        "tp1",
+        "tp2",
+        "reference_execution_quantity",
+        "order_submission_instruction",
+    }.isdisjoint(vars(view))
+    assert all(
+        forbidden not in rendered
+        for forbidden in ("Planned entry:", "Stop:", "TP1:", "TP2:", "Order instruction:")
+    )
+    envelope = build_envelope(view=view, created_at=NOW)
+    assert envelope.kind is NotificationKind.RESEARCH_FAILED_BREAKOUT
+    assert envelope.idempotency_key == build_envelope(view=view, created_at=NOW).idempotency_key
+    assert envelope.idempotency_key != build_envelope(view=formal(), created_at=NOW).idempotency_key
 
 
 @pytest.mark.parametrize("mode", ["STANDARD_DEEP", "STANDARD_SHALLOW", "FAST", "MICRO"])
@@ -242,11 +284,15 @@ def dispatcher_for(
             authorization_header_value="never-in-content",
         ),
     )
-    return outbox, client, OutboxDispatcher(
-        outbox=outbox,
-        adapter=adapter,
-        retry_policy=RetryPolicy(
-            max_attempts=max_attempts, base_delay_seconds=30, max_delay_seconds=60
+    return (
+        outbox,
+        client,
+        OutboxDispatcher(
+            outbox=outbox,
+            adapter=adapter,
+            retry_policy=RetryPolicy(
+                max_attempts=max_attempts, base_delay_seconds=30, max_delay_seconds=60
+            ),
         ),
     )
 

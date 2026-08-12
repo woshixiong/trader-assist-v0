@@ -196,6 +196,45 @@ class ScannerWatchNotificationView:
 
 
 @dataclass(frozen=True)
+class ResearchNotificationView:
+    """Non-actionable failed-breakout evidence with no plan or order fields."""
+
+    kind: NotificationKind
+    market_display: str
+    tier: RegistryTier
+    evidence_time: datetime
+    side: str
+    research_id: str
+    source_shadow_order_id: str
+    evidence_summary: str
+    outcome_summary: str
+    strategy_version: str
+    parameter_version: str
+
+    def __post_init__(self) -> None:
+        if self.kind is not NotificationKind.RESEARCH_FAILED_BREAKOUT:
+            raise NotificationContractError(
+                "ResearchNotificationView requires RESEARCH_FAILED_BREAKOUT"
+            )
+        for field in (
+            "market_display",
+            "research_id",
+            "source_shadow_order_id",
+            "evidence_summary",
+            "outcome_summary",
+            "strategy_version",
+            "parameter_version",
+        ):
+            _non_empty(getattr(self, field), field)
+        _utc(self.evidence_time, "evidence_time")
+        if self.side not in _DIRECTIONAL_SIDES:
+            raise NotificationContractError("research evidence side must be LONG or SHORT")
+
+
+NotificationView = SignalNotificationView | ScannerWatchNotificationView | ResearchNotificationView
+
+
+@dataclass(frozen=True)
 class MessageEnvelope:
     """Stable outbox payload; persistence is supplied by the Evidence lane."""
 

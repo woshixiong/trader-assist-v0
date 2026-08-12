@@ -139,6 +139,26 @@ class EvidenceStore:
                     record_id TEXT PRIMARY KEY NOT NULL REFERENCES immutable_records(record_id),
                     signal_id TEXT NOT NULL REFERENCES formal_signals(record_id)
                 ) STRICT;
+                CREATE TABLE IF NOT EXISTS notification_outbox (
+                    idempotency_key TEXT PRIMARY KEY NOT NULL,
+                    schema_version TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    state TEXT NOT NULL CHECK (
+                        state IN ('PENDING', 'DELIVERED', 'PERMANENT_FAILURE')
+                    ),
+                    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+                    next_attempt_at TEXT NOT NULL,
+                    claim_token TEXT,
+                    claim_expires_at TEXT,
+                    completed_at TEXT,
+                    response_status INTEGER,
+                    last_reason TEXT
+                ) STRICT;
+                CREATE UNIQUE INDEX IF NOT EXISTS notification_outbox_claim_token
+                    ON notification_outbox(claim_token)
+                    WHERE claim_token IS NOT NULL;
                 """
             )
             row = self._connection.execute(

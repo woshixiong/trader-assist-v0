@@ -9,6 +9,8 @@ from decimal import Decimal
 from .models import (
     MessageEnvelope,
     NotificationKind,
+    NotificationView,
+    ResearchNotificationView,
     ScannerWatchNotificationView,
     SignalNotificationView,
 )
@@ -24,14 +26,19 @@ def _timestamp(value: datetime) -> str:
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
-def idempotency_key(view: SignalNotificationView | ScannerWatchNotificationView) -> str:
+def idempotency_key(view: NotificationView) -> str:
     """Return the stable identity for one semantic notification, not its rendering."""
-    identity_value = view.signal_id if isinstance(view, SignalNotificationView) else view.watch_id
+    if isinstance(view, SignalNotificationView):
+        identity_value = view.signal_id
+    elif isinstance(view, ScannerWatchNotificationView):
+        identity_value = view.watch_id
+    else:
+        identity_value = view.research_id
     identity = f"{_SCHEMA_VERSION}|{view.kind.value}|{identity_value}".encode()
     return f"masn-v1-{hashlib.sha256(identity).hexdigest()}"
 
 
-def format_notification(view: SignalNotificationView | ScannerWatchNotificationView) -> str:
+def format_notification(view: NotificationView) -> str:
     """Render a human-readable message with unambiguous actionability labels."""
     if isinstance(view, ScannerWatchNotificationView):
         scanner_lines = [
@@ -63,6 +70,23 @@ def format_notification(view: SignalNotificationView | ScannerWatchNotificationV
         if view.do_not_chase:
             scanner_lines.append("DO_NOT_CHASE")
         return "\n".join(scanner_lines)
+    if isinstance(view, ResearchNotificationView):
+        return "\n".join(
+            (
+                "RESEARCH / FAILED_BREAKOUT EVIDENCE",
+                "NOT ACTIONABLE",
+                "NOT A FORMAL SIGNAL",
+                f"Market: {view.market_display}",
+                f"Tier: {view.tier.value}",
+                f"Original side: {view.side}",
+                f"Evidence time: {_timestamp(view.evidence_time)}",
+                f"Evidence: {view.evidence_summary}",
+                f"Outcome: {view.outcome_summary}",
+                f"Strategy / parameters: {view.strategy_version} / {view.parameter_version}",
+                f"Source ShadowOrder ID: {view.source_shadow_order_id}",
+                f"Research ID: {view.research_id}",
+            )
+        )
     common = [
         f"Market: {view.market_display}",
         f"Tier: {view.tier.value}",
@@ -105,9 +129,7 @@ def format_notification(view: SignalNotificationView | ScannerWatchNotificationV
     raise AssertionError("SignalNotificationView must be FORMAL_SIGNAL")
 
 
-def build_envelope(
-    *, view: SignalNotificationView | ScannerWatchNotificationView, created_at: datetime
-) -> MessageEnvelope:
+def build_envelope(*, view: NotificationView, created_at: datetime) -> MessageEnvelope:
     return MessageEnvelope(
         schema_version=_SCHEMA_VERSION,
         kind=view.kind,
