@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
+from fractions import Fraction
 from hashlib import sha256
 from itertools import combinations, pairwise
 
@@ -75,11 +76,13 @@ class ShadowSignal:
     confirmed_at: datetime
     strategy_version: str
     parameter_version: str
-    depth: Decimal
-    spread_bps: Decimal
-    day_notional: Decimal
+    p10_weak_depth_10bps: Decimal
+    p95_spread_bps: Decimal
+    exchange_day_notional: Decimal
     oi_notional: Decimal
     outcome_r: Decimal | None = None
+    outcome_mfe: Decimal | None = None
+    outcome_mae: Decimal | None = None
 
     def __post_init__(self) -> None:
         if not all(
@@ -95,15 +98,29 @@ class ShadowSignal:
             raise CorrelationEngineError("signal identity is incomplete")
         if self.confirmed_at.tzinfo is None:
             raise CorrelationEngineError("confirmed_at must be timezone-aware")
-        values = (self.depth, self.spread_bps, self.day_notional, self.oi_notional)
+        values = (
+            self.p10_weak_depth_10bps,
+            self.p95_spread_bps,
+            self.exchange_day_notional,
+            self.oi_notional,
+        )
         if any(not value.is_finite() or value < 0 for value in values):
             raise CorrelationEngineError("leader ordering fields must be finite and non-negative")
-        if self.outcome_r is not None and not self.outcome_r.is_finite():
-            raise CorrelationEngineError("outcome_r must be finite when present")
+        outcomes = (self.outcome_r, self.outcome_mfe, self.outcome_mae)
+        if any(value is not None and not value.is_finite() for value in outcomes):
+            raise CorrelationEngineError("outcome research fields must be finite when present")
 
     @property
     def confirmed_at_utc(self) -> datetime:
         return self.confirmed_at.astimezone(UTC)
+
+
+@dataclass(frozen=True)
+class PairedReturnEvidence:
+    left_previous_candle_hash: str
+    left_current_candle_hash: str
+    right_previous_candle_hash: str
+    right_current_candle_hash: str
 
 
 @dataclass(frozen=True)
@@ -114,8 +131,28 @@ class PairwiseCorrelation:
     paired_return_count: int
     status: CorrelationStatus
     pearson: Decimal | None
-    paired_candle_hashes: tuple[tuple[str, str], ...]
+    paired_return_evidence: tuple[PairedReturnEvidence, ...]
     correlation_data_hash: str
+
+
+@dataclass(frozen=True)
+class WinLossDispersion:
+    win_count: int
+    loss_count: int
+    breakeven_count: int
+    unavailable_count: int
+
+
+@dataclass(frozen=True)
+class ClusterResearchMetrics:
+    mean_r: Decimal | None
+    median_r: Decimal | None
+    best_r: Decimal | None
+    worst_r: Decimal | None
+    mean_mfe: Decimal | None
+    mean_mae: Decimal | None
+    member_count: int
+    win_loss_dispersion: WinLossDispersion | None
 
 
 @dataclass(frozen=True)
@@ -131,11 +168,15 @@ class Cluster:
     members: tuple[ShadowSignal, ...]
     leader: ShadowSignal
     correlation_unknown: bool
+    research_metrics: ClusterResearchMetrics
 
 
 @dataclass(frozen=True)
 class RawMarketLevelReport:
     signals: tuple[ShadowSignal, ...]
+    ordered_r_observations: tuple[Decimal, ...]
+    cumulative_r_equity_curve: tuple[Decimal, ...]
+    r_space_drawdown: tuple[Decimal, ...]
 
     @property
     def raw_shadow_order_count(self) -> int:
@@ -146,19 +187,26 @@ class RawMarketLevelReport:
 class ClusterNormalizedMember:
     cluster_id: str
     shadow_order_id: str
-    member_weight: Decimal
+    member_weight: Fraction
     weighted_outcome_r: Decimal | None
+    raw_market_evidence: ShadowSignal
 
 
 @dataclass(frozen=True)
 class ClusterNormalizedReport:
     members: tuple[ClusterNormalizedMember, ...]
     cluster_count: int
+    ordered_r_observations: tuple[Decimal, ...]
+    cumulative_r_equity_curve: tuple[Decimal, ...]
+    r_space_drawdown: tuple[Decimal, ...]
 
 
 @dataclass(frozen=True)
 class LeaderOnlyReport:
     leaders: tuple[ShadowSignal, ...]
+    ordered_r_observations: tuple[Decimal, ...]
+    cumulative_r_equity_curve: tuple[Decimal, ...]
+    r_space_drawdown: tuple[Decimal, ...]
 
     @property
     def leader_only_count(self) -> int:
@@ -203,25 +251,25 @@ class CorrelationReport:
 class _Return:
     close_time_ms: int
     value: Decimal
-    source_candle_hash: str
+    previous_candle_hash: str
+    current_candle_hash: str
 
 
-def _leader_key(signal: ShadowSignal) -> tuple[Decimal, Decimal, Decimal, Decimal, str, str]:
-    """The frozen leader ordering, with identity only after market-id ties."""
+def _leader_key(signal: ShadowSignal) -> tuple[Decimal, Decimal, Decimal, Decimal, str]:
+    """The exact frozen five-field leader ordering."""
     return (
-        -signal.depth,
-        signal.spread_bps,
-        -signal.day_notional,
+        -signal.p10_weak_depth_10bps,
+        signal.p95_spread_bps,
+        -signal.exchange_day_notional,
         -signal.oi_notional,
         signal.market_id,
-        signal.shadow_order_id,
     )
 
 
 def _signal_time_key(
     signal: ShadowSignal,
-) -> tuple[datetime, tuple[Decimal, Decimal, Decimal, Decimal, str, str]]:
-    return signal.confirmed_at_utc, _leader_key(signal)
+) -> tuple[datetime, tuple[Decimal, Decimal, Decimal, Decimal, str], str]:
+    return signal.confirmed_at_utc, _leader_key(signal), signal.shadow_order_id
 
 
 def _validate_signals(signals: Sequence[ShadowSignal]) -> tuple[ShadowSignal, ...]:
@@ -247,7 +295,8 @@ def _market_returns(observations: Sequence[CloseObservation]) -> tuple[_Return, 
                 _Return(
                     close_time_ms=current.close_time_ms,
                     value=current.close / prior.close - Decimal(1),
-                    source_candle_hash=current.source_candle_hash,
+                    previous_candle_hash=prior.source_candle_hash,
+                    current_candle_hash=current.source_candle_hash,
                 )
             )
     return tuple(returns)
@@ -274,7 +323,10 @@ def _correlation_data_hash(
     market_ids: tuple[str, str], pairs: Sequence[tuple[_Return, _Return]]
 ) -> str:
     payload = "".join(
-        f"{left.close_time_ms}|{left.source_candle_hash}|{right.source_candle_hash};"
+        (
+            f"{left.close_time_ms}|{left.previous_candle_hash}|{left.current_candle_hash}|"
+            f"{right.previous_candle_hash}|{right.current_candle_hash};"
+        )
         for left, right in pairs
     )
     return sha256(("|".join(market_ids) + "|" + payload).encode("utf-8")).hexdigest()
@@ -309,7 +361,15 @@ def _pairwise_correlation(
         if lower_ms <= item.close_time_ms <= upper_ms
     }
     pairs = tuple((left[time], right[time]) for time in sorted(set(left) & set(right)))
-    hashes = tuple((item[0].source_candle_hash, item[1].source_candle_hash) for item in pairs)
+    evidence = tuple(
+        PairedReturnEvidence(
+            left_previous_candle_hash=left.previous_candle_hash,
+            left_current_candle_hash=left.current_candle_hash,
+            right_previous_candle_hash=right.previous_candle_hash,
+            right_current_candle_hash=right.current_candle_hash,
+        )
+        for left, right in pairs
+    )
     status = CorrelationStatus.COMPUTED
     value: Decimal | None = None
     if len(pairs) < MIN_PAIRED_RETURNS:
@@ -327,7 +387,7 @@ def _pairwise_correlation(
         paired_return_count=len(pairs),
         status=status,
         pearson=value,
-        paired_candle_hashes=hashes,
+        paired_return_evidence=evidence,
         correlation_data_hash=_correlation_data_hash(market_ids, pairs),
     )
 
@@ -374,6 +434,46 @@ def _cluster_id(
     fields.extend((direction, event_start.astimezone(UTC).isoformat()))
     fields.extend(sorted(item.shadow_order_id for item in members))
     return sha256("".join(fields).encode("utf-8")).hexdigest()
+
+
+def _mean(values: Sequence[Decimal]) -> Decimal | None:
+    if not values:
+        return None
+    return sum(values, Decimal()) / Decimal(len(values))
+
+
+def _median(values: Sequence[Decimal]) -> Decimal | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / Decimal(2)
+
+
+def _cluster_research_metrics(members: Sequence[ShadowSignal]) -> ClusterResearchMetrics:
+    r_values = tuple(signal.outcome_r for signal in members if signal.outcome_r is not None)
+    mfe_values = tuple(signal.outcome_mfe for signal in members if signal.outcome_mfe is not None)
+    mae_values = tuple(signal.outcome_mae for signal in members if signal.outcome_mae is not None)
+    dispersion = None
+    if r_values:
+        dispersion = WinLossDispersion(
+            win_count=sum(value > 0 for value in r_values),
+            loss_count=sum(value < 0 for value in r_values),
+            breakeven_count=sum(value == 0 for value in r_values),
+            unavailable_count=len(members) - len(r_values),
+        )
+    return ClusterResearchMetrics(
+        mean_r=_mean(r_values),
+        median_r=_median(r_values),
+        best_r=max(r_values) if r_values else None,
+        worst_r=min(r_values) if r_values else None,
+        mean_mfe=_mean(mfe_values),
+        mean_mae=_mean(mae_values),
+        member_count=len(members),
+        win_loss_dispersion=dispersion,
+    )
 
 
 def _cluster_window(
@@ -438,6 +538,7 @@ def _cluster_window(
                 members=ordered_members,
                 leader=ordered_members[0],
                 correlation_unknown=unknown,
+                research_metrics=_cluster_research_metrics(ordered_members),
             )
         )
     return tuple(built)
@@ -486,10 +587,34 @@ def _clusters_for_threshold(
     return tuple(setup_clusters), tuple(exposure_clusters)
 
 
+def _performance_series(
+    observations: Sequence[Decimal | None],
+) -> tuple[tuple[Decimal, ...], tuple[Decimal, ...], tuple[Decimal, ...]]:
+    ordered = tuple(value for value in observations if value is not None)
+    equity: list[Decimal] = []
+    drawdown: list[Decimal] = []
+    cumulative = Decimal()
+    peak = Decimal()
+    for value in ordered:
+        cumulative += value
+        peak = max(peak, cumulative)
+        equity.append(cumulative)
+        drawdown.append(peak - cumulative)
+    return ordered, tuple(equity), tuple(drawdown)
+
+
+def _raw_report(signals: Sequence[ShadowSignal]) -> RawMarketLevelReport:
+    observations, equity, drawdown = _performance_series(
+        tuple(signal.outcome_r for signal in signals)
+    )
+    return RawMarketLevelReport(tuple(signals), observations, equity, drawdown)
+
+
 def _normalized_report(exposure_clusters: Sequence[Cluster]) -> ClusterNormalizedReport:
     members: list[ClusterNormalizedMember] = []
     for cluster in exposure_clusters:
-        weight = Decimal(1) / Decimal(len(cluster.members))
+        member_count = len(cluster.members)
+        weight = Fraction(1, member_count)
         for signal in cluster.members:
             members.append(
                 ClusterNormalizedMember(
@@ -498,10 +623,24 @@ def _normalized_report(exposure_clusters: Sequence[Cluster]) -> ClusterNormalize
                     member_weight=weight,
                     weighted_outcome_r=None
                     if signal.outcome_r is None
-                    else signal.outcome_r * weight,
+                    else signal.outcome_r / Decimal(member_count),
+                    raw_market_evidence=signal,
                 )
             )
-    return ClusterNormalizedReport(tuple(members), len(exposure_clusters))
+    observations, equity, drawdown = _performance_series(
+        tuple(member.weighted_outcome_r for member in members)
+    )
+    return ClusterNormalizedReport(
+        tuple(members), len(exposure_clusters), observations, equity, drawdown
+    )
+
+
+def _leader_report(exposure_clusters: Sequence[Cluster]) -> LeaderOnlyReport:
+    leaders = tuple(cluster.leader for cluster in exposure_clusters)
+    observations, equity, drawdown = _performance_series(
+        tuple(leader.outcome_r for leader in leaders)
+    )
+    return LeaderOnlyReport(leaders, observations, equity, drawdown)
 
 
 def build_correlation_report(
@@ -557,11 +696,11 @@ def build_correlation_report(
             primary_setup, primary_exposure = setup, exposure
 
     return CorrelationReport(
-        raw_market_level=RawMarketLevelReport(ordered_signals),
+        raw_market_level=_raw_report(ordered_signals),
         setup_research_clusters=primary_setup,
         exposure_clusters=primary_exposure,
         cluster_normalized=_normalized_report(primary_exposure),
-        leader_only=LeaderOnlyReport(tuple(cluster.leader for cluster in primary_exposure)),
+        leader_only=_leader_report(primary_exposure),
         pairwise_correlations=tuple(
             sorted(
                 pair_lookup.values(),
