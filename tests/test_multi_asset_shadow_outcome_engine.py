@@ -178,6 +178,162 @@ def test_same_bar_stop_and_tp_is_ambiguous_and_conservatively_stop_first() -> No
     assert path.stop_hit is True
     assert path.tp1_hit is False
     assert path.one_r_hit is False
+    assert path.max_profit_giveback == Decimal()
+    assert path.return_to_entry_after_profit is False
+
+
+@pytest.mark.parametrize(
+    ("side", "first", "second"),
+    (
+        (
+            Side.LONG,
+            _bar(0, open_="101", high="108", low="101", close="107"),
+            _bar(1, open_="107", high="107", low="103", close="104"),
+        ),
+        (
+            Side.SHORT,
+            _bar(0, open_="99", high="99", low="92", close="93"),
+            _bar(1, open_="93", high="97", low="93", close="96"),
+        ),
+    ),
+)
+def test_long_and_short_max_profit_giveback(
+    side: Side, first: OneMinuteBar, second: OneMinuteBar
+) -> None:
+    engine = OutcomeEngine()
+    view = _view(side)
+    engine.attach(view, now_ms=0, recover=False)
+    _admit(engine, (first, second))
+
+    path = engine.evaluate(view.shadow_order_id, as_of_ms=2 * ONE_MINUTE_MS).path
+
+    assert path.max_profit_giveback == Decimal("5")
+
+
+@pytest.mark.parametrize(
+    ("side", "bars"),
+    (
+        (
+            Side.LONG,
+            (
+                _bar(0, open_="100", high="102", low="100", close="102"),
+                _bar(1, open_="102", high="104", low="102", close="104"),
+                _bar(2, open_="104", high="106", low="104", close="106"),
+            ),
+        ),
+        (
+            Side.SHORT,
+            (
+                _bar(0, open_="100", high="100", low="98", close="98"),
+                _bar(1, open_="98", high="98", low="96", close="96"),
+                _bar(2, open_="96", high="96", low="94", close="94"),
+            ),
+        ),
+    ),
+)
+def test_monotonic_favorable_path_has_no_profit_giveback(
+    side: Side, bars: tuple[OneMinuteBar, ...]
+) -> None:
+    engine = OutcomeEngine()
+    view = _view(side)
+    engine.attach(view, now_ms=0, recover=False)
+    _admit(engine, bars)
+
+    path = engine.evaluate(view.shadow_order_id, as_of_ms=3 * ONE_MINUTE_MS).path
+
+    assert path.max_profit_giveback == Decimal()
+
+
+@pytest.mark.parametrize(
+    ("side", "profit_bar", "return_bar"),
+    (
+        (
+            Side.LONG,
+            _bar(0, open_="101", high="104", low="101", close="103"),
+            _bar(1, open_="103", high="103", low="100", close="100"),
+        ),
+        (
+            Side.SHORT,
+            _bar(0, open_="99", high="99", low="96", close="97"),
+            _bar(1, open_="97", high="100", low="97", close="100"),
+        ),
+    ),
+)
+def test_long_and_short_profit_then_return_to_entry(
+    side: Side, profit_bar: OneMinuteBar, return_bar: OneMinuteBar
+) -> None:
+    engine = OutcomeEngine()
+    view = _view(side)
+    engine.attach(view, now_ms=0, recover=False)
+    _admit(engine, (profit_bar, return_bar))
+
+    path = engine.evaluate(view.shadow_order_id, as_of_ms=2 * ONE_MINUTE_MS).path
+
+    assert path.return_to_entry_after_profit is True
+
+
+@pytest.mark.parametrize(
+    ("side", "bar"),
+    (
+        (Side.LONG, _bar(0, open_="100", high="100", low="99", close="100")),
+        (Side.SHORT, _bar(0, open_="100", high="101", low="100", close="100")),
+    ),
+)
+def test_entry_touch_without_prior_profit_does_not_count_as_return(
+    side: Side, bar: OneMinuteBar
+) -> None:
+    engine = OutcomeEngine()
+    view = _view(side)
+    engine.attach(view, now_ms=0, recover=False)
+    _admit(engine, (bar,))
+
+    path = engine.evaluate(view.shadow_order_id, as_of_ms=ONE_MINUTE_MS).path
+
+    assert path.return_to_entry_after_profit is False
+
+
+@pytest.mark.parametrize(
+    ("side", "bar"),
+    (
+        (Side.LONG, _bar(0, high="104", low="99", close="101")),
+        (Side.SHORT, _bar(0, high="101", low="96", close="99")),
+    ),
+)
+def test_same_bar_profit_and_entry_cross_does_not_invent_order(
+    side: Side, bar: OneMinuteBar
+) -> None:
+    engine = OutcomeEngine()
+    view = _view(side)
+    engine.attach(view, now_ms=0, recover=False)
+    _admit(engine, (bar,))
+
+    path = engine.evaluate(view.shadow_order_id, as_of_ms=ONE_MINUTE_MS).path
+
+    assert path.max_profit_giveback == Decimal()
+    assert path.return_to_entry_after_profit is False
+
+
+def test_open_profit_then_same_bar_entry_return_uses_known_open_order() -> None:
+    engine = OutcomeEngine()
+    view = _view()
+    engine.attach(view, now_ms=0, recover=False)
+    _admit(engine, (_bar(0, open_="102", high="103", low="100", close="101"),))
+
+    path = engine.evaluate(view.shadow_order_id, as_of_ms=ONE_MINUTE_MS).path
+
+    assert path.max_profit_giveback == Decimal("2")
+    assert path.return_to_entry_after_profit is True
+
+
+def test_pending_path_is_explicitly_unresolved() -> None:
+    engine = OutcomeEngine()
+    view = _view()
+    engine.attach(view, now_ms=0, recover=False)
+
+    outcome = engine.evaluate(view.shadow_order_id, as_of_ms=0)
+
+    assert outcome.path_maturity_status is MaturityStatus.PENDING
+    assert outcome.unresolved is True
 
 
 def test_no_hit_mfe_mae_atr_normalization_and_30_60_120_maturity() -> None:
@@ -197,11 +353,13 @@ def test_no_hit_mfe_mae_atr_normalization_and_30_60_120_maturity() -> None:
     assert at_30.horizons[0].mae == Decimal("2")
     assert at_30.horizons[0].mfe_atr == Decimal("1.5")
     assert at_30.horizons[0].mae_atr == Decimal("1")
+    assert at_30.unresolved is True
 
     at_120 = engine.evaluate(view.shadow_order_id, as_of_ms=120 * ONE_MINUTE_MS)
     assert all(item.maturity is MaturityStatus.MATURE for item in at_120.horizons)
     assert at_120.path.primary_result is PathPrimaryResult.NO_HIT
     assert at_120.path_maturity_status is MaturityStatus.MATURE
+    assert at_120.unresolved is False
 
 
 def test_missing_elapsed_minute_is_gapped_and_does_not_publish_metrics() -> None:
@@ -216,6 +374,7 @@ def test_missing_elapsed_minute_is_gapped_and_does_not_publish_metrics() -> None
     assert outcome.horizons[0].maturity is MaturityStatus.GAPPED
     assert outcome.horizons[0].mfe is None
     assert outcome.horizons[0].mae is None
+    assert outcome.unresolved is True
 
 
 def test_one_one_and_half_two_r_and_time_to_one_r() -> None:
@@ -295,6 +454,7 @@ def test_duplicate_is_idempotent_and_conflict_fails_closed_with_evidence() -> No
 
     assert outcome.path_maturity_status is MaturityStatus.CONFLICTED
     assert outcome.horizons[0].maturity is MaturityStatus.CONFLICTED
+    assert outcome.unresolved is True
     assert len(outcome.conflicts) == 1
     assert {outcome.conflicts[0].retained_hash, outcome.conflicts[0].conflicting_hash} == {
         first.canonical_hash,

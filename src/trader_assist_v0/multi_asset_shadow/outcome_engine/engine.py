@@ -71,6 +71,46 @@ def _favorable_adverse(
     return favorable, adverse
 
 
+def _profit_path_statistics(
+    *, side: Side, entry: Decimal, bars: tuple[OneMinuteBar, ...]
+) -> tuple[Decimal, bool]:
+    """Measure giveback and entry return without inventing same-bar ordering.
+
+    A favorable extreme from a prior closed bar, or the current bar's open, is
+    authoritative before the current high/low.  An otherwise ambiguous
+    same-bar high/low sequence cannot establish a profit-then-return path.
+    """
+    prior_peak_favorable = Decimal()
+    max_giveback = Decimal()
+    returned_to_entry = False
+    for bar in bars:
+        if side is Side.LONG:
+            opening_favorable = max(Decimal(), bar.open - entry)
+            favorable = max(Decimal(), bar.high - entry)
+            worst_later_price = bar.low
+            crosses_entry = bar.low <= entry
+        else:
+            opening_favorable = max(Decimal(), entry - bar.open)
+            favorable = max(Decimal(), entry - bar.low)
+            worst_later_price = bar.high
+            crosses_entry = bar.high >= entry
+
+        established_peak = max(prior_peak_favorable, opening_favorable)
+        if established_peak > 0:
+            established_peak_price = (
+                entry + established_peak if side is Side.LONG else entry - established_peak
+            )
+            giveback = (
+                established_peak_price - worst_later_price
+                if side is Side.LONG
+                else worst_later_price - established_peak_price
+            )
+            max_giveback = max(max_giveback, giveback)
+            returned_to_entry = returned_to_entry or crosses_entry
+        prior_peak_favorable = max(established_peak, favorable)
+    return max_giveback, returned_to_entry
+
+
 class OutcomeEngine:
     """On-demand path manager with no strategy, account, or write authority."""
 
@@ -286,6 +326,7 @@ class OutcomeEngine:
             original_deadline_ms=view.original_deadline_ms,
             required_end_ms=required_end,
             path_maturity_status=overall_status,
+            unresolved=overall_status is not MaturityStatus.MATURE,
             horizons=horizons,
             path=path,
             time_to_retest_ms=time_to_retest,
@@ -481,6 +522,11 @@ class OutcomeEngine:
         one_level = view.r_level(Decimal("1"))
         one_half_level = view.r_level(Decimal("1.5"))
         two_level = view.r_level(Decimal("2"))
+        max_profit_giveback, return_to_entry_after_profit = _profit_path_statistics(
+            side=view.side,
+            entry=view.planned_entry,
+            bars=bars,
+        )
         for bar in bars:
             if view.side is Side.LONG:
                 bar_stop = bar.low <= view.stop
@@ -540,6 +586,8 @@ class OutcomeEngine:
             two_r_hit=two_hit,
             time_to_one_r_ms=time_to_one,
             max_mfe_before_stop=max_before_stop,
+            max_profit_giveback=max_profit_giveback,
+            return_to_entry_after_profit=return_to_entry_after_profit,
         )
 
     @staticmethod
