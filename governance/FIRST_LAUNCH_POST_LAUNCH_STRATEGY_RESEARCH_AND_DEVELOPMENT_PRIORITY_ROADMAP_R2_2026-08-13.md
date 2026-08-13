@@ -4,9 +4,11 @@
 **日期：** `2026-08-13`  
 **仓库：** `woshixiong/trader-assist-v0`  
 **关联 Draft PR：** `#52`  
-**状态：** `CURRENT POST-LAUNCH STRATEGY PRIORITY ROADMAP / NON-EXECUTABLE / NON-AUTHORIZING`  
+**状态：** `SUPERSEDED FOR FUTURE PRIORITY ORDER / RETAINED FOR AUDIT AND RESEARCH CONTENT / NON-EXECUTABLE / NON-AUTHORIZING`  
 **父级：** `FIRST_LAUNCH_POST_LAUNCH_STRATEGY_RESEARCH_AND_SHADOW_EVIDENCE_BACKLOG_R1_2026-08-12.md`  
-**作用：** 在不改变当前 Machine Strategy R1/R1.1 的前提下，综合 Strong Breakout / No-Retest、Auction/Market Microstructure、Scheduled Macro Event、Event Asset Selection 与既有研究 Backlog，形成下一阶段统一研究和开发排序。
+**当前取代文件：** `FIRST_LAUNCH_POST_LAUNCH_STRATEGY_RESEARCH_AND_FUTURE_DEVELOPMENT_INVENTORY_R3_2026-08-13.md`  
+
+> 2026-08-13 用户更新：未来开发优先级暂不冻结。R2 中的 R1→R9 排序保留为当时研究判断和审计历史，但不再构成未来开发顺序权威。所有有价值方向由 R3 Inventory 完整登记，First Launch 上线后再依据真实 Shadow / Forward Evidence、策略增量价值与工程成本统一排序。
 
 ---
 
@@ -262,7 +264,7 @@ TIME_ACCEPTANCE   # 研究 outside 1m micro-balance
 BREAKOUT_PROBE    # 最后才考虑
 ```
 
-优先顺序：
+研究成熟度关系：
 
 ```text
 CURRENT MICRO_FAST / STANDARD BASELINE
@@ -270,6 +272,8 @@ CURRENT MICRO_FAST / STANDARD BASELINE
 → SHADOW TEST IF PROMISING
 → BREAKOUT_PROBE ONLY IF MISSED-RUNAWAY ECONOMICS JUSTIFY IT
 ```
+
+这不是未来全局优先级冻结，只表示这些候选自身的证据依赖关系。
 
 `BREAKOUT_PROBE` 不得以 `boundary crossed → full-size market order` 实现。
 
@@ -321,101 +325,34 @@ FAILED_ACCEPTED_BREAKOUT research labels
 
 ---
 
-## 10. 未来统一优先级
+## 10. 历史候选分组（不再作为冻结优先级）
 
-### R1 — BREAKOUT LIFECYCLE OPTIMIZATION
-
-最高优先。
-
-包含两个并行子问题：
+R2 当时曾按以下结构分组：
 
 ```text
-R1A = FAILED_ACCEPTED_BREAKOUT / FAILED_IMPULSE
-R1B = STRONG / NO-RETEST BREAKOUT COVERAGE AUDIT
+R1 = BREAKOUT LIFECYCLE OPTIMIZATION
+R2 = PER_MARKET_STABLE_TIMEFRAME_PROFILE
+R3 = SECTOR / PEER RELATIVE STRENGTH
+R4 = SCHEDULED MACRO EVENT + EVENT ASSET ROUTER
+R5 = CASH OPEN / OPENING REPRICING
+R6 = LOGICAL INVALIDATION EXIT
+R7 = POSITION ENTRY SCALING / PROBE → ADD
+R8 = CROSS-MARKET CONFIRMATION SOFT SCORE
+R9 = ADVANCED L2 / OFI / BOOK RESILIENCY
 ```
 
-R1B 先验证现有 MICRO_FAST 的 coverage，只有存在显著增量价值时才研究：
-
-```text
-MICRO_PULLBACK
-TIME_ACCEPTANCE
-```
-
-`BREAKOUT_PROBE` 属于 R1 的后段条件分支，不是前置开发。
-
-### R2 — PER_MARKET_STABLE_TIMEFRAME_PROFILE
-
-延续现有 Backlog。先离线比较 FAST_5M 与更慢 Profile；不得实时动态切换。
-
-### R3 — SECTOR / PEER RELATIVE STRENGTH
-
-优先作为 Ranking / Attribution，不作为 Hard Gate。
-
-### R4 — SCHEDULED MACRO EVENT + EVENT ASSET ROUTER
-
-继续使用既有 Scheduled U.S. Macro 子合同，初始 CPI / NFP / PCE。
-
-新增明确研究问题：
-
-```text
-MACRO INTERPRETATION ASSET != TRADE ASSET
-```
-
-研究：
-
-```text
-US2Y / DXY / NQ / ES as interpreters
-INDEX / HIGH-BETA SECTOR / BTC / ETH as candidate trade expressions
-EVENT_RELATIVE_STRENGTH
-IMPULSE_RETENTION
-PRICE_ACCEPTANCE
-EXECUTION QUALITY
-IDIOSYNCRATIC_CATALYST_RISK
-```
-
-目标是未来形成 `EVENT ASSET ROUTER`，而不是默认每次 CPI/NFP 都交易 ETH 或任意固定资产。
-
-### R5 — CASH OPEN / OPENING REPRICING
-
-研究 Premarket Trend → Cash Open Continuation / Failure。
-
-### R6 — LOGICAL INVALIDATION EXIT
-
-比较结构提前失效 vs 当前 Hard Stop。
-
-### R7 — POSITION ENTRY SCALING / PROBE→ADD
-
-包括一般 Probe→Add；若 R1 证明 Breakout Probe 有价值，也在这一阶段进入真正多腿执行设计。
-
-### R8 — CROSS-MARKET CONFIRMATION SOFT SCORE
-
-只做 Context / Ranking，不做 Hard Gate。
-
-### R9 — ADVANCED L2 / OFI / BOOK RESILIENCY
-
-只有当低成本 price/volume/BBO evidence 已证明某个明确问题值得进一步区分时，才加入：
-
-```text
-aggressive buy/sell volume
-CVD
-OFI
-queue imbalance
-multi-level OFI
-cancellation / replenishment
-book resiliency
-```
-
-不得为了理论完整性提前建设。
+这些方向全部保留，但未来排序服从 R3 Inventory 和 Post-Launch Evidence Review。
 
 ---
 
 ## 11. 开发数量与产品边界
 
-本路线当前识别：
+R2 当时识别的 9 个大类现在视为历史分组，不再限制未来 Inventory 数量。
+
+固定仍为：
 
 ```text
 CURRENT RELEASE NEW STRATEGY FEATURES = 0
-POST-LAUNCH RESEARCH / DEVELOPMENT STREAMS = 9
 NEW FORMAL SETUP COMMITTED = 0
 ```
 
@@ -522,25 +459,13 @@ Wyckoff / Market Profile / Auction Market Theory / SMC 可以用于描述和产�
 
 ---
 
-## 15. 最终冻结状态
+## 15. 最终状态
 
 ```text
 LET_CURRENT_ENGINEERING_SHIP = YES
 CURRENT_STRATEGY_DELTA = ZERO
-
-BREAKOUT_LIFECYCLE_RESEARCH = NEW_HIGHEST_PRIORITY_UMBRELLA
-FAILED_ACCEPTED_BREAKOUT_REMAINS_TOP_PRIORITY = YES
-STRONG_NO_RETEST_COVERAGE_AUDIT = TOP_PRIORITY_PARALLEL_SUBTRACK
-
-AUCTION_REGIME = RESEARCH_ONLY
-RANGE_EDGE_DOWNRANK = RESEARCH_ONLY
-MICRO_PULLBACK = RESEARCH_ONLY
-TIME_ACCEPTANCE = RESEARCH_ONLY
-BREAKOUT_PROBE = RESEARCH_ONLY_CONDITIONAL
-L2_OFI = LATE_STAGE_CONDITIONAL
-
-POST_LAUNCH_STREAM_COUNT = 9
-NEW_FORMAL_SETUP_COMMITTED = 0
+FUTURE_GLOBAL_PRIORITY = NOT_YET_FROZEN
+R3_INVENTORY_IS_CURRENT_FUTURE_DIRECTION_AUTHORITY = YES
 ```
 
-本文件不授权代码修改、依赖安装、数据订阅购买、部署、重启、permit 修改、账户访问、签名、交易所写入、自动下单、Mark Ready 或 Merge。
+本文件不授权代码修改、依赖安装、数据订阅购买、部署、重启、permit 修改、账户访问、签名、交易所写入、自动下单、Mark Ready 或 Merge.
