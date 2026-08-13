@@ -5,7 +5,7 @@
 **仓库：** `woshixiong/trader-assist-v0`  
 **关联 Draft PR：** `#52`  
 **状态：** `POST-LAUNCH STRATEGY RESEARCH CONTRACT / NON-EXECUTABLE / NON-AUTHORIZING`  
-**父级 Backlog：** `FIRST_LAUNCH_POST_LAUNCH_STRATEGY_RESEARCH_AND_SHADOW_EVIDENCE_BACKLOG_R1_2026-08-12.md` → Current R2 Roadmap `R4 = SCHEDULED MACRO EVENT + EVENT ASSET ROUTER`  
+**父级 Backlog：** `FIRST_LAUNCH_POST_LAUNCH_STRATEGY_RESEARCH_AND_SHADOW_EVIDENCE_BACKLOG_R1_2026-08-12.md`；完整候选登记服从 `FIRST_LAUNCH_POST_LAUNCH_STRATEGY_RESEARCH_AND_FUTURE_DEVELOPMENT_INVENTORY_R3_2026-08-13.md`。  
 **适用阶段：** `POST_FIRST_LAUNCH / OFFLINE_RESEARCH / SHADOW_RESEARCH / FUTURE_V0.x`  
 
 ---
@@ -40,6 +40,7 @@ EVENT_ASSET_ROUTER_RESEARCH = YES
 HIGH_PRODUCT_VALUE = YES
 PARALLEL_OFFLINE_RESEARCH_ELIGIBLE = YES
 CURRENT_RELEASE_SCOPE_CHANGED = NO
+FUTURE_PRIORITY = NOT_YET_FROZEN
 ```
 
 本文件不改变当前正式三 Setup：
@@ -62,7 +63,7 @@ RANGE_EDGE_REJECTION
 
 ```text
 L0 PRE-EVENT EXPECTATION
-Consensus / prior / revisions / policy prior / implied move
+Consensus / prior / revisions / policy prior / implied move / expectation distribution
 
 L1 RELEASE INTERPRETATION
 standardized surprise vector / internal conflict
@@ -134,6 +135,7 @@ revised_previous if known at that time
 RAW_SURPRISE
 HISTORICALLY_STANDARDIZED_SURPRISE
 FORECAST_DISPERSION_ADJUSTED_SURPRISE
+MULTI_VARIABLE_SURPRISE_VECTOR
 ```
 
 Forecast distribution / major-bank forecasts / whisper / prediction-market distribution 属于 High Value，但不得成为第一版阻塞依赖。
@@ -147,7 +149,24 @@ NFP: payroll/unemployment/AHE/revisions
 
 ---
 
-## 6. Policy Interpretation
+## 6. Forecast Disagreement / Distribution
+
+研究：
+
+```text
+forecast range
+std / IQR where available
+forecaster disagreement
+full probability distribution where available
+```
+
+目标：判断同样大小的 `Actual - Consensus` 在 forecast 高度集中与高度分歧时，信息冲击是否不同。
+
+不预设 `surprise / dispersion` 一定是最优公式；分别保存 surprise magnitude 与 disagreement，避免过早压缩成单一分数。
+
+---
+
+## 7. Policy Interpretation / Policy Sensitivity / Uncertainty
 
 优先研究：
 
@@ -159,13 +178,39 @@ FedWatch probability delta as lagged policy-repricing confirmation
 
 FedWatch 不作为 sub-second entry trigger。
 
-需要研究 Event-specific / regime-dependent `POLICY_SENSITIVITY`，避免假定同样 surprise 在所有年份具有相同影响。
+需要研究 Event-specific / regime-dependent：
+
+```text
+POLICY_SENSITIVITY
+MONETARY_POLICY_UNCERTAINTY
+```
+
+例如滚动估计 standardized CPI / NFP surprise 对 US2Y 的响应，并研究 FedWatch probability distribution / expected policy rate / entropy 等是否提供增量信息。
+
+禁止假定同样 surprise 在所有年份具有相同影响，或 CPI / NFP 的相对重要性恒定。
 
 ---
 
-## 7. Interpretation Asset 与 Trade Asset 必须分离
+## 8. Investor Attention / Overreaction
 
-当前新增正式研究原则：
+独立研究候选：
+
+```text
+ATTENTION HIGH
+→ larger first reaction?
+→ greater continuation?
+→ greater overreaction / FAILED_FIRST_MOVE?
+```
+
+具体 attention proxy 以后再选择，可研究 mature external measures、event options/volume/news attention 等；当前不因此新增数据平台。
+
+该方向可与 `FAILED_FIRST_MOVE` / `FAILED_ACCEPTED_BREAKOUT` 共享研究方法，但不能因为理论关联直接产生反向交易规则。
+
+---
+
+## 9. Interpretation Asset 与 Trade Asset 必须分离
+
+当前正式研究原则：
 
 ```text
 MACRO_INTERPRETATION_ASSET != TRADE_ASSET
@@ -203,7 +248,7 @@ CPI → always trade NQ
 
 ---
 
-## 8. EVENT ASSET ROUTER Research
+## 10. EVENT ASSET ROUTER Research
 
 未来研究：
 
@@ -232,7 +277,7 @@ STRONGEST_PRICE_MOVE != BEST_TRADE
 
 ---
 
-## 9. Macro Pure vs Sector Amplifier
+## 11. Macro Pure vs Sector Amplifier / Leader-Laggard
 
 研究两类表达：
 
@@ -257,11 +302,48 @@ Event-specific catalyst contamination
 
 个股/行业当天存在 earnings、M&A、analyst、sector-specific catalyst 时必须记录或排除，避免把 idiosyncratic move 错归因于 CPI/NFP/PCE。
 
+同时研究：
+
+```text
+leader confirms → laggard catches up?
+laggard weakness → avoid?
+sector leader vs index leader
+crypto divergence vs equity acceptance
+```
+
+不得直接升级为 Cross-Market Hard Gate。
+
 ---
 
-## 10. Entry Regimes
+## 12. Prediction-Market Macro Distribution
 
-第一阶段研究四类：
+未来研究 Kalshi 或其他成熟、合规 prediction market 是否能提供：
+
+```text
+continuous expectation
+high-frequency probability distribution
+market-implied tail probability
+```
+
+其价值可能高于仅增加多个银行点预测，但进入工程前必须独立评估：
+
+```text
+historical PIT availability
+license / terms
+cost
+latency
+rate limits
+API stability
+commercial / non-display use
+```
+
+当前不购买、不开发。
+
+---
+
+## 13. Entry Regimes
+
+第一阶段研究：
 
 ```text
 A. SECOND-STAGE CONTINUATION
@@ -280,7 +362,7 @@ Immediate first-second news race 不作为第一版主要竞争区域。
 
 ---
 
-## 11. Event Window Data
+## 14. Event Window Data
 
 当前 First Launch 仍为 5m strategy route。
 
@@ -302,7 +384,7 @@ EVENT-WINDOW HIGH-RES DATA ONLY
 
 ---
 
-## 12. NO_TRADE Gate
+## 15. NO_TRADE Gate
 
 至少研究：
 
@@ -322,7 +404,7 @@ first move excessively extended
 
 ---
 
-## 13. Execution / Risk
+## 16. Execution / Risk
 
 Event backtest 不允许只用 OHLC mid-price 假设成交。
 
@@ -342,7 +424,54 @@ Probe / scale-in 仍属于未来 Execution Rule，不能因为 Macro Strategy �
 
 ---
 
-## 14. 研究优先级与成熟度
+## 17. NQ / ES vs Hyperliquid Index Tracking
+
+如果 interpretation 使用 CME NQ / ES，而实际 trade expression 使用 Hyperliquid XYZ100 / SP500，必须研究事件窗口：
+
+```text
+tracking lag
+basis
+spread
+slippage
+reaction speed
+price acceptance consistency
+```
+
+不得假设 CME benchmark 与 Hyperliquid perpetual 完全同步。
+
+---
+
+## 18. Pre-Announcement Drift
+
+可以作为 expectation-state / attribution 研究，但当前固定：
+
+```text
+PRE_EVENT_DIRECTIONAL_BET = NO
+```
+
+不把潜在 proprietary forecast / information leakage 当作可复制 edge。
+
+---
+
+## 19. Event Volatility / Options Independent Branch
+
+长期独立研究候选：
+
+```text
+REALIZED EVENT MOVE
+vs
+PRE-EVENT IMPLIED MOVE
+```
+
+可能涉及 straddle / strangle / defined-risk options structures。
+
+该方向需要 options data、IV surface、expiry/gamma/theta/vega 和独立 execution 研究，复杂度显著高于当前 directional Event Strategy，因此只登记，不进入当前开发。
+
+---
+
+## 20. Research Maturity Path
+
+不是冻结的全局开发优先级，只是本模块内部从证据到自动化的成熟度顺序：
 
 ```text
 M0 = PIT historical event dataset
@@ -356,42 +485,24 @@ M6 = bounded automation only after independent evidence and new authority
 
 ---
 
-## 15. 当前禁止
+## 21. 当前禁止
 
 ```text
 NO CURRENT RELEASE CODE
 NO NEW FOURTH SETUP
 NO EVENT-SPECIFIC MACHINE PARAMETERS
 NO FEDWATCH PURCHASE REQUIRED NOW
+NO PREDICTION-MARKET PURCHASE REQUIRED NOW
 NO FULL MACRO DATA PLATFORM
 NO FULL-UNIVERSE TICK INFRASTRUCTURE
 NO LIVE EVENT ASSET ROUTER
 NO PRE-EVENT DIRECTIONAL BET
+NO EVENT-VOLATILITY OPTIONS ENGINE NOW
 NO AUTO TRADE
 ```
 
 ---
 
-## 16. 与当前 Strategy Roadmap 的关系
+## 22. Authority Boundary
 
-当前统一 Post-Launch Roadmap：
-
-```text
-R1 BREAKOUT LIFECYCLE OPTIMIZATION
-R2 PER_MARKET_STABLE_TIMEFRAME_PROFILE
-R3 SECTOR / PEER RELATIVE STRENGTH
-R4 SCHEDULED MACRO EVENT + EVENT ASSET ROUTER
-R5 CASH OPEN / OPENING REPRICING
-R6 LOGICAL INVALIDATION EXIT
-R7 POSITION ENTRY SCALING / PROBE→ADD
-R8 CROSS-MARKET CONFIRMATION SOFT SCORE
-R9 ADVANCED L2 / OFI / BOOK RESILIENCY
-```
-
-本文件只负责 R4，不改变当前发布。
-
----
-
-## 17. Authority Boundary
-
-本文件不授权代码修改、工程派发、依赖安装、数据订阅购买、部署、重启、账户访问、签名、交易所写入、自动交易、PR Mark Ready 或 Merge。
+本文件不授权代码修改、工程派发、依赖安装、数据订阅购买、部署、重启、账户访问、签名、交易所写入、自动交易、PR Mark Ready 或 Merge.
