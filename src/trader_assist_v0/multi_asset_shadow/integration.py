@@ -54,6 +54,7 @@ from .outcome_engine import (
     OneMinuteBar,
     OneMinuteProvider,
     OutcomeEngine,
+    OutcomeEngineError,
     OutcomeSink,
     OutcomeTransitionView,
     PathPrimaryResult,
@@ -475,6 +476,10 @@ class EvidenceOutbox:
         return self._store
 
     def enqueue(self, envelope: MessageEnvelope) -> EnqueueReceipt:
+        if envelope.kind is NotificationKind.FORMAL_SIGNAL:
+            raise NotificationContractError(
+                "FORMAL_SIGNAL must be published by EvidenceStore.publish_formal_bundle"
+            )
         created_at = _timestamp(envelope.created_at)
         with self._store._connection:
             inserted = self._store._connection.execute(
@@ -704,6 +709,13 @@ class EvidenceOutcomeAdapter(OutcomeSink):
         )
 
     def save_outcome(self, outcome: FormalShadowOutcome) -> None:
+        engine = self.restore_engine(now_ms=outcome.evaluated_at_ms)
+        if outcome.shadow_order_id not in engine.attached_shadow_ids:
+            raise RecordError("outcome has no reconstructable ShadowOrder")
+        if engine.evaluate(
+            outcome.shadow_order_id, as_of_ms=outcome.evaluated_at_ms
+        ) != outcome:
+            raise RecordError("outcome contradicts retained transition or 1m authority")
         self._store._write_controlled((self._outcome_record(outcome),))
 
     def canonical_outcome(self, record: OutcomeEnvelope) -> FormalShadowOutcome:
@@ -736,73 +748,27 @@ class EvidenceOutcomeAdapter(OutcomeSink):
                 values.append(record)
         return tuple(sorted(values, key=lambda item: int(item.payload.get("evaluated_at_ms", -1))))
 
-    def persist_transition(self, transition: OutcomeTransitionView) -> OutcomeTransitionEvidence:
-        shadow = self._store.get(transition.shadow_order_id)
-        if not isinstance(shadow, ShadowOrder):
-            raise RecordError("outcome transition has no retained ShadowOrder")
-        if shadow.payload.get("market_id") != transition.market_id:
-            raise RecordError("outcome transition market does not match retained ShadowOrder")
-        if transition.occurred_at_ms < int(shadow.payload.get("outcome_start_ms", -1)):
-            raise RecordError("outcome transition predates retained ShadowOrder")
-        if (
-            transition.kind in {TransitionKind.ACCEPTED_REENTRY, TransitionKind.FAILED_BREAKOUT}
-            and shadow.payload.get("setup_family") != OutcomeSetupFamily.BREAKOUT_RETEST.value
-        ):
-            raise RecordError("breakout transition requires retained BREAKOUT_RETEST ShadowOrder")
-        payload = _canonical_dataclass(transition)
-        record = OutcomeTransitionEvidence.create(
-            identity={"transition_id": transition.transition_id},
-            **payload,
-            payload_hash=_typed_hash("outcome-transition", payload),
+    def _persist_provider_bars(
+        self, bars: tuple[OneMinuteBar, ...]
+    ) -> tuple[OutcomeBarEvidence, ...]:
+        records = tuple(
+            OutcomeBarEvidence.create(
+                identity={
+                    "market_id": bar.market_id,
+                    "open_time_ms": bar.open_time_ms,
+                    "canonical_hash": bar.canonical_hash,
+                },
+                **_canonical_dataclass(bar),
+            )
+            for bar in bars
         )
-        self._store._write_controlled((record,))
-        return record
-
-    def persist_bar(self, bar: OneMinuteBar) -> OutcomeBarEvidence:
-        payload = _canonical_dataclass(bar)
-        record = OutcomeBarEvidence.create(
-            identity={
-                "market_id": bar.market_id,
-                "open_time_ms": bar.open_time_ms,
-                "canonical_hash": bar.canonical_hash,
-            },
-            **payload,
-        )
-        self._store._write_controlled((record,))
-        return record
+        self._store._write_controlled(records)
+        return records
 
     def _retained_transitions(self) -> tuple[OutcomeTransitionView, ...]:
-        values: list[OutcomeTransitionView] = []
-        for record_id in _record_ids(self._store, "outcome_transition"):
-            record = self._store.get(record_id)
-            if not isinstance(record, OutcomeTransitionEvidence):
-                continue
-            payload = record.payload
-            material = {
-                "transition_id": payload["transition_id"],
-                "shadow_order_id": payload["shadow_order_id"],
-                "market_id": payload["market_id"],
-                "kind": payload["kind"],
-                "occurred_at_ms": payload["occurred_at_ms"],
-                "reference_price": payload["reference_price"],
-            }
-            if payload.get("payload_hash") != _typed_hash("outcome-transition", material):
-                raise RecordError("retained outcome transition payload hash is invalid")
-            values.append(
-                OutcomeTransitionView(
-                    transition_id=str(payload["transition_id"]),
-                    shadow_order_id=str(payload["shadow_order_id"]),
-                    market_id=str(payload["market_id"]),
-                    kind=TransitionKind(str(payload["kind"])),
-                    occurred_at_ms=int(payload["occurred_at_ms"]),
-                    reference_price=(
-                        None
-                        if payload.get("reference_price") is None
-                        else _as_decimal(payload["reference_price"], "reference_price")
-                    ),
-                )
-            )
-        return tuple(values)
+        if _record_ids(self._store, "outcome_transition"):
+            raise RecordError("retained Outcome transitions have no production authority")
+        return ()
 
     def _retained_bars(self) -> tuple[OneMinuteBar, ...]:
         values: list[OneMinuteBar] = []
@@ -875,15 +841,52 @@ class EvidenceOutcomeAdapter(OutcomeSink):
                     active=True,
                 )
             )
+        evidence_provider = (
+            None
+            if provider is None
+            else EvidenceOneMinuteProvider(provider=provider, adapter=self)
+        )
         return OutcomeEngine.reconstruct(
             shadows=tuple(views),
             transitions=self._retained_transitions(),
             bars=self._retained_bars(),
             now_ms=now_ms,
-            provider=provider,
+            provider=evidence_provider,
             sink=self,
             recover=False,
         )
+
+
+class EvidenceOneMinuteProvider:
+    """Persist configured public-provider bars before Outcome Engine admission."""
+
+    def __init__(
+        self, *, provider: OneMinuteProvider, adapter: EvidenceOutcomeAdapter
+    ) -> None:
+        self.provider = provider
+        self.adapter = adapter
+
+    def subscribe_1m(self, *, market_id: str) -> None:
+        self.provider.subscribe_1m(market_id=market_id)
+
+    def unsubscribe_1m(self, *, market_id: str) -> None:
+        self.provider.unsubscribe_1m(market_id=market_id)
+
+    def backfill_1m(
+        self, *, market_id: str, start_ms: int, end_ms: int
+    ) -> tuple[OneMinuteBar, ...]:
+        bars = self.provider.backfill_1m(
+            market_id=market_id, start_ms=start_ms, end_ms=end_ms
+        )
+        if type(bars) is not tuple or any(
+            type(bar) is not OneMinuteBar
+            or bar.market_id != market_id
+            or not start_ms <= bar.open_time_ms < end_ms
+            for bar in bars
+        ):
+            raise OutcomeEngineError("backfill returned a bar outside its request")
+        self.adapter._persist_provider_bars(bars)
+        return bars
 
 
 @dataclass(frozen=True)
@@ -1105,6 +1108,14 @@ class MultiAssetShadowCoordinator:
             raise IntegrationError("outbox and outcome persistence must use the Evidence store")
         if outcome_engine.sink is not outcome_adapter:
             raise IntegrationError("Outcome Engine sink must be the Evidence adapter")
+        if isinstance(outcome_engine.provider, EvidenceOneMinuteProvider):
+            if outcome_engine.provider.adapter is not outcome_adapter:
+                raise IntegrationError("1m provider persistence must use the Evidence adapter")
+        elif outcome_engine.provider is not None:
+            outcome_engine.provider = EvidenceOneMinuteProvider(
+                provider=outcome_engine.provider,
+                adapter=outcome_adapter,
+            )
         if len(release_sha) != 40 or any(value not in "0123456789abcdef" for value in release_sha):
             raise IntegrationError("release_sha must be exact lowercase git SHA-1")
         self._registry = registry
@@ -2192,18 +2203,22 @@ class MultiAssetShadowCoordinator:
     def admit_outcome_transition(
         self, transition: OutcomeTransitionView, *, now_ms: int, recover: bool = True
     ) -> bool:
-        """Durably retain an Outcome transition before exposing it to the engine."""
-        if transition.occurred_at_ms > now_ms:
-            raise IntegrationError("outcome transition cannot be admitted before it occurs")
-        self._outcome_adapter.persist_transition(transition)
-        return self._outcome.admit_transition(transition, now_ms=now_ms, recover=recover)
+        """Reject caller-authored Outcome facts at the application boundary."""
+        del transition, now_ms, recover
+        raise IntegrationError(
+            "literal Outcome transitions are prohibited; no production authority exists"
+        )
 
     def admit_outcome_bar(self, bar: OneMinuteBar) -> AdmissionStatus:
-        """Durably retain every canonical 1m variant before engine admission."""
-        if not self._outcome.requires_bar(bar):
-            return AdmissionStatus.OUTSIDE_REQUIRED_WINDOW
-        self._outcome_adapter.persist_bar(bar)
-        return self._outcome.admit_bar(bar)
+        """Reject caller-authored 1m truth at the application boundary."""
+        del bar
+        raise IntegrationError(
+            "caller-authored 1m bars are prohibited; use the configured OneMinuteProvider"
+        )
+
+    def recover_outcome_bars(self, *, now_ms: int) -> tuple[tuple[str, int, int], ...]:
+        """Recover provider-owned 1m bars through durable Evidence admission."""
+        return self._outcome.recover(now_ms=now_ms)
 
     def human_review_status(self, shadow_order_id: str) -> str:
         reviews: list[HumanReview] = []

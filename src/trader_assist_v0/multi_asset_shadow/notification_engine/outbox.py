@@ -5,7 +5,14 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Protocol
 
-from .models import ClaimedOutboxMessage, DeliveryTransition, EnqueueReceipt, MessageEnvelope
+from .models import (
+    ClaimedOutboxMessage,
+    DeliveryTransition,
+    EnqueueReceipt,
+    MessageEnvelope,
+    NotificationContractError,
+    NotificationKind,
+)
 
 
 class OutboxPort(Protocol):
@@ -37,4 +44,8 @@ class NotificationPublisher:
         self._outbox = outbox
 
     def publish(self, envelope: MessageEnvelope) -> EnqueueReceipt:
+        if envelope.kind is NotificationKind.FORMAL_SIGNAL:
+            raise NotificationContractError(
+                "FORMAL_SIGNAL must be published by EvidenceStore.publish_formal_bundle"
+            )
         return self._outbox.enqueue(envelope)

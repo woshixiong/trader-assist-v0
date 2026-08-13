@@ -43,17 +43,10 @@ from trader_assist_v0.multi_asset_shadow.notification_engine import (
     build_envelope,
 )
 from trader_assist_v0.multi_asset_shadow.outcome_engine import (
-    FormalShadowView,
     OneMinuteBar,
     OutcomeEngine,
     OutcomeTransitionView,
     TransitionKind,
-)
-from trader_assist_v0.multi_asset_shadow.outcome_engine import (
-    SetupFamily as OutcomeSetupFamily,
-)
-from trader_assist_v0.multi_asset_shadow.outcome_engine import (
-    Side as OutcomeSide,
 )
 from trader_assist_v0.multi_asset_shadow.planning import (
     CostModel,
@@ -112,6 +105,7 @@ class FakeOneMinuteProvider:
     def __init__(self) -> None:
         self.subscribed: list[str] = []
         self.unsubscribed: list[str] = []
+        self.inventory: list[OneMinuteBar] = []
 
     def subscribe_1m(self, *, market_id: str) -> None:
         self.subscribed.append(market_id)
@@ -122,8 +116,11 @@ class FakeOneMinuteProvider:
     def backfill_1m(
         self, *, market_id: str, start_ms: int, end_ms: int
     ) -> tuple[OneMinuteBar, ...]:
-        del market_id, start_ms, end_ms
-        return ()
+        return tuple(
+            bar
+            for bar in self.inventory
+            if bar.market_id == market_id and start_ms <= bar.open_time_ms < end_ms
+        )
 
 
 class FakePlanningData:
@@ -560,6 +557,8 @@ def test_finalized_5m_to_direct_formal_shadow_evidence_outbox_and_outcome(tmp_pa
     )
     assert route.planning.calls == ["BBO", "L2"]
     assert route.evidence.get(artifacts.shadow_order.record_id) == artifacts.shadow_order
+    with pytest.raises(ValueError, match="publish_formal_bundle"):
+        route.outbox.enqueue(artifacts.outbox_receipt.envelope)
     assert route.coordinator.human_review_status(artifacts.shadow_order.record_id) == "UNLABELED"
     with pytest.raises(IntegrationError, match="BREAKOUT_RETEST"):
         route.coordinator.publish_failed_breakout_research(
@@ -1104,17 +1103,18 @@ def test_draining_blocks_new_activity_but_existing_outcome_completes_and_detache
             market_id=route.market.identity.market_id,
         )
     start = int(artifacts.shadow_order.payload["outcome_start_ms"])
-    for index in range(120):
-        route.coordinator.admit_outcome_bar(
-            OneMinuteBar.create(
-                market_id=route.market.identity.market_id,
-                open_time_ms=start + index * 60_000,
-                open=Decimal("100.1"),
-                high=Decimal("100.2"),
-                low=Decimal("100.0"),
-                close=Decimal("100.1"),
-            )
+    route.outcome_provider.inventory.extend(
+        OneMinuteBar.create(
+            market_id=route.market.identity.market_id,
+            open_time_ms=start + index * 60_000,
+            open=Decimal("100.1"),
+            high=Decimal("100.2"),
+            low=Decimal("100.0"),
+            close=Decimal("100.1"),
         )
+        for index in range(120)
+    )
+    route.coordinator.recover_outcome_bars(now_ms=start + 120 * 60_000)
     completed = route.outcome.tick(now_ms=start + 120 * 60_000)[0]
     assert not completed.unresolved
     assert route.outcome.subscription_requirements == ()
@@ -1239,92 +1239,109 @@ def test_strategy_restart_uses_semantic_chronology_not_record_id_order(tmp_path:
 
 
 @pytest.mark.parametrize(
-    "transition_kind", (TransitionKind.ACCEPTED_REENTRY, TransitionKind.FAILED_BREAKOUT)
+    "kind", (TransitionKind.ACCEPTED_REENTRY, TransitionKind.FAILED_BREAKOUT)
 )
-def test_outcome_evidence_reopens_with_shared_demand_extension_conflict_and_projection(
-    tmp_path: Path, transition_kind: TransitionKind
+def test_literal_transition_has_no_production_ingress(
+    tmp_path: Path, kind: TransitionKind
 ) -> None:
     route = _route(tmp_path)
-    start = route.latest.close_time_ms + 1
-    market_id = route.market.identity.market_id
-    first = _persist_breakout_shadow(
-        route.evidence, market_id=market_id, start_ms=start, tag="first"
+    evaluation = route.coordinator.evaluate_finalized_market(
+        market_id=route.market.identity.market_id
     )
-    second = _persist_breakout_shadow(
-        route.evidence, market_id=market_id, start_ms=start, tag="second"
-    )
-    for shadow in (first, second):
-        route.outcome.attach(
-            FormalShadowView(
-                shadow_order_id=shadow.record_id,
-                market_id=market_id,
-                side=OutcomeSide.LONG,
-                setup_family=OutcomeSetupFamily.BREAKOUT_RETEST,
-                outcome_start_ms=start,
-                planned_entry=Decimal("100"),
-                stop=Decimal("95"),
-                tp1=Decimal("105"),
-                tp2=Decimal("110"),
-                atr=Decimal("2"),
-                zone_low=Decimal("99"),
-                zone_high=Decimal("101"),
-            ),
-            now_ms=start,
-            recover=False,
-        )
-    assert route.outcome.subscription_requirements == (market_id,)
-    with pytest.raises(IntegrationError, match="no canonical failed-breakout"):
-        route.coordinator.publish_failed_breakout_research(shadow_order_id=first.record_id)
+    artifacts = _formalize(route, evaluation)
+    assert isinstance(artifacts, FormalizationArtifacts)
+    start = int(artifacts.shadow_order.payload["outcome_start_ms"])
     transition = OutcomeTransitionView(
-        transition_id=transition_kind.value.lower(),
-        shadow_order_id=first.record_id,
-        market_id=market_id,
-        kind=transition_kind,
-        occurred_at_ms=start + 90 * 60_000,
-        reference_price=Decimal("99.8"),
+        transition_id=f"literal-{kind.value.lower()}",
+        shadow_order_id=artifacts.shadow_order.record_id,
+        market_id=route.market.identity.market_id,
+        kind=kind,
+        occurred_at_ms=start,
+        reference_price=Decimal("100"),
     )
-    route.coordinator.admit_outcome_transition(
-        transition, now_ms=transition.occurred_at_ms, recover=False
-    )
-    assert route.outcome.required_window(first.record_id)[1] == start + 210 * 60_000
 
-    for minute in range(210):
-        if minute == 10:  # retained gap remains authoritative on restart
-            continue
-        bar = OneMinuteBar.create(
-            market_id=market_id,
-            open_time_ms=start + minute * 60_000,
-            open=Decimal("100"),
-            high=Decimal("102"),
-            low=Decimal("98"),
-            close=Decimal("99.8"),
+    with pytest.raises(IntegrationError, match="literal Outcome transitions"):
+        route.coordinator.admit_outcome_transition(
+            transition, now_ms=start, recover=False
         )
-        route.coordinator.admit_outcome_bar(bar)
-        if minute == 11:
-            route.coordinator.admit_outcome_bar(
-                OneMinuteBar.create(
-                    market_id=market_id,
-                    open_time_ms=bar.open_time_ms,
-                    open=Decimal("100"),
-                    high=Decimal("103"),
-                    low=Decimal("98"),
-                    close=Decimal("100.5"),
-                    source_id="REST_CONFLICT",
-                )
-            )
-    now_ms = start + 211 * 60_000
-    before = route.outcome.tick(now_ms=now_ms)
-    before_by_id = {outcome.shadow_order_id: outcome for outcome in before}
-    assert route.outcome.subscription_requirements == ()
-    assert before_by_id[first.record_id].conflicts
-    assert before_by_id[first.record_id].required_end_ms == start + 210 * 60_000
-    research = route.coordinator.publish_failed_breakout_research(shadow_order_id=first.record_id)
-    assert research.envelope.content.startswith("RESEARCH / FAILED_BREAKOUT EVIDENCE")
-    assert "NOT ACTIONABLE" in research.envelope.content
-    assert all(
-        forbidden not in research.envelope.content
-        for forbidden in ("Planned entry", "Stop:", "TP1:", "TP2:", "quantity", "submit")
+    assert not hasattr(route.coordinator, "admit_accepted_reentry")
+    assert (
+        route.evidence._connection.execute("SELECT COUNT(*) FROM outcome_transitions").fetchone()[0]
+        == 0
     )
+
+
+def test_direct_engine_arbitrary_bar_cannot_persist_canonical_outcome(tmp_path: Path) -> None:
+    route = _route(tmp_path)
+    evaluation = route.coordinator.evaluate_finalized_market(
+        market_id=route.market.identity.market_id
+    )
+    artifacts = _formalize(route, evaluation)
+    assert isinstance(artifacts, FormalizationArtifacts)
+    start = int(artifacts.shadow_order.payload["outcome_start_ms"])
+    bar = OneMinuteBar.create(
+        market_id=route.market.identity.market_id,
+        open_time_ms=start,
+        open=Decimal("100"),
+        high=Decimal("101"),
+        low=Decimal("99"),
+        close=Decimal("100"),
+    )
+
+    with pytest.raises(IntegrationError, match="caller-authored 1m"):
+        route.coordinator.admit_outcome_bar(bar)
+    route.outcome.admit_bar(bar)
+    with pytest.raises(RecordError, match="retained transition or 1m authority"):
+        route.outcome.tick(now_ms=start + 60_000)
+    assert (
+        route.evidence._connection.execute("SELECT COUNT(*) FROM outcome_envelopes").fetchone()[0]
+        == 0
+    )
+
+
+def test_normal_formal_outcome_uses_provider_bars_with_zero_transitions_and_restarts(
+    tmp_path: Path,
+) -> None:
+    route = _route(tmp_path)
+    evaluation = route.coordinator.evaluate_finalized_market(
+        market_id=route.market.identity.market_id
+    )
+    artifacts = _formalize(route, evaluation)
+    assert isinstance(artifacts, FormalizationArtifacts)
+    start = int(artifacts.shadow_order.payload["outcome_start_ms"])
+    bars = tuple(
+        OneMinuteBar.create(
+            market_id=route.market.identity.market_id,
+            open_time_ms=start + minute * 60_000,
+            open=Decimal("100.1"),
+            high=Decimal("100.2"),
+            low=Decimal("100"),
+            close=Decimal("100.1"),
+        )
+        for minute in range(120)
+    )
+    route.outcome_provider.inventory.extend((*bars, bars[10]))
+    now_ms = start + 120 * 60_000
+    route.coordinator.recover_outcome_bars(now_ms=now_ms)
+    before = route.outcome.tick(now_ms=now_ms)
+    outcome = next(
+        item
+        for item in before
+        if item.shadow_order_id == artifacts.shadow_order.record_id
+    )
+    assert outcome.path_maturity_status.value == "MATURE"
+    assert not outcome.unresolved
+    assert {item.horizon_minutes for item in outcome.horizons} == {30, 60, 120}
+    assert outcome.required_end_ms == start + 120 * 60_000
+    assert (
+        route.evidence._connection.execute("SELECT COUNT(*) FROM outcome_transitions").fetchone()[0]
+        == 0
+    )
+    assert (
+        route.evidence._connection.execute("SELECT COUNT(*) FROM outcome_bars").fetchone()[0]
+        == 120
+    )
+    assert artifacts.shadow_order.payload["submission_status"] == "NOT_SUBMITTED"
 
     route.evidence.close()
     reopened = EvidenceStore(tmp_path / "evidence.sqlite")
@@ -1332,16 +1349,67 @@ def test_outcome_evidence_reopens_with_shared_demand_extension_conflict_and_proj
     adapter = EvidenceOutcomeAdapter(reopened)
     restored = adapter.restore_engine(now_ms=now_ms, provider=provider)
     after = tuple(
-        restored.evaluate(identity, as_of_ms=now_ms) for identity in restored.attached_shadow_ids
+        restored.evaluate(identity, as_of_ms=now_ms)
+        for identity in restored.attached_shadow_ids
     )
     assert after == before
-    assert restored.subscription_requirements == ()
-    assert provider.subscribed == []
-    assert (
-        reopened._connection.execute("SELECT COUNT(*) FROM outcome_transitions").fetchone()[0] == 1
+
+
+def test_provider_conflict_and_gap_reconstruct_deterministically(tmp_path: Path) -> None:
+    route = _route(tmp_path)
+    evaluation = route.coordinator.evaluate_finalized_market(
+        market_id=route.market.identity.market_id
     )
-    assert reopened._connection.execute("SELECT COUNT(*) FROM outcome_bars").fetchone()[0] == 210
-    assert before_by_id[first.record_id].failed_breakout
+    artifacts = _formalize(route, evaluation)
+    assert isinstance(artifacts, FormalizationArtifacts)
+    start = int(artifacts.shadow_order.payload["outcome_start_ms"])
+    bars = [
+        OneMinuteBar.create(
+            market_id=route.market.identity.market_id,
+            open_time_ms=start + minute * 60_000,
+            open=Decimal("100.1"),
+            high=Decimal("100.2"),
+            low=Decimal("100"),
+            close=Decimal("100.1"),
+        )
+        for minute in range(120)
+        if minute != 10
+    ]
+    bars.append(
+        OneMinuteBar.create(
+            market_id=route.market.identity.market_id,
+            open_time_ms=start + 11 * 60_000,
+            open=Decimal("100.1"),
+            high=Decimal("100.3"),
+            low=Decimal("100"),
+            close=Decimal("100.2"),
+            source_id="PUBLIC_1M_CONFLICT",
+        )
+    )
+    route.outcome_provider.inventory.extend(bars)
+    now_ms = start + 120 * 60_000
+    route.coordinator.recover_outcome_bars(now_ms=now_ms)
+    before = route.outcome.tick(now_ms=now_ms)
+    outcome = next(
+        item
+        for item in before
+        if item.shadow_order_id == artifacts.shadow_order.record_id
+    )
+    assert outcome.conflicts
+    assert outcome.path_maturity_status.value == "CONFLICTED"
+    assert (
+        route.evidence._connection.execute("SELECT COUNT(*) FROM outcome_bars").fetchone()[0]
+        == 120
+    )
+
+    route.evidence.close()
+    reopened = EvidenceStore(tmp_path / "evidence.sqlite")
+    restored = EvidenceOutcomeAdapter(reopened).restore_engine(now_ms=now_ms)
+    after = tuple(
+        restored.evaluate(identity, as_of_ms=now_ms)
+        for identity in restored.attached_shadow_ids
+    )
+    assert after == before
 
 
 def test_fabricated_outcome_projection_cannot_drive_research_or_correlation(
@@ -1400,48 +1468,43 @@ def test_non_breakout_families_cannot_publish_failed_breakout_research(
         route.coordinator.publish_failed_breakout_research(shadow_order_id=shadow.record_id)
 
 
-def test_mature_non_failed_breakout_cannot_publish_failed_breakout_research(
+def test_returned_inside_provider_path_without_transition_cannot_publish_research(
     tmp_path: Path,
 ) -> None:
     route = _route(tmp_path)
+    evaluation = route.coordinator.evaluate_finalized_market(
+        market_id=route.market.identity.market_id
+    )
+    artifacts = _formalize(route, evaluation)
+    assert isinstance(artifacts, FormalizationArtifacts)
     market_id = route.market.identity.market_id
-    start = route.latest.close_time_ms + 1
-    shadow = _persist_breakout_shadow(
-        route.evidence, market_id=market_id, start_ms=start, tag="successful-breakout"
-    )
-    route.outcome.attach(
-        FormalShadowView(
-            shadow_order_id=shadow.record_id,
+    start = int(artifacts.shadow_order.payload["outcome_start_ms"])
+    route.outcome_provider.inventory.extend(
+        OneMinuteBar.create(
             market_id=market_id,
-            side=OutcomeSide.LONG,
-            setup_family=OutcomeSetupFamily.BREAKOUT_RETEST,
-            outcome_start_ms=start,
-            planned_entry=Decimal("100"),
-            stop=Decimal("95"),
-            tp1=Decimal("105"),
-            tp2=Decimal("110"),
-            atr=Decimal("2"),
-            zone_low=Decimal("99"),
-            zone_high=Decimal("101"),
-        ),
-        now_ms=start,
-        recover=False,
-    )
-    for minute in range(120):
-        route.coordinator.admit_outcome_bar(
-            OneMinuteBar.create(
-                market_id=market_id,
-                open_time_ms=start + minute * 60_000,
-                open=Decimal("100"),
-                high=Decimal("100.2"),
-                low=Decimal("99.8"),
-                close=Decimal("100"),
-            )
+            open_time_ms=start + minute * 60_000,
+            open=Decimal("100"),
+            high=Decimal("100.2"),
+            low=Decimal("99.8"),
+            close=Decimal("100"),
         )
-    outcome = route.outcome.tick(now_ms=start + 120 * 60_000)[0]
+        for minute in range(120)
+    )
+    route.coordinator.recover_outcome_bars(now_ms=start + 120 * 60_000)
+    outcome = next(
+        item
+        for item in route.outcome.tick(now_ms=start + 120 * 60_000)
+        if item.shadow_order_id == artifacts.shadow_order.record_id
+    )
     assert not outcome.failed_breakout and not outcome.unresolved
-    with pytest.raises(IntegrationError, match="no canonical failed-breakout"):
-        route.coordinator.publish_failed_breakout_research(shadow_order_id=shadow.record_id)
+    assert (
+        route.evidence._connection.execute("SELECT COUNT(*) FROM outcome_transitions").fetchone()[0]
+        == 0
+    )
+    with pytest.raises(IntegrationError, match="BREAKOUT_RETEST"):
+        route.coordinator.publish_failed_breakout_research(
+            shadow_order_id=artifacts.shadow_order.record_id
+        )
 
 
 def test_durable_outbox_coalesces_reclaims_and_rejects_stale_completion(tmp_path: Path) -> None:

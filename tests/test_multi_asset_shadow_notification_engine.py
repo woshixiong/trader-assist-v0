@@ -263,13 +263,33 @@ class FakeOutbox:
         self.completed.append((claim_token, transition))
 
 
-def test_duplicate_publish_coalesces_at_outbox_boundary() -> None:
+@pytest.mark.parametrize(
+    "view",
+    (
+        scanner_watch(),
+        scanner_watch(kind=NotificationKind.WATCH_NEW_MARKET),
+        research(),
+    ),
+)
+def test_ordinary_publish_coalesces_non_formal_at_outbox_boundary(
+    view: ScannerWatchNotificationView | ResearchNotificationView,
+) -> None:
     outbox = FakeOutbox()
     publisher = NotificationPublisher(outbox)
-    envelope = build_envelope(view=formal(), created_at=NOW)
+    envelope = build_envelope(view=view, created_at=NOW)
     assert not publisher.publish(envelope).coalesced
     assert publisher.publish(envelope).coalesced
     assert len(outbox.envelopes) == 1
+
+
+def test_notification_publisher_rejects_fabricated_formal_signal() -> None:
+    outbox = FakeOutbox()
+    envelope = build_envelope(view=formal(), created_at=NOW)
+
+    with pytest.raises(ValueError, match="publish_formal_bundle"):
+        NotificationPublisher(outbox).publish(envelope)
+
+    assert not outbox.envelopes
 
 
 class FakeWebhook:
