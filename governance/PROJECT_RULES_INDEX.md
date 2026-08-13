@@ -12,7 +12,8 @@ Successor windows read the following order before acting:
 8. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_FAILURE_AND_DEFERRED_WORK_V1.md`
 9. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_AUTOMATION_ABANDONMENT_RULING_V1.md`
 10. `governance/TRADER_ASSIST_ENGINEERING_WORKFLOW_V3_2026-07-22.md`
-11. current live GitHub and CI state
+11. `governance/CODEX_TOKEN_EFFICIENCY_AND_PROMPT_RULES_V1_2026-08-13.md`
+12. current live GitHub and CI state
 
 Live GitHub objects override stale chat snapshots and stale PR-body snapshots. Future windows
 must resolve live GitHub state before relying on historical text.
