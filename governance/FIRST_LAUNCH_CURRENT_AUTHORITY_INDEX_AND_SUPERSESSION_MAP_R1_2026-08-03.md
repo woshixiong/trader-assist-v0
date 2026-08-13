@@ -1,7 +1,7 @@
 # First Launch 当前权威索引与取代关系 R1
 
 **记录 ID：** `TA-FIRST-LAUNCH-CURRENT-AUTHORITY-INDEX-R1-2026-08-03`  
-**更新日期：** `2026-08-12`  
+**更新日期：** `2026-08-13`  
 **仓库：** `woshixiong/trader-assist-v0`  
 **关联 Draft PR：** `#52`  
 **状态：** `CURRENT AUTHORITY ENTRY / NON-EXECUTABLE / NON-AUTHORIZING`
@@ -25,8 +25,9 @@
    - 高相关信号归组、研究独立样本解释、回撤和未来真实暴露治理最高权威。
 
 5. `FIRST_LAUNCH_POST_LAUNCH_STRATEGY_RESEARCH_AND_SHADOW_EVIDENCE_BACKLOG_R1_2026-08-12.md`
-   - 当前上线后策略研究与 Shadow Evidence 最高 Backlog 权威。固定 `FAILED_ACCEPTED_BREAKOUT / FAILED_IMPULSE`、Per-Market Timeframe Profile、Sector/Peer Relative Strength、Event Regime、Cash Open、Logical Exit、Probe→Add 和 Cross-Market Soft Score 的研究入口；当前发布不得据此增加正式策略逻辑。
-   - `R4 = EVENT REGIME` 的当前 Scheduled U.S. Macro 子研究合同为：`FIRST_LAUNCH_SCHEDULED_US_MACRO_EVENT_STRATEGY_RESEARCH_AND_FUTURE_AUTOMATION_BACKLOG_R1_2026-08-12.md`。该子合同初始聚焦 CPI / NFP / PCE，允许并行历史/离线研究，但不改变 R1–R3 顺序、不改变当前 Machine Strategy、不扩大当前发布范围，也不授权自动交易。
+   - 当前上线后 Strategy Research / Shadow Evidence 的父级 Backlog 权威。其 Evidence、可重建性和“不扩大当前发布”边界继续有效。
+   - 当前研究/未来开发排序由 `FIRST_LAUNCH_POST_LAUNCH_STRATEGY_RESEARCH_AND_DEVELOPMENT_PRIORITY_ROADMAP_R2_2026-08-13.md` 进一步收敛；该 R2 只更新 Post-Launch Research/Development Priority，不修改当前 Machine Strategy R1/R1.1。
+   - `R4 = SCHEDULED MACRO EVENT + EVENT ASSET ROUTER` 的当前子研究合同为：`FIRST_LAUNCH_SCHEDULED_US_MACRO_EVENT_STRATEGY_RESEARCH_AND_FUTURE_AUTOMATION_BACKLOG_R1_2026-08-12.md`。该子合同初始聚焦 CPI / NFP / PCE，可并行历史/离线研究，但不扩大当前发布范围，也不授权自动交易。
 
 6. `FIRST_LAUNCH_MULTI_ASSET_PARALLEL_REPLACEMENT_ARCHITECTURE_DECISION_R1_2026-08-03.md`
    - 旧 ETH fallback 与新多资产并行替代架构权威。
@@ -41,7 +42,7 @@
    - 小批量、快速前向验证方法权威。
 
 10. `FIRST_LAUNCH_SHADOW_FORWARD_VALIDATION_AND_RAPID_ITERATION_PLAN_R1_2026-08-03.md`
-   - T/S/R、Outcome、Evidence、快速迭代流程权威；样本独立性服从第 4 项；上线后研究问题与证据优先级服从第 5 项。
+   - T/S/R、Outcome、Evidence、快速迭代流程权威；样本独立性服从第 4 项；上线后研究排序服从第 5 项及其 R2 Roadmap。
 
 11. `FIRST_LAUNCH_CURRENT_MASTER_TASK_REGISTER_AND_EXECUTION_ORDER_R2_2026-08-03.md`
     - 当前执行顺序与 Backlog 入口。
@@ -120,6 +121,8 @@ EVENT-WINDOW HIGH-RES DATA ONLY
 ```
 
 该研究需求不得修改当前发布的 5m-only Strategy Route，也不得恢复全市场持续 tick/sub-second 平台。
+
+Strong / No-Retest Breakout 未来研究如需 `MICRO_PULLBACK / TIME_ACCEPTANCE`，优先使用 bounded 1m event path；不得因此把当前正式 Signal timeframe 改为 1m。
 
 ---
 
@@ -203,40 +206,60 @@ ONE_NEW_POSITION_PER_EXPOSURE_CLUSTER
 
 ---
 
-## 7. 上线后策略研究权威
+## 7. 上线后策略研究与未来开发权威
 
-当前发布不因最近实盘发现增加第四 Setup 或重新打开机器策略参数。
+当前发布不因新研究增加第四 Setup 或重新打开 Machine Strategy 参数。
 
-上线后利用真实 Shadow / Candidate / Transition / Outcome 证据，按以下当前优先级研究：
+当前统一排序：
 
 ```text
-R1 = FAILED_ACCEPTED_BREAKOUT / FAILED_IMPULSE
+R1 = BREAKOUT LIFECYCLE OPTIMIZATION
+     R1A FAILED_ACCEPTED_BREAKOUT / FAILED_IMPULSE
+     R1B STRONG / NO-RETEST BREAKOUT COVERAGE AUDIT
+
 R2 = PER_MARKET_STABLE_TIMEFRAME_PROFILE
 R3 = SECTOR / PEER RELATIVE STRENGTH
-R4 = EVENT REGIME
+R4 = SCHEDULED MACRO EVENT + EVENT ASSET ROUTER
 R5 = CASH OPEN / OPENING REPRICING
 R6 = LOGICAL INVALIDATION EXIT
-R7 = PROBE → ADD
+R7 = POSITION ENTRY SCALING / PROBE → ADD
 R8 = CROSS-MARKET CONFIRMATION SOFT SCORE
+R9 = ADVANCED L2 / OFI / BOOK RESILIENCY
 ```
 
-当前发布只要求 Evidence Pipeline 保证这些研究问题未来可以从保存数据中离线重建。若某关键原始字段无法重建，允许增加最小 Evidence 字段；不得增加新的实时策略判断或 Formal Signal。
+R1 不改变原 `FAILED_ACCEPTED_BREAKOUT` 的最高优先级；它将成功 Micro FAST、Standard、Missed Runaway、Immediate Failure 与 Delayed Failed Accepted Breakout 放入同一 Breakout Event 生命周期研究，减少重复开发和样本选择偏差。
 
-特别固定：
+当前 Micro FAST 已覆盖无 Pullback Start 后的 5m outside acceptance/continuation；因此：
 
 ```text
-FAILED_ACCEPTED_BREAKOUT_RESEARCH = HIGH_PRIORITY
-FAILED_ACCEPTED_BREAKOUT_LIVE_SIGNAL_THIS_RELEASE = NO
-SHADOW_DATA_AS_PRIMARY_NEXT_STRATEGY_RESEARCH_SOURCE = YES
+NEW_MOMENTUM_SETUP_THIS_RELEASE = NO
+MICRO_PULLBACK = RESEARCH_ONLY
+TIME_ACCEPTANCE = RESEARCH_ONLY
+BREAKOUT_PROBE = RESEARCH_ONLY_CONDITIONAL
+```
 
-SCHEDULED_US_MACRO_EVENT_RESEARCH = YES
-SCHEDULED_US_MACRO_EVENT_PARENT = R4_EVENT_REGIME
-SCHEDULED_US_MACRO_EVENT_INITIAL_FAMILIES = CPI_NFP_PCE
-SCHEDULED_US_MACRO_EVENT_HIGH_PRODUCT_VALUE = YES
-SCHEDULED_US_MACRO_EVENT_PARALLEL_OFFLINE_RESEARCH = YES
-SCHEDULED_US_MACRO_EVENT_CURRENT_RELEASE_IMPLEMENTATION = NO
-SCHEDULED_US_MACRO_EVENT_FOURTH_SETUP_THIS_RELEASE = NO
-SCHEDULED_US_MACRO_EVENT_AUTO_TRADE_THIS_RELEASE = NO
+`AUCTION_REGIME` 当前仅为 Research / Attribution Taxonomy，不是 Hard Gate；`RANGE_EDGE_REJECTION` 不在本发布中降级，未来只通过 Shadow Evidence 判断其 Ranking / Confidence 是否应低于 Sweep/Accepted Breakout。
+
+当前发布只允许核验一个 Breakout Research Evidence 风险：没有 Formal Plan 的 Initial Breakout Event 是否具有未来可研究的 bounded 1m path。若可直接复用现有 on-demand 1m collector 且不造成实质 launch delay，可保留最小研究证据；否则作为第一项 Post-Launch Evidence Collector 工作，不得阻塞当前发布。
+
+Scheduled Macro Event 继续保持 Research Only，未来明确加入：
+
+```text
+MACRO INTERPRETATION ASSET != TRADE ASSET
+EVENT ASSET ROUTER
+EVENT RELATIVE STRENGTH
+IMPULSE RETENTION
+PRICE ACCEPTANCE
+EXECUTION QUALITY
+IDIOSYNCRATIC CATALYST RISK
+```
+
+当前策略开发数量：
+
+```text
+CURRENT_RELEASE_NEW_STRATEGY_FEATURES = 0
+POST_LAUNCH_RESEARCH_DEVELOPMENT_STREAMS = 9
+NEW_FORMAL_SETUP_COMMITTED = 0
 ```
 
 ---
