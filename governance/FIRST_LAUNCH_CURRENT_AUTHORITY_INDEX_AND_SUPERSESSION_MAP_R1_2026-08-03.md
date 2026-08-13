@@ -26,11 +26,10 @@
 
 5. `FIRST_LAUNCH_POST_LAUNCH_STRATEGY_RESEARCH_AND_SHADOW_EVIDENCE_BACKLOG_R1_2026-08-12.md`
    - 当前上线后 Strategy Research / Shadow Evidence 的父级 Backlog 权威。其 Evidence、可重建性和“不扩大当前发布”边界继续有效。
-   - `FIRST_LAUNCH_POST_LAUNCH_STRATEGY_RESEARCH_AND_FUTURE_DEVELOPMENT_INVENTORY_R4_2026-08-13.md` 是当前完整的 Post-Launch Research / Future Development Inventory。它取代 R3/R2 中“未来全局优先级已经冻结”的解释；所有有价值方向先登记，未来顺序必须由上线后的 Forward / Shadow Evidence、策略增量价值和工程成本重新决定。
-   - `FIRST_LAUNCH_POST_LAUNCH_STRATEGY_RESEARCH_AND_DEVELOPMENT_PRIORITY_ROADMAP_R2_2026-08-13.md` 保留审计和研究内容价值，但其 R1→R9 顺序不再构成冻结的未来开发优先级。
-   - Scheduled U.S. Macro 当前子研究合同：`FIRST_LAUNCH_SCHEDULED_US_MACRO_EVENT_STRATEGY_RESEARCH_AND_FUTURE_AUTOMATION_BACKLOG_R1_2026-08-12.md`。初始聚焦 CPI / NFP / PCE；FOMC 独立多阶段研究；可并行历史/离线研究，但不扩大当前发布范围，也不授权自动交易。
-   - Scheduled Corporate Earnings 当前子研究合同：`FIRST_LAUNCH_SCHEDULED_CORPORATE_EARNINGS_EVENT_STRATEGY_RESEARCH_BACKLOG_R1_2026-08-13.md`。与 Macro Event 共享未来 Scheduled Information Event Engine 的 PIT/event-window/acceptance/asset-router/execution primitives，但保留独立 earnings/guidance/call/company-KPI interpreter；不扩大当前发布范围，也不授权自动交易。
-   - Intraday Event / Extended-Hours 当前跨模块补充合同：`FIRST_LAUNCH_INTRADAY_INFORMATION_EVENT_AND_US_EXTENDED_HOURS_STRATEGY_RESEARCH_ADDENDUM_R1_2026-08-13.md`。固定 Macro/Earnings 未来产品目标为约 10–120 分钟的事件窗口微观交易，不以多日 PEAD 为产品目标；区分 `PRE_EVENT_TREND_PARTICIPATION` 与 `CROSS_EVENT_CARRY`；登记 U.S. POST_MARKET / OVERNIGHT / PREMARKET / CASH_OPEN_RECONCILIATION 的 TradeXYZ 独立研究方向；不扩大当前发布范围。
+   - `FIRST_LAUNCH_POST_LAUNCH_STRATEGY_RESEARCH_AND_FUTURE_DEVELOPMENT_INVENTORY_R4_2026-08-13.md` 是当前完整 Post-Launch Research / Future Development Inventory；未来全局优先级不因旧 R1→R9 编号冻结。
+   - **当前 Event / Boundary 收敛权威：** `FIRST_LAUNCH_EVENT_AWARE_OVERLAY_AND_SCHEDULED_BOUNDARY_RISK_CONVERGENCE_R1_2026-08-13.md`。它把 Macro / Earnings / Extended-Hours 研究收敛为：`ONE CORE THREE-SETUP PRICE-ACTION SYSTEM + THIN EVENT-AWARE OVERLAY + GENERAL SCHEDULED BOUNDARY RISK LAYER`。
+   - `FIRST_LAUNCH_SCHEDULED_US_MACRO_EVENT_STRATEGY_RESEARCH_AND_FUTURE_AUTOMATION_BACKLOG_R1_2026-08-12.md`、`FIRST_LAUNCH_SCHEDULED_CORPORATE_EARNINGS_EVENT_STRATEGY_RESEARCH_BACKLOG_R1_2026-08-13.md`、`FIRST_LAUNCH_INTRADAY_INFORMATION_EVENT_AND_US_EXTENDED_HOURS_STRATEGY_RESEARCH_ADDENDUM_R1_2026-08-13.md` 保留数据源、PIT、财报/FOMC 多阶段、执行研究等历史价值；与新收敛合同冲突时服从新收敛合同。
+   - 旧 `...PRIORITY_ROADMAP_R2...` / `...INVENTORY_R3...` 保留审计价值，不再冻结未来开发顺序。
 
 6. `FIRST_LAUNCH_MULTI_ASSET_PARALLEL_REPLACEMENT_ARCHITECTURE_DECISION_R1_2026-08-03.md`
    - 旧 ETH fallback 与新多资产并行替代架构权威。
@@ -45,14 +44,14 @@
    - 小批量、快速前向验证方法权威。
 
 10. `FIRST_LAUNCH_SHADOW_FORWARD_VALIDATION_AND_RAPID_ITERATION_PLAN_R1_2026-08-03.md`
-   - T/S/R、Outcome、Evidence、快速迭代流程权威；样本独立性服从第 4 项；上线后候选方向服从第 5 项及其 R4 Inventory / Event Addenda。
+   - T/S/R、Outcome、Evidence、快速迭代流程权威；样本独立性服从第 4 项；上线后候选方向服从第 5 项及其 Inventory / Convergence Contract。
 
 11. `FIRST_LAUNCH_CURRENT_MASTER_TASK_REGISTER_AND_EXECUTION_ORDER_R2_2026-08-03.md`
-    - 当前执行顺序与 Backlog 入口。
+   - 当前执行顺序与 Backlog 入口。
 
 12. 部署前运维阻断：
-    - `FIRST_LAUNCH_RECONNECT_BUDGET_RESET_NEXT_DEPLOYMENT_BLOCKER_2026-08-02.md`
-    - `TRADER_ASSIST_OFF_HOST_BACKUP_AND_LIGHTSAIL_SNAPSHOT_RETIREMENT_NEXT_DEPLOYMENT_SCOPE_2026-08-02.md`
+   - `FIRST_LAUNCH_RECONNECT_BUDGET_RESET_NEXT_DEPLOYMENT_BLOCKER_2026-08-02.md`
+   - `TRADER_ASSIST_OFF_HOST_BACKUP_AND_LIGHTSAIL_SNAPSHOT_RETIREMENT_NEXT_DEPLOYMENT_SCOPE_2026-08-02.md`
 
 ---
 
@@ -117,19 +116,15 @@ PER_MARKET_STABLE_TIMEFRAME_PROFILE
 
 Engineering 不得自行实现第二 Profile 或动态切换。
 
-Scheduled U.S. Macro Event 子研究未来如需研究 `T+1s / T+5s / T+10s / 10–60s Micro-Pause`，允许在独立未来研究阶段评估：
+Event / Earnings / Boundary 未来如需秒级或分钟级 price-discovery / execution 研究，优先采用：
 
 ```text
-EVENT-WINDOW HIGH-RES DATA ONLY
+BOUNDED EVENT / BOUNDARY WINDOW HIGH-RES EVIDENCE
 ```
 
-Scheduled Corporate Earnings 子研究未来如需研究 release/call/cash-open 的秒级或分钟级 price discovery，同样优先采用 bounded event-window high-resolution evidence，而不是恢复全市场持续 tick/sub-second 平台。
+不得因此修改当前 5m-only Strategy Route，也不得恢复全市场持续 tick/sub-second 平台。
 
-Intraday Event / Extended-Hours 子研究未来如需研究事件前趋势、盘后/overnight/盘前微观路径或 cash-open reconciliation，同样优先采用 bounded session/event evidence；不得因此修改当前发布的 5m-only Strategy Route 或建设全市场持续 tick/sub-second 平台。
-
-以上研究需求不得修改当前发布的 5m-only Strategy Route。
-
-Strong / No-Retest Breakout 未来研究如需 `MICRO_PULLBACK / TIME_ACCEPTANCE`，优先使用 bounded 1m event path；不得因此把当前正式 Signal timeframe 改为 1m。
+Strong / No-Retest Breakout 未来研究如需 `MICRO_PULLBACK / TIME_ACCEPTANCE / IMPACT_RETENTION / RETEST-CONTINUATION-FAILURE`，优先使用 bounded 1m raw event path 并离线重建；不得因此把当前正式 Signal timeframe 改为 1m。
 
 ---
 
@@ -217,49 +212,77 @@ ONE_NEW_POSITION_PER_EXPOSURE_CLUSTER
 
 当前发布不因新研究增加第四 Setup 或重新打开 Machine Strategy 参数。
 
-当前治理不是冻结 R1→R9 的未来全局顺序，而是：
+当前治理：
 
 ```text
 REGISTER_ALL_VALUABLE_DIRECTIONS = YES
-FUTURE_GLOBAL_PRIORITY = NOT_YET_FROZEN
-POST_LAUNCH_EVIDENCE_BEFORE_PRIORITY_FREEZE = YES
+FUTURE_GLOBAL_PRIORITY = NOT_GLOBALLY_FROZEN
+POST_LAUNCH_EVIDENCE_BEFORE_BROAD_PRIORITY_FREEZE = YES
 ```
 
-完整候选清单由：
-
-`FIRST_LAUNCH_POST_LAUNCH_STRATEGY_RESEARCH_AND_FUTURE_DEVELOPMENT_INVENTORY_R4_2026-08-13.md`
-
-统一登记，涵盖至少：
+但以下工程顺序已单独确认：
 
 ```text
-BREAKOUT LIFECYCLE / FAILED ACCEPTED BREAKOUT / STRONG NO-RETEST
-BOUNDED 1m BREAKOUT RESEARCH PATH
-MICRO_PULLBACK / TIME_ACCEPTANCE / MISSED RUNAWAY / BREAKOUT PROBE
-FAST FAILURE / LOGICAL INVALIDATION
-AUCTION REGIME / EDGE TEST / RANGE EDGE INFORMATION STRENGTH
-PER-MARKET STABLE TIMEFRAME PROFILE
-SECTOR / PEER RELATIVE STRENGTH
-CROSS-MARKET SOFT CONTEXT
-SCHEDULED MACRO EVENT / EVENT ASSET ROUTER
-SCHEDULED CORPORATE EARNINGS / EARNINGS ASSET ROUTER
-EARNINGS SURPRISE VECTOR / GUIDANCE / CALL REPRICING / PEER-SPILLOVER
-INTRADAY EVENT MICRO-OPPORTUNITY SEQUENCE
-PRE_EVENT_TREND_PARTICIPATION
-CROSS_EVENT_CARRY AS SEPARATE TAIL-RISK RESEARCH
-PRICED_EXPECTATION / SELL-THE-FACT CONDITIONAL RESEARCH
-US EXTENDED-HOURS SESSION STRATEGY
-POST_MARKET / OVERNIGHT / PREMARKET / CASH_OPEN_RECONCILIATION
-FORECAST DISAGREEMENT / POLICY UNCERTAINTY / POLICY SENSITIVITY
-INVESTOR ATTENTION / FEDWATCH / PREDICTION-MARKET DISTRIBUTION
-MACRO PURE vs SECTOR AMPLIFIER / EVENT LEADER-LAGGARD
-EVENT HIGH-RES DATA / EXECUTION / NQ-ES vs HYPERLIQUID TRACKING
-FOMC SEPARATE EVENT FAMILY / EVENT VOLATILITY OPTIONS BRANCH
-CASH OPEN / OPENING REPRICING
-PROBE→ADD / POSITION SCALING
-POST-LAUNCH COST MODEL
-ADVANCED L2 / OFI / QUEUE / BOOK RESILIENCY
-ANTI-OVERFITTING / EXPERIMENT REGISTRY / CLUSTER-NORMALIZED RESEARCH
+P1 BOUNDED INITIAL BREAKOUT 1m RESEARCH EVIDENCE
+= HIGH POST-LAUNCH PRIORITY
+= FIRST RESEARCH-EVIDENCE ENGINEERING ITEM AFTER RELEASE/OPERABILITY CRITICAL WORK
+= MAY BE BUNDLED INTO THE EARLIEST COHERENT POST-LAUNCH STAGE
+
+P2 1m VOLUME / TRADE_COUNT
+= PIGGYBACK P1 ONLY IF TRIVIAL
+
+P3 CAUSAL PAIRED OI
+= SEPARATE POST-LAUNCH DESIGN
 ```
+
+P1 的 +120m 只是高分辨率 Breakout research horizon，不是任何交易持仓上限。
+
+当前 Event / Boundary 研究收敛为：
+
+```text
+CORE ALPHA / ENTRY = THREE EXISTING SETUPS
+SESSION = CONTEXT, NOT NEW STRATEGY
+EVENT = THIN INFORMATION / ATTRIBUTION OVERLAY
+SCHEDULED HIGH-RISK BOUNDARY = GENERAL ALL-STRATEGY RISK LAYER
+```
+
+### 当前人工 / V0 Boundary Discipline
+
+亚洲、欧洲、美国主要开盘/参与者切换边界都必须格外注意。人工交易阶段原则上：
+
+```text
+DEFAULT = DO NOT CARRY ORDINARY POSITION THROUGH MAJOR OPEN BOUNDARY
+DEFAULT = FLATTEN / DE-RISK BEFORE BOUNDARY
+EXCEPTION = HUMAN-APPROVED SPECIAL CASE
+```
+
+具体时间、提前多久、何时恢复交易目前不进入当前 Machine Strategy；由人类最终执行。
+
+### Future Auto-Trading Mandatory Research
+
+全面自动交易前必须建立、验证并冻结：
+
+```text
+SCHEDULED_BOUNDARY_RISK_GUARD
+```
+
+至少处理：
+
+```text
+Asia / Europe / U.S. regional open boundaries
+scheduled macro releases
+scheduled corporate information releases
+multi-stage FOMC / Earnings Call boundaries
+pre-boundary de-risk
+new-entry suppression
+recovery gate
+calendar / DST / holiday handling
+execution-quality dependency
+exception authority
+complete audit evidence
+```
+
+不能把人工“约 9:45 恢复”直接硬编码为固定规则；必须用 Forward/Historical/Shadow evidence 量化 false-break、whipsaw、MFE/MAE、spread/slippage 和 recovery conditions。
 
 当前 Micro FAST 已覆盖无 Pullback Start 后的 5m outside acceptance/continuation，因此：
 
@@ -272,25 +295,19 @@ BREAKOUT_PROBE = RESEARCH_ONLY_CONDITIONAL
 
 `AUCTION_REGIME` 当前仅为 Research / Attribution Taxonomy，不是 Hard Gate；`RANGE_EDGE_REJECTION` 不在本发布中降级。
 
-当前唯一特殊 Evidence 候选：没有 Formal Plan 的 Qualified Initial Breakout Event 是否可直接复用现有 on-demand 1m collector，保存 bounded 1m research path。其价值是避免不可恢复的反事实路径与 Drawdown / MFE-MAE 研究证据永久丢失，并防止只研究 Formal Plans 的 selection bias。
+当前 P1/P2/P3 已明确移至上线后顺序，不再是 First Launch release blocker：
 
 ```text
-IF bounded reuse is low-cost AND no strategy logic AND no architecture rewrite AND no material launch delay:
-  USER MAY AUTHORIZE current-release evidence-only addition after Engineering estimate
-ELSE:
-  DEFER without blocking launch
+CURRENT_RELEASE_P1_BLOCKER = NO
+CURRENT_RELEASE_P2_BLOCKER = NO
+CURRENT_RELEASE_P3_BLOCKER = NO
 ```
-
-这不是当前自动授权；需用户在 Engineering 返回开发量和资源估算后另行决定。
-
-Scheduled Macro、Scheduled Corporate Earnings 与 Intraday Extended-Hours 都保持 future research only，不进入当前 First Launch code。
 
 当前策略开发数量：
 
 ```text
 CURRENT_RELEASE_NEW_STRATEGY_FEATURES = 0
 NEW_FORMAL_SETUP_COMMITTED = 0
-FUTURE_RESEARCH_DIRECTION_COUNT = OPEN_INVENTORY_NOT_FIXED_STREAM_COUNT
 ```
 
 ---
