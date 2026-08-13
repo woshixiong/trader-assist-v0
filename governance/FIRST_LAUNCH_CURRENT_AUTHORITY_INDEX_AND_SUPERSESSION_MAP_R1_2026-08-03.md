@@ -27,8 +27,9 @@
 5. `FIRST_LAUNCH_POST_LAUNCH_STRATEGY_RESEARCH_AND_SHADOW_EVIDENCE_BACKLOG_R1_2026-08-12.md`
    - 当前上线后 Strategy Research / Shadow Evidence 的父级 Backlog 权威。其 Evidence、可重建性和“不扩大当前发布”边界继续有效。
    - `FIRST_LAUNCH_POST_LAUNCH_STRATEGY_RESEARCH_AND_FUTURE_DEVELOPMENT_INVENTORY_R4_2026-08-13.md` 是当前完整 Post-Launch Research / Future Development Inventory；未来全局优先级不因旧 R1→R9 编号冻结。
-   - **当前 Event / Boundary 收敛权威：** `FIRST_LAUNCH_EVENT_AWARE_OVERLAY_AND_SCHEDULED_BOUNDARY_RISK_CONVERGENCE_R1_2026-08-13.md`。它把 Macro / Earnings / Extended-Hours 研究收敛为：`ONE CORE THREE-SETUP PRICE-ACTION SYSTEM + THIN EVENT-AWARE OVERLAY + GENERAL SCHEDULED BOUNDARY RISK LAYER`。
-   - `FIRST_LAUNCH_SCHEDULED_US_MACRO_EVENT_STRATEGY_RESEARCH_AND_FUTURE_AUTOMATION_BACKLOG_R1_2026-08-12.md`、`FIRST_LAUNCH_SCHEDULED_CORPORATE_EARNINGS_EVENT_STRATEGY_RESEARCH_BACKLOG_R1_2026-08-13.md`、`FIRST_LAUNCH_INTRADAY_INFORMATION_EVENT_AND_US_EXTENDED_HOURS_STRATEGY_RESEARCH_ADDENDUM_R1_2026-08-13.md` 保留数据源、PIT、财报/FOMC 多阶段、执行研究等历史价值；与新收敛合同冲突时服从新收敛合同。
+   - **当前 Event / Boundary 最终研究权威：** `FIRST_LAUNCH_EVENT_AWARE_AND_SCHEDULED_BOUNDARY_RISK_FINAL_RESEARCH_FREEZE_R2_2026-08-13.md`。它把最终架构冻结为：`ONE CORE THREE-SETUP PRICE-ACTION SYSTEM + EVENT-AWARE CONTEXT / ATTRIBUTION + GENERAL SCHEDULED BOUNDARY RISK / PERMISSION LAYER`；Event 不直接产生 Long/Short，Boundary Guard 不改变方向但未来可 veto / de-risk；Asia / Europe / U.S. 三类主要开盘边界全部纳入 Guard，但采用 asset-specific relevance；Default Flatten / De-Risk 为未来自动化研究 baseline；所有宏观/财报/FOMC/Call 信息节点统一进入同一个 Boundary Guard。
+   - `FIRST_LAUNCH_EVENT_AWARE_OVERLAY_AND_SCHEDULED_BOUNDARY_RISK_CONVERGENCE_R1_2026-08-13.md` 保留审计价值，但发生冲突时服从上述 R2 Final Research Freeze。
+   - `FIRST_LAUNCH_SCHEDULED_US_MACRO_EVENT_STRATEGY_RESEARCH_AND_FUTURE_AUTOMATION_BACKLOG_R1_2026-08-12.md`、`FIRST_LAUNCH_SCHEDULED_CORPORATE_EARNINGS_EVENT_STRATEGY_RESEARCH_BACKLOG_R1_2026-08-13.md`、`FIRST_LAUNCH_INTRADAY_INFORMATION_EVENT_AND_US_EXTENDED_HOURS_STRATEGY_RESEARCH_ADDENDUM_R1_2026-08-13.md` 保留数据源、PIT、财报/FOMC 多阶段、执行研究等历史价值；与 R2 Final Research Freeze 冲突时服从 R2。
    - 旧 `...PRIORITY_ROADMAP_R2...` / `...INVENTORY_R3...` 保留审计价值，不再冻结未来开发顺序。
 
 6. `FIRST_LAUNCH_MULTI_ASSET_PARALLEL_REPLACEMENT_ARCHITECTURE_DECISION_R1_2026-08-03.md`
@@ -44,10 +45,10 @@
    - 小批量、快速前向验证方法权威。
 
 10. `FIRST_LAUNCH_SHADOW_FORWARD_VALIDATION_AND_RAPID_ITERATION_PLAN_R1_2026-08-03.md`
-   - T/S/R、Outcome、Evidence、快速迭代流程权威；样本独立性服从第 4 项；上线后候选方向服从第 5 项及其 Inventory / Convergence Contract。
+   - T/S/R、Outcome、Evidence、快速迭代流程权威；样本独立性服从第 4 项；上线后候选方向服从第 5 项及其 Inventory / Final Research Freeze。
 
 11. `FIRST_LAUNCH_CURRENT_MASTER_TASK_REGISTER_AND_EXECUTION_ORDER_R2_2026-08-03.md`
-   - 当前执行顺序与 Backlog 入口。
+    - 当前执行顺序与 Backlog 入口。
 
 12. 部署前运维阻断：
    - `FIRST_LAUNCH_RECONNECT_BUDGET_RESET_NEXT_DEPLOYMENT_BLOCKER_2026-08-02.md`
@@ -237,13 +238,14 @@ P3 CAUSAL PAIRED OI
 
 P1 的 +120m 只是高分辨率 Breakout research horizon，不是任何交易持仓上限。
 
-当前 Event / Boundary 研究收敛为：
+当前 Event / Boundary 最终研究冻结为：
 
 ```text
 CORE ALPHA / ENTRY = THREE EXISTING SETUPS
 SESSION = CONTEXT, NOT NEW STRATEGY
-EVENT = THIN INFORMATION / ATTRIBUTION OVERLAY
-SCHEDULED HIGH-RISK BOUNDARY = GENERAL ALL-STRATEGY RISK LAYER
+EVENT = INFORMATION / ATTRIBUTION OVERLAY
+SCHEDULED HIGH-RISK BOUNDARY = GENERAL ALL-STRATEGY RISK / PERMISSION LAYER
+EVENT BOUNDARIES USE THE SAME BOUNDARY GUARD
 ```
 
 ### 当前人工 / V0 Boundary Discipline
@@ -270,19 +272,24 @@ SCHEDULED_BOUNDARY_RISK_GUARD
 
 ```text
 Asia / Europe / U.S. regional open boundaries
+asset-specific boundary relevance
 scheduled macro releases
 scheduled corporate information releases
 multi-stage FOMC / Earnings Call boundaries
+uncertain release windows
+compound / stacked boundaries
 pre-boundary de-risk
 new-entry suppression
-recovery gate
+market-state recovery gate
 calendar / DST / holiday handling
 execution-quality dependency
 exception authority
 complete audit evidence
 ```
 
-不能把人工“约 9:45 恢复”直接硬编码为固定规则；必须用 Forward/Historical/Shadow evidence 量化 false-break、whipsaw、MFE/MAE、spread/slippage 和 recovery conditions。
+不能把人工“约 9:45 恢复”直接硬编码为固定规则；必须用 Historical/Forward/Shadow evidence 量化 false-break、whipsaw、MFE/MAE、spread/slippage、directional efficiency 和 recovery conditions。
+
+Event Overlay 第一阶段不产生 Long/Short；任何 Event feature 想升级为 ranking/gate 必须证明相对 Base Setup 的稳定 OOS marginal value，并重新冻结 Strategy Authority。
 
 当前 Micro FAST 已覆盖无 Pullback Start 后的 5m outside acceptance/continuation，因此：
 
