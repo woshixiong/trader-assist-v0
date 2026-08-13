@@ -115,7 +115,10 @@ from .strategy_kernel import (
     DecisionKind,
     EventLedger,
     EventStatus,
+    HtfContext,
+    HtfMomentum,
     HtfRelation,
+    HtfStructure,
     KernelResult,
     RetestType,
     ScannerLinkage,
@@ -403,6 +406,54 @@ def _ledger_from_payload(value: object) -> EventLedger:
     return EventLedger(tuple(_market_event_from_payload(item) for item in value["events"]))
 
 
+def _kernel_result_from_payload(payload: Mapping[str, object]) -> KernelResult:
+    decisions = payload.get("decisions")
+    zones = payload.get("zones")
+    htf = payload.get("htf_context")
+    if not isinstance(decisions, list) or not isinstance(zones, list) or not isinstance(htf, dict):
+        raise IntegrationError("retained KernelResult checkpoint is incomplete")
+    decoded_decisions: list[StrategyDecision] = []
+    for item in decisions:
+        if not isinstance(item, dict):
+            raise IntegrationError("retained StrategyDecision checkpoint is invalid")
+        decision = _decision_from_payload(item.get("content"))
+        if item.get("decision_id") != _typed_hash(
+            "strategy-decision", _canonical_dataclass(decision)
+        ):
+            raise IntegrationError("retained StrategyDecision identity is invalid")
+        decoded_decisions.append(decision)
+    ledger = _ledger_from_payload(payload.get("output_ledger"))
+    if payload.get("output_ledger_hash") != _typed_hash(
+        "event-ledger", _ledger_payload(ledger)
+    ):
+        raise IntegrationError("retained EventLedger checkpoint hash is invalid")
+    return KernelResult(
+        ledger=ledger,
+        decisions=tuple(decoded_decisions),
+        zones=tuple(_zone_from_payload(item) for item in zones),
+        active_support=(
+            None
+            if payload.get("active_support") is None
+            else _zone_from_payload(payload["active_support"])
+        ),
+        active_resistance=(
+            None
+            if payload.get("active_resistance") is None
+            else _zone_from_payload(payload["active_resistance"])
+        ),
+        htf_context=HtfContext(
+            momentum=HtfMomentum(str(htf["momentum"])),
+            structure=HtfStructure(str(htf["structure"])),
+            er8_1h=(
+                None if htf.get("er8_1h") is None else _as_decimal(htf["er8_1h"], "er8_1h")
+            ),
+            d8_1h=(
+                None if htf.get("d8_1h") is None else _as_decimal(htf["d8_1h"], "d8_1h")
+            ),
+        ),
+    )
+
+
 def _row_envelope(row: sqlite3.Row) -> MessageEnvelope:
     return MessageEnvelope(
         schema_version=str(row["schema_version"]),
@@ -615,10 +666,12 @@ class EvidenceOutcomeAdapter(OutcomeSink):
     def evidence_store(self) -> EvidenceStore:
         return self._store
 
-    def save_outcome(self, outcome: FormalShadowOutcome) -> None:
+    def _outcome_record(self, outcome: FormalShadowOutcome) -> OutcomeEnvelope:
         shadow = self._store.get(outcome.shadow_order_id)
         if not isinstance(shadow, ShadowOrder):
             raise RecordError("outcome shadow_order_id is not retained")
+        if shadow.payload.get("market_id") != outcome.market_id:
+            raise RecordError("outcome market does not match retained ShadowOrder")
         horizon_120 = next((item for item in outcome.horizons if item.horizon_minutes == 120), None)
         outcome_r: str | None
         if outcome.path.primary_result is PathPrimaryResult.STOP_FIRST:
@@ -628,7 +681,7 @@ class EvidenceOutcomeAdapter(OutcomeSink):
         else:
             outcome_r = None
         observed_at = datetime.fromtimestamp(outcome.evaluated_at_ms / 1000, tz=UTC)
-        record = OutcomeEnvelope.create(
+        return OutcomeEnvelope.create(
             identity={
                 "shadow_order_id": outcome.shadow_order_id,
                 "evaluated_at_ms": outcome.evaluated_at_ms,
@@ -649,7 +702,28 @@ class EvidenceOutcomeAdapter(OutcomeSink):
             failed_breakout=outcome.failed_breakout,
             projection=asdict(outcome),
         )
-        self._store.write((record,))
+
+    def save_outcome(self, outcome: FormalShadowOutcome) -> None:
+        self._store._write_controlled((self._outcome_record(outcome),))
+
+    def canonical_outcome(self, record: OutcomeEnvelope) -> FormalShadowOutcome:
+        """Strictly validate one projection against the accepted B05 reconstruction."""
+        payload = record.payload
+        evaluated_value = payload.get("evaluated_at_ms")
+        shadow_value = payload.get("shadow_order_id")
+        if type(evaluated_value) is not int or evaluated_value < 0 or not isinstance(
+            shadow_value, str
+        ):
+            raise RecordError("outcome projection identity is invalid")
+        evaluated_at_ms = evaluated_value
+        shadow_order_id = shadow_value
+        engine = self.restore_engine(now_ms=evaluated_at_ms)
+        if shadow_order_id not in engine.attached_shadow_ids:
+            raise RecordError("outcome projection has no reconstructable ShadowOrder")
+        outcome = engine.evaluate(shadow_order_id, as_of_ms=evaluated_at_ms)
+        if self._outcome_record(outcome) != record:
+            raise RecordError("outcome projection contradicts canonical reconstruction")
+        return outcome
 
     def persisted_outcomes(self, shadow_order_id: str) -> tuple[OutcomeEnvelope, ...]:
         values: list[OutcomeEnvelope] = []
@@ -681,7 +755,7 @@ class EvidenceOutcomeAdapter(OutcomeSink):
             **payload,
             payload_hash=_typed_hash("outcome-transition", payload),
         )
-        self._store.write((record,))
+        self._store._write_controlled((record,))
         return record
 
     def persist_bar(self, bar: OneMinuteBar) -> OutcomeBarEvidence:
@@ -694,7 +768,7 @@ class EvidenceOutcomeAdapter(OutcomeSink):
             },
             **payload,
         )
-        self._store.write((record,))
+        self._store._write_controlled((record,))
         return record
 
     def _retained_transitions(self) -> tuple[OutcomeTransitionView, ...]:
@@ -845,20 +919,26 @@ class CorrelationResearchAdapter:
         self._store = store
 
     def completed_signals(self) -> tuple[ShadowSignal, ...]:
-        latest: dict[str, OutcomeEnvelope] = {}
+        adapter = EvidenceOutcomeAdapter(self._store)
+        latest_records: dict[str, OutcomeEnvelope] = {}
         for record_id in _record_ids(self._store, "outcome_envelope"):
             record = self._store.get(record_id)
             if not isinstance(record, OutcomeEnvelope):  # pragma: no cover
                 continue
             payload = record.payload
-            if payload.get("path_maturity_status") != "MATURE" or payload.get("unresolved"):
+            shadow_order_id = str(payload.get("shadow_order_id", ""))
+            evaluated_at_ms = payload.get("evaluated_at_ms")
+            if type(evaluated_at_ms) is not int:
+                raise RecordError("outcome projection evaluation time is invalid")
+            prior = latest_records.get(shadow_order_id)
+            if prior is None or evaluated_at_ms > int(prior.payload["evaluated_at_ms"]):
+                latest_records[shadow_order_id] = record
+        latest: dict[str, FormalShadowOutcome] = {}
+        for shadow_order_id, record in latest_records.items():
+            outcome = adapter.canonical_outcome(record)
+            if outcome.path_maturity_status is not MaturityStatus.MATURE or outcome.unresolved:
                 continue
-            shadow_order_id = str(payload["shadow_order_id"])
-            prior = latest.get(shadow_order_id)
-            if prior is None or int(payload.get("evaluated_at_ms", -1)) > int(
-                prior.payload.get("evaluated_at_ms", -1)
-            ):
-                latest[shadow_order_id] = record
+            latest[shadow_order_id] = outcome
         projected: list[ShadowSignal] = []
         for shadow_order_id, outcome in latest.items():
             shadow = self._store.get(shadow_order_id)
@@ -886,19 +966,29 @@ class CorrelationResearchAdapter:
                     ),
                     oi_notional=_as_decimal(metrics.get("oi_notional"), "oi_notional"),
                     outcome_r=(
-                        None
-                        if outcome.payload.get("outcome_r") is None
-                        else _as_decimal(outcome.payload["outcome_r"], "outcome_r")
+                        Decimal("-1")
+                        if outcome.path.primary_result is PathPrimaryResult.STOP_FIRST
+                        else (
+                            Decimal("1")
+                            if outcome.path.primary_result is PathPrimaryResult.TP_FIRST
+                            else None
+                        )
                     ),
-                    outcome_mfe=(
-                        None
-                        if outcome.payload.get("outcome_mfe") is None
-                        else _as_decimal(outcome.payload["outcome_mfe"], "outcome_mfe")
+                    outcome_mfe=next(
+                        (
+                            item.mfe
+                            for item in outcome.horizons
+                            if item.horizon_minutes == 120
+                        ),
+                        None,
                     ),
-                    outcome_mae=(
-                        None
-                        if outcome.payload.get("outcome_mae") is None
-                        else _as_decimal(outcome.payload["outcome_mae"], "outcome_mae")
+                    outcome_mae=next(
+                        (
+                            item.mae
+                            for item in outcome.horizons
+                            if item.horizon_minutes == 120
+                        ),
+                        None,
                     ),
                 )
             )
@@ -1032,7 +1122,8 @@ class MultiAssetShadowCoordinator:
 
     def _restore_ledgers(self) -> None:
         active = self._active_registry()
-        latest: dict[str, tuple[int, str, EventLedger]] = {}
+        latest: dict[str, tuple[int, EventLedger]] = {}
+        authority_slots: set[tuple[str, str, str, str, str, int, int]] = set()
         for record_id in _record_ids(self._evidence, "strategy_evaluation"):
             record = self._evidence.get(record_id)
             if not isinstance(record, StrategyEvaluation):
@@ -1040,22 +1131,34 @@ class MultiAssetShadowCoordinator:
             payload = record.payload
             if (
                 payload.get("registry_version") != active.version
-                or payload.get("registry_hash") != active.content_hash
                 or payload.get("strategy_version") != STRATEGY_VERSION
                 or payload.get("parameter_version") != PARAMETER_VERSION
             ):
                 continue
-            ledger = _ledger_from_payload(payload["output_ledger"])
-            if payload.get("output_ledger_hash") != _typed_hash(
-                "event-ledger", _ledger_payload(ledger)
-            ):
-                raise IntegrationError("retained EventLedger checkpoint hash is invalid")
+            if payload.get("registry_hash") != active.content_hash:
+                raise IntegrationError(
+                    "Registry version has conflicting retained strategy authority"
+                )
             market_id = str(payload["market_id"])
-            order = (int(payload["evaluation_boundary_ms"]), record.record_id)
+            source_open_time_ms = int(payload.get("source_open_time_ms", -1))
+            evaluation_boundary_ms = int(payload["evaluation_boundary_ms"])
+            slot = (
+                STRATEGY_VERSION,
+                PARAMETER_VERSION,
+                active.version,
+                market_id,
+                str(payload.get("source_interval", "")),
+                source_open_time_ms,
+                evaluation_boundary_ms,
+            )
+            if slot in authority_slots:
+                raise IntegrationError("duplicate retained Strategy authority checkpoint")
+            authority_slots.add(slot)
+            ledger = _kernel_result_from_payload(payload).ledger
             prior = latest.get(market_id)
-            if prior is None or order > prior[:2]:
-                latest[market_id] = (order[0], order[1], ledger)
-        self._ledgers = {market_id: value[2] for market_id, value in latest.items()}
+            if prior is None or source_open_time_ms > prior[0]:
+                latest[market_id] = (source_open_time_ms, ledger)
+        self._ledgers = {market_id: value[1] for market_id, value in latest.items()}
 
     def _active_registry(self) -> RegistryVersion:
         active = self._registry.active()
@@ -1125,6 +1228,86 @@ class MultiAssetShadowCoordinator:
             raise IntegrationError("retained closed 5m history is stale against runtime authority")
         return values
 
+    def _resolve_scanner_linkage(
+        self, *, market_id: str, linkage: ScannerLinkage | None
+    ) -> tuple[ScannerLinkage | None, EvidenceCandidate | None]:
+        if linkage is None:
+            return None, None
+        matches: list[EvidenceCandidate] = []
+        for record_id in _record_ids(self._evidence, "candidate"):
+            record = self._evidence.get(record_id)
+            if isinstance(record, EvidenceCandidate) and record.payload.get(
+                "scanner_candidate_id"
+            ) == linkage.candidate_id:
+                matches.append(record)
+        if len(matches) != 1:
+            raise IntegrationError("Scanner linkage does not resolve to one retained Candidate")
+        candidate = matches[0]
+        payload = candidate.payload
+        scan = self._evidence.get(str(payload.get("scanner_evidence_id")))
+        active = self._active_registry()
+        content = payload.get("candidate_content")
+        observations = None if not isinstance(scan, ScannerEvidence) else scan.payload.get(
+            "observations"
+        )
+        if (
+            not isinstance(scan, ScannerEvidence)
+            or scan.payload.get("scan_id") != payload.get("scan_id")
+            or scan.payload.get("scanner_version") != SCANNER_VERSION
+            or scan.payload.get("parameter_version") != PARAMETER_VERSION
+            or scan.payload.get("registry_version") != active.version
+            or scan.payload.get("registry_hash") != active.content_hash
+            or payload.get("market_id") != market_id
+            or payload.get("state") != linkage.state.value
+            or payload.get("scanner_version") != linkage.scanner_version
+            or payload.get("scanner_version") != SCANNER_VERSION
+            or payload.get("parameter_version") != PARAMETER_VERSION
+            or not isinstance(content, dict)
+            or content.get("candidate_id") != linkage.candidate_id
+            or content.get("market_id") != market_id
+            or content.get("state") != linkage.state.value
+            or content.get("side") != payload.get("side")
+            or content.get("scanner_version") != payload.get("scanner_version")
+            or content.get("parameter_version") != payload.get("parameter_version")
+            or payload.get("candidate_content_hash")
+            != _typed_hash("scanner-candidate", content)
+            or not isinstance(observations, list)
+            or not any(
+                isinstance(observation, dict)
+                and observation.get("market_id") == market_id
+                and observation.get("candidate") == content
+                for observation in observations
+            )
+        ):
+            raise IntegrationError("Scanner linkage contradicts retained Scanner authority")
+        return (
+            ScannerLinkage(
+                candidate_id=str(payload["scanner_candidate_id"]),
+                state=ScannerState(str(payload["state"])),
+                scanner_version=str(payload["scanner_version"]),
+            ),
+            candidate,
+        )
+
+    @staticmethod
+    def _evaluation_receipt(record: StrategyEvaluation) -> EvaluationReceipt:
+        payload = record.payload
+        return EvaluationReceipt(
+            evaluation_id=str(payload["evaluation_id"]),
+            evaluation_record_id=record.record_id,
+            evaluation_record_hash=record.canonical_hash,
+            market_id=str(payload["market_id"]),
+            latest_closed_5m_hash=str(payload["latest_closed_5m_hash"]),
+            registry_version=str(payload["registry_version"]),
+            registry_hash=str(payload["registry_hash"]),
+            strategy_version=str(payload["strategy_version"]),
+            parameter_version=str(payload["parameter_version"]),
+            evaluation_boundary_ms=int(payload["evaluation_boundary_ms"]),
+            input_ledger_hash=str(payload["input_ledger_hash"]),
+            output_ledger_hash=str(payload["output_ledger_hash"]),
+            result=_kernel_result_from_payload(payload),
+        )
+
     @staticmethod
     def _strategy_bar(value: ClosedBar) -> Bar:
         return Bar(
@@ -1147,25 +1330,99 @@ class MultiAssetShadowCoordinator:
         zone_book: ZoneBook | None = None,
         scanner_linkage: ScannerLinkage | None = None,
     ) -> EvaluationReceipt:
+        if zone_book is not None:
+            raise IntegrationError(
+                "production strategy authority requires canonical ZoneBook input"
+            )
         readiness = self._readiness()
         market = self._market(market_id, readiness=readiness)
         retained = self._retained_closed_5m(market, readiness=readiness)
         bars_5m = tuple(self._strategy_bar(item) for item in retained)
         bars_15m = aggregate_closed_5m_causally(bars_5m, minutes=15)
         bars_1h = aggregate_closed_5m_causally(bars_5m, minutes=60)
+        tick = minimum_tick(
+            bars_5m[-1].close,
+            max_decimals=market.price_max_decimals,
+            significant_figures=market.price_max_significant_figures,
+        )
+        canonical_linkage, retained_candidate = self._resolve_scanner_linkage(
+            market_id=market_id, linkage=scanner_linkage
+        )
+        active = self._active_registry()
+        evaluation_boundary_ms = retained[-1].close_time_ms + 1
+        authority_slot = {
+            "strategy_version": STRATEGY_VERSION,
+            "parameter_version": PARAMETER_VERSION,
+            "registry_version": active.version,
+            "market_id": market_id,
+            "source_interval": "5m",
+            "source_open_time_ms": retained[-1].open_time_ms,
+            "evaluation_boundary_ms": evaluation_boundary_ms,
+        }
+        evaluation_id = _typed_hash("strategy-evaluation-authority", authority_slot)
+        authoritative_input = {
+            "source_bars": [
+                {
+                    "open_time_ms": item.open_time_ms,
+                    "canonical_hash": item.canonical_hash,
+                }
+                for item in retained
+            ],
+            "minimum_tick": _decimal(tick),
+            "scanner_candidate_record_id": (
+                None if retained_candidate is None else retained_candidate.record_id
+            ),
+            "scanner_evidence_id": (
+                None
+                if retained_candidate is None
+                else retained_candidate.payload.get("scanner_evidence_id")
+            ),
+            "scanner_linkage": (
+                None
+                if canonical_linkage is None
+                else _canonical_dataclass(canonical_linkage)
+            ),
+        }
+        authoritative_input_hash = _typed_hash("strategy-authoritative-input", authoritative_input)
+        existing = tuple(
+            record
+            for record_id in _record_ids(self._evidence, "strategy_evaluation")
+            if isinstance((record := self._evidence.get(record_id)), StrategyEvaluation)
+            and record.payload.get("evaluation_id") == evaluation_id
+        )
+        if len(existing) > 1:
+            raise IntegrationError("Strategy authority slot has multiple retained truths")
+        if existing:
+            record = existing[0]
+            payload = record.payload
+            expected = {
+                **authority_slot,
+                "evaluation_id": evaluation_id,
+                "latest_closed_5m_hash": retained[-1].canonical_hash,
+                "runtime_readiness_hash": readiness.snapshot_hash,
+                "registry_hash": active.content_hash,
+                "release_sha": self._release_sha,
+                "authoritative_input_hash": authoritative_input_hash,
+                "authoritative_input": authoritative_input,
+            }
+            if any(payload.get(name) != value for name, value in expected.items()):
+                raise IntegrationError("Strategy authority slot conflicts with current context")
+            current_ledger = self._ledgers.get(market_id, EventLedger())
+            if _typed_hash("event-ledger", _ledger_payload(current_ledger)) != payload.get(
+                "output_ledger_hash"
+            ):
+                raise IntegrationError("Strategy retry contradicts retained continuation state")
+            return self._evaluation_receipt(record)
+
         current_ledger = self._ledgers.get(market_id, EventLedger())
         result = evaluate_strategy(
             StrategyEvaluationInput(
                 bars_5m=bars_5m,
-                minimum_tick=minimum_tick(
-                    bars_5m[-1].close,
-                    max_decimals=market.price_max_decimals,
-                    significant_figures=market.price_max_significant_figures,
-                ),
+                minimum_tick=tick,
                 bars_15m=bars_15m,
                 bars_1h=bars_1h,
-                zone_book=zone_book,
-                scanner_linkage=scanner_linkage,
+                zone_book=None,
+                scanner_linkage=canonical_linkage,
                 mandatory_data_valid=True,
             ),
             current_ledger,
@@ -1174,21 +1431,6 @@ class MultiAssetShadowCoordinator:
         output_ledger = _ledger_payload(result.ledger)
         input_hash = _typed_hash("event-ledger", input_ledger)
         output_hash = _typed_hash("event-ledger", output_ledger)
-        active = self._active_registry()
-        evaluation_boundary_ms = retained[-1].close_time_ms + 1
-        evaluation_id = _typed_hash(
-            "strategy-evaluation",
-            {
-                "market_id": market_id,
-                "latest_closed_5m_hash": retained[-1].canonical_hash,
-                "registry_version": active.version,
-                "registry_hash": active.content_hash,
-                "strategy_version": STRATEGY_VERSION,
-                "parameter_version": PARAMETER_VERSION,
-                "input_ledger_hash": input_hash,
-                "evaluation_boundary_ms": evaluation_boundary_ms,
-            },
-        )
         decisions = tuple(
             {
                 "decision_id": _typed_hash("strategy-decision", _canonical_dataclass(decision)),
@@ -1197,22 +1439,39 @@ class MultiAssetShadowCoordinator:
             for decision in result.decisions
         )
         record = StrategyEvaluation.create(
-            identity={"evaluation_id": evaluation_id},
+            identity=authority_slot,
             evaluation_id=evaluation_id,
             market_id=market_id,
             latest_closed_5m_hash=retained[-1].canonical_hash,
+            source_interval="5m",
+            source_open_time_ms=retained[-1].open_time_ms,
             evaluation_boundary_ms=evaluation_boundary_ms,
             runtime_readiness_hash=readiness.snapshot_hash,
             registry_version=active.version,
             registry_hash=active.content_hash,
             strategy_version=STRATEGY_VERSION,
             parameter_version=PARAMETER_VERSION,
+            release_sha=self._release_sha,
+            authoritative_input_hash=authoritative_input_hash,
+            authoritative_input=authoritative_input,
             input_ledger_hash=input_hash,
             output_ledger_hash=output_hash,
             output_ledger=output_ledger,
             decisions=decisions,
+            zones=[_canonical_dataclass(item) for item in result.zones],
+            active_support=(
+                None
+                if result.active_support is None
+                else _canonical_dataclass(result.active_support)
+            ),
+            active_resistance=(
+                None
+                if result.active_resistance is None
+                else _canonical_dataclass(result.active_resistance)
+            ),
+            htf_context=_canonical_dataclass(result.htf_context),
         )
-        self._evidence.write((record,))
+        self._evidence._write_controlled((record,))
         self._ledgers[market_id] = result.ledger
         return EvaluationReceipt(
             evaluation_id=evaluation_id,
@@ -1258,6 +1517,16 @@ class MultiAssetShadowCoordinator:
                 {
                     "market_id": market.identity.market_id,
                     "latest_closed_5m_hash": retained[-1].canonical_hash,
+                    "bars": [
+                        {
+                            "open_time_ms": item.open_time_ms,
+                            "canonical_hash": item.canonical_hash,
+                        }
+                        for item in retained[-37:]
+                    ],
+                    "public_snapshot": _canonical_dataclass(
+                        snapshots[market.identity.market_id]
+                    ),
                 }
             )
             snapshot = snapshots[market.identity.market_id]
@@ -1279,22 +1548,23 @@ class MultiAssetShadowCoordinator:
         observation_payload = [_canonical_dataclass(item) for item in observations]
         universe_hash = _typed_hash("scanner-ready-universe", source_bars)
         observations_hash = _typed_hash("scanner-observations", observation_payload)
+        scan_boundary_open_time_ms = readiness.latest_closed_5m_open_time_ms
+        authority_slot = {
+            "scanner_version": SCANNER_VERSION,
+            "parameter_version": PARAMETER_VERSION,
+            "registry_version": active.version,
+            "source_interval": "5m",
+            "scan_boundary_open_time_ms": scan_boundary_open_time_ms,
+        }
         scan_id = _typed_hash(
-            "scanner-run",
-            {
-                "registry_version": active.version,
-                "registry_hash": active.content_hash,
-                "scanner_version": SCANNER_VERSION,
-                "parameter_version": PARAMETER_VERSION,
-                "observed_at": _timestamp(observed),
-                "runtime_readiness_hash": readiness.snapshot_hash,
-                "universe_snapshot_hash": universe_hash,
-                "observations_hash": observations_hash,
-            },
+            "scanner-run-authority",
+            authority_slot,
         )
         scan = ScannerEvidence.create(
-            identity={"scan_id": scan_id},
+            identity=authority_slot,
             scan_id=scan_id,
+            source_interval="5m",
+            scan_boundary_open_time_ms=scan_boundary_open_time_ms,
             observed_at=_timestamp(observed),
             scanner_version=SCANNER_VERSION,
             parameter_version=PARAMETER_VERSION,
@@ -1354,7 +1624,7 @@ class MultiAssetShadowCoordinator:
                         transitioned_at=_timestamp(observed),
                     )
                 )
-        self._evidence.write(records)
+        self._evidence._write_controlled(records)
         return ScannerRunReceipt(
             scan_id=scan_id,
             scanner_evidence_id=scan.record_id,
@@ -1439,22 +1709,18 @@ class MultiAssetShadowCoordinator:
             "strategy_version"
         ) or provenance.payload.get("parameter_version") != shadow.payload.get("parameter_version"):
             raise IntegrationError("research strategy provenance is inconsistent")
-        outcomes = tuple(
-            outcome
-            for outcome in self._outcome_adapter.persisted_outcomes(shadow_order_id)
-            if outcome.payload.get("failed_breakout") is True
+        projections = self._outcome_adapter.persisted_outcomes(shadow_order_id)
+        if not projections:
+            raise IntegrationError("no canonical failed-breakout Outcome evidence")
+        outcome_record = max(
+            projections,
+            key=lambda item: int(item.payload.get("evaluated_at_ms", -1)),
         )
-        if not outcomes:
-            raise IntegrationError("no retained failed-breakout Outcome evidence")
-        outcome = max(
-            outcomes,
-            key=lambda item: (int(item.payload["evaluated_at_ms"]), item.record_id),
-        )
-        projection = outcome.payload.get("projection")
-        if not isinstance(projection, dict) or projection.get("failed_breakout") is not True:
-            raise IntegrationError("failed-breakout Outcome projection is invalid")
-        research = projection.get("research")
-        if not isinstance(research, dict) or research.get("failed_breakout") is not True:
+        outcome = self._outcome_adapter.canonical_outcome(outcome_record)
+        if not outcome.failed_breakout:
+            raise IntegrationError("no canonical failed-breakout Outcome evidence")
+        research = outcome.research
+        if research is None or not research.failed_breakout:
             raise IntegrationError("Outcome lacks structured failed-breakout research evidence")
         transitions: list[str] = []
         for record_id in _record_ids(self._evidence, "outcome_transition"):
@@ -1470,7 +1736,7 @@ class MultiAssetShadowCoordinator:
                 }
             ):
                 transitions.append(str(record.payload["transition_id"]))
-        evidence_time = _parse_timestamp(outcome.payload["observed_at"], "outcome observed_at")
+        evidence_time = datetime.fromtimestamp(outcome.evaluated_at_ms / 1000, tz=UTC)
         view = ResearchNotificationView(
             kind=NotificationKind.RESEARCH_FAILED_BREAKOUT,
             market_display=market.display,
@@ -1479,21 +1745,17 @@ class MultiAssetShadowCoordinator:
             side=str(shadow.payload["side"]),
             research_id=_typed_hash(
                 "failed-breakout-research",
-                {"shadow_order_id": shadow_order_id, "outcome_id": outcome.record_id},
+                {"shadow_order_id": shadow_order_id, "outcome_id": outcome_record.record_id},
             ),
             source_shadow_order_id=shadow_order_id,
-            outcome_id=outcome.record_id,
+            outcome_id=outcome_record.record_id,
             failed_transition_ids=tuple(sorted(transitions)),
-            path_maturity_status=str(outcome.payload["path_maturity_status"]),
-            required_end_ms=int(outcome.payload["required_end_ms"]),
-            accepted_reentry_time_ms=(
-                None
-                if research.get("accepted_reentry_time_ms") is None
-                else int(research["accepted_reentry_time_ms"])
-            ),
-            reclaim_status=str(research["reclaim_status"]),
-            conflict_count=len(projection.get("conflicts", [])),
-            has_gap=outcome.payload["path_maturity_status"] == MaturityStatus.GAPPED.value,
+            path_maturity_status=outcome.path_maturity_status.value,
+            required_end_ms=outcome.required_end_ms,
+            accepted_reentry_time_ms=research.accepted_reentry_time_ms,
+            reclaim_status=research.reclaim_status.value,
+            conflict_count=len(outcome.conflicts),
+            has_gap=outcome.path_maturity_status is MaturityStatus.GAPPED,
             strategy_version=str(shadow.payload["strategy_version"]),
             parameter_version=str(shadow.payload["parameter_version"]),
         )
@@ -1507,25 +1769,24 @@ class MultiAssetShadowCoordinator:
                     "scanner-linked decision requires retained Candidate evidence"
                 )
             return None
-        candidate = self._evidence.get(candidate_id)
-        if not isinstance(candidate, EvidenceCandidate):
+        canonical_linkage, candidate = self._resolve_scanner_linkage(
+            market_id=decision.market_id, linkage=linkage
+        )
+        if candidate is None or candidate.record_id != candidate_id:
             raise IntegrationError("supplied Candidate linkage is not retained")
         payload = candidate.payload
-        scan = self._evidence.get(str(payload.get("scanner_evidence_id")))
-        active = self._active_registry()
+        side = payload.get("side")
         if (
             linkage is None
-            or not isinstance(scan, ScannerEvidence)
-            or scan.payload.get("scan_id") != payload.get("scan_id")
-            or scan.payload.get("registry_version") != active.version
-            or scan.payload.get("registry_hash") != active.content_hash
-            or payload.get("market_id") != decision.market_id
-            or payload.get("scanner_candidate_id") != linkage.candidate_id
-            or payload.get("scanner_version") != linkage.scanner_version
-            or payload.get("parameter_version") != decision.parameter_version
-            or payload.get("state") != linkage.state.value
+            or canonical_linkage != linkage
+            or decision.scanner_version != SCANNER_VERSION
+            or decision.parameter_version != PARAMETER_VERSION
+            or payload.get("parameter_version") != PARAMETER_VERSION
+            or (side is not None and side != decision.side.value)
         ):
-            raise IntegrationError("supplied Candidate linkage contradicts strategy evidence")
+            raise IntegrationError(
+                "supplied Candidate linkage contradicts Formal strategy evidence"
+            )
         return candidate.record_id
 
     @staticmethod

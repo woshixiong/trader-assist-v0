@@ -17,19 +17,30 @@ from trader_assist_v0.multi_asset_shadow.shadow_records import (
     HumanReviewAction,
     MarketEvent,
     NotificationOutboxReference,
+    OutcomeBarEvidence,
     OutcomeEnvelope,
+    OutcomeTransitionEvidence,
     PlanRecord,
     ProvenanceRecord,
     RecordConflictError,
     RecordError,
     ScannerEvidence,
     ShadowOrder,
+    StrategyEvaluation,
 )
+from trader_assist_v0.multi_asset_shadow.shadow_records.records import ImmutableRecord
+
+
+def _retain_fixture(
+    store: EvidenceStore, records: tuple[ImmutableRecord, ...]
+) -> tuple[bool, ...]:
+    """Exercise storage/link invariants below the separately tested producer gates."""
+    return store._write_transaction(records)
 
 
 def _lineage(
     *, family: str = "BREAKOUT_RETEST", mode: str = "MICRO_FAST", tier: str = "P0", tag: str = "a"
-) -> tuple[object, ...]:
+) -> tuple[ImmutableRecord, ...]:
     state = "FAILED_BREAKOUT_SWEEP_WATCH" if family == "BREAKOUT_RETEST" else "SETUP_READY"
     candidate_content = {
         "candidate_id": tag,
@@ -224,7 +235,7 @@ def _lineage(
 def test_record_round_trip_and_signal_plan_shadow_linkage(tmp_path: Path) -> None:
     records = _lineage()
     with EvidenceStore(tmp_path / "shadow-evidence.sqlite") as store:
-        assert all(store.write(records))
+        assert all(_retain_fixture(store, records))
         signal = records[5]
         shadow = records[7]
         assert isinstance(signal, FormalSignal) and isinstance(shadow, ShadowOrder)
@@ -232,6 +243,55 @@ def test_record_round_trip_and_signal_plan_shadow_linkage(tmp_path: Path) -> Non
         assert shadow.payload["signal_id"] == signal.record_id
         assert shadow.payload["submission_status"] == "NOT_SUBMITTED"
         assert store.count() == len(records)
+
+
+def test_generic_write_rejects_every_controlled_authority_and_projection(
+    tmp_path: Path,
+) -> None:
+    lineage = _lineage()
+    strategy = StrategyEvaluation.create(
+        identity={"authority": "strategy-slot"},
+        evaluation_id="strategy-slot",
+        market_id="market-a",
+        latest_closed_5m_hash="b" * 64,
+        evaluation_boundary_ms=300_000,
+        registry_version="registry-1",
+        registry_hash="r" * 64,
+        strategy_version="strategy-1",
+        parameter_version="parameters-1",
+        input_ledger_hash="i" * 64,
+        output_ledger_hash="o" * 64,
+        output_ledger={"events": []},
+        decisions=[],
+    )
+    transition = OutcomeTransitionEvidence.create(
+        identity={"transition_id": "transition-a"},
+        transition_id="transition-a",
+        shadow_order_id="s" * 64,
+        market_id="market-a",
+        kind="ACCEPTED_REENTRY",
+        occurred_at_ms=1,
+        reference_price="100",
+        payload_hash="p" * 64,
+    )
+    bar = OutcomeBarEvidence.create(
+        identity={"market_id": "market-a", "open_time_ms": 0, "canonical_hash": "c" * 64},
+        market_id="market-a",
+        open_time_ms=0,
+        close_time_ms=59_999,
+        open="100",
+        high="101",
+        low="99",
+        close="100",
+        canonical_hash="c" * 64,
+        source_id="REST",
+    )
+    controlled = (*lineage[1:8], lineage[9], lineage[10], lineage[11], strategy, transition, bar)
+    with EvidenceStore(tmp_path / "generic-write.sqlite") as store:
+        for record in controlled:
+            with pytest.raises(RecordError, match="controlled producer"):
+                store.write((record,))
+        assert store.count() == 0
 
 
 def test_hashes_are_deterministic_and_payload_copies_cannot_mutate_record() -> None:
@@ -280,10 +340,10 @@ def test_exact_duplicate_is_idempotent_and_conflicting_identity_fails(tmp_path: 
         **{**candidate.payload, "state": "REJECTED"},
     )
     with EvidenceStore(tmp_path / "shadow-evidence.sqlite") as store:
-        store.write(records[:3])
-        assert store.write((candidate,)) == (False,)
+        _retain_fixture(store, records[:3])
+        assert _retain_fixture(store, (candidate,)) == (False,)
         with pytest.raises(RecordConflictError):
-            store.write((changed,))
+            _retain_fixture(store, (changed,))
 
 
 def test_batch_rolls_back_when_a_later_link_is_invalid(tmp_path: Path) -> None:
@@ -298,9 +358,9 @@ def test_batch_rolls_back_when_a_later_link_is_invalid(tmp_path: Path) -> None:
         transitioned_at="2026-08-12T00:02:00Z",
     )
     with EvidenceStore(tmp_path / "shadow-evidence.sqlite") as store:
-        store.write(records[:2])
+        _retain_fixture(store, records[:2])
         with pytest.raises(RecordError):
-            store.write((candidate, broken))
+            _retain_fixture(store, (candidate, broken))
         assert store.count() == 2
 
 
@@ -321,7 +381,7 @@ def test_tsr_is_append_only_and_uses_live_authority_terms(tmp_path: Path) -> Non
         for index, action in enumerate(HumanReviewAction, start=7)
     )
     with EvidenceStore(tmp_path / "shadow-evidence.sqlite") as store:
-        store.write(records[:8])
+        _retain_fixture(store, records[:8])
         assert all(store.write(reviews))
         assert [review.payload["action"] for review in reviews] == [
             "TAKEN",
@@ -355,8 +415,8 @@ def test_outcome_placeholder_and_failed_breakout_research_linkage(tmp_path: Path
         linked_market_event_id=event.record_id,
     )
     with EvidenceStore(tmp_path / "shadow-evidence.sqlite") as store:
-        store.write(records)
-        store.write((opposite,))
+        _retain_fixture(store, records)
+        _retain_fixture(store, (opposite,))
         assert candidate.payload["state"] == "FAILED_BREAKOUT_SWEEP_WATCH"
         assert transition.payload["invalidation_reason"] == "ACCEPTED_REENTRY"
         assert event.payload["a5_event"] == "A5_EVENT"
@@ -382,9 +442,9 @@ def test_breakout_micro_fast_standard_and_successful_control_are_retained(tmp_pa
         mfe_mae_by_horizon={"120m": {"mfe": "2.1", "mae": "0.3"}},
     )
     with EvidenceStore(tmp_path / "shadow-evidence.sqlite") as store:
-        store.write(micro)
-        store.write(standard)
-        store.write((successful_control,))
+        _retain_fixture(store, micro)
+        _retain_fixture(store, standard)
+        _retain_fixture(store, (successful_control,))
         assert micro[5].payload["setup_mode"] == "MICRO_FAST"
         assert standard[5].payload["setup_mode"] == "STANDARD"
         assert successful_control.payload["research_classification"] == "SUCCESSFUL_BREAKOUT"
@@ -398,7 +458,7 @@ def test_all_families_all_tiers_and_versioned_provenance_are_retained(tmp_path: 
     )
     with EvidenceStore(tmp_path / "shadow-evidence.sqlite") as store:
         for group in groups:
-            store.write(group)
+            _retain_fixture(store, group)
         signals = [group[5] for group in groups]
         families = {
             signal.payload["setup_family"] for signal in signals if isinstance(signal, FormalSignal)
@@ -424,7 +484,7 @@ def test_reopen_and_deterministic_research_export(tmp_path: Path) -> None:
     database = tmp_path / "shadow-evidence.sqlite"
     records = _lineage()
     with EvidenceStore(database) as store:
-        store.write(records)
+        _retain_fixture(store, records)
         first = store.export_jsonl()
         first_hash = store.export_hash()
     with EvidenceStore(database) as reopened:
@@ -496,10 +556,11 @@ def test_direct_formal_families_do_not_require_scanner_ancestry(
     records = _direct_formal(family=family, mode=mode, tag=family.lower())
     event, signal = records[1:]
     with EvidenceStore(tmp_path / "shadow-evidence.sqlite") as store:
-        assert store.write(records) == (True, True, True)
+        with pytest.raises(RecordError, match="controlled producer"):
+            store.write(records)
         assert "candidate_id" not in event.payload
         assert "candidate_id" not in signal.payload
-        assert store.count() == 3
+        assert store.count() == 0
         assert store._connection.execute("SELECT COUNT(*) FROM candidates").fetchone()[0] == 0
         assert store._connection.execute("PRAGMA table_info(market_events)").fetchall()[1][3] == 0
         assert store._connection.execute("PRAGMA table_info(formal_signals)").fetchall()[1][3] == 0
@@ -510,7 +571,7 @@ def test_scanner_linked_formal_path_is_retained(tmp_path: Path) -> None:
     event, signal = records[4:6]
     assert isinstance(event, MarketEvent) and isinstance(signal, FormalSignal)
     with EvidenceStore(tmp_path / "shadow-evidence.sqlite") as store:
-        store.write(records[:6])
+        _retain_fixture(store, records[:6])
         assert event.payload["candidate_id"] == signal.payload["candidate_id"]
 
 
@@ -575,9 +636,11 @@ def test_invalid_supplied_candidate_linkage_fails_closed(tmp_path: Path) -> None
         provenance_id=provenance.record_id,
     )
     with EvidenceStore(tmp_path / "shadow-evidence.sqlite") as store:
-        store.write((provenance, scanner, candidate, other_scanner, other_candidate, event))
+        _retain_fixture(
+            store, (provenance, scanner, candidate, other_scanner, other_candidate, event)
+        )
         with pytest.raises(RecordError, match="does not match candidate"):
-            store.write((mismatched_signal,))
+            _retain_fixture(store, (mismatched_signal,))
         assert store.get(mismatched_signal.record_id) is None
 
 

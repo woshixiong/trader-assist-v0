@@ -39,6 +39,7 @@ from trader_assist_v0.multi_asset_shadow.notification_engine import (
     NotificationKind,
     ResearchNotificationView,
     ScannerWatchNotificationView,
+    SignalNotificationView,
     build_envelope,
 )
 from trader_assist_v0.multi_asset_shadow.outcome_engine import (
@@ -66,9 +67,15 @@ from trader_assist_v0.multi_asset_shadow.shadow_records import (
     FormalSignal,
     HumanReviewAction,
     MarketEvent,
+    NotificationOutboxReference,
+    OutcomeEnvelope,
     PlanRecord,
     ProvenanceRecord,
+    RecordConflictError,
+    RecordError,
+    ScannerEvidence,
     ShadowOrder,
+    StrategyEvaluation,
 )
 from trader_assist_v0.multi_asset_shadow.strategy_kernel import (
     BreakoutLinkage,
@@ -238,25 +245,28 @@ def _market(
 
 def _payload(index: int, *, final: bool, coin: str = "BTC") -> dict[str, object]:
     start = index * 300_000
-    baseline_close = "102" if (index // 3) % 2 else "100"
-    return {
+    group = index // 3
+    payload: dict[str, object] = {
         "i": "5m",
         "s": coin,
         "t": start,
         "T": start + 299_999,
-        "o": "101" if final else "100",
-        "h": "102" if final else "103",
-        "l": "99.8" if final else "98",
-        "c": "101.5" if final else baseline_close,
+        "o": "105",
+        "h": "110" if group in {15, 17, 19} else "106",
+        "l": "100" if group in {14, 16, 18} else "104",
+        "c": "105",
         "v": "10",
     }
+    if final:
+        payload.update({"o": "102.5", "h": "106", "l": "99.8", "c": "105.5"})
+    return payload
 
 
 def _route(
     tmp_path: Path,
     *,
     tier: RegistryTier = RegistryTier.P0,
-    count: int = 60,
+    count: int = 64,
     planning: FakePlanningData | None = None,
 ) -> Route:
     market = _market(tier=tier)
@@ -411,8 +421,14 @@ def _formalize(
 
 
 def _persist_breakout_shadow(
-    store: EvidenceStore, *, market_id: str, start_ms: int, tag: str
+    store: EvidenceStore,
+    *,
+    market_id: str,
+    start_ms: int,
+    tag: str,
+    family: str = "BREAKOUT_RETEST",
 ) -> ShadowOrder:
+    setup_mode = "MICRO_FAST" if family == "BREAKOUT_RETEST" else None
     provenance = ProvenanceRecord.create(
         identity={"provenance": tag},
         strategy_version="FL-MA-PRICE-ACTION-v0.1",
@@ -426,15 +442,15 @@ def _persist_breakout_shadow(
     event = MarketEvent.create(
         identity={"event": tag},
         market_id=market_id,
-        event_kind="BREAKOUT_RETEST",
+        event_kind=family,
         event_time="2026-08-13T00:00:00Z",
     )
     signal = FormalSignal.create(
         identity={"signal": tag},
         market_event_id=event.record_id,
         market_id=market_id,
-        setup_family="BREAKOUT_RETEST",
-        setup_mode="MICRO_FAST",
+        setup_family=family,
+        setup_mode=setup_mode,
         side="LONG",
         approval_status="APPROVED",
         tier="P0",
@@ -458,8 +474,8 @@ def _persist_breakout_shadow(
         plan_id=plan.record_id,
         market_event_id=event.record_id,
         market_id=market_id,
-        setup_family="BREAKOUT_RETEST",
-        setup_mode="MICRO_FAST",
+        setup_family=family,
+        setup_mode=setup_mode,
         side="LONG",
         planned_entry="100",
         stop="95",
@@ -480,7 +496,40 @@ def _persist_breakout_shadow(
         zone_low="99",
         zone_high="101",
     )
-    store.write((provenance, event, signal, plan, shadow))
+    view = SignalNotificationView(
+        kind=NotificationKind.FORMAL_SIGNAL,
+        market_display="BTC",
+        tier=RegistryTier.P0,
+        setup_family=family,
+        setup_mode=setup_mode,
+        side="LONG",
+        signal_time=NOW,
+        planned_entry=Decimal("100"),
+        stop=Decimal("95"),
+        tp1=Decimal("105"),
+        tp2=Decimal("110"),
+        entry_quality="TEST",
+        htf_relation="NEUTRAL",
+        zone_context="test",
+        reference_risk_sizing="REFERENCE_SIZE_ONLY",
+        liquidity_attribution="test",
+        strategy_version="FL-MA-PRICE-ACTION-v0.1",
+        parameter_version="2026-08-03-r1",
+        signal_id=signal.record_id,
+        shadow_order_id=shadow.record_id,
+    )
+    envelope = build_envelope(view=view, created_at=NOW)
+    reference = NotificationOutboxReference.create(
+        identity={"signal_id": signal.record_id, "publication_id": envelope.idempotency_key},
+        signal_id=signal.record_id,
+        publication_id=envelope.idempotency_key,
+        published_at="2026-08-13T00:00:00Z",
+    )
+    store.publish_formal_bundle(
+        records=(provenance, event, signal, plan, shadow),
+        notification_reference=reference,
+        envelope=envelope,
+    )
     return shadow
 
 
@@ -488,7 +537,6 @@ def test_finalized_5m_to_direct_formal_shadow_evidence_outbox_and_outcome(tmp_pa
     route = _route(tmp_path, tier=RegistryTier.P2)
     result = route.coordinator.evaluate_finalized_market(
         market_id=route.market.identity.market_id,
-        zone_book=_zones(route.market.identity.market_id),
     )
     decision = next(
         item
@@ -564,7 +612,6 @@ def test_all_tiers_cross_shared_adapters(tmp_path: Path, tier: RegistryTier) -> 
     route = _route(tmp_path, tier=tier)
     evaluation = route.coordinator.evaluate_finalized_market(
         market_id=route.market.identity.market_id,
-        zone_book=_zones(route.market.identity.market_id),
     )
     artifacts = _formalize(route, evaluation)
     assert isinstance(artifacts, FormalizationArtifacts)
@@ -593,7 +640,6 @@ def test_stale_bbo_spread_and_1000_usd_slippage_fail_closed(
     route = _route(tmp_path, planning=planning)
     evaluation = route.coordinator.evaluate_finalized_market(
         market_id=route.market.identity.market_id,
-        zone_book=_zones(route.market.identity.market_id),
     )
     result = _formalize(route, evaluation)
     assert result is expected
@@ -707,19 +753,39 @@ def test_failed_market_isolated_disconnect_blocks_all_and_readiness_restore_resu
     )
     assert tuple(item.market_id for item in scan.observations) == (eth_id,)
     with pytest.raises(IntegrationError, match="readiness"):
-        coordinator.evaluate_finalized_market(market_id=btc_id, zone_book=_zones(btc_id))
-    healthy = coordinator.evaluate_finalized_market(market_id=eth_id, zone_book=_zones(eth_id))
+        coordinator.evaluate_finalized_market(market_id=btc_id)
+    healthy = coordinator.evaluate_finalized_market(market_id=eth_id)
     assert healthy.market_id == eth_id
 
     readiness.connected = False
     with pytest.raises(IntegrationError, match="disconnected"):
         coordinator.scan_finalized({}, observed_at=NOW + timedelta(hours=6, minutes=5))
     with pytest.raises(IntegrationError, match="disconnected"):
-        coordinator.evaluate_finalized_market(market_id=eth_id, zone_book=_zones(eth_id))
+        coordinator.evaluate_finalized_market(market_id=eth_id)
 
     readiness.connected = True
-    resumed = coordinator.evaluate_finalized_market(market_id=eth_id, zone_book=_zones(eth_id))
+    resumed = coordinator.evaluate_finalized_market(market_id=eth_id)
     assert resumed.latest_closed_5m_hash == healthy.latest_closed_5m_hash
+
+
+def test_scanner_authority_slot_exact_retry_and_changed_input_conflict(tmp_path: Path) -> None:
+    route = _route(tmp_path, count=64)
+    market_id = route.market.identity.market_id
+    snapshots = {market_id: ScannerPublicSnapshot(Decimal("0.1"), True)}
+    observed_at = NOW + timedelta(hours=6)
+    first = route.coordinator.scan_finalized(snapshots, observed_at=observed_at)
+    retained_count = route.evidence.count()
+    retry = route.coordinator.scan_finalized(snapshots, observed_at=observed_at)
+    assert retry == first
+    assert route.evidence.count() == retained_count
+    assert isinstance(route.evidence.get(first.scanner_evidence_id), ScannerEvidence)
+
+    with pytest.raises(RecordConflictError, match="conflicts"):
+        route.coordinator.scan_finalized(
+            {market_id: ScannerPublicSnapshot(Decimal("0.2"), True)},
+            observed_at=observed_at,
+        )
+    assert route.evidence.count() == retained_count
 
 
 def test_optional_candidate_link_validates_and_bad_or_missing_link_fails_closed(
@@ -742,7 +808,6 @@ def test_optional_candidate_link_validates_and_bad_or_missing_link_fails_closed(
     )
     linked = route.coordinator.evaluate_finalized_market(
         market_id=route.market.identity.market_id,
-        zone_book=_zones(route.market.identity.market_id),
         scanner_linkage=candidate.linkage,
     )
     artifacts = _formalize(route, linked, candidate_id=retained.record_id)
@@ -750,15 +815,11 @@ def test_optional_candidate_link_validates_and_bad_or_missing_link_fails_closed(
     assert artifacts.signal.payload["candidate_id"] == retained.record_id
 
     other_route = _route(tmp_path / "bad", count=64)
-    missing = other_route.coordinator.evaluate_finalized_market(
-        market_id=other_route.market.identity.market_id,
-        zone_book=_zones(other_route.market.identity.market_id),
-        scanner_linkage=candidate.linkage,
-    )
-    with pytest.raises(IntegrationError, match="not retained"):
-        _formalize(other_route, missing, candidate_id="e" * 64)
-    with pytest.raises(IntegrationError, match="requires retained Candidate"):
-        _formalize(other_route, missing)
+    with pytest.raises(IntegrationError, match="retained Candidate"):
+        other_route.coordinator.evaluate_finalized_market(
+            market_id=other_route.market.identity.market_id,
+            scanner_linkage=candidate.linkage,
+        )
     assert (
         other_route.evidence._connection.execute("SELECT COUNT(*) FROM formal_signals").fetchone()[
             0
@@ -771,7 +832,6 @@ def test_stale_changed_and_foreign_evaluation_receipts_fail_closed(tmp_path: Pat
     route = _route(tmp_path)
     receipt = route.coordinator.evaluate_finalized_market(
         market_id=route.market.identity.market_id,
-        zone_book=_zones(route.market.identity.market_id),
     )
     changed = replace(
         receipt,
@@ -789,7 +849,7 @@ def test_stale_changed_and_foreign_evaluation_receipts_fail_closed(tmp_path: Pat
     with pytest.raises(IntegrationError, match="not retained"):
         _formalize(other, receipt)
 
-    next_index = 60
+    next_index = route.latest.open_time_ms // 300_000 + 1
     route.data.admit_rest_history(
         market=route.market,
         snapshot=[_payload(next_index, final=False)],
@@ -832,7 +892,6 @@ def test_event_ledger_continuation_survives_evidence_reopen(tmp_path: Path) -> N
         route.coordinator._ledgers[route.market.identity.market_id] = EventLedger((active,))
         checkpoint = route.coordinator.evaluate_finalized_market(
             market_id=route.market.identity.market_id,
-            zone_book=_zones(route.market.identity.market_id),
         )
         assert any(event.status is EventStatus.ACTIVE for event in checkpoint.result.ledger.events)
 
@@ -854,7 +913,7 @@ def test_event_ledger_continuation_survives_evidence_reopen(tmp_path: Path) -> N
     )
     restarted.evidence = reopened
     for route in (uninterrupted, restarted):
-        next_index = 60
+        next_index = route.latest.open_time_ms // 300_000 + 1
         route.data.admit_rest_history(
             market=route.market,
             snapshot=[_payload(next_index, final=False)],
@@ -863,11 +922,9 @@ def test_event_ledger_continuation_survives_evidence_reopen(tmp_path: Path) -> N
         route.readiness.latest_open_ms = next_index * 300_000
     live_result = uninterrupted.coordinator.evaluate_finalized_market(
         market_id=uninterrupted.market.identity.market_id,
-        zone_book=_zones(uninterrupted.market.identity.market_id),
     ).result
     restart_result = restarted.coordinator.evaluate_finalized_market(
         market_id=restarted.market.identity.market_id,
-        zone_book=_zones(restarted.market.identity.market_id),
     ).result
     assert restart_result == live_result
 
@@ -905,11 +962,66 @@ def test_scanner_receipt_rejects_fabrication_and_linkage_state_version_market(
         )
 
     other = _route(tmp_path / "market", count=64)
-    with pytest.raises(IntegrationError, match="not retained"):
+    with pytest.raises(IntegrationError, match="retained Candidate"):
         other.coordinator._candidate_link(
             _direct_decision(other.market.identity.market_id, scanner_linkage=candidate.linkage),
             retained.record_id,
         )
+
+
+def test_candidate_side_and_parameter_must_match_formal_decision(tmp_path: Path) -> None:
+    route = _route(tmp_path, count=288)
+    scan = route.coordinator.scan_finalized(
+        {route.market.identity.market_id: ScannerPublicSnapshot(Decimal("0.1"), True)},
+        observed_at=NOW + timedelta(hours=30),
+    )
+    candidate = scan.observations[0].candidate
+    assert candidate is not None and candidate.side is Side.LONG
+    retained = route.coordinator.persist_scanner_candidate(
+        receipt=scan, candidate_id=candidate.candidate_id
+    )
+    decision = _direct_decision(
+        route.market.identity.market_id, scanner_linkage=candidate.linkage
+    )
+    assert route.coordinator._candidate_link(decision, retained.record_id) == retained.record_id
+    with pytest.raises(IntegrationError, match="Formal strategy evidence"):
+        route.coordinator._candidate_link(
+            replace(decision, side=Side.SHORT), retained.record_id
+        )
+    with pytest.raises(IntegrationError, match="Formal strategy evidence"):
+        route.coordinator._candidate_link(
+            replace(decision, parameter_version="wrong"), retained.record_id
+        )
+
+
+def test_formal_bundle_exact_retry_and_changed_semantic_content_conflict(tmp_path: Path) -> None:
+    route = _route(tmp_path)
+    evaluation = route.coordinator.evaluate_finalized_market(
+        market_id=route.market.identity.market_id
+    )
+    first = _formalize(route, evaluation)
+    assert isinstance(first, FormalizationArtifacts)
+    retained_count = route.evidence.count()
+    outbox_count = route.evidence._connection.execute(
+        "SELECT COUNT(*) FROM notification_outbox"
+    ).fetchone()[0]
+    retry = _formalize(route, evaluation)
+    assert isinstance(retry, FormalizationArtifacts)
+    assert retry.outbox_receipt.coalesced
+    assert retry.shadow_order == first.shadow_order
+    assert retry.shadow_order.payload["submission_status"] == "NOT_SUBMITTED"
+    assert route.evidence.count() == retained_count
+    assert (
+        route.evidence._connection.execute(
+            "SELECT COUNT(*) FROM notification_outbox"
+        ).fetchone()[0]
+        == outbox_count
+    )
+
+    route.planning.best_ask = Decimal("100.2")
+    with pytest.raises(RecordConflictError, match="conflicts"):
+        _formalize(route, evaluation)
+    assert route.evidence.count() == retained_count
 
 
 @pytest.mark.parametrize("failure_index", range(1, 7))
@@ -919,7 +1031,6 @@ def test_atomic_formal_publication_rolls_back_on_record_boundaries(
     route = _route(tmp_path)
     evaluation = route.coordinator.evaluate_finalized_market(
         market_id=route.market.identity.market_id,
-        zone_book=_zones(route.market.identity.market_id),
     )
     original = route.evidence._write_one
     calls = 0
@@ -949,7 +1060,6 @@ def test_atomic_formal_publication_rolls_back_if_outbox_insert_fails(
     route = _route(tmp_path)
     evaluation = route.coordinator.evaluate_finalized_market(
         market_id=route.market.identity.market_id,
-        zone_book=_zones(route.market.identity.market_id),
     )
 
     def fail_outbox(*_args: object, **_kwargs: object) -> int:
@@ -973,7 +1083,6 @@ def test_draining_blocks_new_activity_but_existing_outcome_completes_and_detache
     route = _route(tmp_path)
     evaluation = route.coordinator.evaluate_finalized_market(
         market_id=route.market.identity.market_id,
-        zone_book=_zones(route.market.identity.market_id),
     )
     artifacts = _formalize(route, evaluation)
     assert isinstance(artifacts, FormalizationArtifacts)
@@ -984,7 +1093,7 @@ def test_draining_blocks_new_activity_but_existing_outcome_completes_and_detache
         now=NOW + timedelta(hours=6),
     )
     route.registry.request_apply(successor.version)
-    next_index = 60
+    next_index = route.latest.open_time_ms // 300_000 + 1
     route.data.admit_rest_history(
         market=successor.markets[0],
         snapshot=[_payload(next_index, final=False)],
@@ -993,7 +1102,6 @@ def test_draining_blocks_new_activity_but_existing_outcome_completes_and_detache
     with pytest.raises(IntegrationError, match="lifecycle"):
         route.coordinator.evaluate_finalized_market(
             market_id=route.market.identity.market_id,
-            zone_book=_zones(route.market.identity.market_id),
         )
     start = int(artifacts.shadow_order.payload["outcome_start_ms"])
     for index in range(120):
@@ -1036,8 +1144,105 @@ def test_draining_blocks_new_activity_but_existing_outcome_completes_and_detache
     assert isinstance(reopened.get(artifacts.shadow_order.record_id), ShadowOrder)
 
 
-def test_outcome_evidence_reopens_with_shared_demand_extension_conflict_and_projection(
+def test_strategy_authority_retry_context_bar_conflict_and_canonical_zone(
     tmp_path: Path,
+) -> None:
+    route = _route(tmp_path)
+    market_id = route.market.identity.market_id
+    with pytest.raises(IntegrationError, match="canonical ZoneBook"):
+        route.coordinator.evaluate_finalized_market(
+            market_id=market_id, zone_book=_zones(market_id)
+        )
+    first = route.coordinator.evaluate_finalized_market(market_id=market_id)
+    retained_count = route.evidence.count()
+    retry = route.coordinator.evaluate_finalized_market(market_id=market_id)
+    assert retry == first
+    assert route.evidence.count() == retained_count == 1
+    assert isinstance(route.evidence.get(first.evaluation_record_id), StrategyEvaluation)
+
+    route.coordinator._release_sha = "2" * 40
+    with pytest.raises(IntegrationError, match="conflicts with current context"):
+        route.coordinator.evaluate_finalized_market(market_id=market_id)
+    route.coordinator._release_sha = RELEASE_SHA
+
+    prior = route.latest
+    changed = ClosedBar.create(
+        market_id=prior.market_id,
+        interval=prior.interval,
+        open_time_ms=prior.open_time_ms,
+        close_time_ms=prior.close_time_ms,
+        open=prior.open,
+        high=prior.high,
+        low=prior.low,
+        close=prior.close + Decimal("0.1"),
+        volume=prior.volume,
+        source_id=prior.source_id,
+        provenance_hash="9" * 64,
+        received_at=prior.received_at,
+    )
+    route.closed_store.connection.execute(
+        "UPDATE closed_bars SET canonical_hash = ?, payload_json = ? "
+        "WHERE market_id = ? AND interval = '5m' AND open_time_ms = ?",
+        (changed.canonical_hash, changed.model_dump_json(), market_id, changed.open_time_ms),
+    )
+    route.closed_store.connection.commit()
+    with pytest.raises(IntegrationError, match="conflicts with current context"):
+        route.coordinator.evaluate_finalized_market(market_id=market_id)
+    assert route.evidence.count() == retained_count
+
+
+def test_strategy_restart_uses_semantic_chronology_not_record_id_order(tmp_path: Path) -> None:
+    route = _route(tmp_path)
+    receipts = [
+        route.coordinator.evaluate_finalized_market(market_id=route.market.identity.market_id)
+    ]
+    for _ in range(3):
+        next_index = route.latest.open_time_ms // 300_000 + 1
+        route.data.admit_rest_history(
+            market=route.market,
+            snapshot=[_payload(next_index, final=False)],
+            received_at=datetime.fromtimestamp(
+                ((next_index + 1) * 300_000 + 1_000) / 1000, UTC
+            ),
+        )
+        route.readiness.latest_open_ms = next_index * 300_000
+        receipts.append(
+            route.coordinator.evaluate_finalized_market(
+                market_id=route.market.identity.market_id
+            )
+        )
+    latest = receipts[-1]
+    assert latest.evaluation_record_id < receipts[-2].evaluation_record_id
+
+    database = route.evidence.path
+    route.evidence.close()
+    reopened = EvidenceStore(database)
+    adapter = EvidenceOutcomeAdapter(reopened)
+    outcome = OutcomeEngine(sink=adapter)
+    restarted = MultiAssetShadowCoordinator(
+        registry=route.registry,
+        data_authority=route.data,
+        evidence=reopened,
+        outbox=EvidenceOutbox(reopened),
+        outcome_engine=outcome,
+        outcome_adapter=adapter,
+        planning_data=route.planning,
+        cost_model=CostModel("cost-1", Decimal(), Decimal(), Decimal("2")),
+        release_sha=RELEASE_SHA,
+        runtime_readiness=route.readiness,
+    )
+    retry = restarted.evaluate_finalized_market(market_id=route.market.identity.market_id)
+    assert retry == latest
+    assert reopened._connection.execute("SELECT COUNT(*) FROM strategy_evaluations").fetchone()[
+        0
+    ] == len(receipts)
+
+
+@pytest.mark.parametrize(
+    "transition_kind", (TransitionKind.ACCEPTED_REENTRY, TransitionKind.FAILED_BREAKOUT)
+)
+def test_outcome_evidence_reopens_with_shared_demand_extension_conflict_and_projection(
+    tmp_path: Path, transition_kind: TransitionKind
 ) -> None:
     route = _route(tmp_path)
     start = route.latest.close_time_ms + 1
@@ -1068,13 +1273,13 @@ def test_outcome_evidence_reopens_with_shared_demand_extension_conflict_and_proj
             recover=False,
         )
     assert route.outcome.subscription_requirements == (market_id,)
-    with pytest.raises(IntegrationError, match="no retained failed-breakout"):
+    with pytest.raises(IntegrationError, match="no canonical failed-breakout"):
         route.coordinator.publish_failed_breakout_research(shadow_order_id=first.record_id)
     transition = OutcomeTransitionView(
-        transition_id="accepted-reentry",
+        transition_id=transition_kind.value.lower(),
         shadow_order_id=first.record_id,
         market_id=market_id,
-        kind=TransitionKind.ACCEPTED_REENTRY,
+        kind=transition_kind,
         occurred_at_ms=start + 90 * 60_000,
         reference_price=Decimal("99.8"),
     )
@@ -1137,6 +1342,106 @@ def test_outcome_evidence_reopens_with_shared_demand_extension_conflict_and_proj
     )
     assert reopened._connection.execute("SELECT COUNT(*) FROM outcome_bars").fetchone()[0] == 210
     assert before_by_id[first.record_id].failed_breakout
+
+
+def test_fabricated_outcome_projection_cannot_drive_research_or_correlation(
+    tmp_path: Path,
+) -> None:
+    route = _route(tmp_path)
+    start = route.latest.close_time_ms + 1
+    shadow = _persist_breakout_shadow(
+        route.evidence,
+        market_id=route.market.identity.market_id,
+        start_ms=start,
+        tag="fabricated-projection",
+    )
+    fabricated = OutcomeEnvelope.create(
+        identity={"shadow_order_id": shadow.record_id, "evaluated_at_ms": start},
+        signal_id=shadow.payload["signal_id"],
+        shadow_order_id=shadow.record_id,
+        observed_at=datetime.fromtimestamp(start / 1000, UTC).isoformat().replace("+00:00", "Z"),
+        evaluated_at_ms=start,
+        path_maturity_status="MATURE",
+        unresolved=False,
+        outcome_source="FABRICATED",
+        outcome_r="999",
+        outcome_mfe="999",
+        outcome_mae="0",
+        required_start_ms=start,
+        original_deadline_ms=start + 120 * 60_000,
+        required_end_ms=start + 120 * 60_000,
+        failed_breakout=True,
+        projection={"failed_breakout": True, "research": {"failed_breakout": True}},
+    )
+    with pytest.raises(RecordError, match="controlled producer"):
+        route.evidence.write((fabricated,))
+
+    # Even a test-only low-level insertion cannot promote the projection to truth.
+    route.evidence._write_transaction((fabricated,))
+    with pytest.raises(RecordError, match="canonical reconstruction"):
+        route.coordinator.publish_failed_breakout_research(shadow_order_id=shadow.record_id)
+    with pytest.raises(RecordError, match="canonical reconstruction"):
+        CorrelationResearchAdapter(route.evidence).completed_signals()
+
+
+@pytest.mark.parametrize("family", ("SWEEP_RECLAIM", "RANGE_EDGE_REJECTION"))
+def test_non_breakout_families_cannot_publish_failed_breakout_research(
+    tmp_path: Path, family: str
+) -> None:
+    route = _route(tmp_path)
+    shadow = _persist_breakout_shadow(
+        route.evidence,
+        market_id=route.market.identity.market_id,
+        start_ms=route.latest.close_time_ms + 1,
+        tag=family.lower(),
+        family=family,
+    )
+    with pytest.raises(IntegrationError, match="requires BREAKOUT_RETEST"):
+        route.coordinator.publish_failed_breakout_research(shadow_order_id=shadow.record_id)
+
+
+def test_mature_non_failed_breakout_cannot_publish_failed_breakout_research(
+    tmp_path: Path,
+) -> None:
+    route = _route(tmp_path)
+    market_id = route.market.identity.market_id
+    start = route.latest.close_time_ms + 1
+    shadow = _persist_breakout_shadow(
+        route.evidence, market_id=market_id, start_ms=start, tag="successful-breakout"
+    )
+    route.outcome.attach(
+        FormalShadowView(
+            shadow_order_id=shadow.record_id,
+            market_id=market_id,
+            side=OutcomeSide.LONG,
+            setup_family=OutcomeSetupFamily.BREAKOUT_RETEST,
+            outcome_start_ms=start,
+            planned_entry=Decimal("100"),
+            stop=Decimal("95"),
+            tp1=Decimal("105"),
+            tp2=Decimal("110"),
+            atr=Decimal("2"),
+            zone_low=Decimal("99"),
+            zone_high=Decimal("101"),
+        ),
+        now_ms=start,
+        recover=False,
+    )
+    for minute in range(120):
+        route.coordinator.admit_outcome_bar(
+            OneMinuteBar.create(
+                market_id=market_id,
+                open_time_ms=start + minute * 60_000,
+                open=Decimal("100"),
+                high=Decimal("100.2"),
+                low=Decimal("99.8"),
+                close=Decimal("100"),
+            )
+        )
+    outcome = route.outcome.tick(now_ms=start + 120 * 60_000)[0]
+    assert not outcome.failed_breakout and not outcome.unresolved
+    with pytest.raises(IntegrationError, match="no canonical failed-breakout"):
+        route.coordinator.publish_failed_breakout_research(shadow_order_id=shadow.record_id)
 
 
 def test_durable_outbox_coalesces_reclaims_and_rejects_stale_completion(tmp_path: Path) -> None:
@@ -1244,7 +1549,6 @@ def test_correlation_unavailability_is_not_a_live_formal_gate(tmp_path: Path) ->
     route = _route(tmp_path)
     evaluation = route.coordinator.evaluate_finalized_market(
         market_id=route.market.identity.market_id,
-        zone_book=_zones(route.market.identity.market_id),
     )
     artifacts = _formalize(route, evaluation)
     assert isinstance(artifacts, FormalizationArtifacts)

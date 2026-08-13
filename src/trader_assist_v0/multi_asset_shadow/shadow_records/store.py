@@ -59,6 +59,21 @@ _LINK_COLUMNS = {
     "notification_outbox_reference": ("signal_id",),
 }
 
+# Generic persistence is intentionally limited to ordinary source/user evidence.
+# Computed authority and projections enter through their bounded producers below.
+_GENERIC_WRITE_TYPES = frozenset({"provenance", "human_review"})
+_CONTROLLED_WRITE_TYPES = frozenset(
+    {
+        "scanner_evidence",
+        "strategy_evaluation",
+        "candidate",
+        "candidate_transition",
+        "outcome_envelope",
+        "outcome_transition",
+        "outcome_bar",
+    }
+)
+
 
 class EvidenceStore:
     """A new database only; this class never opens or migrates legacy runtime.db."""
@@ -205,8 +220,22 @@ class EvidenceStore:
                 )
 
     def write(self, records: Iterable[ImmutableRecord]) -> tuple[bool, ...]:
-        """Atomically persist records; exact duplicates are idempotent."""
+        """Persist only ordinary/source/user evidence through the generic surface."""
         materialized = tuple(records)
+        if any(record.record_type not in _GENERIC_WRITE_TYPES for record in materialized):
+            raise RecordError("record type requires its controlled producer")
+        return self._write_transaction(materialized)
+
+    def _write_controlled(self, records: Iterable[ImmutableRecord]) -> tuple[bool, ...]:
+        """Package-private persistence for validated coordinator/Outcome output."""
+        materialized = tuple(records)
+        if any(record.record_type not in _CONTROLLED_WRITE_TYPES for record in materialized):
+            raise RecordError("record type requires a different controlled producer")
+        return self._write_transaction(materialized)
+
+    def _write_transaction(
+        self, materialized: tuple[ImmutableRecord, ...]
+    ) -> tuple[bool, ...]:
         try:
             with self._connection:
                 return tuple(self._write_one(record) for record in materialized)
@@ -239,7 +268,9 @@ class EvidenceStore:
             PlanRecord,
             ShadowOrder,
         }
-        if {type(record) for record in materialized} != required_types:
+        if len(materialized) != len(required_types) or {
+            type(record) for record in materialized
+        } != required_types:
             raise RecordError("formal publication requires one complete typed record bundle")
         if type(notification_reference) is not NotificationOutboxReference:
             raise RecordError("formal publication requires a typed outbox reference")
