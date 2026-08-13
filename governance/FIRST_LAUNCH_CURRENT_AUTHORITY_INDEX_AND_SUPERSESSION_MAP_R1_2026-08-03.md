@@ -26,8 +26,8 @@
 
 5. `FIRST_LAUNCH_POST_LAUNCH_STRATEGY_RESEARCH_AND_SHADOW_EVIDENCE_BACKLOG_R1_2026-08-12.md`
    - 当前上线后 Strategy Research / Shadow Evidence 的父级 Backlog 权威。其 Evidence、可重建性和“不扩大当前发布”边界继续有效。
-   - `FIRST_LAUNCH_POST_LAUNCH_STRATEGY_RESEARCH_AND_FUTURE_DEVELOPMENT_INVENTORY_R3_2026-08-13.md` 是当前完整的 Post-Launch Research / Future Development Inventory。它取代 R2 Roadmap 中“未来全局优先级已经冻结”的解释；所有有价值方向先登记，未来顺序必须由上线后的 Forward / Shadow Evidence、策略增量价值和工程成本重新决定。
-   - `FIRST_LAUNCH_POST_LAUNCH_STRATEGY_RESEARCH_AND_DEVELOPMENT_PRIORITY_ROADMAP_R2_2026-08-13.md` 保留审计和研究内容价值，但其 R1→R9 顺序不再构成冻结的未来开发优先级。
+   - `FIRST_LAUNCH_POST_LAUNCH_STRATEGY_RESEARCH_AND_FUTURE_DEVELOPMENT_INVENTORY_R4_2026-08-13.md` 是当前完整的 Post-Launch Research / Future Development Inventory。它取代 R3/R2 对完整清单和未来优先级解释；所有有价值方向先登记，未来顺序必须由上线后的 Forward / Shadow Evidence、策略增量价值、交易/数据成本和工程复杂度重新决定。
+   - `FIRST_LAUNCH_POST_LAUNCH_STRATEGY_RESEARCH_AND_FUTURE_DEVELOPMENT_INVENTORY_R3_2026-08-13.md` 与 `FIRST_LAUNCH_POST_LAUNCH_STRATEGY_RESEARCH_AND_DEVELOPMENT_PRIORITY_ROADMAP_R2_2026-08-13.md` 保留审计价值，但不再是当前完整清单，也不冻结未来顺序。
    - Scheduled U.S. Macro 的当前子研究合同为：`FIRST_LAUNCH_SCHEDULED_US_MACRO_EVENT_STRATEGY_RESEARCH_AND_FUTURE_AUTOMATION_BACKLOG_R1_2026-08-12.md`。该子合同初始聚焦 CPI / NFP / PCE，可并行历史/离线研究，但不扩大当前发布范围，也不授权自动交易。
 
 6. `FIRST_LAUNCH_MULTI_ASSET_PARALLEL_REPLACEMENT_ARCHITECTURE_DECISION_R1_2026-08-03.md`
@@ -43,7 +43,7 @@
    - 小批量、快速前向验证方法权威。
 
 10. `FIRST_LAUNCH_SHADOW_FORWARD_VALIDATION_AND_RAPID_ITERATION_PLAN_R1_2026-08-03.md`
-   - T/S/R、Outcome、Evidence、快速迭代流程权威；样本独立性服从第 4 项；上线后候选方向服从第 5 项及其 R3 Inventory。
+   - T/S/R、Outcome、Evidence、快速迭代流程权威；样本独立性服从第 4 项；上线后候选方向服从第 5 项及其 R4 Inventory。
 
 11. `FIRST_LAUNCH_CURRENT_MASTER_TASK_REGISTER_AND_EXECUTION_ORDER_R2_2026-08-03.md`
     - 当前执行顺序与 Backlog 入口。
@@ -123,7 +123,7 @@ EVENT-WINDOW HIGH-RES DATA ONLY
 
 该研究需求不得修改当前发布的 5m-only Strategy Route，也不得恢复全市场持续 tick/sub-second 平台。
 
-Strong / No-Retest Breakout 未来研究如需 `MICRO_PULLBACK / TIME_ACCEPTANCE`，优先使用 bounded 1m event path；不得因此把当前正式 Signal timeframe 改为 1m。
+Strong / No-Retest Breakout 未来研究如需 `MICRO_PULLBACK / TIME_ACCEPTANCE / IMPACT_RETENTION / RETEST-CONTINUATION-FAILURE`，优先使用 bounded 1m raw event path 并离线重建；不得因此把当前正式 Signal timeframe 改为 1m。
 
 ---
 
@@ -211,19 +211,33 @@ ONE_NEW_POSITION_PER_EXPOSURE_CLUSTER
 
 当前发布不因新研究增加第四 Setup 或重新打开 Machine Strategy 参数。
 
-当前治理不是冻结 R1→R9 的未来全局顺序，而是：
+当前治理：
 
 ```text
 REGISTER_ALL_VALUABLE_DIRECTIONS = YES
 FUTURE_GLOBAL_PRIORITY = NOT_YET_FROZEN
 POST_LAUNCH_EVIDENCE_BEFORE_PRIORITY_FREEZE = YES
+ONE_COMPLEXITY_LAYER_AT_A_TIME = YES
 ```
 
 完整候选清单由：
 
-`FIRST_LAUNCH_POST_LAUNCH_STRATEGY_RESEARCH_AND_FUTURE_DEVELOPMENT_INVENTORY_R3_2026-08-13.md`
+`FIRST_LAUNCH_POST_LAUNCH_STRATEGY_RESEARCH_AND_FUTURE_DEVELOPMENT_INVENTORY_R4_2026-08-13.md`
 
-统一登记，涵盖至少：
+统一登记。R4 在 R3 基础上新增并明确：
+
+```text
+IMPACT RETENTION / GIVEBACK
+RETEST vs CONTINUATION vs FAILURE FIRST-EVENT / COMPETING-OUTCOME RESEARCH
+NESTED AUCTION / CHILD MICRO-BALANCE
+EVENT-TIME vs CLOCK-TIME ACCEPTANCE
+FLOW × IMPACT × LIQUIDITY / ABSORPTION / LIQUIDITY-VACUUM TAXONOMY
+PRICE × OI RESEARCH WITH CAUSALITY WARNING
+CLOCK-PHASE AS DERIVED RESEARCH ONLY
+ADVANCED CHANGE-POINT / HMM / HAWKES / ML = DEFERRED
+```
+
+R3 已登记并继续有效的方向全部纳入 R4，包括：
 
 ```text
 BREAKOUT LIFECYCLE / FAILED ACCEPTED BREAKOUT / STRONG NO-RETEST
@@ -254,20 +268,43 @@ NEW_MOMENTUM_SETUP_THIS_RELEASE = NO
 MICRO_PULLBACK = RESEARCH_ONLY
 TIME_ACCEPTANCE = RESEARCH_ONLY
 BREAKOUT_PROBE = RESEARCH_ONLY_CONDITIONAL
+AUCTION_REGIME = RESEARCH_ONLY
+RANGE_EDGE_LIVE_DOWNRANK = NO
 ```
 
-`AUCTION_REGIME` 当前仅为 Research / Attribution Taxonomy，不是 Hard Gate；`RANGE_EDGE_REJECTION` 不在本发布中降级。
+### First Launch 前唯一特殊 Evidence 候选
 
-当前唯一特殊 Evidence 候选：没有 Formal Plan 的 Qualified Initial Breakout Event 是否可直接复用现有 on-demand 1m collector，保存 bounded 1m research path。其价值是避免不可恢复的反事实路径与 Drawdown / MFE-MAE 研究证据永久丢失，并防止只研究 Formal Plans 的 selection bias。
+Engineering 可以估算：没有 Formal Plan 的 Qualified Initial Breakout Event 是否可直接复用现有 on-demand 1m collector，保存 bounded 1m raw research path。
+
+推荐优先估算：
 
 ```text
-IF bounded reuse is low-cost AND no strategy logic AND no architecture rewrite AND no material launch delay:
-  USER MAY AUTHORIZE current-release evidence-only addition after Engineering estimate
-ELSE:
-  DEFER without blocking launch
+START = initial_breakout_5m_open_time if cheap
+HORIZONS = reuse existing 30m / 60m / 120m semantics
+INCLUDE = no-Formal-Plan Initial Breakout Events
+DERIVED LIVE FEATURES = NONE
 ```
 
-这不是当前自动授权；需用户在 Engineering 返回开发量和资源估算后另行决定。
+原因：这样可离线重建 Impact Retention、Retest/Continuation/Failure、Micro Pullback、Child Balance、MFE/MAE/Drawdown、Missed Runaway、Fast Failure 和 Chase opportunity cost，并避免只研究 Formal Plans 的 selection bias。
+
+可选、仅在近零增量成本时估算：
+
+```text
+1m candle volume + trade_count raw retention
+already-available event-time OI snapshot reuse
+```
+
+不得为了这些研究当前新增：
+
+```text
+trades WebSocket research engine
+continuous OI history
+continuous full-universe 1m/tick/L2
+new Auction state machine
+new live Breakout entry mode
+```
+
+任何 current-release Evidence addition 都必须先计算其**完整 acceptance cost**：代码时间 + tests + HEAD movement + exact-head CI + independent review reset + launch-delay risk。用户收到估算后另行授权；当前文件不自动授权实现。
 
 当前策略开发数量：
 
@@ -313,4 +350,4 @@ DOCUMENTATION_ONLY
 
 旧文档或评论如与本索引冲突，以本索引和第 1 节当前权威为准。
 
-本文件不授权代码修改、依赖安装、数据订阅购买、部署、重启、permit 修改、账户访问、签名、交易所写入、自动下单、Mark Ready 或 Merge.
+本文件不授权代码修改、依赖安装、数据订阅购买、PR78 mutation、部署、重启、permit 修改、账户访问、签名、交易所写入、自动下单、Mark Ready 或 Merge。
