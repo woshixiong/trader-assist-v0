@@ -53,39 +53,85 @@ Use this preferred order:
 A normal repair plus one exceptional repair is the maximum for one bounded design route. If
 both fail, do not continue iterative patching. Reduce scope or start a clean replacement.
 
-## Operator window and Codex CLI delivery rule
+## Terminal and Codex CLI operator-delivery rule
 
-Every engineering handoff to the human operator must state the execution destination before the
-instructions. Do not leave the operator to infer whether a new chat/window is required.
+All routine Codex engineering work is performed through **Codex CLI in macOS Terminal**. Do not
+refer to a Codex desktop window unless the user explicitly changes this operating model.
 
-Use exactly one of these user-visible directives as appropriate:
+Every engineering command handoff must state the execution destination before the copy-ready
+block. The operator must never have to infer whether the command is ordinary Terminal work,
+whether it launches Codex CLI, which Terminal instance to use, or which repository/worktree is
+intended.
 
-- `新开一个窗口：<role / tool / purpose>` when a fresh independent window is required;
-- `使用原有窗口：<specific existing window / role>` when continuity with an existing window is required;
-- `不需要打开窗口：直接在 Terminal 执行` when the instruction is a local Terminal operation rather than a chat/window handoff.
+### Required execution header
 
-When reusing a window, identify which existing window is intended. Do not say only “use the old
-window” or otherwise leave the referent ambiguous.
+Before every Terminal command block, state all applicable fields in user-visible form:
 
-For Codex CLI work, the default operator deliverable is a single copy-ready macOS Terminal block
-that launches the Codex CLI itself. A naked Codex prompt is not the default deliverable.
+- `执行方式：Terminal 本地命令` for shell/Git/GitHub/inspection/other commands that do not launch Codex;
+- `执行方式：Terminal → Codex CLI` for a block that launches or resumes Codex CLI;
+- `Terminal：新开一个 Terminal` when a fresh Terminal instance is required or safer;
+- `Terminal：使用原有 Terminal：<specific terminal/session description>` when continuity with a specific existing Terminal is intended;
+- `工作目录：<absolute repository/worktree path>` for every repository-dependent command;
+- for Codex CLI, additionally state `Codex 会话：新建` or `Codex 会话：续用 <session-id / precisely identified prior session>`.
 
-Unless the user explicitly asks for prompt text only, every Codex CLI task must therefore:
+If an existing Terminal is required, identify it by the task, branch/worktree, or other concrete
+operator-visible characteristic. Do not say only `使用原有 Terminal` when more than one Terminal
+could plausibly match.
 
-1. be directly pasteable into macOS Terminal;
-2. be provided as one contiguous one-copy block;
-3. invoke `codex exec` from the intended worktree/repository rather than requiring the operator
-   to manually open Codex and paste a second prompt;
-4. include the intended model, reasoning effort, sandbox/approval configuration and task prompt
-   in the Terminal block when those controls are material;
-5. include fail-closed preflight checks for material repository, branch, SHA, worktree, Python or
-   authority assumptions when the task depends on them;
-6. preserve the current task's explicit mutation and authority boundaries;
-7. state what output the operator should return after execution.
+If the command block performs its own `cd` or uses Codex `-C/--cd`, still display the intended
+working directory in the header so the operator can verify the target before execution.
 
-Do not confuse Codex CLI with the Codex desktop application. If a desktop application/window is
-actually required, say `新开一个窗口` or `使用原有窗口` explicitly instead of presenting CLI
-instructions.
+### Terminal-only versus Terminal-to-Codex distinction
+
+These are different execution classes even though both begin in macOS Terminal:
+
+1. **Terminal local command** — executes shell, Git, GitHub CLI, tests, inspection, packaging, or
+   other local commands directly and does not invoke Codex.
+2. **Terminal → Codex CLI** — invokes `codex`, normally through a copy-ready `codex exec` or an
+   explicitly selected resume flow, and delegates the engineering task to Codex.
+
+The delivery must label the class explicitly every time.
+
+### Codex CLI session continuity
+
+Terminal-window continuity and Codex-session continuity are separate concepts. Reusing the same
+Terminal window does not by itself prove that Codex model context is being reused.
+
+When prior Codex context is materially useful, explicitly resume the intended Codex CLI
+session/thread rather than assuming continuity from the Terminal window. When a clean independent
+Writer or Reviewer context is required, explicitly start a new Codex session.
+
+The engineering orchestrator should choose between new versus resumed Codex context based on the
+current role and review-separation requirements:
+
+- continue the same Writer task: prefer the same authorized worktree and, when safe and useful,
+  resume the exact prior Codex session;
+- independent review, role separation, provenance uncertainty, or contamination risk: use a new
+  Codex session even if the same repository/worktree is inspected;
+- never resume a session merely to save tokens when doing so would weaken Writer/Reviewer
+  independence or carry stale authority assumptions forward.
+
+### Codex CLI copy-ready delivery
+
+Unless the user explicitly requests prompt text only, every Codex CLI task must be delivered as
+one contiguous, directly pasteable macOS Terminal block that launches or resumes Codex CLI
+itself. A naked Codex prompt is not the default operator deliverable.
+
+The block must, when material:
+
+1. enter or explicitly target the intended absolute repository/worktree path;
+2. invoke `codex exec` or the explicitly selected supported resume form;
+3. specify the intended model and reasoning effort;
+4. specify sandbox/approval settings;
+5. include the complete task prompt in the same Terminal block;
+6. include fail-closed preflight checks for material repository, branch, SHA, worktree, Python,
+   session, or authority assumptions;
+7. preserve the current task's explicit mutation and authority boundaries;
+8. state what output the operator should return after execution.
+
+When a prior Codex session is to be resumed, the command block must identify the exact session
+rather than relying only on Terminal history. When a new Codex session is required, say so
+explicitly.
 
 This is an operator-interface and task-transport rule only. It does not grant commit, push,
 Mark Ready, merge, deployment, runtime, cloud, credential, account, signing or exchange-write
