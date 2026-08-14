@@ -53,6 +53,44 @@ Use this preferred order:
 A normal repair plus one exceptional repair is the maximum for one bounded design route. If
 both fail, do not continue iterative patching. Reduce scope or start a clean replacement.
 
+## Operator window and Codex CLI delivery rule
+
+Every engineering handoff to the human operator must state the execution destination before the
+instructions. Do not leave the operator to infer whether a new chat/window is required.
+
+Use exactly one of these user-visible directives as appropriate:
+
+- `新开一个窗口：<role / tool / purpose>` when a fresh independent window is required;
+- `使用原有窗口：<specific existing window / role>` when continuity with an existing window is required;
+- `不需要打开窗口：直接在 Terminal 执行` when the instruction is a local Terminal operation rather than a chat/window handoff.
+
+When reusing a window, identify which existing window is intended. Do not say only “use the old
+window” or otherwise leave the referent ambiguous.
+
+For Codex CLI work, the default operator deliverable is a single copy-ready macOS Terminal block
+that launches the Codex CLI itself. A naked Codex prompt is not the default deliverable.
+
+Unless the user explicitly asks for prompt text only, every Codex CLI task must therefore:
+
+1. be directly pasteable into macOS Terminal;
+2. be provided as one contiguous one-copy block;
+3. invoke `codex exec` from the intended worktree/repository rather than requiring the operator
+   to manually open Codex and paste a second prompt;
+4. include the intended model, reasoning effort, sandbox/approval configuration and task prompt
+   in the Terminal block when those controls are material;
+5. include fail-closed preflight checks for material repository, branch, SHA, worktree, Python or
+   authority assumptions when the task depends on them;
+6. preserve the current task's explicit mutation and authority boundaries;
+7. state what output the operator should return after execution.
+
+Do not confuse Codex CLI with the Codex desktop application. If a desktop application/window is
+actually required, say `新开一个窗口` or `使用原有窗口` explicitly instead of presenting CLI
+instructions.
+
+This is an operator-interface and task-transport rule only. It does not grant commit, push,
+Mark Ready, merge, deployment, runtime, cloud, credential, account, signing or exchange-write
+authority. Those authorities remain governed by the current task and user gate.
+
 ## Current First Launch recovery boundary
 
 Deferring PR #48-style automation does not permit deferring all recovery preparation.
