@@ -82,13 +82,15 @@ from .planning import (
     Side as PlanningSide,
 )
 from .registry import MarketRegistryManager
-from .runtime import RuntimeReadinessSnapshot
+from .runtime import BoundaryMode, RuntimeReadinessSnapshot
 from .shadow_records import (
     Candidate as EvidenceCandidate,
 )
 from .shadow_records import (
     CandidateTransition,
     EvidenceStore,
+    FormalizationDisposition,
+    FormalizationDispositionStatus,
     FormalSignal,
     HumanReview,
     HumanReviewAction,
@@ -122,8 +124,11 @@ from .strategy_kernel import (
     HtfStructure,
     KernelResult,
     RetestType,
+    ScannerCandidate,
+    ScannerChase,
     ScannerLinkage,
     ScannerMarketInput,
+    ScannerMetrics,
     ScannerObservation,
     ScannerState,
     SetupFamily,
@@ -146,10 +151,19 @@ from .strategy_kernel import (
 from .strategy_kernel import (
     Side as StrategySide,
 )
+from .strategy_kernel.scanner import (
+    ScannerCandidateClass,
+    advance_scanner_candidate,
+    classify_scanner_state,
+)
 
 
 class IntegrationError(ValueError):
     """Mandatory cross-lane identity or provenance is inconsistent."""
+
+
+class TargetResolutionError(IntegrationError):
+    """Deterministic fail-closed frozen target rejection."""
 
 
 class RuntimeReadinessAuthority(Protocol):
@@ -256,6 +270,106 @@ def _scanner_linkage_from_payload(value: object) -> ScannerLinkage | None:
         candidate_id=str(value["candidate_id"]),
         state=ScannerState(str(value["state"])),
         scanner_version=str(value["scanner_version"]),
+    )
+
+
+def _scanner_candidate_from_payload(value: object) -> ScannerCandidate:
+    if not isinstance(value, dict):
+        raise IntegrationError("retained Scanner Candidate is invalid")
+    transitions = value.get("transitions")
+    if not isinstance(transitions, list):
+        raise IntegrationError("retained Scanner transitions are invalid")
+    return ScannerCandidate(
+        candidate_id=str(value["candidate_id"]),
+        market_id=str(value["market_id"]),
+        side=None if value.get("side") is None else StrategySide(str(value["side"])),
+        state=ScannerState(str(value["state"])),
+        created_bar_open_time_ms=int(value["created_bar_open_time_ms"]),
+        breakout_bar_open_time_ms=(
+            None
+            if value.get("breakout_bar_open_time_ms") is None
+            else int(value["breakout_bar_open_time_ms"])
+        ),
+        breakout_level=(
+            None
+            if value.get("breakout_level") is None
+            else _as_decimal(value["breakout_level"], "breakout_level")
+        ),
+        breakout_buffer=(
+            None
+            if value.get("breakout_buffer") is None
+            else _as_decimal(value["breakout_buffer"], "breakout_buffer")
+        ),
+        secondary_level_broken=bool(value["secondary_level_broken"]),
+        retest_touch_bar_open_time_ms=(
+            None
+            if value.get("retest_touch_bar_open_time_ms") is None
+            else int(value["retest_touch_bar_open_time_ms"])
+        ),
+        chase=None if value.get("chase") is None else ScannerChase(str(value["chase"])),
+        chase_distance_atr=(
+            None
+            if value.get("chase_distance_atr") is None
+            else _as_decimal(value["chase_distance_atr"], "chase_distance_atr")
+        ),
+        reason=str(value["reason"]),
+        transitions=tuple(str(item) for item in transitions),
+        scanner_version=str(value["scanner_version"]),
+        parameter_version=str(value["parameter_version"]),
+    )
+
+
+def _scanner_metrics_from_payload(value: object) -> ScannerMetrics | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise IntegrationError("retained Scanner metrics are invalid")
+
+    def required(name: str) -> Decimal:
+        return _as_decimal(value[name], f"Scanner metric {name}")
+
+    def optional(name: str) -> Decimal | None:
+        return (
+            None
+            if value.get(name) is None
+            else _as_decimal(value[name], f"Scanner metric {name}")
+        )
+
+    return ScannerMetrics(
+        return_15m=required("return_15m"),
+        return_30m=required("return_30m"),
+        return_60m=required("return_60m"),
+        relative_universe_15m=required("relative_universe_15m"),
+        relative_universe_30m=required("relative_universe_30m"),
+        relative_universe_60m=required("relative_universe_60m"),
+        relative_btc_15m=optional("relative_btc_15m"),
+        relative_btc_30m=optional("relative_btc_30m"),
+        relative_btc_60m=optional("relative_btc_60m"),
+        move_atr_15m=required("move_atr_15m"),
+        move_atr_30m=required("move_atr_30m"),
+        move_atr_60m=required("move_atr_60m"),
+        relative_volume_5m=required("relative_volume_5m"),
+        er_15m=required("er_15m"),
+        er_30m=required("er_30m"),
+        er_60m=required("er_60m"),
+        prior_high_12=required("prior_high_12"),
+        prior_low_12=required("prior_low_12"),
+        prior_high_36=required("prior_high_36"),
+        prior_low_36=required("prior_low_36"),
+    )
+
+
+def _scanner_observation_from_payload(value: object) -> ScannerObservation:
+    if not isinstance(value, dict):
+        raise IntegrationError("retained Scanner observation is invalid")
+    return ScannerObservation(
+        market_id=str(value["market_id"]),
+        metrics=_scanner_metrics_from_payload(value.get("metrics")),
+        candidate=(
+            None
+            if value.get("candidate") is None
+            else _scanner_candidate_from_payload(value["candidate"])
+        ),
     )
 
 
@@ -1063,6 +1177,7 @@ class EvaluationReceipt:
     evaluation_boundary_ms: int
     input_ledger_hash: str
     output_ledger_hash: str
+    evaluation_mode: BoundaryMode
     result: KernelResult
 
     @property
@@ -1071,6 +1186,24 @@ class EvaluationReceipt:
             _typed_hash("strategy-decision", _canonical_dataclass(decision))
             for decision in self.result.decisions
         )
+
+
+@dataclass(frozen=True)
+class ScannerCompositionReceipt:
+    scan_receipt: ScannerRunReceipt
+    market_id: str
+    selected_candidate: ScannerCandidate | None
+    selected_candidate_record: EvidenceCandidate | None
+    raw_discovery: ScannerCandidate | None
+    raw_discovery_suppressed: bool
+
+
+@dataclass(frozen=True)
+class RetainedFormalDecision:
+    strategy_evaluation_id: str
+    strategy_decision_id: str
+    market_id: str
+    source_open_time_ms: int
 
 
 @dataclass(frozen=True)
@@ -1171,6 +1304,101 @@ class MultiAssetShadowCoordinator:
                 latest[market_id] = (source_open_time_ms, ledger)
         self._ledgers = {market_id: value[1] for market_id, value in latest.items()}
 
+    def strategy_recovery_boundaries(
+        self, *, market_id: str, current_source_open_time_ms: int
+    ) -> tuple[int, ...]:
+        """Derive missing chronological checkpoints from retained evidence and bars."""
+        active = self._active_registry()
+        latest: int | None = None
+        seen: set[int] = set()
+        for record_id in _record_ids(self._evidence, "strategy_evaluation"):
+            record = self._evidence.get(record_id)
+            if not isinstance(record, StrategyEvaluation):
+                continue
+            payload = record.payload
+            if (
+                payload.get("market_id") != market_id
+                or payload.get("registry_version") != active.version
+                or payload.get("strategy_version") != STRATEGY_VERSION
+                or payload.get("parameter_version") != PARAMETER_VERSION
+            ):
+                continue
+            if payload.get("registry_hash") != active.content_hash:
+                raise IntegrationError("retained Strategy checkpoint conflicts with Registry")
+            boundary = int(payload.get("source_open_time_ms", -1))
+            if boundary in seen:
+                raise IntegrationError("duplicate retained Strategy boundary authority")
+            seen.add(boundary)
+            latest = boundary if latest is None else max(latest, boundary)
+        if latest is not None and latest > current_source_open_time_ms:
+            raise IntegrationError("Strategy checkpoint is ahead of requested boundary")
+        if latest == current_source_open_time_ms:
+            return ()
+        rows = self._data.store.connection.execute(
+            """SELECT open_time_ms FROM closed_bars
+               WHERE market_id = ? AND interval = '5m' AND open_time_ms <= ?
+               ORDER BY open_time_ms""",
+            (market_id, current_source_open_time_ms),
+        ).fetchall()
+        available = tuple(int(row[0]) for row in rows)
+        if not available or available[-1] != current_source_open_time_ms:
+            raise IntegrationError("requested Strategy recovery boundary is unavailable")
+        if latest is None:
+            fifteen_minute_opens = tuple(
+                int(row[0])
+                for row in self._data.store.connection.execute(
+                    """SELECT open_time_ms FROM closed_bars
+                       WHERE market_id = ? AND interval = '15m'
+                       ORDER BY open_time_ms""",
+                    (market_id,),
+                )
+            )
+            # The frozen Kernel requires M20 plus a current A15. Earlier
+            # prefixes remain data context but are not valid Strategy inputs.
+            eligible = tuple(
+                boundary
+                for index, boundary in enumerate(available)
+                if index >= 20
+                and sum(
+                    open_time_ms + 600_000 <= boundary
+                    for open_time_ms in fifteen_minute_opens
+                )
+                >= 15
+            )
+            if not eligible:
+                raise IntegrationError("Strategy recovery context is insufficient")
+            return eligible
+        missing = tuple(boundary for boundary in available if boundary > latest)
+        if not missing or missing[-1] != current_source_open_time_ms:
+            raise IntegrationError("Strategy recovery cannot reach requested boundary")
+        return missing
+
+    def has_retained_strategy_evaluation(
+        self, *, market_id: str, source_open_time_ms: int
+    ) -> bool:
+        """Report exact durable Strategy completion under current authority."""
+        active = self._active_registry()
+        matches: list[StrategyEvaluation] = []
+        for record_id in _record_ids(self._evidence, "strategy_evaluation"):
+            record = self._evidence.get(record_id)
+            if not isinstance(record, StrategyEvaluation):
+                continue
+            payload = record.payload
+            if (
+                payload.get("market_id") != market_id
+                or payload.get("source_open_time_ms") != source_open_time_ms
+                or payload.get("registry_version") != active.version
+                or payload.get("strategy_version") != STRATEGY_VERSION
+                or payload.get("parameter_version") != PARAMETER_VERSION
+            ):
+                continue
+            if payload.get("registry_hash") != active.content_hash:
+                raise IntegrationError("retained Strategy checkpoint conflicts with Registry")
+            matches.append(record)
+        if len(matches) > 1:
+            raise IntegrationError("duplicate retained Strategy boundary authority")
+        return bool(matches)
+
     def _active_registry(self) -> RegistryVersion:
         active = self._registry.active()
         if active is None:
@@ -1219,7 +1447,11 @@ class MultiAssetShadowCoordinator:
         return market
 
     def _retained_closed_5m(
-        self, market: RegistryMarket, *, readiness: RuntimeReadinessSnapshot
+        self,
+        market: RegistryMarket,
+        *,
+        readiness: RuntimeReadinessSnapshot,
+        source_open_time_ms: int | None = None,
     ) -> tuple[ClosedBar, ...]:
         active = self._active_registry()
         rows = self._data.store.connection.execute(
@@ -1231,26 +1463,49 @@ class MultiAssetShadowCoordinator:
         ).fetchall()
         if not rows:
             raise IntegrationError("market has no retained provider-finalized 5m evidence")
-        latest = rows[-1]
-        if latest[1] != active.version or latest[2] != active.content_hash:
-            raise IntegrationError("latest closed 5m bar is not bound to active Registry authority")
-        values = tuple(ClosedBar.model_validate_json(row[0]) for row in rows)
-        if values[-1].open_time_ms != readiness.latest_closed_5m_open_time_ms:
-            raise IntegrationError("retained closed 5m history is stale against runtime authority")
-        return values
+        all_values = tuple(ClosedBar.model_validate_json(row[0]) for row in rows)
+        requested = (
+            readiness.latest_closed_5m_open_time_ms
+            if source_open_time_ms is None
+            else source_open_time_ms
+        )
+        if requested > readiness.latest_closed_5m_open_time_ms:
+            raise IntegrationError("requested Strategy boundary is ahead of runtime authority")
+        indexes = tuple(
+            index for index, value in enumerate(all_values) if value.open_time_ms <= requested
+        )
+        if not indexes or all_values[indexes[-1]].open_time_ms != requested:
+            raise IntegrationError("requested closed 5m boundary is not retained")
+        last_index = indexes[-1]
+        selected = rows[last_index]
+        if selected[1] != active.version or selected[2] != active.content_hash:
+            raise IntegrationError("selected 5m boundary is not bound to active Registry authority")
+        return all_values[: last_index + 1]
 
     def _resolve_scanner_linkage(
-        self, *, market_id: str, linkage: ScannerLinkage | None
+        self,
+        *,
+        market_id: str,
+        linkage: ScannerLinkage | None,
+        candidate_record_id: str | None = None,
     ) -> tuple[ScannerLinkage | None, EvidenceCandidate | None]:
         if linkage is None:
+            if candidate_record_id is not None:
+                raise IntegrationError("Candidate record requires typed Scanner linkage")
             return None, None
-        matches: list[EvidenceCandidate] = []
-        for record_id in _record_ids(self._evidence, "candidate"):
-            record = self._evidence.get(record_id)
-            if isinstance(record, EvidenceCandidate) and record.payload.get(
-                "scanner_candidate_id"
-            ) == linkage.candidate_id:
-                matches.append(record)
+        if candidate_record_id is not None:
+            exact = self._evidence.get(candidate_record_id)
+            matches = [exact] if isinstance(exact, EvidenceCandidate) else []
+        else:
+            matches = []
+            for record_id in _record_ids(self._evidence, "candidate"):
+                record = self._evidence.get(record_id)
+                if (
+                    isinstance(record, EvidenceCandidate)
+                    and record.payload.get("scanner_candidate_id") == linkage.candidate_id
+                    and record.payload.get("state") == linkage.state.value
+                ):
+                    matches.append(record)
         if len(matches) != 1:
             raise IntegrationError("Scanner linkage does not resolve to one retained Candidate")
         candidate = matches[0]
@@ -1300,6 +1555,55 @@ class MultiAssetShadowCoordinator:
             candidate,
         )
 
+    def _causal_candidate_record_id(
+        self,
+        *,
+        decision: StrategyDecision,
+        current_linkage: ScannerLinkage | None,
+        current_candidate: EvidenceCandidate | None,
+    ) -> str | None:
+        """Carry the Candidate record frozen when a Strategy event was created."""
+        linkage = decision.scanner_linkage
+        if linkage is None:
+            return None
+        matches: set[str] = set()
+        for record_id in _record_ids(self._evidence, "strategy_evaluation"):
+            record = self._evidence.get(record_id)
+            if not isinstance(record, StrategyEvaluation):
+                continue
+            decisions = record.payload.get("decisions")
+            if not isinstance(decisions, list):
+                raise IntegrationError("retained Strategy decisions are invalid")
+            for item in decisions:
+                if not isinstance(item, dict):
+                    raise IntegrationError("retained Strategy decision is invalid")
+                prior = _decision_from_payload(item.get("content"))
+                candidate_id = item.get("scanner_candidate_record_id")
+                if (
+                    prior.market_event_id == decision.market_event_id
+                    and prior.scanner_linkage == linkage
+                    and isinstance(candidate_id, str)
+                ):
+                    matches.add(candidate_id)
+        if len(matches) > 1:
+            raise IntegrationError(
+                "Strategy decision lacks one frozen causal Candidate record"
+            )
+        if matches:
+            candidate_id = next(iter(matches))
+        elif current_linkage == linkage and current_candidate is not None:
+            candidate_id = current_candidate.record_id
+        else:
+            raise IntegrationError(
+                "Strategy decision lacks one frozen causal Candidate record"
+            )
+        self._resolve_scanner_linkage(
+            market_id=decision.market_id,
+            linkage=linkage,
+            candidate_record_id=candidate_id,
+        )
+        return candidate_id
+
     @staticmethod
     def _evaluation_receipt(record: StrategyEvaluation) -> EvaluationReceipt:
         payload = record.payload
@@ -1316,6 +1620,7 @@ class MultiAssetShadowCoordinator:
             evaluation_boundary_ms=int(payload["evaluation_boundary_ms"]),
             input_ledger_hash=str(payload["input_ledger_hash"]),
             output_ledger_hash=str(payload["output_ledger_hash"]),
+            evaluation_mode=BoundaryMode(str(payload["evaluation_mode"])),
             result=_kernel_result_from_payload(payload),
         )
 
@@ -1340,6 +1645,9 @@ class MultiAssetShadowCoordinator:
         market_id: str,
         zone_book: ZoneBook | None = None,
         scanner_linkage: ScannerLinkage | None = None,
+        scanner_candidate_record_id: str | None = None,
+        source_open_time_ms: int | None = None,
+        evaluation_mode: BoundaryMode = BoundaryMode.LIVE_ACTIONABLE,
     ) -> EvaluationReceipt:
         if zone_book is not None:
             raise IntegrationError(
@@ -1347,7 +1655,17 @@ class MultiAssetShadowCoordinator:
             )
         readiness = self._readiness()
         market = self._market(market_id, readiness=readiness)
-        retained = self._retained_closed_5m(market, readiness=readiness)
+        if evaluation_mode is not BoundaryMode.LIVE_ACTIONABLE and (
+            scanner_linkage is not None or scanner_candidate_record_id is not None
+        ):
+            raise IntegrationError(
+                "context-only Strategy evaluation cannot receive Scanner linkage"
+            )
+        retained = self._retained_closed_5m(
+            market,
+            readiness=readiness,
+            source_open_time_ms=source_open_time_ms,
+        )
         bars_5m = tuple(self._strategy_bar(item) for item in retained)
         bars_15m = aggregate_closed_5m_causally(bars_5m, minutes=15)
         bars_1h = aggregate_closed_5m_causally(bars_5m, minutes=60)
@@ -1357,7 +1675,9 @@ class MultiAssetShadowCoordinator:
             significant_figures=market.price_max_significant_figures,
         )
         canonical_linkage, retained_candidate = self._resolve_scanner_linkage(
-            market_id=market_id, linkage=scanner_linkage
+            market_id=market_id,
+            linkage=scanner_linkage,
+            candidate_record_id=scanner_candidate_record_id,
         )
         active = self._active_registry()
         evaluation_boundary_ms = retained[-1].close_time_ms + 1
@@ -1397,9 +1717,16 @@ class MultiAssetShadowCoordinator:
         authoritative_input_hash = _typed_hash("strategy-authoritative-input", authoritative_input)
         existing = tuple(
             record
-            for record_id in _record_ids(self._evidence, "strategy_evaluation")
-            if isinstance((record := self._evidence.get(record_id)), StrategyEvaluation)
-            and record.payload.get("evaluation_id") == evaluation_id
+            for row in self._evidence._connection.execute(
+                """SELECT record_id FROM immutable_records
+                   WHERE record_type = 'strategy_evaluation'
+                   AND json_extract(payload_json, '$.evaluation_id') = ?""",
+                (evaluation_id,),
+            )
+            if isinstance(
+                (record := self._evidence.get(str(row["record_id"]))),
+                StrategyEvaluation,
+            )
         )
         if len(existing) > 1:
             raise IntegrationError("Strategy authority slot has multiple retained truths")
@@ -1415,14 +1742,10 @@ class MultiAssetShadowCoordinator:
                 "release_sha": self._release_sha,
                 "authoritative_input_hash": authoritative_input_hash,
                 "authoritative_input": authoritative_input,
+                "evaluation_mode": evaluation_mode.value,
             }
             if any(payload.get(name) != value for name, value in expected.items()):
                 raise IntegrationError("Strategy authority slot conflicts with current context")
-            current_ledger = self._ledgers.get(market_id, EventLedger())
-            if _typed_hash("event-ledger", _ledger_payload(current_ledger)) != payload.get(
-                "output_ledger_hash"
-            ):
-                raise IntegrationError("Strategy retry contradicts retained continuation state")
             return self._evaluation_receipt(record)
 
         current_ledger = self._ledgers.get(market_id, EventLedger())
@@ -1446,6 +1769,11 @@ class MultiAssetShadowCoordinator:
             {
                 "decision_id": _typed_hash("strategy-decision", _canonical_dataclass(decision)),
                 "content": _canonical_dataclass(decision),
+                "scanner_candidate_record_id": self._causal_candidate_record_id(
+                    decision=decision,
+                    current_linkage=canonical_linkage,
+                    current_candidate=retained_candidate,
+                ),
             }
             for decision in result.decisions
         )
@@ -1463,6 +1791,7 @@ class MultiAssetShadowCoordinator:
             strategy_version=STRATEGY_VERSION,
             parameter_version=PARAMETER_VERSION,
             release_sha=self._release_sha,
+            evaluation_mode=evaluation_mode.value,
             authoritative_input_hash=authoritative_input_hash,
             authoritative_input=authoritative_input,
             input_ledger_hash=input_hash,
@@ -1497,6 +1826,7 @@ class MultiAssetShadowCoordinator:
             evaluation_boundary_ms=evaluation_boundary_ms,
             input_ledger_hash=input_hash,
             output_ledger_hash=output_hash,
+            evaluation_mode=evaluation_mode,
             result=result,
         )
 
@@ -1505,7 +1835,10 @@ class MultiAssetShadowCoordinator:
         snapshots: Mapping[str, ScannerPublicSnapshot],
         *,
         observed_at: datetime,
+        evaluation_mode: BoundaryMode = BoundaryMode.LIVE_ACTIONABLE,
     ) -> ScannerRunReceipt:
+        if evaluation_mode is not BoundaryMode.LIVE_ACTIONABLE:
+            raise IntegrationError("Scanner is disabled for context-only boundaries")
         observed = _utc(observed_at, "observed_at")
         readiness = self._readiness()
         active = self._active_registry()
@@ -1566,6 +1899,7 @@ class MultiAssetShadowCoordinator:
             "registry_version": active.version,
             "source_interval": "5m",
             "scan_boundary_open_time_ms": scan_boundary_open_time_ms,
+            "evidence_role": "RAW_DISCOVERY",
         }
         scan_id = _typed_hash(
             "scanner-run-authority",
@@ -1588,86 +1922,364 @@ class MultiAssetShadowCoordinator:
             observations_hash=observations_hash,
             observations=observation_payload,
             eligible_count=len(source_bars),
+            evidence_role="RAW_DISCOVERY",
         )
-        records: list[ImmutableRecord] = [scan]
-        candidate_records: list[EvidenceCandidate] = []
-        for observation in observations:
-            candidate = observation.candidate
-            if candidate is None:
-                continue
-            candidate_payload = _canonical_dataclass(candidate)
-            record = EvidenceCandidate.create(
-                identity={
-                    "scanner_candidate_id": candidate.candidate_id,
-                    "state": candidate.state.value,
-                },
-                scanner_evidence_id=scan.record_id,
-                scan_id=scan_id,
-                scanner_candidate_id=candidate.candidate_id,
-                market_id=candidate.market_id,
-                state=candidate.state.value,
-                side=None if candidate.side is None else candidate.side.value,
-                alert_level="WATCH",
-                created_at=_timestamp(observed),
-                reason=candidate.reason,
-                scanner_version=candidate.scanner_version,
-                parameter_version=candidate.parameter_version,
-                candidate_content=candidate_payload,
-                candidate_content_hash=_typed_hash("scanner-candidate", candidate_payload),
-                transitions=list(candidate.transitions),
-            )
-            candidate_records.append(record)
-            records.append(record)
-            for index, transition in enumerate(candidate.transitions):
-                if "->" not in transition:
-                    raise IntegrationError("Scanner transition evidence is invalid")
-                from_state, to_state = transition.split("->", 1)
-                records.append(
-                    CandidateTransition.create(
-                        identity={
-                            "candidate_id": record.record_id,
-                            "transition_index": index,
-                        },
-                        candidate_id=record.record_id,
-                        from_state=from_state,
-                        to_state=to_state,
-                        transition=transition,
-                        transitioned_at=_timestamp(observed),
-                    )
-                )
-        self._evidence._write_controlled(records)
+        self._evidence._write_controlled((scan,))
         return ScannerRunReceipt(
             scan_id=scan_id,
             scanner_evidence_id=scan.record_id,
             scanner_evidence_hash=scan.canonical_hash,
             observations=observations,
-            candidate_record_ids=tuple(record.record_id for record in candidate_records),
+            candidate_record_ids=(),
         )
 
     def persist_scanner_candidate(
         self, *, receipt: ScannerRunReceipt, candidate_id: str
     ) -> EvidenceCandidate:
+        scan = self._validated_scanner_receipt(receipt)
+        matches = tuple(
+            observation.candidate
+            for observation in receipt.observations
+            if observation.candidate is not None
+            and observation.candidate.candidate_id == candidate_id
+        )
+        if len(matches) != 1:
+            raise IntegrationError("Candidate was not produced by retained raw discovery")
+        candidate = matches[0]
+        boundary = int(scan.payload["scan_boundary_open_time_ms"])
+        existing = self._candidate_records(
+            market_id=candidate.market_id, boundary_open_time_ms=boundary
+        )
+        if len(existing) > 1:
+            raise IntegrationError("Scanner boundary has multiple live Candidate authorities")
+        if existing:
+            if existing[0].payload.get("scanner_candidate_id") != candidate_id:
+                raise IntegrationError("raw discovery is suppressed by selected live authority")
+            return existing[0]
+        active = self._active_breakout_candidate_records(
+            market_id=candidate.market_id, before_boundary_open_time_ms=boundary
+        )
+        if active:
+            raise IntegrationError("raw discovery is suppressed by active Breakout authority")
+        return self._persist_candidate_projection(
+            scan=scan,
+            candidate=candidate,
+            observed_at=_parse_timestamp(scan.payload["observed_at"], "Scanner observed_at"),
+            prior_candidate_record=None,
+            raw_scanner_evidence_id=scan.record_id,
+        )
+
+    def retained_scanner_run(
+        self, *, boundary_open_time_ms: int
+    ) -> ScannerRunReceipt | None:
+        active = self._active_registry()
+        matches = tuple(
+            record
+            for record_id in _record_ids(self._evidence, "scanner_evidence")
+            if isinstance((record := self._evidence.get(record_id)), ScannerEvidence)
+            and record.payload.get("scan_boundary_open_time_ms") == boundary_open_time_ms
+            and record.payload.get("registry_version") == active.version
+            and record.payload.get("evidence_role", "RAW_DISCOVERY") == "RAW_DISCOVERY"
+        )
+        if len(matches) > 1:
+            raise IntegrationError("Scanner boundary has multiple retained raw discoveries")
+        if not matches:
+            return None
+        scan = matches[0]
+        if (
+            scan.payload.get("registry_hash") != active.content_hash
+            or scan.payload.get("scanner_version") != SCANNER_VERSION
+            or scan.payload.get("parameter_version") != PARAMETER_VERSION
+        ):
+            raise IntegrationError("retained Scanner run conflicts with current authority")
+        payload = scan.payload.get("observations")
+        if not isinstance(payload, list):
+            raise IntegrationError("retained Scanner observations are invalid")
+        observations = tuple(_scanner_observation_from_payload(item) for item in payload)
+        return ScannerRunReceipt(
+            scan_id=str(scan.payload["scan_id"]),
+            scanner_evidence_id=scan.record_id,
+            scanner_evidence_hash=scan.canonical_hash,
+            observations=observations,
+            candidate_record_ids=tuple(
+                record.record_id
+                for record_id in _record_ids(self._evidence, "candidate")
+                if isinstance((record := self._evidence.get(record_id)), EvidenceCandidate)
+                and record.payload.get("raw_scanner_evidence_id") == scan.record_id
+                and record.payload.get("live_authority") is True
+            ),
+        )
+
+    def compose_scanner_market(
+        self, *, receipt: ScannerRunReceipt, market_id: str
+    ) -> ScannerCompositionReceipt:
+        """Retain raw discovery, but select at most one live path per market."""
+        raw_scan = self._validated_scanner_receipt(receipt)
+        boundary = int(raw_scan.payload["scan_boundary_open_time_ms"])
+        raw_matches = tuple(
+            observation
+            for observation in receipt.observations
+            if observation.market_id == market_id
+        )
+        if len(raw_matches) != 1:
+            raise IntegrationError("Scanner run lacks one raw market observation")
+        raw = raw_matches[0]
+        current = self._candidate_records(
+            market_id=market_id, boundary_open_time_ms=boundary
+        )
+        if len(current) > 1:
+            raise IntegrationError("Scanner boundary has contradictory live Candidate authority")
+        if current:
+            selected = self._candidate_from_record(current[0])
+            return ScannerCompositionReceipt(
+                receipt,
+                market_id,
+                selected,
+                current[0],
+                raw.candidate,
+                raw.candidate is not None and raw.candidate.candidate_id != selected.candidate_id,
+            )
+        active = self._active_breakout_candidate_records(
+            market_id=market_id, before_boundary_open_time_ms=boundary
+        )
+        if len(active) > 1:
+            raise IntegrationError("multiple contradictory active Breakout paths")
+        observed = _parse_timestamp(raw_scan.payload["observed_at"], "Scanner observed_at")
+        if active:
+            prior = active[0]
+            candidate = self._candidate_from_record(prior)
+            readiness = self._readiness()
+            market = self._market(market_id, readiness=readiness)
+            retained = self._retained_closed_5m(
+                market, readiness=readiness, source_open_time_ms=boundary
+            )
+            source = raw_scan.payload.get("ready_universe")
+            if not isinstance(source, list):
+                raise IntegrationError("Scanner progression lacks retained public snapshot")
+            market_source = next(
+                (
+                    item
+                    for item in source
+                    if isinstance(item, dict) and item.get("market_id") == market_id
+                ),
+                None,
+            )
+            public = None if market_source is None else market_source.get("public_snapshot")
+            if not isinstance(public, dict) or type(public.get("liquidity_healthy")) is not bool:
+                raise IntegrationError("Scanner progression public evidence is invalid")
+            progressed = advance_scanner_candidate(
+                candidate,
+                bars_5m=tuple(self._strategy_bar(item) for item in retained),
+                current_spread_price=_as_decimal(
+                    public.get("current_spread_price"), "Scanner spread"
+                ),
+                liquidity_healthy=bool(public["liquidity_healthy"]),
+            )
+            projection_scan = self._progression_scanner_evidence(
+                raw_scan=raw_scan,
+                raw_observation=raw,
+                candidate=progressed,
+                prior_candidate_record=prior,
+            )
+            record = self._persist_candidate_projection(
+                scan=projection_scan,
+                candidate=progressed,
+                observed_at=observed,
+                prior_candidate_record=prior,
+                raw_scanner_evidence_id=raw_scan.record_id,
+            )
+            return ScannerCompositionReceipt(
+                receipt, market_id, progressed, record, raw.candidate, raw.candidate is not None
+            )
+        if raw.candidate is None:
+            return ScannerCompositionReceipt(receipt, market_id, None, None, None, False)
+        record = self.persist_scanner_candidate(
+            receipt=receipt, candidate_id=raw.candidate.candidate_id
+        )
+        return ScannerCompositionReceipt(
+            receipt, market_id, raw.candidate, record, raw.candidate, False
+        )
+
+    def _validated_scanner_receipt(self, receipt: ScannerRunReceipt) -> ScannerEvidence:
         scan = self._evidence.get(receipt.scanner_evidence_id)
         if (
             not isinstance(scan, ScannerEvidence)
             or scan.canonical_hash != receipt.scanner_evidence_hash
             or scan.payload.get("scan_id") != receipt.scan_id
+            or scan.payload.get("evidence_role", "RAW_DISCOVERY") != "RAW_DISCOVERY"
+            or _typed_hash(
+                "scanner-observations",
+                [_canonical_dataclass(item) for item in receipt.observations],
+            )
+            != scan.payload.get("observations_hash")
         ):
-            raise IntegrationError("Scanner run receipt is not retained by this Evidence store")
-        if _typed_hash(
-            "scanner-observations",
-            [_canonical_dataclass(item) for item in receipt.observations],
-        ) != scan.payload.get("observations_hash"):
-            raise IntegrationError("Scanner run receipt content contradicts retained evidence")
-        for record_id in receipt.candidate_record_ids:
+            raise IntegrationError("Scanner receipt contradicts retained raw evidence")
+        return scan
+
+    def _candidate_records(
+        self, *, market_id: str, boundary_open_time_ms: int
+    ) -> tuple[EvidenceCandidate, ...]:
+        return tuple(
+            record
+            for record_id in _record_ids(self._evidence, "candidate")
+            if isinstance((record := self._evidence.get(record_id)), EvidenceCandidate)
+            and record.payload.get("live_authority") is True
+            and record.payload.get("market_id") == market_id
+            and record.payload.get("source_boundary_open_time_ms") == boundary_open_time_ms
+        )
+
+    def _candidate_from_record(self, record: EvidenceCandidate) -> ScannerCandidate:
+        payload = record.payload
+        content = payload.get("candidate_content")
+        if (
+            not isinstance(content, dict)
+            or payload.get("candidate_content_hash") != _typed_hash("scanner-candidate", content)
+            or payload.get("live_authority") is not True
+        ):
+            raise IntegrationError("retained live Candidate content is invalid")
+        candidate = _scanner_candidate_from_payload(content)
+        if (
+            candidate.candidate_id != payload.get("scanner_candidate_id")
+            or candidate.market_id != payload.get("market_id")
+            or candidate.state.value != payload.get("state")
+        ):
+            raise IntegrationError("retained live Candidate projection is inconsistent")
+        return candidate
+
+    def _active_breakout_candidate_records(
+        self, *, market_id: str, before_boundary_open_time_ms: int
+    ) -> tuple[EvidenceCandidate, ...]:
+        latest: dict[str, tuple[int, EvidenceCandidate]] = {}
+        slots: set[tuple[str, int]] = set()
+        for record_id in _record_ids(self._evidence, "candidate"):
             record = self._evidence.get(record_id)
             if (
-                isinstance(record, EvidenceCandidate)
-                and record.payload.get("scanner_candidate_id") == candidate_id
-                and record.payload.get("scanner_evidence_id") == scan.record_id
+                not isinstance(record, EvidenceCandidate)
+                or record.payload.get("live_authority") is not True
+                or record.payload.get("market_id") != market_id
             ):
-                return record
-        raise IntegrationError("Candidate was not produced by the retained Scanner run")
+                continue
+            boundary = int(record.payload.get("source_boundary_open_time_ms", -1))
+            if boundary >= before_boundary_open_time_ms:
+                continue
+            candidate = self._candidate_from_record(record)
+            if candidate.breakout_bar_open_time_ms is None:
+                continue
+            slot = (candidate.candidate_id, boundary)
+            if slot in slots:
+                raise IntegrationError("duplicate retained Candidate progression checkpoint")
+            slots.add(slot)
+            prior = latest.get(candidate.candidate_id)
+            if prior is None or boundary > prior[0]:
+                latest[candidate.candidate_id] = (boundary, record)
+        return tuple(
+            record
+            for _, record in latest.values()
+            if classify_scanner_state(self._candidate_from_record(record).state)
+            is ScannerCandidateClass.PROGRESSION_ELIGIBLE
+        )
+
+    def _progression_scanner_evidence(
+        self,
+        *,
+        raw_scan: ScannerEvidence,
+        raw_observation: ScannerObservation,
+        candidate: ScannerCandidate,
+        prior_candidate_record: EvidenceCandidate,
+    ) -> ScannerEvidence:
+        boundary = int(raw_scan.payload["scan_boundary_open_time_ms"])
+        observation = ScannerObservation(
+            raw_observation.market_id, raw_observation.metrics, candidate
+        )
+        observation_payload = [_canonical_dataclass(observation)]
+        authority_slot = {
+            "scanner_version": SCANNER_VERSION,
+            "parameter_version": PARAMETER_VERSION,
+            "registry_version": raw_scan.payload["registry_version"],
+            "source_interval": "5m",
+            "scan_boundary_open_time_ms": boundary,
+            "evidence_role": "SELECTED_LIVE_PROGRESSION",
+            "scanner_candidate_id": candidate.candidate_id,
+        }
+        record = ScannerEvidence.create(
+            identity=authority_slot,
+            scan_id=_typed_hash("scanner-run-authority", authority_slot),
+            source_interval="5m",
+            scan_boundary_open_time_ms=boundary,
+            observed_at=raw_scan.payload["observed_at"],
+            scanner_version=SCANNER_VERSION,
+            parameter_version=PARAMETER_VERSION,
+            registry_version=raw_scan.payload["registry_version"],
+            registry_hash=raw_scan.payload["registry_hash"],
+            release_sha=raw_scan.payload["release_sha"],
+            runtime_readiness_hash=raw_scan.payload["runtime_readiness_hash"],
+            universe_snapshot_hash=raw_scan.payload["universe_snapshot_hash"],
+            ready_universe=raw_scan.payload["ready_universe"],
+            observations_hash=_typed_hash("scanner-observations", observation_payload),
+            observations=observation_payload,
+            eligible_count=raw_scan.payload.get("eligible_count"),
+            evidence_role="SELECTED_LIVE_PROGRESSION",
+            raw_scanner_evidence_id=raw_scan.record_id,
+            prior_candidate_record_id=prior_candidate_record.record_id,
+        )
+        self._evidence._write_controlled((record,))
+        return record
+
+    def _persist_candidate_projection(
+        self,
+        *,
+        scan: ScannerEvidence,
+        candidate: ScannerCandidate,
+        observed_at: datetime,
+        prior_candidate_record: EvidenceCandidate | None,
+        raw_scanner_evidence_id: str,
+    ) -> EvidenceCandidate:
+        boundary = int(scan.payload["scan_boundary_open_time_ms"])
+        content = _canonical_dataclass(candidate)
+        record = EvidenceCandidate.create(
+            identity={
+                "scanner_candidate_id": candidate.candidate_id,
+                "state": candidate.state.value,
+                "source_boundary_open_time_ms": boundary,
+            },
+            scanner_evidence_id=scan.record_id,
+            scan_id=scan.payload["scan_id"],
+            scanner_candidate_id=candidate.candidate_id,
+            market_id=candidate.market_id,
+            state=candidate.state.value,
+            side=None if candidate.side is None else candidate.side.value,
+            alert_level="WATCH",
+            created_at=_timestamp(observed_at),
+            reason=candidate.reason,
+            scanner_version=candidate.scanner_version,
+            parameter_version=candidate.parameter_version,
+            candidate_content=content,
+            candidate_content_hash=_typed_hash("scanner-candidate", content),
+            transitions=list(candidate.transitions),
+            live_authority=True,
+            source_boundary_open_time_ms=boundary,
+            raw_scanner_evidence_id=raw_scanner_evidence_id,
+            prior_candidate_record_id=(
+                None if prior_candidate_record is None else prior_candidate_record.record_id
+            ),
+        )
+        records: list[ImmutableRecord] = [record]
+        for index, transition in enumerate(candidate.transitions):
+            if "->" not in transition:
+                raise IntegrationError("Scanner transition evidence is invalid")
+            from_state, to_state = transition.split("->", 1)
+            records.append(
+                CandidateTransition.create(
+                    identity={"candidate_id": record.record_id, "transition_index": index},
+                    candidate_id=record.record_id,
+                    from_state=from_state,
+                    to_state=to_state,
+                    transition=transition,
+                    transitioned_at=_timestamp(observed_at),
+                )
+            )
+        self._evidence._write_controlled(records)
+        return record
 
     def publish_watch(self, view: ScannerWatchNotificationView) -> EnqueueReceipt:
         readiness = self._readiness()
@@ -1693,6 +2305,15 @@ class MultiAssetShadowCoordinator:
                 and record.payload.get("parameter_version") == view.scanner_parameter_version
             ):
                 matches.append(record)
+        if matches:
+            latest_boundary = max(
+                int(item.payload.get("source_boundary_open_time_ms", -1)) for item in matches
+            )
+            matches = [
+                item
+                for item in matches
+                if int(item.payload.get("source_boundary_open_time_ms", -1)) == latest_boundary
+            ]
         if len(matches) != 1:
             raise IntegrationError("WATCH notification lacks exact retained Scanner ancestry")
         expected_side = matches[0].payload.get("side")
@@ -1772,6 +2393,111 @@ class MultiAssetShadowCoordinator:
         )
         return self._outbox.enqueue(build_envelope(view=view, created_at=view.evidence_time))
 
+    def pending_formal_decisions(self) -> tuple[RetainedFormalDecision, ...]:
+        """Derive pending Formal work only from immutable retained completion truth."""
+        successful: set[tuple[str, str]] = set()
+        for record_id in _record_ids(self._evidence, "formal_signal"):
+            record = self._evidence.get(record_id)
+            if not isinstance(record, FormalSignal):
+                continue
+            evaluation_id = record.payload.get("strategy_evaluation_id")
+            decision_id = record.payload.get("strategy_decision_id")
+            if isinstance(evaluation_id, str) and isinstance(decision_id, str):
+                successful.add((evaluation_id, decision_id))
+        completed: set[tuple[str, str]] = set()
+        for record_id in _record_ids(self._evidence, "formalization_disposition"):
+            record = self._evidence.get(record_id)
+            if not isinstance(record, FormalizationDisposition):
+                continue
+            completed.add(
+                (
+                    str(record.payload["strategy_evaluation_id"]),
+                    str(record.payload["strategy_decision_id"]),
+                )
+            )
+        pending: list[RetainedFormalDecision] = []
+        for record_id in _record_ids(self._evidence, "strategy_evaluation"):
+            record = self._evidence.get(record_id)
+            if not isinstance(record, StrategyEvaluation):
+                continue
+            payload = record.payload
+            if payload.get("evaluation_mode") != BoundaryMode.LIVE_ACTIONABLE.value:
+                continue
+            decisions = payload.get("decisions")
+            if not isinstance(decisions, list):
+                raise IntegrationError("retained Strategy decisions are invalid")
+            for item in decisions:
+                if not isinstance(item, dict):
+                    raise IntegrationError("retained Strategy decision is invalid")
+                decision = _decision_from_payload(item.get("content"))
+                decision_id = str(item.get("decision_id"))
+                if decision.decision is not DecisionKind.FORMAL_SETUP_CONFIRMED:
+                    continue
+                key = (str(payload["evaluation_id"]), decision_id)
+                if key in successful or key in completed:
+                    continue
+                pending.append(
+                    RetainedFormalDecision(
+                        strategy_evaluation_id=key[0],
+                        strategy_decision_id=key[1],
+                        market_id=decision.market_id,
+                        source_open_time_ms=int(payload["source_open_time_ms"]),
+                    )
+                )
+        return tuple(
+            sorted(
+                pending,
+                key=lambda item: (
+                    item.source_open_time_ms,
+                    item.market_id,
+                    item.strategy_evaluation_id,
+                    item.strategy_decision_id,
+                ),
+            )
+        )
+
+    def record_formalization_disposition(
+        self,
+        *,
+        decision: RetainedFormalDecision,
+        status: FormalizationDispositionStatus,
+        reason: str,
+        decided_at: datetime,
+    ) -> FormalizationDisposition:
+        return self._evidence.record_formalization_disposition(
+            strategy_evaluation_id=decision.strategy_evaluation_id,
+            strategy_decision_id=decision.strategy_decision_id,
+            market_id=decision.market_id,
+            status=status,
+            reason=reason,
+            decided_at=_timestamp(_utc(decided_at, "decided_at")),
+            strategy_version=STRATEGY_VERSION,
+            parameter_version=PARAMETER_VERSION,
+            release_sha=self._release_sha,
+        )
+
+    def process_retained_formal_decision(
+        self,
+        *,
+        strategy_evaluation_id: str,
+        strategy_decision_id: str,
+        now_ms: int,
+    ) -> FormalizationArtifacts | PlanRejection:
+        matches = tuple(
+            record
+            for record_id in _record_ids(self._evidence, "strategy_evaluation")
+            if isinstance((record := self._evidence.get(record_id)), StrategyEvaluation)
+            and record.payload.get("evaluation_id") == strategy_evaluation_id
+        )
+        if len(matches) != 1:
+            raise IntegrationError("retained Formal decision lacks one StrategyEvaluation")
+        receipt = self._evaluation_receipt(matches[0])
+        return self.process_formal_decision(
+            evaluation_receipt=receipt,
+            decision_id=strategy_decision_id,
+            now_ms=now_ms,
+        )
+
     def _candidate_link(self, decision: StrategyDecision, candidate_id: str | None) -> str | None:
         linkage = decision.scanner_linkage
         if candidate_id is None:
@@ -1781,7 +2507,9 @@ class MultiAssetShadowCoordinator:
                 )
             return None
         canonical_linkage, candidate = self._resolve_scanner_linkage(
-            market_id=decision.market_id, linkage=linkage
+            market_id=decision.market_id,
+            linkage=linkage,
+            candidate_record_id=candidate_id,
         )
         if candidate is None or candidate.record_id != candidate_id:
             raise IntegrationError("supplied Candidate linkage is not retained")
@@ -1801,29 +2529,51 @@ class MultiAssetShadowCoordinator:
         return candidate.record_id
 
     @staticmethod
-    def _target(decision: StrategyDecision, resolved: Decimal | None) -> Decimal:
+    def resolve_structural_target(decision: StrategyDecision) -> Decimal:
+        """Resolve only immutable target geometry retained by Strategy."""
         reference = decision.target_reference
         if reference is None:
-            raise IntegrationError("formal decision has no target reference")
+            raise TargetResolutionError("formal decision has no target reference")
         if reference.price is not None:
-            if resolved is not None and resolved != reference.price:
-                raise IntegrationError("resolved target contradicts frozen strategy target")
             target = reference.price
+        elif reference.kind is TargetKind.DIRECTIONAL_ZONE_SET_FROZEN:
+            if not reference.frozen_directional_zones:
+                raise TargetResolutionError("directional target lacks frozen zone evidence")
+            first = reference.frozen_directional_zones[0]
+            target = first.low if decision.side is StrategySide.LONG else first.high
+        elif reference.kind is TargetKind.OPEN_SPACE_REFERENCE:
+            target = (
+                decision.zone_snapshot.high + decision.a5_event
+                if decision.side is StrategySide.LONG
+                else decision.zone_snapshot.low - decision.a5_event
+            )
         else:
-            if resolved is None:
-                raise IntegrationError("price-less frozen target requires explicit resolution")
-            target = resolved
-            if reference.kind is TargetKind.DIRECTIONAL_ZONE_SET_FROZEN:
-                if decision.side.value == "LONG" and not any(
-                    zone.low <= target <= zone.high for zone in reference.frozen_directional_zones
-                ):
-                    raise IntegrationError("resolved target is outside frozen directional zones")
-                if decision.side.value == "SHORT" and not any(
-                    zone.low <= target <= zone.high for zone in reference.frozen_directional_zones
-                ):
-                    raise IntegrationError("resolved target is outside frozen directional zones")
-        if not target.is_finite() or target <= 0:
-            raise IntegrationError("resolved target must be positive and finite")
+            raise TargetResolutionError("price-less target shape has no production resolver")
+        chase = decision.chase_limit
+        stop = decision.structural_stop
+        if (
+            not target.is_finite()
+            or target <= 0
+            or chase is None
+            or stop is None
+            or not chase.is_finite()
+            or not stop.is_finite()
+            or chase <= 0
+            or stop <= 0
+        ):
+            raise TargetResolutionError("resolved target geometry is incomplete or invalid")
+        if decision.side is StrategySide.LONG:
+            if not stop < chase < target:
+                raise TargetResolutionError("LONG target is not favorable beyond chase and stop")
+        elif not target < chase < stop:
+            raise TargetResolutionError("SHORT target is not favorable beyond chase and stop")
+        return target
+
+    @classmethod
+    def _target(cls, decision: StrategyDecision, resolved: Decimal | None) -> Decimal:
+        target = cls.resolve_structural_target(decision)
+        if resolved is not None and resolved != target:
+            raise TargetResolutionError("resolved target contradicts frozen Strategy target")
         return target
 
     def process_formal_decision(
@@ -1856,9 +2606,11 @@ class MultiAssetShadowCoordinator:
             ("evaluation_boundary_ms", evaluation_receipt.evaluation_boundary_ms),
             ("input_ledger_hash", evaluation_receipt.input_ledger_hash),
             ("output_ledger_hash", evaluation_receipt.output_ledger_hash),
+            ("evaluation_mode", evaluation_receipt.evaluation_mode.value),
         )
         if any(payload.get(name) != value for name, value in receipt_fields):
             raise IntegrationError("evaluation receipt contradicts retained Evidence content")
+        retained_decisions = payload.get("decisions")
         result_decisions = tuple(
             {
                 "decision_id": _typed_hash("strategy-decision", _canonical_dataclass(decision)),
@@ -1866,7 +2618,18 @@ class MultiAssetShadowCoordinator:
             }
             for decision in evaluation_receipt.result.decisions
         )
-        if payload.get("decisions") != list(result_decisions):
+        if (
+            not isinstance(retained_decisions, list)
+            or len(retained_decisions) != len(result_decisions)
+            or any(
+                not isinstance(retained, dict)
+                or retained.get("decision_id") != expected["decision_id"]
+                or retained.get("content") != expected["content"]
+                for retained, expected in zip(
+                    retained_decisions, result_decisions, strict=True
+                )
+            )
+        ):
             raise IntegrationError("evaluation receipt StrategyDecision content was changed")
         if payload.get("output_ledger") != _ledger_payload(evaluation_receipt.result.ledger):
             raise IntegrationError("evaluation receipt EventLedger content was changed")
@@ -1880,11 +2643,22 @@ class MultiAssetShadowCoordinator:
         )
         if decision is None:
             raise IntegrationError("decision identity is absent from retained evaluation")
+        retained_decision = next(
+            item
+            for item in retained_decisions
+            if item.get("decision_id") == decision_id
+        )
         if decision.decision is not DecisionKind.FORMAL_SETUP_CONFIRMED:
             raise IntegrationError("only a Formal Setup decision can enter planning")
+        if payload.get("evaluation_mode") != BoundaryMode.LIVE_ACTIONABLE.value:
+            raise IntegrationError("only LIVE_ACTIONABLE decisions may be formalized")
         market = self._market(decision.market_id, readiness=readiness)
         active = self._active_registry()
-        retained = self._retained_closed_5m(market, readiness=readiness)
+        retained = self._retained_closed_5m(
+            market,
+            readiness=readiness,
+            source_open_time_ms=int(payload["source_open_time_ms"]),
+        )
         confirmed_bar = retained[-1]
         if (
             confirmed_bar.canonical_hash != evaluation_receipt.latest_closed_5m_hash
@@ -1894,17 +2668,18 @@ class MultiAssetShadowCoordinator:
             or evaluation_receipt.strategy_version != STRATEGY_VERSION
             or evaluation_receipt.parameter_version != PARAMETER_VERSION
         ):
-            raise IntegrationError("evaluation receipt is stale or mismatches current authority")
-        current_ledger = self._ledgers.get(decision.market_id)
-        if (
-            current_ledger is None
-            or _typed_hash("event-ledger", _ledger_payload(current_ledger))
-            != evaluation_receipt.output_ledger_hash
-        ):
-            raise IntegrationError(
-                "evaluation receipt does not bind coordinator continuation state"
-            )
-        candidate_record_id = self._candidate_link(decision, candidate_id)
+            raise IntegrationError("evaluation receipt mismatches retained authority")
+        authoritative_input = payload.get("authoritative_input")
+        if not isinstance(authoritative_input, dict):
+            raise IntegrationError("StrategyEvaluation lacks authoritative input")
+        frozen_candidate_id = retained_decision.get("scanner_candidate_record_id")
+        if "scanner_candidate_record_id" not in retained_decision:
+            frozen_candidate_id = authoritative_input.get("scanner_candidate_record_id")
+        if frozen_candidate_id is not None and not isinstance(frozen_candidate_id, str):
+            raise IntegrationError("StrategyEvaluation Candidate identity is invalid")
+        if candidate_id is not None and candidate_id != frozen_candidate_id:
+            raise IntegrationError("caller Candidate differs from frozen causal linkage")
+        candidate_record_id = self._candidate_link(decision, frozen_candidate_id)
         if decision.setup_family is SetupFamily.BREAKOUT_RETEST:
             if decision.setup_mode not in {SetupMode.MICRO_FAST, SetupMode.STANDARD}:
                 raise IntegrationError("Breakout Retest has no authorized external mode")
@@ -2023,6 +2798,8 @@ class MultiAssetShadowCoordinator:
             "confirmed_at": _timestamp(confirmed_at),
             "provenance_id": provenance.record_id,
             "confirmed_5m_hash": confirmed_bar.canonical_hash,
+            "strategy_evaluation_id": evaluation_receipt.evaluation_id,
+            "strategy_decision_id": decision_id,
         }
         if candidate_record_id is not None:
             signal_payload["candidate_id"] = candidate_record_id

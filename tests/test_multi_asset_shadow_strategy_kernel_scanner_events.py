@@ -32,6 +32,10 @@ from trader_assist_v0.multi_asset_shadow.strategy_kernel import (
     market_event_id,
     scan_cross_section,
 )
+from trader_assist_v0.multi_asset_shadow.strategy_kernel.scanner import (
+    ScannerCandidateClass,
+    classify_scanner_state,
+)
 
 
 def market_bar(
@@ -157,6 +161,42 @@ def breakout_candidate(*, side: Side = Side.LONG) -> ScannerCandidate:
         "BREAKOUT_DETECTED",
         ("NEW->BREAKOUT_DETECTED",),
     )
+
+
+def test_scanner_lifecycle_classification_is_the_progression_source_of_truth() -> None:
+    expected = {
+        ScannerCandidateClass.DISCOVERY_ONLY: {
+            ScannerState.WATCH_MOMENTUM,
+            ScannerState.WATCH_NEAR_LEVEL,
+            ScannerState.WATCH_NEW_MARKET,
+        },
+        ScannerCandidateClass.PROGRESSION_ELIGIBLE: {
+            ScannerState.BREAKOUT_DETECTED,
+            ScannerState.RETEST_PENDING,
+            ScannerState.LATE_WATCH,
+            ScannerState.REJECTED_CHASE_FOR_ACTION,
+        },
+        ScannerCandidateClass.TERMINAL: {
+            ScannerState.BREAKOUT_RETEST_READY,
+            ScannerState.FAILED_BREAKOUT_SWEEP_WATCH,
+            ScannerState.FAILED_INVALIDATED_INSIDE_RANGE,
+            ScannerState.EXPIRED_NO_RETEST,
+        },
+    }
+    assert set().union(*expected.values()) == set(ScannerState)
+    for classification, states in expected.items():
+        assert all(classify_scanner_state(state) is classification for state in states)
+    for state in expected[ScannerCandidateClass.TERMINAL]:
+        terminal = replace(breakout_candidate(), state=state)
+        assert (
+            advance_scanner_candidate(
+                terminal,
+                bars_5m=scanner_path("100.1"),
+                current_spread_price=Decimal("0.1"),
+                liquidity_healthy=True,
+            )
+            is terminal
+        )
 
 
 def scanner_path(*closes: str) -> tuple[Bar, ...]:

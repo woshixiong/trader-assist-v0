@@ -10,7 +10,13 @@ from typing import TYPE_CHECKING
 
 from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
 
-from .records import RECORD_TYPES, ImmutableRecord, RecordError
+from .records import (
+    RECORD_TYPES,
+    FormalizationDisposition,
+    FormalizationDispositionStatus,
+    ImmutableRecord,
+    RecordError,
+)
 
 if TYPE_CHECKING:
     from ..notification_engine import MessageEnvelope
@@ -27,6 +33,7 @@ _TABLE_BY_TYPE = {
     "provenance": "provenance_records",
     "scanner_evidence": "scanner_evidence",
     "strategy_evaluation": "strategy_evaluations",
+    "formalization_disposition": "formalization_dispositions",
     "candidate": "candidates",
     "candidate_transition": "candidate_transitions",
     "market_event": "market_events",
@@ -45,6 +52,7 @@ _LINK_COLUMNS = {
     "provenance": (),
     "scanner_evidence": (),
     "strategy_evaluation": (),
+    "formalization_disposition": (),
     "candidate": ("scanner_evidence_id",),
     "candidate_transition": ("candidate_id",),
     "market_event": ("candidate_id",),
@@ -117,6 +125,9 @@ class EvidenceStore:
                     record_id TEXT PRIMARY KEY NOT NULL REFERENCES immutable_records(record_id)
                 ) STRICT;
                 CREATE TABLE IF NOT EXISTS strategy_evaluations (
+                    record_id TEXT PRIMARY KEY NOT NULL REFERENCES immutable_records(record_id)
+                ) STRICT;
+                CREATE TABLE IF NOT EXISTS formalization_dispositions (
                     record_id TEXT PRIMARY KEY NOT NULL REFERENCES immutable_records(record_id)
                 ) STRICT;
                 CREATE TABLE IF NOT EXISTS candidates (
@@ -232,6 +243,63 @@ class EvidenceStore:
         if any(record.record_type not in _CONTROLLED_WRITE_TYPES for record in materialized):
             raise RecordError("record type requires a different controlled producer")
         return self._write_transaction(materialized)
+
+    def record_formalization_disposition(
+        self,
+        *,
+        strategy_evaluation_id: str,
+        strategy_decision_id: str,
+        market_id: str,
+        status: FormalizationDispositionStatus,
+        reason: str,
+        decided_at: str,
+        strategy_version: str,
+        parameter_version: str,
+        release_sha: str,
+    ) -> FormalizationDisposition:
+        """Retain the sole bounded non-publication completion record."""
+        rows = self._connection.execute(
+            "SELECT payload_json FROM immutable_records WHERE record_type = 'strategy_evaluation'"
+        ).fetchall()
+        matching: list[dict[str, object]] = []
+        for row in rows:
+            payload = json.loads(row["payload_json"])
+            if isinstance(payload, dict) and payload.get("evaluation_id") == strategy_evaluation_id:
+                matching.append(payload)
+        if len(matching) != 1:
+            raise RecordError("disposition requires one retained StrategyEvaluation")
+        evaluation = matching[0]
+        decisions = evaluation.get("decisions")
+        if not isinstance(decisions, list) or not any(
+            isinstance(item, dict) and item.get("decision_id") == strategy_decision_id
+            for item in decisions
+        ):
+            raise RecordError("disposition decision is absent from StrategyEvaluation")
+        expected = {
+            "market_id": market_id,
+            "strategy_version": strategy_version,
+            "parameter_version": parameter_version,
+            "release_sha": release_sha,
+        }
+        if any(evaluation.get(field) != value for field, value in expected.items()):
+            raise RecordError("disposition provenance contradicts StrategyEvaluation")
+        record = FormalizationDisposition.create(
+            identity={
+                "strategy_evaluation_id": strategy_evaluation_id,
+                "strategy_decision_id": strategy_decision_id,
+            },
+            strategy_evaluation_id=strategy_evaluation_id,
+            strategy_decision_id=strategy_decision_id,
+            market_id=market_id,
+            status=status.value,
+            reason=reason,
+            decided_at=decided_at,
+            strategy_version=strategy_version,
+            parameter_version=parameter_version,
+            release_sha=release_sha,
+        )
+        self._write_transaction((record,))
+        return record
 
     def _write_transaction(
         self, materialized: tuple[ImmutableRecord, ...]

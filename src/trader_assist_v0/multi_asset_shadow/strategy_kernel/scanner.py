@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from decimal import Decimal
+from enum import StrEnum
 from hashlib import sha256
 from itertools import pairwise
 from math import ceil
@@ -89,6 +90,37 @@ class ScannerObservation:
     market_id: str
     metrics: ScannerMetrics | None
     candidate: ScannerCandidate | None
+
+
+class ScannerCandidateClass(StrEnum):
+    DISCOVERY_ONLY = "DISCOVERY_ONLY"
+    PROGRESSION_ELIGIBLE = "PROGRESSION_ELIGIBLE"
+    TERMINAL = "TERMINAL"
+
+
+def classify_scanner_state(state: ScannerState) -> ScannerCandidateClass:
+    """Return the one lifecycle classification used by Scanner progression."""
+    if state in {
+        ScannerState.WATCH_MOMENTUM,
+        ScannerState.WATCH_NEAR_LEVEL,
+        ScannerState.WATCH_NEW_MARKET,
+    }:
+        return ScannerCandidateClass.DISCOVERY_ONLY
+    if state in {
+        ScannerState.BREAKOUT_DETECTED,
+        ScannerState.RETEST_PENDING,
+        ScannerState.LATE_WATCH,
+        ScannerState.REJECTED_CHASE_FOR_ACTION,
+    }:
+        return ScannerCandidateClass.PROGRESSION_ELIGIBLE
+    if state in {
+        ScannerState.BREAKOUT_RETEST_READY,
+        ScannerState.FAILED_BREAKOUT_SWEEP_WATCH,
+        ScannerState.FAILED_INVALIDATED_INSIDE_RANGE,
+        ScannerState.EXPIRED_NO_RETEST,
+    }:
+        return ScannerCandidateClass.TERMINAL
+    raise KernelInputError("unknown Scanner state")
 
 
 def _returns(bars: tuple[Bar, ...]) -> tuple[Decimal, Decimal, Decimal]:
@@ -390,12 +422,7 @@ def advance_scanner_candidate(
     """Advance only the Scanner path; Formal events are intentionally untouched."""
     if candidate.breakout_bar_open_time_ms is None or candidate.breakout_level is None:
         return candidate
-    if candidate.state in {
-        ScannerState.BREAKOUT_RETEST_READY,
-        ScannerState.FAILED_BREAKOUT_SWEEP_WATCH,
-        ScannerState.FAILED_INVALIDATED_INSIDE_RANGE,
-        ScannerState.EXPIRED_NO_RETEST,
-    }:
+    if classify_scanner_state(candidate.state) is ScannerCandidateClass.TERMINAL:
         return candidate
     positions = {
         item.open_time_ms: index for index, item in enumerate(bars_5m)

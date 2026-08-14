@@ -14,7 +14,8 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from enum import StrEnum
+from typing import Any, cast
 
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
@@ -33,7 +34,7 @@ from .finality import (
     GenerationFinalityAuthority,
 )
 from .hyperliquid_public import HyperliquidPublicClient, PublicDataError
-from .models import MarketLifecycle, RegistryMarket, RegistryVersion
+from .models import ClosedBar, MarketLifecycle, RegistryMarket, RegistryVersion
 from .registry import MarketRegistryManager, RegistryError
 
 WS_URL = "wss://api.hyperliquid.xyz/ws"
@@ -42,6 +43,15 @@ _WARMUP_5M_BARS = 2_304
 _FIVE_MINUTES_MS = FIVE_MINUTES_MS
 _ACK_TIMEOUT_SECONDS = 8.0
 _MAX_CONFIRMATIONS = 4
+_MAX_CALLBACK_FAILURES = 100
+
+
+class BoundaryMode(StrEnum):
+    """Provider-independent semantics for one finalized 5m application boundary."""
+
+    LIVE_ACTIONABLE = "LIVE_ACTIONABLE"
+    RECOVERY_CONTEXT_ONLY = "RECOVERY_CONTEXT_ONLY"
+    COLD_START_CONTEXT_ONLY = "COLD_START_CONTEXT_ONLY"
 
 
 @dataclass
@@ -51,7 +61,17 @@ class RuntimeHealth:
     reconnects: int = 0
     acknowledgements: set[str] = field(default_factory=set)
     failed_markets: set[str] = field(default_factory=set)
+    callback_failures: list[FinalizedCallbackFailure] = field(default_factory=list)
     data_ready: bool = False
+
+
+@dataclass(frozen=True)
+class FinalizedCallbackFailure:
+    market_id: str
+    open_time_ms: int
+    evaluation_mode: BoundaryMode
+    error_type: str
+    reason: str
 
 
 @dataclass(frozen=True)
@@ -140,6 +160,9 @@ class MultiAssetPublicRuntime:
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        on_finalized_5m: (
+            Callable[[ClosedBar, BoundaryMode], Awaitable[object] | object | None] | None
+        ) = None,
         confirmation_concurrency: int = _MAX_CONFIRMATIONS,
         acknowledgement_timeout_seconds: float = _ACK_TIMEOUT_SECONDS,
     ) -> None:
@@ -152,6 +175,7 @@ class MultiAssetPublicRuntime:
         self.clock = clock
         self.monotonic = monotonic
         self.sleep = sleep
+        self.on_finalized_5m = on_finalized_5m
         self.acknowledgement_timeout_seconds = acknowledgement_timeout_seconds
         self.health = RuntimeHealth()
         self._finality = GenerationFinalityAuthority(
@@ -340,6 +364,14 @@ class MultiAssetPublicRuntime:
     async def run(self, shutdown: asyncio.Event) -> None:
         """Startup recovery, acknowledgement readiness, then bounded reconnect."""
         try:
+            startup_mode = (
+                BoundaryMode.RECOVERY_CONTEXT_ONLY
+                if any(
+                    self.authority.store.last_open(market.identity.market_id) is not None
+                    for market in self.selected_markets()
+                )
+                else BoundaryMode.COLD_START_CONTEXT_ONLY
+            )
             await self._warmup_all(recovery=True)
             await self._maybe_stage_lifecycle(snapshot_ready=False)
             for attempt in range(_MAX_RECONNECTS + 1):
@@ -355,6 +387,11 @@ class MultiAssetPublicRuntime:
                     await self._await_acknowledgements(websocket, shutdown)
                     await self._maybe_stage_lifecycle(snapshot_ready=True)
                     self.health.data_ready = True
+                    await self._wake_recovered_application(
+                        startup_mode
+                        if attempt == 0
+                        else BoundaryMode.RECOVERY_CONTEXT_ONLY
+                    )
                     await self._receive_loop(websocket, shutdown)
                     return
                 except (
@@ -503,7 +540,7 @@ class MultiAssetPublicRuntime:
             await asyncio.sleep(0)
             if not self._finality.is_latest(generation):
                 return ConfirmationResult.STALE
-            self.authority.confirm_ws_candidate(
+            admitted = self.authority.confirm_ws_candidate(
                 market=generation.market,
                 open_time_ms=identity.open_time_ms,
                 candidate_fingerprint=generation.fingerprint,
@@ -516,6 +553,8 @@ class MultiAssetPublicRuntime:
                 observation_gap_ms=MIN_MONOTONIC_CONFIRMATION_GAP_MS,
             )
             await self._maybe_stage_lifecycle(snapshot_ready=self.health.data_ready)
+            if admitted is not None:
+                await self._notify_finalized(admitted, BoundaryMode.LIVE_ACTIONABLE)
             return ConfirmationResult.COMPLETE
         except asyncio.CancelledError:
             raise
@@ -523,6 +562,44 @@ class MultiAssetPublicRuntime:
             if not self._finality.is_latest(generation):
                 return ConfirmationResult.STALE
             return ConfirmationResult.FAILED
+
+    async def _notify_finalized(self, bar: ClosedBar, mode: BoundaryMode) -> object | None:
+        callback = self.on_finalized_5m
+        if callback is None:
+            return None
+        try:
+            result = callback(bar, mode)
+            if isinstance(result, Awaitable):
+                return await cast(Awaitable[object], result)
+            return result
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.health.failed_markets.add(bar.market_id)
+            self.health.callback_failures.append(
+                FinalizedCallbackFailure(
+                    market_id=bar.market_id,
+                    open_time_ms=bar.open_time_ms,
+                    evaluation_mode=mode,
+                    error_type=type(exc).__name__,
+                    reason=str(exc),
+                )
+            )
+            if len(self.health.callback_failures) > _MAX_CALLBACK_FAILURES:
+                del self.health.callback_failures[:-_MAX_CALLBACK_FAILURES]
+            return None
+
+    async def _wake_recovered_application(self, mode: BoundaryMode) -> None:
+        """Wake once; retained history lets the reconciler derive every missing prefix."""
+        latest: list[ClosedBar] = []
+        for market in self.selected_markets():
+            bars = self.authority.store.bars(market.identity.market_id)
+            if not bars:
+                return
+            latest.append(bars[-1])
+        if not latest or len({bar.open_time_ms for bar in latest}) != 1:
+            return
+        await self._notify_finalized(latest[0], mode)
 
     async def _cancel_confirmation_tasks(self) -> None:
         """Compatibility seam for deterministic runtime shutdown tests."""

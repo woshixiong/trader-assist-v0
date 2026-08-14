@@ -144,17 +144,17 @@ class ScannerWatchNotificationView:
     tier: RegistryTier
     side: str | None
     observation_time: datetime
-    return_15m: Decimal
-    return_30m: Decimal
-    return_60m: Decimal
-    rank: int
-    move_atr: Decimal
-    relative_volume: Decimal
-    prior_level: str
-    distance_to_level: Decimal
-    liquidity_summary: str
+    return_15m: Decimal | None
+    return_30m: Decimal | None
+    return_60m: Decimal | None
+    rank: int | None
+    move_atr: Decimal | None
+    relative_volume: Decimal | None
+    prior_level: str | None
+    distance_to_level: Decimal | None
+    liquidity_summary: str | None
     scanner_r3_state: str
-    session: str
+    session: str | None
     scanner_parameter_version: str
     watch_id: str
     do_not_chase: bool = False
@@ -164,14 +164,15 @@ class ScannerWatchNotificationView:
             raise NotificationContractError("ScannerWatchNotificationView requires a watch kind")
         for field in (
             "market_display",
-            "prior_level",
-            "liquidity_summary",
             "scanner_r3_state",
-            "session",
             "scanner_parameter_version",
             "watch_id",
         ):
             _non_empty(getattr(self, field), field)
+        for field in ("prior_level", "liquidity_summary", "session"):
+            value = getattr(self, field)
+            if value is not None:
+                _non_empty(value, field)
         _utc(self.observation_time, "observation_time")
         for field in (
             "return_15m",
@@ -181,9 +182,11 @@ class ScannerWatchNotificationView:
             "relative_volume",
             "distance_to_level",
         ):
-            _finite_decimal(getattr(self, field), field)
-        if type(self.rank) is not int or self.rank < 1:
-            raise NotificationContractError("rank must be a positive integer")
+            value = getattr(self, field)
+            if value is not None:
+                _finite_decimal(value, field)
+        if self.rank is not None and (type(self.rank) is not int or self.rank < 1):
+            raise NotificationContractError("rank must be a positive integer when supplied")
         if self.kind is NotificationKind.WATCH and self.side not in _DIRECTIONAL_SIDES:
             raise NotificationContractError("directional WATCH side must be LONG or SHORT")
         if self.kind is NotificationKind.WATCH_NEW_MARKET and self.side is not None:

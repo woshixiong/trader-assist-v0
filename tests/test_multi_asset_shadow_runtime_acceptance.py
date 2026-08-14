@@ -23,6 +23,7 @@ from trader_assist_v0.multi_asset_shadow.models import (
 )
 from trader_assist_v0.multi_asset_shadow.registry import MarketRegistryManager
 from trader_assist_v0.multi_asset_shadow.runtime import (
+    BoundaryMode,
     MultiAssetPublicRuntime,
     ReconnectRequired,
 )
@@ -232,11 +233,32 @@ async def test_startup_warmup_ack_policy_and_shutdown_are_runtime_owned(tmp_path
         return socket
 
     runtime.websocket_factory = factory
+    callbacks: list[tuple[int, BoundaryMode]] = []
+    runtime.on_finalized_5m = lambda bar, mode: callbacks.append((bar.open_time_ms, mode))
     await runtime.run(shutdown)
     assert client.calls  # run(), not an external caller, warmed history.
     assert authority.store.last_open(item.identity.market_id) == 300_000
     assert runtime.health.acknowledgements == {"BTC"}
     assert socket.closed
+    assert callbacks == [(300_000, BoundaryMode.COLD_START_CONTEXT_ONLY)]
+
+
+@async_test
+async def test_finalized_ws_boundary_is_semantically_live_actionable(tmp_path: Path) -> None:
+    runtime, _, item, _, _ = setup(
+        tmp_path, client_values=[[candle("BTC", 0)]]
+    )
+    callbacks: list[tuple[str, int, BoundaryMode]] = []
+    runtime.on_finalized_5m = lambda bar, mode: callbacks.append(
+        (bar.market_id, bar.open_time_ms, mode)
+    )
+    await runtime.handle_message(json.dumps({"channel": "candle", "data": candle("BTC", 0)}))
+    task = runtime._finality.task_for(item.identity.market_id)
+    assert task is not None
+    await task
+    assert callbacks == [
+        (item.identity.market_id, 0, BoundaryMode.LIVE_ACTIONABLE)
+    ]
 
 
 @async_test
