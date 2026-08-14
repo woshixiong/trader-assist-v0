@@ -374,14 +374,17 @@ class MultiAssetPublicRuntime:
             )
             await self._warmup_all(recovery=True)
             await self._maybe_stage_lifecycle(snapshot_ready=False)
-            for attempt in range(_MAX_RECONNECTS + 1):
+            reconnecting = False
+            consecutive_incomplete_recoveries = 0
+            while True:
                 if shutdown.is_set():
                     return
                 websocket: Any | None = None
+                recovery_complete = False
                 try:
                     websocket = await self.websocket_factory(WS_URL)
                     self.health.connection_count = 1
-                    if attempt:
+                    if reconnecting:
                         await self._warmup_all(recovery=True)
                     await self._subscribe(websocket)
                     await self._await_acknowledgements(websocket, shutdown)
@@ -389,9 +392,11 @@ class MultiAssetPublicRuntime:
                     self.health.data_ready = True
                     await self._wake_recovered_application(
                         startup_mode
-                        if attempt == 0
+                        if not reconnecting
                         else BoundaryMode.RECOVERY_CONTEXT_ONLY
                     )
+                    recovery_complete = True
+                    consecutive_incomplete_recoveries = 0
                     await self._receive_loop(websocket, shutdown)
                     return
                 except (
@@ -404,10 +409,13 @@ class MultiAssetPublicRuntime:
                     self.health.connection_count = 0
                     self.health.data_ready = False
                     await self._finality.invalidate_all()
-                    if attempt == _MAX_RECONNECTS:
-                        return
+                    if reconnecting and not recovery_complete:
+                        consecutive_incomplete_recoveries += 1
+                        if consecutive_incomplete_recoveries >= _MAX_RECONNECTS:
+                            return
                     self.health.reconnects += 1
-                    await self.sleep(min(2**attempt, 4))
+                    await self.sleep(min(2**consecutive_incomplete_recoveries, 4))
+                    reconnecting = True
                 finally:
                     if websocket is not None:
                         await self._close_socket(websocket)
