@@ -502,6 +502,7 @@ def test_shadow_store_has_no_exchange_write_or_account_surface() -> None:
         "export_jsonl",
         "get",
         "publish_formal_bundle",
+        "record_formalization_disposition",
         "write",
     }
     assert SUBMISSION_STATUS == "NOT_SUBMITTED"

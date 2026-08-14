@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -180,6 +181,33 @@ def test_watch_new_market_allows_no_side_but_directional_watch_does_not() -> Non
         scanner_watch(side=None)
 
 
+def test_watch_new_market_omits_unavailable_metrics_rank_and_session() -> None:
+    view = replace(
+        scanner_watch(kind=NotificationKind.WATCH_NEW_MARKET, side=None),
+        return_15m=None,
+        return_30m=None,
+        return_60m=None,
+        rank=None,
+        move_atr=None,
+        relative_volume=None,
+        prior_level=None,
+        distance_to_level=None,
+        liquidity_summary=None,
+        session=None,
+    )
+    rendered = format_notification(view)
+    for unavailable in (
+        "15m return:",
+        "30m return:",
+        "60m return:",
+        "Rank:",
+        "Session:",
+        "Prior level:",
+        "Liquidity:",
+    ):
+        assert unavailable not in rendered
+
+
 def test_failed_breakout_research_is_constructible_distinct_and_non_actionable() -> None:
     view = research()
     rendered = format_notification(view)
@@ -236,6 +264,14 @@ def test_idempotency_is_deterministic_and_does_not_depend_on_formatting_time() -
     assert one.idempotency_key == two.idempotency_key
     assert one.idempotency_key.startswith("masn-v1-")
     assert one.content == two.content
+
+
+def test_watch_idempotency_binds_retained_observation_boundary() -> None:
+    first = scanner_watch(kind=NotificationKind.WATCH)
+    later = replace(first, observation_time=first.observation_time + timedelta(minutes=5))
+    assert build_envelope(view=first, created_at=NOW).idempotency_key != build_envelope(
+        view=later, created_at=NOW
+    ).idempotency_key
 
 
 class FakeOutbox:

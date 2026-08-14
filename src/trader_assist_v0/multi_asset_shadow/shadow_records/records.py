@@ -31,6 +31,13 @@ class HumanReviewAction(StrEnum):
     REJECTED = "REJECTED"
 
 
+class FormalizationDispositionStatus(StrEnum):
+    """Terminal completion without a published Formal Signal."""
+
+    REJECTED = "REJECTED"
+    EXPIRED = "EXPIRED"
+
+
 _SKIPPED_REASON_CODES = frozenset(
     {
         "NOT_SEEN_IN_TIME",
@@ -214,6 +221,35 @@ class StrategyEvaluation(ImmutableRecord):
             "decisions",
         }
     )
+
+
+class FormalizationDisposition(ImmutableRecord):
+    """One immutable terminal disposition for one retained Formal decision."""
+
+    record_type = "formalization_disposition"
+    required_fields = frozenset(
+        {
+            "strategy_evaluation_id",
+            "strategy_decision_id",
+            "market_id",
+            "status",
+            "reason",
+            "decided_at",
+            "strategy_version",
+            "parameter_version",
+            "release_sha",
+        }
+    )
+
+    @classmethod
+    def validate_payload(cls, payload: Mapping[str, object]) -> None:
+        if payload.get("status") not in {
+            FormalizationDispositionStatus.REJECTED.value,
+            FormalizationDispositionStatus.EXPIRED.value,
+        }:
+            raise RecordError("formalization disposition status is invalid")
+        if not isinstance(payload.get("reason"), str) or not payload["reason"]:
+            raise RecordError("formalization disposition reason is required")
 
 
 class Candidate(ImmutableRecord):
@@ -414,6 +450,7 @@ RECORD_TYPES: dict[str, type[ImmutableRecord]] = {
         ProvenanceRecord,
         ScannerEvidence,
         StrategyEvaluation,
+        FormalizationDisposition,
         Candidate,
         CandidateTransition,
         MarketEvent,

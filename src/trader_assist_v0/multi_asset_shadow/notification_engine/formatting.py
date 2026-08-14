@@ -31,7 +31,9 @@ def idempotency_key(view: NotificationView) -> str:
     if isinstance(view, SignalNotificationView):
         identity_value = view.signal_id
     elif isinstance(view, ScannerWatchNotificationView):
-        identity_value = view.watch_id
+        identity_value = (
+            f"{view.watch_id}|{view.scanner_r3_state}|{_timestamp(view.observation_time)}"
+        )
     else:
         identity_value = view.research_id
     identity = f"{_SCHEMA_VERSION}|{view.kind.value}|{identity_value}".encode()
@@ -49,23 +51,31 @@ def format_notification(view: NotificationView) -> str:
         ]
         if view.side is not None:
             scanner_lines.append(f"Side: {view.side}")
+        scanner_lines.append(f"Observation time: {_timestamp(view.observation_time)}")
+        for label, value in (
+            ("15m return", view.return_15m),
+            ("30m return", view.return_30m),
+            ("60m return", view.return_60m),
+            ("Move ATR", view.move_atr),
+            ("Relative volume", view.relative_volume),
+            ("Distance to level", view.distance_to_level),
+        ):
+            if value is not None:
+                scanner_lines.append(f"{label}: {_decimal(value)}")
+        if view.rank is not None:
+            scanner_lines.append(f"Rank: {view.rank}")
+        if view.prior_level is not None:
+            scanner_lines.append(f"Prior level: {view.prior_level}")
+        if view.liquidity_summary is not None:
+            scanner_lines.append(f"Liquidity: {view.liquidity_summary}")
+        scanner_lines.append(f"Scanner R3 state: {view.scanner_r3_state}")
+        if view.session is not None:
+            scanner_lines.append(f"Session: {view.session}")
         scanner_lines.extend(
-            [
-                f"Observation time: {_timestamp(view.observation_time)}",
-                f"15m return: {_decimal(view.return_15m)}",
-                f"30m return: {_decimal(view.return_30m)}",
-                f"60m return: {_decimal(view.return_60m)}",
-                f"Rank: {view.rank}",
-                f"Move ATR: {_decimal(view.move_atr)}",
-                f"Relative volume: {_decimal(view.relative_volume)}",
-                f"Prior level: {view.prior_level}",
-                f"Distance to level: {_decimal(view.distance_to_level)}",
-                f"Liquidity: {view.liquidity_summary}",
-                f"Scanner R3 state: {view.scanner_r3_state}",
-                f"Session: {view.session}",
+            (
                 f"Scanner / parameters: {view.scanner_parameter_version}",
                 f"Watch ID: {view.watch_id}",
-            ]
+            )
         )
         if view.do_not_chase:
             scanner_lines.append("DO_NOT_CHASE")

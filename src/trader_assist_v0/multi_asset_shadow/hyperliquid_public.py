@@ -10,17 +10,29 @@ from __future__ import annotations
 import json
 import ssl
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from itertools import pairwise
-from typing import Protocol, cast
+from typing import TYPE_CHECKING, Protocol, cast
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
 
 from .models import RegistryMarket
-from .planning import LiquidityAssessment, Side, assess_l2
+from .outcome_engine import ONE_MINUTE_MS, OneMinuteBar, OutcomeEngineError
+from .planning import (
+    HARD_MAX_PRIMARY_ONE_WAY_SLIPPAGE_BPS,
+    HARD_MAX_SPREAD_BPS,
+    LiquidityAssessment,
+    PublicBbo,
+    Side,
+    assess_l2,
+)
+from .registry import MarketRegistryManager
+
+if TYPE_CHECKING:
+    from .integration import PublicL2Snapshot, ScannerPublicSnapshot
 
 INFO_URL = "https://api.hyperliquid.xyz/info"
 _ALLOWED_TYPES = frozenset(
@@ -30,6 +42,27 @@ _ALLOWED_TYPES = frozenset(
 
 class PublicDataError(RuntimeError):
     pass
+
+
+_MAX_PUBLIC_EVIDENCE_AGE_MS = 10_000
+
+
+@dataclass(frozen=True)
+class _NormalizedL2:
+    market_id: str
+    coin: str
+    observed_at_ms: int
+    bids: tuple[tuple[Decimal, Decimal], ...]
+    asks: tuple[tuple[Decimal, Decimal], ...]
+    provenance_hash: str
+
+    @property
+    def best_bid(self) -> Decimal:
+        return self.bids[0][0]
+
+    @property
+    def best_ask(self) -> Decimal:
+        return self.asks[0][0]
 
 
 class HttpPost(Protocol):
@@ -134,42 +167,258 @@ class HyperliquidPublicClient:
         self, *, market_id: str, coin: str, side: Side, response: object
     ) -> LiquidityAssessment:
         """Parse one official on-demand L2 response into immutable hard-gate evidence."""
-        if not isinstance(response, dict) or response.get("coin") != coin:
-            raise PublicDataError("public L2 response identity is invalid")
-        observed = response.get("time")
-        levels = response.get("levels")
-        if not isinstance(observed, int) or not isinstance(levels, list) or len(levels) != 2:
-            raise PublicDataError("public L2 response shape is invalid")
-        try:
-            bids = tuple((Decimal(str(item["px"])), Decimal(str(item["sz"]))) for item in levels[0])
-            asks = tuple((Decimal(str(item["px"])), Decimal(str(item["sz"]))) for item in levels[1])
-        except (KeyError, TypeError, ArithmeticError, ValueError) as exc:
-            raise PublicDataError("public L2 levels are invalid") from exc
-        if not bids or not asks:
-            raise PublicDataError("public L2 book is incomplete")
-        if any(
-            not price.is_finite() or not size.is_finite() or price <= 0 or size <= 0
-            for price, size in bids + asks
-        ):
-            raise PublicDataError("public L2 book has invalid price or size")
-        if any(right[0] > left[0] for left, right in pairwise(bids)):
-            raise PublicDataError("public L2 bids are not ordered outward")
-        if any(right[0] < left[0] for left, right in pairwise(asks)):
-            raise PublicDataError("public L2 asks are not ordered outward")
-        best_bid = bids[0][0]
-        best_ask = asks[0][0]
-        if best_bid >= best_ask:
-            raise PublicDataError("public L2 book is crossed")
+        normalized = _normalize_l2(market_id=market_id, coin=coin, response=response)
         return assess_l2(
             market_id=market_id,
             coin=coin,
             side=side,
-            observed_at_ms=observed,
-            best_bid=best_bid,
-            best_ask=best_ask,
-            levels=asks if side is Side.LONG else bids,
-            provenance_hash=sha256_hex(canonical_json_bytes(response)),
+            observed_at_ms=normalized.observed_at_ms,
+            best_bid=normalized.best_bid,
+            best_ask=normalized.best_ask,
+            levels=normalized.asks if side is Side.LONG else normalized.bids,
+            provenance_hash=normalized.provenance_hash,
         )
+
+
+def _normalize_l2(*, market_id: str, coin: str, response: object) -> _NormalizedL2:
+    if not isinstance(response, dict) or response.get("coin") != coin:
+        raise PublicDataError("public L2 response identity is invalid")
+    observed = response.get("time")
+    levels = response.get("levels")
+    if (
+        not isinstance(observed, int)
+        or isinstance(observed, bool)
+        or observed < 0
+        or not isinstance(levels, list)
+        or len(levels) != 2
+        or not all(isinstance(side, list) for side in levels)
+    ):
+        raise PublicDataError("public L2 response shape is invalid")
+    try:
+        bids = tuple((Decimal(str(item["px"])), Decimal(str(item["sz"]))) for item in levels[0])
+        asks = tuple((Decimal(str(item["px"])), Decimal(str(item["sz"]))) for item in levels[1])
+    except (KeyError, TypeError, ArithmeticError, ValueError) as exc:
+        raise PublicDataError("public L2 levels are invalid") from exc
+    if not bids or not asks:
+        raise PublicDataError("public L2 book is incomplete")
+    if any(
+        not price.is_finite() or not size.is_finite() or price <= 0 or size <= 0
+        for price, size in bids + asks
+    ):
+        raise PublicDataError("public L2 book has invalid price or size")
+    if any(right[0] > left[0] for left, right in pairwise(bids)):
+        raise PublicDataError("public L2 bids are not ordered outward")
+    if any(right[0] < left[0] for left, right in pairwise(asks)):
+        raise PublicDataError("public L2 asks are not ordered outward")
+    if bids[0][0] >= asks[0][0]:
+        raise PublicDataError("public L2 book is crossed")
+    return _NormalizedL2(
+        market_id=market_id,
+        coin=coin,
+        observed_at_ms=observed,
+        bids=bids,
+        asks=asks,
+        provenance_hash=sha256_hex(canonical_json_bytes(response)),
+    )
+
+
+@dataclass
+class HyperliquidPublicPlanningAdapter:
+    """One-request BBO/L2 adapter over official public, on-demand L2 evidence."""
+
+    client: HyperliquidPublicClient
+    max_age_ms: int = _MAX_PUBLIC_EVIDENCE_AGE_MS
+    _pending: dict[str, _NormalizedL2] = field(default_factory=dict, init=False)
+
+    def __post_init__(self) -> None:
+        if self.max_age_ms < 0:
+            raise ValueError("public L2 maximum age must be non-negative")
+
+    def fetch_bbo(self, *, market: RegistryMarket, now_ms: int) -> PublicBbo:
+        normalized = _normalize_l2(
+            market_id=market.identity.market_id,
+            coin=market.identity.coin,
+            response=self.client.l2_book(coin=market.identity.coin),
+        )
+        if not 0 <= now_ms - normalized.observed_at_ms <= self.max_age_ms:
+            raise PublicDataError("public L2 response is stale or future-dated")
+        self._pending[normalized.market_id] = normalized
+        return PublicBbo(
+            best_bid=normalized.best_bid,
+            best_ask=normalized.best_ask,
+            observed_at_ms=normalized.observed_at_ms,
+            market_id=normalized.market_id,
+            coin=normalized.coin,
+        )
+
+    def fetch_l2(
+        self, *, market: RegistryMarket, side: Side, bbo: PublicBbo
+    ) -> PublicL2Snapshot:
+        from .integration import PublicL2Snapshot
+
+        normalized = self._pending.pop(market.identity.market_id, None)
+        if (
+            normalized is None
+            or bbo.market_id != market.identity.market_id
+            or bbo.coin != market.identity.coin
+            or normalized.observed_at_ms != bbo.observed_at_ms
+            or normalized.best_bid != bbo.best_bid
+            or normalized.best_ask != bbo.best_ask
+        ):
+            raise PublicDataError("BBO does not bind one retained public L2 response")
+        return PublicL2Snapshot(
+            market_id=normalized.market_id,
+            coin=normalized.coin,
+            observed_at_ms=normalized.observed_at_ms,
+            best_bid=normalized.best_bid,
+            best_ask=normalized.best_ask,
+            levels=normalized.asks if side is Side.LONG else normalized.bids,
+            provenance_hash=normalized.provenance_hash,
+        )
+
+    def fetch_scanner_snapshot(
+        self,
+        *,
+        market: RegistryMarket,
+        now_ms: int,
+        btc_returns: tuple[Decimal | None, Decimal | None, Decimal | None],
+    ) -> ScannerPublicSnapshot:
+        from .integration import ScannerPublicSnapshot
+
+        normalized = _normalize_l2(
+            market_id=market.identity.market_id,
+            coin=market.identity.coin,
+            response=self.client.l2_book(coin=market.identity.coin),
+        )
+        if not 0 <= now_ms - normalized.observed_at_ms <= self.max_age_ms:
+            raise PublicDataError("public L2 response is stale or future-dated")
+        assessments = tuple(
+            assess_l2(
+                market_id=normalized.market_id,
+                coin=normalized.coin,
+                side=side,
+                observed_at_ms=normalized.observed_at_ms,
+                best_bid=normalized.best_bid,
+                best_ask=normalized.best_ask,
+                levels=normalized.asks if side is Side.LONG else normalized.bids,
+                provenance_hash=normalized.provenance_hash,
+            )
+            for side in (Side.LONG, Side.SHORT)
+        )
+        healthy = (
+            PublicBbo(normalized.best_bid, normalized.best_ask).spread_bps
+            <= HARD_MAX_SPREAD_BPS
+            and all(
+                item.sufficient_depth
+                and item.one_way_slippage_bps is not None
+                and item.one_way_slippage_bps
+                <= HARD_MAX_PRIMARY_ONE_WAY_SLIPPAGE_BPS
+                for item in assessments
+            )
+        )
+        return ScannerPublicSnapshot(
+            current_spread_price=normalized.best_ask - normalized.best_bid,
+            liquidity_healthy=healthy,
+            btc_returns=btc_returns,
+        )
+
+
+@dataclass
+class HyperliquidRestOneMinuteProvider:
+    """REST-only closed-1m provider with bounded demand bookkeeping."""
+
+    client: HyperliquidPublicClient
+    registry: MarketRegistryManager
+    subscribed_market_ids: set[str] = field(default_factory=set, init=False)
+
+    def subscribe_1m(self, *, market_id: str) -> None:
+        self._market(market_id)
+        self.subscribed_market_ids.add(market_id)
+
+    def unsubscribe_1m(self, *, market_id: str) -> None:
+        self.subscribed_market_ids.discard(market_id)
+
+    def backfill_1m(
+        self, *, market_id: str, start_ms: int, end_ms: int
+    ) -> tuple[OneMinuteBar, ...]:
+        market = self._market(market_id)
+        if (
+            isinstance(start_ms, bool)
+            or isinstance(end_ms, bool)
+            or not isinstance(start_ms, int)
+            or not isinstance(end_ms, int)
+            or start_ms < 0
+            or end_ms <= start_ms
+            or start_ms % ONE_MINUTE_MS
+            or end_ms % ONE_MINUTE_MS
+        ):
+            raise PublicDataError("public 1m request window is invalid")
+        response = self.client.closed_candles(
+            coin=market.identity.coin,
+            interval="1m",
+            start_ms=start_ms,
+            end_ms=end_ms,
+        )
+        if not isinstance(response, list):
+            raise PublicDataError("candleSnapshot did not return a list")
+        bars = tuple(
+            self._bar(market=market, payload=item, start_ms=start_ms, end_ms=end_ms)
+            for item in response
+        )
+        ordered = tuple(sorted(bars, key=lambda bar: (bar.open_time_ms, bar.canonical_hash)))
+        if len({bar.open_time_ms for bar in ordered}) != len(ordered):
+            raise PublicDataError("public 1m response has duplicate time slots")
+        return ordered
+
+    def _market(self, market_id: str) -> RegistryMarket:
+        registry = self.registry.active()
+        if registry is None:
+            raise PublicDataError("active Registry is required for public 1m identity")
+        matches = tuple(
+            market for market in registry.markets if market.identity.market_id == market_id
+        )
+        if len(matches) != 1:
+            raise PublicDataError("public 1m market identity is not active Registry authority")
+        return matches[0]
+
+    @staticmethod
+    def _bar(
+        *, market: RegistryMarket, payload: object, start_ms: int, end_ms: int
+    ) -> OneMinuteBar:
+        if not isinstance(payload, dict):
+            raise PublicDataError("public 1m candle is invalid")
+        try:
+            interval = payload["i"]
+            coin = payload["s"]
+            open_ms = payload["t"]
+            close_ms = payload["T"]
+            values = (payload["o"], payload["h"], payload["l"], payload["c"])
+        except KeyError as exc:
+            raise PublicDataError("public 1m candle is incomplete") from exc
+        if (
+            interval != "1m"
+            or coin != market.identity.coin
+            or not isinstance(open_ms, int)
+            or isinstance(open_ms, bool)
+            or not isinstance(close_ms, int)
+            or isinstance(close_ms, bool)
+            or open_ms % ONE_MINUTE_MS
+            or close_ms != open_ms + ONE_MINUTE_MS - 1
+            or not start_ms <= open_ms < end_ms
+        ):
+            raise PublicDataError("public 1m candle identity or window is invalid")
+        try:
+            return OneMinuteBar.create(
+                market_id=market.identity.market_id,
+                open_time_ms=open_ms,
+                open=Decimal(str(values[0])),
+                high=Decimal(str(values[1])),
+                low=Decimal(str(values[2])),
+                close=Decimal(str(values[3])),
+                source_id="hyperliquid-public-candleSnapshot-1m",
+            )
+        except (ArithmeticError, OutcomeEngineError, ValueError) as exc:
+            raise PublicDataError("public 1m candle values are invalid") from exc
 
 
 class OfficialMetadataValidator:
