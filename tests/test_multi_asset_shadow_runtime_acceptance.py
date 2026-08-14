@@ -9,7 +9,7 @@ from functools import wraps
 from pathlib import Path
 
 import pytest
-from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
+from websockets.exceptions import ConnectionClosedOK
 
 from trader_assist_v0.contracts.common import sha256_hex
 from trader_assist_v0.multi_asset_shadow.data import ClosedBarStore, MultiAssetDataAuthority
@@ -298,18 +298,66 @@ async def test_ack_unknown_duplicate_timeout_and_reconnect_close_paths(tmp_path:
 
 
 @async_test
-async def test_error_close_reconnects_and_exhaustion_stops(tmp_path: Path) -> None:
+async def test_repeated_completed_reconnects_replenish_budget(tmp_path: Path) -> None:
     clock = Clock(seconds=600)
-    runtime, _, _, _, _ = setup(tmp_path, clock=clock, client_values=[[candle("BTC", 300_000)]])
-    sockets = [Socket([ack(), ConnectionClosedError(None, None)]) for _ in range(4)]
+    runtime, _, _, _, _ = setup(
+        tmp_path, clock=clock, client_values=[[candle("BTC", 300_000)]]
+    )
+    shutdown = asyncio.Event()
+    sockets = [Socket([ack(), ConnectionClosedOK(None, None)]) for _ in range(5)]
+    sockets.append(Socket([ack()], shutdown=shutdown))
+    created: list[Socket] = []
+    wakes: list[BoundaryMode] = []
 
     async def factory(_: str) -> Socket:
-        return sockets.pop(0)
+        socket = sockets.pop(0)
+        created.append(socket)
+        return socket
+
+    runtime.websocket_factory = factory
+    runtime.on_finalized_5m = lambda _bar, mode: wakes.append(mode)
+    await runtime.run(shutdown)
+
+    # Four completed reconnects (more than the nominal maximum of three) each
+    # reached application wake before their later close. The following recovery
+    # still established, acknowledged, woke the application, and shut down cleanly.
+    assert len(created) == 6
+    assert wakes == [
+        BoundaryMode.COLD_START_CONTEXT_ONLY,
+        *([BoundaryMode.RECOVERY_CONTEXT_ONLY] * 5),
+    ]
+    assert runtime.health.reconnects == 5
+    assert runtime.health.data_ready is True
+    assert all(socket.closed for socket in created)
+
+
+@async_test
+async def test_consecutive_incomplete_recoveries_exhaust_budget_fail_closed(
+    tmp_path: Path,
+) -> None:
+    clock = Clock(seconds=600)
+    runtime, _, _, _, _ = setup(
+        tmp_path, clock=clock, client_values=[[candle("BTC", 300_000)]]
+    )
+    sockets = [Socket([ack("ETH")]) for _ in range(4)]
+    created: list[Socket] = []
+
+    async def factory(_: str) -> Socket:
+        socket = sockets.pop(0)
+        created.append(socket)
+        return socket
 
     runtime.websocket_factory = factory
     await runtime.run(asyncio.Event())
+
+    # The initial startup failure is free. Three later incomplete recoveries
+    # consume the bounded budget without any READY/application-wake reset.
+    assert len(created) == 4
     assert runtime.health.reconnects == 3
     assert runtime.health.connection_count == 0
+    assert runtime.health.data_ready is False
+    assert clock.monotonic_seconds == 7.0
+    assert all(socket.closed for socket in created)
 
 
 @async_test
