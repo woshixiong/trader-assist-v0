@@ -317,3 +317,29 @@ async def test_lifecycle_advances_one_safe_boundary_at_a_time(tmp_path: Path) ->
     active = runtime.registry.active()
     assert active is not None and active.markets[0].lifecycle is MarketLifecycle.ACTIVE
     assert authority.can_formalize(active.markets[0])
+
+
+def test_runtime_readiness_snapshot_binds_transport_failure_registry_and_currentness(
+    tmp_path: Path,
+) -> None:
+    runtime, authority, item, clock, _ = setup(tmp_path, lifecycle=MarketLifecycle.ACTIVE)
+    authority.admit_rest_history(market=item, snapshot=[candle("BTC", 0)], received_at=clock.now())
+    runtime.health.data_ready = True
+    ready = runtime.readiness_snapshot()
+    active = runtime.registry.active()
+    assert active is not None
+    assert ready.registry_version == active.version
+    assert ready.registry_content_hash == active.content_hash
+    assert ready.latest_closed_5m_open_time_ms == 0
+    assert ready.ready_market_ids == (item.identity.market_id,)
+
+    runtime.health.failed_markets.add(item.identity.market_id)
+    failed = runtime.readiness_snapshot()
+    assert failed.ready_market_ids == ()
+    assert failed.failed_market_ids == (item.identity.market_id,)
+
+    runtime.health.failed_markets.clear()
+    runtime.health.data_ready = False
+    disconnected = runtime.readiness_snapshot()
+    assert disconnected.ready_market_ids == ()
+    assert disconnected.data_ready is False

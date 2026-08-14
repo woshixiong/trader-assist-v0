@@ -19,6 +19,8 @@ from typing import Any
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
+from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
+
 from .data import DataRouteError, MultiAssetDataAuthority
 from .finality import (
     FIVE_MINUTES_MS,
@@ -50,6 +52,75 @@ class RuntimeHealth:
     acknowledgements: set[str] = field(default_factory=set)
     failed_markets: set[str] = field(default_factory=set)
     data_ready: bool = False
+
+
+@dataclass(frozen=True)
+class RuntimeReadinessSnapshot:
+    """Immutable A1 authority presented to every new-activity integration gate."""
+
+    registry_version: str
+    registry_content_hash: str
+    data_ready: bool
+    ready_market_ids: tuple[str, ...]
+    failed_market_ids: tuple[str, ...]
+    latest_closed_5m_open_time_ms: int
+    observed_at_ms: int
+    snapshot_hash: str
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        registry_version: str,
+        registry_content_hash: str,
+        data_ready: bool,
+        ready_market_ids: tuple[str, ...],
+        failed_market_ids: tuple[str, ...],
+        latest_closed_5m_open_time_ms: int,
+        observed_at_ms: int,
+    ) -> RuntimeReadinessSnapshot:
+        ready = tuple(sorted(ready_market_ids))
+        failed = tuple(sorted(failed_market_ids))
+        payload = {
+            "registry_version": registry_version,
+            "registry_content_hash": registry_content_hash,
+            "data_ready": data_ready,
+            "ready_market_ids": ready,
+            "failed_market_ids": failed,
+            "latest_closed_5m_open_time_ms": latest_closed_5m_open_time_ms,
+            "observed_at_ms": observed_at_ms,
+        }
+        return cls(
+            registry_version=registry_version,
+            registry_content_hash=registry_content_hash,
+            data_ready=data_ready,
+            ready_market_ids=ready,
+            failed_market_ids=failed,
+            latest_closed_5m_open_time_ms=latest_closed_5m_open_time_ms,
+            observed_at_ms=observed_at_ms,
+            snapshot_hash=sha256_hex(canonical_json_bytes(payload)),
+        )
+
+    def __post_init__(self) -> None:
+        if tuple(sorted(set(self.ready_market_ids))) != self.ready_market_ids:
+            raise ValueError("ready market identities must be unique and ordered")
+        if tuple(sorted(set(self.failed_market_ids))) != self.failed_market_ids:
+            raise ValueError("failed market identities must be unique and ordered")
+        if set(self.ready_market_ids) & set(self.failed_market_ids):
+            raise ValueError("a market cannot be both ready and failed")
+        if not self.data_ready and self.ready_market_ids:
+            raise ValueError("disconnected runtime cannot expose ready markets")
+        payload = {
+            "registry_version": self.registry_version,
+            "registry_content_hash": self.registry_content_hash,
+            "data_ready": self.data_ready,
+            "ready_market_ids": self.ready_market_ids,
+            "failed_market_ids": self.failed_market_ids,
+            "latest_closed_5m_open_time_ms": self.latest_closed_5m_open_time_ms,
+            "observed_at_ms": self.observed_at_ms,
+        }
+        if self.snapshot_hash != sha256_hex(canonical_json_bytes(payload)):
+            raise ValueError("runtime readiness snapshot hash is invalid")
 
 
 class ReconnectRequired(RuntimeError):
@@ -120,6 +191,36 @@ class MultiAssetPublicRuntime:
             market
             for market in self.acquisition_registry().markets
             if market.lifecycle not in {MarketLifecycle.DISABLED, MarketLifecycle.OUTCOMES_COMPLETE}
+        )
+
+    def readiness_snapshot(self) -> RuntimeReadinessSnapshot:
+        """Return current A1 transport, Registry, failure, and finality authority."""
+        active = self.registry.active()
+        if active is None:
+            raise DataRouteError("active Registry is required for runtime readiness")
+        latest_open = self._latest_completed_open()
+        failed = {
+            market.identity.market_id
+            for market in active.markets
+            if market.identity.market_id in self.health.failed_markets
+            or self.authority.market_failed(market.identity.market_id)
+        }
+        ready = tuple(
+            market.identity.market_id
+            for market in active.markets
+            if self.health.data_ready
+            and market.lifecycle is MarketLifecycle.ACTIVE
+            and market.identity.market_id not in failed
+            and self._history_current(market)
+        )
+        return RuntimeReadinessSnapshot.create(
+            registry_version=active.version,
+            registry_content_hash=active.content_hash,
+            data_ready=self.health.data_ready,
+            ready_market_ids=ready,
+            failed_market_ids=tuple(failed),
+            latest_closed_5m_open_time_ms=latest_open,
+            observed_at_ms=int(self.clock().timestamp() * 1000),
         )
 
     def subscriptions(self) -> tuple[dict[str, object], ...]:
@@ -210,9 +311,7 @@ class MultiAssetPublicRuntime:
         results: dict[str, int] = {}
         for market in self.selected_markets():
             try:
-                results[market.identity.market_id] = self.warmup(
-                    market, start_ms=start, end_ms=end
-                )
+                results[market.identity.market_id] = self.warmup(market, start_ms=start, end_ms=end)
             except (DataRouteError, PublicDataError):
                 self.health.failed_markets.add(market.identity.market_id)
         return results
@@ -355,11 +454,7 @@ class MultiAssetPublicRuntime:
             return
         payload = message["data"]
         market = next(
-            (
-                item
-                for item in self.selected_markets()
-                if item.identity.coin == payload.get("s")
-            ),
+            (item for item in self.selected_markets() if item.identity.coin == payload.get("s")),
             None,
         )
         if market is None:
@@ -371,9 +466,7 @@ class MultiAssetPublicRuntime:
             open_ms = payload.get("t")
             if not isinstance(open_ms, int):
                 raise DataRouteError("websocket candle is missing open timestamp")
-            self._finality.offer(
-                market=market, open_time_ms=open_ms, fingerprint=fingerprint
-            )
+            self._finality.offer(market=market, open_time_ms=open_ms, fingerprint=fingerprint)
         except DataRouteError:
             self.health.failed_markets.add(market.identity.market_id)
 
@@ -382,9 +475,7 @@ class MultiAssetPublicRuntime:
             market_id=identity.market_id, open_time_ms=identity.open_time_ms
         )
 
-    async def _confirm_generation(
-        self, generation: CandidateGeneration
-    ) -> ConfirmationResult:
+    async def _confirm_generation(self, generation: CandidateGeneration) -> ConfirmationResult:
         identity = generation.identity
         try:
             snapshots: list[list[object]] = []
