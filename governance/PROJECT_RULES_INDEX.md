@@ -11,8 +11,10 @@ Successor windows read the following order before acting:
 7. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_LOWEST_PRIORITY_BACKLOG_RULING_V1.md`
 8. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_FAILURE_AND_DEFERRED_WORK_V1.md`
 9. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_AUTOMATION_ABANDONMENT_RULING_V1.md`
-10. `governance/TRADER_ASSIST_ENGINEERING_WORKFLOW_V3_2026-07-22.md`
+10. `governance/TRADER_ASSIST_ENGINEERING_WORKFLOW_V4_2026-08-14.md`
 11. current live GitHub and CI state
+
+`governance/TRADER_ASSIST_ENGINEERING_WORKFLOW_V3_2026-07-22.md` remains historical process context. V4 supersedes it for future work wherever the two conflict, especially direct Engineering Optimization orchestration, model/quota routing, Research-Before-Build, future-mainline reuse, delta-first Review, and bounded repair stop-loss rules.
 
 Live GitHub objects override stale chat snapshots and stale PR-body snapshots. Future windows
 must resolve live GitHub state before relying on historical text.
@@ -22,8 +24,8 @@ superseded. PR #48 is a frozen failed-design and historical research reference; 
 merged authority and has no fourth-commit authority.
 
 No governance file independently grants host, deployment, runtime, smoke, account or
-exchange-write authority. Product authority, engineering authority and Project Control
-execution authority remain separate.
+exchange-write authority. Product authority, engineering authority and user execution/finalization
+authority remain separate.
 
 ## Efficiency-first rule
 
@@ -50,8 +52,12 @@ Use this preferred order:
 5. small permanent script only after repeated use proves net value;
 6. framework only when scale, authority or compliance objectively requires it.
 
+For all nontrivial commodity engineering, V4 additionally requires a mature external/provider-native
+solution check, future-mainline reuse check, and total-cost convergence before implementation.
+
 A normal repair plus one exceptional repair is the maximum for one bounded design route. If
-both fail, do not continue iterative patching. Reduce scope or start a clean replacement.
+both fail on the same root problem, do not continue iterative patching. Reduce scope, salvage
+accepted work, defer, use an external solution, or start a clean replacement.
 
 ## Current First Launch recovery boundary
 
