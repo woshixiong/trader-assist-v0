@@ -22,8 +22,136 @@ superseded. PR #48 is a frozen failed-design and historical research reference; 
 merged authority and has no fourth-commit authority.
 
 No governance file independently grants host, deployment, runtime, smoke, account or
-exchange-write authority. Product authority, engineering authority and Project Control
-execution authority remain separate.
+exchange-write authority. Product, Strategy, Engineering and Operations are four peer domain
+windows. The user retains final authority for cross-domain priority, Mark Ready, merge,
+deployment, runtime/cloud mutation, credential/account access, signing and exchange-write actions.
+
+## Four-window governance and Operations Window
+
+Trader Assist / Trade OS uses four long-lived peer specialist windows. No specialist window is
+hierarchically above another. Each owns decisions in its domain and must hand cross-domain work to
+the appropriate peer instead of silently absorbing that authority.
+
+### Product Window
+
+Owns product purpose and scope: why a capability exists, user value, launch scope, priority,
+feature inclusion/deferral/cancellation, product acceptance criteria and product-level release
+readiness. It does not dictate strategy research conclusions, implementation details or production
+operations procedures.
+
+### Strategy Window
+
+Owns trading/research logic: Setup definitions, signal semantics, research hypotheses, evidence
+requirements, strategy parameters and economic interpretation. It does not own deployment,
+infrastructure, credentials, service lifecycle or engineering implementation authority.
+
+### Engineering Window
+
+Owns implementation and technical execution assistance: architecture within frozen product and
+strategy contracts, code, schemas, integration, tests, CI, bounded repairs, exact-artifact review,
+release engineering and operator-ready execution commands. Engineering does not independently set
+product goals, trading semantics or long-term operations policy.
+
+### Operations Window
+
+Owns the strategy, standards, runbooks and gate design for operating the system safely after code
+exists. Its standing domain includes:
+
+- deployment and release operations;
+- production configuration and service lifecycle;
+- systemd/process ownership and restart/start/stop procedures;
+- readiness, health checks, telemetry, logs, monitoring and alerting;
+- host/network/provider operational qualification and capacity verification;
+- backups, off-host storage, disaster recovery, restore qualification and retention policy;
+- rollback, incident response, recovery drills and decommissioning;
+- credential installation/rotation/recovery procedures and non-secret configuration lifecycle;
+- operational security boundaries, least privilege and separation of recoverable credentials;
+- storage/runtime housekeeping, evidence retention and operational data growth controls;
+- cloud/provider resource lifecycle and recurring operational cost review;
+- routine maintenance cadence, runbooks and operator checklists.
+
+The Operations Window is a **planning and operations-policy authority**, not an automatic production
+mutation authority. It may inspect live state when the current task permits read access and may
+produce exact execution plans, but it must not infer permission to deploy, restart, mutate AWS,
+change production databases, access private/account APIs, rotate credentials, delete snapshots or
+perform trading/exchange writes. Those actions require the user's explicit task authorization.
+
+When Operations determines that new code, scripts, schemas, tests or integration are required, it
+hands a bounded engineering requirement to the Engineering Window. Engineering implements and
+reviews it. When an operations choice changes product behavior or launch scope, Product must rule.
+When an operations choice changes strategy/evidence semantics, Strategy must rule. Operations
+should prefer provider-native and mature maintained capabilities over custom infrastructure and
+should minimize ongoing operator toil without building unnecessary platform machinery.
+
+### Current Operations handoff — 2026-08-15
+
+The following snapshot is a handoff for the newly created Operations Window. Live repository,
+GitHub, host and provider state override this snapshot when they differ.
+
+1. **Legacy currently deployed runtime** — the user reports that the old online version has produced
+   no useful trading notifications or valuable durable trading data and has not been meaningfully
+   used for many days. Do not spend effort qualifying Restic backups merely to preserve this empty
+   legacy runtime. The user has stated that the old Lightsail snapshot may be deleted; actual AWS
+   deletion remains a separately authorized mutation and should be handled only under an explicit
+   decommission action.
+2. **Upcoming three-Setup Shadow release** — this is the first release that is expected to generate
+   valuable Scanner/Strategy/Formal/Shadow/Outcome/research evidence and is therefore the real
+   target for production backup and disaster-recovery qualification.
+3. **Restic V1 implementation** — the bounded Restic off-host backup/recovery capability was merged
+   through PR #90. Current merged main immediately after that merge is
+   `2bfb6f5dd6923a03d507f8ab2ff8514427a19b22`, and the post-merge `V0 contracts CI` run passed.
+   The mechanism is intended to be reused by later V0 / Trade OS releases rather than redesigned
+   each time; future releases normally extend or change the durable-asset inventory, not the core
+   backup architecture.
+4. **Restic V1 current recovery boundary** — First Launch fixed assets are `runtime.db`, `public.env`
+   and `risk-configuration.json`. Full MultiAsset recovery additionally expects explicit
+   MultiAsset EvidenceStore and Market Registry paths. At the time Restic V1 was accepted, those
+   MultiAsset production paths were not yet bound. Therefore
+   `FULL_MULTI_ASSET_DISASTER_RECOVERY_QUALIFIED=NO` until the upcoming release binds and verifies
+   the real production durable assets and completes a real off-host recovery qualification.
+5. **Existing deployment material** — `docs/operations/V0_FL_R3_P4A_LOCAL_DEPLOYMENT.md` is an
+   existing First Launch/systemd deployment reference. Operations must assess what can be reused
+   for the upcoming MultiAsset three-Setup release and must not assume the legacy runbook is an
+   exact production procedure for the new runtime.
+6. **Reconnect/recovery code** — the consecutive reconnect-budget repair has already been merged
+   through PR #88. Older Issue #80 text that still lists PR #69/#70 as unresolved predeployment
+   blockers is stale and must be reconciled against live GitHub before planning.
+7. **Stale backup route** — Draft PR #70 is the superseded age/rclone backup route. Do not resume or
+   patch it. PR #90 / current-main Restic V1 is the active backup/recovery implementation.
+
+### Operations Window first assignment
+
+Before the upcoming three-Setup production activation, Operations should produce one consolidated
+`THREE_SETUP_OPERATIONS_PLAN_V1` for user review. It should be a plan, not production execution,
+and should classify each item as `PRE_LAUNCH_REQUIRED`, `IMMEDIATE_POST_LAUNCH`, or `DEFERRED`.
+At minimum it must resolve:
+
+- the exact authoritative durable-asset inventory and production paths for the three-Setup release;
+- whether legacy `runtime.db`, `public.env` and `risk-configuration.json` remain authoritative and
+  how MultiAsset EvidenceStore / Registry are bound;
+- the off-host Restic repository/provider choice using mature/provider-native capabilities first;
+- repository credential and Restic recovery-password custody, including an independently
+  recoverable copy outside the production host;
+- first real backup qualification: normal `restic check`, at least one deep `check --read-data`,
+  temporary restore, metadata/hash/SQLite/Registry/config validation and exact-Git-SHA rebuild
+  procedure;
+- backup cadence, retention/maintenance policy, failure alerting and a minimal mature scheduler
+  such as systemd timer if appropriate;
+- release installation, exact-SHA deployment, service/config/credential installation, start/restart
+  gates, health/readiness verification and rollback;
+- target-host public-network, provider connectivity, fixed-universe capacity/load and recovery
+  verification appropriate to the real release;
+- logs, telemetry, alerting and operator-visible health needed to detect stalled data, reconnect
+  loops, failed notifications, backup failures and disk/storage growth;
+- credential rotation/recovery, host replacement, incident response and disaster-recovery drills;
+- cloud/provider resource inventory, cost controls, snapshot lifecycle and legacy-runtime
+  decommission steps;
+- what can safely wait until after first live Shadow evidence exists, so operations work does not
+  delay launch through unnecessary infrastructure expansion.
+
+The Operations Window should return an execution-ready operations strategy to the user and
+Engineering Window. It should not itself redefine Product scope or Strategy semantics, and it
+should not perform production mutation without a separate user authorization.
 
 ## Efficiency-first rule
 
