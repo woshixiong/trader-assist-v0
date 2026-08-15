@@ -1,243 +1,311 @@
 # Three Setup Operations Plan V1
 
-Status: FROZEN OPERATIONS BASELINE / CURRENT SHADOW STAGE
-Date: 2026-08-15
+Status: FROZEN OPERATIONS BASELINE / CURRENT SHADOW STAGE  
+Date: 2026-08-15  
 Repository: `woshixiong/trader-assist-v0`
 
-This document freezes the minimum operations direction for the upcoming Three Setup Shadow release. It is deliberately small. It does not authorize deployment, runtime mutation, AWS mutation, credential mutation, production DB writes, account/private API access, signing, wallet/key use, exchange writes, or order submission.
+This document freezes the minimum reusable Operations/SRE direction for the upcoming Three Setup Shadow release. It does not authorize deployment, runtime/AWS mutation, credential mutation, production DB writes, account/private API access, signing, wallet/key use, exchange writes, order submission, Mark Ready, or merge.
 
-Live GitHub/code/CI and the final production bootstrap remain the authority for actual paths and release identity.
+Live GitHub/code/CI and the final production bootstrap remain authority for exact release identity and actual production paths.
 
-## 1. Operating principle
+## 1. Long-term operating architecture
 
-The project uses minimum safe operations:
+The project uses **minimum safe operations**:
 
 - mature/provider-native capability first;
-- one small supervised host while execution remains human-controlled;
 - exact-SHA reproducible deployment;
-- durable data off-host and independently recoverable;
-- simple health/readiness and logs before observability platforms;
-- measure real production behavior before increasing complexity;
-- no institution-grade infrastructure unless a later authority/risk requirement objectively needs it.
+- one replaceable supervised host while execution remains human-controlled;
+- authoritative durable data separated from reproducible source/cache data;
+- encrypted off-host recovery with independently recoverable credentials;
+- systemd + journal + Linux/provider-native health before observability platforms;
+- real 24h/7d/30d evidence before capacity, retention, archive, or host-migration expansion;
+- no platform build without an evidence-backed requirement.
 
-The operations design must support frequent releases, replacement hosts, future Lightsail-to-EC2 migration, and incremental future expansion without replacing the backup/deployment foundation.
+The reusable foundation is:
 
-## 2. Frozen current-stage architecture
+`GITHUB EXACT SHA + SYSTEMD + SQLITE DURABLE STORES + RESTIC + OFF-HOST OBJECT STORAGE + RESTORE QUALIFICATION`
 
-### Compute
+Future V0 / Trade OS versions should normally update only the durable-asset manifest, profile inventory, capacity limits, backup cadence/retention, and gates required by new authority. They must not replace this foundation unless a demonstrated requirement cannot be satisfied by it.
+
+`ARCHITECTURE_REPLAN_REQUIRED=NO`
+
+## 2. Current compute and source recovery
 
 Current Shadow stage uses one replaceable Lightsail host.
 
 `CURRENT_MULTI_HOST_HA_REQUIRED=NO`
 
-The host is not a durable asset. A failed/replaced host is rebuilt from GitHub and off-host recovery material.
-
-### Code and deployment identity
-
-`SOURCE_RECOVERY=GITHUB_EXACT_40_CHAR_SHA`
-
-Do not depend on floating `main`, mutable branches, machine-local source copies, or instance snapshots as the primary rebuild authority.
-
-### Service lifecycle
-
-Use systemd and existing project lifecycle mechanisms. Do not add a process supervisor platform.
-
-A bounded `Restart=on-failure` policy may be adopted only if the deployment review shows it is a small, safe change with explicit start-rate limits and no restart loop. It is not independently authorized by this document and is not allowed to delay first live Shadow merely to add automation.
-
-### Operational backup and disaster recovery
-
-The merged Restic V1 route remains the long-term backup/restore foundation.
-
-`BACKUP_ARCHITECTURE=RESTIC_V1`
-
-Default off-host provider candidate:
-
-`PRIMARY_OFF_HOST_PROVIDER=BACKBLAZE_B2_S3_COMPATIBLE`
-
-Cloudflare R2 remains a fallback only if a real B2 backup/restore qualification is unstable or operationally too slow. A comparative performance benchmark is not a pre-launch requirement.
-
-Operational Restic recovery material remains encrypted. Recovery credentials must exist outside the production host and outside Git.
-
-### Host migration
-
-The normal migration route is:
+The host is not a durable asset. Normal host replacement/migration is:
 
 `CLEAN_HOST -> EXACT_SHA_REBUILD -> CONFIG/CREDENTIAL_RESTORE -> RESTIC_RESTORE -> QUALIFICATION -> CUTOVER`
 
-This route must work for Lightsail-to-EC2 and later host replacements without changing backup architecture. Provider machine-image/snapshot migration may be used as an optional convenience/fallback, not as the durable recovery design.
+This route is intentionally compatible with future Lightsail-to-EC2 migration.
 
-## 3. Frozen data lifecycle principles
+`SOURCE_RECOVERY=GITHUB_EXACT_40_CHAR_SHA`
 
-Every durable object must be classified as one of:
+Do not use floating `main`, mutable branches, machine-local source copies, or instance snapshots as primary rebuild authority.
 
-1. `RECOVERY_DATA` — required to recover current authoritative operation; keep in operational Restic backup.
-2. `RESEARCH_ARCHIVE` — no longer required for current operation but potentially useful for future research; eligible for later cold archive.
-3. `REPRODUCIBLE_DATA` — can be regenerated reliably from Git/provider/public sources; do not retain indefinitely unless re-acquisition cost justifies it.
+## 3. Service lifecycle foundation
 
-Actual future data scale and storage cost are not forecast contracts.
+Use systemd and the existing First Launch safety boundary where still applicable:
 
-`DATA_SCALE_POLICY=OBSERVE_REAL_DATA_THEN_DECIDE`
+- dedicated `traderassist` user/group;
+- root-owned source/config;
+- activation permit / default-off behavior;
+- `EnvironmentFile` for reviewed non-secret configuration;
+- `LoadCredential` for notification secrets;
+- forced approved source provenance / PYTHONPATH;
+- filesystem containment;
+- `StateDirectory` / `RuntimeDirectory`;
+- systemd hardening;
+- journal output;
+- SIGTERM and bounded graceful stop.
 
-No further pre-launch data-scale/cost architecture work is authorized.
+Do not build a new process supervisor or deployment platform.
 
-## 4. Frozen cold-archive direction
+Current default for First Live remains `Restart=no`. A bounded `Restart=on-failure` may be adopted later, or in the current release only if the production-binding implementation makes controlled-shutdown versus unexpected-failure exit semantics explicit and the additional tests remain genuinely small. It is not an independent launch blocker.
 
-`COLD_ARCHIVE_CURRENTLY_REQUIRED=NO`
+## 4. Current Three Setup engineering boundary
 
-When real data growth later justifies cold archive:
+The accepted MultiAsset library/composition already contains Runtime, Registry, provider-finalized 5m authority, Scanner, Strategy, Planning, EvidenceStore, Formal/ShadowOrder, Outcome, Bootstrap/reconciliation, reconnect recovery, public providers, and notification machinery.
 
-- operational/private/strategy-bearing recovery data stays inside encrypted Restic or an equivalent approved secure recovery store;
-- public-only/reproducible historical market data may be exported manually to a Mac/local disk and uploaded to Quark Cloud or Baidu Cloud;
-- public-only archives do not require an additional confidentiality-encryption layer if they contain no private, credential, strategy, human-review, execution, account, or configuration data;
-- public-only archives still require a manifest and cryptographic checksum (for example SHA-256) for integrity;
-- automation/API integration with Quark/Baidu is not required for low-frequency archive work;
-- archive format/mechanics are selected only when this lifecycle is actually activated.
+Do not redesign those components.
 
-The current design must not make future archival impossible, but no cold-archive implementation belongs to the current release.
+Current pre-launch engineering is bounded to:
 
-## 5. Current Three Setup pre-launch minimum
+### B01 — Thin Three Setup production binding
 
-Only the following items may block first live Shadow on operations grounds.
+Create the minimum production composition that:
 
-### OPS-1 — Durable asset binding
+- binds actual production paths;
+- instantiates Registry + ClosedBarStore/DataAuthority + public client + existing `MultiAssetProductionBootstrap`;
+- binds exact release SHA and reviewed non-secret config;
+- composes the existing notification outbox/dispatcher/secure credential path with no new notification engine;
+- installs graceful shutdown;
+- emits minimal structured journal visibility for startup, Registry identity, readiness, ready/failed markets, latest finalized 5m, boundary/Scanner/Strategy progress/failure, reconnect state, and shutdown;
+- preserves public-data-only / no-account / no-signing / no-exchange-write boundaries and `ShadowOrder=NOT_SUBMITTED`.
 
-Derive the actual production durable asset inventory from final bootstrap/service/config wiring. At minimum resolve:
+Reuse/adapt the existing First Launch service/wrapper safety controls where this is smaller and safer than reimplementing them.
 
-- MultiAsset EvidenceStore production path;
-- Market Registry production path/root;
-- whether legacy `/var/lib/trader-assist-v0/runtime.db` remains a required dependency of the new production runtime;
-- `public.env`;
-- `risk-configuration.json`;
-- any other non-reproducible durable asset actually used by the new production runtime.
+### B02 — Exact Three Setup recovery profile
 
-Output: `THREE_SETUP_DURABLE_ASSET_MANIFEST`.
+Restic V1 architecture remains accepted. Add an additive Three Setup-specific recovery profile after B01 freezes the real durable asset manifest. Do not continue using the legacy `full-multi-asset` inventory as the long-term Three Setup authority merely because it is a superset.
 
-Do not invent paths. Current `EvidenceStore` is a separate database and explicitly does not open/migrate legacy `runtime.db`; final production wiring must decide the legacy DB disposition.
+`LEGACY_RUNTIME_DB_REQUIRED_FOR_THREE_SETUP=NO`
 
-### OPS-2 — Deployment/service readiness
+The Three Setup profile must include only actual non-reproducible recovery assets and reviewed required non-secret configuration, and must exclude legacy-unused assets, secrets, activation permit, Git-reproducible source, and reproducible data.
 
-Adapt the existing First Launch deployment reference rather than building a new deployment platform. Verify:
+No Restic redesign, custom storage adapter, backup service, tar/rclone/age route, retention platform, Object Lock, or second provider belongs to the current release.
 
-- exact release SHA and source provenance;
-- dependency installation;
-- production paths and permissions;
-- non-secret configuration;
-- credential ingress;
-- service install/start/stop/graceful shutdown;
-- activation/preflight;
-- safe stop procedure;
-- post-start readiness verification.
+## 5. Durable asset classification
 
-Only small service-lifecycle corrections proven necessary by the audit belong here.
+Every production object must be classified as one of:
 
-### OPS-3 — Minimum operator-visible health
+1. `RECOVERY_DATA` — required to recover authoritative operation; included in the current recovery profile.
+2. `RESEARCH_ARCHIVE` — no longer required for current operation but potentially valuable research history; eligible for later archive.
+3. `REPRODUCIBLE_DATA` — reliably regenerated from Git/provider/public sources; normally excluded from operational recovery.
 
-Reuse existing runtime health/readiness and OS/provider-native signals. The operator must be able to determine, without a new monitoring platform:
+B01 must freeze `THREE_SETUP_DURABLE_ASSET_MANIFEST` including at least:
 
-- service/process state;
-- runtime data readiness;
-- active/ready versus failed markets;
-- latest authoritative finalized 5m progress/freshness;
-- whether Scanner/Strategy application progress is advancing or visibly failing;
-- durable EvidenceStore path and basic size/disk-headroom information;
-- meaningful bootstrap/callback/reconnect failure visibility through existing status/logs.
+- `EVIDENCE_STORE_PATH` — independent SQLite; must not reuse legacy `runtime.db`;
+- `REGISTRY_ROOT` — persistent Registry tree (`versions`, `validations`, `current`, `pending`, `history` as applicable);
+- `CLOSED_BAR_STORE_PATH` — independent SQLite;
+- `CLOSED_BAR_STORE_BACKUP_CLASSIFICATION`;
+- actual required Three Setup non-secret config assets;
+- secret assets explicitly excluded;
+- `LEGACY_RUNTIME_DB_REQUIRED=NO`.
 
-If this can be exposed with a thin read-only status surface, Engineering may implement it. If the audit shows it requires substantial new runtime architecture, reduce the scope to the minimum pre-launch health proof and defer richer status work.
+Do not invent final production filenames before B01 binds them.
 
-A backup freshness field is not a pre-launch blocker because no valuable legacy data is being protected and the first real backup occurs after live evidence begins.
+Secrets such as notification credential, B2 storage credential, and Restic repository password/key must remain outside Git and outside the Restic application payload and must have an independently recoverable copy outside the production host.
 
-### OPS-4 — Target-host qualification
+Activation permit is not Recovery Data. A clean host must remain default-off until an operator explicitly reactivates it.
 
-Run a bounded real qualification against the actual selected launch universe and production public-data route. Verify only what is needed to answer whether the current Lightsail host can sustain first live Shadow:
+## 6. ClosedBarStore recovery qualification
 
-- CPU and memory headroom;
-- disk headroom;
-- public-provider connectivity;
-- WebSocket/REST behavior;
-- Scanner/Strategy 5m cadence completion;
-- Outcome 1m demand behavior where applicable;
-- SQLite/Evidence persistence health;
-- absence of sustained backlog or obvious rate/resource exhaustion.
+ClosedBarStore is not yet proven reproducible merely because market OHLCV is public.
 
-Do not test future full-universe/automatic-trading capacity.
+Current classification:
 
-### OPS-5 — B2/Restic recovery prerequisites
+`CLOSED_BAR_STORE_CLASSIFICATION=PROVISIONALLY_REPRODUCIBLE_OPERATIONAL_STATE__QUALIFICATION_REQUIRED`
 
-Before valuable live evidence begins, prepare but do not overbuild:
+The store retains canonical hash, Registry identity, finality identity, finalized time, and normalized provider evidence that can participate in retained Strategy/Evidence authority.
+
+Pre-launch acceptance must include a deterministic recovery scenario:
+
+`RESTORED_REGISTRY + RESTORED_NONEMPTY_EVIDENCE_STORE + EMPTY_NEW_CLOSED_BAR_STORE + PUBLIC_HISTORY_REWARMUP + BOOTSTRAP_RECONCILIATION`
+
+It must prove:
+
+- required history rewarms;
+- Registry/readiness become valid;
+- retained Scanner/Strategy/Formal/Outcome authority does not conflict;
+- no duplicate authoritative records are produced;
+- canonical/provenance mismatch does not break reconciliation;
+- the next live boundary can continue normally;
+- operational readiness can be reached.
+
+If PASS, classify ClosedBarStore as reproducible and exclude it from recovery payload. If FAIL, classify it as Recovery Data and include it in the Three Setup profile. Do not redesign ClosedBar identity solely to force a PASS.
+
+A real empty-store cold-start proof must be repeated during target-host qualification.
+
+## 7. Backup and disaster recovery
+
+`BACKUP_ARCHITECTURE=RESTIC_V1`
+
+Primary off-host provider:
+
+`PRIMARY_OFF_HOST_PROVIDER=BACKBLAZE_B2_S3_COMPATIBLE`
+
+`CLOUDFLARE_R2=FALLBACK_ONLY`
+
+Do not benchmark providers pre-emptively. Re-open R2 only if real B2 backup/restore is unstable or restore time is operationally unacceptable.
+
+Before First Live/valuable Evidence, prepare:
 
 - private B2 bucket/repository endpoint;
-- least-privilege storage credential;
-- Restic repository/password/recovery credential arrangement;
+- scoped least-privilege storage credential;
+- Restic repository/password/key arrangement;
 - independent recovery credential copy outside production host;
-- reviewed `full-multi-asset` paths matching OPS-1.
+- reviewed Three Setup recovery profile matching the frozen durable-asset manifest.
 
-A real data restore qualification waits for the first real production Evidence snapshot.
+After the first meaningful real Evidence appears, immediately perform the first real DR qualification:
 
-## 6. First live and immediate post-live sequence
+`THREE_SETUP BACKUP -> RESTIC CHECK -> ONE CHECK --READ-DATA -> EXACT SNAPSHOT TEMP RESTORE -> VERIFY`
 
-After OPS-1 through OPS-5 pass and deployment is separately authorized:
+Verification must cover recovery metadata, exact Git SHA, payload hashes, SQLite quick/integrity checks, Registry validation, and required config assets. Record backup duration/logical size and restore/verification duration.
 
-1. controlled Three Setup Shadow deployment;
-2. verify live readiness and evidence progression;
-3. after first meaningful real Evidence exists, create the first real `full-multi-asset` Restic snapshot to B2;
-4. run normal `restic check`;
-5. run one deep `check --read-data` qualification;
-6. restore the exact snapshot into a clean temporary target;
-7. verify recovery metadata, exact Git SHA binding, payload hashes, SQLite quick/integrity checks, Registry validation and required config assets;
-8. record backup duration and full restore/verification duration;
-9. only then declare `THREE_SETUP_DISASTER_RECOVERY_QUALIFIED=YES`.
+Only then:
 
-Routine backup scheduling/retention is then selected from real data. A small systemd timer is preferred if/when recurring automation is justified; no backup service/platform is required.
+`THREE_SETUP_DISASTER_RECOVERY_QUALIFIED=YES`
 
-## 7. Observation-driven decisions
+`check --read-data` is for first/low-frequency deep qualification, not every routine backup.
 
-The first live release establishes measurements instead of speculative architecture.
+Routine automation is not a pre-launch blocker. After real operating evidence, prefer an existing Restic command first and a small systemd timer only when recurring automation is clearly worthwhile. Do not build a Backup Service.
 
-- `T+24h`: runtime stability, CPU/memory/disk headroom, Evidence DB size, failed markets, Scanner/Strategy progress.
-- `T+7d`: daily data growth, Restic growth, backup duration, reconnect/provider failure pattern, initial backup cadence decision.
-- `T+30d`: annualized growth estimate, storage cost reality, retention review, current Lightsail suitability and EC2 migration timing if needed.
-- before each major deployment: durable asset manifest drift, disk headroom, last successful backup where real data exists, restore-qualification age.
+## 8. Accepted residual: cross-asset snapshot atomicity
 
-These observations should come from existing runtime status/logs, OS commands, Restic metadata/statistics, Lightsail metrics/alarms and provider billing. Do not build an analytics platform. If a small read-only operations snapshot materially reduces recurring operator effort, Engineering may propose the minimum implementation.
+Restic V1 gives per-database consistent SQLite snapshots but not one cross-database/global transaction across EvidenceStore, optional ClosedBarStore, Registry, and config assets.
 
-## 8. Frozen future automated-execution operations baseline
+`PER_DATABASE_CONSISTENCY=YES`
 
-Status: `FUTURE_RESEARCH_BASELINE_ONLY__NO_CURRENT_IMPLEMENTATION`
+`CROSS_DATABASE_ATOMIC_SNAPSHOT=NO`
 
-The following are starting principles, not a finalized implementation:
+For the current Shadow/research stage this is an accepted residual only because application authority is immutable/idempotent/reconcilable and every real DR qualification must prove the restored combination can reconcile safely.
 
-- `SERVER_FAILURE_MUST_NOT_CREATE_UNBOUNDED_MARKET_RISK`;
-- uncertain critical data/account/risk/authority state must fail closed against increasing market risk;
-- exchange-side protective capabilities should be preferred where they reduce dependence on a single application process remaining alive;
-- automated execution requires explicit kill/disengage capability, reconciliation, duplicate-order prevention, stale-data guards and pre-trade risk limits;
-- multi-host/Multi-AZ redundancy becomes a required cost/benefit research item before automated execution because infrastructure cost may be trivial relative to trading interruption/loss;
-- do not assume two identical active execution servers are safe; future research must resolve single execution authority, leader/fencing/takeover semantics and failure reconciliation;
-- institutional risk-control principles may be reused, but institution-grade infrastructure complexity is not a project goal.
+Escalation triggers:
 
-Future research candidates include active/standby or other strictly single-authority designs, EC2/Multi-AZ recovery options, exchange-side dead-man/protective controls, failover and order/position reconciliation. No selection is frozen now.
+- any real restore qualification fails because assets represent incompatible moments;
+- future application authority introduces state that cannot reconcile safely across independently captured assets;
+- before fully autonomous execution if cross-asset inconsistency could create market/account risk.
 
-## 9. Explicitly deferred from the current release
+If triggered, evaluate coordinated/quiesced application-consistent capture before replacing Restic or the off-host architecture. This is an extension point, not a current architecture rewrite.
 
-- second live trading server / HA / Multi-AZ execution;
+## 9. Minimum operator health
+
+Do not build Prometheus/Grafana/ELK/Datadog or a monitoring service.
+
+Use existing Runtime/Bootstrap health information exposed through structured journal plus:
+
+- `systemctl`;
+- `journalctl`;
+- `scripts/multi_asset_registry.py status`;
+- Linux native CPU/memory/disk/file commands;
+- Lightsail native metrics/alarms;
+- Restic metadata/check output.
+
+The current ETH-only `ta-status` is not MultiAsset authority. Do not rewrite it pre-launch unless real operator use proves journal + existing commands insufficient.
+
+## 10. Target-host qualification
+
+`CURRENT_LIGHTSAIL_HOST_SUFFICIENT=UNDETERMINED_PENDING_REAL_QUALIFICATION`
+
+This is an Operations gate, not a capacity-platform development task. Qualify only the actual First Live selected universe and public-data route for:
+
+- CPU/RAM/disk/network headroom;
+- provider connectivity, WS/REST, reconnect behavior;
+- finalized 5m progression;
+- Scanner/Strategy cycle completion before the next 5m boundary;
+- relevant Outcome 1m demand;
+- EvidenceStore/SQLite health;
+- no sustained backlog or obvious rate/resource exhaustion;
+- real empty-ClosedBar cold-start recovery proof.
+
+Do not test future full-universe or automated-trading capacity now.
+
+## 11. Triggered observations and decisions
+
+The canonical Operations trigger ledger is GitHub Issue #93. Deferred tasks must be triggered by evidence/state, not human memory.
+
+Required gates:
+
+- **Before every major deployment:** exact SHA/CI, durable-asset manifest drift, config/credential readiness, disk headroom, last successful real-data backup if one exists, restore-qualification age.
+- **First Live:** record exact timestamp, SHA, Registry identity, selected universe, host identity.
+- **First meaningful Evidence:** immediately run first real B2/Restic backup + full DR qualification.
+- **T+24h:** runtime stability, CPU/RAM/disk, Evidence size, ready/failed markets, Scanner/Strategy progression.
+- **T+7d:** Evidence growth, Restic growth, backup duration, reconnect/provider failures, initial backup cadence/timer decision.
+- **T+30d:** storage growth/cost, retention, Lightsail suitability, EC2 migration timing, archive trigger review.
+- **Before automatic execution is planned:** reopen HA/Multi-AZ/execution authority/fencing/reconciliation/kill-control and cross-asset snapshot consistency research.
+
+## 12. Legacy/decommission deletion gates
+
+Legacy assets must not remain forever merely because earlier backup profiles referenced them. Issue #93 tracks explicit deletion eligibility reviews.
+
+### Legacy `runtime.db`
+
+Review for deletion when all are true:
+
+1. B01 proves Three Setup has no runtime dependency on it;
+2. the Three Setup recovery profile no longer references it;
+3. no unique data has been intentionally designated for preservation;
+4. rollback/decommission policy does not require the legacy runtime.
+
+Then notify the user that it is eligible for a separately authorized deletion. Never delete automatically.
+
+### Legacy First Launch config files
+
+Review individually after B01 freezes the actual Three Setup config manifest. A file is deletion-eligible only if the new service does not consume it, the recovery profile does not require it, and any needed replacement/non-secret configuration is already preserved. Secrets follow their own revoke/rotation procedure.
+
+### Legacy Lightsail snapshot / host resources
+
+The user has expressed intent to delete the old snapshot because the old runtime has no valuable operating data. Before any AWS deletion, perform a lightweight decommission check for unique config/credential/log assets and ongoing rollback need, then request separate AWS mutation authorization. Do not block old-snapshot cleanup on backing up an empty legacy DB.
+
+### Future obsolete resources
+
+At T+30d and before host migration, review unused snapshots, old hosts, old Restic profiles/keys, stale config, and other recurring-cost resources. Remove only after dependency/recovery evidence says they are no longer required and after the required mutation authority is granted.
+
+## 13. Research / engineering TODO ownership map
+
+To prevent duplicate reminders:
+
+- **Issue #93** — canonical Operations/SRE trigger ledger: deployment, health, B2/DR, observations, deletion/decommission, host migration, future operations-risk triggers.
+- **Issue #80** — current Engineering/post-live research-evidence sequencing. Historical P0 text may be stale; current pre-launch production/DR authority is Issue #93 plus this document.
+- **Issue #85** — canonical post-live Shadow/Forward strategy research matrix; trigger only when enough real evidence exists.
+- Other focused research/backlog issues remain source-specific and must not be promoted into the current release unless Product/Strategy/Operations explicitly triggers them.
+
+A reminder/monitor must surface a task only when its stated trigger becomes true or a time gate is due; it should not repeatedly notify about dormant future backlog.
+
+## 14. Explicitly deferred from current release
+
+Do not promote these without a new evidence-backed requirement:
+
+- multi-host HA / Multi-AZ execution;
 - automated failover;
-- automated-execution operations architecture implementation;
-- Prometheus/Grafana/ELK/Datadog or equivalent platform;
-- Kubernetes or distributed orchestration;
-- Terraform/Ansible solely for this first Shadow release;
+- automated-execution operations implementation;
+- Prometheus/Grafana/ELK/Datadog;
+- Kubernetes/distributed orchestration;
+- Terraform/Ansible platform solely for this Shadow release;
 - cold archive implementation;
 - Quark/Baidu automation;
-- B2-vs-R2 benchmark unless B2 qualification is actually inadequate;
-- long-term retention tuning before real data exists;
+- B2-vs-R2 benchmark when B2 works acceptably;
 - full-universe capacity engineering;
-- backup immutability/Object Lock/append-only hardening unless later risk justifies it.
+- speculative retention tuning;
+- custom backup/monitoring service;
+- Object Lock/append-only hardening;
+- second backup provider.
 
-## 10. Change rule
+## 15. Change rule
 
-Future versions should normally update only:
+This plan is intentionally reusable. Future versions may evolve paths, durable assets, config, data scale, cadence, or execution authority. Those changes should update the manifest/profile/gates rather than replace the underlying exact-SHA + systemd + SQLite + Restic + off-host restore architecture.
 
-- the durable asset manifest;
-- measured capacity limits;
-- backup cadence/retention;
-- health/incident gates required by new authority.
-
-Do not replace GitHub exact-SHA rebuild + Restic off-host recovery + simple systemd operations without a demonstrated requirement that the existing foundation cannot satisfy.
+Any proposal to replace that foundation must demonstrate a concrete requirement that cannot be safely met by an incremental extension.
