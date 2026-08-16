@@ -1,0 +1,164 @@
+{
+  "schema_version": "LOSSLESS_TASK_PACKET_V1",
+  "task_id": "HERMES-SHADOW-H01-HISTORICAL-REPLAY",
+  "packet_version": 2,
+  "control_contract_id": "HERMES-EXECUTION-OPERATOR-V1-2026-08-16",
+  "stage": "H0_SHADOW_REPLAY",
+  "authority": {
+    "repository": "woshixiong/trader-assist-v0",
+    "authority_main_sha": "27c74f5f0eb4a8045956cf42b2d92dbd58c587d3",
+    "packet_ref": "governance/hermes-operator-contract-v1-20260816",
+    "packet_path": "governance/hermes_pilot/H01_LOSSLESS_TASK_PACKET_EXAMPLE.json",
+    "source_refs": [
+      "historical PR #97",
+      "historical release main 36804a1760f1923440c14d5e9de98a0777244c17",
+      "historical post-merge CI run 31934037055"
+    ]
+  },
+  "decision_status": {
+    "frozen": true,
+    "executor_assigned_by_l1": true,
+    "decision_record": "Historical replay only; destination and prohibitions are explicit machine-readable fields.",
+    "approved_by": "L1 pilot governance"
+  },
+  "destination": "OPERATIONS_CHATGPT",
+  "objective": "Replay the historical Engineering-to-Operations handoff after exact release import and verify lossless transport behavior without performing any live action.",
+  "executor": {
+    "kind": "NO_EXECUTOR_TRANSPORT_ONLY",
+    "session_mode": "NOT_APPLICABLE"
+  },
+  "transport": {
+    "mode": "POINTER",
+    "no_paraphrase": true,
+    "downstream_ack_required": true,
+    "loader_instruction": "Read this exact Task Packet using authority.packet_ref + authority.packet_path, verify integrity.expected_sha256 under RFC8785_JCS_SHA256_V1 before using it, and do not paraphrase or create a new technical judgment. This is historical replay only.",
+    "ack_fields": [
+      "TASK_ID",
+      "PACKET_VERSION",
+      "AUTHORITY_SHA",
+      "PACKET_PATH",
+      "PACKET_HASH",
+      "DESTINATION",
+      "EXECUTOR"
+    ]
+  },
+  "permissions": {
+    "allowed_actions": [
+      "READ_PACKET",
+      "VERIFY_IDENTIFIERS",
+      "VERIFY_PACKET_INTEGRITY",
+      "TRANSPORT_EXACT_PACKET",
+      "CAPTURE_RAW_OUTPUT",
+      "RETURN_FIXED_RESULT_PACKET"
+    ],
+    "forbidden_actions": [
+      "RESEARCH_OR_DIRECTION_DECISION",
+      "TECHNICAL_ROUTE_OR_SIMPLIFICATION_DECISION",
+      "EXECUTOR_OR_MODEL_SELECTION",
+      "SCOPE_OR_ACCEPTANCE_CHANGE",
+      "AUTONOMOUS_REPAIR_OR_RETRY",
+      "INDEPENDENT_ACCEPTANCE",
+      "MARK_READY_OR_MERGE",
+      "DEPLOY_OR_PRODUCTION_MUTATION",
+      "CREDENTIAL_OR_PRIVATE_API",
+      "RUNTIME_OR_REAL_NOTIFICATION",
+      "SIGNING_EXCHANGE_WRITE_ORDER",
+      "TRADING_OR_FINANCIAL_ACTION"
+    ]
+  },
+  "scope": {
+    "in_scope": [
+      "lossless historical handoff replay",
+      "identifier preservation",
+      "destination preservation",
+      "integrity verification",
+      "fail-closed ambiguity handling"
+    ],
+    "out_of_scope": [
+      "live operations",
+      "engineering repair",
+      "capacity judgment",
+      "deployment",
+      "production mutation"
+    ]
+  },
+  "acceptance": {
+    "criteria": [
+      "all authoritative identifiers and destination are preserved exactly",
+      "packet canonical hash verifies before transport",
+      "no substantive content is paraphrased",
+      "no live action is performed",
+      "any injected identifier/hash/destination conflict produces BLOCKED"
+    ],
+    "required_evidence": [
+      "fixed Hermes result fields",
+      "raw transported payload or exact pointer",
+      "verified packet hash",
+      "conflict-stop result for injected ambiguity"
+    ]
+  },
+  "stop_conditions": [
+    "missing TASK_ID, authority SHA, packet ref/path, destination, or packet hash",
+    "packet hash mismatch",
+    "packet/ref/path mismatch",
+    "conflicting destination or executor instruction",
+    "request for any live production action",
+    "request for technical or operational judgment"
+  ],
+  "human_gates": [
+    "SCOPE_CHANGE",
+    "TECHNICAL_ROUTE_CHANGE",
+    "EXECUTOR_CHANGE",
+    "MODEL_CHANGE",
+    "INDEPENDENT_ACCEPTANCE",
+    "MARK_READY",
+    "MERGE",
+    "DEPLOY",
+    "PRODUCTION_HOST_MUTATION",
+    "SERVICE_RESTART",
+    "HOST_REBOOT",
+    "CREDENTIAL_ACCESS",
+    "PRIVATE_API",
+    "REAL_NOTIFICATION",
+    "RUNTIME_ACTIVATION",
+    "FIRST_LIVE",
+    "SIGNING",
+    "EXCHANGE_WRITE",
+    "ORDER_SUBMISSION",
+    "TRADING_OR_FINANCIAL_ACTION"
+  ],
+  "expected_result_fields": [
+    "HERMES_OPERATOR_CONTRACT",
+    "TASK_ID",
+    "PACKET_VERSION",
+    "STAGE",
+    "AUTHORITY_SHA",
+    "PACKET_PATH",
+    "PACKET_HASH",
+    "PACKET_INTEGRITY",
+    "DESTINATION",
+    "EXECUTOR",
+    "TARGET_VERIFICATION",
+    "EXECUTION_STARTED",
+    "EXECUTION_STATUS",
+    "RAW_EVIDENCE_REF",
+    "RESULT_INTEGRITY",
+    "UNAUTHORIZED_ACTION",
+    "DECISION_REQUIRED",
+    "STOP_REASON",
+    "NEXT_AUTHORIZED_ACTION"
+  ],
+  "retry_policy": {
+    "autonomous_retry_allowed": false
+  },
+  "notes": [
+    "This packet is a historical shadow-test fixture, not live operations authority."
+  ],
+  "integrity": {
+    "scheme": "RFC8785_JCS_SHA256_V1",
+    "excluded_top_level_fields": [
+      "integrity"
+    ],
+    "expected_sha256": "58408ae864b9ce31798c44ec00bf63f8add35a217f2abeaf8010bb76129eb1e1"
+  }
+}
