@@ -1,0 +1,205 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/woshixiong/trader-assist-v0/schemas/control/lossless-task-packet-v1.schema.json",
+  "title": "Lossless Task Packet V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "task_id",
+    "packet_version",
+    "control_contract_id",
+    "authority",
+    "decision_status",
+    "objective",
+    "executor",
+    "transport",
+    "permissions",
+    "scope",
+    "acceptance",
+    "stop_conditions",
+    "human_gates",
+    "expected_result_fields"
+  ],
+  "properties": {
+    "schema_version": {"const": "LOSSLESS_TASK_PACKET_V1"},
+    "task_id": {"type": "string", "minLength": 1},
+    "packet_version": {"type": "integer", "minimum": 1},
+    "control_contract_id": {"type": "string", "minLength": 1},
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "authority_main_sha", "packet_path"],
+      "properties": {
+        "repository": {"const": "woshixiong/trader-assist-v0"},
+        "authority_main_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "packet_path": {"type": "string", "minLength": 1},
+        "expected_git_blob_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "expected_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "source_refs": {
+          "type": "array",
+          "items": {"type": "string"},
+          "uniqueItems": true
+        }
+      }
+    },
+    "decision_status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["frozen", "executor_assigned_by_l1"],
+      "properties": {
+        "frozen": {"const": true},
+        "executor_assigned_by_l1": {"const": true},
+        "decision_record": {"type": "string"},
+        "approved_by": {"type": "string"}
+      }
+    },
+    "objective": {"type": "string", "minLength": 1},
+    "executor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "CODEX_CLI",
+            "TRAE_COMPUTER_USE",
+            "TERMINAL_LOCAL",
+            "GITHUB_READ_ONLY",
+            "NO_EXECUTOR_TRANSPORT_ONLY"
+          ]
+        },
+        "model": {"type": "string"},
+        "reasoning_effort": {"type": "string"},
+        "session_mode": {"enum": ["NEW", "RESUME_EXACT", "NOT_APPLICABLE"]},
+        "session_id": {"type": "string"},
+        "target_worktree": {"type": "string"},
+        "target_branch": {"type": "string"},
+        "expected_head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+      }
+    },
+    "transport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["no_paraphrase", "downstream_ack_required", "mode"],
+      "properties": {
+        "mode": {"enum": ["POINTER", "EXACT_TEXT", "EXACT_COMMAND"]},
+        "no_paraphrase": {"const": true},
+        "downstream_ack_required": {"const": true},
+        "loader_instruction": {"type": "string"},
+        "exact_command": {"type": "string"},
+        "ack_fields": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "TASK_ID",
+              "PACKET_VERSION",
+              "AUTHORITY_SHA",
+              "PACKET_PATH",
+              "PACKET_HASH",
+              "EXECUTOR",
+              "TARGET_WORKTREE"
+            ]
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowed_actions", "forbidden_actions"],
+      "properties": {
+        "allowed_actions": {
+          "type": "array",
+          "items": {"type": "string"},
+          "uniqueItems": true
+        },
+        "forbidden_actions": {
+          "type": "array",
+          "items": {"type": "string"},
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "allowed_paths": {
+          "type": "array",
+          "items": {"type": "string"},
+          "uniqueItems": true
+        },
+        "forbidden_paths": {
+          "type": "array",
+          "items": {"type": "string"},
+          "uniqueItems": true
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["in_scope", "out_of_scope"],
+      "properties": {
+        "in_scope": {"type": "array", "items": {"type": "string"}},
+        "out_of_scope": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "acceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["criteria"],
+      "properties": {
+        "criteria": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+        "targeted_tests": {"type": "array", "items": {"type": "string"}},
+        "required_evidence": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "stop_conditions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string"}
+    },
+    "human_gates": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "SCOPE_CHANGE",
+          "TECHNICAL_ROUTE_CHANGE",
+          "EXECUTOR_CHANGE",
+          "MODEL_CHANGE",
+          "INDEPENDENT_ACCEPTANCE",
+          "MARK_READY",
+          "MERGE",
+          "DEPLOY",
+          "PRODUCTION_HOST_MUTATION",
+          "SERVICE_RESTART",
+          "HOST_REBOOT",
+          "CREDENTIAL_ACCESS",
+          "PRIVATE_API",
+          "REAL_NOTIFICATION",
+          "RUNTIME_ACTIVATION",
+          "FIRST_LIVE",
+          "SIGNING",
+          "EXCHANGE_WRITE",
+          "ORDER_SUBMISSION",
+          "TRADING_OR_FINANCIAL_ACTION"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "expected_result_fields": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string"},
+      "uniqueItems": true
+    },
+    "retry_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["autonomous_retry_allowed"],
+      "properties": {
+        "autonomous_retry_allowed": {"const": false},
+        "authorized_exact_retry_command": {"type": "string"}
+      }
+    },
+    "notes": {"type": "array", "items": {"type": "string"}}
+  }
+}
