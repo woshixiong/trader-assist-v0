@@ -30,7 +30,21 @@ automation_track_gate.m1_entry_condition_satisfied=true
 automation_track_gate.evidence_refs=<at least two accepted M1 evidence refs>
 ```
 
+Session identity is additionally machine-constrained:
+
+```text
+IF executor.session_mode=RESUME_EXACT
+THEN executor.session_id=<exact non-empty session id> is REQUIRED
+
+IF executor.session_mode=NEW
+THEN executor.session_id MUST be absent
+
+executor.session_mode=NOT_APPLICABLE is invalid for H2.
+```
+
 Hermes must not infer or fill any of these fields.
+
+The schema validates the shape of `automation_track_gate`, but the acceptance of each M1 evidence reference must be verified by a deterministic validator before H2. Hermes must not interpret free-text evidence refs as accepted evidence.
 
 ## Mandatory Hermes permission mode
 
@@ -53,12 +67,13 @@ Only from a valid H2 packet may Hermes:
 1. locate/open Trae;
 2. verify the expected workspace/worktree;
 3. verify the exact model/mode;
-4. verify or create the exact session mode specified by L1;
-5. paste the verified exact Task Packet or loader instruction;
-6. submit once;
-7. wait;
-8. capture raw Trae output;
-9. collect explicitly authorized read-only local Git/status evidence.
+4. verify the exact session mode and, for `RESUME_EXACT`, the exact session id specified by L1;
+5. create a new session only when `session_mode=NEW`, or resume only the exact frozen session when `session_mode=RESUME_EXACT`;
+6. paste the verified exact Task Packet or loader instruction;
+7. submit once;
+8. wait;
+9. capture raw Trae output;
+10. collect explicitly authorized read-only local Git/status evidence.
 
 ## Forbidden UI actions
 
@@ -66,6 +81,7 @@ Hermes must not:
 
 - select a different model because the requested one is unavailable;
 - choose or switch project/worktree on its own;
+- guess which Trae session to resume;
 - enlarge scope or allowed paths;
 - accept an unexpected permission/security dialog;
 - log into a new account or change account settings;
@@ -80,6 +96,9 @@ Hermes must not:
 Return `HUMAN_OR_L1_DECISION_REQUIRED` immediately if:
 
 - the H2/M2 machine gate is absent or invalid;
+- `session_mode` is not `NEW` or `RESUME_EXACT`;
+- `RESUME_EXACT` lacks an exact `session_id`, or `NEW` unexpectedly carries one;
+- accepted M1 evidence cannot be deterministically verified;
 - workspace/worktree/branch/HEAD cannot be proven;
 - authorized model/mode is unavailable;
 - Trae shows an unexpected dialog, login, update, permission request, or conflicting state;
