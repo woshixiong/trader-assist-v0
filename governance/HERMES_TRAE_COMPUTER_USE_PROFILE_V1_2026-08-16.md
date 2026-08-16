@@ -1,7 +1,8 @@
 # Hermes Trae Computer Use Profile V1
 
 **PROFILE_ID:** `HERMES-TRAE-COMPUTER-USE-V1-2026-08-16`  
-**PARENT_CONTRACT:** `HERMES-EXECUTION-OPERATOR-V1-2026-08-16`
+**PARENT_CONTRACT:** `HERMES-EXECUTION-OPERATOR-V1-2026-08-16`  
+**ACTIVATION:** No Trae Computer Use pilot is authorized until the repaired PR exact head receives independent acceptance and the existing M2 entry gate is separately satisfied.
 
 ## Decision
 
