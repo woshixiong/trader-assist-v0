@@ -1,0 +1,139 @@
+{
+  "schema_version": "LOSSLESS_TASK_PACKET_V1",
+  "task_id": "HERMES-SHADOW-H01-HISTORICAL-REPLAY",
+  "packet_version": 1,
+  "control_contract_id": "HERMES-EXECUTION-OPERATOR-V1-2026-08-16",
+  "authority": {
+    "repository": "woshixiong/trader-assist-v0",
+    "authority_main_sha": "27c74f5f0eb4a8045956cf42b2d92dbd58c587d3",
+    "packet_path": "governance/hermes_pilot/H01_LOSSLESS_TASK_PACKET_EXAMPLE.json",
+    "source_refs": [
+      "historical PR #97",
+      "historical release main 36804a1760f1923440c14d5e9de98a0777244c17",
+      "historical post-merge CI run 31934037055"
+    ]
+  },
+  "decision_status": {
+    "frozen": true,
+    "executor_assigned_by_l1": true,
+    "decision_record": "Historical replay only; transport destination and prohibitions are pre-decided.",
+    "approved_by": "L1 pilot governance"
+  },
+  "objective": "Replay the historical Engineering-to-Operations handoff after exact release import and verify lossless transport behavior without performing any live action.",
+  "executor": {
+    "kind": "NO_EXECUTOR_TRANSPORT_ONLY",
+    "session_mode": "NOT_APPLICABLE"
+  },
+  "transport": {
+    "mode": "POINTER",
+    "no_paraphrase": true,
+    "downstream_ack_required": true,
+    "loader_instruction": "Read this exact Task Packet from the specified repository/path. Do not paraphrase or create a new technical judgment. This is historical replay only.",
+    "ack_fields": [
+      "TASK_ID",
+      "PACKET_VERSION",
+      "AUTHORITY_SHA",
+      "PACKET_PATH",
+      "EXECUTOR"
+    ]
+  },
+  "permissions": {
+    "allowed_actions": [
+      "read packet",
+      "verify identifiers",
+      "prepare exact historical transport",
+      "capture fixed result fields"
+    ],
+    "forbidden_actions": [
+      "modify repository",
+      "start runtime",
+      "touch production host",
+      "touch sing-box",
+      "deploy",
+      "merge",
+      "decide host capacity",
+      "decide server upgrade",
+      "perform First Live",
+      "research or redesign"
+    ]
+  },
+  "scope": {
+    "in_scope": [
+      "lossless historical handoff replay",
+      "identifier preservation",
+      "fail-closed ambiguity handling"
+    ],
+    "out_of_scope": [
+      "live operations",
+      "engineering repair",
+      "capacity judgment",
+      "deployment",
+      "production mutation"
+    ]
+  },
+  "acceptance": {
+    "criteria": [
+      "all authoritative identifiers are preserved exactly",
+      "no substantive content is paraphrased",
+      "no live action is performed",
+      "any injected identifier conflict produces BLOCKED"
+    ],
+    "required_evidence": [
+      "fixed Hermes result fields",
+      "raw transported payload or exact pointer",
+      "conflict-stop result for injected ambiguity"
+    ]
+  },
+  "stop_conditions": [
+    "missing TASK_ID or authority SHA",
+    "packet/path mismatch",
+    "conflicting destination or executor instruction",
+    "request for any live production action",
+    "request for technical or operational judgment"
+  ],
+  "human_gates": [
+    "TECHNICAL_ROUTE_CHANGE",
+    "EXECUTOR_CHANGE",
+    "MODEL_CHANGE",
+    "INDEPENDENT_ACCEPTANCE",
+    "MARK_READY",
+    "MERGE",
+    "DEPLOY",
+    "PRODUCTION_HOST_MUTATION",
+    "SERVICE_RESTART",
+    "HOST_REBOOT",
+    "CREDENTIAL_ACCESS",
+    "PRIVATE_API",
+    "REAL_NOTIFICATION",
+    "RUNTIME_ACTIVATION",
+    "FIRST_LIVE",
+    "SIGNING",
+    "EXCHANGE_WRITE",
+    "ORDER_SUBMISSION",
+    "TRADING_OR_FINANCIAL_ACTION"
+  ],
+  "expected_result_fields": [
+    "HERMES_OPERATOR_CONTRACT",
+    "TASK_ID",
+    "PACKET_VERSION",
+    "AUTHORITY_SHA",
+    "PACKET_PATH",
+    "PACKET_INTEGRITY",
+    "EXECUTOR",
+    "TARGET_VERIFICATION",
+    "EXECUTION_STARTED",
+    "EXECUTION_STATUS",
+    "RAW_EVIDENCE_REF",
+    "RESULT_INTEGRITY",
+    "UNAUTHORIZED_ACTION",
+    "DECISION_REQUIRED",
+    "STOP_REASON",
+    "NEXT_AUTHORIZED_ACTION"
+  ],
+  "retry_policy": {
+    "autonomous_retry_allowed": false
+  },
+  "notes": [
+    "This packet is a historical shadow-test fixture, not live operations authority."
+  ]
+}
