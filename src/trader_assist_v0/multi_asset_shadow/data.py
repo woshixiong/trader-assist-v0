@@ -8,7 +8,8 @@ timestamp is not enough to make it strategy or Registry authority.
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -22,6 +23,13 @@ from .models import ClosedBar, MarketLifecycle, RegistryMarket, RegistryVersion
 from .registry import MarketRegistryManager
 
 _FIVE_MINUTES_MS = 300_000
+# Internal tuning value only: source 5m bars grouped into one bounded durable
+# SQLite transaction during historical admission.  Not an architectural
+# constant; callers never observe batch boundaries.
+_HISTORY_BATCH_BARS = 64
+# Internal bound for the call-local rolling aggregate window: the largest
+# aggregation window needs at most its 11 predecessor bars in memory.
+_WINDOW_CACHE_BARS = 11
 
 
 class DataRouteError(ValueError):
@@ -79,6 +87,44 @@ class ClosedBarStore:
         finality_identity: str | None = None,
         finalized_at_ms: int | None = None,
     ) -> bool:
+        return self._insert(
+            bar,
+            registry_version=registry_version,
+            registry_content_hash=registry_content_hash,
+            finality_identity=finality_identity,
+            finalized_at_ms=finalized_at_ms,
+            commit=True,
+        )
+
+    def put_deferred(
+        self,
+        bar: ClosedBar,
+        *,
+        registry_version: str = "UNBOUND_TEST_ONLY",
+        registry_content_hash: str = "0" * 64,
+        finality_identity: str | None = None,
+        finalized_at_ms: int | None = None,
+    ) -> bool:
+        """Insert inside a caller-owned :meth:`transaction` without committing."""
+        return self._insert(
+            bar,
+            registry_version=registry_version,
+            registry_content_hash=registry_content_hash,
+            finality_identity=finality_identity,
+            finalized_at_ms=finalized_at_ms,
+            commit=False,
+        )
+
+    def _insert(
+        self,
+        bar: ClosedBar,
+        *,
+        registry_version: str,
+        registry_content_hash: str,
+        finality_identity: str | None,
+        finalized_at_ms: int | None,
+        commit: bool,
+    ) -> bool:
         encoded = bar.model_dump_json().encode("utf-8")
         finality = finality_identity or bar.canonical_hash
         finalized = (
@@ -110,8 +156,19 @@ class ClosedBarStore:
                 encoded,
             ),
         )
-        self.connection.commit()
+        if commit:
+            self.connection.commit()
         return True
+
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Bounded multi-row transaction; rollback discards uncommitted evidence."""
+        try:
+            yield
+            self.connection.commit()
+        except BaseException:
+            self.connection.rollback()
+            raise
 
     def last_open(self, market_id: str) -> int | None:
         row = self.connection.execute(
@@ -119,6 +176,33 @@ class ClosedBarStore:
             (market_id,),
         ).fetchone()
         return None if row is None or row[0] is None else int(row[0])
+
+    def tail_bars(
+        self, market_id: str, *, at_or_before_ms: int, limit: int, interval: str = "5m"
+    ) -> tuple[ClosedBar, ...]:
+        """Causally-required tail only: newest <= ``at_or_before_ms``, ascending."""
+        rows = self.connection.execute(
+            "SELECT payload_json FROM closed_bars "
+            "WHERE market_id=? AND interval=? AND open_time_ms<=? "
+            "ORDER BY open_time_ms DESC LIMIT ?",
+            (market_id, interval, at_or_before_ms, limit),
+        ).fetchall()
+        return tuple(ClosedBar.model_validate_json(row[0]) for row in reversed(rows))
+
+    def is_contiguous_5m(self, market_id: str) -> bool:
+        """Exact continuity proof from SQL aggregates, not full deserialization.
+
+        With unique primary-key opens, a gap-free ascending sequence is exactly
+        ``max - min == (count - 1) * 5m``; any interior gap breaks the identity.
+        """
+        row = self.connection.execute(
+            "SELECT COUNT(*), MIN(open_time_ms), MAX(open_time_ms) FROM closed_bars "
+            "WHERE market_id=? AND interval='5m'",
+            (market_id,),
+        ).fetchone()
+        if row is None or row[0] == 0:
+            return True
+        return int(row[2]) - int(row[1]) == (int(row[0]) - 1) * _FIVE_MINUTES_MS
 
     def bars(self, market_id: str, *, interval: str = "5m") -> tuple[ClosedBar, ...]:
         rows = self.connection.execute(
@@ -337,8 +421,52 @@ class MultiAssetDataAuthority:
     def admit_rest_history(
         self, *, market: RegistryMarket, snapshot: Sequence[object], received_at: datetime
     ) -> tuple[ClosedBar, ...]:
-        """Warmup/backfill path: accepted official history is already closed."""
+        """Warmup/backfill path: accepted official history is already closed.
+
+        Repeated contiguous calls with bounded snapshot chunks are equivalent
+        to one call: already-retained identical evidence stays idempotent and
+        conflicts/gaps fail closed.  While a pending Registry version exists,
+        every causal 5m row is durably committed before Registry activation
+        consumes its admission capability; once active authority exists,
+        subsequent rows use bounded durable SQLite transactions.
+        """
         output: list[ClosedBar] = []
+        accepted = self._accepted_history(market, snapshot, received_at)
+        # Call-local rolling window: survives repeated contiguous calls via
+        # bounded SQL reseeding, and any failure aborts the call so it can
+        # never serve evidence from an uncommitted batch.
+        window_cache: dict[str, tuple[ClosedBar, ...]] = {}
+        index = 0
+        total = len(accepted)
+        while index < total:
+            if self.registry.pending_version() is not None:
+                bar = accepted[index]
+                index += 1
+                admitted = self._admit(
+                    market=market,
+                    bar=bar,
+                    finality_identity=bar.provenance_hash,
+                    window_cache=window_cache,
+                )
+                if admitted is not None:
+                    output.append(admitted)
+            else:
+                chunk = accepted[index : index + _HISTORY_BATCH_BARS]
+                index += len(chunk)
+                output.extend(
+                    self._admit_history_batch(
+                        market=market, bars=chunk, window_cache=window_cache
+                    )
+                )
+        self._clear_failure_if_contiguous(market.identity.market_id)
+        return tuple(output)
+
+    @staticmethod
+    def _accepted_history(
+        market: RegistryMarket, snapshot: Sequence[object], received_at: datetime
+    ) -> tuple[ClosedBar, ...]:
+        """Validate and order one snapshot lazily-equivalently to per-payload flow."""
+        accepted: list[ClosedBar] = []
         for payload in sorted(
             snapshot, key=lambda item: item.get("t", -1) if isinstance(item, dict) else -1
         ):
@@ -352,14 +480,99 @@ class MultiAssetDataAuthority:
             # necessary but not sufficient: receipt must be after end.
             if int(received_at.timestamp() * 1000) <= bar.close_time_ms:
                 continue
-            admitted = self._admit(market=market, bar=bar, finality_identity=bar.provenance_hash)
-            if admitted is not None:
-                output.append(admitted)
-        self._clear_failure_if_contiguous(market.identity.market_id)
-        return tuple(output)
+            accepted.append(bar)
+        return tuple(accepted)
+
+    def _admit_history_batch(
+        self,
+        *,
+        market: RegistryMarket,
+        bars: Sequence[ClosedBar],
+        window_cache: dict[str, tuple[ClosedBar, ...]],
+    ) -> list[ClosedBar]:
+        """Admit one bounded batch inside a single durable SQLite transaction."""
+        market_id = market.identity.market_id
+        inserted: list[ClosedBar] = []
+        try:
+            # Registry activation is deferred until after this transaction
+            # commits, so the binding cannot change inside it.
+            binding = self._binding_registry(market)
+            with self.store.transaction():
+                for bar in bars:
+                    if self._admit_transactional(
+                        market=market, bar=bar, binding=binding, window_cache=window_cache
+                    ):
+                        inserted.append(bar)
+        except BaseException:
+            # Uncommitted batch is rolled back; committed batches remain valid.
+            # Uncertain admission state is fail-closed and in-memory progress
+            # returns to durable SQLite truth.
+            self._failed.add(market_id)
+            self._restore_durable_last_open(market_id)
+            raise
+        # Registry activation may only consume a capability whose causal 5m
+        # row is already durable: batching runs only when no pending Registry
+        # version can be activated mid-transaction, and commits happen above.
+        for bar in inserted:
+            admission = Closed5mAdmission(bar=bar, issuer=self.registry._boundary_issuer)
+            self.registry._apply_admitted(admission)
+        return inserted
+
+    def _admit_transactional(
+        self,
+        *,
+        market: RegistryMarket,
+        bar: ClosedBar,
+        binding: RegistryVersion,
+        window_cache: dict[str, tuple[ClosedBar, ...]],
+    ) -> bool:
+        """Insert one bar inside an open batch transaction (no commit here)."""
+        prior = self._last_open.get(bar.market_id)
+        if prior is not None and bar.open_time_ms > prior + _FIVE_MINUTES_MS:
+            self._failed.add(bar.market_id)
+            raise DataRouteError("closed 5m gap detected")
+        try:
+            inserted = self.store.put_deferred(
+                bar,
+                registry_version=binding.version,
+                registry_content_hash=binding.content_hash,
+                finality_identity=bar.provenance_hash,
+            )
+        except DataRouteError:
+            self._failed.add(bar.market_id)
+            raise
+        self._last_open[bar.market_id] = max(
+            bar.open_time_ms, prior if prior is not None else bar.open_time_ms
+        )
+        if not inserted:
+            self._track_window_tail(window_cache, bar)
+            return False
+        self._persist_aggregates(
+            bar,
+            binding_version=binding.version,
+            binding_hash=binding.content_hash,
+            defer_commit=True,
+            window_cache=window_cache,
+        )
+        # Extend the rolling tail only after the window was built from the
+        # predecessor cache, so the next window can be served in memory.
+        self._track_window_tail(window_cache, bar)
+        return True
+
+    def _restore_durable_last_open(self, market_id: str) -> None:
+        durable = self.store.last_open(market_id)
+        if durable is None:
+            self._last_open.pop(market_id, None)
+        else:
+            self._last_open[market_id] = durable
 
     def _admit(
-        self, *, market: RegistryMarket, bar: ClosedBar, finality_identity: str
+        self,
+        *,
+        market: RegistryMarket,
+        bar: ClosedBar,
+        finality_identity: str,
+        window_cache: dict[str, tuple[ClosedBar, ...]] | None = None,
     ) -> ClosedBar | None:
         prior = self._last_open.get(bar.market_id)
         if prior is not None and bar.open_time_ms > prior + _FIVE_MINUTES_MS:
@@ -380,10 +593,17 @@ class MultiAssetDataAuthority:
             bar.open_time_ms, prior if prior is not None else bar.open_time_ms
         )
         if not inserted:
+            if window_cache is not None:
+                self._track_window_tail(window_cache, bar)
             return None
         self._persist_aggregates(
-            bar, binding_version=binding.version, binding_hash=binding.content_hash
+            bar,
+            binding_version=binding.version,
+            binding_hash=binding.content_hash,
+            window_cache=window_cache,
         )
+        if window_cache is not None:
+            self._track_window_tail(window_cache, bar)
         admission = Closed5mAdmission(bar=bar, issuer=self.registry._boundary_issuer)
         self.registry._apply_admitted(admission)
         return bar
@@ -403,28 +623,80 @@ class MultiAssetDataAuthority:
         raise DataRouteError("market is not authorized by an active or pending Registry")
 
     def _persist_aggregates(
-        self, bar: ClosedBar, *, binding_version: str, binding_hash: str
+        self,
+        bar: ClosedBar,
+        *,
+        binding_version: str,
+        binding_hash: str,
+        defer_commit: bool = False,
+        window_cache: dict[str, tuple[ClosedBar, ...]] | None = None,
     ) -> None:
-        all_five = self.store.bars(bar.market_id)
+        insert = self.store.put_deferred if defer_commit else self.store.put
         for minutes, count in ((15, 3), (60, 12)):
-            window = tuple(item for item in all_five if item.open_time_ms <= bar.open_time_ms)[
-                -count:
-            ]
-            if len(window) == count and window[0].open_time_ms % (minutes * 60_000) == 0:
+            # A window ending at this bar exists only when it would be aligned:
+            # window[0].open = bar.open - (count-1)*5m must be a multiple of
+            # count*5m.  Otherwise no aggregate can be produced, so no tail is
+            # loaded at all.
+            span = count * _FIVE_MINUTES_MS
+            if (bar.open_time_ms - (count - 1) * _FIVE_MINUTES_MS) % span != 0:
+                continue
+            window = self._aggregate_window(bar, count=count, window_cache=window_cache)
+            if len(window) == count:
                 aggregate = aggregate_closed_5m(window, minutes=minutes)
-                self.store.put(
+                insert(
                     aggregate,
                     registry_version=binding_version,
                     registry_content_hash=binding_hash,
                     finality_identity=aggregate.provenance_hash,
                 )
 
+    def _aggregate_window(
+        self,
+        bar: ClosedBar,
+        *,
+        count: int,
+        window_cache: dict[str, tuple[ClosedBar, ...]] | None,
+    ) -> tuple[ClosedBar, ...]:
+        """Return the last ``count`` stored 5m bars ending at ``bar``.
+
+        Served from the call-local rolling tail when it already proves every
+        causal predecessor is stored; otherwise one bounded SQL tail query.
+        Both routes yield the same canonical evidence: the cache contains only
+        bars whose durable insertion was verified in this call or reseeded
+        from the store, and the 5m grid makes their positions unique.
+        """
+        if window_cache is not None:
+            cached = window_cache.get(bar.market_id)
+            if (
+                cached is not None
+                and len(cached) >= count - 1
+                and cached[-1].open_time_ms + _FIVE_MINUTES_MS == bar.open_time_ms
+            ):
+                return (*cached[-(count - 1) :], bar)
+        return self.store.tail_bars(
+            bar.market_id, at_or_before_ms=bar.open_time_ms, limit=count
+        )
+
+    @staticmethod
+    def _track_window_tail(
+        window_cache: dict[str, tuple[ClosedBar, ...]], bar: ClosedBar
+    ) -> None:
+        cached = window_cache.get(bar.market_id)
+        if cached is None:
+            window_cache[bar.market_id] = (bar,)
+        elif cached[-1].open_time_ms + _FIVE_MINUTES_MS == bar.open_time_ms:
+            window_cache[bar.market_id] = (*cached, bar)[-_WINDOW_CACHE_BARS:]
+        elif bar.open_time_ms == cached[-1].open_time_ms:
+            pass
+        else:
+            # Out-of-order admission cannot extend the rolling tail; restart
+            # tracking from this bar and let the next window reseed from SQL.
+            window_cache[bar.market_id] = (bar,)
+
     def _clear_failure_if_contiguous(self, market_id: str) -> None:
-        values = self.store.bars(market_id)
-        if all(
-            right.open_time_ms - left.open_time_ms == _FIVE_MINUTES_MS
-            for left, right in pairwise(values)
-        ):
+        # Exact bounded proof: with unique primary-key opens, contiguity is
+        # max - min == (count - 1) * 5m; no historical deserialization.
+        if self.store.is_contiguous_5m(market_id):
             self._failed.discard(market_id)
 
 
