@@ -2,7 +2,8 @@
 
 **CONTRACT_ID:** `HERMES-EXECUTION-OPERATOR-V1-2026-08-16`  
 **STATUS:** DRAFT GOVERNANCE FOR PILOT  
-**SCOPE:** Hermes Agent acting only as a bounded execution operator for Trader Assist / Trade OS.
+**SCOPE:** Hermes Agent acting only as a bounded execution operator for Trader Assist / Trade OS.  
+**REPAIR_PROVENANCE:** Prior exact head `f1b70732ee8805b2ddedadd0adce785d7f32c174` was independently blocked on B01-B04; this revision is the bounded governance repair for those four blockers only.
 
 ## 1. Purpose
 
