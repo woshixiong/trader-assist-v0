@@ -9,6 +9,7 @@ from pathlib import Path
 from trader_assist_v0.operations.backup_recovery import (
     FIRST_LAUNCH_PROFILE,
     FULL_MULTI_ASSET_PROFILE,
+    THREE_SETUP_PROFILE,
     RecoveryPaths,
     backup_recovery,
     check_repository,
@@ -35,7 +36,9 @@ def _add_credentials(parser: argparse.ArgumentParser) -> None:
 
 def _add_profile(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
-        "--profile", choices=(FIRST_LAUNCH_PROFILE, FULL_MULTI_ASSET_PROFILE), required=True
+        "--profile",
+        choices=(FIRST_LAUNCH_PROFILE, FULL_MULTI_ASSET_PROFILE, THREE_SETUP_PROFILE),
+        required=True,
     )
     parser.add_argument("--multi-asset-evidence")
     parser.add_argument("--multi-asset-registry")
@@ -54,7 +57,9 @@ def main() -> None:
     verify.add_argument("--snapshot-id", required=True)
     verify.add_argument("--expected-git-sha", required=True)
     verify.add_argument(
-        "--profile", choices=(FIRST_LAUNCH_PROFILE, FULL_MULTI_ASSET_PROFILE), required=True
+        "--profile",
+        choices=(FIRST_LAUNCH_PROFILE, FULL_MULTI_ASSET_PROFILE, THREE_SETUP_PROFILE),
+        required=True,
     )
     _add_credentials(verify)
     check = commands.add_parser("check")

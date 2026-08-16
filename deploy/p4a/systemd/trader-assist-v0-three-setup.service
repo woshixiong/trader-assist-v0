@@ -1,0 +1,43 @@
+[Unit]
+Description=TraderAssist V0 Three Setup Public Shadow Runtime
+Documentation=https://github.com/woshixiong/trader-assist-v0
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/trader-assist-v0/three-setup-activation-permit
+
+[Service]
+Type=simple
+User=traderassist
+Group=traderassist
+EnvironmentFile=/etc/trader-assist-v0/three-setup-shadow.env
+LoadCredential=notification.json:/etc/trader-assist-v0/credentials/notification.json
+ExecStart=/opt/trader-assist-v0/scripts/p4a/run_three_setup_shadow_runtime.sh
+Restart=no
+KillSignal=SIGTERM
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=trader-assist-v0-three-setup
+StateDirectory=trader-assist-v0
+StateDirectoryMode=0750
+RuntimeDirectory=trader-assist-v0
+RuntimeDirectoryMode=0750
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/trader-assist-v0 /run/trader-assist-v0
+ReadOnlyPaths=/opt/trader-assist-v0 /etc/trader-assist-v0
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictRealtime=yes
+MemoryDenyWriteExecute=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+
+[Install]
+WantedBy=multi-user.target

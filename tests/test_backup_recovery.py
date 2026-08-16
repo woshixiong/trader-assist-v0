@@ -18,6 +18,7 @@ from trader_assist_v0.operations.backup_recovery import (
     FULL_MULTI_ASSET_PROFILE,
     METADATA_SCHEMA,
     REPOSITORY_IDENTITY,
+    THREE_SETUP_PROFILE,
     BackupEvidence,
     CommandResult,
     RecoveryError,
@@ -57,7 +58,7 @@ def _paths(tmp_path: Path, *, full: bool = False) -> _RecoveryPaths:
     (registry / "versions").mkdir(parents=True)
     (registry / "versions" / "one.json").write_text('{"version":"one"}\n', encoding="utf-8")
     (registry / "history").mkdir()
-    (registry / "history" / "prior.json").write_text('{}\n', encoding="utf-8")
+    (registry / "history" / "prior.json").write_text("{}\n", encoding="utf-8")
     return _RecoveryPaths(runtime, public, risk, evidence, registry)
 
 
@@ -218,6 +219,40 @@ def test_full_profile_copies_nested_registry_regular_tree(tmp_path: Path) -> Non
         "multi-asset-registry/tree/history/prior.json",
         "multi-asset-registry/tree/versions/one.json",
     ]
+
+
+def test_three_setup_profile_has_exact_fixed_inventory_and_excludes_closed_bars(
+    tmp_path: Path,
+) -> None:
+    source = _paths(tmp_path / "source")
+    evidence = tmp_path / "evidence.sqlite"
+    _database(evidence, "evidence")
+    registry = tmp_path / "registry"
+    (registry / "versions").mkdir(parents=True)
+    (registry / "versions" / "one.json").write_text('{"version":"one"}\n', encoding="utf-8")
+    config = tmp_path / "three-setup.json"
+    config.write_text('{"schema":"three-setup"}\n', encoding="utf-8")
+    staged = _stage(
+        THREE_SETUP_PROFILE,
+        _RecoveryPaths(
+            source.first_launch_runtime,
+            source.first_launch_public_env,
+            source.first_launch_risk_config,
+            three_setup_evidence=evidence,
+            three_setup_registry=registry,
+            three_setup_config=config,
+        ),
+        SHA,
+        tmp_path / "staging",
+    )
+    metadata = _metadata(staged)
+    assert [asset["logical_id"] for asset in metadata["assets"]] == [
+        "three-setup-evidence",
+        "three-setup-registry",
+        "three-setup-config",
+    ]
+    assert "runtime.db" not in json.dumps(metadata)
+    assert "closed-bars" not in json.dumps(metadata)
 
 
 @pytest.mark.parametrize("bad_sha", ["A" * 40, "a" * 39, "a" * 41, "not-a-sha"])

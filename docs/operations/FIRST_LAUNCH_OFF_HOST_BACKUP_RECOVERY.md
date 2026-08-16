@@ -51,6 +51,17 @@ For that reason, operator-supplied paths are required for `full-multi-asset`, an
 until a separately authorized deployment phase binds and verifies their production locations. A
 First Launch-only snapshot must not be described as complete current MultiAsset recovery.
 
+`three-setup-shadow` is the fixed recovery profile for the Three Setup Shadow Release. It contains
+exactly the production EvidenceStore at
+`/var/lib/trader-assist-v0/three-setup-shadow/evidence.sqlite`, the Registry root at
+`/var/lib/trader-assist-v0/three-setup-shadow/registry`, and the non-secret canonical production
+configuration at `/etc/trader-assist-v0/three-setup-shadow.json`. It excludes legacy
+`/var/lib/trader-assist-v0/runtime.db`, all credentials/secrets, the activation permit, source,
+and the closed-bar store. The closed-bar store is excluded only because the deterministic local
+recovery acceptance establishes it as
+`PROVISIONALLY_REPRODUCIBLE_OPERATIONAL_STATE__QUALIFICATION_REQUIRED`. The profile has no
+source-path override.
+
 ## Snapshot contract
 
 Each SQLite source is opened read-only and copied with `sqlite3.Connection.backup`, which includes
@@ -72,6 +83,9 @@ recovery/
   first-launch-risk-config/file
   multi-asset-evidence/database.sqlite          # full profile only
   multi-asset-registry/tree/...                 # full profile only
+  three-setup-evidence/database.sqlite          # Three Setup profile only
+  three-setup-registry/tree/...                  # Three Setup profile only
+  three-setup-config/file                        # Three Setup profile only
 ```
 
 `recovery-metadata.json` is canonical JSON. It records the schema, repository identity
@@ -118,6 +132,12 @@ For a full MultiAsset candidate, add both explicit paths:
   --profile full-multi-asset \
   --multi-asset-evidence /reviewed/evidence.sqlite \
   --multi-asset-registry /reviewed/registry-root
+```
+
+For the fixed Three Setup release profile, use no asset-path flags:
+
+```text
+  --profile three-setup-shadow
 ```
 
 Normal repository integrity check:
