@@ -119,7 +119,9 @@ def _select_requests(displays: tuple[str, ...]) -> tuple[UniverseRequest, ...]:
         raise ValueError("First-Launch market selection contains duplicates")
     missing = [display for display in displays if display not in catalog]
     if missing:
-        raise ValueError("First-Launch market selection is outside Manual-40: " + ", ".join(missing))
+        raise ValueError(
+            "First-Launch market selection is outside Manual-40: " + ", ".join(missing)
+        )
     return tuple(catalog[display] for display in displays)
 
 
