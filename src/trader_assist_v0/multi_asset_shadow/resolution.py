@@ -1,4 +1,4 @@
-"""Deterministic Manual-40 resolver over one official allPerpMetas snapshot."""
+"""Deterministic Manual-40 catalog and First-Launch-20 resolver over official metadata."""
 
 from __future__ import annotations
 
@@ -86,9 +86,52 @@ def _asset_class(display: str) -> AssetClass:
 
 INITIAL_40 = _requests()
 
+# Strategy/Product-approved First Launch order.  Selection reuses the already
+# verified Manual-40 request objects so provider identities, aliases, tiers,
+# and asset classes are inherited rather than re-declared.
+FIRST_LAUNCH_20_DISPLAYS = (
+    "BTC",
+    "ETH",
+    "HYPE",
+    "SOL",
+    "SKHX",
+    "MU",
+    "SNDK",
+    "XYZ100",
+    "SP500",
+    "WTIOIL",
+    "DRAM",
+    "SPCX",
+    "SILVER",
+    "NVDA",
+    "SMSN",
+    "EWY",
+    "GOLD",
+    "XRP",
+    "TSLA",
+    "GOOGL",
+)
 
-def resolve_initial_40(
-    *, perp_dexes: object, all_perp_metas: object, observed_at: datetime
+
+def _select_requests(displays: tuple[str, ...]) -> tuple[UniverseRequest, ...]:
+    catalog = {request.display: request for request in INITIAL_40}
+    if len(displays) != len(set(displays)):
+        raise ValueError("First-Launch market selection contains duplicates")
+    missing = [display for display in displays if display not in catalog]
+    if missing:
+        raise ValueError("First-Launch market selection is outside Manual-40: " + ", ".join(missing))
+    return tuple(catalog[display] for display in displays)
+
+
+FIRST_LAUNCH_20 = _select_requests(FIRST_LAUNCH_20_DISPLAYS)
+
+
+def _resolve_requests(
+    requests: tuple[UniverseRequest, ...],
+    *,
+    perp_dexes: object,
+    all_perp_metas: object,
+    observed_at: datetime,
 ) -> tuple[Resolution, ...]:
     """Resolve every intended display exactly; never silently choose a DEX."""
     if not isinstance(perp_dexes, list) or not isinstance(all_perp_metas, list):
@@ -111,7 +154,7 @@ def resolve_initial_40(
             if isinstance(raw, dict) and isinstance(raw.get("name"), str):
                 records[(dex, cast(str, raw["name"]))] = raw
     resolutions: list[Resolution] = []
-    for request in INITIAL_40:
+    for request in requests:
         raw = records.get((request.dex, request.coin))
         if raw is None:
             resolutions.append(Resolution(request, "REGISTRY_IDENTITY_UNRESOLVED", None))
@@ -146,3 +189,27 @@ def resolve_initial_40(
             continue
         resolutions.append(Resolution(request, "RESOLVED", market))
     return tuple(resolutions)
+
+
+def resolve_initial_40(
+    *, perp_dexes: object, all_perp_metas: object, observed_at: datetime
+) -> tuple[Resolution, ...]:
+    """Resolve the retained Manual-40 catalog against official metadata."""
+    return _resolve_requests(
+        INITIAL_40,
+        perp_dexes=perp_dexes,
+        all_perp_metas=all_perp_metas,
+        observed_at=observed_at,
+    )
+
+
+def resolve_first_launch_20(
+    *, perp_dexes: object, all_perp_metas: object, observed_at: datetime
+) -> tuple[Resolution, ...]:
+    """Resolve the Strategy/Product-approved First-Launch-20 selection."""
+    return _resolve_requests(
+        FIRST_LAUNCH_20,
+        perp_dexes=perp_dexes,
+        all_perp_metas=all_perp_metas,
+        observed_at=observed_at,
+    )
