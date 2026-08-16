@@ -472,6 +472,182 @@ def _compose_bootstrap(
     return bootstrap
 
 
+def test_closed_bar_exact_rebuild_preserves_retained_authority_and_duplicate_wakeup(
+    tmp_path: Path,
+) -> None:
+    """A new closed-bar database must rebuild from local history without new authority."""
+
+    class MutableClock:
+        def __init__(self, value: datetime) -> None:
+            self.value = value
+
+        def now(self) -> datetime:
+            return self.value
+
+    class LocalPublicHistory:
+        def __init__(self, clock: MutableClock, history: list[dict[str, object]]) -> None:
+            self.clock = clock
+            self.history = history
+
+        def closed_candles(
+            self, *, coin: str, interval: str, start_ms: int, end_ms: int
+        ) -> object:
+            assert coin == "BTC"
+            if interval == "5m":
+                return [
+                    item
+                    for item in self.history
+                    if start_ms <= int(item["t"]) < end_ms
+                ]
+            return []
+
+        def l2_book(self, *, coin: str) -> object:
+            assert coin == "BTC"
+            return {
+                "coin": coin,
+                "time": int(self.clock.now().timestamp() * 1000),
+                "levels": [
+                    [{"px": "100", "sz": "100"}],
+                    [{"px": "100.1", "sz": "100"}],
+                ],
+            }
+
+    def inventory(store: EvidenceStore) -> dict[str, tuple[tuple[str, str], ...]]:
+        rows = store._connection.execute(
+            "SELECT record_type, record_id, canonical_hash FROM immutable_records "
+            "ORDER BY record_type, record_id"
+        ).fetchall()
+        return {
+            record_type: tuple(
+                (str(row["record_id"]), str(row["canonical_hash"]))
+                for row in rows
+                if row["record_type"] == record_type
+            )
+            for record_type in (
+                "scanner_evidence",
+                "strategy_evaluation",
+                "formal_signal",
+                "formalization_disposition",
+                "shadow_order",
+                "outcome_envelope",
+                "outcome_transition",
+            )
+        }
+
+    history_count = 64
+    boundary = history_count - 1
+    history = [_payload(index, final=False) for index in range(history_count + 1)]
+    clock = MutableClock(
+        datetime.fromtimestamp(((history_count) * 300_000 + 5_000) / 1000, UTC)
+    )
+    public = LocalPublicHistory(clock, history)
+    market = _market(tier=RegistryTier.P0)
+    registry_root = tmp_path / "registry"
+    registry = MarketRegistryManager(registry_root, metadata_validator=lambda _: True)
+    version = RegistryVersion.create(version="rebuild-1", created_at=NOW, markets=(market,))
+    registry.stage(version)
+    registry.request_apply(version.version)
+    original_closed = ClosedBarStore(tmp_path / "closed-before-restart.sqlite")
+    original_data = MultiAssetDataAuthority(store=original_closed, registry=registry)
+    original_data.admit_rest_history(
+        market=market, snapshot=history[:history_count], received_at=clock.now()
+    )
+    evidence_path = tmp_path / "evidence.sqlite"
+    initial = MultiAssetProductionBootstrap.compose(
+        registry=registry,
+        data_authority=original_data,
+        public_client=public,  # type: ignore[arg-type]
+        evidence_db_path=evidence_path,
+        cost_model=CostModel("cost-1", Decimal(), Decimal(), Decimal("2")),
+        release_sha=RELEASE_SHA,
+        clock=clock.now,
+    )
+    initial.runtime.health.data_ready = True
+    first = asyncio.run(
+        initial.process_boundary(boundary * 300_000, BoundaryMode.LIVE_ACTIONABLE)
+    )
+    assert first.failures == ()
+    retained = inventory(initial.evidence)
+    assert retained["scanner_evidence"] and retained["strategy_evaluation"]
+    retained_bars = tuple(
+        (bar.open_time_ms, bar.canonical_hash, bar.provenance_hash)
+        for bar in original_closed.bars(market.identity.market_id)
+    )
+    initial.close()
+    original_closed.close()
+
+    # Restart with the same Registry and Evidence authority, but an empty
+    # closed-bar SQLite file.  Rewarm uses the local fake only.
+    restarted_registry = MarketRegistryManager(registry_root, metadata_validator=lambda _: True)
+    rebuilt_closed = ClosedBarStore(tmp_path / "closed-after-restart.sqlite")
+    rebuilt_data = MultiAssetDataAuthority(store=rebuilt_closed, registry=restarted_registry)
+    rewarmer = MultiAssetPublicRuntime(
+        registry=restarted_registry,
+        authority=rebuilt_data,
+        client=public,  # type: ignore[arg-type]
+        clock=clock.now,
+    )
+    rewarmer.health.data_ready = True
+    assert rewarmer.warmup_all() == {market.identity.market_id: history_count}
+    assert tuple(
+        (bar.open_time_ms, bar.canonical_hash, bar.provenance_hash)
+        for bar in rebuilt_closed.bars(market.identity.market_id)
+    ) == retained_bars
+    assert tuple(
+        bar.open_time_ms
+        for bar in rebuilt_closed.bars(market.identity.market_id, interval="15m")
+    ) == tuple(
+        index * 300_000 for index in range(0, history_count - 1, 3)
+    )
+    readiness = rewarmer.readiness_snapshot()
+    assert readiness.data_ready and readiness.ready_market_ids == (market.identity.market_id,)
+
+    restarted = MultiAssetProductionBootstrap.compose(
+        registry=restarted_registry,
+        data_authority=rebuilt_data,
+        public_client=public,  # type: ignore[arg-type]
+        evidence_db_path=evidence_path,
+        cost_model=CostModel("cost-1", Decimal(), Decimal(), Decimal("2")),
+        release_sha=RELEASE_SHA,
+        clock=clock.now,
+    )
+    restarted.runtime.health.data_ready = True
+    assert asyncio.run(restarted.reconcile()) == ()
+    recovery = asyncio.run(
+        restarted.process_boundary(boundary * 300_000, BoundaryMode.RECOVERY_CONTEXT_ONLY)
+    )
+    assert recovery.failures == ()
+    assert inventory(restarted.evidence) == retained
+
+    # A genuinely new live boundary creates exactly one new Scanner and Strategy authority.
+    clock.value = datetime.fromtimestamp(
+        (((history_count + 1) * 300_000) + 5_000) / 1000, UTC
+    )
+    rebuilt_data.admit_rest_history(
+        market=market, snapshot=[history[history_count]], received_at=clock.now()
+    )
+    live = asyncio.run(
+        restarted.process_boundary(history_count * 300_000, BoundaryMode.LIVE_ACTIONABLE)
+    )
+    assert live.failures == () and live.scanner_run_count == 1
+    after_live = inventory(restarted.evidence)
+    assert len(after_live["scanner_evidence"]) == len(retained["scanner_evidence"]) + 1
+    assert len(after_live["strategy_evaluation"]) == len(retained["strategy_evaluation"]) + 1
+
+    # observed_at_ms and hence readiness hash change, but an already-authoritative
+    # Strategy boundary must be skipped rather than treated as a conflict.
+    prior_readiness = restarted.runtime.readiness_snapshot()
+    clock.value += timedelta(seconds=1)
+    duplicate = asyncio.run(
+        restarted.process_boundary(history_count * 300_000, BoundaryMode.LIVE_ACTIONABLE)
+    )
+    assert restarted.runtime.readiness_snapshot().observed_at_ms != prior_readiness.observed_at_ms
+    assert duplicate.failures == () and duplicate.scanner_run_count == 0
+    assert inventory(restarted.evidence) == after_live
+    restarted.close()
+    rebuilt_closed.close()
+
+
 def _two_active_market_fixture(
     tmp_path: Path, *, planning: FakePlanningData
 ) -> tuple[

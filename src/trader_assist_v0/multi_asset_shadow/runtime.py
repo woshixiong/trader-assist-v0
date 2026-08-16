@@ -163,6 +163,7 @@ class MultiAssetPublicRuntime:
         on_finalized_5m: (
             Callable[[ClosedBar, BoundaryMode], Awaitable[object] | object | None] | None
         ) = None,
+        on_reconnect: Callable[[int], object | None] | None = None,
         confirmation_concurrency: int = _MAX_CONFIRMATIONS,
         acknowledgement_timeout_seconds: float = _ACK_TIMEOUT_SECONDS,
     ) -> None:
@@ -176,6 +177,7 @@ class MultiAssetPublicRuntime:
         self.monotonic = monotonic
         self.sleep = sleep
         self.on_finalized_5m = on_finalized_5m
+        self.on_reconnect = on_reconnect
         self.acknowledgement_timeout_seconds = acknowledgement_timeout_seconds
         self.health = RuntimeHealth()
         self._finality = GenerationFinalityAuthority(
@@ -391,9 +393,7 @@ class MultiAssetPublicRuntime:
                     await self._maybe_stage_lifecycle(snapshot_ready=True)
                     self.health.data_ready = True
                     await self._wake_recovered_application(
-                        startup_mode
-                        if not reconnecting
-                        else BoundaryMode.RECOVERY_CONTEXT_ONLY
+                        startup_mode if not reconnecting else BoundaryMode.RECOVERY_CONTEXT_ONLY
                     )
                     recovery_complete = True
                     consecutive_incomplete_recoveries = 0
@@ -414,6 +414,12 @@ class MultiAssetPublicRuntime:
                         if consecutive_incomplete_recoveries >= _MAX_RECONNECTS:
                             return
                     self.health.reconnects += 1
+                    if self.on_reconnect is not None:
+                        try:
+                            self.on_reconnect(self.health.reconnects)
+                        except Exception:
+                            # Observability must not create a second runtime authority.
+                            pass
                     await self.sleep(min(2**consecutive_incomplete_recoveries, 4))
                     reconnecting = True
                 finally:

@@ -26,9 +26,13 @@ REPOSITORY_IDENTITY = "woshixiong/trader-assist-v0"
 METADATA_SCHEMA = "trader-assist-v0/recovery-metadata/v1"
 FIRST_LAUNCH_PROFILE = "first-launch"
 FULL_MULTI_ASSET_PROFILE = "full-multi-asset"
+THREE_SETUP_PROFILE = "three-setup-shadow"
 _FIRST_LAUNCH_RUNTIME = Path("/var/lib/trader-assist-v0/runtime.db")
 _FIRST_LAUNCH_PUBLIC_ENV = Path("/etc/trader-assist-v0/public.env")
 _FIRST_LAUNCH_RISK_CONFIG = Path("/etc/trader-assist-v0/risk-configuration.json")
+_THREE_SETUP_EVIDENCE = Path("/var/lib/trader-assist-v0/three-setup-shadow/evidence.sqlite")
+_THREE_SETUP_REGISTRY = Path("/var/lib/trader-assist-v0/three-setup-shadow/registry")
+_THREE_SETUP_CONFIG = Path("/etc/trader-assist-v0/three-setup-shadow.json")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 _SNAPSHOT_ID = re.compile(r"^[0-9a-f]{64}$")
@@ -72,6 +76,9 @@ class _RecoveryPaths:
     first_launch_risk_config: Path
     multi_asset_evidence: Path | None = None
     multi_asset_registry: Path | None = None
+    three_setup_evidence: Path | None = None
+    three_setup_registry: Path | None = None
+    three_setup_config: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -89,6 +96,11 @@ _FIRST_LAUNCH_ASSETS = (
 _MULTI_ASSET_ASSETS = (
     _AssetDefinition("multi-asset-evidence", "sqlite", "multi-asset-evidence/database.sqlite"),
     _AssetDefinition("multi-asset-registry", "directory", "multi-asset-registry/tree"),
+)
+_THREE_SETUP_ASSETS = (
+    _AssetDefinition("three-setup-evidence", "sqlite", "three-setup-evidence/database.sqlite"),
+    _AssetDefinition("three-setup-registry", "directory", "three-setup-registry/tree"),
+    _AssetDefinition("three-setup-config", "file", "three-setup-config/file"),
 )
 
 
@@ -141,6 +153,16 @@ def _asset_definitions(profile: str, paths: _RecoveryPaths) -> tuple[_AssetDefin
         if paths.multi_asset_evidence is None or paths.multi_asset_registry is None:
             raise RecoveryError("Full MultiAsset profile requires both explicit MultiAsset paths")
         return _FIRST_LAUNCH_ASSETS + _MULTI_ASSET_ASSETS
+    if profile == THREE_SETUP_PROFILE:
+        if (
+            paths.multi_asset_evidence is not None
+            or paths.multi_asset_registry is not None
+            or paths.three_setup_evidence is None
+            or paths.three_setup_registry is None
+            or paths.three_setup_config is None
+        ):
+            raise RecoveryError("Three Setup profile requires exactly its fixed durable assets")
+        return _THREE_SETUP_ASSETS
     raise RecoveryError("unknown recovery profile")
 
 
@@ -151,6 +173,9 @@ def _source_for(asset: _AssetDefinition, paths: _RecoveryPaths) -> Path:
         "first-launch-risk-config": paths.first_launch_risk_config,
         "multi-asset-evidence": paths.multi_asset_evidence,
         "multi-asset-registry": paths.multi_asset_registry,
+        "three-setup-evidence": paths.three_setup_evidence,
+        "three-setup-registry": paths.three_setup_registry,
+        "three-setup-config": paths.three_setup_config,
     }
     source = sources[asset.logical_id]
     if source is None:  # safeguarded by _asset_definitions
@@ -303,13 +328,16 @@ def _snapshot_id(stdout: str) -> str:
     return snapshot_id
 
 
-def _fixed_recovery_paths(paths: RecoveryPaths) -> _RecoveryPaths:
+def _fixed_recovery_paths(paths: RecoveryPaths, *, profile: str) -> _RecoveryPaths:
     return _RecoveryPaths(
         first_launch_runtime=_FIRST_LAUNCH_RUNTIME,
         first_launch_public_env=_FIRST_LAUNCH_PUBLIC_ENV,
         first_launch_risk_config=_FIRST_LAUNCH_RISK_CONFIG,
         multi_asset_evidence=paths.multi_asset_evidence,
         multi_asset_registry=paths.multi_asset_registry,
+        three_setup_evidence=(_THREE_SETUP_EVIDENCE if profile == THREE_SETUP_PROFILE else None),
+        three_setup_registry=(_THREE_SETUP_REGISTRY if profile == THREE_SETUP_PROFILE else None),
+        three_setup_config=(_THREE_SETUP_CONFIG if profile == THREE_SETUP_PROFILE else None),
     )
 
 
@@ -327,7 +355,7 @@ def backup_recovery(
     """Create and back up one fixed recovery profile; always removes plain staging."""
     return _backup_recovery(
         profile=profile,
-        paths=_fixed_recovery_paths(paths),
+        paths=_fixed_recovery_paths(paths, profile=profile),
         deployed_git_sha=deployed_git_sha,
         repository=repository,
         password_file=password_file,
@@ -354,7 +382,8 @@ def _backup_recovery(
         prefix="trader-assist-recovery-", dir=temporary_parent
     ) as workspace:
         recovery_root = _stage(profile, paths, deployed_git_sha, Path(workspace))
-        command = [*_restic_prefix(repository, credentials),
+        command = [
+            *_restic_prefix(repository, credentials),
             "--json",
             "backup",
             "--tag",
@@ -377,6 +406,8 @@ def _expected_assets(profile: str) -> tuple[_AssetDefinition, ...]:
         return _FIRST_LAUNCH_ASSETS
     if profile == FULL_MULTI_ASSET_PROFILE:
         return _FIRST_LAUNCH_ASSETS + _MULTI_ASSET_ASSETS
+    if profile == THREE_SETUP_PROFILE:
+        return _THREE_SETUP_ASSETS
     raise RecoveryError("unknown recovery profile")
 
 
@@ -533,7 +564,8 @@ def verify_snapshot(
     ) as workspace:
         target = Path(workspace) / "restored"
         target.mkdir()
-        command = [*_restic_prefix(repository, credentials),
+        command = [
+            *_restic_prefix(repository, credentials),
             "restore",
             "--target",
             str(target),
