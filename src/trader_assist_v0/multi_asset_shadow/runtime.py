@@ -4,6 +4,10 @@ WebSocket traffic only nominates a finality candidate.  Targeted synchronous
 ``urllib`` calls are deliberately bridged through a bounded thread pool so the
 receive loop remains responsive while the finality authority waits for its
 provider-close hold and real observation gap.
+
+Cold-start warmup is a bounded cohort process: one captured target boundary
+per round, chunked history admission with cooperative event-loop yields, and
+an all-market barrier before any WebSocket path may become actionable.
 """
 
 from __future__ import annotations
@@ -15,7 +19,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, cast
+from typing import Any, Final, cast
 
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
@@ -44,6 +48,13 @@ _FIVE_MINUTES_MS = FIVE_MINUTES_MS
 _ACK_TIMEOUT_SECONDS = 8.0
 _MAX_CONFIRMATIONS = 4
 _MAX_CALLBACK_FAILURES = 100
+
+# First-Launch cold-start tuning values.  They bound runtime-local behavior
+# only and are deliberately explicit rather than scattered literals.
+WARMUP_ADMISSION_CHUNK_BARS: Final = 64
+WARMUP_CATCHUP_ROUNDS_MAX: Final = 3
+FRESHNESS_TARGET_SECONDS: Final = 30.0
+FRESHNESS_ACTION_CEILING_SECONDS: Final = 60.0
 
 
 class BoundaryMode(StrEnum):
@@ -145,6 +156,26 @@ class RuntimeReadinessSnapshot:
 
 class ReconnectRequired(RuntimeError):
     """An expected transport/readiness incident, not an authority failure."""
+
+
+@dataclass(frozen=True)
+class _WarmupCohort:
+    """Runtime-local ephemeral control state for exactly one warmup round.
+
+    A cohort binds one captured closed-5m target to the selected acquisition
+    Registry identity.  It is deliberately not durable authority: no table,
+    file, or queue is created, and every market in the round is judged against
+    the captured target rather than a recomputed wall-clock target.
+    """
+
+    registry_version: str
+    registry_content_hash: str
+    market_ids: tuple[str, ...]
+    target_open_ms: int
+
+    @property
+    def identity(self) -> tuple[str, str, tuple[str, ...]]:
+        return (self.registry_version, self.registry_content_hash, self.market_ids)
 
 
 class MultiAssetPublicRuntime:
@@ -249,6 +280,28 @@ class MultiAssetPublicRuntime:
             observed_at_ms=int(self.clock().timestamp() * 1000),
         )
 
+    def freshness_lag_seconds(self, snapshot: RuntimeReadinessSnapshot) -> float:
+        """Age of the latest authoritative closed-5m boundary when observed."""
+        close_ms = snapshot.latest_closed_5m_open_time_ms + _FIVE_MINUTES_MS
+        return (snapshot.observed_at_ms - close_ms) / 1_000
+
+    def freshness_within_target(self, snapshot: RuntimeReadinessSnapshot) -> bool:
+        """Operational First-Launch freshness target metric (not a hard gate)."""
+        return self.freshness_lag_seconds(snapshot) <= FRESHNESS_TARGET_SECONDS
+
+    def actionable_ready_market_ids(self) -> tuple[str, ...]:
+        """New-activity gate: ready markets inside the hard freshness ceiling.
+
+        Existing :class:`RuntimeReadinessSnapshot` semantics are unchanged; a
+        boundary observed older than the actionability ceiling is simply not
+        exposed for NEW actionable activity.  Retained historical evidence and
+        past evaluations are not invalidated.
+        """
+        snapshot = self.readiness_snapshot()
+        if self.freshness_lag_seconds(snapshot) > FRESHNESS_ACTION_CEILING_SECONDS:
+            return ()
+        return snapshot.ready_market_ids
+
     def subscriptions(self) -> tuple[dict[str, object], ...]:
         return tuple(
             {
@@ -279,40 +332,89 @@ class MultiAssetPublicRuntime:
         _, end = self._window()
         return end - _FIVE_MINUTES_MS
 
-    def _history_current(self, market: RegistryMarket) -> bool:
+    def _capture_cohort(self) -> _WarmupCohort:
+        """Bind one warmup round to the acquisition Registry and one target."""
+        registry = self.acquisition_registry()
+        selected = self.selected_markets()
+        return _WarmupCohort(
+            registry_version=registry.version,
+            registry_content_hash=registry.content_hash,
+            market_ids=tuple(sorted(item.identity.market_id for item in selected)),
+            target_open_ms=self._latest_completed_open(),
+        )
+
+    def _history_current_at(self, market: RegistryMarket, target_open_time_ms: int) -> bool:
+        """Prove durable history ended exactly at one captured cohort target."""
         return (
             not self.authority.market_failed(market.identity.market_id)
             and self.authority.store.last_open(market.identity.market_id)
-            == self._latest_completed_open()
+            == target_open_time_ms
         )
 
-    async def _warmup_market(self, market: RegistryMarket, *, recovery: bool) -> int:
-        start, end = self._window()
+    def _history_current(self, market: RegistryMarket) -> bool:
+        return self._history_current_at(market, self._latest_completed_open())
+
+    async def _admit_history_chunked(
+        self,
+        market: RegistryMarket,
+        snapshot: list[object],
+        *,
+        shutdown: asyncio.Event | None,
+    ) -> int:
+        """Admit one fetched history in bounded chunks with cooperative yields.
+
+        SQLite admission stays serialized on the event-loop thread; the loop
+        is only given a chance to run shutdown/monitoring between chunks.
+        """
+        admitted = 0
+        for offset in range(0, len(snapshot), WARMUP_ADMISSION_CHUNK_BARS):
+            chunk = snapshot[offset : offset + WARMUP_ADMISSION_CHUNK_BARS]
+            admitted += len(
+                self.authority.admit_rest_history(
+                    market=market, snapshot=chunk, received_at=self.clock()
+                )
+            )
+            await self.sleep(0)
+            if shutdown is not None and shutdown.is_set():
+                break
+        return admitted
+
+    async def _warmup_market(
+        self,
+        market: RegistryMarket,
+        *,
+        recovery: bool,
+        target_open_ms: int,
+        shutdown: asyncio.Event | None = None,
+    ) -> int:
+        end_ms = target_open_ms + _FIVE_MINUTES_MS
+        start_ms = end_ms - _WARMUP_5M_BARS * _FIVE_MINUTES_MS
         last = self.authority.store.last_open(market.identity.market_id)
         if recovery and last is not None:
-            start = last + _FIVE_MINUTES_MS
-        if start >= end:
-            if self._history_current(market):
+            start_ms = last + _FIVE_MINUTES_MS
+        if start_ms >= end_ms:
+            if self._history_current_at(market, target_open_ms):
                 return 0
             raise DataRouteError("persisted closed-bar state is stale")
         try:
             # urllib is synchronous; only transport runs in a worker.  SQLite
-            # evidence admission remains serialized on the event-loop thread.
+            # evidence admission remains serialized on the event-loop thread,
+            # but is split into bounded chunks below.
             snapshot = await asyncio.to_thread(
                 self.client.closed_candles,
                 coin=market.identity.coin,
                 interval="5m",
-                start_ms=start,
-                end_ms=end,
+                start_ms=start_ms,
+                end_ms=end_ms,
             )
             if not isinstance(snapshot, list):
                 raise PublicDataError("candleSnapshot did not return a list")
-            count = len(
-                self.authority.admit_rest_history(
-                    market=market, snapshot=snapshot, received_at=self.clock()
-                )
-            )
-            if not self._history_current(market):
+            count = await self._admit_history_chunked(market, snapshot, shutdown=shutdown)
+            if shutdown is not None and shutdown.is_set():
+                # A clean operator shutdown exits at a bounded chunk boundary;
+                # it is not a provider market failure and must not be marked one.
+                return count
+            if not self._history_current_at(market, target_open_ms):
                 raise DataRouteError("warmup did not prove current contiguous 5m history")
         except (DataRouteError, PublicDataError):
             self.health.failed_markets.add(market.identity.market_id)
@@ -320,16 +422,54 @@ class MultiAssetPublicRuntime:
         self.health.failed_markets.discard(market.identity.market_id)
         return count
 
-    async def _warmup_all(self, *, recovery: bool) -> dict[str, int]:
+    async def _warmup_all(
+        self, *, recovery: bool, shutdown: asyncio.Event | None = None
+    ) -> dict[str, int]:
+        """One cohort round: every selected market judged against one target."""
         results: dict[str, int] = {}
+        cohort = self._capture_cohort()
         for market in self.selected_markets():
+            if shutdown is not None and shutdown.is_set():
+                break
             try:
                 results[market.identity.market_id] = await self._warmup_market(
-                    market, recovery=recovery
+                    market,
+                    recovery=recovery,
+                    target_open_ms=cohort.target_open_ms,
+                    shutdown=shutdown,
                 )
             except (DataRouteError, PublicDataError):
                 continue
         return results
+
+    async def _startup_warmup_barrier(self, shutdown: asyncio.Event) -> bool:
+        """Fail-closed all-market barrier before any WebSocket path.
+
+        Every selected market must converge onto one common authoritative
+        closed-5m boundary, with a small explicit bound on whole-cohort
+        catch-up rounds.  A genuine market failure, a Registry identity
+        change mid-round, shutdown, or an outrun catch-up bound all fail
+        closed rather than opening a mixed-time cohort.
+        """
+        for _round in range(1 + WARMUP_CATCHUP_ROUNDS_MAX):
+            if shutdown.is_set():
+                return False
+            cohort = self._capture_cohort()
+            results = await self._warmup_all(recovery=True, shutdown=shutdown)
+            if shutdown.is_set():
+                return False
+            selected = self.selected_markets()
+            if len(results) != len(selected):
+                return False
+            if not all(
+                self._history_current_at(item, cohort.target_open_ms) for item in selected
+            ):
+                return False
+            if self._capture_cohort().identity != cohort.identity:
+                return False
+            if self._latest_completed_open() == cohort.target_open_ms:
+                return True
+        return False
 
     def warmup_all(self) -> dict[str, int]:
         """Synchronous diagnostic helper; ``run`` invokes its own lifecycle."""
@@ -374,7 +514,10 @@ class MultiAssetPublicRuntime:
                 )
                 else BoundaryMode.COLD_START_CONTEXT_ONLY
             )
-            await self._warmup_all(recovery=True)
+            if not await self._startup_warmup_barrier(shutdown):
+                # A partial or mixed-time cohort must never become actionable:
+                # fail closed before any WebSocket, subscription, or live flow.
+                return
             await self._maybe_stage_lifecycle(snapshot_ready=False)
             reconnecting = False
             consecutive_incomplete_recoveries = 0
@@ -387,7 +530,9 @@ class MultiAssetPublicRuntime:
                     websocket = await self.websocket_factory(WS_URL)
                     self.health.connection_count = 1
                     if reconnecting:
-                        await self._warmup_all(recovery=True)
+                        await self._warmup_all(recovery=True, shutdown=shutdown)
+                        if shutdown.is_set():
+                            return
                     await self._subscribe(websocket)
                     await self._await_acknowledgements(websocket, shutdown)
                     await self._maybe_stage_lifecycle(snapshot_ready=True)

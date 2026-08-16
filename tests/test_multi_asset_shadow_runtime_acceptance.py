@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
@@ -13,6 +14,7 @@ from websockets.exceptions import ConnectionClosedOK
 
 from trader_assist_v0.contracts.common import sha256_hex
 from trader_assist_v0.multi_asset_shadow.data import ClosedBarStore, MultiAssetDataAuthority
+from trader_assist_v0.multi_asset_shadow.hyperliquid_public import PublicDataError
 from trader_assist_v0.multi_asset_shadow.models import (
     AssetClass,
     MarketIdentity,
@@ -23,9 +25,12 @@ from trader_assist_v0.multi_asset_shadow.models import (
 )
 from trader_assist_v0.multi_asset_shadow.registry import MarketRegistryManager
 from trader_assist_v0.multi_asset_shadow.runtime import (
+    WARMUP_ADMISSION_CHUNK_BARS,
+    WARMUP_CATCHUP_ROUNDS_MAX,
     BoundaryMode,
     MultiAssetPublicRuntime,
     ReconnectRequired,
+    RuntimeReadinessSnapshot,
 )
 
 
@@ -41,6 +46,7 @@ class Clock:
     def __init__(self, seconds: int = 303) -> None:
         self.seconds = seconds
         self.monotonic_seconds = 0.0
+        self.sleep_seconds: list[float] = []
 
     def now(self) -> datetime:
         return datetime.fromtimestamp(self.seconds, UTC)
@@ -49,6 +55,7 @@ class Clock:
         return self.monotonic_seconds
 
     async def sleep(self, seconds: float) -> None:
+        self.sleep_seconds.append(seconds)
         self.seconds += int(seconds)
         self.monotonic_seconds += seconds
         await asyncio.sleep(0)
@@ -413,3 +420,482 @@ def test_runtime_readiness_snapshot_binds_transport_failure_registry_and_current
     disconnected = runtime.readiness_snapshot()
     assert disconnected.ready_market_ids == ()
     assert disconnected.data_ready is False
+
+
+# ---------------------------------------------------------------------------
+# Cold-start cohort warmup acceptance (captured T0, bounded catch-up, barrier,
+# chunked admission, shutdown responsiveness, trading freshness).
+# ---------------------------------------------------------------------------
+
+
+class WindowClient:
+    """Deterministic public client serving exactly the closed bars in [start, end)."""
+
+    def __init__(self, coins: tuple[str, ...], clock: Clock) -> None:
+        self.coins = coins
+        self.clock = clock
+        self.calls: list[tuple[str, int, int]] = []
+        self.on_call: Callable[[], None] | None = None
+        self.fail_coins: frozenset[str] = frozenset()
+
+    def closed_candles(self, *, coin: str, interval: str, start_ms: int, end_ms: int) -> object:
+        assert interval == "5m"
+        self.calls.append((coin, start_ms, end_ms))
+        if self.on_call is not None:
+            self.on_call()
+        if coin in self.fail_coins:
+            raise PublicDataError("provider route failed")
+        return [candle(coin, open_ms) for open_ms in range(max(0, start_ms), end_ms, 300_000)]
+
+
+class RecordingAuthority(MultiAssetDataAuthority):
+    """Spy over the unchanged public Data seam admitting in bounded chunks."""
+
+    def __init__(self, *, store: ClosedBarStore, registry: MarketRegistryManager) -> None:
+        super().__init__(store=store, registry=registry)
+        self.admission_sizes: list[int] = []
+        self.on_admission: Callable[[], None] | None = None
+
+    def admit_rest_history(  # type: ignore[override]
+        self, *, market: RegistryMarket, snapshot: object, received_at: datetime
+    ) -> object:
+        assert isinstance(snapshot, list)
+        self.admission_sizes.append(len(snapshot))
+        if self.on_admission is not None:
+            self.on_admission()
+        return super().admit_rest_history(
+            market=market, snapshot=snapshot, received_at=received_at
+        )
+
+
+class CohortSocket:
+    """Socket acknowledging every subscribed coin, then setting shutdown."""
+
+    def __init__(self, coins: tuple[str, ...], shutdown: asyncio.Event) -> None:
+        self.frames = [ack(coin) for coin in coins]
+        self.shutdown = shutdown
+        self.sent: list[str] = []
+        self.closed = False
+
+    async def send(self, raw: str) -> None:
+        self.sent.append(raw)
+
+    async def recv(self) -> str:
+        if self.frames:
+            return self.frames.pop(0)
+        self.shutdown.set()
+        await asyncio.Future()
+        raise AssertionError("unreachable")
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+def cohort_setup(
+    tmp_path: Path,
+    coins: tuple[str, ...],
+    clock: Clock,
+    *,
+    client: object | None = None,
+    spy: bool = False,
+) -> tuple[
+    MultiAssetPublicRuntime,
+    MultiAssetDataAuthority,
+    tuple[RegistryMarket, ...],
+    Clock,
+    WindowClient | Client,
+]:
+    registry = MarketRegistryManager(tmp_path / "registry", metadata_validator=lambda _: True)
+    markets = tuple(market(coin) for coin in coins)
+    seed = RegistryVersion.create(version="seed", created_at=clock.now(), markets=markets)
+    registry.stage(seed)
+    registry.request_apply(seed.version)
+    authority: MultiAssetDataAuthority
+    if spy:
+        authority = RecordingAuthority(
+            store=ClosedBarStore(tmp_path / "evidence.db"), registry=registry
+        )
+    else:
+        authority = MultiAssetDataAuthority(
+            store=ClosedBarStore(tmp_path / "evidence.db"), registry=registry
+        )
+    selected_client: WindowClient | Client
+    if client is not None:
+        assert isinstance(client, WindowClient | Client)
+        selected_client = client
+    else:
+        selected_client = WindowClient(coins, clock)
+    runtime = MultiAssetPublicRuntime(
+        registry=registry,
+        authority=authority,
+        client=selected_client,  # type: ignore[arg-type]
+        clock=clock.now,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    return runtime, authority, markets, clock, selected_client
+
+
+@async_test
+async def test_captured_cohort_target_judges_markets_against_one_t0(
+    tmp_path: Path,
+) -> None:
+    # A. One captured T0: the clock crosses a closed-5m boundary mid-round yet
+    # markets that reached the original target are not falsely marked stale.
+    clock = Clock(seconds=599)
+    coins = ("BTC", "ETH", "SOL")
+    runtime, authority, markets, _, client = cohort_setup(tmp_path, coins, clock)
+    assert runtime._capture_cohort().target_open_ms == 0
+
+    def advance_past_boundary() -> None:
+        if len(client.calls) == 1:
+            clock.seconds = 700
+
+    client.on_call = advance_past_boundary
+    assert await runtime._startup_warmup_barrier(asyncio.Event()) is True
+
+    # Every market was judged against the single captured T0=0 even though the
+    # wall clock had already advanced past the next boundary during the round.
+    assert [end for _, _, end in client.calls[:3]] == [300_000, 300_000, 300_000]
+    assert runtime.health.failed_markets == set()
+    for item in markets:
+        assert not authority.market_failed(item.identity.market_id)
+        assert runtime._history_current(item) is True
+        assert authority.store.last_open(item.identity.market_id) == 300_000
+
+
+@async_test
+async def test_target_aware_currentness_does_not_chase_wall_clock(tmp_path: Path) -> None:
+    # Repair 2 semantics: currentness at a captured target is exact equality,
+    # independent of the later wall clock the old check recomputed.
+    clock = Clock(seconds=599)
+    runtime, authority, markets, _, _ = cohort_setup(tmp_path, ("BTC",), clock)
+    item = markets[0]
+    authority.admit_rest_history(
+        market=item, snapshot=[candle("BTC", 0)], received_at=clock.now()
+    )
+    clock.seconds = 700
+    assert runtime._history_current_at(item, 0) is True
+    assert runtime._history_current_at(item, 300_000) is False
+    assert runtime._history_current(item) is False  # wall clock now points to 300_000
+
+
+@async_test
+async def test_bounded_cohort_catchup_moves_whole_cohort_to_t1(tmp_path: Path) -> None:
+    # B. After all markets reach T0, the clock reports T1 and the runtime runs
+    # exactly one whole-cohort catch-up round ending at T1 for every market.
+    clock = Clock(seconds=599)
+    coins = ("BTC", "ETH", "SOL")
+    runtime, authority, markets, _, client = cohort_setup(tmp_path, coins, clock)
+
+    def advance_past_boundary() -> None:
+        if len(client.calls) == 1:
+            clock.seconds = 700
+
+    client.on_call = advance_past_boundary
+    assert await runtime._startup_warmup_barrier(asyncio.Event()) is True
+    assert len(client.calls) == len(coins) * 2  # initial round plus one catch-up round
+    assert [end for _, _, end in client.calls[3:]] == [600_000, 600_000, 600_000]
+    assert runtime.health.failed_markets == set()
+    for item in markets:
+        assert authority.store.last_open(item.identity.market_id) == 300_000
+        assert runtime._history_current_at(item, 300_000) is True
+
+
+@async_test
+async def test_outrun_catchup_bound_fails_closed_without_websocket(tmp_path: Path) -> None:
+    # B (fail-closed). A target that keeps advancing faster than the bounded
+    # catch-up must fail closed instead of opening a mixed-time cohort.
+    clock = Clock(seconds=600)
+    coins = ("BTC", "ETH")
+    runtime, _, _, _, client = cohort_setup(tmp_path, coins, clock)
+
+    def advance_every_fetch() -> None:
+        clock.seconds += 300
+
+    client.on_call = advance_every_fetch
+    factory_calls: list[str] = []
+
+    async def factory(url: str) -> object:
+        factory_calls.append(url)
+        raise AssertionError("websocket must not open on a mixed-time cohort")
+
+    runtime.websocket_factory = factory
+    await runtime.run(asyncio.Event())
+    assert len(client.calls) == len(coins) * (1 + WARMUP_CATCHUP_ROUNDS_MAX)
+    assert factory_calls == []
+    assert runtime.health.subscriptions == 0
+    assert runtime.health.failed_markets == set()
+    assert runtime._finality._closed is True
+
+
+@async_test
+async def test_all_market_barrier_holds_websocket_until_full_cohort(
+    tmp_path: Path,
+) -> None:
+    # C. 40 unique markets: no WebSocket factory call and no subscription until
+    # every selected market reaches the exact common current boundary.
+    coins = tuple(f"C{index}" for index in range(40))
+    clock = Clock(seconds=600)
+    runtime, authority, markets, _, _ = cohort_setup(tmp_path, coins, clock)
+    assert runtime.registry.active() is None
+    shutdown = asyncio.Event()
+    socket = CohortSocket(coins, shutdown)
+    factory_states: list[tuple[tuple[int, ...], tuple[str, ...]]] = []
+
+    async def factory(_: str) -> CohortSocket:
+        factory_states.append(
+            (
+                tuple(
+                    authority.store.last_open(item.identity.market_id) for item in markets
+                ),
+                tuple(sorted(runtime.health.failed_markets)),
+            )
+        )
+        return socket
+
+    runtime.websocket_factory = factory
+    await runtime.run(shutdown)
+
+    assert len(factory_states) == 1
+    boundaries, failed = factory_states[0]
+    assert boundaries == (300_000,) * len(coins)
+    assert failed == ()
+    assert runtime.health.subscriptions == len(coins)
+    assert len(socket.sent) == len(coins)
+    assert runtime.health.acknowledgements == set(coins)
+    assert socket.closed is True
+    active = runtime.registry.active()
+    assert active is not None and active.version == "seed"
+
+
+@async_test
+async def test_single_provider_failure_keeps_partial_cohort_fail_closed(
+    tmp_path: Path,
+) -> None:
+    # D. One genuine market/provider failure prevents the partial cohort from
+    # becoming live-ready; startup does not silently continue to WebSocket.
+    clock = Clock(seconds=600)
+    coins = ("BTC", "ETH", "SOL")
+    runtime, authority, markets, _, client = cohort_setup(tmp_path, coins, clock)
+    client.fail_coins = frozenset({"SOL"})
+    factory_calls: list[str] = []
+
+    async def factory(url: str) -> object:
+        factory_calls.append(url)
+        raise AssertionError("websocket must not open after a genuine market failure")
+
+    runtime.websocket_factory = factory
+    await runtime.run(asyncio.Event())
+
+    assert factory_calls == []
+    assert runtime.health.subscriptions == 0
+    assert runtime.health.data_ready is False
+    assert runtime.health.failed_markets == {markets[2].identity.market_id}
+    assert authority.store.bars(markets[2].identity.market_id) == ()
+    for item in markets[:2]:
+        assert authority.store.last_open(item.identity.market_id) == 300_000
+    assert runtime._finality._closed is True
+
+
+def large_history_fixture(bars: int) -> list[object]:
+    return [candle("BTC", index * 300_000) for index in range(bars)]
+
+
+@async_test
+async def test_large_history_admission_is_chunked_with_cooperative_yields(
+    tmp_path: Path,
+) -> None:
+    # E + F. A full ~2304-candle cold history is admitted in bounded chunks,
+    # and the injected sleep seam proves deterministic zero-delay cooperative
+    # yields between chunks (no wall-clock microbenchmark).
+    bars = 2_304
+    clock = Clock(seconds=(bars * 300_000) // 1000 + 3)
+    target_open_ms = (bars - 1) * 300_000
+    client = Client([large_history_fixture(bars)])
+    runtime, authority, markets, _, _ = cohort_setup(
+        tmp_path, ("BTC",), clock, client=client, spy=True
+    )
+    assert isinstance(authority, RecordingAuthority)
+    expected_chunks = -(-bars // WARMUP_ADMISSION_CHUNK_BARS)
+
+    count = await runtime._warmup_market(
+        markets[0], recovery=False, target_open_ms=target_open_ms
+    )
+
+    assert count == bars
+    assert authority.admission_sizes == [WARMUP_ADMISSION_CHUNK_BARS] * expected_chunks
+    assert max(authority.admission_sizes) == WARMUP_ADMISSION_CHUNK_BARS
+    assert len(authority.store.bars(markets[0].identity.market_id)) == bars
+    assert authority.store.last_open(markets[0].identity.market_id) == target_open_ms
+    assert clock.sleep_seconds.count(0) == expected_chunks
+    assert runtime._history_current_at(markets[0], target_open_ms) is True
+
+
+@async_test
+async def test_shutdown_during_large_admission_stops_at_bounded_chunk_boundary(
+    tmp_path: Path,
+) -> None:
+    # G. Shutdown set during cold-history admission finishes the current chunk,
+    # skips the remaining bars, never opens WebSocket, and run() returns
+    # normally through the finality-closing cleanup path without TimeoutError.
+    bars = 2_304
+    clock = Clock(seconds=(bars * 300_000) // 1000 + 3)
+    target_open_ms = (bars - 1) * 300_000
+    client = Client([large_history_fixture(bars)])
+    runtime, authority, markets, _, _ = cohort_setup(
+        tmp_path, ("BTC",), clock, client=client, spy=True
+    )
+    assert isinstance(authority, RecordingAuthority)
+    shutdown = asyncio.Event()
+    authority.on_admission = lambda: shutdown.set() if len(authority.admission_sizes) == 2 else None
+    factory_calls: list[str] = []
+
+    async def factory(url: str) -> object:
+        factory_calls.append(url)
+        raise AssertionError("websocket must not open after shutdown during warmup")
+
+    runtime.websocket_factory = factory
+    await runtime.run(shutdown)
+
+    admitted = 2 * WARMUP_ADMISSION_CHUNK_BARS
+    assert authority.admission_sizes == [
+        WARMUP_ADMISSION_CHUNK_BARS,
+        WARMUP_ADMISSION_CHUNK_BARS,
+    ]
+    assert len(authority.store.bars(markets[0].identity.market_id)) == admitted
+    assert authority.store.last_open(markets[0].identity.market_id) == (
+        admitted - 1
+    ) * 300_000
+    assert authority.store.last_open(markets[0].identity.market_id) != target_open_ms
+    assert factory_calls == []
+    assert runtime.health.subscriptions == 0
+    assert runtime.health.data_ready is False
+    assert runtime.health.failed_markets == set()  # clean shutdown is not a market failure
+    assert runtime._finality._closed is True
+
+
+@async_test
+async def test_shutdown_during_warmup_skips_remaining_markets(tmp_path: Path) -> None:
+    # G (cohort view). Shutdown during the first market's admission stops the
+    # round before any further market fetch or WebSocket activity.
+    clock = Clock(seconds=600)
+    coins = ("BTC", "ETH", "SOL")
+    runtime, authority, _, _, client = cohort_setup(tmp_path, coins, clock, spy=True)
+    assert isinstance(authority, RecordingAuthority)
+    shutdown = asyncio.Event()
+    authority.on_admission = shutdown.set
+    factory_calls: list[str] = []
+
+    async def factory(url: str) -> object:
+        factory_calls.append(url)
+        raise AssertionError("websocket must not open after shutdown during warmup")
+
+    runtime.websocket_factory = factory
+    await runtime.run(shutdown)
+
+    assert [coin for coin, _, _ in client.calls] == ["BTC"]
+    assert factory_calls == []
+    assert runtime.health.subscriptions == 0
+    assert runtime.health.failed_markets == set()
+    assert runtime._finality._closed is True
+
+
+@async_test
+async def test_trading_freshness_target_metric_and_hard_action_ceiling(
+    tmp_path: Path,
+) -> None:
+    # H. Boundary age <=30s is inside the operational target, 30s..60s stays
+    # potentially actionable but outside target, and >60s must not expose any
+    # market as ready for NEW actionable activity. observed_at_ms keeps
+    # affecting RuntimeReadinessSnapshot.snapshot_hash exactly as before.
+    runtime, authority, item, clock, _ = setup(tmp_path, lifecycle=MarketLifecycle.ACTIVE)
+    runtime.health.data_ready = True
+    authority.admit_rest_history(market=item, snapshot=[candle("BTC", 0)], received_at=clock.now())
+
+    clock.seconds = 310
+    fresh = runtime.readiness_snapshot()
+    assert runtime.freshness_lag_seconds(fresh) == 10.0
+    assert runtime.freshness_within_target(fresh) is True
+    assert runtime.actionable_ready_market_ids() == (item.identity.market_id,)
+
+    clock.seconds = 345
+    slow = runtime.readiness_snapshot()
+    assert runtime.freshness_lag_seconds(slow) == 45.0
+    assert runtime.freshness_within_target(slow) is False
+    assert runtime.actionable_ready_market_ids() == (item.identity.market_id,)
+
+    clock.seconds = 361
+    stale = runtime.readiness_snapshot()
+    assert runtime.freshness_lag_seconds(stale) == 61.0
+    assert runtime.freshness_within_target(stale) is False
+    assert runtime.actionable_ready_market_ids() == ()
+    # Existing readiness semantics are deliberately not weakened: the durable
+    # readiness snapshot still reports the market; only NEW activity is gated.
+    assert stale.ready_market_ids == (item.identity.market_id,)
+    assert stale.observed_at_ms == 361_000
+
+    assert fresh.snapshot_hash != slow.snapshot_hash != stale.snapshot_hash
+    rebuilt = RuntimeReadinessSnapshot.create(
+        registry_version=stale.registry_version,
+        registry_content_hash=stale.registry_content_hash,
+        data_ready=stale.data_ready,
+        ready_market_ids=stale.ready_market_ids,
+        failed_market_ids=stale.failed_market_ids,
+        latest_closed_5m_open_time_ms=stale.latest_closed_5m_open_time_ms,
+        observed_at_ms=stale.observed_at_ms,
+    )
+    assert rebuilt.snapshot_hash == stale.snapshot_hash
+
+
+@async_test
+async def test_startup_barrier_activates_pending_registry_through_admission_only(
+    tmp_path: Path,
+) -> None:
+    # I. Initial pending Registry startup stays deterministic: active=None and
+    # a validated pending version warm through the provider admission seam.
+    clock = Clock(seconds=600)
+    coins = ("BTC", "ETH", "SOL")
+    runtime, _, markets, _, _ = cohort_setup(tmp_path, coins, clock)
+    assert runtime.registry.active() is None
+    assert runtime.registry.pending_version() is not None
+    shutdown = asyncio.Event()
+    socket = CohortSocket(coins, shutdown)
+
+    async def factory(_: str) -> CohortSocket:
+        return socket
+
+    runtime.websocket_factory = factory
+    await runtime.run(shutdown)
+
+    active = runtime.registry.active()
+    assert active is not None and active.version == "seed"
+    active_ids = {entry.identity.market_id for entry in active.markets}
+    assert all(item.identity.market_id in active_ids for item in markets)
+    assert all(runtime._history_current(item) for item in markets)
+    assert runtime.health.failed_markets == set()
+
+
+@async_test
+async def test_run_regression_startup_warmup_and_shutdown_paths_stay_green(
+    tmp_path: Path,
+) -> None:
+    # J. The repaired startup path still produces the original deterministic
+    # cold-start behavior: runtime-owned warmup, acknowledgement, and the
+    # recovered application wake for a single-market cohort.
+    clock = Clock(seconds=600)
+    client = Client([[candle("BTC", 300_000)]])
+    runtime, _, _, _, _ = cohort_setup(tmp_path, ("BTC",), clock, client=client)
+    shutdown = asyncio.Event()
+    socket = Socket([ack()], shutdown=shutdown)
+    callbacks: list[tuple[int, BoundaryMode]] = []
+
+    async def factory(_: str) -> Socket:
+        return socket
+
+    runtime.websocket_factory = factory
+    runtime.on_finalized_5m = lambda bar, mode: callbacks.append((bar.open_time_ms, mode))
+    await runtime.run(shutdown)
+    assert runtime.health.acknowledgements == {"BTC"}
+    assert socket.closed
+    assert callbacks == [(300_000, BoundaryMode.COLD_START_CONTEXT_ONLY)]
