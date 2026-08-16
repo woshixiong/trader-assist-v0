@@ -117,7 +117,9 @@ The delivery must label the class explicitly every time.
 Terminal-window continuity and Codex-session continuity are separate concepts. Reusing the same
 Terminal window does not by itself prove that Codex model context is being reused.
 
-When prior Codex context is materially useful, explicitly resume the intended Codex CLI session/thread rather than assuming continuity from the Terminal window. When a clean independent Writer or Reviewer context is required, explicitly start a new Codex session.
+When prior Codex context is materially useful, explicitly resume the intended Codex CLI
+session/thread rather than assuming continuity from the Terminal window. When a clean independent
+Writer or Reviewer context is required, explicitly start a new Codex session.
 
 The engineering orchestrator should choose between new versus resumed Codex context based on the
 current role and review-separation requirements:
@@ -132,7 +134,8 @@ current role and review-separation requirements:
 ### Codex CLI copy-ready delivery
 
 Unless the user explicitly requests prompt text only, every Codex CLI task must be delivered as
-one contiguous, directly pasteable macOS Terminal block that launches or resumes Codex CLI itself. A naked Codex prompt is not the default operator deliverable.
+one contiguous, directly pasteable macOS Terminal block that launches or resumes Codex CLI
+itself. A naked Codex prompt is not the default operator deliverable.
 
 The block must, when material:
 
