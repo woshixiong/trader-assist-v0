@@ -3,7 +3,7 @@
 **CONTRACT_ID:** `HERMES-EXECUTION-OPERATOR-V1-2026-08-16`  
 **STATUS:** DRAFT GOVERNANCE FOR PILOT  
 **SCOPE:** Hermes Agent acting only as a bounded execution operator for Trader Assist / Trade OS.  
-**REPAIR_PROVENANCE:** Prior exact head `f1b70732ee8805b2ddedadd0adce785d7f32c174` was independently blocked on B01-B04; this revision is the bounded governance repair for those four blockers only.
+**REPAIR_PROVENANCE:** Prior exact head `f1b70732ee8805b2ddedadd0adce785d7f32c174` was independently blocked on B01-B04. First bounded repair exact head `afe5399cbd43bd22c55ed1140fe23dddbd7c9434` closed B01/B03 but remained blocked on B02/B04. This revision is limited to those remaining B02/B04 protocol/schema blockers.
 
 ## 1. Purpose
 
@@ -99,28 +99,30 @@ The packet contains two different concepts:
 
 The retrieval ref may move, so it is never sufficient by itself. Exact content is pinned by the required canonical SHA-256 below. If the ref/path resolves to different content, verification fails closed.
 
-### 5.3 Canonical packet integrity — no self-reference
+### 5.3 Canonical packet integrity — RFC 8785 JCS, no self-reference
 
 Every packet must contain:
 
 ```text
-integrity.scheme=SHA256_SORTED_JSON_V1
+integrity.scheme=RFC8785_JCS_SHA256_V1
 integrity.excluded_top_level_fields=["integrity"]
 integrity.expected_sha256=<64 lowercase hex>
 ```
 
-Verification algorithm `SHA256_SORTED_JSON_V1`:
+Verification algorithm `RFC8785_JCS_SHA256_V1`:
 
-1. parse the packet as JSON;
+1. parse the packet as JSON and require input compatible with the RFC 8785 / I-JSON constraints;
 2. make an in-memory copy;
 3. remove the complete top-level `integrity` member;
-4. serialize JSON as UTF-8 with object keys recursively sorted lexicographically, no insignificant whitespace, array order preserved, and normal JSON string escaping;
-5. compute SHA-256 over those serialized bytes;
+4. canonicalize that remaining JSON object **exactly according to RFC 8785 JSON Canonicalization Scheme (JCS)**, including its primitive serialization, deterministic recursive property ordering, array-order preservation, Unicode-string preservation, and UTF-8 generation rules;
+5. compute SHA-256 over the resulting JCS UTF-8 octets;
 6. compare to `integrity.expected_sha256`.
+
+No local substitute such as generic `sort_keys`, implementation-default Unicode escaping, or an informally described "normal JSON" serializer is authoritative. RFC 8785 JCS is the sole canonicalization definition for V1.
 
 Because the complete `integrity` member is excluded from the hash input, the packet does not hash a field that contains its own hash. No Git blob SHA is embedded inside the same packet.
 
-If canonicalization cannot be reproduced exactly, Hermes stops. A later external manifest may be added, but it is not required for V1.
+Integrity verification must be performed by a deterministic RFC-8785-conformant validator, not by Hermes model reasoning. Before H0 is accepted, that validator must demonstrate deterministic agreement on representative vectors including non-ASCII string content. If JCS canonicalization or the validator is unavailable or produces a mismatch, Hermes stops.
 
 ### 5.4 No-paraphrase transport
 
@@ -193,7 +195,9 @@ When `EXECUTOR=TRAE_COMPUTER_USE`, the packet must be H2, set `destination=TRAE_
 
 - exact model;
 - exact Trae mode;
-- session mode;
+- `executor.session_mode` restricted to `NEW` or `RESUME_EXACT`;
+- when `RESUME_EXACT`, an exact non-empty `executor.session_id`;
+- when `NEW`, `executor.session_id` must be absent;
 - target worktree;
 - target branch;
 - expected HEAD SHA;
@@ -215,7 +219,9 @@ When `EXECUTOR=CODEX_CLI`, the packet must be H2, set `destination=CODEX_CLI`, a
 
 - model and reasoning effort;
 - target worktree/branch/expected HEAD;
-- new versus resumed session;
+- `executor.session_mode` restricted to `NEW` or `RESUME_EXACT`;
+- when `RESUME_EXACT`, exact `executor.session_id` is required;
+- when `NEW`, `executor.session_id` must be absent;
 - allowed paths;
 - permissions and stop conditions;
 - accepted Engineering Automation Track M2 entry evidence.
@@ -293,7 +299,9 @@ The schema also restricts `permissions.allowed_actions` to a safe operator actio
 - executor limited to `CODEX_CLI` or `TRAE_COMPUTER_USE`;
 - isolated non-production worktree;
 - no autonomous repair;
-- packet must include model, worktree, branch, expected HEAD, session mode, allowed paths;
+- packet must include model, worktree, branch, expected HEAD, allowed paths;
+- `session_mode` must be exactly `NEW` or `RESUME_EXACT`, never `NOT_APPLICABLE`;
+- `RESUME_EXACT` requires exact `session_id`; `NEW` prohibits `session_id`;
 - Codex additionally requires reasoning effort;
 - Trae additionally requires exact UI/executor mode.
 
@@ -305,7 +313,7 @@ automation_track_gate.m1_entry_condition_satisfied=true
 automation_track_gate.evidence_refs=<at least two accepted evidence references>
 ```
 
-If those fields/evidence are absent, H2 is schema-invalid and Hermes must not launch an executor.
+The JSON Schema enforces the presence/shape of these fields but does not itself decide whether a referenced artifact is genuinely accepted M1 evidence. Before H2 launch, a deterministic validator must resolve and verify every `evidence_ref` against accepted M1 evidence. Hermes must not infer acceptance from free text. If deterministic evidence validation is unavailable or fails, H2 is blocked.
 
 ### H3 — Evidence/CI collection
 
