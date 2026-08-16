@@ -4,15 +4,16 @@ Successor windows read the following order before acting:
 
 1. `AGENTS.md`
 2. `governance/PROJECT_RULES_INDEX.md`
-3. `governance/PROJECT_STATE.json`
-4. `governance/V0_FAST_LAUNCH_PROGRAM.json`
-5. `governance/POST_PR46_FIRST_LAUNCH_STATE_AND_NEXT_GATE_V1.md`
-6. `governance/FIRST_LAUNCH_MINIMUM_RECOVERY_READINESS_V1.md`
-7. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_LOWEST_PRIORITY_BACKLOG_RULING_V1.md`
-8. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_FAILURE_AND_DEFERRED_WORK_V1.md`
-9. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_AUTOMATION_ABANDONMENT_RULING_V1.md`
-10. `governance/TRADER_ASSIST_ENGINEERING_WORKFLOW_V3_2026-07-22.md`
-11. current live GitHub and CI state
+3. `governance/PROJECT_RESEARCH_EVIDENCE_DECISION_METHOD_V1_2026-08-16.md`
+4. `governance/PROJECT_STATE.json`
+5. `governance/V0_FAST_LAUNCH_PROGRAM.json`
+6. `governance/POST_PR46_FIRST_LAUNCH_STATE_AND_NEXT_GATE_V1.md`
+7. `governance/FIRST_LAUNCH_MINIMUM_RECOVERY_READINESS_V1.md`
+8. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_LOWEST_PRIORITY_BACKLOG_RULING_V1.md`
+9. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_FAILURE_AND_DEFERRED_WORK_V1.md`
+10. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_AUTOMATION_ABANDONMENT_RULING_V1.md`
+11. `governance/TRADER_ASSIST_ENGINEERING_WORKFLOW_V3_2026-07-22.md`
+12. current live GitHub and CI state
 
 Live GitHub objects override stale chat snapshots and stale PR-body snapshots. Future windows
 must resolve live GitHub state before relying on historical text.
@@ -24,6 +25,25 @@ merged authority and has no fourth-commit authority.
 No governance file independently grants host, deployment, runtime, smoke, account or
 exchange-write authority. Product authority, engineering authority and Project Control
 execution authority remain separate.
+
+## Mandatory research / evidence / decision method
+
+For every applicable research, planning, strategy, product, engineering, architecture, technology,
+framework, provider, or other material direction-setting task, use
+`governance/PROJECT_RESEARCH_EVIDENCE_DECISION_METHOD_V1_2026-08-16.md` without requiring the user
+to restate it.
+
+The mandatory sequence is:
+
+1. independent analysis and preliminary position;
+2. broad external research, including mature solutions, validated cases, counterexamples and
+   disconfirming evidence;
+3. explicit synthesis showing what the external evidence confirms, modifies, rejects, or leaves
+   uncertain before issuing the final recommendation.
+
+Do not browse external conclusions first and later present the result as independent reasoning.
+Do not search only for evidence that supports the initial view. Purely mechanical execution and
+exact state verification are exempt unless they expose a new material design choice.
 
 ## Efficiency-first rule
 
