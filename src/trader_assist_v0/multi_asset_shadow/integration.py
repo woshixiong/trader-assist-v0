@@ -1265,7 +1265,25 @@ class MultiAssetShadowCoordinator:
         self._restore_ledgers()
 
     def _restore_ledgers(self) -> None:
-        active = self._active_registry()
+        active = self._registry.active()
+        if active is None:
+            # A new deployment may have a validated acquisition Registry staged
+            # before its first provider-admitted closed boundary.  It has no
+            # application authority to restore, and the pending Registry must
+            # not become one by implication.
+            if self._registry.pending_version() is None:
+                raise IntegrationError("no active Registry authority")
+            retained = self._evidence._connection.execute(
+                """SELECT EXISTS(SELECT 1 FROM immutable_records)
+                   OR EXISTS(SELECT 1 FROM notification_outbox)"""
+            ).fetchone()
+            if retained is None:  # pragma: no cover - SQLite SELECT always returns one row
+                raise IntegrationError("unable to inspect retained application evidence")
+            if bool(retained[0]):
+                raise IntegrationError(
+                    "cannot restore retained application evidence without active Registry authority"
+                )
+            return
         latest: dict[str, tuple[int, EventLedger]] = {}
         authority_slots: set[tuple[str, str, str, str, str, int, int]] = set()
         for record_id in _record_ids(self._evidence, "strategy_evaluation"):
