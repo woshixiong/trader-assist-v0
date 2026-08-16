@@ -31,7 +31,7 @@
     "mode": "POINTER",
     "no_paraphrase": true,
     "downstream_ack_required": true,
-    "loader_instruction": "Read this exact Task Packet using authority.packet_ref + authority.packet_path, verify integrity.expected_sha256 under SHA256_SORTED_JSON_V1 before using it, and do not paraphrase or create a new technical judgment. This is historical replay only.",
+    "loader_instruction": "Read this exact Task Packet using authority.packet_ref + authority.packet_path, verify integrity.expected_sha256 under RFC8785_JCS_SHA256_V1 before using it, and do not paraphrase or create a new technical judgment. This is historical replay only.",
     "ack_fields": [
       "TASK_ID",
       "PACKET_VERSION",
@@ -155,7 +155,7 @@
     "This packet is a historical shadow-test fixture, not live operations authority."
   ],
   "integrity": {
-    "scheme": "SHA256_SORTED_JSON_V1",
+    "scheme": "RFC8785_JCS_SHA256_V1",
     "excluded_top_level_fields": [
       "integrity"
     ],
