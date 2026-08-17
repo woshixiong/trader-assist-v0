@@ -4,16 +4,17 @@ Successor windows read the following order before acting:
 
 1. `AGENTS.md`
 2. `governance/PROJECT_RULES_INDEX.md`
-3. `governance/PROJECT_RESEARCH_EVIDENCE_DECISION_METHOD_V1_2026-08-16.md`
-4. `governance/PROJECT_STATE.json`
-5. `governance/V0_FAST_LAUNCH_PROGRAM.json`
-6. `governance/POST_PR46_FIRST_LAUNCH_STATE_AND_NEXT_GATE_V1.md`
-7. `governance/FIRST_LAUNCH_MINIMUM_RECOVERY_READINESS_V1.md`
-8. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_LOWEST_PRIORITY_BACKLOG_RULING_V1.md`
-9. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_FAILURE_AND_DEFERRED_WORK_V1.md`
-10. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_AUTOMATION_ABANDONMENT_RULING_V1.md`
-11. `governance/TRADER_ASSIST_ENGINEERING_WORKFLOW_V3_2026-07-22.md`
-12. current live GitHub and CI state
+3. `governance/MANDATORY_ENGINEERING_PREFLIGHT_AND_CONVERGENCE_GATE_V1_2026-08-17.md`
+4. `governance/PROJECT_RESEARCH_EVIDENCE_DECISION_METHOD_V1_2026-08-16.md`
+5. `governance/PROJECT_STATE.json`
+6. `governance/V0_FAST_LAUNCH_PROGRAM.json`
+7. `governance/POST_PR46_FIRST_LAUNCH_STATE_AND_NEXT_GATE_V1.md`
+8. `governance/FIRST_LAUNCH_MINIMUM_RECOVERY_READINESS_V1.md`
+9. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_LOWEST_PRIORITY_BACKLOG_RULING_V1.md`
+10. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_FAILURE_AND_DEFERRED_WORK_V1.md`
+11. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_AUTOMATION_ABANDONMENT_RULING_V1.md`
+12. `governance/TRADER_ASSIST_ENGINEERING_WORKFLOW_V3_2026-07-22.md`
+13. current live GitHub and CI state
 
 Live GitHub objects override stale chat snapshots and stale PR-body snapshots. Future windows
 must resolve live GitHub state before relying on historical text.
@@ -25,6 +26,37 @@ merged authority and has no fourth-commit authority.
 No governance file independently grants host, deployment, runtime, smoke, account or
 exchange-write authority. Product authority, engineering authority and Project Control
 execution authority remain separate.
+
+## Mandatory engineering preflight / convergence gate
+
+For every material engineering route, architecture decision, runtime/persistence/provider design,
+cross-layer repair, technical selection, Writer task package or implementation prompt, apply
+`governance/MANDATORY_ENGINEERING_PREFLIGHT_AND_CONVERGENCE_GATE_V1_2026-08-17.md` before Writer
+dispatch.
+
+No material Writer prompt may be issued unless `ENGINEERING_PREFLIGHT_GATE=PASS` is supported by:
+
+- resolved live GitHub authority;
+- independent analysis;
+- external mature-solution research where applicable;
+- explicit synthesis;
+- root-cause and affected-authority analysis;
+- frozen cross-layer invariants;
+- future continuity / replaceability analysis;
+- provider/scale/freshness analysis where applicable;
+- attack matrix;
+- repair stage and stop condition.
+
+If a task repeatedly produces local blockers, do not continue adding conditionals. After one
+normal repair plus one exceptional repair, or earlier when the failure proves a cross-layer/global
+abstraction problem, stop coding and enter `HOLISTIC_CONVERGENCE_GATE`.
+
+Critical permanent rules must be moved into the canonical successor-window read path; chat memory,
+an Issue comment, or an unmerged Draft PR alone is not a sufficient long-term rule location.
+
+If a new architecture-critical requirement is discovered after a Writer prompt was issued but
+before it was executed, void the old prompt and regenerate one complete replacement prompt. Do not
+make the user assemble critical prompt addenda.
 
 ## Mandatory research / evidence / decision method
 
@@ -44,6 +76,31 @@ The mandatory sequence is:
 Do not browse external conclusions first and later present the result as independent reasoning.
 Do not search only for evidence that supports the initial view. Purely mechanical execution and
 exact state verification are exempt unless they expose a new material design choice.
+
+## Continuity-first / scale-provider rule
+
+Every material technical route must preserve an explicit continuation path into the next expected
+development stage. Do not choose a host-specific, launch-size, provider-specific or current-policy
+shortcut that predictably forces a near-term rewrite, incompatible authority model or avoidable
+migration burden.
+
+Before acceptance state:
+
+- the current bounded need;
+- the next expected scale/capability step;
+- which interfaces/contracts/authorities remain stable;
+- which implementation policy is replaceable;
+- which values are tuning parameters rather than architectural constants;
+- known migration/lock-in risk.
+
+Prefer stable narrow seams plus one current implementation. Do not build speculative future
+platforms merely to claim extensibility.
+
+Before first deployment or a material change to market count, history depth, cadence, provider/API
+usage, confirmation/retry count, concurrency, database workload or runtime cohort size, calculate
+the provider/scale budget and include a realistic-order-of-magnitude acceptance test when the
+bottleneck is scale-dependent. Trading/scanner routes must prove the intended freshness SLA at the
+target scale.
 
 ## Efficiency-first rule
 
@@ -71,7 +128,8 @@ Use this preferred order:
 6. framework only when scale, authority or compliance objectively requires it.
 
 A normal repair plus one exceptional repair is the maximum for one bounded design route. If
-both fail, do not continue iterative patching. Reduce scope or start a clean replacement.
+both fail, do not continue iterative patching. Reduce scope, enter holistic convergence, or start
+a clean replacement.
 
 ## Terminal and Codex CLI operator-delivery rule
 
