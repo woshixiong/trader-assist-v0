@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections import Counter
 from collections.abc import Callable
 from datetime import UTC, datetime
 from functools import wraps
@@ -1103,6 +1104,107 @@ async def test_hot_add_warming_market_does_not_pause_existing_active_cohort(
     ready = runtime.readiness_snapshot()
     assert set(ready.ready_market_ids) == {item.identity.market_id for item in live}
     assert ready.failed_market_ids == (mu_id,)
+
+
+@async_test
+async def test_first_launch_mixed_pre_active_converges_atomically_to_active(
+    tmp_path: Path,
+) -> None:
+    """FINAL INVARIANT A over the real composition, mixed PRE_ACTIVE start.
+
+    5 WARMING / 7 HISTORY_READY / 8 SNAPSHOT_READY / 0 ACTIVE converges only
+    as 12 HISTORY_READY / 8 SNAPSHOT_READY, then 20 SNAPSHOT_READY, then
+    20 ACTIVE: every staged successor advances exactly the minimum PRE_ACTIVE
+    stage by one legal Registry transition, and after EVERY applied successor
+    ACTIVE_COUNT is only 0 or N — never 1..N-1.
+    """
+    clock = Clock(seconds=303)
+    coins = NATIVE + XYZ
+    mixed: list[RegistryMarket] = []
+    for index, coin in enumerate(coins):
+        lifecycle = (
+            MarketLifecycle.WARMING
+            if index < 5
+            else MarketLifecycle.HISTORY_READY
+            if index < 12
+            else MarketLifecycle.SNAPSHOT_READY
+        )
+        mixed.append(market(coin).model_copy(update={"lifecycle": lifecycle}))
+    registry = MarketRegistryManager(tmp_path / "registry", metadata_validator=lambda _: True)
+    seed = RegistryVersion.create(
+        version=PRODUCTION_SEED, created_at=clock.now(), markets=tuple(mixed)
+    )
+    registry.stage(seed)
+    registry.request_apply(seed.version)
+    authority = MultiAssetDataAuthority(
+        store=ClosedBarStore(tmp_path / "evidence.db"), registry=registry
+    )
+    runtime = MultiAssetPublicRuntime(
+        registry=registry,
+        authority=authority,
+        client=ScriptedClient(lambda coin, start, end: [candle(coin, start)]),  # type: ignore[arg-type]
+        clock=clock.now,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    for item in mixed:
+        authority.admit_rest_history(
+            market=item, snapshot=[candle(item.identity.coin, 0)], received_at=clock.now()
+        )
+    runtime.health.data_ready = True
+
+    expected_history_snapshot = ((12, 8), (0, 20), (0, 0))
+    observed_active_counts: list[int] = []
+    for step, boundary_ms in enumerate((SLOT, 2 * SLOT, 3 * SLOT)):
+        await runtime._maybe_stage_lifecycle(snapshot_ready=True)
+        pending = registry.pending_version()
+        assert pending is not None, step
+        prior = registry.active()
+        assert prior is not None
+        prior_lifecycles = {
+            item.identity.market_id: item.lifecycle for item in prior.markets
+        }
+        staged = {item.identity.market_id: item.lifecycle for item in pending.markets}
+        moved = [mid for mid, state in prior_lifecycles.items() if staged[mid] is not state]
+        moved_set = set(moved)
+        # Only the minimum PRE_ACTIVE stage moves, by exactly one legal
+        # transition each; markets already ahead remain unchanged.
+        assert moved, step
+        assert len({prior_lifecycles[mid] for mid in moved}) == 1, (step, prior_lifecycles)
+        assert len({staged[mid] for mid in moved}) == 1, (step, staged)
+        unchanged = [mid for mid in prior_lifecycles if mid not in moved_set]
+        assert all(staged[mid] is prior_lifecycles[mid] for mid in unchanged), step
+        # Real activation: genuine closed-5m admissions consume the pending
+        # successor's Closed5mAdmission capability.
+        clock.seconds = boundary_ms // 1000 + 303
+        for item in pending.markets:
+            authority.admit_rest_history(
+                market=item,
+                snapshot=[candle(item.identity.coin, boundary_ms)],
+                received_at=clock.now(),
+            )
+        applied = registry.active()
+        assert applied is not None
+        assert registry.pending_version() is None
+        counts = Counter(item.lifecycle for item in applied.markets)
+        observed_active_counts.append(counts[MarketLifecycle.ACTIVE])
+        assert counts[MarketLifecycle.ACTIVE] in (0, len(mixed)), (step, counts)
+        assert (
+            counts[MarketLifecycle.HISTORY_READY],
+            counts[MarketLifecycle.SNAPSHOT_READY],
+        ) == expected_history_snapshot[step], (step, counts)
+
+    assert observed_active_counts == [0, 0, len(mixed)]
+    final = registry.active()
+    assert final is not None
+    assert all(item.lifecycle is MarketLifecycle.ACTIVE for item in final.markets)
+    assert not runtime.health.failed_markets
+    # The converged all-ACTIVE cohort is a fixed point: no further successor.
+    await runtime._maybe_stage_lifecycle(snapshot_ready=True)
+    assert registry.pending_version() is None
+    ready = runtime.readiness_snapshot()
+    assert len(ready.ready_market_ids) == len(mixed)
+    assert ready.failed_market_ids == ()
 
 
 class ScriptedGrid(ScriptedClient):

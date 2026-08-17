@@ -119,10 +119,10 @@ xyz:SP500 provider omission), production-length seed:
 
 | metric | baseline | repaired |
 |---|---|---|
-| lifecycle | frozen `SNAPSHOT_READY:19 / HISTORY_READY:1` (never ACTIVE) | First Launch holds the whole cohort pre-ACTIVE (`WARMING`) while any selected member is failed; never a partial ACTIVE cohort |
+| lifecycle | frozen `SNAPSHOT_READY:19 / HISTORY_READY:1` (never ACTIVE) | Initial-Launch convergence holds the whole cohort PRE_ACTIVE while any selected member is failed; ACTIVE_COUNT is only ever 0 or 20 (never 19/20) |
 | health failed | 20/20 | 1/20 (xyz:SP500 only) |
 | Data authority failed | 16/20 (15 false gaps + 1 genuine) | 1/20 (genuine only) |
-| ready markets | 0/20 | 0/20 during First Launch (see REPAIR-3 below) |
+| ready markets | 0/20 | 0/20 during First Launch (see FINAL CONVERGENCE DESIGN below) |
 | ClosedBarStore spread | 4 slots | 0 slots among the 19 healthy |
 | finalized boundaries | 10 | 62 |
 
@@ -132,34 +132,120 @@ genuine omission stays fail-closed; every lifecycle activation still flows throu
 Closed5mAdmission. Durable acceptance lives in
 `tests/test_post_ack_finality_lifecycle_repair.py`.
 
-## REPAIR-3 (final holistic review): First-Launch atomicity, defer-not-cascade, unknown-finality escalation
+## FINAL CONVERGENCE DESIGN (invariant-based; supersedes the Repair-3 approximation)
 
-The final base→HEAD holistic review found three cross-layer integration defects in
-the earlier repair. A repaired First-Launch run with one failed selected market is
-NOT an acceptable 19/20 live cohort: 19/20 may exist as diagnostic Runtime state,
-but MUST NOT become new Scanner/Strategy authority during First Launch
-(`NO NEW ACTIVITY UNTIL EXACT 20/20 SELECTED MARKETS ARE COHERENTLY CURRENT`).
+The final holistic review stopped the example-by-example repair loop and confirmed
+the architecture (Registry → Data Authority → Generation Finality → Runtime →
+Bootstrap → production composition) is sound. The residual defects were two
+cross-layer state-machine contracts implemented as local approximations:
 
-1. `runtime.py` `_maybe_stage_lifecycle` — initial-cohort atomicity: while the
-   Registry holds zero ACTIVE markets, the launch cohort progresses
-   `WARMING → HISTORY_READY → SNAPSHOT_READY → ACTIVE` atomically; a failed or
-   not-yet-eligible member blocks staging for every member, so a partial healthy
-   subset can never become an actionable ACTIVE cohort. Once an ACTIVE cohort
-   exists, hot-add semantics are preserved: a new WARMING market may progress
-   independently and never pauses the already-live cohort. No second Registry
-   authority, no new durable state.
-2. `bootstrap.py` `_boundary_markets` — expected operational non-readiness
-   (required ACTIVE peer failed, readiness set incomplete, no complete actionable
-   cohort, empty ACTIVE cohort during First Launch) is now a normal fail-closed
-   defer (`DEFERRED_WAITING_FOR_PEERS`) instead of `BootstrapIntegrityError`, so
-   one failed peer can no longer cascade an `application_callback`
-   nonrecoverable failure onto healthy markets whose bars finalized normally.
-   True integrity failures still raise fail-closed: active Registry
-   version/hash contradiction, requested boundary contradicting runtime
-   authority, retained-boundary/Registry conflicts.
-3. `runtime.py` `_confirm_generation` — an unexpected exception inside the current
-   finality generation is recorded as `stage=finality_unknown`,
-   `recoverable=False`, escalating over any stale recoverable record; a later
-   provider-authoritative success cannot clear it
+- Repair-3 approximated First-Launch atomicity as "zero ACTIVE ⇒ stage only if
+  every cohort member has an update", which (a) defined First Launch as
+  `ACTIVE_COUNT == 0` — misclassifying a post-live DRAINING cohort as a new
+  launch — and (b) allowed one batch to advance different markets different
+  numbers of stages.
+- Repair-3 made Bootstrap defer operational non-readiness but left the
+  integrity-vs-operational ordering implicit, so operational conditions could be
+  evaluated before observable integrity contradictions.
+
+Both are now implemented as explicit invariants. No authority changed: no new
+durable state, table, queue, service, or dependency; every activation still flows
+exclusively through `Closed5mAdmission → MarketRegistryManager._apply_admitted()`.
+
+### FINAL INVARIANT A — First-Launch cohort atomic ACTIVE authority
+
+`runtime.plan_lifecycle_updates` is a PURE deterministic planner (no durable
+state, never a second authority): it maps immutable cohort lifecycles plus
+failure/history/snapshot evidence to one batch of one-step legal
+`Registry._LIFECYCLE_NEXT` transitions.
+
+- PRE_ACTIVE = exactly {WARMING, HISTORY_READY, SNAPSHOT_READY}, ranked
+  WARMING < HISTORY_READY < SNAPSHOT_READY.
+- Initial-Launch convergence mode holds iff EVERY selected non-terminal member
+  is PRE_ACTIVE (hence no ACTIVE member). It is NOT defined as
+  `ACTIVE_COUNT == 0`: a post-live cohort containing DRAINING or any post-ACTIVE
+  member uses hot-add semantics and can never re-enter First Launch.
+- While in Initial-Launch convergence: ACTIVE_COUNT ∈ {0, N}. No reachable
+  successor has 1 ≤ ACTIVE_COUNT ≤ N-1.
+- Reconciliation: any failed launch member holds the whole cohort (no update).
+  Otherwise only the markets at the MINIMUM PRE_ACTIVE stage advance, each by
+  exactly one legal transition; markets already ahead remain unchanged.
+  WARMING→HISTORY_READY requires unanimous current authoritative history for the
+  advancing group; HISTORY_READY→SNAPSHOT_READY requires snapshot readiness;
+  SNAPSHOT_READY→ACTIVE is reachable only when SNAPSHOT_READY is the minimum
+  stage — i.e. the exact launch cohort is coherently SNAPSHOT_READY — so the
+  final activation is always ALL selected launch markets together. N is cohort
+  size, never hard-coded.
+  Example: 19 SNAPSHOT_READY + 1 HISTORY_READY becomes 20 SNAPSHOT_READY before
+  20 ACTIVE, never 19 ACTIVE + 1 SNAPSHOT_READY. 5/7/8 mixed starts converge
+  monotonically 12/8 → 20 SNAPSHOT_READY → 20 ACTIVE.
+- Post-launch (any ACTIVE or post-ACTIVE member exists): accepted hot-add
+  behavior is preserved — markets progress independently and a failed future
+  member never pauses the already-live cohort.
+
+### FINAL INVARIANT B — Bootstrap gate precedence
+
+`bootstrap._boundary_markets` classifies each boundary under an explicit
+precedence: INTEGRITY ERROR > OPERATIONAL DEFER > ACTION.
+
+- PHASE 1 (integrity, fail-closed raise): readiness Registry version or content
+  hash contradicting the active Registry; requested boundary contradicting the
+  runtime's authoritative latest closed boundary; any PRESENT required retained
+  5m boundary row bound to the wrong Registry version/content hash. These are
+  checked FIRST: a failed peer, `data_ready=False`, incomplete readiness, or a
+  zero-ACTIVE cohort must never hide an observable integrity contradiction.
+- PHASE 2 (operational defer, only after available integrity evidence is
+  coherent): zero actionable ACTIVE cohort (Initial Launch), `data_ready=False`,
+  failed required peer, missing required boundary row (a MISSING row is
+  operational non-readiness, never an integrity contradiction), incomplete
+  `ready_market_ids` — all defer the whole cohort
+  (`DEFERRED_WAITING_FOR_PEERS`) without cascading an application failure onto
+  healthy markets.
+- PHASE 3: only a complete coherent cohort enters Scanner/Strategy.
+
+### Acceptance method (state machine first, then composition)
+
+- LAYER 1 — `tests/test_first_launch_lifecycle_convergence.py`: exhaustive
+  finite-state proof of the pure planner. N=3 synthetic cohort, all 27 PRE_ACTIVE
+  configurations × failed/healthy × snapshot_ready true/false × WARMING
+  history-currency: every transition is one legal `_LIFECYCLE_NEXT` step, only
+  the minimum stage moves, no 1..N-1 ACTIVE successor exists, a failed cohort
+  never advances, repeated reconciliation converges monotonically to all ACTIVE,
+  and a DRAINING (zero-ACTIVE) control never re-enters First-Launch semantics.
+- LAYER 2 — `tests/test_post_ack_whole_cohort_composition.py` precedence matrix:
+  coherent failed peer → DEFER; failed peer + PRESENT wrong-bound retained row →
+  `BootstrapIntegrityError`; coherent zero-ACTIVE launch → DEFER; zero ACTIVE +
+  readiness Registry version/hash mismatch → `BootstrapIntegrityError`; zero
+  ACTIVE + authoritative boundary contradiction → `BootstrapIntegrityError`;
+  missing required boundary → DEFER; incomplete ready set with coherent
+  authority (stale beyond the 60s action ceiling) → DEFER. Integrity always
+  dominates operational defer.
+- LAYER 3 — real production composition (`Runtime → planner →
+  Registry.lifecycle_successor → request_apply → real Closed5mAdmission`):
+  (A) mixed 5 WARMING / 7 HISTORY_READY / 8 SNAPSHOT_READY start converges
+  12/8 → 20 SNAPSHOT_READY → 20 ACTIVE with ACTIVE_COUNT only 0 or N after
+  every applied successor; (B) recoverable failure holds at 0 ACTIVE until
+  genuine evidence-derived recovery, then converges to N ACTIVE; (C)
+  nonrecoverable failure keeps ACTIVE_COUNT 0; (D) failed/healthy hot-adds never
+  pause an existing ACTIVE cohort; (E) failed peer → Bootstrap defer → Scanner 0
+  → Strategy 0, no callback cascade onto the healthy triggering market; (F)
+  failed peer + wrong PRESENT Registry-bound row raises; (G) the exact-cohort
+  one-Scanner/whole-Strategy/duplicate-reuses-retained-authority proof.
+
+### Retained from the earlier repairs (verified unchanged)
+
+1. `runtime.py` `_maybe_stage_lifecycle` — the planner above is the only staging
+   decision path; it still stages through `lifecycle_successor` +
+   `request_apply` and activates only via genuine `Closed5mAdmission`. The
+   staging guard still contains `ValueError` so control-plane/schema failures
+   can never crash a finality confirmation; lifecycle version names remain
+   bounded by `_lifecycle_version_name`.
+2. `bootstrap.py` `_boundary_markets` — the phase ordering above replaces the
+   defer-not-cascade approximation with the same fail-closed outcome for true
+   integrity breaks and `DEFERRED_WAITING_FOR_PEERS` for expected peer
+   non-readiness.
+3. `runtime.py` `_confirm_generation` — an unexpected exception inside the
+   current finality generation is recorded as `stage=finality_unknown`,
+   `recoverable=False`, escalating over any stale recoverable record
    (`test_unknown_finality_failure_escalates_over_stale_recoverable_record`).
    `GenerationFinalityAuthority`'s defensive fail-closed catch is unchanged.

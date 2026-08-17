@@ -399,6 +399,14 @@ class MultiAssetProductionBootstrap:
     def _boundary_markets(
         self, boundary_open_time_ms: int
     ) -> tuple[tuple[RegistryMarket, ...], bool]:
+        """Classify one boundary under explicit gate precedence.
+
+        INTEGRITY ERROR > OPERATIONAL DEFER > ACTION.  Integrity
+        contradictions are checked first because a failed peer, incomplete
+        warmup, or an empty ACTIVE cohort must never hide an observable
+        authority break; only a boundary whose available integrity evidence
+        is coherent may defer operationally.
+        """
         active = self.registry.active()
         if active is None:
             raise BootstrapIntegrityError("active Registry is required")
@@ -407,11 +415,7 @@ class MultiAssetProductionBootstrap:
             market for market in active.markets if market.lifecycle is MarketLifecycle.ACTIVE
         )
         required_ids = {market.identity.market_id for market in required}
-        if not required_ids:
-            # No actionable cohort exists yet (first launch before the whole
-            # selected cohort reaches ACTIVE): wait for peers, never act on a
-            # partial cohort.
-            return required, True
+        # PHASE 1 -- true integrity contradictions, fail closed immediately.
         if (
             readiness.registry_version != active.version
             or readiness.registry_content_hash != active.content_hash
@@ -420,12 +424,6 @@ class MultiAssetProductionBootstrap:
             raise BootstrapIntegrityError(
                 "runtime readiness contradicts active Registry authority"
             )
-        if not readiness.data_ready or required_ids & set(readiness.failed_market_ids):
-            # Expected operational non-readiness: a failed required peer or a
-            # runtime still completing warmup is a normal fail-closed defer
-            # for the whole cohort, not an integrity failure and not an
-            # application failure of whichever healthy market finalized.
-            return required, True
         waiting = False
         for market in required:
             row = self.data_authority.store.connection.execute(
@@ -434,18 +432,34 @@ class MultiAssetProductionBootstrap:
                 (market.identity.market_id, boundary_open_time_ms),
             ).fetchone()
             if row is None:
+                # A missing row is operational non-readiness, never an
+                # integrity contradiction: only PRESENT retained rows must
+                # bind to the active Registry authority.
                 waiting = True
                 continue
             if row != (active.version, active.content_hash):
                 raise BootstrapIntegrityError(
                     "retained boundary is not bound to active Registry authority"
                 )
+        # PHASE 2 -- expected operational non-readiness defers the whole
+        # cohort fail-closed, without failing any healthy market's callback.
+        if (
+            not required_ids
+            or not readiness.data_ready
+            or required_ids & set(readiness.failed_market_ids)
+        ):
+            # No actionable cohort yet (Initial Launch before the whole
+            # selected cohort reaches ACTIVE), a runtime still completing
+            # warmup, or a failed required peer: wait for peers, never act
+            # on a partial cohort.
+            return required, True
         if waiting:
             return required, True
         if set(readiness.ready_market_ids) != required_ids:
             # Incomplete readiness set: expected non-readiness, defer for the
             # whole cohort instead of failing the healthy markets' callback.
             return required, True
+        # PHASE 3 -- a complete, coherent cohort may act.
         return required, False
 
     async def _scanner_snapshots(

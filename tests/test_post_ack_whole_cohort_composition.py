@@ -4,7 +4,9 @@ Runtime -> Bootstrap -> Coordinator -> Scanner -> Strategy, exercised through
 ``MultiAssetProductionBootstrap.process_boundary`` exactly as the production
 callback drives it.  CASE A proves a 19/20 cohort can never produce partial
 Scanner or Strategy authority; CASE B proves the exact 20-market cohort is
-processed as one whole with no duplicate authority.
+processed as one whole with no duplicate authority.  The LAYER 2 precedence
+matrix proves FINAL INVARIANT B: an observable integrity contradiction always
+raises BootstrapIntegrityError, dominating every operational DEFER condition.
 """
 
 from __future__ import annotations
@@ -42,7 +44,11 @@ from trader_assist_v0.multi_asset_shadow.models import (
 from trader_assist_v0.multi_asset_shadow.outcome_engine import OneMinuteBar, OutcomeEngine
 from trader_assist_v0.multi_asset_shadow.planning import CostModel, PublicBbo
 from trader_assist_v0.multi_asset_shadow.registry import MarketRegistryManager
-from trader_assist_v0.multi_asset_shadow.runtime import BoundaryMode, MultiAssetPublicRuntime
+from trader_assist_v0.multi_asset_shadow.runtime import (
+    BoundaryMode,
+    MultiAssetPublicRuntime,
+    RuntimeReadinessSnapshot,
+)
 from trader_assist_v0.multi_asset_shadow.shadow_records import EvidenceStore
 
 NOW = datetime(2026, 8, 17, 0, 0, tzinfo=UTC)
@@ -58,7 +64,7 @@ COINS = (
 BOUNDARY = (BARS - 1) * SLOT
 
 
-def market(coin: str) -> RegistryMarket:
+def market(coin: str, lifecycle: MarketLifecycle = MarketLifecycle.ACTIVE) -> RegistryMarket:
     native = not coin.startswith("xyz:")
     return RegistryMarket(
         display=coin.removeprefix("xyz:"),
@@ -70,7 +76,7 @@ def market(coin: str) -> RegistryMarket:
         max_leverage=Decimal("40"),
         is_hip3=not native,
         market_status="ACTIVE",
-        lifecycle=MarketLifecycle.ACTIVE,
+        lifecycle=lifecycle,
         metadata_observed_at=NOW,
         metadata_hash=sha256_hex(f"{coin}-metadata".encode()),
     )
@@ -149,11 +155,23 @@ class OneMinuteProvider:
 
 
 class Cohort:
-    def __init__(self, tmp_path: Path, *, omit_boundary_for: str | None = None) -> None:
+    def __init__(
+        self,
+        tmp_path: Path,
+        *,
+        omit_boundary_for: str | None = None,
+        lifecycles: dict[str, MarketLifecycle] | None = None,
+    ) -> None:
         self.registry = MarketRegistryManager(
             tmp_path / "registry", metadata_validator=lambda _: True
         )
-        self.markets = tuple(market(coin) for coin in COINS)
+        self.markets = tuple(
+            market(
+                coin,
+                lifecycle=lifecycles[coin] if lifecycles is not None else MarketLifecycle.ACTIVE,
+            )
+            for coin in COINS
+        )
         version = RegistryVersion.create(
             version="registry-cohort-20260817", created_at=NOW, markets=self.markets
         )
@@ -174,8 +192,10 @@ class Cohort:
         self.outcome = OutcomeEngine(provider=OneMinuteProvider(), sink=self.outcome_adapter)
         self.planning = PlanningData()
 
+        self.now_ms = BOUNDARY + SLOT + 1_000
+
         def clock() -> datetime:
-            return datetime.fromtimestamp((BOUNDARY + SLOT + 1_000) / 1000, UTC)
+            return datetime.fromtimestamp(self.now_ms / 1000, UTC)
 
         self.runtime = MultiAssetPublicRuntime(
             registry=self.registry,
@@ -296,3 +316,126 @@ async def test_case_b_exact_cohort_scans_once_strategies_all_no_duplicates(
             market_id=item.identity.market_id, source_open_time_ms=BOUNDARY
         )
     assert cohort.planning.calls.count("SCANNER_L2") == 20
+
+
+# --------------------------------------------------------------------------
+# LAYER 2 -- Bootstrap gate precedence matrix (FINAL INVARIANT B).
+#
+# INTEGRITY ERROR > OPERATIONAL DEFER > ACTION: an observable authority
+# contradiction must always raise, even when an operational condition (failed
+# peer, zero-ACTIVE launch, incomplete readiness) would otherwise defer.
+# --------------------------------------------------------------------------
+
+WARMING_LAUNCH: dict[str, MarketLifecycle] = {
+    coin: MarketLifecycle.WARMING for coin in COINS
+}
+
+
+def tamper_boundary_binding(cohort: Cohort, coin: str) -> None:
+    cohort.data.store.connection.execute(
+        "UPDATE closed_bars SET registry_version = 'tampered-boundary-authority' "
+        "WHERE market_id = ? AND interval = '5m' AND open_time_ms = ?",
+        (cohort.id_of(coin), BOUNDARY),
+    )
+    cohort.data.store.connection.commit()
+
+
+@async_test
+async def test_precedence_failed_peer_with_present_wrong_bound_row_raises(
+    tmp_path: Path,
+) -> None:
+    """Failed peer + PRESENT retained row bound to the wrong Registry authority
+    raises BootstrapIntegrityError: integrity dominates the failed-peer defer."""
+    cohort = Cohort(tmp_path)
+    cohort.runtime.health.failed_markets.add(cohort.id_of("xyz:SP500"))
+    tamper_boundary_binding(cohort, "BTC")
+    with pytest.raises(BootstrapIntegrityError):
+        await drive(cohort)
+    assert cohort.planning.calls == []
+    assert cohort.coordinator.retained_scanner_run(boundary_open_time_ms=BOUNDARY) is None
+
+    # Control pair: the identical failed peer with coherent retained authority
+    # defers operationally instead of raising.
+    control_path = tmp_path / "control"
+    control_path.mkdir()
+    control = Cohort(control_path)
+    control.runtime.health.failed_markets.add(control.id_of("xyz:SP500"))
+    report = await drive(control)
+    assert report.disposition is BoundaryDisposition.DEFERRED_WAITING_FOR_PEERS
+    assert report.scanner_run_count == 0
+
+
+@async_test
+async def test_precedence_zero_active_initial_launch_defers(tmp_path: Path) -> None:
+    """A coherent zero-ACTIVE Initial-Launch cohort (all PRE_ACTIVE) defers."""
+    cohort = Cohort(tmp_path, lifecycles=WARMING_LAUNCH)
+    report = await drive(cohort)
+    assert report.disposition is BoundaryDisposition.DEFERRED_WAITING_FOR_PEERS
+    assert report.scanner_run_count == 0
+    assert report.evaluated_market_ids == ()
+    assert cohort.planning.calls == []
+
+
+@pytest.mark.parametrize(
+    ("field", "wrong_value"),
+    [
+        ("registry_version", "stale-registry-version-20260816"),
+        ("registry_content_hash", "e" * 64),
+    ],
+)
+@async_test
+async def test_precedence_zero_active_registry_readiness_mismatch_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str, wrong_value: str
+) -> None:
+    """Zero ACTIVE + readiness Registry identity mismatch raises even though a
+    coherent zero-ACTIVE launch would defer."""
+    cohort = Cohort(tmp_path, lifecycles=WARMING_LAUNCH)
+    snapshot = cohort.runtime.readiness_snapshot()
+    fields = {
+        "registry_version": snapshot.registry_version,
+        "registry_content_hash": snapshot.registry_content_hash,
+    }
+    fields[field] = wrong_value
+    tampered = RuntimeReadinessSnapshot.create(
+        registry_version=fields["registry_version"],
+        registry_content_hash=fields["registry_content_hash"],
+        data_ready=snapshot.data_ready,
+        ready_market_ids=snapshot.ready_market_ids,
+        failed_market_ids=snapshot.failed_market_ids,
+        latest_closed_5m_open_time_ms=snapshot.latest_closed_5m_open_time_ms,
+        observed_at_ms=snapshot.observed_at_ms,
+    )
+    monkeypatch.setattr(cohort.runtime, "readiness_snapshot", lambda: tampered)
+    with pytest.raises(BootstrapIntegrityError):
+        await drive(cohort)
+    assert cohort.planning.calls == []
+
+
+@async_test
+async def test_precedence_zero_active_boundary_contradiction_raises(
+    tmp_path: Path,
+) -> None:
+    """Zero ACTIVE + requested boundary contradicting the runtime's
+    authoritative latest closed boundary raises."""
+    cohort = Cohort(tmp_path, lifecycles=WARMING_LAUNCH)
+    with pytest.raises(BootstrapIntegrityError):
+        await cohort.bootstrap.process_boundary(BOUNDARY - SLOT, BoundaryMode.LIVE_ACTIONABLE)
+    assert cohort.planning.calls == []
+
+
+@async_test
+async def test_precedence_incomplete_ready_set_with_present_rows_defers(
+    tmp_path: Path,
+) -> None:
+    """All required boundary rows PRESENT and bound correctly, but the observed
+    boundary is older than the hard action ceiling: readiness exposes an empty
+    ready set and the boundary defers operationally."""
+    cohort = Cohort(tmp_path)
+    cohort.now_ms = BOUNDARY + SLOT + 61_000
+    snapshot = cohort.runtime.readiness_snapshot()
+    assert snapshot.latest_closed_5m_open_time_ms == BOUNDARY
+    assert snapshot.ready_market_ids == ()
+    report = await drive(cohort)
+    assert report.disposition is BoundaryDisposition.DEFERRED_WAITING_FOR_PEERS
+    assert report.scanner_run_count == 0
+    assert cohort.planning.calls == []

@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Set
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -58,6 +58,93 @@ FRESHNESS_ACTION_CEILING_SECONDS: Final = 60.0
 # Mirrors RegistryVersion.version max_length; the lifecycle name chain below
 # must never hand schema validation a name it must reject.
 _REGISTRY_VERSION_NAME_MAX: Final = 80
+
+# The exact PRE_ACTIVE lifecycle states of the Initial-Launch convergence
+# mode, ranked low to high.  A cohort is in Initial-Launch convergence only
+# while every selected non-terminal member is one of these AND no member is
+# ACTIVE: any ACTIVE or post-ACTIVE (e.g. DRAINING) member means the launch
+# already completed and hot-add semantics apply instead.
+_PRE_ACTIVE_LIFECYCLE: Final = (
+    MarketLifecycle.WARMING,
+    MarketLifecycle.HISTORY_READY,
+    MarketLifecycle.SNAPSHOT_READY,
+)
+_PRE_ACTIVE_RANK: Final = {
+    MarketLifecycle.WARMING: 0,
+    MarketLifecycle.HISTORY_READY: 1,
+    MarketLifecycle.SNAPSHOT_READY: 2,
+}
+
+
+def plan_lifecycle_updates(
+    lifecycles: Mapping[str, MarketLifecycle],
+    *,
+    failed_market_ids: Set[str],
+    history_current_ids: Set[str],
+    snapshot_ready: bool,
+) -> dict[str, MarketLifecycle]:
+    """Pure lifecycle reconciliation planner over immutable state.
+
+    This is a deterministic function, never a second authority: it only
+    proposes one batch of one-step legal Registry transitions, and every
+    proposed successor is still activated exclusively by a genuine
+    Closed5mAdmission capability.
+
+    Initial-Launch convergence mode holds while every non-terminal selected
+    member is PRE_ACTIVE (hence zero ACTIVE).  Its safety invariant is
+    ACTIVE_COUNT in {0, N}: the cohort converges monotonically one stage at
+    a time — only the markets at the minimum PRE_ACTIVE stage advance, each
+    by exactly one legal transition, and markets already ahead stay
+    unchanged.  SNAPSHOT_READY is the highest PRE_ACTIVE state, so it is the
+    minimum only when the exact launch cohort is coherently SNAPSHOT_READY;
+    activation is therefore always all selected launch markets together, and
+    no successor with 1..N-1 ACTIVE markets is reachable.  Any failed launch
+    member holds the entire cohort.
+
+    Once launch has completed (any ACTIVE or post-ACTIVE member exists),
+    markets progress independently (hot-add): a failed future member never
+    pauses the already-live cohort.
+    """
+    if not lifecycles:
+        return {}
+    states = set(lifecycles.values())
+    if states <= set(_PRE_ACTIVE_LIFECYCLE):
+        if any(market_id in failed_market_ids for market_id in lifecycles):
+            return {}
+        minimum = min(states, key=lambda state: _PRE_ACTIVE_RANK[state])
+        group = [
+            market_id
+            for market_id, state in lifecycles.items()
+            if state is minimum
+        ]
+        if minimum is MarketLifecycle.WARMING:
+            if all(market_id in history_current_ids for market_id in group):
+                return {
+                    market_id: MarketLifecycle.HISTORY_READY
+                    for market_id in group
+                }
+            return {}
+        if minimum is MarketLifecycle.HISTORY_READY:
+            if snapshot_ready:
+                return {
+                    market_id: MarketLifecycle.SNAPSHOT_READY
+                    for market_id in group
+                }
+            return {}
+        if snapshot_ready:
+            return {market_id: MarketLifecycle.ACTIVE for market_id in group}
+        return {}
+    updates: dict[str, MarketLifecycle] = {}
+    for market_id, state in lifecycles.items():
+        if market_id in failed_market_ids:
+            continue
+        if state is MarketLifecycle.WARMING and market_id in history_current_ids:
+            updates[market_id] = MarketLifecycle.HISTORY_READY
+        elif state is MarketLifecycle.HISTORY_READY and snapshot_ready:
+            updates[market_id] = MarketLifecycle.SNAPSHOT_READY
+        elif state is MarketLifecycle.SNAPSHOT_READY and snapshot_ready:
+            updates[market_id] = MarketLifecycle.ACTIVE
+    return updates
 
 
 def _lifecycle_version_name(predecessor: str, predecessor_hash: str, suffix: str) -> str:
@@ -1080,29 +1167,19 @@ class MultiAssetPublicRuntime:
             if market.lifecycle
             not in {MarketLifecycle.DISABLED, MarketLifecycle.OUTCOMES_COMPLETE}
         ]
-        # First Launch: while the Registry holds zero ACTIVE markets, the
-        # launch cohort must progress atomically.  A failed or not-yet-eligible
-        # member blocks staging for every member, so a partial healthy subset
-        # can never become an actionable ACTIVE cohort before the exact
-        # selected cohort is coherently current.  Once an ACTIVE cohort
-        # exists, a later WARMING market may progress independently (hot-add)
-        # and must not pause the already-live cohort.
-        launch_cohort = all(
-            market.lifecycle is not MarketLifecycle.ACTIVE for market in cohort
+        history_current_ids = {
+            market.identity.market_id
+            for market in cohort
+            if market.lifecycle is MarketLifecycle.WARMING
+            and self._history_current(market)
+        }
+        updates = plan_lifecycle_updates(
+            {market.identity.market_id: market.lifecycle for market in cohort},
+            failed_market_ids=self.health.failed_markets,
+            history_current_ids=history_current_ids,
+            snapshot_ready=snapshot_ready,
         )
-        updates: dict[str, MarketLifecycle] = {}
-        for market in cohort:
-            if market.identity.market_id in self.health.failed_markets:
-                continue
-            if market.lifecycle is MarketLifecycle.WARMING and self._history_current(market):
-                updates[market.identity.market_id] = MarketLifecycle.HISTORY_READY
-            elif market.lifecycle is MarketLifecycle.HISTORY_READY and snapshot_ready:
-                updates[market.identity.market_id] = MarketLifecycle.SNAPSHOT_READY
-            elif market.lifecycle is MarketLifecycle.SNAPSHOT_READY and snapshot_ready:
-                updates[market.identity.market_id] = MarketLifecycle.ACTIVE
         if not updates:
-            return
-        if launch_cohort and len(updates) != len(cohort):
             return
         suffix = "-".join(sorted(value.value.lower() for value in set(updates.values())))
         version = _lifecycle_version_name(active.version, active.content_hash, suffix)
