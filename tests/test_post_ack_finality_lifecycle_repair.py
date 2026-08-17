@@ -487,6 +487,167 @@ async def test_warmup_success_does_not_clear_nonrecoverable_failures(
 
 
 @async_test
+async def test_callback_failure_not_laundered_by_later_recoverable_failure(
+    tmp_path: Path,
+) -> None:
+    """Attack A: a later transient recoverable failure must not overwrite a
+    nonrecoverable callback record, so later success cannot clear it."""
+    clock = Clock(seconds=603)
+    state = {"fail_finality_once": True}
+
+    def respond(coin: str, start_ms: int, end_ms: int) -> object:
+        if start_ms == SLOT:
+            return [candle(coin, SLOT)]
+        if start_ms == 2 * SLOT:
+            if state["fail_finality_once"]:
+                state["fail_finality_once"] = False
+                return PublicDataError("transient public route failure")
+            return [candle(coin, 2 * SLOT)]
+        if start_ms == 3 * SLOT:
+            return [candle(coin, 3 * SLOT)]
+        raise AssertionError(f"unexpected window {start_ms}")
+
+    runtime, authority, item = single_market_harness(tmp_path, respond=respond, clock=clock)
+    authority.admit_rest_history(
+        market=item, snapshot=[candle("BTC", 0)], received_at=clock.now()
+    )
+    market_id = item.identity.market_id
+
+    def broken_callback(bar, mode):  # type: ignore[no-untyped-def]
+        raise RuntimeError("application callback down")
+
+    runtime.on_finalized_5m = broken_callback
+    clock.seconds = SLOT // 1000 + 5
+    await confirm_candidate(runtime, market_id, candle("BTC", SLOT))
+    assert market_id in runtime.health.failed_markets
+    assert runtime.health.failure_records[market_id].stage == "application_callback"
+
+    runtime.on_finalized_5m = None
+    clock.seconds = 2 * SLOT // 1000 + 5
+    await confirm_candidate(runtime, market_id, candle("BTC", 2 * SLOT))
+    # The transient recoverable failure did NOT overwrite the nonrecoverable
+    # classification, so the failed market cannot be laundered.
+    record = runtime.health.failure_records[market_id]
+    assert record.stage == "application_callback"
+    assert record.recoverable is False
+    assert market_id in runtime.health.failed_markets
+    assert authority.store.last_open(market_id) == SLOT
+
+    clock.seconds = 3 * SLOT // 1000 + 5
+    await confirm_candidate(runtime, market_id, candle("BTC", 3 * SLOT))
+    assert market_id in runtime.health.failed_markets
+    assert runtime.health.failure_records[market_id].stage == "application_callback"
+    assert authority.store.last_open(market_id) == 3 * SLOT
+
+
+@async_test
+async def test_registry_failure_not_laundered_by_later_recoverable_warmup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Attack B: a later transient recoverable warmup failure must not
+    overwrite a nonrecoverable Registry record, so warmup success cannot clear
+    it."""
+    clock = Clock(seconds=603)
+    state = {"fail_warmup_once": True}
+
+    def respond(coin: str, start_ms: int, end_ms: int) -> object:
+        if start_ms == SLOT:
+            return [candle(coin, SLOT)]
+        if start_ms == 2 * SLOT:
+            if state["fail_warmup_once"]:
+                state["fail_warmup_once"] = False
+                return PublicDataError("transient warmup route failure")
+            return [candle(coin, 2 * SLOT)]
+        raise AssertionError(f"unexpected window {start_ms}")
+
+    runtime, authority, item = single_market_harness(tmp_path, respond=respond, clock=clock)
+    authority.admit_rest_history(
+        market=item, snapshot=[candle("BTC", 0)], received_at=clock.now()
+    )
+    market_id = item.identity.market_id
+    runtime.health.data_ready = True
+
+    def broken_successor(**_: object) -> RegistryVersion:
+        raise RegistryError("forced control-plane failure")
+
+    monkeypatch.setattr(runtime.registry, "lifecycle_successor", broken_successor)
+    clock.seconds = SLOT // 1000 + 5
+    await confirm_candidate(runtime, market_id, candle("BTC", SLOT))
+    assert runtime.health.failure_records[market_id].stage == "lifecycle_staging"
+
+    monkeypatch.undo()
+    clock.seconds = 3 * SLOT // 1000 + 5
+    with pytest.raises(PublicDataError):
+        await runtime._warmup_market(item, recovery=True, target_open_ms=2 * SLOT)
+    # The transient recoverable warmup failure did NOT overwrite the
+    # nonrecoverable Registry classification.
+    record = runtime.health.failure_records[market_id]
+    assert record.stage == "lifecycle_staging"
+    assert record.recoverable is False
+    assert market_id in runtime.health.failed_markets
+
+    count = await runtime._warmup_market(item, recovery=True, target_open_ms=2 * SLOT)
+    assert count == 1
+    assert authority.store.last_open(market_id) == 2 * SLOT
+    assert market_id in runtime.health.failed_markets
+    assert runtime.health.failure_records[market_id].stage == "lifecycle_staging"
+
+
+@async_test
+async def test_recoverable_failure_escalates_to_nonrecoverable_callback(
+    tmp_path: Path,
+) -> None:
+    """Attack C: an existing recoverable record must become nonrecoverable
+    when a callback failure arrives, and later success cannot clear it."""
+    clock = Clock(seconds=603)
+    state = {"fail_once": True}
+
+    def respond(coin: str, start_ms: int, end_ms: int) -> object:
+        if start_ms == SLOT:
+            if state["fail_once"]:
+                state["fail_once"] = False
+                return PublicDataError("transient public route failure")
+            return [candle(coin, SLOT)]
+        if start_ms == 2 * SLOT:
+            return [candle(coin, 2 * SLOT)]
+        if start_ms == 3 * SLOT:
+            return [candle(coin, 3 * SLOT)]
+        raise AssertionError(f"unexpected window {start_ms}")
+
+    runtime, authority, item = single_market_harness(tmp_path, respond=respond, clock=clock)
+    authority.admit_rest_history(
+        market=item, snapshot=[candle("BTC", 0)], received_at=clock.now()
+    )
+    market_id = item.identity.market_id
+
+    clock.seconds = SLOT // 1000 + 5
+    await confirm_candidate(runtime, market_id, candle("BTC", SLOT))
+    record = runtime.health.failure_records[market_id]
+    assert record.stage == "finality_confirmation"
+    assert record.recoverable is True
+    assert market_id in runtime.health.failed_markets
+
+    def broken_callback(bar, mode):  # type: ignore[no-untyped-def]
+        raise RuntimeError("application callback down")
+
+    runtime.on_finalized_5m = broken_callback
+    clock.seconds = 2 * SLOT // 1000 + 5
+    await confirm_candidate(runtime, market_id, candle("BTC", 2 * SLOT))
+    # recoverable -> nonrecoverable escalation sticks.
+    record = runtime.health.failure_records[market_id]
+    assert record.stage == "application_callback"
+    assert record.recoverable is False
+    assert market_id in runtime.health.failed_markets
+
+    runtime.on_finalized_5m = None
+    clock.seconds = 3 * SLOT // 1000 + 5
+    await confirm_candidate(runtime, market_id, candle("BTC", 3 * SLOT))
+    assert market_id in runtime.health.failed_markets
+    assert runtime.health.failure_records[market_id].stage == "application_callback"
+    assert authority.store.last_open(market_id) == 3 * SLOT
+
+
+@async_test
 async def test_genuine_provider_omission_remains_failed_no_broad_reset(
     tmp_path: Path,
 ) -> None:

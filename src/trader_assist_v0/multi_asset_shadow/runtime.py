@@ -95,8 +95,9 @@ class RuntimeHealth:
     acknowledgements: set[str] = field(default_factory=set)
     failed_markets: set[str] = field(default_factory=set)
     # Non-durable, bounded operator diagnostics: the latest failure record per
-    # market (one entry per market id, overwritten on new failures).  Never a
-    # durable authority, queue, or platform of its own.
+    # market (one entry per market id; a nonrecoverable classification is
+    # never weakened by a later recoverable incident).  Never a durable
+    # authority, queue, or platform of its own.
     failure_records: dict[str, MarketFailureRecord] = field(default_factory=dict)
     callback_failures: list[FinalizedCallbackFailure] = field(default_factory=list)
     data_ready: bool = False
@@ -935,6 +936,22 @@ class MultiAssetPublicRuntime:
         self.health.failed_markets.discard(market_id)
         self.health.failure_records.pop(market_id, None)
 
+    def _merge_failure_record(self, record: MarketFailureRecord) -> None:
+        """Nonrecoverable failure authority dominates monotonically.
+
+        An application callback failure, a Registry control-plane failure, a
+        malformed WS candidate, or an unknown authority failure can never be
+        weakened to recoverable by later market-data/warmup/finality
+        incidents; only an explicit future application/control-plane recovery
+        mechanism (out of scope here) could clear it.  A later nonrecoverable
+        failure may refresh the diagnostic while remaining nonrecoverable.
+        """
+        self.health.failed_markets.add(record.market_id)
+        existing = self.health.failure_records.get(record.market_id)
+        if existing is not None and not existing.recoverable and record.recoverable:
+            return
+        self.health.failure_records[record.market_id] = record
+
     def _record_market_failure(
         self,
         market: RegistryMarket,
@@ -945,18 +962,19 @@ class MultiAssetPublicRuntime:
         recoverable: bool | None = None,
     ) -> None:
         market_id = market.identity.market_id
-        self.health.failed_markets.add(market_id)
-        self.health.failure_records[market_id] = MarketFailureRecord(
-            market_id=market_id,
-            coin=market.identity.coin,
-            open_time_ms=open_time_ms,
-            stage=stage,
-            category=f"{type(category).__name__}: {category}"[:160],
-            recoverable=(
-                not self.authority.market_failed(market_id)
-                if recoverable is None
-                else recoverable
-            ),
+        self._merge_failure_record(
+            MarketFailureRecord(
+                market_id=market_id,
+                coin=market.identity.coin,
+                open_time_ms=open_time_ms,
+                stage=stage,
+                category=f"{type(category).__name__}: {category}"[:160],
+                recoverable=(
+                    not self.authority.market_failed(market_id)
+                    if recoverable is None
+                    else recoverable
+                ),
+            )
         )
 
     def _record_failure_by_id(
@@ -974,14 +992,15 @@ class MultiAssetPublicRuntime:
             if market.identity.market_id == market_id:
                 coin = market.identity.coin
                 break
-        self.health.failed_markets.add(market_id)
-        self.health.failure_records[market_id] = MarketFailureRecord(
-            market_id=market_id,
-            coin=coin,
-            open_time_ms=open_time_ms,
-            stage=stage,
-            category=f"{type(category).__name__}: {category}"[:160],
-            recoverable=recoverable,
+        self._merge_failure_record(
+            MarketFailureRecord(
+                market_id=market_id,
+                coin=coin,
+                open_time_ms=open_time_ms,
+                stage=stage,
+                category=f"{type(category).__name__}: {category}"[:160],
+                recoverable=recoverable,
+            )
         )
 
     async def _notify_finalized(self, bar: ClosedBar, mode: BoundaryMode) -> object | None:
