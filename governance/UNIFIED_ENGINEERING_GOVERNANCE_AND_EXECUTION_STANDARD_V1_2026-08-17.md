@@ -656,6 +656,26 @@ EXACT PACKET / POINTER + HASH
 → RAW EVIDENCE RETURN
 ```
 
+### Oversized authoritative Task Packet / Prompt File Mode
+
+Transport/UI length limits never authorize shortening or weakening an authoritative Task Packet.
+
+When the complete authoritative Writer/Reviewer packet approaches or exceeds the destination Agent/UI single-message limit:
+
+1. preserve the complete Task Packet as one immutable logical artifact; do not summarize, trim, split, paraphrase, or ask the user to reassemble architecture-critical content;
+2. generate one complete UTF-8 packet file and bind it to a SHA-256 digest; the digest is an integrity fingerprint used to detect content changes during transport;
+3. store/install the packet under `$HOME/trader-assist-v0-control/agent-packets/<TASK_ID>/...`, using restrictive local permissions such as mode `600` where practical;
+4. use a short fail-closed Terminal installer/verification step to locate or copy the artifact and verify the exact SHA-256 before execution; missing file or hash mismatch means `SAFE_STOP`;
+5. give the downstream executor a short pointer command such as `cat '<ABSOLUTE_PACKET_PATH>'`; it must read the complete file from beginning to end before acting and must not substitute a summary for the packet;
+6. do not move the same oversized prompt into another heredoc or message merely to bypass one interface limit;
+7. an equally lossless direct file attachment or CLI file-input path may replace `cat` only if exact packet identity/integrity is preserved;
+8. truncated/incomplete read, unreadable packet, or packet-identity disagreement means `SAFE_STOP`;
+9. minimize unavoidable human transport work: Engineering prepares and integrity-binds the packet; the user should not copy multiple chunks between ChatGPT, Terminal and the executor.
+
+For the currently observed Trae/GLM single-message ceiling of approximately **20,000 characters**, use **18,000 characters as the conservative inline cutoff** and switch to Prompt File Mode at or above that size. This is an observed transport constraint, not a permanent vendor/API contract. If the destination limit changes, re-verify it and retain a safety margin rather than hard-coding 20,000 into architecture.
+
+This rule extends the existing exact packet / pointer + hash pattern and the merged Lossless Task Packet philosophy. SHA-256 is appropriate as the project integrity fingerprint; FIPS 180-4 defines SHA-256 as part of the Secure Hash Standard for generating message digests that can detect changed content.
+
 When the Hermes operator path is used, its merged `HERMES_EXECUTION_OPERATOR_CONTRACT` and Lossless Task Packet schema are mandatory and stricter. Hermes transports/executes frozen work only; it does not research, select routes, choose models/executors, review, repair, approve or infer missing fields.
 
 Raw evidence remains authoritative over intermediary summaries.
@@ -689,6 +709,8 @@ The block should self-contain, where material:
 - concise evidence/output to return.
 
 For multi-step scripts, contain failures in a subshell/heredoc or equivalent so `exit` does not unnecessarily close the parent interactive Terminal/SSH session.
+
+Prompt File Mode in Section 18 is the explicit exception when an authoritative packet cannot fit safely inside the destination interface. In that case Engineering creates and integrity-binds the transport file; the user performs only the minimum technically unavoidable file-placement/Terminal step, followed by the short executor read instruction. The user must never manually reconstruct the packet from multiple chunks.
 
 ### Supersession of the older user-facing routing distinction
 
@@ -962,6 +984,8 @@ REPAIR_3_PLUS_SAME_ROUTE=PROHIBITED
 HOLISTIC_CONVERGENCE_AFTER_BUDGET=MANDATORY
 ARCHITECTURE_CRITICAL_PROMPT_ADDENDA=PROHIBITED_REGENERATE_COMPLETE_PACKET
 LOSSLESS_HANDOFF=REQUIRED_FOR_AUTHORITY_BEARING_TASKS
+OVERSIZED_TASK_PACKET=LOSSLESS_PROMPT_FILE_MODE
+TRAE_GLM_OBSERVED_20000_CHAR_LIMIT_INLINE_CUTOFF=18000
 MACOS_OPERATOR_DELIVERY=ONE_PASTE_TERMINAL_BY_DEFAULT
 CODEX_SESSION_REUSE=SAME_ROLE_SAME_STAGE_ONLY
 INDEPENDENT_REVIEW_SESSION=NEW
