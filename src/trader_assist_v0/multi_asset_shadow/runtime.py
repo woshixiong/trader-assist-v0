@@ -55,6 +55,28 @@ WARMUP_ADMISSION_CHUNK_BARS: Final = 64
 WARMUP_CATCHUP_ROUNDS_MAX: Final = 3
 FRESHNESS_TARGET_SECONDS: Final = 30.0
 FRESHNESS_ACTION_CEILING_SECONDS: Final = 60.0
+# Mirrors RegistryVersion.version max_length; the lifecycle name chain below
+# must never hand schema validation a name it must reject.
+_REGISTRY_VERSION_NAME_MAX: Final = 80
+
+
+def _lifecycle_version_name(predecessor: str, predecessor_hash: str, suffix: str) -> str:
+    """Bounded, deterministic, unique lifecycle successor version name.
+
+    The naive chain (predecessor + "-lifecycle-" + suffix) exceeds the
+    RegistryVersion 80-character schema bound after a few transitions and
+    converts healthy progression into a RegistryError, which the caller then
+    records as cohort failure.  Keep the readable chain while it fits; once it
+    would overflow, compress the inherited prefix to its stable head plus a
+    predecessor-hash tag so lineage stays provable, the name stays unique, and
+    the length stays bounded forever.
+    """
+    tail = f"-lifecycle-{suffix}"
+    if len(predecessor) + len(tail) <= _REGISTRY_VERSION_NAME_MAX:
+        return f"{predecessor}{tail}"
+    tag = f"~{predecessor_hash[:8]}{tail}"
+    head = _REGISTRY_VERSION_NAME_MAX - len(tag)
+    return f"{predecessor[:head]}{tag}"
 
 
 class BoundaryMode(StrEnum):
@@ -72,8 +94,24 @@ class RuntimeHealth:
     reconnects: int = 0
     acknowledgements: set[str] = field(default_factory=set)
     failed_markets: set[str] = field(default_factory=set)
+    # Non-durable, bounded operator diagnostics: the latest failure record per
+    # market (one entry per market id, overwritten on new failures).  Never a
+    # durable authority, queue, or platform of its own.
+    failure_records: dict[str, MarketFailureRecord] = field(default_factory=dict)
     callback_failures: list[FinalizedCallbackFailure] = field(default_factory=list)
     data_ready: bool = False
+
+
+@dataclass(frozen=True)
+class MarketFailureRecord:
+    """Bounded operator-visible record of why one market is failed right now."""
+
+    market_id: str
+    coin: str
+    open_time_ms: int
+    stage: str
+    category: str
+    recoverable: bool
 
 
 @dataclass(frozen=True)
@@ -454,10 +492,16 @@ class MultiAssetPublicRuntime:
                 return count
             if not self._history_current_at(market, target_open_ms):
                 raise DataRouteError("warmup did not prove current contiguous 5m history")
-        except (DataRouteError, PublicDataError):
-            self.health.failed_markets.add(market.identity.market_id)
+        except (DataRouteError, PublicDataError) as exc:
+            self._record_market_failure(
+                market,
+                open_time_ms=target_open_ms,
+                stage="warmup",
+                category=exc,
+            )
             raise
         self.health.failed_markets.discard(market.identity.market_id)
+        self.health.failure_records.pop(market.identity.market_id, None)
         return count
 
     async def _warmup_all(
@@ -708,8 +752,14 @@ class MultiAssetPublicRuntime:
             if not isinstance(open_ms, int):
                 raise DataRouteError("websocket candle is missing open timestamp")
             self._finality.offer(market=market, open_time_ms=open_ms, fingerprint=fingerprint)
-        except DataRouteError:
-            self.health.failed_markets.add(market.identity.market_id)
+        except DataRouteError as exc:
+            self._record_market_failure(
+                market,
+                open_time_ms=payload.get("t") if isinstance(payload.get("t"), int) else 0,
+                stage="ws_candidate",
+                category=exc,
+                recoverable=False,
+            )
 
     def _discard_candidate(self, identity: FinalityIdentity) -> None:
         self.authority.discard_ws_candidate(
@@ -744,6 +794,7 @@ class MultiAssetPublicRuntime:
             await asyncio.sleep(0)
             if not self._finality.is_latest(generation):
                 return ConfirmationResult.STALE
+            await self._backfill_ws_silent_boundaries(generation)
             admitted = self.authority.confirm_ws_candidate(
                 market=generation.market,
                 open_time_ms=identity.open_time_ms,
@@ -756,16 +807,102 @@ class MultiAssetPublicRuntime:
                 second_observed_monotonic=observed_at[1],
                 observation_gap_ms=MIN_MONOTONIC_CONFIRMATION_GAP_MS,
             )
+            self._recover_runtime_finality_failure(generation.market)
             await self._maybe_stage_lifecycle(snapshot_ready=self.health.data_ready)
             if admitted is not None:
                 await self._notify_finalized(admitted, BoundaryMode.LIVE_ACTIONABLE)
             return ConfirmationResult.COMPLETE
         except asyncio.CancelledError:
             raise
-        except (DataRouteError, PublicDataError):
+        except (DataRouteError, PublicDataError) as exc:
             if not self._finality.is_latest(generation):
                 return ConfirmationResult.STALE
+            self._record_market_failure(
+                generation.market,
+                open_time_ms=identity.open_time_ms,
+                stage="finality_confirmation",
+                category=exc,
+            )
             return ConfirmationResult.FAILED
+
+    async def _backfill_ws_silent_boundaries(self, generation: CandidateGeneration) -> None:
+        """Admit provider REST evidence for boundaries WS can never nominate.
+
+        The candle channel is trade-driven: a zero-trade 5m boundary emits no
+        candidate at all, while the provider's candleSnapshot series stays
+        contiguous (zero-volume flat bars, probe-verified 2026-08-17).  Those
+        boundaries are admitted from the provider's own series before the live
+        candidate's confirmation, so a legitimate provider no-trade bar never
+        surfaces as a false Data gap.  A genuine provider omission still fails
+        closed inside the unchanged continuity authority.
+        """
+        market_id = generation.identity.market_id
+        prior_open = self.authority.store.last_open(market_id)
+        if prior_open is None or generation.identity.open_time_ms <= prior_open + _FIVE_MINUTES_MS:
+            return
+        start_ms = prior_open + _FIVE_MINUTES_MS
+        end_ms = generation.identity.open_time_ms
+        if end_ms - start_ms > _WARMUP_5M_BARS * _FIVE_MINUTES_MS:
+            raise DataRouteError("ws-silent boundary backfill exceeds bounded history")
+        snapshot = await asyncio.to_thread(
+            self.client.closed_candles,
+            coin=generation.market.identity.coin,
+            interval="5m",
+            start_ms=start_ms,
+            end_ms=end_ms,
+        )
+        if not isinstance(snapshot, list):
+            raise DataRouteError("candleSnapshot did not return a list")
+        self.authority.admit_rest_history(
+            market=generation.market, snapshot=snapshot, received_at=self.clock()
+        )
+
+    def _recover_runtime_finality_failure(self, market: RegistryMarket) -> None:
+        """Market-scoped, evidence-derived recovery of a runtime finality failure.
+
+        A later successful provider-authoritative finality may clear ONLY a
+        recoverable runtime failure for this same market, and only while the
+        Data authority holds no failure for it and its durable 5m series is
+        exactly contiguous.  Data gaps and conflicts, Registry and metadata
+        failures, authority conflicts, and callback failures are never cleared
+        here.
+        """
+        market_id = market.identity.market_id
+        if market_id not in self.health.failed_markets:
+            return
+        record = self.health.failure_records.get(market_id)
+        if record is not None and not record.recoverable:
+            return
+        if self.authority.market_failed(market_id):
+            return
+        if not self.authority.store.is_contiguous_5m(market_id):
+            return
+        self.health.failed_markets.discard(market_id)
+        self.health.failure_records.pop(market_id, None)
+
+    def _record_market_failure(
+        self,
+        market: RegistryMarket,
+        *,
+        open_time_ms: int,
+        stage: str,
+        category: object,
+        recoverable: bool | None = None,
+    ) -> None:
+        market_id = market.identity.market_id
+        self.health.failed_markets.add(market_id)
+        self.health.failure_records[market_id] = MarketFailureRecord(
+            market_id=market_id,
+            coin=market.identity.coin,
+            open_time_ms=open_time_ms,
+            stage=stage,
+            category=f"{type(category).__name__}: {category}"[:160],
+            recoverable=(
+                not self.authority.market_failed(market_id)
+                if recoverable is None
+                else recoverable
+            ),
+        )
 
     async def _notify_finalized(self, bar: ClosedBar, mode: BoundaryMode) -> object | None:
         callback = self.on_finalized_5m
@@ -827,13 +964,15 @@ class MultiAssetPublicRuntime:
         if not updates:
             return
         suffix = "-".join(sorted(value.value.lower() for value in set(updates.values())))
-        version = f"{active.version}-lifecycle-{suffix}"
+        version = _lifecycle_version_name(active.version, active.content_hash, suffix)
         try:
             candidate = self.registry.lifecycle_successor(
                 version=version, updates=updates, now=self.clock()
             )
             self.registry.request_apply(candidate.version)
-        except RegistryError:
-            # A filesystem/control-plane conflict must not become a different
-            # data authority.  Leave markets below ACTIVE for operator review.
+        except (RegistryError, ValueError):
+            # A filesystem/control-plane conflict or schema rejection (pydantic
+            # ValidationError is a ValueError) must not become a different data
+            # authority, and must not escape into the confirming market's
+            # finality task.  Leave markets below ACTIVE for operator review.
             self.health.failed_markets.update(updates)

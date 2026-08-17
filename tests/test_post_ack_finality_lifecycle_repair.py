@@ -1,0 +1,504 @@
+"""Post-ACK live finality and lifecycle bounded repair acceptance (Issue #80).
+
+Deterministic offline proofs over the real production control flow:
+WS candidate -> GenerationFinalityAuthority -> confirmation semaphore ->
+two REST confirmations -> confirm_ws_candidate -> Closed5mAdmission ->
+registry pending activation -> _maybe_stage_lifecycle -> successor stage.
+
+Covers the real-host POST_ACK_LIVE_FINALITY_AND_LIFECYCLE_COHORT_FAILURE:
+WS-silent zero-trade boundaries, sticky runtime finality failures, the
+lifecycle version-name schema bound, bounded failure diagnostics, and the
+First-Launch-20 same-boundary burst.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from collections.abc import Callable
+from datetime import UTC, datetime
+from functools import wraps
+from pathlib import Path
+
+from trader_assist_v0.contracts.common import sha256_hex
+from trader_assist_v0.multi_asset_shadow.data import ClosedBarStore, MultiAssetDataAuthority
+from trader_assist_v0.multi_asset_shadow.hyperliquid_public import PublicDataError
+from trader_assist_v0.multi_asset_shadow.models import (
+    AssetClass,
+    MarketIdentity,
+    MarketLifecycle,
+    RegistryMarket,
+    RegistryTier,
+    RegistryVersion,
+)
+from trader_assist_v0.multi_asset_shadow.registry import MarketRegistryManager
+from trader_assist_v0.multi_asset_shadow.runtime import (
+    MultiAssetPublicRuntime,
+    _lifecycle_version_name,
+)
+
+SLOT = 300_000
+PRODUCTION_SEED = "first-launch-manual-20-20260817"
+NATIVE = ("BTC", "ETH", "HYPE", "SOL", "XRP")
+XYZ = (
+    "xyz:SKHX", "xyz:MU", "xyz:SNDK", "xyz:XYZ100", "xyz:SP500",
+    "xyz:CL", "xyz:DRAM", "xyz:SPCX", "xyz:SILVER", "xyz:NVDA",
+    "xyz:SMSN", "xyz:EWY", "xyz:GOLD", "xyz:TSLA", "xyz:GOOGL",
+)
+
+
+def async_test(function):  # type: ignore[no-untyped-def]
+    @wraps(function)
+    def runner(*args, **kwargs):  # type: ignore[no-untyped-def]
+        return asyncio.run(function(*args, **kwargs))
+
+    return runner
+
+
+class Clock:
+    def __init__(self, seconds: int = 303) -> None:
+        self.seconds = seconds
+        self.monotonic_seconds = 0.0
+
+    def now(self) -> datetime:
+        return datetime.fromtimestamp(self.seconds, UTC)
+
+    def monotonic(self) -> float:
+        return self.monotonic_seconds
+
+    async def sleep(self, seconds: float) -> None:
+        self.monotonic_seconds += seconds
+        self.seconds += int(seconds)
+        await asyncio.sleep(0)
+
+
+def candle(coin: str, open_ms: int, *, close: str = "101") -> dict[str, object]:
+    return {
+        "i": "5m",
+        "s": coin,
+        "t": open_ms,
+        "T": open_ms + SLOT - 1,
+        "o": "100",
+        "h": "102",
+        "l": "99",
+        "c": close,
+        "v": "10",
+    }
+
+
+def flat_candle(coin: str, open_ms: int, *, price: str = "100") -> dict[str, object]:
+    """Provider's own zero-trade bar: no volume, unchanged price."""
+    return {
+        "i": "5m",
+        "s": coin,
+        "t": open_ms,
+        "T": open_ms + SLOT - 1,
+        "o": price,
+        "h": price,
+        "l": price,
+        "c": price,
+        "v": "0",
+    }
+
+
+def market(coin: str = "BTC") -> RegistryMarket:
+    native = not coin.startswith("xyz:")
+    return RegistryMarket(
+        display=coin.removeprefix("xyz:"),
+        tier=RegistryTier.P0,
+        identity=MarketIdentity.create(dex="MAIN" if native else "xyz", coin=coin),
+        asset_class=AssetClass.CRYPTO if native else AssetClass.EQUITY,
+        size_decimals=5,
+        price_max_decimals=1,
+        max_leverage=40,
+        is_hip3=not native,
+        market_status="ACTIVE",
+        lifecycle=MarketLifecycle.WARMING,
+        metadata_observed_at=datetime(2026, 8, 12, tzinfo=UTC),
+        metadata_hash=sha256_hex(coin.encode()),
+    )
+
+
+class ScriptedClient:
+    """Deterministic public REST: responses are keyed by request start_ms."""
+
+    def __init__(
+        self,
+        respond: Callable[[str, int, int], object],
+    ) -> None:
+        self.respond = respond
+        self.calls: list[tuple[str, int, int]] = []
+
+    def closed_candles(self, *, coin: str, interval: str, start_ms: int, end_ms: int) -> object:
+        assert interval == "5m"
+        self.calls.append((coin, start_ms, end_ms))
+        result = self.respond(coin, start_ms, end_ms)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
+def single_market_harness(
+    tmp_path: Path,
+    *,
+    respond: Callable[[str, int, int], object],
+    clock: Clock,
+    coin: str = "BTC",
+) -> tuple[MultiAssetPublicRuntime, MultiAssetDataAuthority, RegistryMarket]:
+    item = market(coin)
+    registry = MarketRegistryManager(tmp_path / "registry", metadata_validator=lambda _: True)
+    seed = RegistryVersion.create(version=PRODUCTION_SEED, created_at=clock.now(), markets=(item,))
+    registry.stage(seed)
+    registry.request_apply(seed.version)
+    authority = MultiAssetDataAuthority(
+        store=ClosedBarStore(tmp_path / "evidence.db"), registry=registry
+    )
+    runtime = MultiAssetPublicRuntime(
+        registry=registry,
+        authority=authority,
+        client=ScriptedClient(respond),  # type: ignore[arg-type]
+        clock=clock.now,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    return runtime, authority, item
+
+
+async def confirm_candidate(
+    runtime: MultiAssetPublicRuntime, market_id: str, payload: dict[str, object]
+) -> None:
+    await runtime.handle_message(json.dumps({"channel": "candle", "data": payload}))
+    task = runtime._finality.task_for(market_id)
+    assert task is not None
+    await task
+
+
+@async_test
+async def test_ws_silent_boundary_is_backfilled_from_provider_not_a_false_gap(
+    tmp_path: Path,
+) -> None:
+    clock = Clock(seconds=603)
+    grid: dict[int, object] = {
+        SLOT: [flat_candle("BTC", SLOT)],
+        2 * SLOT: [candle("BTC", 2 * SLOT)],
+    }
+    runtime, authority, item = single_market_harness(
+        tmp_path, respond=lambda coin, start, end: grid[start], clock=clock
+    )
+    # Warmup ends at boundary 0; slot 1 trades nothing (WS stays silent), so
+    # the next WS candidate jumps straight from open 0 to open 600_000.
+    authority.admit_rest_history(
+        market=item, snapshot=[candle("BTC", 0)], received_at=clock.now()
+    )
+    clock.seconds = 2 * SLOT // 1000 + 5
+    await confirm_candidate(runtime, item.identity.market_id, candle("BTC", 2 * SLOT))
+
+    opens = [bar.open_time_ms for bar in authority.store.bars(item.identity.market_id)]
+    assert opens == [0, SLOT, 2 * SLOT]
+    assert authority.store.is_contiguous_5m(item.identity.market_id)
+    assert not authority.market_failed(item.identity.market_id)
+    assert item.identity.market_id not in runtime.health.failed_markets
+
+
+@async_test
+async def test_transient_finality_failure_fails_closed_then_recovers_market_scoped(
+    tmp_path: Path,
+) -> None:
+    clock = Clock(seconds=603)
+    state = {"fail_once": True}
+
+    def respond(coin: str, start_ms: int, end_ms: int) -> object:
+        if state["fail_once"] and start_ms == SLOT:
+            state["fail_once"] = False
+            return PublicDataError("transient public route failure")
+        if start_ms == SLOT:
+            return [candle(coin, SLOT)]
+        if start_ms == 2 * SLOT:
+            return [candle(coin, 2 * SLOT)]
+        raise AssertionError(f"unexpected window {start_ms}")
+
+    runtime, authority, item = single_market_harness(tmp_path, respond=respond, clock=clock)
+    authority.admit_rest_history(
+        market=item, snapshot=[candle("BTC", 0)], received_at=clock.now()
+    )
+
+    clock.seconds = SLOT // 1000 + 5
+    await confirm_candidate(runtime, item.identity.market_id, candle("BTC", SLOT))
+    market_id = item.identity.market_id
+    assert market_id in runtime.health.failed_markets
+    record = runtime.health.failure_records[market_id]
+    assert record.stage == "finality_confirmation"
+    assert record.recoverable is True
+    assert "PublicDataError" in record.category
+    assert authority.store.last_open(market_id) == 0
+
+    clock.seconds = 2 * SLOT // 1000 + 5
+    await confirm_candidate(runtime, item.identity.market_id, candle("BTC", 2 * SLOT))
+    assert market_id not in runtime.health.failed_markets
+    assert market_id not in runtime.health.failure_records
+    opens = [bar.open_time_ms for bar in authority.store.bars(market_id)]
+    assert opens == [0, SLOT, 2 * SLOT]
+
+    # A recovered market must not stay lifecycle-stuck.
+    clock.seconds = 1_000
+    runtime.health.data_ready = True
+    await runtime._maybe_stage_lifecycle(snapshot_ready=True)
+    pending = runtime.registry.pending_version()
+    assert pending is not None and pending.markets[0].lifecycle is MarketLifecycle.HISTORY_READY
+
+
+@async_test
+async def test_genuine_provider_omission_remains_failed_no_broad_reset(
+    tmp_path: Path,
+) -> None:
+    clock = Clock(seconds=603)
+
+    def respond(coin: str, start_ms: int, end_ms: int) -> object:
+        # The provider genuinely omits slot 1 from every REST surface.
+        if start_ms == 2 * SLOT:
+            return [candle(coin, 2 * SLOT)]
+        if start_ms == 3 * SLOT:
+            return [candle(coin, 3 * SLOT)]
+        return []
+
+    runtime, authority, item = single_market_harness(tmp_path, respond=respond, clock=clock)
+    authority.admit_rest_history(
+        market=item, snapshot=[candle("BTC", 0)], received_at=clock.now()
+    )
+    market_id = item.identity.market_id
+
+    clock.seconds = 2 * SLOT // 1000 + 5
+    await confirm_candidate(runtime, item.identity.market_id, candle("BTC", 2 * SLOT))
+    assert market_id in runtime.health.failed_markets
+    assert authority.market_failed(market_id)
+    record = runtime.health.failure_records[market_id]
+    assert record.recoverable is False
+
+    clock.seconds = 3 * SLOT // 1000 + 5
+    await confirm_candidate(runtime, item.identity.market_id, candle("BTC", 3 * SLOT))
+    assert market_id in runtime.health.failed_markets
+    assert authority.market_failed(market_id)
+    assert authority.store.last_open(market_id) == 0
+    active_item = item.model_copy(update={"lifecycle": MarketLifecycle.ACTIVE})
+    assert not authority.can_formalize(active_item)
+
+
+def test_lifecycle_version_name_stays_bounded_deterministic_and_unique() -> None:
+    predecessor = PRODUCTION_SEED
+    predecessor_hash = sha256_hex(b"seed")
+    names = []
+    for suffix in ("history_ready", "snapshot_ready", "active", "active", "history_ready"):
+        name = _lifecycle_version_name(predecessor, predecessor_hash, suffix)
+        assert len(name) <= 80
+        names.append(name)
+        predecessor = name
+        predecessor_hash = sha256_hex(predecessor.encode())
+    assert len(set(names)) == len(names)
+    assert names[0] == f"{PRODUCTION_SEED}-lifecycle-history_ready"
+    again = _lifecycle_version_name(PRODUCTION_SEED, sha256_hex(b"seed"), "history_ready")
+    assert again == names[0]
+
+
+@async_test
+async def test_lifecycle_reaches_active_with_production_length_seed(tmp_path: Path) -> None:
+    clock = Clock(seconds=603)
+    runtime, authority, item = single_market_harness(
+        tmp_path, respond=lambda coin, start, end: [candle(coin, start)], clock=clock
+    )
+    authority.admit_rest_history(
+        market=item, snapshot=[candle("BTC", SLOT)], received_at=clock.now()
+    )
+    assert runtime.registry.active() is not None
+    for open_ms, expected in (
+        (2 * SLOT, MarketLifecycle.HISTORY_READY),
+        (3 * SLOT, MarketLifecycle.SNAPSHOT_READY),
+        (4 * SLOT, MarketLifecycle.ACTIVE),
+    ):
+        await runtime._maybe_stage_lifecycle(snapshot_ready=True)
+        pending = runtime.registry.pending_version()
+        assert pending is not None
+        assert len(pending.version) <= 80
+        assert pending.markets[0].lifecycle is expected
+        clock.seconds = open_ms // 1000 + 303
+        authority.admit_rest_history(
+            market=pending.markets[0], snapshot=[candle("BTC", open_ms)], received_at=clock.now()
+        )
+    active = runtime.registry.active()
+    assert active is not None
+    assert active.markets[0].lifecycle is MarketLifecycle.ACTIVE
+    assert len(active.version) <= 80
+    assert item.identity.market_id not in runtime.health.failed_markets
+
+
+@async_test
+async def test_failure_records_expose_bounded_non_durable_diagnostics(tmp_path: Path) -> None:
+    clock = Clock(seconds=603)
+    runtime, authority, item = single_market_harness(
+        tmp_path, respond=lambda coin, start, end: [candle(coin, start)], clock=clock
+    )
+    market_id = item.identity.market_id
+    await runtime.handle_message(
+        json.dumps({"channel": "candle", "data": {"i": "5m", "s": "BTC"}})
+    )
+    assert market_id in runtime.health.failed_markets
+    record = runtime.health.failure_records[market_id]
+    assert record.stage == "ws_candidate"
+    assert record.coin == "BTC"
+    assert record.recoverable is False
+    assert len(record.category) <= 160
+    # RuntimeHealth diagnostics are memory-only: the durable evidence store
+    # schema is untouched by the repair.
+    tables = {
+        row[0]
+        for row in authority.store.connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )
+    }
+    assert "failure_records" not in tables
+
+
+class QueueSocket:
+    def __init__(self) -> None:
+        self.queue: asyncio.Queue[str] = asyncio.Queue()
+
+    async def send(self, raw: str) -> None:
+        return None
+
+    async def recv(self) -> str:
+        return await self.queue.get()
+
+    async def close(self) -> None:
+        return None
+
+
+def ack_frame(coin: str) -> str:
+    return json.dumps(
+        {
+            "channel": "subscriptionResponse",
+            "data": {
+                "method": "subscribe",
+                "subscription": {"type": "candle", "coin": coin, "interval": "5m"},
+            },
+        }
+    )
+
+
+class CohortGrid:
+    """Contiguous provider grid: silent xyz slot 1, one genuine SP500 omission."""
+
+    def __init__(self) -> None:
+        self.fail_btc_once = True
+
+    def candles(self, coin: str, start_ms: int, end_ms: int) -> list[dict[str, object]]:
+        out: list[dict[str, object]] = []
+        for open_ms in range(max(0, start_ms), end_ms, SLOT):
+            if coin == "xyz:SP500" and open_ms == 2 * SLOT:
+                continue
+            if coin in XYZ and open_ms == SLOT:
+                out.append(flat_candle(coin, open_ms))
+            else:
+                out.append(candle(coin, open_ms))
+        return out
+
+
+@async_test
+async def test_first_launch_20_same_boundary_burst_converges_strictly(tmp_path: Path) -> None:
+    clock = Clock(seconds=303)
+    coins = NATIVE + XYZ
+    markets = tuple(market(coin) for coin in coins)
+    registry = MarketRegistryManager(tmp_path / "registry", metadata_validator=lambda _: True)
+    seed = RegistryVersion.create(
+        version=PRODUCTION_SEED, created_at=clock.now(), markets=markets
+    )
+    registry.stage(seed)
+    registry.request_apply(seed.version)
+    authority = MultiAssetDataAuthority(
+        store=ClosedBarStore(tmp_path / "evidence.db"), registry=registry
+    )
+    grid = CohortGrid()
+    client = ScriptedGrid(grid)
+    runtime = MultiAssetPublicRuntime(
+        registry=registry,
+        authority=authority,
+        client=client,  # type: ignore[arg-type]
+        clock=clock.now,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    socket = QueueSocket()
+
+    async def factory(_: str) -> QueueSocket:
+        return socket
+
+    runtime.websocket_factory = factory  # type: ignore[assignment]
+    finalized: list[tuple[str, int]] = []
+    runtime.on_finalized_5m = lambda bar, mode: finalized.append(
+        (bar.market_id, bar.open_time_ms)
+    )
+    shutdown = asyncio.Event()
+    run_task = asyncio.create_task(runtime.run(shutdown))
+    for _ in range(20_000):
+        if runtime.health.subscriptions == 20 or run_task.done():
+            break
+        await asyncio.sleep(0)
+    for coin in coins:
+        await socket.queue.put(ack_frame(coin))
+    for _ in range(20_000):
+        if runtime.health.data_ready or run_task.done():
+            break
+        await asyncio.sleep(0)
+    assert runtime.health.data_ready
+
+    # Slot 1: natives trade, every xyz market is WS-silent. Slot 2 onward:
+    # everyone trades except that SP500's own provider row is genuinely gone.
+    phases = (
+        (SLOT, NATIVE),
+        (2 * SLOT, coins),
+        (3 * SLOT, coins),
+    )
+    for open_ms, trading in phases:
+        for coin in trading:
+            await socket.queue.put(
+                json.dumps({"channel": "candle", "data": candle(coin, open_ms)})
+            )
+        clock.seconds = open_ms // 1000 + 303
+        clock.monotonic_seconds = clock.seconds
+        for _ in range(50_000):
+            await asyncio.sleep(0)
+        for task in list(runtime._finality.tasks.values()):
+            if not task.done():
+                await asyncio.wait_for(asyncio.shield(task), timeout=5)
+
+    shutdown.set()
+    await socket.queue.put(ack_frame("BTC"))
+    await asyncio.wait_for(run_task, timeout=10)
+
+    active = registry.active()
+    assert active is not None
+    sp500_id = next(m.identity.market_id for m in markets if m.identity.coin == "xyz:SP500")
+    healthy = [m for m in active.markets if m.identity.market_id != sp500_id]
+    assert all(m.lifecycle is MarketLifecycle.ACTIVE for m in healthy)
+    assert authority.market_failed(sp500_id)
+    assert runtime.health.failed_markets == {sp500_id}
+
+    clock.seconds = 3 * SLOT // 1000 + 303
+    ready = runtime.readiness_snapshot()
+    assert set(ready.ready_market_ids) == {m.identity.market_id for m in healthy}
+    assert ready.failed_market_ids == (sp500_id,)
+    healthy_ids = {m.identity.market_id for m in healthy}
+    for market_id in healthy_ids:
+        assert authority.store.last_open(market_id) == 3 * SLOT
+    live_finalized = [open_ms for _, open_ms in finalized if open_ms > 0]
+    assert live_finalized and all(open_ms == SLOT for open_ms in live_finalized[:4])
+
+
+class ScriptedGrid(ScriptedClient):
+    def __init__(self, grid: CohortGrid) -> None:
+        super().__init__(lambda coin, start, end: self._respond(coin, start, end))
+        self.grid = grid
+
+    def _respond(self, coin: str, start_ms: int, end_ms: int) -> object:
+        if coin == "BTC" and self.grid.fail_btc_once and start_ms == SLOT:
+            self.grid.fail_btc_once = False
+            return PublicDataError("transient public route failure")
+        return self.grid.candles(coin, start_ms, end_ms)
