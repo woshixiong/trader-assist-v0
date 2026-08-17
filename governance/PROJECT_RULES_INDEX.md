@@ -63,12 +63,13 @@ The unified standard consolidates the durable project-wide rules covering:
 - scale/provider/freshness budgets and realistic-size tests;
 - capability-matched task allocation;
 - coherent continuous execution without using the user as a routine message bus;
-- one primary Writer for shared authority plus independent review;
+- one primary Writer plus independent review;
 - exact artifact / exact-head CI / delta-first review;
 - one normal repair + at most one exceptional repair, then holistic convergence;
 - complete task packets and prohibition on architecture-critical prompt addenda;
 - lossless handoff for authority-bearing tasks;
 - one-paste macOS Terminal delivery;
+- lossless Prompt File Mode for oversized authoritative task packets;
 - Codex session/prompt/token-efficiency rules;
 - automation/toil and third-party service rules;
 - explicit user-retained release/runtime/account/exchange authority gates.
@@ -124,6 +125,27 @@ The current default for user-operated macOS engineering work is **one contiguous
 
 Engineering owns the routing inside the block. The user should not have to separately `cd`, launch Codex, choose shell-vs-agent text, paste a second prompt, manually select the branch/worktree, or create a transport file when those steps can safely be encoded.
 
+### Oversized authoritative Task Packet / Prompt File Mode
+
+Transport/UI length limits are transport constraints, never authority to shorten or weaken an authoritative Writer/Reviewer Task Packet.
+
+When a complete authoritative packet approaches or exceeds the destination Agent/UI single-message limit:
+
+1. **Do not summarize, trim, split or ask the user to reassemble architecture-critical content.** The complete Task Packet remains one immutable logical artifact.
+2. Generate the complete packet as one UTF-8 file and bind it to a SHA-256 digest. SHA-256 is used here as an integrity fingerprint so later transport can detect accidental or unintended content changes.
+3. Store/install the packet under the local control-plane path:
+   `$HOME/trader-assist-v0-control/agent-packets/<TASK_ID>/...`
+   using restrictive local permissions such as mode `600` where practical.
+4. The user-facing Terminal block should locate/copy the downloaded artifact, verify the exact SHA-256, fail closed on missing file or hash mismatch, and print the short downstream read instruction. Do not move the same oversized payload into another heredoc merely to bypass one UI limit.
+5. The downstream executor receives only a short pointer instruction such as `cat '<ABSOLUTE_PACKET_PATH>'`, must read the complete file from beginning to end before acting, and must not summarize, shorten, reinterpret or substitute any architecture contract, attack case, authority boundary, stop condition, validation gate or output requirement.
+6. If supported by the executor, an equally lossless direct file attachment/CLI file-input mechanism may replace `cat`, but only when exact packet identity/integrity is preserved.
+7. Missing packet, SHA mismatch, unreadable file, truncated/incomplete read, or packet identity disagreement means `SAFE_STOP`; never continue from a partial prompt.
+8. The user must not be used to copy multiple chunks between ChatGPT, Terminal and the executor. If one unavoidable human file-download step is required by the platform, Engineering should still reduce the remainder to one Terminal paste plus one short executor instruction.
+
+For the currently observed Trae/GLM single-message ceiling of approximately **20,000 characters**, use **18,000 characters as the conservative inline cutoff** and switch to Prompt File Mode at or above that size. Treat this as an observed transport bound, not a permanent vendor/API contract: if the destination limit changes, re-verify it and retain a safety margin rather than hard-coding 20,000 into architecture.
+
+This Prompt File Mode is an explicit exception to the ordinary preference that the user should not manually create a transport file: **Engineering creates and integrity-binds the file; the user only performs the minimum technically unavoidable placement/Terminal step.**
+
 The older requirement that every user-facing handoff separately expose `Terminal local command` versus `Terminal -> Codex CLI` is superseded when it adds no safety value. The orchestrator must still know and encode the execution class internally, but it must not turn that distinction into extra user work.
 
 Extra human steps are allowed only when technically unavoidable or required by a security/authority gate, such as MFA, OS credential approval, secret handling, GUI-only action, explicit Mark Ready/merge/deploy/runtime authorization, credentials/private API/signing or exchange-write authority.
@@ -151,7 +173,7 @@ The unified standard intentionally absorbs the durable project-wide principles f
 - PR #86 — Engineering Workflow V4 efficiency method;
 - PR #79 — Codex token-efficiency and prompt rules;
 - PR #67 — mature-solution-first and cumulative small-step delivery;
-- PR #58 — capability-matched continuous-stage execution;
+- PR #58 — capability-matched continuous-stage execution rules;
 - PR #51 — simplicity-first and route stop-loss.
 
 After the unified rule is independently accepted and merged, these Drafts are historical/salvage inputs rather than competing active constitutions. Do not resume patching an old governance branch merely because it contains an earlier version of an absorbed rule.
