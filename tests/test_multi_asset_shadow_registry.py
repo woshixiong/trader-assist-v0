@@ -77,21 +77,47 @@ def admit(
 
 def test_validate_request_and_data_boundary_apply_are_atomic(tmp_path: Path) -> None:
     subject = manager(tmp_path)
-    one = registry("one", market())
+    one = registry("one", market(lifecycle=MarketLifecycle.ACTIVE))
     two = registry("two", market("ETH"))
     subject.stage(one)
     subject.stage(two)
     subject.request_apply("one")
+    authority = MultiAssetDataAuthority(
+        store=ClosedBarStore(tmp_path / "evidence.db"), registry=subject
+    )
     admit(subject, tmp_path, one.markets[0])
     assert subject.active() is not None and subject.active().version == "one"
     with pytest.raises(AttributeError):
         subject.apply_at_closed_5m()  # type: ignore[attr-defined]
     subject.request_apply("two")
     admit(subject, tmp_path, two.markets[0], 300_000)
+    # While a Registry is active, an individual market bar must never
+    # activate a pending global successor: activation belongs to the cohort
+    # barrier capability only.
+    assert subject.active() is not None and subject.active().version == "one"
+    assert subject.pending_version() is not None and subject.pending_version().version == "two"
+    # The required ACTIVE cohort row at this boundary is not durable under
+    # the active epoch yet: no capability, no activation.
+    btc_id = one.markets[0].identity.market_id
+    admission = authority.cohort_boundary_admission(
+        boundary_open_time_ms=300_000, market_ids=(btc_id,)
+    )
+    assert admission is None
+    admit(subject, tmp_path, one.markets[0], 300_000)
+    admission = authority.cohort_boundary_admission(
+        boundary_open_time_ms=300_000, market_ids=(btc_id,)
+    )
+    assert admission is not None
+    applied = subject.apply_cohort_admission(admission)
+    assert applied is not None and applied.version == "two"
     assert subject.active() is not None and subject.active().version == "two"
+    with pytest.raises(RegistryError):
+        subject.apply_cohort_admission(admission)
     subject.rollback_request("one")
     admit(subject, tmp_path, one.markets[0], 600_000)
-    assert subject.active() is not None and subject.active().version == "one"
+    # The rolled-back pending pointer also moves only at a cohort barrier,
+    # never on an individual market bar.
+    assert subject.active() is not None and subject.active().version == "two"
 
 
 def test_invalid_candidate_keeps_previous_active_version(tmp_path: Path) -> None:

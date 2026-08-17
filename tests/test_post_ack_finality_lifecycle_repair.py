@@ -782,9 +782,13 @@ async def test_lifecycle_reaches_active_with_production_length_seed(tmp_path: Pa
         assert len(pending.version) <= 80
         assert pending.markets[0].lifecycle is expected
         clock.seconds = open_ms // 1000 + 303
-        authority.admit_rest_history(
-            market=pending.markets[0], snapshot=[candle("BTC", open_ms)], received_at=clock.now()
-        )
+        clock.monotonic_seconds = clock.seconds
+        # The staged successor applies only at the cohort barrier, after the
+        # dual-REST boundary proof made the boundary row durable.
+        report = await runtime.process_cohort_boundary(open_ms)
+        assert report.successor_applied
+        assert runtime.registry.active().version == pending.version
+        assert runtime.registry.pending_version() is None
     active = runtime.registry.active()
     assert active is not None
     assert active.markets[0].lifecycle is MarketLifecycle.ACTIVE
@@ -948,6 +952,10 @@ async def drive_first_launch_cohort(
         for task in list(runtime._finality.tasks.values()):
             if not task.done():
                 await asyncio.wait_for(asyncio.shield(task), timeout=5)
+        # The clock-driven cohort barrier closes each phase: the boundary's
+        # durable rows are dual-REST re-proven (idempotent) and at most one
+        # staged successor applies after the boundary's processing.
+        await runtime.process_cohort_boundary(open_ms)
         if after_phase is not None:
             after_phase(open_ms, runtime)
 
@@ -1024,14 +1032,17 @@ async def test_first_launch_20_recoverable_failure_recovers_to_whole_active_coho
         extra_phases=((4 * SLOT, NATIVE + XYZ),),
         after_phase=after_phase,
     )
-    # After slot 1: SP500's slot-1 confirmation transport failed once
-    # (recoverable), zero ACTIVE.
-    assert checks[0] == (SLOT, 0, True, True)
-    # After slot 2: SP500 transiently failed again (recoverable), still zero
-    # ACTIVE — BTC's recovery cannot partially activate the launch cohort.
-    assert checks[1] == (2 * SLOT, 0, True, True)
-    # After slot 4: the exact 20/20 cohort reached ACTIVE coherently and the
-    # recovered failure is fully cleared.
+    # After slot 1: SP500's slot-1 WS confirmation transport failed once
+    # (recoverable), zero ACTIVE -- and the cohort barrier's own dual-REST
+    # proof then re-admitted the missed row, clearing the recoverable record
+    # before the staged HISTORY_READY successor applied.
+    assert checks[0] == (SLOT, 0, False, False)
+    # After slot 2: the transient transport failure repeated and was again
+    # recovered by the barrier proof; SNAPSHOT_READY applied as one cohort.
+    assert checks[1] == (2 * SLOT, 0, False, False)
+    # After slot 3: all-ACTIVE applied at the barrier, never partially.
+    assert checks[2] == (3 * SLOT, 20, False, False)
+    # After slot 4: the exact 20/20 ACTIVE cohort is a fixed point.
     assert checks[3] == (4 * SLOT, 20, False, False)
     active = registry.active()
     assert active is not None
@@ -1174,17 +1185,17 @@ async def test_first_launch_mixed_pre_active_converges_atomically_to_active(
         assert len({staged[mid] for mid in moved}) == 1, (step, staged)
         unchanged = [mid for mid in prior_lifecycles if mid not in moved_set]
         assert all(staged[mid] is prior_lifecycles[mid] for mid in unchanged), step
-        # Real activation: genuine closed-5m admissions consume the pending
-        # successor's Closed5mAdmission capability.
+        # Real activation happens only at the cohort barrier: the dual-REST
+        # boundary proof makes every cohort row durable, then exactly one
+        # staged successor applies -- never on an individual market bar.
         clock.seconds = boundary_ms // 1000 + 303
-        for item in pending.markets:
-            authority.admit_rest_history(
-                market=item,
-                snapshot=[candle(item.identity.coin, boundary_ms)],
-                received_at=clock.now(),
-            )
+        clock.monotonic_seconds = clock.seconds
+        report = await runtime.process_cohort_boundary(boundary_ms)
+        assert report.successor_applied
+        assert report.failed_market_ids == ()
         applied = registry.active()
         assert applied is not None
+        assert applied.version == pending.version
         assert registry.pending_version() is None
         counts = Counter(item.lifecycle for item in applied.markets)
         observed_active_counts.append(counts[MarketLifecycle.ACTIVE])

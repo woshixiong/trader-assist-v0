@@ -1325,7 +1325,14 @@ class MultiAssetShadowCoordinator:
     def strategy_recovery_boundaries(
         self, *, market_id: str, current_source_open_time_ms: int
     ) -> tuple[int, ...]:
-        """Derive missing chronological checkpoints from retained evidence and bars."""
+        """Derive missing chronological checkpoints from retained evidence and bars.
+
+        Retained Strategy authority for a boundary dominates across Registry
+        epochs: an evaluation bound to a predecessor Registry is valid history,
+        never corruption, and is never re-created under a newer Registry.  Only
+        an evaluation claiming the *active* version with a wrong hash is a
+        conflict.
+        """
         active = self._active_registry()
         latest: int | None = None
         seen: set[int] = set()
@@ -1336,29 +1343,33 @@ class MultiAssetShadowCoordinator:
             payload = record.payload
             if (
                 payload.get("market_id") != market_id
-                or payload.get("registry_version") != active.version
                 or payload.get("strategy_version") != STRATEGY_VERSION
                 or payload.get("parameter_version") != PARAMETER_VERSION
             ):
                 continue
-            if payload.get("registry_hash") != active.content_hash:
-                raise IntegrationError("retained Strategy checkpoint conflicts with Registry")
             boundary = int(payload.get("source_open_time_ms", -1))
             if boundary in seen:
                 raise IntegrationError("duplicate retained Strategy boundary authority")
             seen.add(boundary)
+            if (
+                payload.get("registry_version") == active.version
+                and payload.get("registry_hash") != active.content_hash
+            ):
+                raise IntegrationError("retained Strategy checkpoint conflicts with Registry")
             latest = boundary if latest is None else max(latest, boundary)
         if latest is not None and latest > current_source_open_time_ms:
             raise IntegrationError("Strategy checkpoint is ahead of requested boundary")
         if latest == current_source_open_time_ms:
             return ()
         rows = self._data.store.connection.execute(
-            """SELECT open_time_ms FROM closed_bars
+            """SELECT open_time_ms, registry_version, registry_content_hash
+               FROM closed_bars
                WHERE market_id = ? AND interval = '5m' AND open_time_ms <= ?
                ORDER BY open_time_ms""",
             (market_id, current_source_open_time_ms),
         ).fetchall()
         available = tuple(int(row[0]) for row in rows)
+        bindings = tuple((row[1], row[2]) for row in rows)
         if not available or available[-1] != current_source_open_time_ms:
             raise IntegrationError("requested Strategy recovery boundary is unavailable")
         if latest is None:
@@ -1373,10 +1384,15 @@ class MultiAssetShadowCoordinator:
             )
             # The frozen Kernel requires M20 plus a current A15. Earlier
             # prefixes remain data context but are not valid Strategy inputs.
+            # Only rows already bound to the active Registry epoch may become
+            # NEW evaluation checkpoints; predecessor-epoch rows are historical
+            # context that must not gain retrospective action.
+            active_binding = (active.version, active.content_hash)
             eligible = tuple(
                 boundary
                 for index, boundary in enumerate(available)
                 if index >= 20
+                and bindings[index] == active_binding
                 and sum(
                     open_time_ms + 600_000 <= boundary
                     for open_time_ms in fifteen_minute_opens
@@ -1392,9 +1408,18 @@ class MultiAssetShadowCoordinator:
         return missing
 
     def has_retained_strategy_evaluation(
-        self, *, market_id: str, source_open_time_ms: int
+        self,
+        *,
+        market_id: str,
+        source_open_time_ms: int,
+        any_registry_epoch: bool = False,
     ) -> bool:
-        """Report exact durable Strategy completion under current authority."""
+        """Report exact durable Strategy completion under current authority.
+
+        With ``any_registry_epoch`` the check honors retained authority from
+        predecessor Registry epochs too: a boundary already evaluated under an
+        older epoch is never re-evaluated under a newer Registry.
+        """
         active = self._active_registry()
         matches: list[StrategyEvaluation] = []
         for record_id in _record_ids(self._evidence, "strategy_evaluation"):
@@ -1405,12 +1430,16 @@ class MultiAssetShadowCoordinator:
             if (
                 payload.get("market_id") != market_id
                 or payload.get("source_open_time_ms") != source_open_time_ms
-                or payload.get("registry_version") != active.version
                 or payload.get("strategy_version") != STRATEGY_VERSION
                 or payload.get("parameter_version") != PARAMETER_VERSION
             ):
                 continue
-            if payload.get("registry_hash") != active.content_hash:
+            if not any_registry_epoch and payload.get("registry_version") != active.version:
+                continue
+            if (
+                payload.get("registry_version") == active.version
+                and payload.get("registry_hash") != active.content_hash
+            ):
                 raise IntegrationError("retained Strategy checkpoint conflicts with Registry")
             matches.append(record)
         if len(matches) > 1:
@@ -1990,13 +2019,19 @@ class MultiAssetShadowCoordinator:
     def retained_scanner_run(
         self, *, boundary_open_time_ms: int
     ) -> ScannerRunReceipt | None:
+        """Retained raw-discovery Scanner authority for a boundary.
+
+        Retained Scanner authority dominates across Registry epochs: a run
+        bound to a predecessor Registry is durable truth for its boundary and
+        is never re-created under a newer Registry.  Only a run claiming the
+        *active* version with a wrong hash is a conflict.
+        """
         active = self._active_registry()
         matches = tuple(
             record
             for record_id in _record_ids(self._evidence, "scanner_evidence")
             if isinstance((record := self._evidence.get(record_id)), ScannerEvidence)
             and record.payload.get("scan_boundary_open_time_ms") == boundary_open_time_ms
-            and record.payload.get("registry_version") == active.version
             and record.payload.get("evidence_role", "RAW_DISCOVERY") == "RAW_DISCOVERY"
         )
         if len(matches) > 1:
@@ -2005,9 +2040,12 @@ class MultiAssetShadowCoordinator:
             return None
         scan = matches[0]
         if (
-            scan.payload.get("registry_hash") != active.content_hash
-            or scan.payload.get("scanner_version") != SCANNER_VERSION
+            scan.payload.get("scanner_version") != SCANNER_VERSION
             or scan.payload.get("parameter_version") != PARAMETER_VERSION
+        ):
+            raise IntegrationError("retained Scanner run conflicts with current authority")
+        if scan.payload.get("registry_version") == active.version and (
+            scan.payload.get("registry_hash") != active.content_hash
         ):
             raise IntegrationError("retained Scanner run conflicts with current authority")
         payload = scan.payload.get("observations")

@@ -391,6 +391,15 @@ async def test_lifecycle_advances_one_safe_boundary_at_a_time(tmp_path: Path) ->
             snapshot=[candle("BTC", open_ms)],
             received_at=clock.now(),
         )
+        # Successors apply only through the cohort barrier capability: during
+        # Initial-Launch convergence the actionable ACTIVE set is empty, so
+        # the staged successor applies on the capability alone.
+        admission = authority.cohort_boundary_admission(
+            boundary_open_time_ms=open_ms, market_ids=()
+        )
+        assert admission is not None
+        applied = runtime.registry.apply_cohort_admission(admission)
+        assert applied is not None and applied.markets[0].lifecycle is expected
     active = runtime.registry.active()
     assert active is not None and active.markets[0].lifecycle is MarketLifecycle.ACTIVE
     assert authority.can_formalize(active.markets[0])

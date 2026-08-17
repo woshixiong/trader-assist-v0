@@ -21,7 +21,7 @@ from trader_assist_v0.contracts.common import canonical_json_bytes
 from .models import MarketLifecycle, RegistryMarket, RegistryVersion
 
 if TYPE_CHECKING:
-    from .data import Closed5mAdmission
+    from .data import Closed5mAdmission, Closed5mCohortAdmission
 
 
 class RegistryError(ValueError):
@@ -188,7 +188,18 @@ class MarketRegistryManager:
         This deliberately has no ``ClosedBar`` parameter and no public
         counterpart.  The data authority verifies provider finality and calls
         it through this narrow capability seam.
+
+        Once an active Registry exists, an individual market admission must
+        never activate a pending global successor mid-boundary: activation is
+        reserved for the cohort barrier capability
+        (:meth:`apply_cohort_admission`).  This path only establishes the
+        initial Registry authority.
         """
+        if self.active() is not None:
+            raise RegistryError(
+                "individual bar admission cannot activate a successor while a Registry"
+                " is active; activation belongs to the cohort barrier"
+            )
         issuer = getattr(admission, "_issuer", None)
         if (
             issuer is not self._boundary_issuer
@@ -197,6 +208,29 @@ class MarketRegistryManager:
             raise RegistryError(
                 "registry activation requires provider admitted boundary capability"
             )
+        stamp = admission.bar.received_at.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
+        return self._activate_pending(stamp=stamp)
+
+    def apply_cohort_admission(
+        self, admission: Closed5mCohortAdmission
+    ) -> RegistryVersion | None:
+        """Consume one cohort-barrier capability exactly once to apply pending.
+
+        The Registry never learns the finality transport: the opaque
+        process-local capability is the Data authority's proof that the
+        required cohort boundary rows were verified durable and coherent
+        under the active epoch before the pointer advanced.
+        """
+        issuer = getattr(admission, "_issuer", None)
+        if (
+            issuer is not self._boundary_issuer
+            or not getattr(admission, "_consume", lambda: False)()
+        ):
+            raise RegistryError("registry activation requires a cohort boundary capability")
+        stamp = admission.observed_at.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
+        return self._activate_pending(stamp=stamp)
+
+    def _activate_pending(self, *, stamp: str) -> RegistryVersion | None:
         candidate = self.pending_version()
         if candidate is None:
             return None
@@ -205,7 +239,6 @@ class MarketRegistryManager:
         pointer = {"version": candidate.version, "content_hash": candidate.content_hash}
         _write_atomic(self.pointer, canonical_json_bytes(pointer))
         if prior is not None and prior_pointer is not None:
-            stamp = admission.bar.received_at.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
             _write_atomic(self.history / f"{stamp}-{prior.version}.json", prior_pointer)
         try:
             self.pending.unlink()

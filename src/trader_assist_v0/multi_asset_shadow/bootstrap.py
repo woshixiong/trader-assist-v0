@@ -149,6 +149,10 @@ class MultiAssetProductionBootstrap:
             client=public_client,
             clock=clock,
             sleep=sleep,
+            # Production cadence: the clock-driven cohort barrier owns the one
+            # canonical closed-5m finality route and the application wake.
+            # WebSocket candidates remain diagnostics/future hybrid input only.
+            ws_candidate_finality=False,
         )
         coordinator = MultiAssetShadowCoordinator(
             registry=registry,
@@ -191,6 +195,13 @@ class MultiAssetProductionBootstrap:
         async with self._lock:
             markets, waiting_for_peers = self._boundary_markets(boundary_open_time_ms)
             if waiting_for_peers:
+                # ACTION LANE != MAINTENANCE LANE: a non-actionable boundary
+                # creates no new Scanner/Strategy/Formal authority, but
+                # already-authorized maintenance keeps progressing -- retained
+                # Formal decisions whose live boundary ended expire, and the
+                # Outcome cadence ticks without retrospective live trades.
+                self._expire_prior_pending(boundary_open_time_ms)
+                outcome_report = self.advance_outcomes()
                 return BoundaryReport(
                     boundary_open_time_ms=boundary_open_time_ms,
                     evaluation_mode=mode,
@@ -199,7 +210,9 @@ class MultiAssetProductionBootstrap:
                     evaluated_market_ids=(),
                     formal_shadow_order_ids=(),
                     plan_rejections=(),
-                    failures=(),
+                    failures=()
+                    if outcome_report.failure is None
+                    else (outcome_report.failure,),
                 )
             failures: list[BoundaryFailure] = []
             compositions: dict[str, ScannerCompositionReceipt] = {}
@@ -245,6 +258,7 @@ class MultiAssetProductionBootstrap:
                         and not self.coordinator.has_retained_strategy_evaluation(
                             market_id=market_id,
                             source_open_time_ms=boundary_open_time_ms,
+                            any_registry_epoch=True,
                         )
                     ):
                         boundaries += (boundary_open_time_ms,)

@@ -16,6 +16,7 @@ import asyncio
 import json
 import time
 from collections.abc import Awaitable, Callable, Mapping, Set
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -26,6 +27,7 @@ from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
 from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
 
+from .cohort_finality import Closed5mCohortFinality, RestCohortFinality
 from .data import DataRouteError, MultiAssetDataAuthority
 from .finality import (
     FIVE_MINUTES_MS,
@@ -55,6 +57,10 @@ WARMUP_ADMISSION_CHUNK_BARS: Final = 64
 WARMUP_CATCHUP_ROUNDS_MAX: Final = 3
 FRESHNESS_TARGET_SECONDS: Final = 30.0
 FRESHNESS_ACTION_CEILING_SECONDS: Final = 60.0
+# Operational pacing only: after the heavy cold-start warmup, the first full
+# live cohort REST confirmation burst waits at least this long.  Never a
+# market-data truth or durable authority; skipping a boundary is acceptable.
+STARTUP_REST_COOLDOWN_SECONDS: Final = 60.0
 # Mirrors RegistryVersion.version max_length; the lifecycle name chain below
 # must never hand schema validation a name it must reject.
 _REGISTRY_VERSION_NAME_MAX: Final = 80
@@ -187,6 +193,8 @@ class RuntimeHealth:
     # authority, queue, or platform of its own.
     failure_records: dict[str, MarketFailureRecord] = field(default_factory=dict)
     callback_failures: list[FinalizedCallbackFailure] = field(default_factory=list)
+    # Bounded, non-durable diagnostics for unexpected cohort-barrier errors.
+    barrier_incidents: list[str] = field(default_factory=list)
     data_ready: bool = False
 
 
@@ -280,6 +288,19 @@ class RuntimeReadinessSnapshot:
             raise ValueError("runtime readiness snapshot hash is invalid")
 
 
+@dataclass(frozen=True)
+class CohortBarrierReport:
+    """Non-durable outcome of one clock-driven cohort boundary reconciliation."""
+
+    boundary_open_time_ms: int
+    registry_version: str | None
+    registry_content_hash: str | None
+    finalized_market_ids: tuple[str, ...]
+    failed_market_ids: tuple[str, ...]
+    successor_applied: bool
+    action: object | None
+
+
 class ReconnectRequired(RuntimeError):
     """An expected transport/readiness incident, not an authority failure."""
 
@@ -323,6 +344,8 @@ class MultiAssetPublicRuntime:
         on_reconnect: Callable[[int], object | None] | None = None,
         confirmation_concurrency: int = _MAX_CONFIRMATIONS,
         acknowledgement_timeout_seconds: float = _ACK_TIMEOUT_SECONDS,
+        cohort_finality: Closed5mCohortFinality | None = None,
+        ws_candidate_finality: bool = True,
     ) -> None:
         if confirmation_concurrency < 1 or acknowledgement_timeout_seconds <= 0:
             raise ValueError("runtime bounds must be positive")
@@ -336,6 +359,27 @@ class MultiAssetPublicRuntime:
         self.on_finalized_5m = on_finalized_5m
         self.on_reconnect = on_reconnect
         self.acknowledgement_timeout_seconds = acknowledgement_timeout_seconds
+        # The clock-driven cohort barrier is the one production application
+        # authority.  The per-market WS finality machinery stays available for
+        # diagnostics/future hybrid finality, but the production composition
+        # disables it so a WS candidate can never stage global lifecycle,
+        # switch the global Registry, wake whole-cohort Scanner/Strategy, or
+        # trigger a duplicate pair of REST confirmations.
+        self._ws_candidate_finality = ws_candidate_finality
+        self._cohort_finality: Closed5mCohortFinality = (
+            cohort_finality
+            if cohort_finality is not None
+            else RestCohortFinality(
+                client=client,
+                authority=authority,
+                clock=clock,
+                monotonic=monotonic,
+                sleep=sleep,
+                confirmation_concurrency=confirmation_concurrency,
+            )
+        )
+        self._warmup_completed_monotonic: float | None = None
+        self._barrier_task: asyncio.Task[None] | None = None
         self.health = RuntimeHealth()
         self._finality = GenerationFinalityAuthority(
             confirm=self._confirm_generation,
@@ -405,6 +449,10 @@ class MultiAssetPublicRuntime:
         # adversarial clock cannot split readiness across internal calls.
         observed_at_ms = int(self.clock().timestamp() * 1000)
         latest_open = self._latest_completed_open_at(observed_at_ms)
+        # Failure observability spans the whole selected cohort; the ACTION
+        # gate consumes it only through the ACTIVE required set, so a failed
+        # WARMING hot-add is diagnostic state that never pauses the ACTIVE
+        # cohort.
         failed = {
             market.identity.market_id
             for market in active.markets
@@ -713,6 +761,13 @@ class MultiAssetPublicRuntime:
                 # A partial or mixed-time cohort must never become actionable:
                 # fail closed before any WebSocket, subscription, or live flow.
                 return
+            self._warmup_completed_monotonic = self.monotonic()
+            if not self._ws_candidate_finality:
+                # Production cadence: the clock-driven cohort barrier owns the
+                # global application wake for the whole run, across reconnects.
+                self._barrier_task = asyncio.create_task(
+                    self._cohort_barrier_loop(shutdown)
+                )
             await self._maybe_stage_lifecycle(snapshot_ready=False)
             reconnecting = False
             consecutive_incomplete_recoveries = 0
@@ -766,6 +821,12 @@ class MultiAssetPublicRuntime:
                     if websocket is not None:
                         await self._close_socket(websocket)
         finally:
+            barrier = self._barrier_task
+            if barrier is not None:
+                barrier.cancel()
+                with suppress(asyncio.CancelledError):
+                    await barrier
+                self._barrier_task = None
             await self._finality.close()
 
     async def _close_socket(self, websocket: Any) -> None:
@@ -857,7 +918,8 @@ class MultiAssetPublicRuntime:
             open_ms = payload.get("t")
             if not isinstance(open_ms, int):
                 raise DataRouteError("websocket candle is missing open timestamp")
-            self._finality.offer(market=market, open_time_ms=open_ms, fingerprint=fingerprint)
+            if self._ws_candidate_finality:
+                self._finality.offer(market=market, open_time_ms=open_ms, fingerprint=fingerprint)
         except DataRouteError as exc:
             self._record_market_failure(
                 market,
@@ -1155,6 +1217,161 @@ class MultiAssetPublicRuntime:
     async def _cancel_confirmation_tasks(self) -> None:
         """Compatibility seam for deterministic runtime shutdown tests."""
         await self._finality.invalidate_all()
+
+    async def process_cohort_boundary(self, boundary_open_time_ms: int) -> CohortBarrierReport:
+        """One clock-driven 5m cohort reconciliation attempt.
+
+        Ordering: capture the epoch -> prove every selected market at T
+        through the cohort finality policy -> ONE whole-cohort application
+        wake -> stage the allowed lifecycle successor -> apply at most one
+        pending successor at the safe cohort barrier, so T+1 uses the
+        successor epoch and no actionable boundary ever mixes Registry
+        epochs.  The clock is scheduling only: it never manufactures OHLC,
+        volume, finality, or Registry authority, and every durable row still
+        flows exclusively through the unchanged Data authority.
+        """
+        if boundary_open_time_ms < 0 or boundary_open_time_ms % _FIVE_MINUTES_MS:
+            raise DataRouteError("cohort boundary must be an aligned 5m open")
+        epoch = self.registry.active()
+        if epoch is None:
+            # The initial bootstrap path (startup warmup) establishes the
+            # first Registry authority; the barrier never manufactures one.
+            return CohortBarrierReport(
+                boundary_open_time_ms=boundary_open_time_ms,
+                registry_version=None,
+                registry_content_hash=None,
+                finalized_market_ids=(),
+                failed_market_ids=(),
+                successor_applied=False,
+                action=None,
+            )
+        captured = self.acquisition_registry()
+        cohort = tuple(
+            market
+            for market in captured.markets
+            if market.lifecycle
+            not in {MarketLifecycle.DISABLED, MarketLifecycle.OUTCOMES_COMPLETE}
+        )
+        active_ids = tuple(
+            market.identity.market_id
+            for market in epoch.markets
+            if market.lifecycle is MarketLifecycle.ACTIVE
+        )
+        result = await self._cohort_finality.confirm_cohort_boundary(
+            markets=cohort,
+            boundary_open_time_ms=boundary_open_time_ms,
+            deadline_ms=(
+                boundary_open_time_ms
+                + _FIVE_MINUTES_MS
+                + int(FRESHNESS_ACTION_CEILING_SECONDS * 1_000)
+            ),
+        )
+        cohort_by_id = {market.identity.market_id: market for market in cohort}
+        for failure in result.failures:
+            self._record_failure_by_id(
+                failure.market_id,
+                open_time_ms=boundary_open_time_ms,
+                stage="cohort_finality",
+                category=failure.reason,
+                recoverable=not self.authority.market_failed(failure.market_id),
+            )
+        for bar in result.finalized:
+            market = cohort_by_id.get(bar.market_id)
+            if market is not None:
+                self._recover_runtime_finality_failure(market)
+        action: object | None = None
+        now_ms = int(self.clock().timestamp() * 1_000)
+        stale = now_ms - (boundary_open_time_ms + _FIVE_MINUTES_MS) > int(
+            FRESHNESS_ACTION_CEILING_SECONDS * 1_000
+        )
+        if result.finalized and not stale:
+            # Exactly one application wake per boundary; Bootstrap's retained
+            # authority plus readiness gates keep repeated wakes idempotent.
+            # A boundary that only completed finality after the hard action
+            # ceiling stays durable history: no retrospective live action.
+            action = await self._notify_finalized(
+                result.finalized[0], BoundaryMode.LIVE_ACTIONABLE
+            )
+        await self._maybe_stage_lifecycle(snapshot_ready=self.health.data_ready)
+        successor_applied = False
+        if self.registry.pending_version() is not None:
+            admission = self.authority.cohort_boundary_admission(
+                boundary_open_time_ms=boundary_open_time_ms, market_ids=active_ids
+            )
+            if admission is not None:
+                try:
+                    self.registry.apply_cohort_admission(admission)
+                    successor_applied = True
+                except (RegistryError, ValueError) as exc:
+                    # A control-plane failure applying the successor is an
+                    # operator-review failure: later market-data success can
+                    # never auto-recover it.
+                    for market_id in active_ids:
+                        self._record_failure_by_id(
+                            market_id,
+                            open_time_ms=boundary_open_time_ms,
+                            stage="registry_barrier_apply",
+                            category=exc,
+                            recoverable=False,
+                        )
+        return CohortBarrierReport(
+            boundary_open_time_ms=boundary_open_time_ms,
+            registry_version=epoch.version,
+            registry_content_hash=epoch.content_hash,
+            finalized_market_ids=tuple(bar.market_id for bar in result.finalized),
+            failed_market_ids=tuple(failure.market_id for failure in result.failures),
+            successor_applied=successor_applied,
+            action=action,
+        )
+
+    def _startup_cooldown_remaining(self) -> float:
+        """Seconds of startup REST cooldown still owed (operational pacing)."""
+        if self._warmup_completed_monotonic is None:
+            return 0.0
+        elapsed = self.monotonic() - self._warmup_completed_monotonic
+        return max(0.0, STARTUP_REST_COOLDOWN_SECONDS - elapsed)
+
+    async def _cohort_barrier_loop(self, shutdown: asyncio.Event) -> None:
+        """Clock-driven 5m cohort barrier: scheduling only, never evidence.
+
+        For aligned boundary T the loop wakes after ``T close + hold`` and
+        attempts exactly one global reconciliation.  The wake time is derived
+        from the wall clock; market evidence still comes only from the
+        provider through the Data authority.  There is deliberately no
+        durable processed-boundary cache: idempotency for a repeated wake of
+        the same T rests on retained Scanner/Strategy authority and the
+        immutable ClosedBar store.
+        """
+        attempted: int | None = None
+        while not shutdown.is_set():
+            now_ms = int(self.clock().timestamp() * 1_000)
+            boundary = self._latest_completed_open_at(now_ms)
+            wake_ms = boundary + _FIVE_MINUTES_MS + POST_CLOSE_HOLD_MS
+            if boundary == attempted:
+                wake_ms += _FIVE_MINUTES_MS
+            await self.sleep(max(0.05, (wake_ms - now_ms) / 1_000))
+            if shutdown.is_set():
+                return
+            cooldown = self._startup_cooldown_remaining()
+            if cooldown > 0:
+                await self.sleep(cooldown)
+                attempted = None
+                continue
+            boundary = self._latest_completed_open_at(int(self.clock().timestamp() * 1_000))
+            if boundary == attempted:
+                continue
+            try:
+                await self.process_cohort_boundary(boundary)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # One failed reconciliation must never kill the scheduling
+                # authority: the incident is bounded diagnostics and the next
+                # boundary retries under unchanged data authority.
+                self.health.barrier_incidents.append(f"{type(exc).__name__}: {exc}"[:160])
+                if len(self.health.barrier_incidents) > _MAX_CALLBACK_FAILURES:
+                    del self.health.barrier_incidents[:-_MAX_CALLBACK_FAILURES]
+            attempted = boundary
 
     async def _maybe_stage_lifecycle(self, *, snapshot_ready: bool) -> None:
         if self.registry.active() is None or self.registry.pending_version() is not None:

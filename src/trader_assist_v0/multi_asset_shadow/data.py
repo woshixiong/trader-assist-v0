@@ -62,6 +62,38 @@ class Closed5mAdmission:
         return True
 
 
+class Closed5mCohortAdmission:
+    """Opaque, one-use cohort-barrier Registry activation capability.
+
+    Issued only after the Data authority verified the required cohort
+    boundary rows are durable and coherently bound to the active Registry
+    epoch.  The Registry consumes it without learning the finality transport.
+    Process-local only; never durable state.
+    """
+
+    __slots__ = ("_issuer", "_used", "boundary_open_time_ms", "market_ids", "observed_at")
+
+    def __init__(
+        self,
+        *,
+        boundary_open_time_ms: int,
+        market_ids: tuple[str, ...],
+        observed_at: datetime,
+        issuer: object,
+    ) -> None:
+        self.boundary_open_time_ms = boundary_open_time_ms
+        self.market_ids = market_ids
+        self.observed_at = observed_at
+        self._issuer = issuer
+        self._used = False
+
+    def _consume(self) -> bool:
+        if self._used:
+            return False
+        self._used = True
+        return True
+
+
 class ClosedBarStore:
     """SQLite evidence store with immutable registry and finality linkage."""
 
@@ -339,6 +371,15 @@ class MultiAssetDataAuthority:
             # A changing unfinalized candle is normal.  Replace it, but a
             # previously finalized conflict is caught by immutable storage.
             self._candidates.pop(key)
+        for stale_key in [
+            item
+            for item in self._candidates
+            if item[0] == bar.market_id and item[1] < bar.open_time_ms
+        ]:
+            # Observability-only mode (no WS finality) never confirms or
+            # discards candidates: keep only the latest open per market so the
+            # diagnostic store stays bounded.
+            del self._candidates[stale_key]
         self._candidates[key] = _ProviderCandidate(
             bar.market_id,
             market.identity.coin,
@@ -417,6 +458,101 @@ class MultiAssetDataAuthority:
             self._candidates[(market.identity.market_id, open_time_ms)] = candidate
         self._candidates.pop((market.identity.market_id, open_time_ms), None)
         return self._admit(market=market, bar=confirmed, finality_identity=candidate.fingerprint)
+
+    def confirm_rest_boundary(
+        self,
+        *,
+        market: RegistryMarket,
+        open_time_ms: int,
+        observation_first: Sequence[object],
+        observation_second: Sequence[object],
+        received_at: datetime,
+        first_observed_monotonic: float,
+        second_observed_monotonic: float,
+        hold_ms: int = 3_000,
+        observation_gap_ms: int = 1_000,
+    ) -> ClosedBar | None:
+        """Admit one exact boundary from dual provider REST observations only.
+
+        The canonical cohort finality route: no websocket candidate is
+        required or consulted.  Each observation must contain exactly one
+        candle whose open time equals the boundary; both exact-boundary
+        payloads must be canonical-identical; provider end-inclusive echoes
+        (the next boundary or a still-forming bar) are simply non-target
+        entries and are ignored.  Missing, duplicated, conflicting, or
+        malformed exact-boundary evidence fails closed.  Admission flows
+        through the same immutable ClosedBar + continuity/gap/conflict +
+        Registry-binding authority as every other route; no synthetic candle
+        is ever created.
+        """
+        if observation_gap_ms < 0 or (
+            received_at.tzinfo is None
+            or int(received_at.timestamp() * 1000) < open_time_ms + _FIVE_MINUTES_MS + hold_ms
+        ):
+            return None
+        if (
+            first_observed_monotonic is None
+            or second_observed_monotonic is None
+            or second_observed_monotonic < first_observed_monotonic
+            or (second_observed_monotonic - first_observed_monotonic) * 1000 < observation_gap_ms
+        ):
+            raise DataRouteError("targeted REST confirmation observation gap is insufficient")
+        first_matches = [
+            item
+            for item in observation_first
+            if isinstance(item, dict) and item.get("t") == open_time_ms
+        ]
+        second_matches = [
+            item
+            for item in observation_second
+            if isinstance(item, dict) and item.get("t") == open_time_ms
+        ]
+        if (
+            len(first_matches) != 1
+            or len(second_matches) != 1
+            or canonical_json_bytes(first_matches[0]) != canonical_json_bytes(second_matches[0])
+        ):
+            raise DataRouteError("targeted REST confirmation is not exact")
+        confirmed = _provider_bar(
+            market=market,
+            payload=first_matches[0],
+            received_at=received_at,
+            source_id="hyperliquid-public-candleSnapshot-final",
+        )
+        return self._admit(
+            market=market,
+            bar=confirmed,
+            finality_identity=sha256_hex(canonical_json_bytes(first_matches[0])),
+        )
+
+    def cohort_boundary_admission(
+        self, *, boundary_open_time_ms: int, market_ids: Sequence[str]
+    ) -> Closed5mCohortAdmission | None:
+        """Issue the cohort-barrier activation capability, or None.
+
+        The capability is issued only when every required market of the
+        captured epoch retains its exact boundary row durably bound to the
+        ACTIVE Registry version/content hash.  A missing or differently-bound
+        row is not cohort-coherent: no capability is issued and the pending
+        successor waits for a later barrier.
+        """
+        active = self.registry.active()
+        if active is None:
+            return None
+        for market_id in market_ids:
+            row = self.store.connection.execute(
+                "SELECT registry_version, registry_content_hash FROM closed_bars "
+                "WHERE market_id=? AND interval='5m' AND open_time_ms=?",
+                (market_id, boundary_open_time_ms),
+            ).fetchone()
+            if row != (active.version, active.content_hash):
+                return None
+        return Closed5mCohortAdmission(
+            boundary_open_time_ms=boundary_open_time_ms,
+            market_ids=tuple(market_ids),
+            observed_at=datetime.now(UTC),
+            issuer=self.registry._boundary_issuer,
+        )
 
     def admit_rest_history(
         self, *, market: RegistryMarket, snapshot: Sequence[object], received_at: datetime
@@ -514,8 +650,7 @@ class MultiAssetDataAuthority:
         # row is already durable: batching runs only when no pending Registry
         # version can be activated mid-transaction, and commits happen above.
         for bar in inserted:
-            admission = Closed5mAdmission(bar=bar, issuer=self.registry._boundary_issuer)
-            self.registry._apply_admitted(admission)
+            self._maybe_activate_initial_registry(bar)
         return inserted
 
     def _admit_transactional(
@@ -604,9 +739,22 @@ class MultiAssetDataAuthority:
         )
         if window_cache is not None:
             self._track_window_tail(window_cache, bar)
+        self._maybe_activate_initial_registry(bar)
+        return bar
+
+    def _maybe_activate_initial_registry(self, bar: ClosedBar) -> None:
+        """Consume the bar capability only on the initial bootstrap path.
+
+        Once an active Registry exists, an individual market bar must never
+        activate a pending global successor mid-boundary: the pending
+        successor is applied exclusively at the cohort barrier through a
+        Closed5mCohortAdmission capability.  With no active Registry yet, the
+        first validated admission still establishes the initial authority.
+        """
+        if self.registry.active() is not None:
+            return
         admission = Closed5mAdmission(bar=bar, issuer=self.registry._boundary_issuer)
         self.registry._apply_admitted(admission)
-        return bar
 
     def _binding_registry(self, market: RegistryMarket) -> RegistryVersion:
         """Return the exact validated Registry version that authorized acquisition."""

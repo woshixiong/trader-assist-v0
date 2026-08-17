@@ -2532,6 +2532,16 @@ def test_draining_blocks_new_activity_but_existing_outcome_completes_and_detache
         snapshot=[_payload(next_index, final=False)],
         received_at=datetime.fromtimestamp(((next_index + 1) * 300_000 + 1_000) / 1000, UTC),
     )
+    # A pending successor applies only at the cohort barrier: the durable
+    # boundary row binds the current epoch, then the capability admits the
+    # successor exactly once.
+    admission = route.data.cohort_boundary_admission(
+        boundary_open_time_ms=next_index * 300_000,
+        market_ids=(route.market.identity.market_id,),
+    )
+    assert admission is not None
+    applied = route.registry.apply_cohort_admission(admission)
+    assert applied is not None and applied.version == successor.version
     with pytest.raises(IntegrationError, match="lifecycle"):
         route.coordinator.evaluate_finalized_market(
             market_id=route.market.identity.market_id,

@@ -309,6 +309,15 @@ def test_initial_pending_registry_composes_then_activates_only_from_provider_adm
             received_at=clock.now(),
         )
         assert len(admitted) == 1
+        # Successors apply only through the cohort barrier capability: during
+        # Initial-Launch convergence the actionable ACTIVE set is empty, so
+        # the staged lifecycle successor applies on the capability alone.
+        admission = bootstrap.data_authority.cohort_boundary_admission(
+            boundary_open_time_ms=open_ms, market_ids=()
+        )
+        assert admission is not None
+        applied = bootstrap.registry.apply_cohort_admission(admission)
+        assert applied is not None and applied.markets[0].lifecycle is expected
         active = bootstrap.registry.active()
         assert active is not None and active.markets[0].lifecycle is expected
         lifecycles.append(active.markets[0].lifecycle)
