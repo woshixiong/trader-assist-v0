@@ -843,6 +843,22 @@ class MultiAssetPublicRuntime:
                 category=exc,
             )
             return ConfirmationResult.FAILED
+        except Exception as exc:
+            # An unexpected exception is an unknown authority failure with no
+            # proven recovery path; it must not hide behind a stale
+            # recoverable record, and it must not escape the finality task.
+            # GenerationFinalityAuthority keeps its own defensive
+            # fail-closed catch; this records the exact generation first.
+            if not self._finality.is_latest(generation):
+                return ConfirmationResult.STALE
+            self._record_market_failure(
+                generation.market,
+                open_time_ms=identity.open_time_ms,
+                stage="finality_unknown",
+                category=exc,
+                recoverable=False,
+            )
+            return ConfirmationResult.FAILED
 
     async def _backfill_ws_silent_boundaries(self, generation: CandidateGeneration) -> None:
         """Admit provider REST evidence for boundaries WS can never nominate.
@@ -1058,8 +1074,24 @@ class MultiAssetPublicRuntime:
             return
         active = self.registry.active()
         assert active is not None
+        cohort = [
+            market
+            for market in active.markets
+            if market.lifecycle
+            not in {MarketLifecycle.DISABLED, MarketLifecycle.OUTCOMES_COMPLETE}
+        ]
+        # First Launch: while the Registry holds zero ACTIVE markets, the
+        # launch cohort must progress atomically.  A failed or not-yet-eligible
+        # member blocks staging for every member, so a partial healthy subset
+        # can never become an actionable ACTIVE cohort before the exact
+        # selected cohort is coherently current.  Once an ACTIVE cohort
+        # exists, a later WARMING market may progress independently (hot-add)
+        # and must not pause the already-live cohort.
+        launch_cohort = all(
+            market.lifecycle is not MarketLifecycle.ACTIVE for market in cohort
+        )
         updates: dict[str, MarketLifecycle] = {}
-        for market in active.markets:
+        for market in cohort:
             if market.identity.market_id in self.health.failed_markets:
                 continue
             if market.lifecycle is MarketLifecycle.WARMING and self._history_current(market):
@@ -1069,6 +1101,8 @@ class MultiAssetPublicRuntime:
             elif market.lifecycle is MarketLifecycle.SNAPSHOT_READY and snapshot_ready:
                 updates[market.identity.market_id] = MarketLifecycle.ACTIVE
         if not updates:
+            return
+        if launch_cohort and len(updates) != len(cohort):
             return
         suffix = "-".join(sorted(value.value.lower() for value in set(updates.values())))
         version = _lifecycle_version_name(active.version, active.content_hash, suffix)

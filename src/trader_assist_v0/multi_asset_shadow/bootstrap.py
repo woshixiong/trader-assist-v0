@@ -407,14 +407,25 @@ class MultiAssetProductionBootstrap:
             market for market in active.markets if market.lifecycle is MarketLifecycle.ACTIVE
         )
         required_ids = {market.identity.market_id for market in required}
+        if not required_ids:
+            # No actionable cohort exists yet (first launch before the whole
+            # selected cohort reaches ACTIVE): wait for peers, never act on a
+            # partial cohort.
+            return required, True
         if (
-            not readiness.data_ready
-            or readiness.registry_version != active.version
+            readiness.registry_version != active.version
             or readiness.registry_content_hash != active.content_hash
             or readiness.latest_closed_5m_open_time_ms != boundary_open_time_ms
-            or required_ids & set(readiness.failed_market_ids)
         ):
-            raise BootstrapIntegrityError("runtime is not ready for the requested boundary")
+            raise BootstrapIntegrityError(
+                "runtime readiness contradicts active Registry authority"
+            )
+        if not readiness.data_ready or required_ids & set(readiness.failed_market_ids):
+            # Expected operational non-readiness: a failed required peer or a
+            # runtime still completing warmup is a normal fail-closed defer
+            # for the whole cohort, not an integrity failure and not an
+            # application failure of whichever healthy market finalized.
+            return required, True
         waiting = False
         for market in required:
             row = self.data_authority.store.connection.execute(
@@ -432,7 +443,9 @@ class MultiAssetProductionBootstrap:
         if waiting:
             return required, True
         if set(readiness.ready_market_ids) != required_ids:
-            raise BootstrapIntegrityError("runtime is not ready for the requested boundary")
+            # Incomplete readiness set: expected non-readiness, defer for the
+            # whole cohort instead of failing the healthy markets' callback.
+            return required, True
         return required, False
 
     async def _scanner_snapshots(

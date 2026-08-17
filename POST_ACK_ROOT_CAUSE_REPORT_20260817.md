@@ -119,10 +119,10 @@ xyz:SP500 provider omission), production-length seed:
 
 | metric | baseline | repaired |
 |---|---|---|
-| lifecycle | frozen `SNAPSHOT_READY:19 / HISTORY_READY:1` (never ACTIVE) | `ACTIVE: 20` |
+| lifecycle | frozen `SNAPSHOT_READY:19 / HISTORY_READY:1` (never ACTIVE) | First Launch holds the whole cohort pre-ACTIVE (`WARMING`) while any selected member is failed; never a partial ACTIVE cohort |
 | health failed | 20/20 | 1/20 (xyz:SP500 only) |
 | Data authority failed | 16/20 (15 false gaps + 1 genuine) | 1/20 (genuine only) |
-| ready markets | 0/20 | 19/20 (SP500 correctly excluded) |
+| ready markets | 0/20 | 0/20 during First Launch (see REPAIR-3 below) |
 | ClosedBarStore spread | 4 slots | 0 slots among the 19 healthy |
 | finalized boundaries | 10 | 62 |
 
@@ -130,4 +130,36 @@ BTC's transient failure recovers at its next provider-authoritative success; the
 WS-silent xyz boundaries are admitted from the provider's own REST flat bars; SP500's
 genuine omission stays fail-closed; every lifecycle activation still flows through
 Closed5mAdmission. Durable acceptance lives in
-`tests/test_post_ack_finality_lifecycle_repair.py` (7 tests).
+`tests/test_post_ack_finality_lifecycle_repair.py`.
+
+## REPAIR-3 (final holistic review): First-Launch atomicity, defer-not-cascade, unknown-finality escalation
+
+The final base→HEAD holistic review found three cross-layer integration defects in
+the earlier repair. A repaired First-Launch run with one failed selected market is
+NOT an acceptable 19/20 live cohort: 19/20 may exist as diagnostic Runtime state,
+but MUST NOT become new Scanner/Strategy authority during First Launch
+(`NO NEW ACTIVITY UNTIL EXACT 20/20 SELECTED MARKETS ARE COHERENTLY CURRENT`).
+
+1. `runtime.py` `_maybe_stage_lifecycle` — initial-cohort atomicity: while the
+   Registry holds zero ACTIVE markets, the launch cohort progresses
+   `WARMING → HISTORY_READY → SNAPSHOT_READY → ACTIVE` atomically; a failed or
+   not-yet-eligible member blocks staging for every member, so a partial healthy
+   subset can never become an actionable ACTIVE cohort. Once an ACTIVE cohort
+   exists, hot-add semantics are preserved: a new WARMING market may progress
+   independently and never pauses the already-live cohort. No second Registry
+   authority, no new durable state.
+2. `bootstrap.py` `_boundary_markets` — expected operational non-readiness
+   (required ACTIVE peer failed, readiness set incomplete, no complete actionable
+   cohort, empty ACTIVE cohort during First Launch) is now a normal fail-closed
+   defer (`DEFERRED_WAITING_FOR_PEERS`) instead of `BootstrapIntegrityError`, so
+   one failed peer can no longer cascade an `application_callback`
+   nonrecoverable failure onto healthy markets whose bars finalized normally.
+   True integrity failures still raise fail-closed: active Registry
+   version/hash contradiction, requested boundary contradicting runtime
+   authority, retained-boundary/Registry conflicts.
+3. `runtime.py` `_confirm_generation` — an unexpected exception inside the current
+   finality generation is recorded as `stage=finality_unknown`,
+   `recoverable=False`, escalating over any stale recoverable record; a later
+   provider-authoritative success cannot clear it
+   (`test_unknown_finality_failure_escalates_over_stale_recoverable_record`).
+   `GenerationFinalityAuthority`'s defensive fail-closed catch is unchanged.

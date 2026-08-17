@@ -233,13 +233,42 @@ async def test_case_a_missing_market_boundary_defers_whole_cohort(tmp_path: Path
 
 
 @async_test
-async def test_case_a_failed_market_blocks_whole_cohort(tmp_path: Path) -> None:
+async def test_failed_peer_defers_whole_cohort_no_callback_cascade(
+    tmp_path: Path,
+) -> None:
+    """CASE A (failed peer): expected cohort non-readiness defers through the
+    real Runtime -> Bootstrap callback path without cascading an application
+    failure onto the healthy triggering market."""
     cohort = Cohort(tmp_path)
-    cohort.runtime.health.failed_markets.add(cohort.id_of("xyz:SP500"))
-    with pytest.raises(BootstrapIntegrityError):
-        await drive(cohort)
+    sp500_id = cohort.id_of("xyz:SP500")
+    btc_id = cohort.id_of("BTC")
+    cohort.runtime.health.failed_markets.add(sp500_id)
+
+    # Real production wiring: Runtime dispatches the finalized healthy bar to
+    # the Bootstrap application callback exactly as
+    # ThreeSetupProductionApplication wires on_finalized_5m.
+    cohort.runtime.on_finalized_5m = cohort.bootstrap.on_finalized_5m
+    bar = next(
+        closed for closed in cohort.data.store.bars(btc_id)
+        if closed.open_time_ms == BOUNDARY
+    )
+    report = await cohort.runtime._notify_finalized(bar, BoundaryMode.LIVE_ACTIONABLE)
+
+    assert report.disposition is BoundaryDisposition.DEFERRED_WAITING_FOR_PEERS
+    assert report.scanner_run_count == 0
+    assert report.evaluated_market_ids == ()
+    assert report.formal_shadow_order_ids == ()
     assert cohort.planning.calls == []
     assert cohort.coordinator.retained_scanner_run(boundary_open_time_ms=BOUNDARY) is None
+    # No cascade: the healthy triggering market stays healthy and unrecorded.
+    assert btc_id not in cohort.runtime.health.failed_markets
+    assert btc_id not in cohort.runtime.health.failure_records
+    assert sp500_id in cohort.runtime.health.failed_markets
+
+    # True integrity failures still raise: a boundary that contradicts the
+    # runtime's authoritative latest closed boundary.
+    with pytest.raises(BootstrapIntegrityError):
+        await cohort.bootstrap.process_boundary(BOUNDARY - SLOT, BoundaryMode.LIVE_ACTIONABLE)
 
 
 @async_test

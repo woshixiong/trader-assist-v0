@@ -648,6 +648,67 @@ async def test_recoverable_failure_escalates_to_nonrecoverable_callback(
 
 
 @async_test
+async def test_unknown_finality_failure_escalates_over_stale_recoverable_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Attack C: T1 recoverable failure, T2 unexpected exception inside the
+    current generation, T3 later authoritative success stays failed."""
+    clock = Clock(seconds=603)
+    state = {"fail_once": True, "explode_once": True}
+
+    def respond(coin: str, start_ms: int, end_ms: int) -> object:
+        if start_ms == SLOT:
+            if state["fail_once"]:
+                state["fail_once"] = False
+                return PublicDataError("transient public route failure")
+            # End-inclusive backfill window for the slot-3 candidate.
+            return [candle(coin, SLOT), candle(coin, 2 * SLOT)]
+        if start_ms == 2 * SLOT:
+            return [candle(coin, 2 * SLOT)]
+        if start_ms == 3 * SLOT:
+            return [candle(coin, 3 * SLOT)]
+        raise AssertionError(f"unexpected window {start_ms}")
+
+    runtime, authority, item = single_market_harness(tmp_path, respond=respond, clock=clock)
+    authority.admit_rest_history(
+        market=item, snapshot=[candle("BTC", 0)], received_at=clock.now()
+    )
+    market_id = item.identity.market_id
+
+    # T1: known PublicData failure is classified recoverable.
+    clock.seconds = SLOT // 1000 + 5
+    await confirm_candidate(runtime, market_id, candle("BTC", SLOT))
+    record = runtime.health.failure_records[market_id]
+    assert record.stage == "finality_confirmation"
+    assert record.recoverable is True
+
+    # T2: an unexpected exception inside the current generation is an unknown
+    # authority failure and must escalate over the stale recoverable record.
+    def explode(generation: object) -> None:
+        if state["explode_once"]:
+            state["explode_once"] = False
+            raise RuntimeError("unexpected authority defect")
+
+    monkeypatch.setattr(runtime, "_backfill_ws_silent_boundaries", explode)
+    clock.seconds = 2 * SLOT // 1000 + 5
+    await confirm_candidate(runtime, market_id, candle("BTC", 2 * SLOT))
+    record = runtime.health.failure_records[market_id]
+    assert record.stage == "finality_unknown"
+    assert record.recoverable is False
+    assert "RuntimeError" in record.category
+    assert market_id in runtime.health.failed_markets
+    assert authority.store.last_open(market_id) == 0
+
+    # T3: later successful provider-authoritative finality cannot clear it.
+    monkeypatch.undo()
+    clock.seconds = 3 * SLOT // 1000 + 5
+    await confirm_candidate(runtime, market_id, candle("BTC", 3 * SLOT))
+    assert market_id in runtime.health.failed_markets
+    assert runtime.health.failure_records[market_id].stage == "finality_unknown"
+    assert authority.store.last_open(market_id) == 3 * SLOT
+
+
+@async_test
 async def test_genuine_provider_omission_remains_failed_no_broad_reset(
     tmp_path: Path,
 ) -> None:
@@ -784,17 +845,19 @@ def ack_frame(coin: str) -> str:
 
 
 class CohortGrid:
-    """End-inclusive provider grid: silent xyz slot 1, one genuine SP500 omission."""
+    """End-inclusive provider grid: silent xyz slot 1 except SP500, whose own
+    slot-1 provider row is genuinely omitted while it does trade on WS."""
 
     def __init__(self) -> None:
         self.fail_btc_once = True
+        self.fail_sp500_slots: frozenset[int] = frozenset()
 
     def candles(self, coin: str, start_ms: int, end_ms: int) -> list[dict[str, object]]:
         # Real candleSnapshot is end-inclusive: a window (start, end) may
         # include the bar whose open == end, exactly as the live probe showed.
         out: list[dict[str, object]] = []
         for open_ms in range(max(0, start_ms), end_ms + SLOT, SLOT):
-            if coin == "xyz:SP500" and open_ms == 2 * SLOT:
+            if coin == "xyz:SP500" and open_ms == SLOT:
                 continue
             if coin in XYZ and open_ms == SLOT:
                 out.append(flat_candle(coin, open_ms))
@@ -803,8 +866,21 @@ class CohortGrid:
         return out
 
 
-@async_test
-async def test_first_launch_20_same_boundary_burst_converges_strictly(tmp_path: Path) -> None:
+async def drive_first_launch_cohort(
+    tmp_path: Path,
+    grid: CohortGrid,
+    *,
+    extra_phases: tuple[tuple[int, tuple[str, ...]], ...] = (),
+    after_phase: Callable[[int, MultiAssetPublicRuntime], None] | None = None,
+) -> tuple[
+    MultiAssetPublicRuntime,
+    MultiAssetDataAuthority,
+    MarketRegistryManager,
+    Clock,
+    tuple[RegistryMarket, ...],
+    list[tuple[str, int]],
+]:
+    """Drive the real production runtime loop for the exact First-Launch 20."""
     clock = Clock(seconds=303)
     coins = NATIVE + XYZ
     markets = tuple(market(coin) for coin in coins)
@@ -817,7 +893,6 @@ async def test_first_launch_20_same_boundary_burst_converges_strictly(tmp_path: 
     authority = MultiAssetDataAuthority(
         store=ClosedBarStore(tmp_path / "evidence.db"), registry=registry
     )
-    grid = CohortGrid()
     client = ScriptedGrid(grid)
     runtime = MultiAssetPublicRuntime(
         registry=registry,
@@ -851,12 +926,14 @@ async def test_first_launch_20_same_boundary_burst_converges_strictly(tmp_path: 
         await asyncio.sleep(0)
     assert runtime.health.data_ready
 
-    # Slot 1: natives trade, every xyz market is WS-silent. Slot 2 onward:
-    # everyone trades except that SP500's own provider row is genuinely gone.
+    # Slot 1: natives trade and SP500 trades (its provider row is the grid's
+    # decision); every other xyz market is WS-silent. Slot 2 onward: everyone
+    # trades.
     phases = (
-        (SLOT, NATIVE),
+        (SLOT, (*NATIVE, "xyz:SP500")),
         (2 * SLOT, coins),
         (3 * SLOT, coins),
+        *extra_phases,
     )
     for open_ms, trading in phases:
         for coin in trading:
@@ -870,22 +947,42 @@ async def test_first_launch_20_same_boundary_burst_converges_strictly(tmp_path: 
         for task in list(runtime._finality.tasks.values()):
             if not task.done():
                 await asyncio.wait_for(asyncio.shield(task), timeout=5)
+        if after_phase is not None:
+            after_phase(open_ms, runtime)
 
     shutdown.set()
     await socket.queue.put(ack_frame("BTC"))
     await asyncio.wait_for(run_task, timeout=10)
+    return runtime, authority, registry, clock, markets, finalized
 
+
+@async_test
+async def test_first_launch_20_nonrecoverable_failure_keeps_launch_closed(
+    tmp_path: Path,
+) -> None:
+    """First Launch atomicity: one genuinely nonrecoverable selected market
+    keeps the whole launch cohort non-ACTIVE; no partial 19/20 authority."""
+    runtime, authority, registry, clock, markets, finalized = await drive_first_launch_cohort(
+        tmp_path, CohortGrid()
+    )
     active = registry.active()
     assert active is not None
     sp500_id = next(m.identity.market_id for m in markets if m.identity.coin == "xyz:SP500")
     healthy = [m for m in active.markets if m.identity.market_id != sp500_id]
-    assert all(m.lifecycle is MarketLifecycle.ACTIVE for m in healthy)
+    # ACTIVE_COUNT stays 0: the launch cohort never partially activates. The
+    # whole cohort holds at HISTORY_READY, the stage the pending version
+    # reached before the first selected-market failure.
+    assert sum(
+        1 for m in active.markets if m.lifecycle is MarketLifecycle.ACTIVE
+    ) == 0
+    assert all(m.lifecycle is MarketLifecycle.HISTORY_READY for m in active.markets)
     assert authority.market_failed(sp500_id)
     assert runtime.health.failed_markets == {sp500_id}
+    assert runtime.health.failure_records[sp500_id].recoverable is False
 
     clock.seconds = 3 * SLOT // 1000 + 303
     ready = runtime.readiness_snapshot()
-    assert set(ready.ready_market_ids) == {m.identity.market_id for m in healthy}
+    assert ready.ready_market_ids == ()
     assert ready.failed_market_ids == (sp500_id,)
     healthy_ids = {m.identity.market_id for m in healthy}
     for market_id in healthy_ids:
@@ -894,13 +991,154 @@ async def test_first_launch_20_same_boundary_burst_converges_strictly(tmp_path: 
     assert live_finalized and all(open_ms == SLOT for open_ms in live_finalized[:4])
 
 
+@async_test
+async def test_first_launch_20_recoverable_failure_recovers_to_whole_active_cohort(
+    tmp_path: Path,
+) -> None:
+    """First Launch atomicity: after a recoverable selected-market failure
+    genuinely recovers, all 20 progress coherently to ACTIVE together."""
+    checks: list[tuple[int, int, bool, bool]] = []
+
+    def after_phase(open_ms: int, runtime: MultiAssetPublicRuntime) -> None:
+        active = runtime.registry.active()
+        assert active is not None
+        sp500 = next(m for m in active.markets if m.identity.coin == "xyz:SP500")
+        record = runtime.health.failure_records.get(sp500.identity.market_id)
+        checks.append(
+            (
+                open_ms,
+                sum(
+                    1
+                    for m in active.markets
+                    if m.lifecycle is MarketLifecycle.ACTIVE
+                ),
+                sp500.identity.market_id in runtime.health.failed_markets,
+                record.recoverable if record is not None else False,
+            )
+        )
+
+    runtime, authority, registry, clock, markets, finalized = await drive_first_launch_cohort(
+        tmp_path,
+        TransientGrid(),
+        extra_phases=((4 * SLOT, NATIVE + XYZ),),
+        after_phase=after_phase,
+    )
+    # After slot 1: SP500's slot-1 confirmation transport failed once
+    # (recoverable), zero ACTIVE.
+    assert checks[0] == (SLOT, 0, True, True)
+    # After slot 2: SP500 transiently failed again (recoverable), still zero
+    # ACTIVE — BTC's recovery cannot partially activate the launch cohort.
+    assert checks[1] == (2 * SLOT, 0, True, True)
+    # After slot 4: the exact 20/20 cohort reached ACTIVE coherently and the
+    # recovered failure is fully cleared.
+    assert checks[3] == (4 * SLOT, 20, False, False)
+    active = registry.active()
+    assert active is not None
+    assert all(m.lifecycle is MarketLifecycle.ACTIVE for m in active.markets)
+    assert not runtime.health.failed_markets
+    assert not runtime.health.failure_records
+    clock.seconds = 4 * SLOT // 1000 + 303
+    ready = runtime.readiness_snapshot()
+    assert len(ready.ready_market_ids) == 20
+    assert ready.failed_market_ids == ()
+    assert authority.store.last_open(next(
+        m.identity.market_id for m in markets if m.identity.coin == "xyz:SP500"
+    )) == 4 * SLOT
+    live_finalized = [open_ms for _, open_ms in finalized if open_ms > 0]
+    assert live_finalized and all(open_ms == SLOT for open_ms in live_finalized[:4])
+
+
+@async_test
+async def test_hot_add_warming_market_does_not_pause_existing_active_cohort(
+    tmp_path: Path,
+) -> None:
+    """FUTURE_HOT_ADD: once an ACTIVE cohort exists, a new WARMING market
+    progresses independently; even a failed WARMING hot-add never pauses the
+    already-live cohort's lifecycle staging or readiness authority."""
+    clock = Clock(seconds=303)
+    live = market("BTC").model_copy(update={"lifecycle": MarketLifecycle.ACTIVE}), market(
+        "ETH"
+    ).model_copy(update={"lifecycle": MarketLifecycle.ACTIVE})
+    hot_add_healthy = market("SOL")
+    hot_add_failed = market("xyz:MU")
+    markets = (*live, hot_add_healthy, hot_add_failed)
+    registry = MarketRegistryManager(tmp_path / "registry", metadata_validator=lambda _: True)
+    seed = RegistryVersion.create(version=PRODUCTION_SEED, created_at=clock.now(), markets=markets)
+    registry.stage(seed)
+    registry.request_apply(seed.version)
+    authority = MultiAssetDataAuthority(
+        store=ClosedBarStore(tmp_path / "evidence.db"), registry=registry
+    )
+    runtime = MultiAssetPublicRuntime(
+        registry=registry,
+        authority=authority,
+        client=ScriptedClient(lambda coin, start, end: []),  # type: ignore[arg-type]
+        clock=clock.now,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    for item in markets:
+        authority.admit_rest_history(
+            market=item, snapshot=[candle(item.identity.coin, 0)], received_at=clock.now()
+        )
+    runtime.health.data_ready = True
+    mu_id = hot_add_failed.identity.market_id
+    sol_id = hot_add_healthy.identity.market_id
+    runtime.health.failed_markets.add(mu_id)
+
+    await runtime._maybe_stage_lifecycle(snapshot_ready=True)
+
+    pending = registry.pending_version()
+    assert pending is not None
+    staged = {m.identity.market_id: m.lifecycle for m in pending.markets}
+    # The healthy hot-add progresses independently of its failed WARMING peer.
+    assert staged[sol_id] is MarketLifecycle.HISTORY_READY
+    assert staged[mu_id] is MarketLifecycle.WARMING
+    for item in live:
+        assert staged[item.identity.market_id] is MarketLifecycle.ACTIVE
+
+    # The already-live ACTIVE cohort keeps its readiness authority: the failed
+    # hot-add is diagnostic state only and is never part of the required
+    # ACTIVE cohort.
+    ready = runtime.readiness_snapshot()
+    assert set(ready.ready_market_ids) == {item.identity.market_id for item in live}
+    assert ready.failed_market_ids == (mu_id,)
+
+
 class ScriptedGrid(ScriptedClient):
     def __init__(self, grid: CohortGrid) -> None:
         super().__init__(lambda coin, start, end: self._respond(coin, start, end))
         self.grid = grid
+        self._sp500_failed: set[int] = set()
 
     def _respond(self, coin: str, start_ms: int, end_ms: int) -> object:
         if coin == "BTC" and self.grid.fail_btc_once and start_ms == SLOT:
             self.grid.fail_btc_once = False
             return PublicDataError("transient public route failure")
+        if (
+            coin == "xyz:SP500"
+            and start_ms in self.grid.fail_sp500_slots
+            and start_ms not in self._sp500_failed
+        ):
+            self._sp500_failed.add(start_ms)
+            return PublicDataError("transient public route failure")
         return self.grid.candles(coin, start_ms, end_ms)
+
+
+class TransientGrid(CohortGrid):
+    """Complete provider grid: SP500 trades slot 1, but its slot-1 and slot-2
+    confirmation transports each fail once (recoverable) instead of the
+    genuine row omission."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_sp500_slots = frozenset({SLOT, 2 * SLOT})
+
+    def candles(self, coin: str, start_ms: int, end_ms: int) -> list[dict[str, object]]:
+        out: list[dict[str, object]] = []
+        for open_ms in range(max(0, start_ms), end_ms + SLOT, SLOT):
+            if coin in XYZ and coin != "xyz:SP500" and open_ms == SLOT:
+                out.append(flat_candle(coin, open_ms))
+            else:
+                out.append(candle(coin, open_ms))
+        return out
