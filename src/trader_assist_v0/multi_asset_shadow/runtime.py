@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -252,12 +252,31 @@ class MultiAssetPublicRuntime:
         self._finality = GenerationFinalityAuthority(
             confirm=self._confirm_generation,
             discard=self._discard_candidate,
-            mark_failed=self.health.failed_markets.add,
+            mark_failed=self._mark_finality_failed,
             now_ms=lambda: int(self.clock().timestamp() * 1000),
             sleep=self.sleep,
             confirmation_concurrency=confirmation_concurrency,
         )
         self._expected_acks: set[str] = set()
+
+    def _mark_finality_failed(self, market_id: str) -> None:
+        """Finality authority failure hook: preserve the classified record.
+
+        _confirm_generation already recorded a classified record for the
+        failures it understands.  A market reaching this hook without a record
+        is an unknown authority failure with no proven recovery path, and must
+        fail closed as nonrecoverable instead of silently becoming recoverable.
+        """
+        if market_id in self.health.failure_records:
+            self.health.failed_markets.add(market_id)
+            return
+        self._record_failure_by_id(
+            market_id,
+            open_time_ms=0,
+            stage="finality_unknown",
+            category="unknown finality authority failure: no classified record",
+            recoverable=False,
+        )
 
     def acquisition_registry(self) -> RegistryVersion:
         """Active markets plus the strictly bounded initial bootstrap exception."""
@@ -500,8 +519,7 @@ class MultiAssetPublicRuntime:
                 category=exc,
             )
             raise
-        self.health.failed_markets.discard(market.identity.market_id)
-        self.health.failure_records.pop(market.identity.market_id, None)
+        self._clear_if_proven_recoverable(market.identity.market_id)
         return count
 
     async def _warmup_all(
@@ -587,7 +605,7 @@ class MultiAssetPublicRuntime:
                     market, start_ms=start, end_ms=end
                 )
                 if self._history_current(market):
-                    self.health.failed_markets.discard(market.identity.market_id)
+                    self._clear_if_proven_recoverable(market.identity.market_id)
             except (DataRouteError, PublicDataError):
                 self.health.failed_markets.add(market.identity.market_id)
         return recovered
@@ -853,25 +871,62 @@ class MultiAssetPublicRuntime:
         )
         if not isinstance(snapshot, list):
             raise DataRouteError("candleSnapshot did not return a list")
+        # candleSnapshot is end-inclusive (probe-verified 2026-08-17): the
+        # response can echo the live boundary whose open == end_ms, including a
+        # still-forming or disagreeing value.  Only a strict historical prefix
+        # may enter through this REST history observation; the live candidate
+        # itself stays exclusively governed by confirm_ws_candidate's two
+        # targeted stable observations.  Evidence past the candidate is
+        # unexpected and fails closed.
+        target_open = generation.identity.open_time_ms
+        prefix: list[dict[str, object]] = []
+        for item in snapshot:
+            if not isinstance(item, Mapping) or not isinstance(item.get("t"), int):
+                raise DataRouteError("backfill snapshot contains a malformed bar")
+            open_ms = item["t"]
+            if open_ms > target_open:
+                raise DataRouteError("backfill snapshot contains unexpected future evidence")
+            if open_ms < target_open:
+                prefix.append(dict(item))
+        if not prefix:
+            return
         self.authority.admit_rest_history(
-            market=generation.market, snapshot=snapshot, received_at=self.clock()
+            market=generation.market, snapshot=prefix, received_at=self.clock()
         )
 
     def _recover_runtime_finality_failure(self, market: RegistryMarket) -> None:
         """Market-scoped, evidence-derived recovery of a runtime finality failure.
 
         A later successful provider-authoritative finality may clear ONLY a
-        recoverable runtime failure for this same market, and only while the
+        failure that carries an explicit recoverable record, and only while the
         Data authority holds no failure for it and its durable 5m series is
-        exactly contiguous.  Data gaps and conflicts, Registry and metadata
-        failures, authority conflicts, and callback failures are never cleared
-        here.
+        exactly contiguous.  A market with no record, an application/callback
+        failure, a Registry lifecycle failure, an unknown authority failure, a
+        Data gap, or any conflict is never cleared here: no record means no
+        proven recovery path, so it fails closed.
         """
         market_id = market.identity.market_id
         if market_id not in self.health.failed_markets:
             return
         record = self.health.failure_records.get(market_id)
-        if record is not None and not record.recoverable:
+        if record is None or not record.recoverable:
+            return
+        if self.authority.market_failed(market_id):
+            return
+        if not self.authority.store.is_contiguous_5m(market_id):
+            return
+        self.health.failed_markets.discard(market_id)
+        self.health.failure_records.pop(market_id, None)
+
+    def _clear_if_proven_recoverable(self, market_id: str) -> None:
+        """Warmup/reconnect success may clear only a proven recoverable record.
+
+        A healthy warmup is market-data evidence only; it can never repair an
+        application callback failure, a Registry lifecycle failure, or any
+        failure without an explicit recoverable record.
+        """
+        record = self.health.failure_records.get(market_id)
+        if record is None or not record.recoverable:
             return
         if self.authority.market_failed(market_id):
             return
@@ -904,6 +959,31 @@ class MultiAssetPublicRuntime:
             ),
         )
 
+    def _record_failure_by_id(
+        self,
+        market_id: str,
+        *,
+        open_time_ms: int,
+        stage: str,
+        category: object,
+        recoverable: bool,
+    ) -> None:
+        """Record a runtime failure without a live generation's market object."""
+        coin = market_id
+        for market in self.selected_markets():
+            if market.identity.market_id == market_id:
+                coin = market.identity.coin
+                break
+        self.health.failed_markets.add(market_id)
+        self.health.failure_records[market_id] = MarketFailureRecord(
+            market_id=market_id,
+            coin=coin,
+            open_time_ms=open_time_ms,
+            stage=stage,
+            category=f"{type(category).__name__}: {category}"[:160],
+            recoverable=recoverable,
+        )
+
     async def _notify_finalized(self, bar: ClosedBar, mode: BoundaryMode) -> object | None:
         callback = self.on_finalized_5m
         if callback is None:
@@ -916,7 +996,15 @@ class MultiAssetPublicRuntime:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            self.health.failed_markets.add(bar.market_id)
+            # An application callback failure is never repaired by later
+            # market-data success: the application itself must be reviewed.
+            self._record_failure_by_id(
+                bar.market_id,
+                open_time_ms=bar.open_time_ms,
+                stage="application_callback",
+                category=exc,
+                recoverable=False,
+            )
             self.health.callback_failures.append(
                 FinalizedCallbackFailure(
                     market_id=bar.market_id,
@@ -970,9 +1058,17 @@ class MultiAssetPublicRuntime:
                 version=version, updates=updates, now=self.clock()
             )
             self.registry.request_apply(candidate.version)
-        except (RegistryError, ValueError):
+        except (RegistryError, ValueError) as exc:
             # A filesystem/control-plane conflict or schema rejection (pydantic
             # ValidationError is a ValueError) must not become a different data
             # authority, and must not escape into the confirming market's
-            # finality task.  Leave markets below ACTIVE for operator review.
-            self.health.failed_markets.update(updates)
+            # finality task.  Registry lifecycle failures are operator-review
+            # failures: later market-data success must never auto-recover them.
+            for market_id in updates:
+                self._record_failure_by_id(
+                    market_id,
+                    open_time_ms=self.authority.store.last_open(market_id) or 0,
+                    stage="lifecycle_staging",
+                    category=exc,
+                    recoverable=False,
+                )
