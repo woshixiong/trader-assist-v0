@@ -83,6 +83,10 @@ PR108_CANONICAL_ON_MAIN
 
 Cache-hit and on-demand-skill observability are collected during that task, not before it.
 
+## Deferred tooling work
+
+Codex configuration and efficiency tuning is intentionally deferred until the user resumes it. A separate draft governance line may capture provisional Codex CLI execution/session/token-efficiency findings without changing this current priority or blocking PR #108. Hermes configuration remains later work.
+
 ## Permanent boundaries unchanged
 
 This priority record grants no Mark Ready, merge, deployment, runtime/cloud mutation, credentials/private API, signing/wallet, exchange write, order submission, cancellation, autonomous trading or financial-action authority.
