@@ -81,7 +81,7 @@ from .planning import (
 from .planning import (
     Side as PlanningSide,
 )
-from .registry import MarketRegistryManager
+from .registry import MarketRegistryManager, RegistryError
 from .runtime import BoundaryMode, RuntimeReadinessSnapshot
 from .shadow_records import (
     Candidate as EvidenceCandidate,
@@ -519,6 +519,13 @@ def _ledger_from_payload(value: object) -> EventLedger:
     if not isinstance(value, dict) or not isinstance(value.get("events"), list):
         raise IntegrationError("retained EventLedger checkpoint is invalid")
     return EventLedger(tuple(_market_event_from_payload(item) for item in value["events"]))
+
+
+def _payload_int(payload: Mapping[str, object], key: str) -> int:
+    value = payload.get(key)
+    if not isinstance(value, int):
+        raise IntegrationError("retained Strategy payload numeric field is invalid")
+    return value
 
 
 def _kernel_result_from_payload(payload: Mapping[str, object]) -> KernelResult:
@@ -1264,6 +1271,74 @@ class MultiAssetShadowCoordinator:
         self._ledgers: dict[str, EventLedger] = {}
         self._restore_ledgers()
 
+    def _validated_retained_strategy_payloads(
+        self, *, active: RegistryVersion
+    ) -> list[dict[str, object]]:
+        """Validate every retained Strategy evaluation across Registry epochs.
+
+        A retained StrategyEvaluation for a boundary dominates across Registry
+        epochs (packet section 12): the exact referenced RegistryVersion is
+        loaded and its content hash verified, the market must be valid in that
+        epoch, and duplicate market/source-boundary authority fails closed.
+        Records produced by a different Strategy/Parameter release stay
+        invisible to this authority, exactly as before.
+        """
+        validated: list[dict[str, object]] = []
+        authority_slots: set[tuple[str, str, str, str, int, int]] = set()
+        for record_id in _record_ids(self._evidence, "strategy_evaluation"):
+            record = self._evidence.get(record_id)
+            if not isinstance(record, StrategyEvaluation):
+                continue
+            payload = record.payload
+            if (
+                payload.get("strategy_version") != STRATEGY_VERSION
+                or payload.get("parameter_version") != PARAMETER_VERSION
+            ):
+                continue
+            market_id = str(payload["market_id"])
+            source_open_time_ms = int(payload.get("source_open_time_ms", -1))
+            evaluation_boundary_ms = int(payload["evaluation_boundary_ms"])
+            slot = (
+                STRATEGY_VERSION,
+                PARAMETER_VERSION,
+                market_id,
+                str(payload.get("source_interval", "")),
+                source_open_time_ms,
+                evaluation_boundary_ms,
+            )
+            if slot in authority_slots:
+                raise IntegrationError("duplicate retained Strategy authority checkpoint")
+            authority_slots.add(slot)
+            version = str(payload["registry_version"])
+            if version == active.version:
+                if payload.get("registry_hash") != active.content_hash:
+                    raise IntegrationError(
+                        "Registry version has conflicting retained strategy authority"
+                    )
+                epoch = active
+            else:
+                try:
+                    epoch = self._registry.load_version(version)
+                except RegistryError as exc:
+                    raise IntegrationError(
+                        "retained Strategy references an unknown Registry epoch"
+                    ) from exc
+                if payload.get("registry_hash") != epoch.content_hash:
+                    raise IntegrationError(
+                        "retained Strategy checkpoint conflicts with its Registry epoch"
+                    )
+                if self._registry.prior_active(version) is None:
+                    raise IntegrationError(
+                        "retained Strategy references a Registry epoch that was "
+                        "never the live authority"
+                    )
+            if market_id not in {item.identity.market_id for item in epoch.markets}:
+                raise IntegrationError(
+                    "retained Strategy market is not valid in its Registry epoch"
+                )
+            validated.append(payload)
+        return validated
+
     def _restore_ledgers(self) -> None:
         active = self._registry.active()
         if active is None:
@@ -1284,38 +1359,14 @@ class MultiAssetShadowCoordinator:
                     "cannot restore retained application evidence without active Registry authority"
                 )
             return
+        # Restore the latest authoritative Strategy output ledger per market
+        # across Registry epochs, never only the current active one: after
+        # R1->R2 with an immediate restart, T's R1 ledger is the authoritative
+        # input for the first R2 evaluation.
         latest: dict[str, tuple[int, EventLedger]] = {}
-        authority_slots: set[tuple[str, str, str, str, str, int, int]] = set()
-        for record_id in _record_ids(self._evidence, "strategy_evaluation"):
-            record = self._evidence.get(record_id)
-            if not isinstance(record, StrategyEvaluation):
-                continue
-            payload = record.payload
-            if (
-                payload.get("registry_version") != active.version
-                or payload.get("strategy_version") != STRATEGY_VERSION
-                or payload.get("parameter_version") != PARAMETER_VERSION
-            ):
-                continue
-            if payload.get("registry_hash") != active.content_hash:
-                raise IntegrationError(
-                    "Registry version has conflicting retained strategy authority"
-                )
+        for payload in self._validated_retained_strategy_payloads(active=active):
             market_id = str(payload["market_id"])
-            source_open_time_ms = int(payload.get("source_open_time_ms", -1))
-            evaluation_boundary_ms = int(payload["evaluation_boundary_ms"])
-            slot = (
-                STRATEGY_VERSION,
-                PARAMETER_VERSION,
-                active.version,
-                market_id,
-                str(payload.get("source_interval", "")),
-                source_open_time_ms,
-                evaluation_boundary_ms,
-            )
-            if slot in authority_slots:
-                raise IntegrationError("duplicate retained Strategy authority checkpoint")
-            authority_slots.add(slot)
+            source_open_time_ms = _payload_int(payload, "source_open_time_ms")
             ledger = _kernel_result_from_payload(payload).ledger
             prior = latest.get(market_id)
             if prior is None or source_open_time_ms > prior[0]:
@@ -1329,21 +1380,10 @@ class MultiAssetShadowCoordinator:
         active = self._active_registry()
         latest: int | None = None
         seen: set[int] = set()
-        for record_id in _record_ids(self._evidence, "strategy_evaluation"):
-            record = self._evidence.get(record_id)
-            if not isinstance(record, StrategyEvaluation):
+        for payload in self._validated_retained_strategy_payloads(active=active):
+            if payload.get("market_id") != market_id:
                 continue
-            payload = record.payload
-            if (
-                payload.get("market_id") != market_id
-                or payload.get("registry_version") != active.version
-                or payload.get("strategy_version") != STRATEGY_VERSION
-                or payload.get("parameter_version") != PARAMETER_VERSION
-            ):
-                continue
-            if payload.get("registry_hash") != active.content_hash:
-                raise IntegrationError("retained Strategy checkpoint conflicts with Registry")
-            boundary = int(payload.get("source_open_time_ms", -1))
+            boundary = _payload_int(payload, "source_open_time_ms")
             if boundary in seen:
                 raise IntegrationError("duplicate retained Strategy boundary authority")
             seen.add(boundary)
@@ -1394,28 +1434,18 @@ class MultiAssetShadowCoordinator:
     def has_retained_strategy_evaluation(
         self, *, market_id: str, source_open_time_ms: int
     ) -> bool:
-        """Report exact durable Strategy completion under current authority."""
+        """Report exact durable Strategy completion across Registry epochs."""
         active = self._active_registry()
-        matches: list[StrategyEvaluation] = []
-        for record_id in _record_ids(self._evidence, "strategy_evaluation"):
-            record = self._evidence.get(record_id)
-            if not isinstance(record, StrategyEvaluation):
-                continue
-            payload = record.payload
+        matches = 0
+        for payload in self._validated_retained_strategy_payloads(active=active):
             if (
-                payload.get("market_id") != market_id
-                or payload.get("source_open_time_ms") != source_open_time_ms
-                or payload.get("registry_version") != active.version
-                or payload.get("strategy_version") != STRATEGY_VERSION
-                or payload.get("parameter_version") != PARAMETER_VERSION
+                payload.get("market_id") == market_id
+                and payload.get("source_open_time_ms") == source_open_time_ms
             ):
-                continue
-            if payload.get("registry_hash") != active.content_hash:
-                raise IntegrationError("retained Strategy checkpoint conflicts with Registry")
-            matches.append(record)
-        if len(matches) > 1:
+                matches += 1
+        if matches > 1:
             raise IntegrationError("duplicate retained Strategy boundary authority")
-        return bool(matches)
+        return matches > 0
 
     def _active_registry(self) -> RegistryVersion:
         active = self._registry.active()
@@ -1765,6 +1795,17 @@ class MultiAssetShadowCoordinator:
             if any(payload.get(name) != value for name, value in expected.items()):
                 raise IntegrationError("Strategy authority slot conflicts with current context")
             return self._evaluation_receipt(record)
+
+        if self.has_retained_strategy_evaluation(
+            market_id=market_id, source_open_time_ms=retained[-1].open_time_ms
+        ):
+            # A boundary already authoritative under a predecessor Registry
+            # epoch is never re-evaluated under the current one (packet
+            # section 12): its retained output ledger dominates.
+            raise IntegrationError(
+                "boundary already holds authoritative Strategy authority "
+                "under a predecessor Registry epoch"
+            )
 
         current_ledger = self._ledgers.get(market_id, EventLedger())
         result = evaluate_strategy(

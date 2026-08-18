@@ -88,9 +88,13 @@ def test_validate_request_and_data_boundary_apply_are_atomic(tmp_path: Path) -> 
         subject.apply_at_closed_5m()  # type: ignore[attr-defined]
     subject.request_apply("two")
     admit(subject, tmp_path, two.markets[0], 300_000)
-    assert subject.active() is not None and subject.active().version == "two"
+    # An individual ClosedBar never activates a successor once an active
+    # Registry exists; only the one-use cohort witness may.
+    assert subject.active() is not None and subject.active().version == "one"
+    pending = subject.pending_version()
+    assert pending is not None and pending.version == "two"
     subject.rollback_request("one")
-    admit(subject, tmp_path, one.markets[0], 600_000)
+    admit(subject, tmp_path, one.markets[0], 300_000)
     assert subject.active() is not None and subject.active().version == "one"
 
 

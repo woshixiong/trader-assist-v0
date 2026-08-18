@@ -1,4 +1,12 @@
-"""Adversarial generation/finality tests for the A1 public-data runtime."""
+"""Adversarial generation/finality tests for the A1 public-data runtime.
+
+Single-owner architecture (attack AV): per-market websocket traffic may only
+offer and supersede candidates, while targeted exact-T confirmation REST,
+durable admission, and the global LIVE_ACTIONABLE wake happen exclusively
+inside the cohort barrier.  The legacy per-market ``runtime._finality`` engine
+tests were replaced by these composition equivalents; the generation
+coordinator unit tests and the frozen constants below are unchanged.
+"""
 
 from __future__ import annotations
 
@@ -15,6 +23,7 @@ import pytest
 from trader_assist_v0.contracts.common import sha256_hex
 from trader_assist_v0.multi_asset_shadow.data import (
     ClosedBarStore,
+    DataRouteError,
     MultiAssetDataAuthority,
 )
 from trader_assist_v0.multi_asset_shadow.finality import (
@@ -33,7 +42,9 @@ from trader_assist_v0.multi_asset_shadow.models import (
     RegistryVersion,
 )
 from trader_assist_v0.multi_asset_shadow.registry import MarketRegistryManager
-from trader_assist_v0.multi_asset_shadow.runtime import MultiAssetPublicRuntime
+from trader_assist_v0.multi_asset_shadow.runtime import BoundaryMode, MultiAssetPublicRuntime
+
+T = 300_000
 
 
 def async_test(function):  # type: ignore[no-untyped-def]
@@ -135,6 +146,7 @@ def setup_runtime(
     clock: Clock | None = None,
     markets: tuple[RegistryMarket, ...] | None = None,
     confirmation_concurrency: int = 4,
+    sleep: Callable[[float], object] | None = None,
 ) -> tuple[MultiAssetPublicRuntime, MultiAssetDataAuthority, tuple[RegistryMarket, ...], Clock]:
     clock = clock or Clock()
     selected = markets or (market(),)
@@ -151,7 +163,7 @@ def setup_runtime(
         client=client,  # type: ignore[arg-type]
         clock=clock.now,
         monotonic=clock.monotonic,
-        sleep=clock.sleep,
+        sleep=sleep or clock.sleep,
         confirmation_concurrency=confirmation_concurrency,
     )
     return runtime, authority, selected, clock
@@ -161,10 +173,19 @@ async def wait_for_thread_event(event: threading.Event) -> None:
     assert await asyncio.wait_for(asyncio.to_thread(event.wait, 2), timeout=3)
 
 
-async def wait_for_finality(runtime: MultiAssetPublicRuntime, market_id: str) -> None:
-    task = runtime._finality.task_for(market_id)
-    assert task is not None
-    await asyncio.wait_for(task, timeout=3)
+def active_market(coin: str = "BTC") -> RegistryMarket:
+    return market(coin).model_copy(update={"lifecycle": MarketLifecycle.ACTIVE})
+
+
+def seed_boundary_zero(
+    authority: MultiAssetDataAuthority, selected: tuple[RegistryMarket, ...]
+) -> None:
+    for item in selected:
+        authority.admit_rest_history(
+            market=item,
+            snapshot=[candle(item.identity.coin, 0)],
+            received_at=datetime.fromtimestamp(301_000 / 1000, UTC),
+        )
 
 
 def ws(payload: dict[str, object]) -> str:
@@ -247,120 +268,136 @@ async def test_one_failed_market_does_not_stop_another_market() -> None:
 
 
 @async_test
-async def test_a_rest1_running_then_b_self_finalizes_without_third_ws_event(
+async def test_ws_candidate_supersession_is_observation_only_then_barrier_proves(
     tmp_path: Path,
 ) -> None:
-    a = candle("BTC", 0)
-    b = candle("BTC", 0, close="101")
-    client = SequenceClient([[a], [b], [b]], blocked_calls={0})
-    runtime, authority, (item,), _ = setup_runtime(tmp_path, client=client)
-    await runtime.handle_message(ws(a))
-    original_task = runtime._finality.task_for(item.identity.market_id)
-    assert original_task is not None
-    await wait_for_thread_event(client.entered[0])
-    await runtime.handle_message(ws(b))
-    latest = runtime._finality.latest(item.identity.market_id)
-    assert latest is not None and latest.sequence == 2 and latest.fingerprint != ""
-    assert runtime._finality.task_for(item.identity.market_id) is original_task
-    client.release[0].set()
-    await original_task
-    bars = authority.store.bars(item.identity.market_id)
-    assert len(client.calls) == 3
-    assert len(bars) == 1 and str(bars[0].close) == "101"
-    assert not runtime._finality.pending and not runtime._finality.tasks
+    item = active_market()
+    a = candle("BTC", T)
+    b = candle("BTC", T, close="101")
+    client = SequenceClient([[a], [a]])
+    runtime, authority, (selected,), clock = setup_runtime(
+        tmp_path, client=client, markets=(item,)
+    )
+    wakes: list[tuple[int, BoundaryMode]] = []
 
+    async def on_finalized(bar: object, mode: BoundaryMode) -> None:
+        wakes.append((bar.open_time_ms, mode))  # type: ignore[attr-defined]
 
-@async_test
-async def test_a_two_rest_observations_then_b_supersedes_before_admission(
-    tmp_path: Path,
-) -> None:
-    a = candle("BTC", 0)
-    b = candle("BTC", 0, close="101")
-    client = SequenceClient([[a], [a], [b], [b]])
-    runtime, authority, (item,), _ = setup_runtime(tmp_path, client=client)
-    loop = asyncio.get_running_loop()
-    client.after_call[1] = lambda: loop.call_soon_threadsafe(
-        lambda: asyncio.create_task(runtime.handle_message(ws(b)))
+    runtime.on_finalized_5m = on_finalized
+    runtime.health.data_ready = True
+    seed_boundary_zero(authority, (selected,))
+
+    first = authority.offer_ws_candidate(market=item, payload=a, received_at=clock.now())
+    second = authority.offer_ws_candidate(market=item, payload=b, received_at=clock.now())
+    assert first != second
+    assert (
+        authority.offer_ws_candidate(market=item, payload=b, received_at=clock.now()) == second
     )
     await runtime.handle_message(ws(a))
-    await wait_for_finality(runtime, item.identity.market_id)
-    bars = authority.store.bars(item.identity.market_id)
-    assert len(client.calls) == 4
-    assert len(bars) == 1 and str(bars[0].close) == "101"
-
-
-@async_test
-async def test_different_open_supersedes_obsolete_confirmation_path(tmp_path: Path) -> None:
-    a = candle("BTC", 0)
-    b = candle("BTC", 300_000, close="101")
-    client = SequenceClient([[a], [b], [b]], blocked_calls={0})
-    runtime, authority, (item,), clock = setup_runtime(tmp_path, client=client)
-    await runtime.handle_message(ws(a))
-    await wait_for_thread_event(client.entered[0])
-    clock.seconds = 603
     await runtime.handle_message(ws(b))
-    latest = runtime._finality.latest(item.identity.market_id)
-    assert latest is not None and latest.identity.open_time_ms == 300_000
-    client.release[0].set()
-    await wait_for_finality(runtime, item.identity.market_id)
-    bars = authority.store.bars(item.identity.market_id)
-    assert [bar.open_time_ms for bar in bars] == [300_000]
+    # Superseding candidates are pure observation: no REST, no durable evidence.
+    assert client.calls == []
+    assert [bar.open_time_ms for bar in authority.store.bars(item.identity.market_id)] == [0]
+
+    await runtime.process_cohort_boundary(T)
+    assert client.calls == [("BTC", T, T + 300_000)] * 2
+    assert [bar.open_time_ms for bar in authority.store.bars(item.identity.market_id)] == [0, T]
+    assert wakes == [(T, BoundaryMode.LIVE_ACTIONABLE)]
 
 
 @async_test
-async def test_stable_two_confirmation_admit_and_unstable_pair_rejects(tmp_path: Path) -> None:
-    stable = candle("BTC", 0)
-    changed = candle("BTC", 0, close="101")
+async def test_stable_confirmation_pair_finalizes_and_unstable_pair_fails_closed(
+    tmp_path: Path,
+) -> None:
+    stable = candle("BTC", T)
+    changed = candle("BTC", T, close="101")
     good = SequenceClient([[stable], [stable]])
-    runtime, authority, (item,), _ = setup_runtime(tmp_path / "stable", client=good)
-    await runtime.handle_message(ws(stable))
-    await wait_for_finality(runtime, item.identity.market_id)
+    runtime, authority, (item,), _ = setup_runtime(
+        tmp_path / "stable", client=good, markets=(active_market(),)
+    )
+    wakes: list[tuple[int, BoundaryMode]] = []
+
+    async def on_finalized(bar: object, mode: BoundaryMode) -> None:
+        wakes.append((bar.open_time_ms, mode))  # type: ignore[attr-defined]
+
+    runtime.on_finalized_5m = on_finalized
+    runtime.health.data_ready = True
+    seed_boundary_zero(authority, (item,))
+    await runtime.process_cohort_boundary(T)
     assert len(good.calls) == TARGET_CONFIRMATIONS
-    assert len(authority.store.bars(item.identity.market_id)) == 1
+    assert [bar.open_time_ms for bar in authority.store.bars(item.identity.market_id)] == [0, T]
+    assert wakes == [(T, BoundaryMode.LIVE_ACTIONABLE)]
 
     bad = SequenceClient([[stable], [changed]])
     rejected, rejected_authority, (rejected_item,), _ = setup_runtime(
-        tmp_path / "unstable", client=bad
+        tmp_path / "unstable", client=bad, markets=(active_market(),)
     )
-    await rejected.handle_message(ws(stable))
-    await wait_for_finality(rejected, rejected_item.identity.market_id)
-    assert rejected_authority.store.bars(rejected_item.identity.market_id) == ()
+    rejected_wakes: list[tuple[int, BoundaryMode]] = []
+
+    async def on_rejected(bar: object, mode: BoundaryMode) -> None:
+        rejected_wakes.append((bar.open_time_ms, mode))  # type: ignore[attr-defined]
+
+    rejected.on_finalized_5m = on_rejected
+    rejected.health.data_ready = True
+    seed_boundary_zero(rejected_authority, (rejected_item,))
+    await rejected.process_cohort_boundary(T)
+    assert [
+        bar.open_time_ms for bar in rejected_authority.store.bars(rejected_item.identity.market_id)
+    ] == [0]
     assert rejected_item.identity.market_id in rejected.health.failed_markets
+    assert rejected_wakes == []
 
 
 @async_test
-async def test_less_than_one_second_monotonic_observation_gap_is_rejected(
+async def test_frozen_monotonic_confirmation_gap_is_requested_between_confirmations(
     tmp_path: Path,
 ) -> None:
-    value = candle("BTC", 0)
+    value = candle("BTC", T)
+    clock = Clock()
+    requested: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        requested.append(seconds)
+        await clock.sleep(seconds)
+
     client = SequenceClient([[value], [value]])
-    clock = Clock(advance_monotonic=False)
-    runtime, authority, (item,), _ = setup_runtime(tmp_path, client=client, clock=clock)
-    await runtime.handle_message(ws(value))
-    await wait_for_finality(runtime, item.identity.market_id)
-    assert authority.store.bars(item.identity.market_id) == ()
-    assert item.identity.market_id in runtime.health.failed_markets
+    runtime, authority, (item,), _ = setup_runtime(
+        tmp_path, client=client, markets=(active_market(),), clock=clock, sleep=sleep
+    )
+    runtime.health.data_ready = True
+    seed_boundary_zero(authority, (item,))
+    await runtime.process_cohort_boundary(T)
+    # Post-close hold first, then exactly one frozen-gap sleep between the two
+    # targeted confirmations.
+    assert requested == [300.0, MIN_MONOTONIC_CONFIRMATION_GAP_MS / 1_000]
+    assert [bar.open_time_ms for bar in authority.store.bars(item.identity.market_id)] == [0, T]
 
 
 @async_test
-async def test_duplicate_finalized_is_idempotent_and_changed_finalized_identity_conflicts(
+async def test_duplicate_boundary_is_idempotent_and_changed_identity_conflicts(
     tmp_path: Path,
 ) -> None:
-    a = candle("BTC", 0)
-    b = candle("BTC", 0, close="101")
-    client = SequenceClient([[a], [a], [a], [a], [b], [b]])
-    runtime, authority, (item,), _ = setup_runtime(tmp_path, client=client)
-    for payload in (a, a):
-        await runtime.handle_message(ws(payload))
-        await wait_for_finality(runtime, item.identity.market_id)
-    assert len(authority.store.bars(item.identity.market_id)) == 1
-    assert item.identity.market_id not in runtime.health.failed_markets
-
-    await runtime.handle_message(ws(b))
-    await wait_for_finality(runtime, item.identity.market_id)
-    bars = authority.store.bars(item.identity.market_id)
-    assert len(bars) == 1 and str(bars[0].close) == "100"
-    assert item.identity.market_id in runtime.health.failed_markets
+    a = candle("BTC", T)
+    client = SequenceClient([[a], [a]])
+    runtime, authority, (item,), _ = setup_runtime(
+        tmp_path, client=client, markets=(active_market(),)
+    )
+    runtime.health.data_ready = True
+    seed_boundary_zero(authority, (item,))
+    await runtime.process_cohort_boundary(T)
+    calls_after_first = len(client.calls)
+    bars_after_first = authority.store.bars(item.identity.market_id)
+    await runtime.process_cohort_boundary(T)
+    assert len(client.calls) == calls_after_first
+    assert authority.store.bars(item.identity.market_id) == bars_after_first
+    # A changed payload for an already-durable boundary can never rewrite it.
+    with pytest.raises(DataRouteError):
+        authority.admit_rest_history(
+            market=item,
+            snapshot=[candle("BTC", T, close="999")],
+            received_at=datetime.fromtimestamp((T + 301_000) / 1000, UTC),
+        )
+    assert authority.store.bars(item.identity.market_id) == bars_after_first
 
 
 class BoundedClient:
@@ -369,12 +406,14 @@ class BoundedClient:
         self._lock = threading.Lock()
         self.active = 0
         self.max_active = 0
+        self.calls: list[tuple[str, int, int]] = []
 
     def closed_candles(
         self, *, coin: str, interval: str, start_ms: int, end_ms: int
     ) -> object:
         assert interval == "5m" and end_ms == start_ms + 300_000
         with self._lock:
+            self.calls.append((coin, start_ms, end_ms))
             self.active += 1
             self.max_active = max(self.max_active, self.active)
         try:
@@ -387,66 +426,110 @@ class BoundedClient:
 
 
 @async_test
-async def test_40_market_pending_state_and_confirmation_concurrency_are_bounded(
+async def test_40_market_confirmation_concurrency_is_bounded_without_pending_state(
     tmp_path: Path,
 ) -> None:
-    selected = tuple(market(f"M{index:02d}") for index in range(40))
+    selected = tuple(active_market(f"M{index:02d}") for index in range(40))
     client = BoundedClient()
+
+    async def instant_sleep(_seconds: float) -> None:
+        await asyncio.sleep(0)
+
     runtime, authority, _, _ = setup_runtime(
         tmp_path,
         client=client,  # type: ignore[arg-type]
         markets=selected,
         confirmation_concurrency=4,
+        clock=Clock(seconds=605, advance_monotonic=False),
+        sleep=instant_sleep,
     )
-    for item in selected:
-        await runtime.handle_message(ws(candle(item.identity.coin, 0)))
-    for _ in range(1_000):
+    wakes: list[tuple[int, BoundaryMode]] = []
+
+    async def on_finalized(bar: object, mode: BoundaryMode) -> None:
+        wakes.append((bar.open_time_ms, mode))  # type: ignore[attr-defined]
+
+    runtime.on_finalized_5m = on_finalized
+    runtime.health.data_ready = True
+    seed_boundary_zero(authority, selected)
+    task = asyncio.create_task(runtime.process_cohort_boundary(T))
+    for _ in range(2_000):
         if client.max_active == 4:
             break
         await asyncio.sleep(0.001)
-    assert len(runtime._finality.pending) == 40
-    assert len(runtime._finality.tasks) == 40
     assert client.max_active == 4
-    invalidation = asyncio.create_task(runtime._finality.invalidate_all())
-    await asyncio.sleep(0)
     client.release.set()
-    await invalidation
-    assert not runtime._finality.pending and not runtime._finality.tasks
-    assert all(authority.store.bars(item.identity.market_id) == () for item in selected)
+    await task
+    assert len(client.calls) == 2 * len(selected)
+    for item in selected:
+        assert [bar.open_time_ms for bar in authority.store.bars(item.identity.market_id)] == [
+            0,
+            T,
+        ]
+    assert wakes == [(T, BoundaryMode.LIVE_ACTIONABLE)]
 
 
 @async_test
-async def test_reconnect_invalidation_prevents_stale_task_admission(tmp_path: Path) -> None:
-    value = candle("BTC", 0)
-    client = SequenceClient([[value], [value], [value]], blocked_calls={0})
-    runtime, authority, (item,), _ = setup_runtime(tmp_path, client=client)
-    await runtime.handle_message(ws(value))
-    await wait_for_thread_event(client.entered[0])
-    await runtime._finality.invalidate_all()
-    client.release[0].set()
-    await asyncio.sleep(0)
-    assert authority.store.bars(item.identity.market_id) == ()
-    assert not runtime._finality.pending and not runtime._finality.tasks
+async def test_reconnect_recovery_persists_evidence_but_only_barrier_acts(
+    tmp_path: Path,
+) -> None:
+    boundary = 600_000
+    clock = Clock(seconds=905)
+    client = SequenceClient([[candle("BTC", 300_000), candle("BTC", boundary)]])
+    runtime, authority, (item,), _ = setup_runtime(
+        tmp_path, client=client, markets=(active_market(),), clock=clock
+    )
+    wakes: list[tuple[int, BoundaryMode]] = []
 
-    await runtime.handle_message(ws(value))
-    await wait_for_finality(runtime, item.identity.market_id)
-    assert len(authority.store.bars(item.identity.market_id)) == 1
+    async def on_finalized(bar: object, mode: BoundaryMode) -> None:
+        wakes.append((bar.open_time_ms, mode))  # type: ignore[attr-defined]
+
+    runtime.on_finalized_5m = on_finalized
+    runtime.health.data_ready = True
+    seed_boundary_zero(authority, (item,))
+    await runtime.handle_message(ws(candle("BTC", boundary)))
+    assert client.calls == []
+    # Reconnect drops readiness and re-hydrates history as context only.
+    runtime.health.data_ready = False
+    await runtime._warmup_all(recovery=True)
+    assert [bar.open_time_ms for bar in authority.store.bars(item.identity.market_id)] == [
+        0,
+        300_000,
+        boundary,
+    ]
+    assert wakes == []
+    # Global LIVE_ACTIONABLE authority still belongs to the barrier alone.
+    runtime.health.data_ready = True
+    await runtime.process_cohort_boundary(boundary)
+    assert wakes == [(boundary, BoundaryMode.LIVE_ACTIONABLE)]
 
 
 @async_test
-async def test_shutdown_cancels_and_cleans_all_finality_state(tmp_path: Path) -> None:
-    value = candle("BTC", 0)
+async def test_cancelled_barrier_leaves_no_durable_authority(tmp_path: Path) -> None:
+    value = candle("BTC", T)
     client = SequenceClient([[value]], blocked_calls={0})
-    runtime, authority, (item,), _ = setup_runtime(tmp_path, client=client)
-    await runtime.handle_message(ws(value))
+    runtime, authority, (item,), _ = setup_runtime(
+        tmp_path, client=client, markets=(active_market(),)
+    )
+    wakes: list[tuple[int, BoundaryMode]] = []
+
+    async def on_finalized(bar: object, mode: BoundaryMode) -> None:
+        wakes.append((bar.open_time_ms, mode))  # type: ignore[attr-defined]
+
+    runtime.on_finalized_5m = on_finalized
+    runtime.health.data_ready = True
+    seed_boundary_zero(authority, (item,))
+    task = asyncio.create_task(runtime.process_cohort_boundary(T))
     await wait_for_thread_event(client.entered[0])
-    await runtime._finality.close()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    # The orphaned worker thread may return late; it must not admit anything.
     client.release[0].set()
-    await asyncio.sleep(0)
-    assert authority.store.bars(item.identity.market_id) == ()
-    assert not runtime._finality.pending and not runtime._finality.tasks
-    with pytest.raises(RuntimeError, match="closed"):
-        runtime._finality.offer(market=item, open_time_ms=0, fingerprint="new")
+    await asyncio.sleep(0.05)
+    assert [bar.open_time_ms for bar in authority.store.bars(item.identity.market_id)] == [0]
+    assert item.identity.market_id not in runtime.health.nonrecoverable_markets
+    assert item.identity.market_id not in runtime.health.failed_markets
+    assert wakes == []
 
 
 def test_frozen_finality_constants() -> None:

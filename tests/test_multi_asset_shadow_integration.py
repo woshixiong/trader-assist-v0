@@ -62,7 +62,10 @@ from trader_assist_v0.multi_asset_shadow.planning import (
     PlanRejection,
     PublicBbo,
 )
-from trader_assist_v0.multi_asset_shadow.registry import MarketRegistryManager
+from trader_assist_v0.multi_asset_shadow.registry import (
+    CohortWitness,
+    MarketRegistryManager,
+)
 from trader_assist_v0.multi_asset_shadow.runtime import (
     BoundaryMode,
     MultiAssetPublicRuntime,
@@ -2532,6 +2535,21 @@ def test_draining_blocks_new_activity_but_existing_outcome_completes_and_detache
         snapshot=[_payload(next_index, final=False)],
         received_at=datetime.fromtimestamp(((next_index + 1) * 300_000 + 1_000) / 1000, UTC),
     )
+    # The draining successor is applied exactly like production: through the
+    # one-use cohort witness bound to the durable next-boundary evidence, never
+    # through an individual ClosedBar admission.
+    base = route.registry.active()
+    assert base is not None
+    witness = CohortWitness.create(
+        boundary_open_time_ms=next_index * 300_000,
+        base_registry_version=base.version,
+        base_registry_hash=base.content_hash,
+        expected_successor_version=successor.version,
+        expected_successor_hash=successor.content_hash,
+        required_evidence_market_ids=frozenset({route.market.identity.market_id}),
+        issuer="SINGLE_OWNER_5M_COHORT_BARRIER",
+    )
+    route.registry.apply_witness(witness, evidence_authority=route.data)
     with pytest.raises(IntegrationError, match="lifecycle"):
         route.coordinator.evaluate_finalized_market(
             market_id=route.market.identity.market_id,

@@ -1,13 +1,15 @@
 """Bounded, public-only selected-market Hyperliquid 5m runtime.
 
-WebSocket traffic only nominates a finality candidate.  Targeted synchronous
-``urllib`` calls are deliberately bridged through a bounded thread pool so the
-receive loop remains responsive while the finality authority waits for its
-provider-close hold and real observation gap.
+SINGLE_OWNER_5M_COHORT_BARRIER: one clock-driven barrier owns whole-cohort
+actionability, retained-epoch classification, current-process failure state,
+the only global Scanner/Strategy application wake, lifecycle progression, and
+safe-boundary Registry switching.  WebSocket traffic, subscription
+acknowledgement, reconnect, warmup completion, and individual market
+callbacks only update observations, candidates, and readiness.
 
-Cold-start warmup is a bounded cohort process: one captured target boundary
-per round, chunked history admission with cooperative event-loop yields, and
-an all-market barrier before any WebSocket path may become actionable.
+Targeted synchronous ``urllib`` calls are bridged through a bounded thread
+pool so the receive loop stays responsive while provider proof and durable
+admission remain serialized on the event-loop thread.
 """
 
 from __future__ import annotations
@@ -26,20 +28,16 @@ from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
 from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
 
-from .data import DataRouteError, MultiAssetDataAuthority
-from .finality import (
-    FIVE_MINUTES_MS,
-    MIN_MONOTONIC_CONFIRMATION_GAP_MS,
-    POST_CLOSE_HOLD_MS,
-    TARGET_CONFIRMATIONS,
-    CandidateGeneration,
-    ConfirmationResult,
-    FinalityIdentity,
-    GenerationFinalityAuthority,
+from .cohort_finality import (
+    Closed5mCohortFinality,
+    FinalityMarketRequest,
+    FinalityOutcome,
 )
+from .data import ClosedBarStore, DataRouteError, MultiAssetDataAuthority
+from .finality import FIVE_MINUTES_MS
 from .hyperliquid_public import HyperliquidPublicClient, PublicDataError
 from .models import ClosedBar, MarketLifecycle, RegistryMarket, RegistryVersion
-from .registry import MarketRegistryManager, RegistryError
+from .registry import CohortWitness, MarketRegistryManager, RegistryError
 
 WS_URL = "wss://api.hyperliquid.xyz/ws"
 _MAX_RECONNECTS = 3
@@ -55,6 +53,20 @@ WARMUP_ADMISSION_CHUNK_BARS: Final = 64
 WARMUP_CATCHUP_ROUNDS_MAX: Final = 3
 FRESHNESS_TARGET_SECONDS: Final = 30.0
 FRESHNESS_ACTION_CEILING_SECONDS: Final = 60.0
+# Operational pacing only (packet section 23): after a heavy cold warmup, the
+# first live full-cohort REST burst waits at least this long.  Not durable
+# authority and not market truth; skipping the earliest boundary is acceptable.
+STARTUP_REST_COOLDOWN_SECONDS: Final = 60.0
+# One real hard action deadline per boundary: T close + 60 seconds (section 8).
+BOUNDARY_ACTION_DEADLINE_SECONDS: Final = 60.0
+# Clock-driven barrier tick: how often the completed-boundary edge is checked.
+_BARRIER_TICK_SECONDS: Final = 5.0
+_BARRIER_ISSUER: Final = "SINGLE_OWNER_5M_COHORT_BARRIER"
+_PRE_ACTIVE_ORDER: Final[dict[MarketLifecycle, int]] = {
+    MarketLifecycle.WARMING: 0,
+    MarketLifecycle.HISTORY_READY: 1,
+    MarketLifecycle.SNAPSHOT_READY: 2,
+}
 
 
 class BoundaryMode(StrEnum):
@@ -72,6 +84,7 @@ class RuntimeHealth:
     reconnects: int = 0
     acknowledgements: set[str] = field(default_factory=set)
     failed_markets: set[str] = field(default_factory=set)
+    nonrecoverable_markets: set[str] = field(default_factory=set)
     callback_failures: list[FinalizedCallbackFailure] = field(default_factory=list)
     data_ready: bool = False
 
@@ -178,8 +191,65 @@ class _WarmupCohort:
         return (self.registry_version, self.registry_content_hash, self.market_ids)
 
 
+class RetainedBoundaryClass(StrEnum):
+    """The five frozen retained exact-T semantic states (Barrier-owned)."""
+
+    CURRENT_EPOCH_FINALIZED = "CURRENT_EPOCH_FINALIZED"
+    PREDECESSOR_CONTEXT_ONLY = "PREDECESSOR_CONTEXT_ONLY"
+    MISSING_LIVE_ELIGIBLE = "MISSING_LIVE_ELIGIBLE"
+    MISSING_NEEDS_RECOVERY = "MISSING_NEEDS_RECOVERY"
+    INVALID_BINDING = "INVALID_BINDING"
+
+
+def classify_retained_boundary(
+    *,
+    store: ClosedBarStore,
+    registry: MarketRegistryManager,
+    market_id: str,
+    boundary_open_ms: int,
+    captured_version: str,
+    captured_hash: str,
+) -> RetainedBoundaryClass:
+    """Classify durable exact-T state against the exact captured Registry epoch.
+
+    The five retained states are semantically distinct (packet sections 6A/11
+    and ruling 2).  A valid exact-T row never becomes invalid merely because
+    later boundaries are also durable: stale/backward T handling belongs to
+    Barrier freshness logic, which must never produce retrospective action.
+    A predecessor binding counts only for an actually superseded active epoch;
+    a staged-never-active candidate is not a predecessor.
+    """
+    row = store.connection.execute(
+        "SELECT registry_version, registry_content_hash FROM closed_bars "
+        "WHERE market_id=? AND interval='5m' AND open_time_ms=?",
+        (market_id, boundary_open_ms),
+    ).fetchone()
+    last_open = store.last_open(market_id)
+    if row is None:
+        if last_open is not None and last_open > boundary_open_ms:
+            # Durable rows beyond T without an exact-T row are a continuity
+            # hole that cannot exist under the legal single-owner ordering.
+            return RetainedBoundaryClass.INVALID_BINDING
+        if last_open is None or last_open < boundary_open_ms - _FIVE_MINUTES_MS:
+            return RetainedBoundaryClass.MISSING_NEEDS_RECOVERY
+        return RetainedBoundaryClass.MISSING_LIVE_ELIGIBLE
+    version = str(row[0])
+    content_hash = str(row[1])
+    if version == captured_version:
+        if content_hash != captured_hash:
+            return RetainedBoundaryClass.INVALID_BINDING
+        return RetainedBoundaryClass.CURRENT_EPOCH_FINALIZED
+    try:
+        historical = registry.prior_active(version)
+    except RegistryError:
+        return RetainedBoundaryClass.INVALID_BINDING
+    if historical is None or historical.content_hash != content_hash:
+        return RetainedBoundaryClass.INVALID_BINDING
+    return RetainedBoundaryClass.PREDECESSOR_CONTEXT_ONLY
+
+
 class MultiAssetPublicRuntime:
-    """One connection, bounded finality tasks, per-market failure isolation."""
+    """One connection, one clock-driven cohort barrier, bounded provider proof."""
 
     def __init__(
         self,
@@ -211,14 +281,24 @@ class MultiAssetPublicRuntime:
         self.on_reconnect = on_reconnect
         self.acknowledgement_timeout_seconds = acknowledgement_timeout_seconds
         self.health = RuntimeHealth()
-        self._finality = GenerationFinalityAuthority(
-            confirm=self._confirm_generation,
-            discard=self._discard_candidate,
-            mark_failed=self.health.failed_markets.add,
-            now_ms=lambda: int(self.clock().timestamp() * 1000),
-            sleep=self.sleep,
+        # Evidence-derived maintenance lane invoked by the barrier whether or
+        # not the boundary produced new action (packet section 20).
+        self.on_maintenance_5m: (
+            Callable[[int], Awaitable[None] | object | None] | None
+        ) = None
+        # Replaceable provider-proof seam: no processed-boundary state, no
+        # failure state, no lifecycle or Registry authority of its own.
+        self._cohort_finality = Closed5mCohortFinality(
+            client=client,
+            clock=clock,
+            monotonic=monotonic,
+            sleep=sleep,
             confirmation_concurrency=confirmation_concurrency,
         )
+        self._barrier_lock = asyncio.Lock()
+        self._last_barrier_boundary: int | None = None
+        self._rest_cooldown_until: float | None = None
+        self._integrity_failed = False
         self._expected_acks: set[str] = set()
 
     def acquisition_registry(self) -> RegistryVersion:
@@ -264,6 +344,7 @@ class MultiAssetPublicRuntime:
             market.identity.market_id
             for market in active.markets
             if market.identity.market_id in self.health.failed_markets
+            or market.identity.market_id in self.health.nonrecoverable_markets
             or self.authority.market_failed(market.identity.market_id)
         }
         # Hard new-activity gate on the production path: a boundary observed
@@ -303,7 +384,7 @@ class MultiAssetPublicRuntime:
     def actionable_ready_market_ids(self) -> tuple[str, ...]:
         """New-activity gate: ready markets inside the hard freshness ceiling.
 
-        The hard freshness ceiling is now enforced inside
+        The hard freshness ceiling is enforced inside
         :meth:`readiness_snapshot` itself, so production paths consuming
         ``ready_market_ids`` directly are fail-closed.  This convenience method
         is retained for explicit new-activity callers.
@@ -317,6 +398,486 @@ class MultiAssetPublicRuntime:
                 "subscription": {"type": "candle", "coin": market.identity.coin, "interval": "5m"},
             }
             for market in self.selected_markets()
+        )
+
+    def begin_cold_start_rest_cooldown(self) -> None:
+        """Operational pacing only: pause the first live full-cohort REST burst."""
+        self._rest_cooldown_until = self.monotonic() + STARTUP_REST_COOLDOWN_SECONDS
+
+    async def process_cohort_boundary(self, boundary_open_ms: int) -> None:
+        """The single global authority for one completed 5m boundary.
+
+        Serialized by one process-local lock (concurrency control only, never
+        durable processed-boundary authority).  Restarts re-derive everything
+        from durable evidence, so duplicate or stale wakes converge without a
+        second authority.
+        """
+        if (
+            not isinstance(boundary_open_ms, int)
+            or boundary_open_ms < 0
+            or boundary_open_ms % _FIVE_MINUTES_MS != 0
+        ):
+            raise DataRouteError("cohort boundary must be an aligned closed 5m open")
+        async with self._barrier_lock:
+            if (
+                self._rest_cooldown_until is not None
+                and self.monotonic() < self._rest_cooldown_until
+            ):
+                return
+            if (
+                self._last_barrier_boundary is not None
+                and boundary_open_ms <= self._last_barrier_boundary
+            ):
+                return
+            active = self.registry.active()
+            if active is None:
+                # No active Registry yet: the initial-bootstrap exception is
+                # owned by the Data authority's first validated admission.
+                self._last_barrier_boundary = boundary_open_ms
+                return
+            self._last_barrier_boundary = boundary_open_ms
+            try:
+                await self._reconcile_boundary(boundary_open_ms, active)
+            except RegistryError:
+                # Registry/lifecycle control-plane contradiction is a
+                # nonrecoverable current-process class (packet section 21).
+                self._integrity_failed = True
+                raise
+
+    async def _reconcile_boundary(
+        self, boundary_open_ms: int, active: RegistryVersion
+    ) -> None:
+        """CAPTURE R -> classify -> lanes -> action under R -> maintenance -> switch."""
+        captured_version = active.version
+        captured_hash = active.content_hash
+        # Explicit single-owner crash convergence first: a pending pointer left
+        # stale by crash-after-pointer-switch/before-pending-cleanup is
+        # recognized as already applied and cleaned idempotently here, never
+        # inside an ordinary Registry read accessor.
+        pending_at_start = self.registry.reconcile_pending()
+        selected = self.selected_markets()
+        observed_ms = int(self.clock().timestamp() * 1000)
+        deadline_ms = boundary_open_ms + _FIVE_MINUTES_MS + int(
+            BOUNDARY_ACTION_DEADLINE_SECONDS * 1000
+        )
+        within_deadline = observed_ms <= deadline_ms
+
+        classes: dict[str, RetainedBoundaryClass] = {}
+        for market in selected:
+            classes[market.identity.market_id] = classify_retained_boundary(
+                store=self.authority.store,
+                registry=self.registry,
+                market_id=market.identity.market_id,
+                boundary_open_ms=boundary_open_ms,
+                captured_version=captured_version,
+                captured_hash=captured_hash,
+            )
+        self.health.nonrecoverable_markets |= {
+            market_id
+            for market_id, state in classes.items()
+            if state is RetainedBoundaryClass.INVALID_BINDING
+        }
+
+        active_selected = [
+            market for market in selected if market.lifecycle is MarketLifecycle.ACTIVE
+        ]
+        first_launch = not active_selected and any(
+            market.lifecycle in _PRE_ACTIVE_ORDER for market in selected
+        )
+        epoch_states = {
+            classes[market.identity.market_id] for market in active_selected
+        } & {
+            RetainedBoundaryClass.CURRENT_EPOCH_FINALIZED,
+            RetainedBoundaryClass.PREDECESSOR_CONTEXT_ONLY,
+        }
+        if len(epoch_states) > 1:
+            # A mixed-epoch ACTIVE cohort cannot exist under the legal
+            # single-owner ordering: integrity failure, not a repair condition.
+            self._integrity_failed = True
+            self.health.nonrecoverable_markets |= {
+                market.identity.market_id for market in active_selected
+            }
+
+        finalized_now: set[str] = set()
+        if within_deadline and not self._integrity_failed:
+            await self._run_recovery_context_lane(
+                boundary_open_ms, selected, classes, first_launch
+            )
+            finalized_now = await self._run_live_finality_lane(
+                boundary_open_ms, selected, classes, first_launch, deadline_ms
+            )
+
+        if self._whole_cohort_actionable(active_selected, classes, finalized_now, deadline_ms):
+            bars = self.authority.store.tail_bars(
+                active_selected[0].identity.market_id,
+                at_or_before_ms=boundary_open_ms,
+                limit=1,
+            )
+            if bars:
+                # The one and only global application wake, entirely under R.
+                await self._notify_finalized(bars[-1], BoundaryMode.LIVE_ACTIONABLE)
+
+        await self._run_maintenance(boundary_open_ms)
+
+        await self._reconcile_successor(
+            boundary_open_ms,
+            active,
+            pending_at_start,
+            selected,
+            active_selected,
+            within_deadline,
+        )
+
+    async def _run_recovery_context_lane(
+        self,
+        boundary_open_ms: int,
+        selected: tuple[RegistryMarket, ...],
+        classes: dict[str, RetainedBoundaryClass],
+        first_launch: bool,
+    ) -> None:
+        """Recovery/context lane: authoritative catch-up that never acts on T.
+
+        A market that entered T behind T-1 recovers history as context only.
+        Even when recovery reaches T during this reconciliation, no new
+        Scanner/Strategy/Formal authority is created for T; live action may
+        resume only at a later fresh boundary.
+        """
+        for market in selected:
+            state = classes[market.identity.market_id]
+            needs_recovery = state is RetainedBoundaryClass.MISSING_NEEDS_RECOVERY or (
+                state is RetainedBoundaryClass.MISSING_LIVE_ELIGIBLE
+                and not first_launch
+                and market.lifecycle in _PRE_ACTIVE_ORDER
+            )
+            if not needs_recovery:
+                continue
+            try:
+                await self._warmup_market(
+                    market, recovery=True, target_open_ms=boundary_open_ms
+                )
+            except asyncio.CancelledError:
+                raise
+            except (DataRouteError, PublicDataError):
+                self.health.failed_markets.add(market.identity.market_id)
+            except Exception:
+                self.health.nonrecoverable_markets.add(market.identity.market_id)
+
+    async def _run_live_finality_lane(
+        self,
+        boundary_open_ms: int,
+        selected: tuple[RegistryMarket, ...],
+        classes: dict[str, RetainedBoundaryClass],
+        first_launch: bool,
+        deadline_ms: int,
+    ) -> set[str]:
+        """Live finality lane: only MISSING_LIVE_ELIGIBLE action-cohort markets."""
+        targets = [
+            market
+            for market in selected
+            if classes[market.identity.market_id] is RetainedBoundaryClass.MISSING_LIVE_ELIGIBLE
+            and (first_launch or market.lifecycle is MarketLifecycle.ACTIVE)
+        ]
+        if not targets:
+            return set()
+        remaining_ms = deadline_ms - int(self.clock().timestamp() * 1000)
+        if remaining_ms <= 0:
+            return set()
+        results = await self._cohort_finality.prove_cohort(
+            requests=tuple(
+                FinalityMarketRequest(market=market, boundary_open_ms=boundary_open_ms)
+                for market in targets
+            ),
+            deadline_monotonic=self.monotonic() + remaining_ms / 1_000,
+        )
+        finalized: set[str] = set()
+        for market, result in zip(targets, results, strict=True):
+            market_id = market.identity.market_id
+            if (
+                result.outcome is FinalityOutcome.FINALIZED
+                and result.confirmed_payload is not None
+            ):
+                try:
+                    # Durable validation/admission happens on the event-loop
+                    # thread; the worker only carried raw provider transport.
+                    self.authority.admit_rest_history(
+                        market=market,
+                        snapshot=[result.confirmed_payload],
+                        received_at=self.clock(),
+                    )
+                    if self._durable_boundary_row(market_id, boundary_open_ms):
+                        finalized.add(market_id)
+                    else:
+                        # Strict admission discarded the payload (for example a
+                        # close time still ahead of the wall clock): the
+                        # provider proof did not become durable evidence.
+                        self.health.failed_markets.add(market_id)
+                except (DataRouteError, PublicDataError):
+                    self.health.failed_markets.add(market_id)
+            elif result.outcome is FinalityOutcome.NONRECOVERABLE_FAILURE:
+                self.health.nonrecoverable_markets.add(market_id)
+            else:
+                self.health.failed_markets.add(market_id)
+        return finalized
+
+    def _durable_boundary_row(self, market_id: str, boundary_open_ms: int) -> bool:
+        """Confirm one exact-T durable row exists under the captured epoch."""
+        row = self.authority.store.connection.execute(
+            "SELECT 1 FROM closed_bars "
+            "WHERE market_id=? AND interval='5m' AND open_time_ms=?",
+            (market_id, boundary_open_ms),
+        ).fetchone()
+        return row is not None
+
+    def _whole_cohort_actionable(
+        self,
+        active_selected: list[RegistryMarket],
+        classes: dict[str, RetainedBoundaryClass],
+        finalized_now: set[str],
+        deadline_ms: int,
+    ) -> bool:
+        """Whole-cohort actionability decision owned by the barrier alone."""
+        if self._integrity_failed or not self.health.data_ready or not active_selected:
+            return False
+        for market in active_selected:
+            market_id = market.identity.market_id
+            if (
+                market_id in self.health.failed_markets
+                or market_id in self.health.nonrecoverable_markets
+                or self.authority.market_failed(market_id)
+            ):
+                return False
+            if market_id in finalized_now:
+                continue
+            if classes[market_id] is not RetainedBoundaryClass.CURRENT_EPOCH_FINALIZED:
+                return False
+        # Hard freshness re-check immediately before the only global wake.
+        return int(self.clock().timestamp() * 1000) <= deadline_ms
+
+    async def _run_maintenance(self, boundary_open_ms: int) -> None:
+        """Action deferral never defers maintenance (packet section 20)."""
+        callback = self.on_maintenance_5m
+        if callback is None:
+            return
+        try:
+            result = callback(boundary_open_ms)
+            if isinstance(result, Awaitable):
+                await cast(Awaitable[None], result)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.health.callback_failures.append(
+                FinalizedCallbackFailure(
+                    market_id="",
+                    open_time_ms=boundary_open_ms,
+                    evaluation_mode=BoundaryMode.RECOVERY_CONTEXT_ONLY,
+                    error_type=type(exc).__name__,
+                    reason=str(exc),
+                )
+            )
+
+    async def _reconcile_successor(
+        self,
+        boundary_open_ms: int,
+        active: RegistryVersion,
+        pending_at_start: RegistryVersion | None,
+        selected: tuple[RegistryMarket, ...],
+        active_selected: list[RegistryMarket],
+        within_deadline: bool,
+    ) -> None:
+        """Lifecycle planning and at most one witness-authorized switch at T."""
+        if self._integrity_failed or not within_deadline:
+            return
+        planner_updates = self._plan_lifecycle_updates(
+            boundary_open_ms=boundary_open_ms,
+            selected=selected,
+            active_selected=active_selected,
+        )
+        try:
+            if pending_at_start is not None:
+                # Never overwrite an existing pending Registry and never mint a
+                # second lifecycle successor in the same boundary.
+                transition = self._pending_lifecycle_transition(active, pending_at_start)
+                if transition is None:
+                    # External/manual membership successor: preserve existing
+                    # safe-boundary semantics through the same exact witness.
+                    evidence = frozenset(
+                        market.identity.market_id for market in active_selected
+                    )
+                    if evidence and self.authority.prove_boundary_evidence(
+                        boundary_open_time_ms=boundary_open_ms,
+                        market_ids=evidence,
+                        base_registry_version=active.version,
+                        base_registry_hash=active.content_hash,
+                    ):
+                        self._apply_successor_witness(
+                            boundary_open_ms=boundary_open_ms,
+                            base=active,
+                            successor=pending_at_start,
+                            evidence_market_ids=evidence,
+                        )
+                elif planner_updates == transition:
+                    self._apply_successor_witness(
+                        boundary_open_ms=boundary_open_ms,
+                        base=active,
+                        successor=pending_at_start,
+                        evidence_market_ids=self._successor_evidence_ids(
+                            selected, active_selected, transition
+                        ),
+                    )
+                # A lifecycle pending the current planner would not reproduce
+                # is a stale/conflicting control-plane proposal: no apply.
+                return
+            if not planner_updates:
+                return
+            suffix = "-".join(
+                sorted(value.value.lower() for value in set(planner_updates.values()))
+            )
+            candidate = self.registry.lifecycle_successor(
+                version=f"{active.version}-lifecycle-{suffix}",
+                updates=planner_updates,
+                now=self.clock(),
+            )
+            self.registry.request_apply(candidate.version)
+            self._apply_successor_witness(
+                boundary_open_ms=boundary_open_ms,
+                base=active,
+                successor=candidate,
+                evidence_market_ids=self._successor_evidence_ids(
+                    selected, active_selected, planner_updates
+                ),
+            )
+        except RegistryError:
+            # Control-plane contradiction: fail closed for the involved cohort.
+            self.health.nonrecoverable_markets |= set(planner_updates) | {
+                market.identity.market_id for market in active_selected
+            }
+
+    def _plan_lifecycle_updates(
+        self,
+        *,
+        boundary_open_ms: int,
+        selected: tuple[RegistryMarket, ...],
+        active_selected: list[RegistryMarket],
+    ) -> dict[str, MarketLifecycle]:
+        """Pure deterministic lifecycle planner; no durable writes occur here."""
+        selected_coins = {market.identity.coin for market in selected}
+        snapshot_ready = (
+            self.health.data_ready
+            and selected_coins <= self.health.acknowledgements
+        )
+
+        def blocked(market: RegistryMarket) -> bool:
+            market_id = market.identity.market_id
+            return (
+                market_id in self.health.nonrecoverable_markets
+                or market_id in self.health.failed_markets
+                or self.authority.market_failed(market_id)
+            )
+
+        def current(market: RegistryMarket) -> bool:
+            return self._history_current_at(market, boundary_open_ms)
+
+        members = [market for market in selected if market.lifecycle in _PRE_ACTIVE_ORDER]
+        if not active_selected:
+            # Initial-Launch mode: the cohort advances atomically.  A failed
+            # selected member holds progression, only the minimum PRE_ACTIVE
+            # stage advances, and markets ahead remain unchanged.
+            if not members or any(blocked(market) or not current(market) for market in members):
+                return {}
+            minimum = min(
+                members, key=lambda market: _PRE_ACTIVE_ORDER[market.lifecycle]
+            ).lifecycle
+            if minimum is MarketLifecycle.WARMING:
+                return {
+                    market.identity.market_id: MarketLifecycle.HISTORY_READY
+                    for market in members
+                    if market.lifecycle is MarketLifecycle.WARMING
+                }
+            if not snapshot_ready:
+                return {}
+            target = (
+                MarketLifecycle.SNAPSHOT_READY
+                if minimum is MarketLifecycle.HISTORY_READY
+                else MarketLifecycle.ACTIVE
+            )
+            return {
+                market.identity.market_id: target
+                for market in members
+                if market.lifecycle is minimum
+            }
+        updates: dict[str, MarketLifecycle] = {}
+        for market in members:
+            if blocked(market) or not current(market):
+                continue
+            if market.lifecycle is MarketLifecycle.WARMING:
+                updates[market.identity.market_id] = MarketLifecycle.HISTORY_READY
+            elif snapshot_ready:
+                updates[market.identity.market_id] = (
+                    MarketLifecycle.SNAPSHOT_READY
+                    if market.lifecycle is MarketLifecycle.HISTORY_READY
+                    else MarketLifecycle.ACTIVE
+                )
+        if updates and any(
+            blocked(market) or not current(market) for market in active_selected
+        ):
+            # A Registry switch at T requires the current ACTIVE cohort to be
+            # coherent at T (packet section 14).
+            return {}
+        return updates
+
+    def _successor_evidence_ids(
+        self,
+        selected: tuple[RegistryMarket, ...],
+        active_selected: list[RegistryMarket],
+        updates: dict[str, MarketLifecycle],
+    ) -> frozenset[str]:
+        if not active_selected:
+            # Initial Launch: the complete selected launch cohort, never empty.
+            return frozenset(market.identity.market_id for market in selected)
+        return frozenset(market.identity.market_id for market in active_selected) | frozenset(
+            updates
+        )
+
+    def _pending_lifecycle_transition(
+        self, active: RegistryVersion, pending: RegistryVersion
+    ) -> dict[str, MarketLifecycle] | None:
+        """Exact lifecycle-only diff, or None for an external successor."""
+        active_by_id = {market.identity.market_id: market for market in active.markets}
+        pending_by_id = {market.identity.market_id: market for market in pending.markets}
+        if set(active_by_id) != set(pending_by_id):
+            return None
+        updates: dict[str, MarketLifecycle] = {}
+        for market_id, market in pending_by_id.items():
+            prior = active_by_id[market_id]
+            if market.lifecycle is prior.lifecycle:
+                if market != prior:
+                    return None
+                continue
+            if market != prior.model_copy(update={"lifecycle": market.lifecycle}):
+                return None
+            updates[market_id] = market.lifecycle
+        return updates or None
+
+    def _apply_successor_witness(
+        self,
+        *,
+        boundary_open_ms: int,
+        base: RegistryVersion,
+        successor: RegistryVersion,
+        evidence_market_ids: frozenset[str],
+    ) -> None:
+        """Activate exactly one successor through the one-use cohort witness."""
+        witness = CohortWitness.create(
+            boundary_open_time_ms=boundary_open_ms,
+            base_registry_version=base.version,
+            base_registry_hash=base.content_hash,
+            expected_successor_version=successor.version,
+            expected_successor_hash=successor.content_hash,
+            required_evidence_market_ids=evidence_market_ids,
+            issuer=_BARRIER_ISSUER,
+        )
+        self.registry.apply_witness(
+            witness, evidence_authority=self.authority
         )
 
     def _window(self) -> tuple[int, int]:
@@ -549,21 +1110,14 @@ class MultiAssetPublicRuntime:
         return recovered
 
     async def run(self, shutdown: asyncio.Event) -> None:
-        """Startup recovery, acknowledgement readiness, then bounded reconnect."""
+        """Startup recovery, bounded reconnect, and the clock-driven barrier."""
+        if not await self._startup_warmup_barrier(shutdown):
+            # A partial or mixed-time cohort must never become actionable:
+            # fail closed before any WebSocket, subscription, or live flow.
+            return
+        self.begin_cold_start_rest_cooldown()
+        ticker = asyncio.create_task(self._barrier_ticker(shutdown))
         try:
-            startup_mode = (
-                BoundaryMode.RECOVERY_CONTEXT_ONLY
-                if any(
-                    self.authority.store.last_open(market.identity.market_id) is not None
-                    for market in self.selected_markets()
-                )
-                else BoundaryMode.COLD_START_CONTEXT_ONLY
-            )
-            if not await self._startup_warmup_barrier(shutdown):
-                # A partial or mixed-time cohort must never become actionable:
-                # fail closed before any WebSocket, subscription, or live flow.
-                return
-            await self._maybe_stage_lifecycle(snapshot_ready=False)
             reconnecting = False
             consecutive_incomplete_recoveries = 0
             while True:
@@ -580,11 +1134,7 @@ class MultiAssetPublicRuntime:
                             return
                     await self._subscribe(websocket)
                     await self._await_acknowledgements(websocket, shutdown)
-                    await self._maybe_stage_lifecycle(snapshot_ready=True)
                     self.health.data_ready = True
-                    await self._wake_recovered_application(
-                        startup_mode if not reconnecting else BoundaryMode.RECOVERY_CONTEXT_ONLY
-                    )
                     recovery_complete = True
                     consecutive_incomplete_recoveries = 0
                     await self._receive_loop(websocket, shutdown)
@@ -598,7 +1148,6 @@ class MultiAssetPublicRuntime:
                 ):
                     self.health.connection_count = 0
                     self.health.data_ready = False
-                    await self._finality.invalidate_all()
                     if reconnecting and not recovery_complete:
                         consecutive_incomplete_recoveries += 1
                         if consecutive_incomplete_recoveries >= _MAX_RECONNECTS:
@@ -616,7 +1165,36 @@ class MultiAssetPublicRuntime:
                     if websocket is not None:
                         await self._close_socket(websocket)
         finally:
-            await self._finality.close()
+            ticker.cancel()
+            await asyncio.gather(ticker, return_exceptions=True)
+
+    async def _barrier_ticker(self, shutdown: asyncio.Event) -> None:
+        """Clock-driven edge detection only; the barrier is the authority."""
+        while not shutdown.is_set():
+            await self.sleep(_BARRIER_TICK_SECONDS)
+            if shutdown.is_set():
+                return
+            try:
+                boundary = self._latest_completed_open()
+                if (
+                    self._last_barrier_boundary is None
+                    or boundary > self._last_barrier_boundary
+                ):
+                    await self.process_cohort_boundary(boundary)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.health.callback_failures.append(
+                    FinalizedCallbackFailure(
+                        market_id="",
+                        open_time_ms=self._last_barrier_boundary or 0,
+                        evaluation_mode=BoundaryMode.RECOVERY_CONTEXT_ONLY,
+                        error_type=type(exc).__name__,
+                        reason=str(exc),
+                    )
+                )
+                if len(self.health.callback_failures) > _MAX_CALLBACK_FAILURES:
+                    del self.health.callback_failures[:-_MAX_CALLBACK_FAILURES]
 
     async def _close_socket(self, websocket: Any) -> None:
         close = getattr(websocket, "close", None)
@@ -682,6 +1260,7 @@ class MultiAssetPublicRuntime:
         self.health.acknowledgements.add(coin)
 
     async def handle_message(self, raw: str) -> None:
+        """Observations and candidates only: no staging, no wake, no Registry."""
         try:
             message = json.loads(raw)
         except (TypeError, json.JSONDecodeError) as exc:
@@ -701,71 +1280,20 @@ class MultiAssetPublicRuntime:
         if market is None:
             return
         try:
-            fingerprint = self.authority.offer_ws_candidate(
+            self.authority.offer_ws_candidate(
                 market=market, payload=payload, received_at=self.clock()
             )
             open_ms = payload.get("t")
-            if not isinstance(open_ms, int):
-                raise DataRouteError("websocket candle is missing open timestamp")
-            self._finality.offer(market=market, open_time_ms=open_ms, fingerprint=fingerprint)
+            last_open = self.authority.store.last_open(market.identity.market_id)
+            if isinstance(open_ms, int) and last_open is not None and open_ms <= last_open:
+                # A candidate for an already provider-finalized boundary is
+                # worthless observation state; drop it so retention stays
+                # bounded to the open boundary.
+                self.authority.discard_ws_candidate(
+                    market_id=market.identity.market_id, open_time_ms=open_ms
+                )
         except DataRouteError:
             self.health.failed_markets.add(market.identity.market_id)
-
-    def _discard_candidate(self, identity: FinalityIdentity) -> None:
-        self.authority.discard_ws_candidate(
-            market_id=identity.market_id, open_time_ms=identity.open_time_ms
-        )
-
-    async def _confirm_generation(self, generation: CandidateGeneration) -> ConfirmationResult:
-        identity = generation.identity
-        try:
-            snapshots: list[list[object]] = []
-            observed_at: list[float] = []
-            for index in range(TARGET_CONFIRMATIONS):
-                if index:
-                    await self.sleep(MIN_MONOTONIC_CONFIRMATION_GAP_MS / 1_000)
-                if not self._finality.is_latest(generation):
-                    return ConfirmationResult.STALE
-                snapshot = await asyncio.to_thread(
-                    self.client.closed_candles,
-                    coin=generation.market.identity.coin,
-                    interval="5m",
-                    start_ms=identity.open_time_ms,
-                    end_ms=identity.open_time_ms + _FIVE_MINUTES_MS,
-                )
-                observed_at.append(self.monotonic())
-                if not self._finality.is_latest(generation):
-                    return ConfirmationResult.STALE
-                if not isinstance(snapshot, list):
-                    raise DataRouteError("candleSnapshot did not return a list")
-                snapshots.append(snapshot)
-            # Give already-queued WebSocket revisions one event-loop turn to
-            # advance the generation before the synchronous admission section.
-            await asyncio.sleep(0)
-            if not self._finality.is_latest(generation):
-                return ConfirmationResult.STALE
-            admitted = self.authority.confirm_ws_candidate(
-                market=generation.market,
-                open_time_ms=identity.open_time_ms,
-                candidate_fingerprint=generation.fingerprint,
-                snapshot=snapshots[0],
-                stable_snapshot=snapshots[1],
-                received_at=self.clock(),
-                hold_ms=POST_CLOSE_HOLD_MS,
-                first_observed_monotonic=observed_at[0],
-                second_observed_monotonic=observed_at[1],
-                observation_gap_ms=MIN_MONOTONIC_CONFIRMATION_GAP_MS,
-            )
-            await self._maybe_stage_lifecycle(snapshot_ready=self.health.data_ready)
-            if admitted is not None:
-                await self._notify_finalized(admitted, BoundaryMode.LIVE_ACTIONABLE)
-            return ConfirmationResult.COMPLETE
-        except asyncio.CancelledError:
-            raise
-        except (DataRouteError, PublicDataError):
-            if not self._finality.is_latest(generation):
-                return ConfirmationResult.STALE
-            return ConfirmationResult.FAILED
 
     async def _notify_finalized(self, bar: ClosedBar, mode: BoundaryMode) -> object | None:
         callback = self.on_finalized_5m
@@ -779,7 +1307,9 @@ class MultiAssetPublicRuntime:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            self.health.failed_markets.add(bar.market_id)
+            # Application callback authority failure is nonrecoverable within
+            # this process (packet section 21).
+            self.health.nonrecoverable_markets.add(bar.market_id)
             self.health.callback_failures.append(
                 FinalizedCallbackFailure(
                     market_id=bar.market_id,
@@ -792,48 +1322,3 @@ class MultiAssetPublicRuntime:
             if len(self.health.callback_failures) > _MAX_CALLBACK_FAILURES:
                 del self.health.callback_failures[:-_MAX_CALLBACK_FAILURES]
             return None
-
-    async def _wake_recovered_application(self, mode: BoundaryMode) -> None:
-        """Wake once; retained history lets the reconciler derive every missing prefix."""
-        latest: list[ClosedBar] = []
-        for market in self.selected_markets():
-            bars = self.authority.store.bars(market.identity.market_id)
-            if not bars:
-                return
-            latest.append(bars[-1])
-        if not latest or len({bar.open_time_ms for bar in latest}) != 1:
-            return
-        await self._notify_finalized(latest[0], mode)
-
-    async def _cancel_confirmation_tasks(self) -> None:
-        """Compatibility seam for deterministic runtime shutdown tests."""
-        await self._finality.invalidate_all()
-
-    async def _maybe_stage_lifecycle(self, *, snapshot_ready: bool) -> None:
-        if self.registry.active() is None or self.registry.pending_version() is not None:
-            return
-        active = self.registry.active()
-        assert active is not None
-        updates: dict[str, MarketLifecycle] = {}
-        for market in active.markets:
-            if market.identity.market_id in self.health.failed_markets:
-                continue
-            if market.lifecycle is MarketLifecycle.WARMING and self._history_current(market):
-                updates[market.identity.market_id] = MarketLifecycle.HISTORY_READY
-            elif market.lifecycle is MarketLifecycle.HISTORY_READY and snapshot_ready:
-                updates[market.identity.market_id] = MarketLifecycle.SNAPSHOT_READY
-            elif market.lifecycle is MarketLifecycle.SNAPSHOT_READY and snapshot_ready:
-                updates[market.identity.market_id] = MarketLifecycle.ACTIVE
-        if not updates:
-            return
-        suffix = "-".join(sorted(value.value.lower() for value in set(updates.values())))
-        version = f"{active.version}-lifecycle-{suffix}"
-        try:
-            candidate = self.registry.lifecycle_successor(
-                version=version, updates=updates, now=self.clock()
-            )
-            self.registry.request_apply(candidate.version)
-        except RegistryError:
-            # A filesystem/control-plane conflict must not become a different
-            # data authority.  Leave markets below ACTIVE for operator review.
-            self.health.failed_markets.update(updates)

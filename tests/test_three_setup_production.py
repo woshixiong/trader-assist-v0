@@ -299,16 +299,17 @@ def test_initial_pending_registry_composes_then_activates_only_from_provider_adm
         (66 * 300_000, True, MarketLifecycle.ACTIVE),
     ):
         bootstrap.runtime.health.data_ready = snapshot_ready
-        asyncio.run(bootstrap.runtime._maybe_stage_lifecycle(snapshot_ready=snapshot_ready))
-        candidate = bootstrap.registry.pending_version()
-        assert candidate is not None and candidate.markets[0].lifecycle is expected
+        bootstrap.runtime.health.acknowledgements = {active.markets[0].identity.coin}
         clock.seconds = (open_ms + 303_000) // 1000
         admitted = bootstrap.data_authority.admit_rest_history(
-            market=candidate.markets[0],
+            market=active.markets[0],
             snapshot=[_candle(open_ms // 300_000)],
             received_at=clock.now(),
         )
         assert len(admitted) == 1
+        # Lifecycle staging is owned solely by the cohort barrier: each
+        # boundary advances exactly one legal stage under the single owner.
+        asyncio.run(bootstrap.runtime.process_cohort_boundary(open_ms))
         active = bootstrap.registry.active()
         assert active is not None and active.markets[0].lifecycle is expected
         lifecycles.append(active.markets[0].lifecycle)

@@ -153,41 +153,39 @@ async def test_bootstrap_pending_seed_warms_then_admitted_boundary_activates_wit
 
 
 @async_test
-async def test_candidate_is_scheduled_nonblocking_and_admits_without_second_ws_message(
+async def test_ws_candidate_is_observation_only_without_rest_or_wake(
     tmp_path: Path,
 ) -> None:
+    # Single-owner architecture: a WS candle message may persist a candidate
+    # observation, but never performs provider REST, never admits evidence,
+    # and never wakes global application authority (packet attack AR/AV).
     runtime, authority, item, _, client = setup(tmp_path, client_values=[[candle("BTC", 0)]])
+    wakes: list[BoundaryMode] = []
+    runtime.on_finalized_5m = lambda _bar, mode: wakes.append(mode)
     await runtime.handle_message(json.dumps({"channel": "candle", "data": candle("BTC", 0)}))
+    await asyncio.sleep(0)
     assert client.calls == []
-    task = runtime._finality.task_for(item.identity.market_id)
-    assert task is not None
-    await task
-    assert len(client.calls) == 2
-    assert authority.store.last_open(item.identity.market_id) == 0
+    assert authority.store.last_open(item.identity.market_id) is None
+    assert wakes == []
 
 
 @async_test
-async def test_finality_gap_change_and_supersession_fail_closed_or_cancel_stale(
-    tmp_path: Path,
-) -> None:
-    runtime, authority, item, clock, _ = setup(
-        tmp_path,
-        client_values=[[candle("BTC", 0)], [candle("BTC", 0, close="101")]],
-    )
+async def test_candidate_supersession_stays_observation_only(tmp_path: Path) -> None:
+    # A later observation of the same unfinalized boundary replaces the prior
+    # candidate without accumulating per-market finality tasks, without REST,
+    # and without any durable ClosedBar (gap/change/supersession authority
+    # now lives in the data authority and the cohort barrier).
+    runtime, authority, item, clock, client = setup(tmp_path)
+    wakes: list[BoundaryMode] = []
+    runtime.on_finalized_5m = lambda _bar, mode: wakes.append(mode)
     await runtime.handle_message(json.dumps({"channel": "candle", "data": candle("BTC", 0)}))
-    task = runtime._finality.task_for(item.identity.market_id)
-    assert task is not None
-    await task
-    assert authority.store.bars(item.identity.market_id) == ()
-    # A later market generation replaces the only pending task rather than
-    # accumulating unbounded candidates for the same market.
     clock.seconds = 603
-    await runtime.handle_message(json.dumps({"channel": "candle", "data": candle("BTC", 300_000)}))
-    first = runtime._finality.task_for(item.identity.market_id)
-    assert first is not None
-    await runtime.handle_message(json.dumps({"channel": "candle", "data": candle("BTC", 600_000)}))
-    assert runtime._finality.task_for(item.identity.market_id) is first
-    assert len(runtime._finality.tasks) == 1
+    await runtime.handle_message(
+        json.dumps({"channel": "candle", "data": candle("BTC", 0, close="101")})
+    )
+    assert client.calls == []
+    assert authority.store.bars(item.identity.market_id) == ()
+    assert wakes == []
 
 
 class Socket:
@@ -247,25 +245,24 @@ async def test_startup_warmup_ack_policy_and_shutdown_are_runtime_owned(tmp_path
     assert authority.store.last_open(item.identity.market_id) == 300_000
     assert runtime.health.acknowledgements == {"BTC"}
     assert socket.closed
-    assert callbacks == [(300_000, BoundaryMode.COLD_START_CONTEXT_ONLY)]
+    # Startup warmup owns no application wake: only the cohort barrier may
+    # wake global LIVE_ACTIONABLE authority.
+    assert callbacks == []
 
 
 @async_test
-async def test_finalized_ws_boundary_is_semantically_live_actionable(tmp_path: Path) -> None:
-    runtime, _, item, _, _ = setup(
-        tmp_path, client_values=[[candle("BTC", 0)]]
-    )
+async def test_ws_boundary_evidence_never_wakes_application_directly(tmp_path: Path) -> None:
+    # Packet attack AV replacement: per-market WS evidence may persist, but
+    # global action occurs only when the cohort barrier processes the boundary.
+    runtime, _, item, _, _ = setup(tmp_path, client_values=[[candle("BTC", 0)]])
     callbacks: list[tuple[str, int, BoundaryMode]] = []
     runtime.on_finalized_5m = lambda bar, mode: callbacks.append(
         (bar.market_id, bar.open_time_ms, mode)
     )
     await runtime.handle_message(json.dumps({"channel": "candle", "data": candle("BTC", 0)}))
-    task = runtime._finality.task_for(item.identity.market_id)
-    assert task is not None
-    await task
-    assert callbacks == [
-        (item.identity.market_id, 0, BoundaryMode.LIVE_ACTIONABLE)
-    ]
+    await asyncio.sleep(0)
+    assert callbacks == []
+    assert item.identity.market_id not in runtime.health.nonrecoverable_markets
 
 
 @async_test
@@ -326,13 +323,10 @@ async def test_repeated_completed_reconnects_replenish_budget(tmp_path: Path) ->
     await runtime.run(shutdown)
 
     # Four completed reconnects (more than the nominal maximum of three) each
-    # reached application wake before their later close. The following recovery
-    # still established, acknowledged, woke the application, and shut down cleanly.
+    # re-established provider history. Reconnect recovery owns no application
+    # wake in the single-owner architecture: only the barrier wakes action.
     assert len(created) == 6
-    assert wakes == [
-        BoundaryMode.COLD_START_CONTEXT_ONLY,
-        *([BoundaryMode.RECOVERY_CONTEXT_ONLY] * 5),
-    ]
+    assert wakes == []
     assert runtime.health.reconnects == 5
     assert runtime.health.data_ready is True
     assert all(socket.closed for socket in created)
@@ -358,41 +352,47 @@ async def test_consecutive_incomplete_recoveries_exhaust_budget_fail_closed(
     await runtime.run(asyncio.Event())
 
     # The initial startup failure is free. Three later incomplete recoveries
-    # consume the bounded budget without any READY/application-wake reset.
+    # consume the bounded budget without any READY/application-wake reset.  The
+    # reconnect backoff sequence is isolated from the barrier ticker's pacing
+    # sleeps (5s each) observed on the same injected clock.
     assert len(created) == 4
     assert runtime.health.reconnects == 3
     assert runtime.health.connection_count == 0
     assert runtime.health.data_ready is False
-    assert clock.monotonic_seconds == 7.0
+    backoffs = [value for value in clock.sleep_seconds if value in (1.0, 2.0, 4.0)]
+    assert backoffs == [1.0, 2.0, 4.0]
     assert all(socket.closed for socket in created)
 
 
 @async_test
 async def test_lifecycle_advances_one_safe_boundary_at_a_time(tmp_path: Path) -> None:
+    # Lifecycle staging is owned solely by the cohort barrier: each boundary
+    # advances exactly one legal stage for the minimum PRE_ACTIVE cohort.
     clock = Clock(seconds=600)
     runtime, authority, item, _, _ = setup(tmp_path, clock=clock)
     authority.admit_rest_history(
         market=item, snapshot=[candle("BTC", 300_000)], received_at=clock.now()
     )
+    runtime.health.data_ready = True
+    runtime.health.acknowledgements = {item.identity.coin}
     assert runtime.registry.active() is not None
+    active = runtime.registry.active()
+    assert active is not None
     for open_ms, expected in (
         (600_000, MarketLifecycle.HISTORY_READY),
         (900_000, MarketLifecycle.SNAPSHOT_READY),
         (1_200_000, MarketLifecycle.ACTIVE),
     ):
-        await runtime._maybe_stage_lifecycle(snapshot_ready=True)
-        pending = runtime.registry.pending_version()
-        assert pending is not None
-        candidate = pending.markets[0]
-        assert candidate.lifecycle is expected
         clock.seconds = (open_ms + 303_000) // 1000
         authority.admit_rest_history(
-            market=candidate,
+            market=active.markets[0],
             snapshot=[candle("BTC", open_ms)],
             received_at=clock.now(),
         )
-    active = runtime.registry.active()
-    assert active is not None and active.markets[0].lifecycle is MarketLifecycle.ACTIVE
+        await runtime.process_cohort_boundary(open_ms)
+        active = runtime.registry.active()
+        assert active is not None
+        assert active.markets[0].lifecycle is expected
     assert authority.can_formalize(active.markets[0])
 
 
@@ -626,7 +626,9 @@ async def test_outrun_catchup_bound_fails_closed_without_websocket(tmp_path: Pat
     assert factory_calls == []
     assert runtime.health.subscriptions == 0
     assert runtime.health.failed_markets == set()
-    assert runtime._finality._closed is True
+    # The fail-closed return released the process-local barrier lock: no
+    # global authority remains in flight after the failed startup.
+    assert runtime._barrier_lock.locked() is False
 
 
 @async_test
@@ -695,7 +697,9 @@ async def test_single_provider_failure_keeps_partial_cohort_fail_closed(
     assert authority.store.bars(markets[2].identity.market_id) == ()
     for item in markets[:2]:
         assert authority.store.last_open(item.identity.market_id) == 300_000
-    assert runtime._finality._closed is True
+    # The fail-closed return released the process-local barrier lock: no
+    # global authority remains in flight after the failed startup.
+    assert runtime._barrier_lock.locked() is False
 
 
 def large_history_fixture(bars: int) -> list[object]:
@@ -772,7 +776,9 @@ async def test_shutdown_during_large_admission_stops_at_bounded_chunk_boundary(
     assert runtime.health.subscriptions == 0
     assert runtime.health.data_ready is False
     assert runtime.health.failed_markets == set()  # clean shutdown is not a market failure
-    assert runtime._finality._closed is True
+    # The fail-closed return released the process-local barrier lock: no
+    # global authority remains in flight after the failed startup.
+    assert runtime._barrier_lock.locked() is False
 
 
 @async_test
@@ -798,7 +804,9 @@ async def test_shutdown_during_warmup_skips_remaining_markets(tmp_path: Path) ->
     assert factory_calls == []
     assert runtime.health.subscriptions == 0
     assert runtime.health.failed_markets == set()
-    assert runtime._finality._closed is True
+    # The fail-closed return released the process-local barrier lock: no
+    # global authority remains in flight after the failed startup.
+    assert runtime._barrier_lock.locked() is False
 
 
 @async_test
@@ -884,8 +892,9 @@ async def test_run_regression_startup_warmup_and_shutdown_paths_stay_green(
     tmp_path: Path,
 ) -> None:
     # J. The repaired startup path still produces the original deterministic
-    # cold-start behavior: runtime-owned warmup, acknowledgement, and the
-    # recovered application wake for a single-market cohort.
+    # cold-start behavior: runtime-owned warmup and acknowledgement.  In the
+    # single-owner architecture startup owns no application wake; only the
+    # cohort barrier wakes global action.
     clock = Clock(seconds=600)
     client = Client([[candle("BTC", 300_000)]])
     runtime, _, _, _, _ = cohort_setup(tmp_path, ("BTC",), clock, client=client)
@@ -901,7 +910,7 @@ async def test_run_regression_startup_warmup_and_shutdown_paths_stay_green(
     await runtime.run(shutdown)
     assert runtime.health.acknowledgements == {"BTC"}
     assert socket.closed
-    assert callbacks == [(300_000, BoundaryMode.COLD_START_CONTEXT_ONLY)]
+    assert callbacks == []
 
 
 # ---------------------------------------------------------------------------

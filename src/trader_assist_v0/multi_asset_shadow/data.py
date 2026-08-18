@@ -33,7 +33,7 @@ _WINDOW_CACHE_BARS = 11
 
 
 class DataRouteError(ValueError):
-    pass
+    """Data-route integrity failure."""
 
 
 @dataclass(frozen=True)
@@ -311,6 +311,33 @@ class MultiAssetDataAuthority:
     def request_registry_apply(self, version: str) -> None:
         self.registry.request_apply(version)
 
+    def prove_boundary_evidence(
+        self,
+        *,
+        boundary_open_time_ms: int,
+        market_ids: frozenset[str],
+        base_registry_version: str,
+        base_registry_hash: str,
+    ) -> bool:
+        """Prove every required market holds exactly one exact-boundary row.
+
+        Narrow provider-authoritative proof consumed by Registry witness
+        application: it decides only whether the required cohort evidence is
+        durably retained at the boundary AND bound to the exact base Registry
+        epoch the witness captured, never lifecycle or epoch authority.
+        """
+        for market_id in market_ids:
+            row = self.store.connection.execute(
+                "SELECT registry_version, registry_content_hash FROM closed_bars "
+                "WHERE market_id=? AND interval='5m' AND open_time_ms=?",
+                (market_id, boundary_open_time_ms),
+            ).fetchone()
+            if row is None:
+                return False
+            if str(row[0]) != base_registry_version or str(row[1]) != base_registry_hash:
+                return False
+        return True
+
     def market_failed(self, market_id: str) -> bool:
         return market_id in self._failed
 
@@ -511,11 +538,12 @@ class MultiAssetDataAuthority:
             self._restore_durable_last_open(market_id)
             raise
         # Registry activation may only consume a capability whose causal 5m
-        # row is already durable: batching runs only when no pending Registry
-        # version can be activated mid-transaction, and commits happen above.
-        for bar in inserted:
-            admission = Closed5mAdmission(bar=bar, issuer=self.registry._boundary_issuer)
-            self.registry._apply_admitted(admission)
+        # row is already durable, and only through the initial-bootstrap
+        # exception while no active Registry exists yet.
+        if self.registry.active() is None:
+            for bar in inserted:
+                admission = Closed5mAdmission(bar=bar, issuer=self.registry._boundary_issuer)
+                self.registry._apply_admitted(admission)
         return inserted
 
     def _admit_transactional(
@@ -604,8 +632,14 @@ class MultiAssetDataAuthority:
         )
         if window_cache is not None:
             self._track_window_tail(window_cache, bar)
-        admission = Closed5mAdmission(bar=bar, issuer=self.registry._boundary_issuer)
-        self.registry._apply_admitted(admission)
+        if self.registry.active() is None:
+            # Initial-bootstrap exception: only while no active Registry exists
+            # may the first validated provider admission establish the initial
+            # pending Registry authority.  Once active authority exists, an
+            # individual ClosedBar never activates a successor; only the Cohort
+            # Barrier's exact-boundary witness may.
+            admission = Closed5mAdmission(bar=bar, issuer=self.registry._boundary_issuer)
+            self.registry._apply_admitted(admission)
         return bar
 
     def _binding_registry(self, market: RegistryMarket) -> RegistryVersion:

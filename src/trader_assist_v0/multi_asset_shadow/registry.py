@@ -12,6 +12,7 @@ import json
 import os
 import tempfile
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -21,11 +22,75 @@ from trader_assist_v0.contracts.common import canonical_json_bytes
 from .models import MarketLifecycle, RegistryMarket, RegistryVersion
 
 if TYPE_CHECKING:
-    from .data import Closed5mAdmission
+    from .data import Closed5mAdmission, MultiAssetDataAuthority
 
 
 class RegistryError(ValueError):
-    pass
+    """Registry control-plane integrity failure."""
+
+
+@dataclass(frozen=True)
+class CohortWitness:
+    """Process-local, one-use capability authorizing exactly one successor apply.
+
+    Binds the boundary, the exact base Registry epoch, the exact expected
+    successor, the required evidence cohort, and the issuer.  Application
+    re-reads live active/pending state and requires exact equality before any
+    durable transition, so a witness minted for one candidate can never apply
+    another.  The consumed flag is process-local capability state, not durable
+    Registry authority.
+    """
+
+    boundary_open_time_ms: int
+    base_registry_version: str
+    base_registry_hash: str
+    expected_successor_version: str
+    expected_successor_hash: str
+    required_evidence_market_ids: frozenset[str]
+    issuer: str
+    _consumed: bool = field(default=False, repr=False, compare=False)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        boundary_open_time_ms: int,
+        base_registry_version: str,
+        base_registry_hash: str,
+        expected_successor_version: str,
+        expected_successor_hash: str,
+        required_evidence_market_ids: frozenset[str],
+        issuer: str,
+    ) -> CohortWitness:
+        if (
+            not isinstance(boundary_open_time_ms, int)
+            or boundary_open_time_ms < 0
+            or boundary_open_time_ms % 300_000 != 0
+        ):
+            raise RegistryError("witness boundary must be an aligned 5m open")
+        for name, value in (
+            ("base_registry_version", base_registry_version),
+            ("base_registry_hash", base_registry_hash),
+            ("expected_successor_version", expected_successor_version),
+            ("expected_successor_hash", expected_successor_hash),
+        ):
+            if not isinstance(value, str) or not value:
+                raise RegistryError(f"witness {name} is required")
+        if not isinstance(required_evidence_market_ids, frozenset) or any(
+            not isinstance(item, str) or not item for item in required_evidence_market_ids
+        ):
+            raise RegistryError("witness evidence cohort must be market id strings")
+        if not isinstance(issuer, str) or not issuer:
+            raise RegistryError("witness issuer is required")
+        return cls(
+            boundary_open_time_ms=boundary_open_time_ms,
+            base_registry_version=base_registry_version,
+            base_registry_hash=base_registry_hash,
+            expected_successor_version=expected_successor_version,
+            expected_successor_hash=expected_successor_hash,
+            required_evidence_market_ids=frozenset(required_evidence_market_ids),
+            issuer=issuer,
+        )
 
 
 MetadataValidator = Callable[[RegistryMarket], bool]
@@ -181,6 +246,137 @@ class MarketRegistryManager:
             raise RegistryError("pending registry pointer content_hash does not match version")
         self._assert_prior_validation(candidate)
         return candidate
+
+    def reconcile_pending(self) -> RegistryVersion | None:
+        """Explicit single-owner crash-convergence for a stale pending pointer.
+
+        Crash-after-pointer-switch/before-pending-cleanup leaves
+        ``active == pending``: recognize it as already applied, clean the stale
+        pointer idempotently, and report no pending proposal.  A read accessor
+        (:meth:`pending_version`) never performs this mutation; only the Cohort
+        Barrier's explicit reconciliation does.  No second transition, no new
+        history record, no alternate candidate.
+        """
+        candidate = self.pending_version()
+        if candidate is None:
+            return None
+        active = self.active()
+        if (
+            active is not None
+            and active.version == candidate.version
+            and active.content_hash == candidate.content_hash
+        ):
+            try:
+                self.pending.unlink()
+            except FileNotFoundError:
+                pass
+            return None
+        return candidate
+
+    def prior_active(self, version: str) -> RegistryVersion | None:
+        """Load one version only if it was an actually superseded active epoch.
+
+        A merely staged/validated candidate that was never the live authority
+        is NOT a predecessor epoch.  Proof comes from the existing immutable
+        history record format, not a new lineage store.
+        """
+        if self._prior_history_record(version) is None:
+            return None
+        return self.load_version(version)
+
+    def _prior_history_record(self, version: str) -> Path | None:
+        """Exact ``{stamp}-{version}.json`` history record for one version."""
+        if not self.history.exists():
+            return None
+        suffix = f"-{version}.json"
+        for path in self.history.glob("*.json"):
+            if len(path.name) > 17 and path.name[16] == "-" and path.name[16:] == suffix:
+                return path
+        return None
+
+    def apply_witness(
+        self,
+        witness: CohortWitness,
+        *,
+        evidence_authority: MultiAssetDataAuthority,
+    ) -> RegistryVersion:
+        """Activate exactly the successor bound by one one-use cohort witness.
+
+        Re-reads live active and pending Registry state immediately before any
+        durable transition and requires exact equality with the witness
+        binding, then proves the required evidence cohort through the
+        provider-authoritative Data authority itself.  The Registry never
+        trusts an arbitrary caller-supplied proof callback: evidence proof is
+        owned by :class:`MultiAssetDataAuthority` (packet section 4A).  The
+        ``issuer`` string is diagnostic text only; real authority is the
+        process-local one-use witness binding plus live state equality plus
+        authority-owned evidence.  Transition order is the crash-convergent
+        existing-format sequence: prior history record, atomic pointer switch,
+        pending cleanup.  Any mismatch fails closed with no mutation.
+        """
+        from .data import MultiAssetDataAuthority
+
+        if witness._consumed:
+            raise RegistryError("cohort witness was already consumed")
+        object.__setattr__(witness, "_consumed", True)
+        if not isinstance(evidence_authority, MultiAssetDataAuthority):
+            raise RegistryError(
+                "cohort witness evidence must be proven by the Data authority"
+            )
+        if not witness.required_evidence_market_ids:
+            raise RegistryError("cohort witness requires a non-empty evidence cohort")
+        active = self.active()
+        if active is None:
+            raise RegistryError("cohort witness apply requires an active Registry")
+        pending = self.pending_version()
+        if pending is None:
+            raise RegistryError("cohort witness apply requires the expected pending successor")
+        if (
+            active.version != witness.base_registry_version
+            or active.content_hash != witness.base_registry_hash
+        ):
+            raise RegistryError("witness base Registry epoch does not match live active")
+        if (
+            pending.version != witness.expected_successor_version
+            or pending.content_hash != witness.expected_successor_hash
+        ):
+            raise RegistryError("witness expected successor does not match live pending")
+        try:
+            proven = bool(
+                evidence_authority.prove_boundary_evidence(
+                    boundary_open_time_ms=witness.boundary_open_time_ms,
+                    market_ids=witness.required_evidence_market_ids,
+                    base_registry_version=witness.base_registry_version,
+                    base_registry_hash=witness.base_registry_hash,
+                )
+            )
+        except RegistryError:
+            raise
+        except Exception as exc:
+            raise RegistryError("cohort witness evidence proof failed") from exc
+        if not proven:
+            raise RegistryError("cohort witness evidence cohort is not proven at boundary")
+        prior_pointer = self.pointer.read_bytes()
+        stamp = datetime.fromtimestamp(witness.boundary_open_time_ms / 1000, UTC).strftime(
+            "%Y%m%dT%H%M%SZ"
+        )
+        record = self.history / f"{stamp}-{active.version}.json"
+        existing = self._prior_history_record(active.version)
+        if existing is None:
+            _write_atomic(record, prior_pointer)
+        elif existing.read_bytes() != prior_pointer:
+            raise RegistryError("prior Registry history record conflicts with live pointer")
+        _write_atomic(
+            self.pointer,
+            canonical_json_bytes(
+                {"version": pending.version, "content_hash": pending.content_hash}
+            ),
+        )
+        try:
+            self.pending.unlink()
+        except FileNotFoundError:
+            pass
+        return pending
 
     def _apply_admitted(self, admission: Closed5mAdmission) -> RegistryVersion | None:
         """Consume one provider-issued boundary capability exactly once.
