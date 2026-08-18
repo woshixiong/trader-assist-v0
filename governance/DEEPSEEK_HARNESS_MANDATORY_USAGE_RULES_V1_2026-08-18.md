@@ -4,117 +4,149 @@
 **Effective date:** 2026-08-18  
 **Repository:** `woshixiong/trader-assist-v0`  
 **Parent profile:** `governance/ENGINEERING_EXECUTOR_POOL_AND_DEEPSEEK_HARNESS_PROFILE_V1_2026-08-18.md`  
-**Scope:** mandatory prompt, session, cache, model, skill, permission, cost-scheduling and qualification rules whenever Trader Assist / Trade OS uses a DeepSeek model or DeepSeek Harness as an engineering coding executor.
+**Scope:** mandatory execution, prompt, context, cache, skill, session, model, permission, cost and qualification rules whenever DeepSeek Harness is used as a Trader Assist / Trade OS coding executor.
 
-This file is a specialized companion, not a second general engineering constitution. The canonical Unified Engineering Governance, Mandatory Engineering Preflight, Project Research/Evidence/Decision Method, parent executor profile and all explicit user authority gates remain controlling.
+This file is a specialized L2 execution contract. It does not replace the canonical Unified Engineering Governance, Mandatory Engineering Preflight, Research/Evidence/Decision Method, Hermes contract, product/strategy/security authorities, or explicit user gates.
 
-It grants no Mark Ready, merge, deployment, production/runtime/cloud mutation, credentials/private API, signing/wallet, exchange write, order submission or trading authority.
-
----
-
-## 1. Mandatory applicability
-
-Whenever an Engineering/Operations ChatGPT window generates a DeepSeek Writer prompt, configures a DeepSeek Harness session, assigns `DEEPSEEK_HARNESS`, or deliberately routes another harness to a DeepSeek API model, it MUST apply this file before dispatch.
-
-Required record:
-
-```text
-DEEPSEEK_USAGE_RULES_LOADED=YES
-DEEPSEEK_EXECUTION_ROUTE=
-DEEPSEEK_PROVIDER=
-DEEPSEEK_MODEL=
-DEEPSEEK_REASONING_EFFORT=
-DEEPSEEK_SESSION_MODE=NEW/RESUME_EXACT
-DEEPSEEK_PERMISSION_PRESET=
-DEEPSEEK_AGENT_PRESET=
-DEEPSEEK_PRICE_WINDOW=PEAK/OFF_PEAK
-DEEPSEEK_CACHE_DISCIPLINE=PASS
-```
-
-Missing or ambiguous material routing fields are fail-closed. The DeepSeek model, Harness, Hermes, or coding Writer may not invent them.
+It grants no Mark Ready, merge, deployment, production/runtime/cloud mutation, credentials/private API beyond the DeepSeek model credential, signing/wallet, exchange write, order submission or trading authority.
 
 ---
 
-## 2. Frozen route decision: native Harness first, Codex compatibility lane second
+## 1. Frozen provider/harness route
 
-For normal DeepSeek coding work, the preferred route is:
-
-```text
-DEEPSEEK_PRIMARY_HARNESS=DEEPSEEK_HARNESS
-DEEPSEEK_PRIMARY_PROVIDER=deepseek-official
-```
-
-Rationale:
-
-- DeepSeek Harness is first-party and exposes provider-native DeepSeek semantics;
-- it supports the project's intended DeepSeek Flash and Pro routes through its native adapter;
-- its Code Mode, project skills, token meter, tool-result pruning, compaction, permission presets and future headless mode form one coherent replaceable executor seam;
-- retaining DSH as a peer executor preserves the project's three-tool coding pool rather than collapsing DeepSeek into the Codex harness.
-
-Codex with a DeepSeek custom provider is an **optional compatibility / benchmark lane**, not the default DeepSeek route. Current Codex custom model providers use the Responses API wire contract. Therefore a Codex→DeepSeek route must not be assumed compatible with a DeepSeek model unless the current official DeepSeek API documentation confirms Responses API support for that exact model and the route passes qualification.
-
-As of this rule freeze, official DeepSeek pricing/model documentation confirms Responses API support for `deepseek-v4-flash` and still states `deepseek-v4-pro` is not yet supported there. Therefore:
+The DeepSeek coding route for this project is fixed as:
 
 ```text
-CODEX_DEEPSEEK_FLASH=OPTIONAL_QUALIFICATION_LANE
-CODEX_DEEPSEEK_PRO=DO_NOT_ASSUME_SUPPORTED
+DEEPSEEK_HARNESS=@deepseek-ai/dsh
+DEEPSEEK_PROVIDER=deepseek-official
+DEEPSEEK_API=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-v4-flash | deepseek-v4-pro
 ```
 
-If official provider support changes later, re-verify before changing this routing policy. Do not infer future support from an old roadmap date.
+Do not route the DeepSeek API through Codex, Trae, Claude Code, OpenCode or another harness for normal project work. Codex and Trae remain independent peer coding executors with their own task assignments; they are not alternate wrappers for the DeepSeek route.
+
+Current qualification baseline:
+
+```text
+DSH_VERSION=0.1.0-rc.7
+DSH_UPSTREAM_RELEASE_SHA=99f6f02fecdb7dff40c3fbc9470f5907c29f74ca
+```
+
+Because DSH is Developer Preview, authority-bearing automated use MUST pin or verify the expected DSH version. A version change that alters command grammar, agent preset composition, permission behavior, tool visibility, session semantics, skill semantics or output/evidence behavior requires bounded seam requalification before automation resumes.
+
+---
+
+## 2. Authority split: L1 decides; L2 executes
+
+The full material governance/preflight burden belongs to L1 Engineering Control before Writer dispatch:
+
+```text
+L1
+→ load canonical governance + live GitHub
+→ independent analysis
+→ external mature/provider-native research when material
+→ synthesis
+→ PROJECT_ENGINEERING_RULESET_PREFLIGHT=PASS
+→ ENGINEERING_PREFLIGHT_GATE=PASS
+→ freeze route / executor / model / reasoning / scope / tests / stop conditions
+→ issue one frozen Writer Task Packet
+```
+
+DeepSeek Harness is an L2 bounded Writer. It MUST NOT independently redo a material route choice that L1 already froze.
+
+### 2.1 Token-efficient L2 fast path
+
+A DeepSeek Writer session does **not** automatically reread every large governance document when all of these are true:
+
+```text
+FROZEN_TASK_PACKET=VALID
+PROJECT_ENGINEERING_RULESET_PREFLIGHT=PASS
+ENGINEERING_PREFLIGHT_GATE=PASS            # material tasks
+LIVE_REPO_AND_EXPECTED_HEAD_MATCH=YES
+EXECUTOR=DEEPSEEK_HARNESS
+MODEL_AND_REASONING=EXPLICIT
+WORKTREE_AND_ALLOWED_PATHS=EXPLICIT
+STOP_CONDITIONS=EXPLICIT
+USER_GATES=EXPLICIT
+```
+
+In that case the Writer loads:
+
+1. root `AGENTS.md` automatically through the shipped DSH instruction mechanism;
+2. the frozen Task Packet;
+3. `trade-os-writer-preflight` at task start;
+4. other project-local skills only when required by the current step;
+5. any narrow authority/source file explicitly referenced by the Task Packet.
+
+The Writer MUST safe-stop and request L1 resolution before continuing if it encounters a new material design choice, an authority ambiguity, missing/stale preflight attestation, governance/version mismatch, HEAD drift, required allowlist expansion, new dependency/service, repair-route change, or a conflict between the Task Packet and repository authority. At that point L1 re-enters the full canonical governance path.
+
+This fast path reduces duplicate model context; it does not delegate L1 authority to the Writer and does not weaken any safety or release gate.
 
 ---
 
 ## 3. Ten mandatory DeepSeek operating rules
 
-### Rule 1 — Code Mode first for coding
+### Rule 1 — PTC / Code Mode first for coding
 
-After DSH qualification, coding sessions default to the shipped `code` agent preset rather than `standard` unless the task explicitly needs a different preset.
+For coding, use the shipped `code` agent preset, displayed as **PTC 模式** in the current Chinese UI. It keeps the standard coding capabilities but presents tools through the Code Mode SDK so a deterministic sequence can be composed in one TypeScript `run_code` instead of many model/tool round trips.
 
-The Code Mode design presents the tool registry through a generated SDK and `run_code`, allowing multiple deterministic tool operations to be composed into one model round trip. Use that mechanism to reduce repeated tool-call turns when the operations and return shapes are already known.
+Use Standard/Plan behavior only when the task explicitly calls for exploration/planning. A session's agent preset is fixed at session creation; do not churn presets mid-stage for convenience.
 
-Use Standard/Plan behavior only when exploration or explicit planning requires it. Do not switch presets or tool composition mid-stage merely for convenience; a session's agent preset is fixed at session creation.
+### Rule 2 — Keep always-loaded instructions small, stable and canonical
 
-### Rule 2 — Canonical repository instructions, not repasted history
+The root repository `AGENTS.md` is the stable project baseline. Do not duplicate the full project governance in `$DSH_HOME/AGENTS.md`, `CLAUDE.md`, prompt prose or task history.
 
-`AGENTS.md` and the mandatory GitHub governance path are the stable project instruction baseline. DeepSeek prompts should reference canonical repository authority instead of repasting long chat histories or duplicate governance text.
+For project work:
 
-Keep the stable repository instruction chain bounded and specific. Use nested `AGENTS.md` only when a real directory-specific rule exists. Do not duplicate byte-equivalent instructions across `AGENTS.md`, `CLAUDE.md`, Task Packets and skills.
+```text
+$DSH_HOME/AGENTS.md = empty or minimal generic non-project guidance
+repository AGENTS.md = canonical stable project pointers/boundaries
+large detailed mechanical procedures = on-demand skills
+volatile task facts = frozen Task Packet tail
+```
 
-### Rule 3 — Put detailed reusable mechanical procedures in on-demand skills
+Do not modify DSH's shipped 65,536-byte instruction budget merely to stuff more project prose into the initial prompt. Smaller correct context is preferred over filling the available budget.
 
-After qualification, detailed reusable mechanical instructions should live under:
+### Rule 3 — Use project-local progressive skills for reusable mechanics
+
+Project skills live at:
 
 ```text
 .dsh/skills/<skill-name>/SKILL.md
 ```
 
-when a project-local skill is justified.
+The initial model catalog carries routing metadata only; the full skill body is loaded on demand. Use this to keep recurring mechanical runbooks out of every prompt.
 
-Good skill candidates: test recipes, deterministic preflight/status collection, diff/scope/secret checks, raw evidence collection, Result Packet formatting and other repeatable mechanical workflows.
-
-Skills MUST NOT decide product/strategy/technical route, architecture, executor/model, repair/replan/simplification, scope expansion, independent acceptance, Mark Ready, merge, deployment, runtime, credential/account/signing/exchange or trading actions.
-
-Keep skill descriptions short and routing-specific; load full skill content only when required.
-
-### Rule 4 — Preserve a stable cache prefix
-
-DeepSeek context caching is prefix-based and automatic. Optimize it by preserving the same stable request prefix across a coherent Writer stage:
+Initial project skill set:
 
 ```text
-stable Harness/preset/tool schema
-→ stable role + safety/authority boundary
-→ stable AGENTS/governance pointers
-→ stable output/acceptance contract
-→ mutable task facts last
+trade-os-writer-preflight
+trade-os-local-gates
+trade-os-evidence
+trade-os-result-packet
 ```
 
-Put volatile branch/head SHA, CI run, timestamps, current blocker IDs, one-off evidence and allowlist deltas late in the task packet.
+Skills may encode deterministic procedures, commands and output formats. Skills MUST NOT decide product/strategy/technical routes, architecture, executor/model, scope expansion, repair/replan/simplification, independent acceptance, Mark Ready, merge, deployment, runtime/cloud, credentials/private API, signing/wallet, exchange write or trading actions.
 
-Do not unnecessarily change provider, model, agent preset, visible plugin/tool composition or stable instruction text during the same stage. Correctness and independence always override cache optimization.
+### Rule 4 — Stable prefix, small mutable tail
 
-### Rule 5 — Measure provider usage instead of guessing efficiency
+DeepSeek context caching is automatic and prefix-based. Optimize both token volume and cache reuse with this shape:
 
-For qualification and material DeepSeek stages, capture when available:
+```text
+stable DSH/PTC composition
+→ stable root AGENTS instructions
+→ stable skill catalog
+→ stable bounded Writer/output contract
+→ mutable frozen Task Packet facts last
+```
+
+Keep branch/head SHA, CI run, timestamps, blocker IDs, one-off evidence and task deltas late. Do not unnecessarily change provider/model/preset/tool composition during one coherent stage.
+
+**Zero-cache rule:** a task must remain reasonably efficient even if cache hit is 0%. Cache is an optimization, not a license to send huge repeated governance bodies.
+
+### Rule 5 — Measure provider usage, not just UI estimates
+
+For qualification and material DeepSeek stages capture when available:
 
 ```text
 uncached_input_tokens
@@ -123,20 +155,18 @@ prompt_cache_miss_tokens
 output_tokens
 cache_hit_ratio
 provider/model
-reasoning_effort
+reasoning mode/effort
 session/task id
 elapsed time
 price window
 repair/rework count
 ```
 
-Provider-reported usage is billing evidence. DSH token-meter estimates are observability aids where exact provider usage is unavailable; they are not billing authority.
+Provider-reported usage is billing evidence. DSH token-meter/context-pressure figures are useful observability but include heuristic estimation when provider usage is unavailable; they are not billing or authority gates.
 
-A token-saving change is accepted as an optimization only when the task still passes correctness, evidence and review requirements.
+### Rule 6 — Resume only the same Writer/stage/worktree
 
-### Rule 6 — Resume only within the same Writer role/stage/worktree
-
-Reuse the exact DeepSeek session when all are true:
+Resume the exact DSH Writer session only when all are true:
 
 - same Writer role;
 - same coherent authorized stage;
@@ -144,32 +174,32 @@ Reuse the exact DeepSeek session when all are true:
 - prior context remains trustworthy;
 - independence is not required.
 
-Start a new session for independent Reviewer work, clean-route adjudication, a different role, a materially changed authority boundary or a new task whose inherited context is more risk than value.
+Use a new session for a new materially different task, changed authority/worktree, clean-route adjudication, different role, or independent Reviewer work. Cache savings never override reviewer independence or clean-context needs.
 
-Do not sacrifice independent review merely to preserve cache hits.
+### Rule 7 — Prune deterministic tool noise before compaction
 
-### Rule 7 — Prune deterministic tool noise before model-backed compaction
+Keep the shipped Code/PTC tool-result pruner and compaction behavior initially. The current shipped Code preset prunes large tool results at its normal thresholds before model-backed compaction.
 
-Prefer deterministic commands and bounded outputs. When test/log/tool output is large, use the shipped tool-result pruning capability before spending another model call on summarization.
+Prefer bounded command output and deterministic pruning. Use compaction only for genuine context pressure or a coherent substage boundary; do not compact every few turns. Preserve raw authority-bearing evidence outside conversational summaries.
 
-Use compaction only at genuine context pressure or a coherent substage boundary. Do not compact after every few turns. Preserve raw authority-bearing evidence separately from conversational summaries.
+### Rule 8 — Model/reasoning economy uses real provider semantics
 
-### Rule 8 — Model and reasoning economy are explicit L1 choices
+DeepSeek's official API exposes thinking ON/OFF and effective reasoning efforts `high` and `max`. Compatibility values `low` and `medium` map to `high`; `xhigh` maps to `max`.
 
-Use the least expensive DeepSeek model/reasoning level likely to complete the task correctly in one pass.
-
-Default candidate policy after qualification:
+Therefore the project routing defaults are:
 
 ```text
-Flash + off/low   = deterministic or narrow mechanical work
-Flash + high      = ordinary bounded coding when qualification shows adequate quality
-Pro + high        = material implementation / difficult debugging
-Pro + max         = exceptional hard quality-first coding where measured benefit justifies cost
+Flash + thinking OFF = deterministic/narrow mechanical work where reasoning is unnecessary
+Flash + HIGH         = ordinary bounded coding / repository work
+Pro   + HIGH         = material implementation / difficult debugging
+Pro   + MAX          = exceptional difficult quality-first agent coding
 ```
 
-These are routing defaults, not model-owned choices. L1 freezes the exact model and reasoning effort in the task. DeepSeek/Hermes may not self-upgrade model, reasoning, scope or cost tier.
+Do **not** use a UI label `Low` as a token-saving policy: with the current DeepSeek API it maps to `high` while thinking is enabled.
 
-### Rule 9 — “Everything is a Plugin” means composable seams, not plugin proliferation
+L1 freezes model and reasoning per task. DeepSeek/Hermes may not self-upgrade model, reasoning, scope or cost tier.
+
+### Rule 9 — “Everything is a Plugin” means stable seams, not plugin proliferation
 
 Use this order:
 
@@ -181,76 +211,94 @@ SHIPPED DSH CAPABILITY
 → THIN CUSTOM PLUGIN ONLY AFTER REPEATED MEASURED NEED
 ```
 
-DSH is Developer Preview, so project integration should minimize dependency on unstable internal plugin details. Custom plugins require a repeated measured need and a replaceability rationale.
+No custom DSH plugin is authorized for the initial project integration. Subagents/workflows/Ralph are opt-in only; they must not become hidden repair loops, competing Writers or substitutes for independent acceptance.
 
-Subagents/workflows/Ralph are opt-in, not default. Ralph must never become an unbounded repair loop or an independent acceptance substitute.
+### Rule 10 — Prefer official DeepSeek off-peak windows for delay-tolerant work
 
-### Rule 10 — Schedule delay-tolerant DeepSeek work for official off-peak windows
-
-Official DeepSeek pricing confirmed by the user from the live DeepSeek platform/pricing pages on 2026-08-18:
+Current official DeepSeek schedule confirmed on 2026-08-18:
 
 ```text
-TIMEZONE=Asia/Shanghai (Beijing time; no DST)
+TIMEZONE=Asia/Shanghai
 PEAK_1=09:00-12:00
 PEAK_2=14:00-18:00
 OFF_PEAK=00:00-09:00,12:00-14:00,18:00-24:00
 OFF_PEAK_PRICE_MULTIPLIER=0.5_OF_PEAK
 ```
 
-Policy:
-
-- delay-tolerant DeepSeek coding/replay/evaluation work should be queued for off-peak where practical;
-- urgent, release-critical, incident or user-time-sensitive work must not be delayed solely to save API cost;
-- cache-hit optimization remains valuable in both price windows;
-- these exact windows remain valid only while the official DeepSeek pricing page says so; official current provider state supersedes this snapshot if DeepSeek changes the schedule.
-
-Hermes may later enforce the window mechanically only after `DEEPSEEK_HARNESS` is added to the Lossless Task Packet/operator schema and that change is independently accepted. Until then, off-peak scheduling is manual/L1-controlled for DSH work.
+Delay-tolerant DeepSeek coding/replay/evaluation work should run off-peak where practical. Urgent, incident, release-critical or user-time-sensitive work must not be delayed solely for price. Reverify the provider schedule if DeepSeek changes its pricing page.
 
 ---
 
-## 4. Mandatory DeepSeek prompt-generation shape
+## 4. Frozen Writer Task Packet shape
 
-When L1 generates a DeepSeek Writer prompt, prefer this shape:
+L1 should give DSH a compact, complete packet rather than a long chat-history prompt. The packet is the mutable tail; it is not a second engineering constitution.
 
-```text
-STABLE PREFIX
-ROLE / MODE
-PROJECT + SAFETY / AUTHORITY BOUNDARY
-READ CANONICAL AGENTS/GOVERNANCE PATH
-EXECUTOR + PROVIDER + MODEL + REASONING
-AGENT PRESET + PERMISSION PRESET
-STABLE OUTPUT / EVIDENCE CONTRACT
+Minimum shape:
 
-MUTABLE TASK TAIL
-TASK_ID
-LIVE_MAIN / EXACT_BASE / EXPECTED_HEAD
-BRANCH / WORKTREE
-OBJECTIVE / ROOT CAUSE
-CURRENT AUTHORITIES / INVARIANTS
-ALLOWED FILES / PROHIBITED SCOPE
-REQUIRED BEHAVIOR
-TEST PLAN / STOP CONDITIONS
-CURRENT BLOCKERS / CI / EVIDENCE
-PRICE WINDOW
+```yaml
+task_id: <stable-id>
+role: BOUNDED_IMPLEMENTATION_WRITER
+mode: READ_ONLY | IMPLEMENT
+
+executor:
+  kind: DEEPSEEK_HARNESS
+  dsh_version: 0.1.0-rc.7
+  provider: deepseek-official
+  model: deepseek-v4-flash | deepseek-v4-pro
+  thinking: disabled | enabled
+  reasoning_effort: high | max | n/a
+  agent_preset: code
+  permission_preset: workspace-write
+  approval_policy: ask
+  session_mode: NEW | RESUME_EXACT
+  session_id: <required only for RESUME_EXACT>
+
+authority:
+  project_engineering_ruleset_preflight: PASS
+  engineering_preflight_gate: PASS | NOT_REQUIRED
+  authority_refs: [<narrow canonical refs>]
+  repair_stage: INITIAL | NORMAL_REPAIR | EXCEPTIONAL_REPAIR
+
+target:
+  repo: woshixiong/trader-assist-v0
+  live_main_sha: <sha>
+  exact_base_sha: <sha>
+  expected_head_sha: <sha>
+  branch: <branch>
+  worktree: <absolute path>
+
+objective: <one coherent objective>
+root_cause: <frozen by L1 when material>
+allowed_paths: [<paths>]
+prohibited_scope: [<explicit boundaries>]
+frozen_invariants: [<invariants>]
+required_behavior: [<requirements>]
+test_plan: [<commands/gates>]
+stop_conditions: [<fail-closed conditions>]
+output_contract: RESULT_PACKET
+
+user_gates:
+  mark_ready: NOT_AUTHORIZED
+  merge: NOT_AUTHORIZED
+  deploy: NOT_AUTHORIZED
+  runtime_cloud: NOT_AUTHORIZED
+  credentials_private_api: NOT_AUTHORIZED
+  signing_wallet_exchange: NOT_AUTHORIZED
 ```
 
-Rules:
+Do not prepend volatile timestamps or long histories. Do not ask the Writer to rediscover an L1-frozen route. If architecture-critical information changes after issuance, void the packet and issue one complete replacement rather than appending patches.
 
-- do not prepend volatile timestamps/SHAs before stable instructions;
-- do not paste complete historical conversations when GitHub already contains accepted authority;
-- do not ask the model to rediscover an L1-frozen route;
-- do not let a cost-saving instruction weaken tests, review or authority gates;
-- for a material Writer task, the normal `PROJECT_ENGINEERING_RULESET_PREFLIGHT=PASS` and `ENGINEERING_PREFLIGHT_GATE=PASS` requirements still apply before dispatch.
+The field model intentionally aligns with the project's existing Lossless Task Packet concepts so later Hermes integration can reuse the same semantics instead of inventing another authority model.
 
 ---
 
-## 5. Mandatory DSH preconfiguration baseline
+## 5. Mandatory DSH session baseline
 
-For normal Trader Assist coding after qualification:
+Normal project Writer session after qualification:
 
 ```text
 PROVIDER=deepseek-official
-AGENT_PRESET=code
+AGENT_PRESET=code / PTC
 PERMISSION_PRESET=workspace-write
 APPROVAL_POLICY=ask
 DANGER_FULL_ACCESS=NO
@@ -260,19 +308,19 @@ ISOLATED_WORKTREE=YES_FOR_WRITER_MUTATION
 MODEL_AND_REASONING=L1_FROZEN_PER_TASK
 ```
 
-For the initial qualification, use the same safety defaults but begin with a non-production isolated workspace/worktree and a read-only task. No commit, push, PR mutation, production/runtime action or credential/private API access is implied.
+Settings that change defaults apply to new sessions; create a new session after a preset/permission/model-default change when the current session cannot safely adopt it.
 
 ---
 
-## 6. Minimum read-only qualification
+## 6. Qualification state and remaining acceptance
 
-Before DSH is promoted to normal Writer routing, the first project-specific qualification must prove at least:
+The first read-only qualification at exact PR #108 head `e8891d0fb8270e83fd34e9790d341932a02846f0` demonstrated:
 
 ```text
 OFFICIAL_PROVIDER_ROUTE=PASS
-CODE_PRESET_SELECTED=PASS
+CODE_PRESET_SELECTED=PASS          # PTC mode
 WORKSPACE_WRITE_PLUS_ASK=PASS
-ISOLATED_WORKSPACE_OR_WORKTREE=PASS
+ISOLATED_WORKTREE=PASS
 AGENTS_GOVERNANCE_DISCOVERY=PASS
 READ_ONLY_REPOSITORY_UNDERSTANDING=PASS
 NO_FILE_MUTATION=PASS
@@ -283,46 +331,82 @@ CACHE_USAGE_CAPTURE=PASS
 RAW_EVIDENCE_CAPTURE=PASS
 ```
 
-Only after that read-only pass should a separate bounded isolated-worktree coding qualification be authorized.
+The original qualification intentionally read the full governance set and observed a large prompt surface; that proved correctness but is **not** the normal Writer context design.
 
----
-
-## 7. Qualification comparison: DSH versus Codex+DeepSeek
-
-Do not decide this from architectural preference alone. Where practical, run the same bounded non-production task through:
+Before normal Writer routing, one separate bounded coding qualification MUST still prove:
 
 ```text
-A = DeepSeek Harness + DeepSeek model
-B = Codex harness + the same DeepSeek model, only if that exact model is officially Responses-compatible
+LIGHTWEIGHT_CONTEXT_FAST_PATH=PASS
+CODE_MODE_BOUNDED_EDIT=PASS
+ALLOWED_PATH_ENFORCEMENT=PASS
+FOCUSED_TEST_EXECUTION=PASS
+RELEVANT_REGRESSION=PASS
+DIFF_SCOPE_EVIDENCE=PASS
+NO_UNAUTHORIZED_GIT_OR_GITHUB_MUTATION=PASS
+RESULT_PACKET=PASS
+SESSION_RESUME_SAME_STAGE=PASS
+TOKEN_AND_CACHE_METRICS_CAPTURE=PASS
+INDEPENDENT_REVIEW=PASS
 ```
 
-Compare:
-
-- correctness / acceptance result;
-- wall-clock time;
-- input/output tokens;
-- cache-hit ratio after warm context;
-- API cost in the same price window;
-- number/severity of Writer mistakes;
-- repair/rework count;
-- test execution quality;
-- operator burden;
-- session continuity and evidence quality.
-
-The primary route remains DSH unless evidence shows the Codex compatibility lane is materially superior without losing provider features, model support, replaceability or the intended independent executor seam.
+No DSH-vs-Codex benchmark is required. The DeepSeek API route is already fixed to DeepSeek Harness; qualification measures whether that fixed route is safe, efficient and usable.
 
 ---
 
-## 8. Permanent boundaries
+## 7. Future Hermes integration seam
+
+After DSH passes coding qualification and receives independent acceptance, the preferred Hermes seam is native non-interactive/headless DSH, not GUI Computer Use, whenever the exact required behavior is supported:
+
+```text
+Hermes frozen packet transport
+→ verify exact dsh version / packet / worktree / model
+→ dsh --profile headless <frozen job>
+→ collect raw Result Packet/evidence
+→ independent ChatGPT review
+```
+
+Current merged Hermes Task Packet/operator contract does not yet enumerate `DEEPSEEK_HARNESS`; Hermes H2 dispatch to DSH remains prohibited until a later bounded schema/profile change is independently accepted.
+
+Hermes remains an L3 low-cost/free-model operator. It does not become the DeepSeek coding model, choose DeepSeek/Trae/Codex, invent repairs, or evaluate independent acceptance.
+
+---
+
+## 8. Deferred configuration work after DeepSeek convergence
+
+After this DeepSeek route is qualified and governance is accepted, the next tooling stages are:
+
+```text
+1. HERMES_CONFIGURATION
+   - install/configure free or approved low-cost operator model;
+   - minimum toolsets/permissions;
+   - H0/H1 transport/evidence qualification;
+   - later add DEEPSEEK_HARNESS to the Lossless Task Packet only after DSH acceptance;
+   - use native dsh headless seam where supported.
+
+2. CODEX_CONFIGURATION_AND_EFFICIENCY_PROFILE
+   - inspect the current installed Codex version and live official configuration surface;
+   - configure user/project settings safely;
+   - optimize AGENTS/project-doc byte budgets, skills, stable prompts and session resume;
+   - define model/reasoning tiers from current official model availability;
+   - use deterministic mechanics before model tokens;
+   - measure token/cache/time/rework evidence on representative Trader Assist tasks;
+   - keep Codex as a peer coding executor, not a DeepSeek API wrapper.
+```
+
+These are deferred work items, not authority granted by this DeepSeek rule.
+
+---
+
+## 9. Permanent boundaries
 
 This specialized rule does not authorize:
 
-- Hermes H2 dispatch to DeepSeek Harness before schema/profile acceptance;
 - autonomous executor/model switching;
-- autonomous repair/retry;
+- autonomous repair/retry beyond a frozen packet;
+- Hermes H2 dispatch to DSH before schema/profile acceptance;
 - Mark Ready or merge;
 - deployment/runtime/cloud mutation;
-- credential/private API/account access outside the explicit provider API key needed for the DSH model route;
+- credential/private API/account access outside the explicit DeepSeek provider credential needed for model calls;
 - wallet/signing/exchange write/order/trading actions.
 
-Any such boundary requires the existing explicit current user authorization and project governance path.
+Any such boundary requires the existing explicit current user authorization and canonical project governance path.
