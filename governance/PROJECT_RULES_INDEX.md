@@ -2,7 +2,7 @@
 
 ## Mandatory successor-window read order
 
-Every successor window / Agent reads this order before acting:
+Every successor **control, research, architecture, product/strategy, operations-engineering or independent-review window / Agent** reads this order before acting:
 
 1. `AGENTS.md`
 2. `governance/PROJECT_RULES_INDEX.md`
@@ -18,11 +18,34 @@ Every successor window / Agent reads this order before acting:
 12. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_AUTOMATION_ABANDONMENT_RULING_V1.md`
 13. current live GitHub objects and exact-head CI state.
 
+### Bounded L2 Writer fast path
+
+A coding executor operating strictly as a bounded L2 Writer from one exact L1-frozen Task Packet is not required to replay the complete control-window read set merely to repeat material analysis already completed by L1, when the packet has current, verifiable:
+
+```text
+PROJECT_ENGINEERING_RULESET_PREFLIGHT=PASS
+ENGINEERING_PREFLIGHT_GATE=PASS            # when material
+EXACT REPOSITORY / BASE / HEAD / WORKTREE
+EXPLICIT EXECUTOR / MODEL / PERMISSIONS
+EXPLICIT ALLOWED PATHS / PROHIBITED SCOPE
+EXPLICIT TESTS / STOP CONDITIONS / USER GATES
+```
+
+The bounded Writer still loads root `AGENTS.md`, its applicable specialized executor contract/skill, the frozen Task Packet, and any narrow authority/source files explicitly referenced by that packet. It must safe-stop and return to L1 if the packet is stale or unverifiable, repository authority conflicts, HEAD drifts, scope must expand, a new dependency/service or material decision is required, the repair route changes, or any authority boundary is ambiguous.
+
+This is a token/context optimization and role separation, not a weakening of governance. L1 retains the full research/preflight burden; independent Review retains its independent read/review burden.
+
 When the role is `HERMES_EXECUTION_OPERATOR`, additionally read:
 
 - `governance/HERMES_EXECUTION_OPERATOR_CONTRACT_V1_2026-08-16.md`;
 - `schemas/control/lossless-task-packet-v1.schema.json`;
 - and, for `TRAE_COMPUTER_USE`, `governance/HERMES_TRAE_COMPUTER_USE_PROFILE_V1_2026-08-16.md`.
+
+When the executor is `DEEPSEEK_HARNESS`, additionally obey:
+
+- `governance/ENGINEERING_EXECUTOR_POOL_AND_DEEPSEEK_HARNESS_PROFILE_V1_2026-08-18.md`;
+- `governance/DEEPSEEK_HARNESS_MANDATORY_USAGE_RULES_V1_2026-08-18.md`;
+- and the project-local `.dsh/skills` required by the frozen task stage.
 
 Live GitHub objects override stale chat snapshots and stale PR-body snapshots. Future windows must resolve live GitHub state before relying on historical text.
 
