@@ -295,7 +295,6 @@ class MultiAssetPublicRuntime:
             confirmation_concurrency=confirmation_concurrency,
         )
         self._barrier_lock = asyncio.Lock()
-        self._last_barrier_boundary: int | None = None
         self._rest_cooldown_until: float | None = None
         self._integrity_failed = False
         self._expected_acks: set[str] = set()
@@ -423,18 +422,11 @@ class MultiAssetPublicRuntime:
                 and self.monotonic() < self._rest_cooldown_until
             ):
                 return
-            if (
-                self._last_barrier_boundary is not None
-                and boundary_open_ms <= self._last_barrier_boundary
-            ):
-                return
             active = self.registry.active()
             if active is None:
                 # No active Registry yet: the initial-bootstrap exception is
                 # owned by the Data authority's first validated admission.
-                self._last_barrier_boundary = boundary_open_ms
                 return
-            self._last_barrier_boundary = boundary_open_ms
             try:
                 await self._reconcile_boundary(boundary_open_ms, active)
             except RegistryError:
@@ -1167,25 +1159,32 @@ class MultiAssetPublicRuntime:
             await asyncio.gather(ticker, return_exceptions=True)
 
     async def _barrier_ticker(self, shutdown: asyncio.Event) -> None:
-        """Clock-driven edge detection only; the barrier is the authority."""
+        """Clock-driven coalescing only; the barrier remains the authority."""
+        # This coroutine-local hint avoids repeatedly scheduling the same clock
+        # edge.  It is neither shared with nor read by process_cohort_boundary:
+        # durable retained state is the only processed-boundary authority.
+        scheduled_boundary: int | None = None
         while not shutdown.is_set():
             await self.sleep(_BARRIER_TICK_SECONDS)
             if shutdown.is_set():
                 return
+            boundary = 0
             try:
                 boundary = self._latest_completed_open()
-                if (
-                    self._last_barrier_boundary is None
-                    or boundary > self._last_barrier_boundary
-                ):
+                cooldown_active = (
+                    self._rest_cooldown_until is not None
+                    and self.monotonic() < self._rest_cooldown_until
+                )
+                if boundary != scheduled_boundary and not cooldown_active:
                     await self.process_cohort_boundary(boundary)
+                    scheduled_boundary = boundary
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 self.health.callback_failures.append(
                     FinalizedCallbackFailure(
                         market_id="",
-                        open_time_ms=self._last_barrier_boundary or 0,
+                        open_time_ms=boundary,
                         evaluation_mode=BoundaryMode.RECOVERY_CONTEXT_ONLY,
                         error_type=type(exc).__name__,
                         reason=str(exc),
