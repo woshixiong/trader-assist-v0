@@ -27,7 +27,8 @@ When the role is `HERMES_EXECUTION_OPERATOR`, additionally read:
 When DeepSeek Harness is selected as the L2 coding executor, additionally read:
 
 - `governance/ENGINEERING_EXECUTOR_POOL_AND_DEEPSEEK_HARNESS_PROFILE_V1_2026-08-18.md`;
-- `governance/DEEPSEEK_HARNESS_MANDATORY_USAGE_RULES_V1_2026-08-18.md`.
+- `governance/DEEPSEEK_HARNESS_MANDATORY_USAGE_RULES_V1_2026-08-18.md`;
+- `governance/CURRENT_TOOLING_EXECUTOR_PRIORITY_V1_2026-08-18.md` for current sequencing and first-real-task setup-verification timing.
 
 Live GitHub objects override stale chat snapshots and stale PR-body snapshots. Future windows must resolve live GitHub state before relying on historical text.
 
@@ -160,21 +161,26 @@ Hermes plus an approved low-cost/free model is a separate L3 routine operator, n
 When DeepSeek Harness is selected, the binding specialized files are:
 
 - `governance/ENGINEERING_EXECUTOR_POOL_AND_DEEPSEEK_HARNESS_PROFILE_V1_2026-08-18.md`;
-- `governance/DEEPSEEK_HARNESS_MANDATORY_USAGE_RULES_V1_2026-08-18.md`.
+- `governance/DEEPSEEK_HARNESS_MANDATORY_USAGE_RULES_V1_2026-08-18.md`;
+- `governance/CURRENT_TOOLING_EXECUTOR_PRIORITY_V1_2026-08-18.md` for current sequencing and setup-verification timing.
 
 DeepSeek API use is fixed to first-party DeepSeek Harness with `deepseek-official`. Normal coding uses PTC/Code Mode, `workspace-write + ask`, stable small repository instructions, project-local progressive skills, stable-prefix/cache discipline, bounded normal provider retries, L1-frozen model/reasoning and official off-peak scheduling where practical.
 
-Only a lightweight preset/skills/cache setup verification is required before the first real small bounded DeepSeek task. Do not create a separate synthetic coding qualification or Harness-only review; the first actual assigned task supplies real capability evidence under that task's normal project validation/review requirements.
+No separate synthetic coding qualification, Harness-only review, or standalone paid setup-verification stage is required before the first real bounded DeepSeek task.
 
-Current tooling priority:
+For the first real task, before Writer file mutation, mechanically verify the execution baseline required for safe use: expected DSH version, `deepseek-official`, PTC/Code, `workspace-write + ask`, root `AGENTS.md` autoload, and discovery of all four project skills. If one of those checks fails, SAFE_STOP before file mutation.
+
+Skill-body progressive loading and cache telemetry/cache reuse are efficiency evidence collected during the real task where naturally observable. They are not prerequisites to start the first real task, no synthetic requests are required, and no arbitrary cache-hit percentage is required. The first actual assigned task supplies real coding capability evidence under that task's normal project validation/review requirements.
+
+Current tooling priority is unambiguous:
 
 ```text
-1. CODEX_CONFIGURATION_AND_EFFICIENCY_PROFILE
-2. DEEPSEEK_HARNESS_LIGHTWEIGHT_SETUP_VERIFICATION
-3. HERMES_CONFIGURATION
+1. FIRST_REAL_BOUNDED_DEEPSEEK_HARNESS_TASK = NOW
+2. CODEX_CONFIGURATION_AND_EFFICIENCY_PROFILE = DEFERRED_UNTIL_USER_RESUMES
+3. HERMES_CONFIGURATION = LATER / WHEN USER NEXT PRIORITIZES
 ```
 
-This priority records work order only; it grants no retained authority gate.
+`governance/CURRENT_TOOLING_EXECUTOR_PRIORITY_V1_2026-08-18.md` is the authoritative current sequencing/timing record and explicitly supersedes stale sequencing or pre-first-task readiness phrases in the two DeepSeek draft technical documents and prior PR-body text. This current priority changes no technical safety rule and grants no retained authority gate.
 
 ---
 
