@@ -218,6 +218,121 @@ async def test_deadline_exceeded_when_budget_is_exhausted() -> None:
 
 
 @async_test
+async def test_already_expired_deadline_starts_no_provider_request() -> None:
+    transport = FakeTransport()
+    results = await _prove(
+        _finality(transport, monotonic=lambda: 60.0), deadline_monotonic=60.0
+    )
+    assert results[0].outcome is FinalityOutcome.DEADLINE_EXCEEDED
+    assert results[0].confirmed_payload is None
+    assert transport.calls == []
+
+
+@async_test
+async def test_confirmation_gap_crossing_deadline_starts_no_next_provider_request() -> None:
+    class Monotonic:
+        value = 0.0
+
+        def __call__(self) -> float:
+            return self.value
+
+    monotonic = Monotonic()
+
+    async def cross_deadline_after_gap(seconds: float) -> None:
+        assert seconds == 1.0
+        monotonic.value = 60.0
+
+    transport = FakeTransport()
+    results = await _prove(
+        _finality(transport, monotonic=monotonic, sleep=cross_deadline_after_gap),
+        deadline_monotonic=60.0,
+    )
+    assert results[0].outcome is FinalityOutcome.DEADLINE_EXCEEDED
+    assert transport.calls == [("BTC", T, T + FIVE_MINUTES_MS)]
+
+
+@async_test
+async def test_semaphore_wait_crossing_deadline_does_not_start_waiting_provider() -> None:
+    class Monotonic:
+        value = 0.0
+
+        def __call__(self) -> float:
+            return self.value
+
+    started = threading.Event()
+    release = threading.Event()
+
+    class BlockingFirst(FakeTransport):
+        def closed_candles(self, *, coin: str, interval: str, start_ms: int, end_ms: int) -> object:
+            self.calls.append((coin, start_ms, end_ms))
+            if coin == "FIRST":
+                started.set()
+                assert release.wait(timeout=5.0)
+            return [_candle(start_ms)]
+
+    monotonic = Monotonic()
+    transport = BlockingFirst()
+    finality = Closed5mCohortFinality(
+        client=transport,  # type: ignore[arg-type]
+        clock=_now,
+        monotonic=monotonic,
+        sleep=asyncio.sleep,
+        confirmation_concurrency=1,
+    )
+    task = asyncio.create_task(
+        finality.prove_cohort(
+            requests=(
+                FinalityMarketRequest(FakeMarket("first", "FIRST"), T),
+                FinalityMarketRequest(FakeMarket("second", "SECOND"), T),
+            ),
+            deadline_monotonic=60.0,
+        )
+    )
+    await asyncio.to_thread(started.wait, 5.0)
+    monotonic.value = 60.0
+    release.set()
+    results = await task
+    assert {result.outcome for result in results} == {FinalityOutcome.DEADLINE_EXCEEDED}
+    assert [call[0] for call in transport.calls] == ["FIRST"]
+
+
+@async_test
+async def test_late_provider_result_is_discarded_before_finality_admission() -> None:
+    class Monotonic:
+        value = 0.0
+
+        def __call__(self) -> float:
+            return self.value
+
+    started = threading.Event()
+    release = threading.Event()
+
+    class Blocking(FakeTransport):
+        def closed_candles(self, *, coin: str, interval: str, start_ms: int, end_ms: int) -> object:
+            self.calls.append((coin, start_ms, end_ms))
+            started.set()
+            assert release.wait(timeout=5.0)
+            return [_candle(start_ms)]
+
+    monotonic = Monotonic()
+    transport = Blocking()
+    task = asyncio.create_task(
+        _prove(
+            _finality(transport, monotonic=monotonic), deadline_monotonic=60.0
+        )
+    )
+    await asyncio.to_thread(started.wait, 5.0)
+    monotonic.value = 60.0
+    release.set()
+    results = await task
+    result = results[0]
+    assert result.outcome is FinalityOutcome.DEADLINE_EXCEEDED
+    assert result.confirmed_payload is None
+    assert result.stable_payload is None
+    assert transport.calls == [("BTC", T, T + FIVE_MINUTES_MS)]
+
+
+@async_test
 async def test_one_market_failure_does_not_cancel_sibling_proof_tasks() -> None:
     calls: list[str] = []
 

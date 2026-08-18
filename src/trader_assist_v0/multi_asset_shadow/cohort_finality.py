@@ -191,6 +191,8 @@ class Closed5mCohortFinality:
         hold_seconds = (eligible_ms - int(self._clock().timestamp() * 1000)) / 1_000
         if hold_seconds > 0:
             await self._sleep(hold_seconds)
+        if self._monotonic() >= deadline_monotonic:
+            raise _DeadlineExceeded
         confirmed: dict[str, object] | None = None
         for index in range(TARGET_CONFIRMATIONS):
             if index:
@@ -198,6 +200,8 @@ class Closed5mCohortFinality:
             if self._monotonic() >= deadline_monotonic:
                 raise _DeadlineExceeded
             async with slots:
+                if self._monotonic() >= deadline_monotonic:
+                    raise _DeadlineExceeded
                 snapshot = await asyncio.to_thread(
                     self._client.closed_candles,
                     coin=market.identity.coin,
@@ -205,6 +209,8 @@ class Closed5mCohortFinality:
                     start_ms=boundary_open_ms,
                     end_ms=boundary_open_ms + FIVE_MINUTES_MS,
                 )
+                if self._monotonic() >= deadline_monotonic:
+                    raise _DeadlineExceeded
             observation = _exact_observation(snapshot, boundary_open_ms)
             if confirmed is None:
                 confirmed = observation
