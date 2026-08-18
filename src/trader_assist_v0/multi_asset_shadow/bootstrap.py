@@ -227,9 +227,10 @@ class MultiAssetProductionBootstrap:
                         source_open_time_ms=source_open,
                         evaluation_mode=BoundaryMode.RECOVERY_CONTEXT_ONLY,
                     )
-            except (IntegrationError, PlanningError, PublicDataError):
+            except (PlanningError, PublicDataError):
                 # One market's reconciliation gap never cancels the remaining
-                # maintenance lane; durable authority remains in EvidenceStore.
+                # maintenance lane; these established operational failures do
+                # not contradict durable authority in EvidenceStore.
                 continue
 
     async def process_boundary(

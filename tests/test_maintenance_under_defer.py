@@ -15,12 +15,15 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from trader_assist_v0.contracts.common import sha256_hex
 from trader_assist_v0.multi_asset_shadow.bootstrap import MultiAssetProductionBootstrap
 from trader_assist_v0.multi_asset_shadow.data import ClosedBarStore, MultiAssetDataAuthority
 from trader_assist_v0.multi_asset_shadow.integration import (
     EvidenceOutbox,
     EvidenceOutcomeAdapter,
+    IntegrationError,
     MultiAssetShadowCoordinator,
 )
 from trader_assist_v0.multi_asset_shadow.models import (
@@ -32,9 +35,9 @@ from trader_assist_v0.multi_asset_shadow.models import (
     RegistryVersion,
 )
 from trader_assist_v0.multi_asset_shadow.outcome_engine import OutcomeEngine
-from trader_assist_v0.multi_asset_shadow.planning import CostModel
+from trader_assist_v0.multi_asset_shadow.planning import CostModel, PlanningError
 from trader_assist_v0.multi_asset_shadow.registry import MarketRegistryManager
-from trader_assist_v0.multi_asset_shadow.runtime import BoundaryMode
+from trader_assist_v0.multi_asset_shadow.runtime import BoundaryMode, MultiAssetPublicRuntime
 from trader_assist_v0.multi_asset_shadow.shadow_records import EvidenceStore
 
 NOW = datetime(2026, 8, 13, 0, 0, tzinfo=UTC)
@@ -289,6 +292,153 @@ def test_deferred_boundary_never_reconciles_itself_only_strictly_prior(
         record = world.evidence.get(str(row[0]))
         if record.payload["source_open_time_ms"] == T:
             assert record.payload["evaluation_mode"] == BoundaryMode.RECOVERY_CONTEXT_ONLY.value
+
+
+def _maintenance_runtime(world: MaintenanceWorld) -> MultiAssetPublicRuntime:
+    runtime = MultiAssetPublicRuntime(
+        registry=world.registry,
+        authority=world.data,
+        client=object(),  # type: ignore[arg-type]
+        clock=lambda: datetime.fromtimestamp((T + FIVE_MINUTES_MS + 5_000) / 1000, UTC),
+    )
+    runtime.on_maintenance_5m = world.application.on_maintenance_5m
+    return runtime
+
+
+def test_maintenance_unknown_retained_registry_epoch_fails_closed(
+    tmp_path: Path,
+) -> None:
+    world = MaintenanceWorld(tmp_path)
+    world.coordinator.evaluate_finalized_market(
+        market_id=world.market.identity.market_id,
+        source_open_time_ms=T,
+        evaluation_mode=BoundaryMode.LIVE_ACTIONABLE,
+    )
+    active = world.registry.active()
+    assert active is not None
+    registry_two = world.registry.successor(
+        version="registry-2",
+        now=NOW,
+        update_market=world.market.model_copy(update={"metadata_hash": sha256_hex(b"r2")}),
+    )
+    world.registry.request_apply(registry_two.version)
+    witness = world.registry._issue_cohort_witness(
+        boundary_open_time_ms=T,
+        base_registry_version=active.version,
+        base_registry_hash=active.content_hash,
+        expected_successor_version=registry_two.version,
+        expected_successor_hash=registry_two.content_hash,
+        required_evidence_market_ids=frozenset({world.market.identity.market_id}),
+    )
+    world.registry.apply_witness(witness, evidence_authority=world.data)
+    active = world.registry.active()
+    assert active is not None
+    world.data.admit_rest_history(
+        market=active.markets[0],
+        snapshot=[_payload(COUNT, final=True)],
+        received_at=datetime.fromtimestamp((T_NEXT + FIVE_MINUTES_MS + 1_000) / 1000, UTC),
+    )
+    registry_three = world.registry.successor(
+        version="registry-3",
+        now=NOW,
+        update_market=active.markets[0].model_copy(update={"metadata_hash": sha256_hex(b"r3")}),
+    )
+    world.registry.request_apply(registry_three.version)
+    (tmp_path / "registry" / "versions" / "registry-1.json").unlink()
+
+    runtime = MultiAssetPublicRuntime(
+        registry=world.registry,
+        authority=world.data,
+        client=object(),  # type: ignore[arg-type]
+        clock=lambda: datetime.fromtimestamp((T_NEXT + FIVE_MINUTES_MS + 5_000) / 1000, UTC),
+    )
+    runtime.on_maintenance_5m = world.application.on_maintenance_5m
+    with pytest.raises(IntegrationError, match="unknown Registry epoch"):
+        asyncio.run(runtime.process_cohort_boundary(T_NEXT))
+
+    assert runtime._integrity_failed is True
+    assert world.registry.active() is not None
+    assert world.registry.active().version == "registry-2"
+    runtime.on_maintenance_5m = lambda _: None
+    runtime.health.data_ready = True
+    asyncio.run(runtime.process_cohort_boundary(T_NEXT))
+    assert world.registry.active() is not None
+    assert world.registry.active().version == "registry-2"
+
+
+@pytest.mark.parametrize(
+    "reason",
+    (
+        "unknown retained Registry epoch",
+        "duplicate retained Strategy boundary authority",
+    ),
+)
+def test_maintenance_authority_error_fails_closed_before_successor(
+    tmp_path: Path, reason: str
+) -> None:
+    world = MaintenanceWorld(tmp_path)
+    runtime = _maintenance_runtime(world)
+    successor = world.registry.successor(
+        version="registry-2",
+        now=NOW,
+        update_market=world.market.model_copy(update={"metadata_hash": sha256_hex(b"r2")}),
+    )
+    world.registry.request_apply(successor.version)
+
+    world.coordinator.strategy_recovery_boundaries = (  # type: ignore[method-assign]
+        lambda **_: (T - FIVE_MINUTES_MS,)
+    )
+
+    def authority_conflict(**_: object) -> None:
+        raise IntegrationError(reason)
+
+    world.coordinator.evaluate_finalized_market = authority_conflict  # type: ignore[method-assign]
+
+    with pytest.raises(IntegrationError, match=reason):
+        asyncio.run(runtime.process_cohort_boundary(T))
+
+    assert runtime._integrity_failed is True
+    assert len(runtime.health.callback_failures) == 1
+    assert world.registry.active() is not None
+    assert world.registry.active().version == "registry-1"
+
+    # A later apparent maintenance success cannot clear the process-local
+    # integrity state or activate the pending Registry successor.
+    runtime.on_maintenance_5m = lambda _: None
+    runtime.health.data_ready = True
+    asyncio.run(runtime.process_cohort_boundary(T))
+    assert world.registry.active() is not None
+    assert world.registry.active().version == "registry-1"
+
+
+def test_maintenance_operational_planning_error_stays_market_local(tmp_path: Path) -> None:
+    world = MaintenanceWorld(tmp_path)
+    ticks_before = world.outcome_ticks
+    world.coordinator.strategy_recovery_boundaries = (  # type: ignore[method-assign]
+        lambda **_: (T - FIVE_MINUTES_MS,)
+    )
+
+    def operational_failure(**_: object) -> None:
+        raise PlanningError("temporary public planning failure")
+
+    world.coordinator.evaluate_finalized_market = operational_failure  # type: ignore[method-assign]
+    asyncio.run(world.application.on_maintenance_5m(T))
+
+    assert world.outcome_ticks > ticks_before
+
+
+def test_maintenance_cancellation_propagates_without_integrity_failure(tmp_path: Path) -> None:
+    world = MaintenanceWorld(tmp_path)
+    runtime = _maintenance_runtime(world)
+
+    async def cancelled(_: int) -> None:
+        raise asyncio.CancelledError()
+
+    runtime.on_maintenance_5m = cancelled
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(runtime._run_maintenance(T))
+    assert runtime._integrity_failed is False
+    assert runtime.health.callback_failures == []
 
 
 def test_compose_wires_single_maintenance_lane(tmp_path: Path) -> None:

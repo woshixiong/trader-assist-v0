@@ -656,6 +656,10 @@ class MultiAssetPublicRuntime:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            # Bootstrap isolates only established per-market operational
+            # failures.  An exception escaping this boundary therefore
+            # contradicts maintenance authority for the current process: keep
+            # bounded diagnostics, fail closed, and prevent successor work.
             self.health.callback_failures.append(
                 FinalizedCallbackFailure(
                     market_id="",
@@ -665,6 +669,10 @@ class MultiAssetPublicRuntime:
                     reason=str(exc),
                 )
             )
+            if len(self.health.callback_failures) > _MAX_CALLBACK_FAILURES:
+                del self.health.callback_failures[:-_MAX_CALLBACK_FAILURES]
+            self._integrity_failed = True
+            raise
 
     async def _reconcile_successor(
         self,
