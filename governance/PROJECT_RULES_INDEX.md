@@ -24,6 +24,12 @@ When the role is `HERMES_EXECUTION_OPERATOR`, additionally read:
 - `schemas/control/lossless-task-packet-v1.schema.json`;
 - and, for `TRAE_COMPUTER_USE`, `governance/HERMES_TRAE_COMPUTER_USE_PROFILE_V1_2026-08-16.md`.
 
+When DeepSeek Harness is selected as the L2 coding executor, additionally read:
+
+- `governance/ENGINEERING_EXECUTOR_POOL_AND_DEEPSEEK_HARNESS_PROFILE_V1_2026-08-18.md`;
+- `governance/DEEPSEEK_HARNESS_MANDATORY_USAGE_RULES_V1_2026-08-18.md`;
+- `governance/CURRENT_TOOLING_EXECUTOR_PRIORITY_V1_2026-08-18.md` for current sequencing and first-real-task setup-verification timing.
+
 Live GitHub objects override stale chat snapshots and stale PR-body snapshots. Future windows must resolve live GitHub state before relying on historical text.
 
 No governance file independently grants host, deployment, runtime, smoke, credential, account, signing or exchange-write authority.
@@ -139,6 +145,42 @@ Hermes is execution/transport infrastructure only. It is not a research, enginee
 A Hermes task must use the merged Lossless Task Packet contract, explicit machine-readable destination/executor/permissions/stop conditions and canonical integrity verification. Hermes must not paraphrase authoritative handoffs, infer missing fields, choose the executor/model/route, independently retry a failed task, or declare engineering PASS.
 
 Raw executor evidence remains authoritative.
+
+---
+
+## Specialized coding-executor pool / DeepSeek Harness rule
+
+Engineering uses three peer L2 coding executors:
+
+```text
+CODEX_CLI | TRAE_COMPUTER_USE / TRAE | DEEPSEEK_HARNESS
+```
+
+Hermes plus an approved low-cost/free model is a separate L3 routine operator, not a fourth coding or decision authority.
+
+When DeepSeek Harness is selected, the binding specialized files are:
+
+- `governance/ENGINEERING_EXECUTOR_POOL_AND_DEEPSEEK_HARNESS_PROFILE_V1_2026-08-18.md`;
+- `governance/DEEPSEEK_HARNESS_MANDATORY_USAGE_RULES_V1_2026-08-18.md`;
+- `governance/CURRENT_TOOLING_EXECUTOR_PRIORITY_V1_2026-08-18.md` for current sequencing and setup-verification timing.
+
+DeepSeek API use is fixed to first-party DeepSeek Harness with `deepseek-official`. Normal coding uses PTC/Code Mode, `workspace-write + ask`, stable small repository instructions, project-local progressive skills, stable-prefix/cache discipline, bounded normal provider retries, L1-frozen model/reasoning and official off-peak scheduling where practical.
+
+No separate synthetic coding qualification, Harness-only review, or standalone paid setup-verification stage is required before the first real bounded DeepSeek task.
+
+For the first real task, before Writer file mutation, mechanically verify the execution baseline required for safe use: expected DSH version, `deepseek-official`, PTC/Code, `workspace-write + ask`, root `AGENTS.md` autoload, and discovery of all four project skills. If one of those checks fails, SAFE_STOP before file mutation.
+
+Skill-body progressive loading and cache telemetry/cache reuse are efficiency evidence collected during the real task where naturally observable. They are not prerequisites to start the first real task, no synthetic requests are required, and no arbitrary cache-hit percentage is required. The first actual assigned task supplies real coding capability evidence under that task's normal project validation/review requirements.
+
+Current tooling priority is unambiguous:
+
+```text
+1. FIRST_REAL_BOUNDED_DEEPSEEK_HARNESS_TASK = NOW
+2. CODEX_CONFIGURATION_AND_EFFICIENCY_PROFILE = DEFERRED_UNTIL_USER_RESUMES
+3. HERMES_CONFIGURATION = LATER / WHEN USER NEXT PRIORITIZES
+```
+
+`governance/CURRENT_TOOLING_EXECUTOR_PRIORITY_V1_2026-08-18.md` is the authoritative current sequencing/timing record and explicitly supersedes stale sequencing or pre-first-task readiness phrases in the two DeepSeek draft technical documents and prior PR-body text. This current priority changes no technical safety rule and grants no retained authority gate.
 
 ---
 
