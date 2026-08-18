@@ -176,12 +176,62 @@ class MultiAssetProductionBootstrap:
             sleep=sleep,
         )
         runtime.on_finalized_5m = application.on_finalized_5m
+        runtime.on_maintenance_5m = application.on_maintenance_5m
         return application
 
     async def on_finalized_5m(
         self, bar: ClosedBar, mode: BoundaryMode
     ) -> BoundaryReport:
         return await self.process_boundary(bar.open_time_ms, mode)
+
+    async def on_maintenance_5m(self, boundary_open_time_ms: int) -> None:
+        """Maintenance lane the Barrier runs even when T cannot create new action.
+
+        ACTION DEFERRED never defers MAINTENANCE: pending Formal decisions whose
+        originating live boundary ended expire, retained strictly-prior Strategy
+        checkpoints reconcile as context, and Outcome cadence advances.  No new
+        Scanner/Strategy/Formal authority is created for T itself here.
+        """
+        self._expire_prior_pending(boundary_open_time_ms)
+        self._reconcile_retained_downstream(boundary_open_time_ms)
+        self.advance_outcomes()
+
+    def _reconcile_retained_downstream(self, boundary_open_time_ms: int) -> None:
+        active = self.registry.active()
+        if active is None:
+            return
+        for market in active.markets:
+            if market.lifecycle is not MarketLifecycle.ACTIVE:
+                continue
+            market_id = market.identity.market_id
+            last = self.data_authority.store.last_open(market_id)
+            if last is None or last > boundary_open_time_ms:
+                # No durable series, or a stale boundary behind already-retained
+                # progress: strictly-prior reconciliation already happened when
+                # those boundaries were current.
+                continue
+            try:
+                boundaries = self.coordinator.strategy_recovery_boundaries(
+                    market_id=market_id,
+                    current_source_open_time_ms=last,
+                )
+                for source_open in boundaries:
+                    if source_open >= boundary_open_time_ms:
+                        # T itself stays untouched while action is deferred; it
+                        # reconciles as context at the next actionable boundary.
+                        continue
+                    self.coordinator.evaluate_finalized_market(
+                        market_id=market_id,
+                        scanner_linkage=None,
+                        scanner_candidate_record_id=None,
+                        source_open_time_ms=source_open,
+                        evaluation_mode=BoundaryMode.RECOVERY_CONTEXT_ONLY,
+                    )
+            except (PlanningError, PublicDataError):
+                # One market's reconciliation gap never cancels the remaining
+                # maintenance lane; these established operational failures do
+                # not contradict durable authority in EvidenceStore.
+                continue
 
     async def process_boundary(
         self, boundary_open_time_ms: int, mode: BoundaryMode
