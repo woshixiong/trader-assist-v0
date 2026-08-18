@@ -1,10 +1,10 @@
 # Trader Assist / Trade OS — DeepSeek Harness Mandatory Usage Rules V1
 
-**Status:** DRAFT SPECIALIZED GOVERNANCE FOR QUALIFICATION  
+**Status:** DRAFT SPECIALIZED GOVERNANCE  
 **Effective date:** 2026-08-18  
 **Repository:** `woshixiong/trader-assist-v0`  
 **Parent profile:** `governance/ENGINEERING_EXECUTOR_POOL_AND_DEEPSEEK_HARNESS_PROFILE_V1_2026-08-18.md`  
-**Scope:** mandatory execution, prompt, context, cache, skill, session, model, permission, cost and qualification rules whenever DeepSeek Harness is used as a Trader Assist / Trade OS coding executor.
+**Scope:** mandatory execution, prompt, context, cache, skill, session, model, permission, cost and setup-verification rules whenever DeepSeek Harness is used as a Trader Assist / Trade OS coding executor.
 
 This file is a specialized L2 execution contract. It does not replace the canonical Unified Engineering Governance, Mandatory Engineering Preflight, Research/Evidence/Decision Method, Hermes contract, product/strategy/security authorities, or explicit user gates.
 
@@ -25,14 +25,14 @@ DEEPSEEK_MODEL=deepseek-v4-flash | deepseek-v4-pro
 
 Do not route the DeepSeek API through Codex, Trae, Claude Code, OpenCode or another harness for normal project work. Codex and Trae remain independent peer coding executors with their own task assignments; they are not alternate wrappers for the DeepSeek route.
 
-Current qualification baseline:
+Current setup baseline:
 
 ```text
 DSH_VERSION=0.1.0-rc.7
 DSH_UPSTREAM_RELEASE_SHA=99f6f02fecdb7dff40c3fbc9470f5907c29f74ca
 ```
 
-Because DSH is Developer Preview, authority-bearing automated use MUST pin or verify the expected DSH version. A version change that alters command grammar, agent preset composition, permission behavior, tool visibility, session semantics, skill semantics or output/evidence behavior requires bounded seam requalification before automation resumes.
+Because DSH is Developer Preview, authority-bearing automated use MUST pin or verify the expected DSH version. A version change that alters command grammar, agent preset composition, permission behavior, tool visibility, session semantics, skill semantics or output/evidence behavior requires bounded seam re-verification before automation resumes.
 
 ---
 
@@ -146,7 +146,7 @@ Keep branch/head SHA, CI run, timestamps, blocker IDs, one-off evidence and task
 
 ### Rule 5 — Measure provider usage, not just UI estimates
 
-For qualification and material DeepSeek stages capture when available:
+For setup verification and material DeepSeek stages capture when available:
 
 ```text
 uncached_input_tokens
@@ -176,11 +176,13 @@ Resume the exact DSH Writer session only when all are true:
 
 Use a new session for a new materially different task, changed authority/worktree, clean-route adjudication, different role, or independent Reviewer work. Cache savings never override reviewer independence or clean-context needs.
 
-### Rule 7 — Prune deterministic tool noise before compaction
+### Rule 7 — Prune deterministic tool noise before compaction; keep provider retries bounded
 
 Keep the shipped Code/PTC tool-result pruner and compaction behavior initially. The current shipped Code preset prunes large tool results at its normal thresholds before model-backed compaction.
 
 Prefer bounded command output and deterministic pruning. Use compaction only for genuine context pressure or a coherent substage boundary; do not compact every few turns. Preserve raw authority-bearing evidence outside conversational summaries.
+
+For the DeepSeek provider route, retain the shipped **normal finite provider-request retry policy** unless a later measured problem justifies a change. Current normal mode is transport/model-request recovery with a bounded retry budget for transient failures; it is not engineering repair authority. Do **not** use the unbounded `always` retry mode for Trader Assist project work. A provider retry may repeat input billing, so retry events are cost evidence and must never be reinterpreted as permission for autonomous task-level repair/replan/retry.
 
 ### Rule 8 — Model/reasoning economy uses real provider semantics
 
@@ -250,6 +252,7 @@ executor:
   agent_preset: code
   permission_preset: workspace-write
   approval_policy: ask
+  provider_retry_policy: normal
   session_mode: NEW | RESUME_EXACT
   session_id: <required only for RESUME_EXACT>
 
@@ -294,13 +297,14 @@ The field model intentionally aligns with the project's existing Lossless Task P
 
 ## 5. Mandatory DSH session baseline
 
-Normal project Writer session after qualification:
+Normal project Writer session after lightweight setup verification:
 
 ```text
 PROVIDER=deepseek-official
 AGENT_PRESET=code / PTC
 PERMISSION_PRESET=workspace-write
 APPROVAL_POLICY=ask
+PROVIDER_RETRY_POLICY=normal
 DANGER_FULL_ACCESS=NO
 PRODUCTION_CREDENTIALS=NO
 PROJECT_MAIN_WORKTREE_MUTATION=NO
@@ -310,11 +314,13 @@ MODEL_AND_REASONING=L1_FROZEN_PER_TASK
 
 Settings that change defaults apply to new sessions; create a new session after a preset/permission/model-default change when the current session cannot safely adopt it.
 
+Do not customize shipped `maxTokens`, compaction thresholds, instruction-byte budget or plugin composition merely for optimization before measured evidence shows a real need.
+
 ---
 
-## 6. Qualification state and remaining acceptance
+## 6. Lightweight setup verification; real coding validation is deferred to real work
 
-The first read-only qualification at exact PR #108 head `e8891d0fb8270e83fd34e9790d341932a02846f0` demonstrated:
+The first read-only qualification at exact PR #108 historical head `e8891d0fb8270e83fd34e9790d341932a02846f0` already demonstrated:
 
 ```text
 OFFICIAL_PROVIDER_ROUTE=PASS
@@ -333,36 +339,45 @@ RAW_EVIDENCE_CAPTURE=PASS
 
 The original qualification intentionally read the full governance set and observed a large prompt surface; that proved correctness but is **not** the normal Writer context design.
 
-Before normal Writer routing, one separate bounded coding qualification MUST still prove:
+No separate synthetic coding qualification or harness-only independent review is required before the first real bounded task. The remaining setup work is intentionally small and mechanical:
 
 ```text
-LIGHTWEIGHT_CONTEXT_FAST_PATH=PASS
-CODE_MODE_BOUNDED_EDIT=PASS
-ALLOWED_PATH_ENFORCEMENT=PASS
-FOCUSED_TEST_EXECUTION=PASS
-RELEVANT_REGRESSION=PASS
-DIFF_SCOPE_EVIDENCE=PASS
-NO_UNAUTHORIZED_GIT_OR_GITHUB_MUTATION=PASS
-RESULT_PACKET=PASS
-SESSION_RESUME_SAME_STAGE=PASS
-TOKEN_AND_CACHE_METRICS_CAPTURE=PASS
-INDEPENDENT_REVIEW=PASS
+EXPECTED_DSH_VERSION_VISIBLE=PASS
+DEEPSEEK_OFFICIAL_PROVIDER_VISIBLE=PASS
+FLASH_AND_PRO_CATALOG_VISIBLE=PASS
+PTC_CODE_PRESET_VISIBLE=PASS
+WORKSPACE_WRITE_PLUS_ASK_VISIBLE=PASS
+ROOT_AGENTS_AUTOLOAD=PASS
+FOUR_PROJECT_SKILLS_DISCOVERED=PASS
+SKILL_BODY_LOADS_ON_DEMAND=PASS
+SKILL_BODY_NOT_ALWAYS_INJECTED=PASS
+CACHE_TELEMETRY_VISIBLE=PASS
+WARM_STABLE_PREFIX_CACHE_HIT_OBSERVED=PASS
+NO_FILE_GIT_GITHUB_MUTATION_DURING_SETUP_CHECK=PASS
 ```
 
-No DSH-vs-Codex benchmark is required. The DeepSeek API route is already fixed to DeepSeek Harness; qualification measures whether that fixed route is safe, efficient and usable.
+The cache check should use a tiny read-only repeated/stable-prefix request in the same session. It only needs to demonstrate that provider cache usage is observable and nonzero under a reusable prefix; no arbitrary target percentage is required.
+
+After these checks:
+
+```text
+DEEPSEEK_HARNESS_SETUP=READY_FOR_BOUNDED_REAL_TASK
+```
+
+The first actual small Trader Assist task assigned to DeepSeek Harness becomes the real capability validation. It must use the normal frozen Task Packet, isolated worktree, task-specific tests/evidence and normal project review requirements for that task. Do not create an extra development exercise or extra review solely to validate the Harness.
 
 ---
 
 ## 7. Future Hermes integration seam
 
-After DSH passes coding qualification and receives independent acceptance, the preferred Hermes seam is native non-interactive/headless DSH, not GUI Computer Use, whenever the exact required behavior is supported:
+When the project later automates DeepSeek Harness, prefer native non-interactive/headless DSH rather than GUI Computer Use whenever the exact required behavior is supported:
 
 ```text
 Hermes frozen packet transport
 → verify exact dsh version / packet / worktree / model
 → dsh --profile headless <frozen job>
 → collect raw Result Packet/evidence
-→ independent ChatGPT review
+→ normal downstream task review
 ```
 
 Current merged Hermes Task Packet/operator contract does not yet enumerate `DEEPSEEK_HARNESS`; Hermes H2 dispatch to DSH remains prohibited until a later bounded schema/profile change is independently accepted.
@@ -371,29 +386,34 @@ Hermes remains an L3 low-cost/free-model operator. It does not become the DeepSe
 
 ---
 
-## 8. Deferred configuration work after DeepSeek convergence
+## 8. Current tooling priority
 
-After this DeepSeek route is qualified and governance is accepted, the next tooling stages are:
+The current user priority as of 2026-08-18 is:
 
 ```text
-1. HERMES_CONFIGURATION
-   - install/configure free or approved low-cost operator model;
-   - minimum toolsets/permissions;
-   - H0/H1 transport/evidence qualification;
-   - later add DEEPSEEK_HARNESS to the Lossless Task Packet only after DSH acceptance;
-   - use native dsh headless seam where supported.
+NEXT_1=CODEX_CONFIGURATION_AND_EFFICIENCY_PROFILE
+- configure Codex first because it is immediately needed for development;
+- inspect the installed Codex version and current official configuration surface;
+- configure safe user/project settings;
+- optimize AGENTS/project-doc byte budgets, skills, stable prompts and session resume;
+- define model/reasoning tiers from current official model availability;
+- use deterministic mechanics before model tokens;
+- measure token/cache/time/rework only where the evidence is useful;
+- keep Codex as a peer coding executor.
 
-2. CODEX_CONFIGURATION_AND_EFFICIENCY_PROFILE
-   - inspect the current installed Codex version and live official configuration surface;
-   - configure user/project settings safely;
-   - optimize AGENTS/project-doc byte budgets, skills, stable prompts and session resume;
-   - define model/reasoning tiers from current official model availability;
-   - use deterministic mechanics before model tokens;
-   - measure token/cache/time/rework evidence on representative Trader Assist tasks;
-   - keep Codex as a peer coding executor, not a DeepSeek API wrapper.
+NEXT_2=DEEPSEEK_HARNESS_LIGHTWEIGHT_SETUP_VERIFICATION
+- perform only the preset/skills/cache checks in section 6;
+- do not create a separate synthetic coding task or harness-only review;
+- validate real coding capability on the first actual small assigned task.
+
+NEXT_3=HERMES_CONFIGURATION
+- configure an approved free or low-cost operator model and minimum permissions/toolsets;
+- H0/H1 lossless transport/evidence qualification;
+- later add DEEPSEEK_HARNESS to the Lossless Task Packet only through a separately accepted schema/profile change;
+- use native DSH headless seam where supported.
 ```
 
-These are deferred work items, not authority granted by this DeepSeek rule.
+These are tooling priorities, not authority for Mark Ready, merge, deployment, runtime or other retained user gates.
 
 ---
 
@@ -402,7 +422,8 @@ These are deferred work items, not authority granted by this DeepSeek rule.
 This specialized rule does not authorize:
 
 - autonomous executor/model switching;
-- autonomous repair/retry beyond a frozen packet;
+- autonomous engineering repair/replan/retry beyond a frozen packet;
+- unbounded provider retry mode;
 - Hermes H2 dispatch to DSH before schema/profile acceptance;
 - Mark Ready or merge;
 - deployment/runtime/cloud mutation;
