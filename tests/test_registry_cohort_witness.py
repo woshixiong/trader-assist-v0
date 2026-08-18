@@ -108,14 +108,13 @@ class Composition:
         )
 
     def witness_for(self, successor: RegistryVersion, *, boundary: int = T) -> CohortWitness:
-        return CohortWitness.create(
+        return self.registry._issue_cohort_witness(
             boundary_open_time_ms=boundary,
             base_registry_version=self.active.version,  # type: ignore[union-attr]
             base_registry_hash=self.active.content_hash,  # type: ignore[union-attr]
             expected_successor_version=successor.version,
             expected_successor_hash=successor.content_hash,
             required_evidence_market_ids=frozenset({self.item.identity.market_id}),
-            issuer="SINGLE_OWNER_5M_COHORT_BARRIER",
         )
 
 
@@ -151,14 +150,13 @@ def test_empty_required_evidence_is_rejected(tmp_path: Path) -> None:
     world.evidence_at(T)
     successor = world.pending_successor("manual-r2")
     world.registry.request_apply(successor.version)
-    witness = CohortWitness.create(
+    witness = world.registry._issue_cohort_witness(
         boundary_open_time_ms=T,
         base_registry_version=world.active.version,  # type: ignore[union-attr]
         base_registry_hash=world.active.content_hash,  # type: ignore[union-attr]
         expected_successor_version=successor.version,
         expected_successor_hash=successor.content_hash,
         required_evidence_market_ids=frozenset(),
-        issuer="SINGLE_OWNER_5M_COHORT_BARRIER",
     )
     with pytest.raises(RegistryError):
         world.registry.apply_witness(
@@ -213,14 +211,13 @@ def test_base_epoch_swap_rejects_witness_captured_under_old_epoch(tmp_path: Path
     world.evidence_at(T + FIVE_MINUTES_MS)
     second = world.pending_successor("second-switch")
     world.registry.request_apply(second.version)
-    stale = CohortWitness.create(
+    stale = world.registry._issue_cohort_witness(
         boundary_open_time_ms=T + FIVE_MINUTES_MS,
         base_registry_version=world.active.version,  # type: ignore[union-attr]  # stale R1 binding
         base_registry_hash="9" * 64,
         expected_successor_version=second.version,
         expected_successor_hash=second.content_hash,
         required_evidence_market_ids=frozenset({world.item.identity.market_id}),
-        issuer="SINGLE_OWNER_5M_COHORT_BARRIER",
     )
     with pytest.raises(RegistryError):
         world.registry.apply_witness(stale, evidence_authority=world.authority)
@@ -288,14 +285,13 @@ def test_crash_after_pointer_before_cleanup_converges_on_reopen(tmp_path: Path) 
     active = reopened.active()
     assert active is not None and active.version == successor.version
     assert len(list((tmp_path / "registry" / "history").glob("*.json"))) == 1
-    witness_again = CohortWitness.create(
+    witness_again = reopened._issue_cohort_witness(
         boundary_open_time_ms=T,
         base_registry_version=successor.version,
         base_registry_hash=successor.content_hash,
         expected_successor_version=successor.version,
         expected_successor_hash=successor.content_hash,
         required_evidence_market_ids=frozenset({world.item.identity.market_id}),
-        issuer="SINGLE_OWNER_5M_COHORT_BARRIER",
     )
     with pytest.raises(RegistryError):
         reopened.apply_witness(
@@ -319,13 +315,55 @@ def test_crash_after_history_before_pointer_keeps_old_r_retryable(tmp_path: Path
     assert active is not None and active.version == world.active.version  # type: ignore[union-attr]
     pending = reopened.pending_version()
     assert pending is not None and pending.version == successor.version
-    applied = reopened.apply_witness(
-        witness, evidence_authority=world.authority
+    # Process-local authority does not survive reconstruction: AE re-derives
+    # the same durable state and issues a new witness for the current manager.
+    with pytest.raises(RegistryError, match="this Registry process"):
+        reopened.apply_witness(witness, evidence_authority=world.authority)
+    reopened_authority = MultiAssetDataAuthority(
+        store=world.authority.store, registry=reopened
     )
+    retry = reopened._issue_cohort_witness(
+        boundary_open_time_ms=T,
+        base_registry_version=active.version,
+        base_registry_hash=active.content_hash,
+        expected_successor_version=successor.version,
+        expected_successor_hash=successor.content_hash,
+        required_evidence_market_ids=frozenset({world.item.identity.market_id}),
+    )
+    applied = reopened.apply_witness(retry, evidence_authority=reopened_authority)
     assert applied is not None and applied.version == successor.version
     assert reopened.active().version == successor.version
     # Exactly one history record for the prior version despite the retry.
     assert len(list((tmp_path / "registry" / "history").glob("*.json"))) == 1
+
+
+def test_public_string_cannot_mint_or_cross_registry_capability(tmp_path: Path) -> None:
+    world = Composition(tmp_path)
+    world.evidence_at(T)
+    successor = world.pending_successor("manual-r2")
+    world.registry.request_apply(successor.version)
+    assert not hasattr(CohortWitness, "create")
+    assert "issuer" not in CohortWitness.__dataclass_fields__
+    # A matching diagnostic string has no place in the capability shape; an
+    # arbitrary object identity cannot substitute for this manager's issuer.
+    forged = CohortWitness(
+        boundary_open_time_ms=T,
+        base_registry_version=world.active.version,  # type: ignore[union-attr]
+        base_registry_hash=world.active.content_hash,  # type: ignore[union-attr]
+        expected_successor_version=successor.version,
+        expected_successor_hash=successor.content_hash,
+        required_evidence_market_ids=frozenset({world.item.identity.market_id}),
+        _issuer=object(),
+    )
+    with pytest.raises(RegistryError, match="this Registry process"):
+        world.registry.apply_witness(forged, evidence_authority=world.authority)
+    legitimate = world.witness_for(successor)
+    foreign_registry = MarketRegistryManager(
+        tmp_path / "registry", metadata_validator=lambda _: True
+    )
+    with pytest.raises(RegistryError, match="this Registry process"):
+        foreign_registry.apply_witness(legitimate, evidence_authority=world.authority)
+    assert world.registry.apply_witness(legitimate, evidence_authority=world.authority)
 
 
 def _atomic_write(path: Path, content: bytes) -> None:

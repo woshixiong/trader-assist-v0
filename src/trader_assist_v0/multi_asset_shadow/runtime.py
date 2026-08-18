@@ -37,7 +37,7 @@ from .data import ClosedBarStore, DataRouteError, MultiAssetDataAuthority
 from .finality import FIVE_MINUTES_MS
 from .hyperliquid_public import HyperliquidPublicClient, PublicDataError
 from .models import ClosedBar, MarketLifecycle, RegistryMarket, RegistryVersion
-from .registry import CohortWitness, MarketRegistryManager, RegistryError
+from .registry import MarketRegistryManager, RegistryError
 
 WS_URL = "wss://api.hyperliquid.xyz/ws"
 _MAX_RECONNECTS = 3
@@ -61,7 +61,6 @@ STARTUP_REST_COOLDOWN_SECONDS: Final = 60.0
 BOUNDARY_ACTION_DEADLINE_SECONDS: Final = 60.0
 # Clock-driven barrier tick: how often the completed-boundary edge is checked.
 _BARRIER_TICK_SECONDS: Final = 5.0
-_BARRIER_ISSUER: Final = "SINGLE_OWNER_5M_COHORT_BARRIER"
 _PRE_ACTIVE_ORDER: Final[dict[MarketLifecycle, int]] = {
     MarketLifecycle.WARMING: 0,
     MarketLifecycle.HISTORY_READY: 1,
@@ -867,14 +866,13 @@ class MultiAssetPublicRuntime:
         evidence_market_ids: frozenset[str],
     ) -> None:
         """Activate exactly one successor through the one-use cohort witness."""
-        witness = CohortWitness.create(
+        witness = self.registry._issue_cohort_witness(
             boundary_open_time_ms=boundary_open_ms,
             base_registry_version=base.version,
             base_registry_hash=base.content_hash,
             expected_successor_version=successor.version,
             expected_successor_hash=successor.content_hash,
             required_evidence_market_ids=evidence_market_ids,
-            issuer=_BARRIER_ISSUER,
         )
         self.registry.apply_witness(
             witness, evidence_authority=self.authority

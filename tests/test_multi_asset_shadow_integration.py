@@ -62,10 +62,7 @@ from trader_assist_v0.multi_asset_shadow.planning import (
     PlanRejection,
     PublicBbo,
 )
-from trader_assist_v0.multi_asset_shadow.registry import (
-    CohortWitness,
-    MarketRegistryManager,
-)
+from trader_assist_v0.multi_asset_shadow.registry import MarketRegistryManager
 from trader_assist_v0.multi_asset_shadow.runtime import (
     BoundaryMode,
     MultiAssetPublicRuntime,
@@ -2540,14 +2537,13 @@ def test_draining_blocks_new_activity_but_existing_outcome_completes_and_detache
     # through an individual ClosedBar admission.
     base = route.registry.active()
     assert base is not None
-    witness = CohortWitness.create(
+    witness = route.registry._issue_cohort_witness(
         boundary_open_time_ms=next_index * 300_000,
         base_registry_version=base.version,
         base_registry_hash=base.content_hash,
         expected_successor_version=successor.version,
         expected_successor_hash=successor.content_hash,
         required_evidence_market_ids=frozenset({route.market.identity.market_id}),
-        issuer="SINGLE_OWNER_5M_COHORT_BARRIER",
     )
     route.registry.apply_witness(witness, evidence_authority=route.data)
     with pytest.raises(IntegrationError, match="lifecycle"):

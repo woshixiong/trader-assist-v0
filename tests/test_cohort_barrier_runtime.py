@@ -374,8 +374,6 @@ async def test_predecessor_rows_are_context_not_refinalized(tmp_path: Path) -> N
     # are durable and bound to the live base epoch.
     await world.barrier(T + FIVE_MINUTES_MS)
     assert world.wakes == [(T + FIVE_MINUTES_MS, BoundaryMode.LIVE_ACTIONABLE)]
-    from trader_assist_v0.multi_asset_shadow.registry import CohortWitness
-
     base = world.registry.active()
     assert base is not None
     successor = world.registry.successor(
@@ -384,7 +382,7 @@ async def test_predecessor_rows_are_context_not_refinalized(tmp_path: Path) -> N
             update_market=world.items[0].model_copy(update={"growth_mode": "HOT_ADD"}),
     )
     world.registry.request_apply(successor.version)
-    witness = CohortWitness.create(
+    witness = world.registry._issue_cohort_witness(
         boundary_open_time_ms=T + FIVE_MINUTES_MS,
         base_registry_version=base.version,
         base_registry_hash=base.content_hash,
@@ -393,7 +391,6 @@ async def test_predecessor_rows_are_context_not_refinalized(tmp_path: Path) -> N
         required_evidence_market_ids=frozenset(
             item.identity.market_id for item in world.items
         ),
-        issuer="SINGLE_OWNER_5M_COHORT_BARRIER",
     )
     world.registry.apply_witness(
         witness, evidence_authority=world.authority

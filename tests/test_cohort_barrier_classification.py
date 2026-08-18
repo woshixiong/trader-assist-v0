@@ -24,11 +24,7 @@ from trader_assist_v0.multi_asset_shadow.models import (
     RegistryTier,
     RegistryVersion,
 )
-from trader_assist_v0.multi_asset_shadow.registry import (
-    CohortWitness,
-    MarketRegistryManager,
-    RegistryError,
-)
+from trader_assist_v0.multi_asset_shadow.registry import MarketRegistryManager, RegistryError
 from trader_assist_v0.multi_asset_shadow.runtime import (
     RetainedBoundaryClass,
     classify_retained_boundary,
@@ -142,14 +138,13 @@ def test_exact_t_row_bound_to_known_predecessor_is_context_only(tmp_path: Path) 
         snapshot=[candle("BTC", T + FIVE_MINUTES_MS)],
         received_at=received_at(T + FIVE_MINUTES_MS),
     )
-    witness = CohortWitness.create(
+    witness = registry._issue_cohort_witness(
         boundary_open_time_ms=T + FIVE_MINUTES_MS,
         base_registry_version=predecessor.version,
         base_registry_hash=predecessor.content_hash,
         expected_successor_version=successor.version,
         expected_successor_hash=successor.content_hash,
         required_evidence_market_ids=frozenset({item.identity.market_id}),
-        issuer="SINGLE_OWNER_5M_COHORT_BARRIER",
     )
     registry.apply_witness(witness, evidence_authority=authority)
     active = registry.active()
@@ -323,14 +318,13 @@ def test_predecessor_t_row_with_later_row_remains_context_only(tmp_path: Path) -
         snapshot=[candle("BTC", T + FIVE_MINUTES_MS)],
         received_at=received_at(T + FIVE_MINUTES_MS),
     )
-    witness = CohortWitness.create(
+    witness = registry._issue_cohort_witness(
         boundary_open_time_ms=T + FIVE_MINUTES_MS,
         base_registry_version=predecessor.version,
         base_registry_hash=predecessor.content_hash,
         expected_successor_version=successor.version,
         expected_successor_hash=successor.content_hash,
         required_evidence_market_ids=frozenset({item.identity.market_id}),
-        issuer="SINGLE_OWNER_5M_COHORT_BARRIER",
     )
     registry.apply_witness(witness, evidence_authority=authority)
     active = registry.active()

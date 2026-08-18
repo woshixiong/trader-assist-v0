@@ -34,7 +34,8 @@ class CohortWitness:
     """Process-local, one-use capability authorizing exactly one successor apply.
 
     Binds the boundary, the exact base Registry epoch, the exact expected
-    successor, the required evidence cohort, and the issuer.  Application
+    successor, the required evidence cohort, and a private Registry issuer.
+    Application
     re-reads live active/pending state and requires exact equality before any
     durable transition, so a witness minted for one candidate can never apply
     another.  The consumed flag is process-local capability state, not durable
@@ -47,50 +48,8 @@ class CohortWitness:
     expected_successor_version: str
     expected_successor_hash: str
     required_evidence_market_ids: frozenset[str]
-    issuer: str
+    _issuer: object = field(repr=False, compare=False)
     _consumed: bool = field(default=False, repr=False, compare=False)
-
-    @classmethod
-    def create(
-        cls,
-        *,
-        boundary_open_time_ms: int,
-        base_registry_version: str,
-        base_registry_hash: str,
-        expected_successor_version: str,
-        expected_successor_hash: str,
-        required_evidence_market_ids: frozenset[str],
-        issuer: str,
-    ) -> CohortWitness:
-        if (
-            not isinstance(boundary_open_time_ms, int)
-            or boundary_open_time_ms < 0
-            or boundary_open_time_ms % 300_000 != 0
-        ):
-            raise RegistryError("witness boundary must be an aligned 5m open")
-        for name, value in (
-            ("base_registry_version", base_registry_version),
-            ("base_registry_hash", base_registry_hash),
-            ("expected_successor_version", expected_successor_version),
-            ("expected_successor_hash", expected_successor_hash),
-        ):
-            if not isinstance(value, str) or not value:
-                raise RegistryError(f"witness {name} is required")
-        if not isinstance(required_evidence_market_ids, frozenset) or any(
-            not isinstance(item, str) or not item for item in required_evidence_market_ids
-        ):
-            raise RegistryError("witness evidence cohort must be market id strings")
-        if not isinstance(issuer, str) or not issuer:
-            raise RegistryError("witness issuer is required")
-        return cls(
-            boundary_open_time_ms=boundary_open_time_ms,
-            base_registry_version=base_registry_version,
-            base_registry_hash=base_registry_hash,
-            expected_successor_version=expected_successor_version,
-            expected_successor_hash=expected_successor_hash,
-            required_evidence_market_ids=frozenset(required_evidence_market_ids),
-            issuer=issuer,
-        )
 
 
 MetadataValidator = Callable[[RegistryMarket], bool]
@@ -143,6 +102,50 @@ class MarketRegistryManager:
         # Capability identity is intentionally process-local.  A Registry
         # operation never accepts a generic candle as time authority.
         self._boundary_issuer = object()
+        # Unlike provider admission, this issuer is only used for the
+        # Barrier's whole-cohort successor witness.  Its identity is local to
+        # this manager instance, so reconstruction invalidates every old
+        # witness without introducing durable capability state.
+        self._cohort_witness_issuer = object()
+
+    def _issue_cohort_witness(
+        self,
+        *,
+        boundary_open_time_ms: int,
+        base_registry_version: str,
+        base_registry_hash: str,
+        expected_successor_version: str,
+        expected_successor_hash: str,
+        required_evidence_market_ids: frozenset[str],
+    ) -> CohortWitness:
+        """Issue the Barrier's opaque, process-local successor capability."""
+        if (
+            not isinstance(boundary_open_time_ms, int)
+            or boundary_open_time_ms < 0
+            or boundary_open_time_ms % 300_000 != 0
+        ):
+            raise RegistryError("witness boundary must be an aligned 5m open")
+        for name, value in (
+            ("base_registry_version", base_registry_version),
+            ("base_registry_hash", base_registry_hash),
+            ("expected_successor_version", expected_successor_version),
+            ("expected_successor_hash", expected_successor_hash),
+        ):
+            if not isinstance(value, str) or not value:
+                raise RegistryError(f"witness {name} is required")
+        if not isinstance(required_evidence_market_ids, frozenset) or any(
+            not isinstance(item, str) or not item for item in required_evidence_market_ids
+        ):
+            raise RegistryError("witness evidence cohort must be market id strings")
+        return CohortWitness(
+            boundary_open_time_ms=boundary_open_time_ms,
+            base_registry_version=base_registry_version,
+            base_registry_hash=base_registry_hash,
+            expected_successor_version=expected_successor_version,
+            expected_successor_hash=expected_successor_hash,
+            required_evidence_market_ids=frozenset(required_evidence_market_ids),
+            _issuer=self._cohort_witness_issuer,
+        )
 
     def _decode(self, raw: bytes) -> RegistryVersion:
         try:
@@ -308,14 +311,17 @@ class MarketRegistryManager:
         provider-authoritative Data authority itself.  The Registry never
         trusts an arbitrary caller-supplied proof callback: evidence proof is
         owned by :class:`MultiAssetDataAuthority` (packet section 4A).  The
-        ``issuer`` string is diagnostic text only; real authority is the
-        process-local one-use witness binding plus live state equality plus
-        authority-owned evidence.  Transition order is the crash-convergent
+        real authority is the process-local one-use witness identity plus live
+        state equality plus authority-owned evidence.  Transition order is the crash-convergent
         existing-format sequence: prior history record, atomic pointer switch,
         pending cleanup.  Any mismatch fails closed with no mutation.
         """
         from .data import MultiAssetDataAuthority
 
+        if not isinstance(witness, CohortWitness):
+            raise RegistryError("registry activation requires a cohort witness capability")
+        if witness._issuer is not self._cohort_witness_issuer:
+            raise RegistryError("cohort witness was not issued by this Registry process")
         if witness._consumed:
             raise RegistryError("cohort witness was already consumed")
         object.__setattr__(witness, "_consumed", True)

@@ -34,10 +34,7 @@ from trader_assist_v0.multi_asset_shadow.models import (
 )
 from trader_assist_v0.multi_asset_shadow.outcome_engine import OutcomeEngine
 from trader_assist_v0.multi_asset_shadow.planning import CostModel
-from trader_assist_v0.multi_asset_shadow.registry import (
-    CohortWitness,
-    MarketRegistryManager,
-)
+from trader_assist_v0.multi_asset_shadow.registry import MarketRegistryManager
 from trader_assist_v0.multi_asset_shadow.runtime import (
     BoundaryMode,
     RuntimeReadinessSnapshot,
@@ -197,14 +194,13 @@ class World:
             )
         )
         self.registry.request_apply(successor.version)
-        witness = CohortWitness.create(
+        witness = self.registry._issue_cohort_witness(
             boundary_open_time_ms=T,
             base_registry_version=active.version,
             base_registry_hash=active.content_hash,
             expected_successor_version=successor.version,
             expected_successor_hash=successor.content_hash,
             required_evidence_market_ids=frozenset({self.market.identity.market_id}),
-            issuer="SINGLE_OWNER_5M_COHORT_BARRIER",
         )
         assert self.registry.apply_witness(
             witness, evidence_authority=self.data
