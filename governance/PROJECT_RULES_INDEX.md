@@ -73,6 +73,7 @@ The unified standard consolidates the durable project-wide rules covering:
 - exact artifact / exact-head CI / delta-first review;
 - one normal repair + at most one exceptional repair, then holistic convergence;
 - complete task packets and prohibition on architecture-critical prompt addenda;
+- high-constraint complete task packets for GLM-family and DeepSeek-family models when used inside approved L2 coding-executor paths, including explicit worktree, scope, validation, SAFE_STOP and lossless prompt-delivery boundaries;
 - lossless handoff for authority-bearing tasks;
 - one-paste macOS Terminal delivery;
 - Codex session/prompt/token-efficiency rules;
@@ -155,6 +156,8 @@ Engineering uses three peer L2 coding executors:
 ```text
 CODEX_CLI | TRAE_COMPUTER_USE / TRAE | DEEPSEEK_HARNESS
 ```
+
+GLM-family and DeepSeek-family names identify **models/model families**, not additional L2 executor authorities. A material coding task using either family must run inside an already-approved executor path and obey the unified standard's high-constraint complete-task-packet rule. In the current GLM/Trae workflow, Trae is the executor and GLM is the selected model. DeepSeek API coding remains fixed to the first-party `DEEPSEEK_HARNESS` route. This prompt-discipline rule does not authorize an alternate harness or fourth coding executor.
 
 Hermes plus an approved low-cost/free model is a separate L3 routine operator, not a fourth coding or decision authority.
 
