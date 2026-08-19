@@ -28,7 +28,8 @@ When DeepSeek Harness is selected as the L2 coding executor, additionally read:
 
 - `governance/ENGINEERING_EXECUTOR_POOL_AND_DEEPSEEK_HARNESS_PROFILE_V1_2026-08-18.md`;
 - `governance/DEEPSEEK_HARNESS_MANDATORY_USAGE_RULES_V1_2026-08-18.md`;
-- `governance/CURRENT_TOOLING_EXECUTOR_PRIORITY_V1_2026-08-18.md` for current sequencing and first-real-task setup-verification timing.
+- `governance/CURRENT_TOOLING_EXECUTOR_PRIORITY_V1_2026-08-18.md` for current sequencing and first-real-task setup-verification timing;
+- `governance/DEEPSEEK_HARNESS_NATIVE_HEADLESS_ONE_PASTE_WORKFLOW_V1_2026-08-20.md` for the user-operated macOS one-paste native-headless route and the bounded `0.1.0-rc.8` first-real-task upgrade-validation transition.
 
 Live GitHub objects override stale chat snapshots and stale PR-body snapshots. Future windows must resolve live GitHub state before relying on historical text.
 
@@ -131,6 +132,8 @@ The current default for user-operated macOS engineering work is **one contiguous
 
 Engineering owns the routing inside the block. The user should not have to separately `cd`, launch Codex, choose shell-vs-agent text, paste a second prompt, manually select the branch/worktree, or create a transport file when those steps can safely be encoded.
 
+When `DEEPSEEK_HARNESS` is the selected L2 Writer, the same operator principle applies through the first-party native headless seam: Engineering should generate one contiguous Terminal block that resolves the exact repo/worktree/preflight/frozen Task Packet and launches `dsh --profile headless` directly. The Web UI is optional for interactive use and is not required for normal bounded Writer dispatch. The binding DSH-specific details and current `rc.8` validation transition are in `governance/DEEPSEEK_HARNESS_NATIVE_HEADLESS_ONE_PASTE_WORKFLOW_V1_2026-08-20.md`.
+
 The older requirement that every user-facing handoff separately expose `Terminal local command` versus `Terminal -> Codex CLI` is superseded when it adds no safety value. The orchestrator must still know and encode the execution class internally, but it must not turn that distinction into extra user work.
 
 Extra human steps are allowed only when technically unavoidable or required by a security/authority gate, such as MFA, OS credential approval, secret handling, GUI-only action, explicit Mark Ready/merge/deploy/runtime authorization, credentials/private API/signing or exchange-write authority.
@@ -165,7 +168,8 @@ When DeepSeek Harness is selected, the binding specialized files are:
 
 - `governance/ENGINEERING_EXECUTOR_POOL_AND_DEEPSEEK_HARNESS_PROFILE_V1_2026-08-18.md`;
 - `governance/DEEPSEEK_HARNESS_MANDATORY_USAGE_RULES_V1_2026-08-18.md`;
-- `governance/CURRENT_TOOLING_EXECUTOR_PRIORITY_V1_2026-08-18.md` for current sequencing and setup-verification timing.
+- `governance/CURRENT_TOOLING_EXECUTOR_PRIORITY_V1_2026-08-18.md` for current sequencing and setup-verification timing;
+- `governance/DEEPSEEK_HARNESS_NATIVE_HEADLESS_ONE_PASTE_WORKFLOW_V1_2026-08-20.md` for user-operated one-paste native headless execution and the bounded `rc.8` first-real-task seam validation.
 
 DeepSeek API use is fixed to first-party DeepSeek Harness with `deepseek-official`. Normal coding uses PTC/Code Mode, `workspace-write + ask`, stable small repository instructions, project-local progressive skills, stable-prefix/cache discipline, bounded normal provider retries, L1-frozen model/reasoning and official off-peak scheduling where practical.
 
@@ -173,7 +177,9 @@ No separate synthetic coding qualification, Harness-only review, or standalone p
 
 For the first real task, before Writer file mutation, mechanically verify the execution baseline required for safe use: expected DSH version, `deepseek-official`, PTC/Code, `workspace-write + ask`, root `AGENTS.md` autoload, and discovery of all four project skills. If one of those checks fails, SAFE_STOP before file mutation.
 
-Skill-body progressive loading and cache telemetry/cache reuse are efficiency evidence collected during the real task where naturally observable. They are not prerequisites to start the first real task, no synthetic requests are required, and no arbitrary cache-hit percentage is required. The first actual assigned task supplies real coding capability evidence under that task's normal project validation/review requirements.
+The previous accepted DSH baseline remains `0.1.0-rc.7`. The current `0.1.0-rc.8` first-party release is a bounded upgrade candidate for the first real DSH task under the native-headless workflow file; successful install/launch alone is not acceptance. The first real task may validate the candidate before mutation and proceed only if the required seam checks pass; promotion of `rc.8` to the accepted project baseline requires subsequent task evidence, independent acceptance and a narrow governance update.
+
+Skill-body progressive loading and cache telemetry/cache reuse are efficiency evidence collected during the real task where naturally observable. They are not prerequisites to start that task, no synthetic requests are required, and no arbitrary cache-hit percentage is required. The first actual assigned task supplies real coding capability evidence under that task's normal project validation/review requirements.
 
 Current tooling priority is unambiguous:
 
