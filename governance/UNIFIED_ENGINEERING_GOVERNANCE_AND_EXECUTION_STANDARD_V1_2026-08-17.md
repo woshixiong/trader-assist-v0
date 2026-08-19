@@ -970,3 +970,62 @@ AUTOMATION=MEANS_NOT_GOAL
 EXACT_HEAD_CI=MANDATORY_WHEN APPLICABLE
 MARK_READY_MERGE_DEPLOY_RUNTIME_CREDENTIAL_ACCOUNT_EXCHANGE=SEPARATE_USER_AUTHORITY
 ```
+
+---
+
+## 29. High-constraint prompt discipline for GLM and DeepSeek coding models
+
+GLM-family and DeepSeek-family models are **models selected within an already-approved L2 coding-executor path**; they are not themselves additional executor authorities. When either model family is selected for material coding work, the approved executor path must use an explicit **high-constraint task packet**. This section does not create or authorize a new executor path. The existing executor pool remains `CODEX_CLI | TRAE_COMPUTER_USE / TRAE | DEEPSEEK_HARNESS`; DeepSeek API coding remains fixed to the first-party `DEEPSEEK_HARNESS` route under its specialized rules. When GLM is selected in the current Trae workflow, GLM is the model and Trae is the executor. Prompt brevity is subordinate to execution clarity. A materially underspecified prompt is a capability mismatch, not token efficiency.
+
+This rule is based on repeated project execution evidence that these model families are materially more reliable on coding tasks when the task is narrowed mechanically, and is consistent with provider guidance that coding-agent tasks should state the goal, relevant context, engineering constraints, completion criteria and controlled execution environment explicitly.
+
+For every material GLM or DeepSeek coding task, Engineering Control must make the prompt concrete enough that the executor does not need to invent the route, scope, authority or acceptance semantics. The packet must include, where applicable:
+
+```text
+EXACT ROLE / STAGE / OBJECTIVE
+EXACT REPOSITORY / BASE / HEAD / BRANCH / WORKTREE
+FROZEN ROOT CAUSE OR ACCEPTED BASELINE
+WHAT IS ALREADY ACCEPTED AND MUST NOT BE REOPENED
+WRITE ALLOWLIST
+READ-ONLY / PROHIBITED FILES AND SYSTEMS
+REQUIRED BEHAVIOR
+MUST-REMAIN BEHAVIOR
+AUTHORITY / ARCHITECTURE INVARIANTS
+ATTACK / NEGATIVE CASES
+EXACT TEST / LINT / COMPILE / DIFF COMMANDS
+EXPECTED FAIL-CLOSED SEMANTICS
+NO-REFACTOR / NO-OPTIMIZATION / NO-GENERALIZATION BOUNDARY
+SAFE_STOP CONDITIONS
+POST-MUTATION SCOPE / HASH PROOF
+OUTPUT CONTRACT
+FINAL USER AUTHORITY BOUNDARY
+```
+
+The prompt must explicitly prohibit the executor from filling gaps by convenience. Use direct language such as:
+
+```text
+DO NOT INFER MISSING REQUIREMENTS.
+DO NOT REDESIGN THE ROUTE.
+DO NOT EXPAND THE ALLOWLIST.
+DO NOT FIX UNRELATED FAILURES.
+IF THE REQUIRED CHANGE CROSSES THIS BOUNDARY: SAFE_STOP AND REPORT IT.
+```
+
+For a validation/review stage whose contract is test-only or read-only, state that production mutation is prohibited; discovering a production defect does not authorize the same executor to repair it. For a narrow repair, state the exact blocker and the exact semantics that must not change. For an accepted baseline, use delta-first instructions and identify the accepted fingerprint/hash when available.
+
+The orchestrator must state the exact working directory or worktree path in user-operated coding tasks. If the active coding UI has a known direct-paste character limit, the complete authoritative prompt must either fit within that limit or be delivered losslessly through the approved Terminal/file/task-packet path. Never silently truncate, split architecture-critical instructions into ad-hoc fragments, or ask the user to reconstruct the authoritative prompt manually. For the current GLM/Trae direct-paste workflow, use a **20,000-character ceiling** unless a later verified interface limit supersedes it; if the complete prompt would exceed that ceiling, use the Terminal/file-based lossless delivery route and state the working directory explicitly.
+
+Token efficiency still applies: omit stale history and repeated prose, but never remove scope, authority, negative constraints, tests, stop conditions or output evidence merely to make the prompt shorter. Prefer a detailed bounded packet that completes correctly in one pass over a shorter ambiguous prompt that increases repair/review cost.
+
+DeepSeek-specific merged usage rules remain additionally binding when `DEEPSEEK_HARNESS` is selected and may be stricter than this section. A future specialized GLM contract may add stricter requirements, but may not weaken this baseline without an explicit canonical governance change.
+
+Frozen execution rule:
+
+```text
+GLM_DEEPSEEK_MATERIAL_CODING_PROMPT=HIGH_CONSTRAINT_COMPLETE_PACKET_REQUIRED
+GLM_TRAE_DIRECT_PROMPT_CEILING_CHARS=20000_UNLESS_VERIFIED_SUPERSEDED
+PROMPT_TRUNCATION=PROHIBITED
+OUT_OF_SCOPE_INFERENCE=PROHIBITED
+WORKING_DIRECTORY=EXPLICIT
+SAFE_STOP_ON_SCOPE_EXPANSION=MANDATORY
+```
