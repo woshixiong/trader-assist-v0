@@ -105,6 +105,8 @@ WORKTREE=<absolute isolated worktree>
 EXECUTOR=DEEPSEEK_HARNESS
 DSH_VERSION=<expected version/candidate>
 PROVIDER=deepseek-official
+MODEL=<exact L1-frozen model>
+REASONING=<exact L1-frozen thinking/reasoning state>
 AGENT/TOOLS_MODE=code / PTC
 PERMISSION_BASELINE=workspace-write + ask
 PROJECT_ENGINEERING_RULESET_PREFLIGHT=PASS
@@ -121,6 +123,34 @@ The block may perform deterministic repository/worktree setup before launching D
 
 A DeepSeek Writer still performs its own bounded task-start preflight skill and must not mutate files until the required session-baseline checks pass.
 
+### 4.1 L1-frozen model and reasoning must match the actual headless Agent
+
+In `rc.8`, a fresh headless Agent resolves its provider/model/reasoning selection through the shared `agent-default-model` service. The base composition provides a provider/model default, while the mounted settings provider can layer the user's saved selection over it; `reasoningEffort` is specifically part of that Settings selection.
+
+Therefore the frozen Task Packet text is **not** by itself a model selector. Before task mutation begins, the one-paste route must establish that the effective provider/model/reasoning selection for the fresh headless Agent exactly matches the L1-frozen selection.
+
+Acceptable routes are limited to:
+
+1. verify that the current effective selection already matches the frozen selection; or
+2. use a separately verified per-invocation selection seam that deterministically applies the frozen selection without broadening authority.
+
+The block must not silently edit the user's persistent `$DSH_HOME/settings.yaml` merely to force task routing. If the effective selection cannot be proven before mutation, SAFE_STOP and return to L1.
+
+### 4.2 `workspace-write + ask` is fail-closed in native headless unless an answerer exists
+
+The `rc.8` base bundle configures `workspace-write` with approval policy `ask`, but the first-party approval service has no built-in human answerer. In a headless deployment, an operation that actually requires approval resolves unavailable and fails closed unless a separately configured answerer owns that Agent.
+
+For the normal one-paste route this is intentional:
+
+```text
+NORMAL_HEADLESS_TASK=WORKSPACE-BOUNDED_OPERATIONS_THAT_REQUIRE_NO_ESCALATION
+APPROVAL_REQUIRED_OPERATION=SAFE_STOP / RETURN_TO_L1
+DANGER_FULL_ACCESS_AUTO_UPGRADE=PROHIBITED
+SILENT_POLICY_WEAKENING=PROHIBITED
+```
+
+Do not wait for a browser approval prompt that native headless does not provide. Do not switch to `danger-full-access`, another executor or another permission policy merely to force progress.
+
 ---
 
 ## 5. First-real-task baseline check stays inside the same invocation
@@ -136,7 +166,11 @@ PTC_CODE_PRESET_VISIBLE=PASS
 WORKSPACE_WRITE_PLUS_ASK_VISIBLE=PASS
 ROOT_AGENTS_AUTOLOAD=PASS
 FOUR_PROJECT_SKILLS_DISCOVERED=PASS
+L1_FROZEN_MODEL_REASONING_MATCH=PASS
+HEADLESS_APPROVAL_FAIL_CLOSED_SEMANTICS=PASS_BY_FIRST_PARTY_CONTRACT
 ```
+
+The last approval item does not require a synthetic approval attempt or an extra paid model request. It is a contract check against the pinned first-party release; the real task should simply stay inside operations that do not require approval escalation.
 
 If any required baseline item fails:
 
@@ -169,7 +203,7 @@ This proposal authorizes `rc.8` only as the bounded candidate for the next real 
 
 The first real task may proceed on `rc.8` only when the required baseline checks above pass before mutation. If the real task then completes its normal validation and independent acceptance without exposing a DSH seam regression, Engineering may propose the narrow follow-up governance update that promotes `rc.8` from candidate to accepted project baseline.
 
-Any incompatible change to command grammar, provider visibility, Code/PTC behavior, permission semantics, instruction loading, skill discovery, session semantics, task/result transport or evidence behavior requires SAFE_STOP and L1 route resolution.
+Any incompatible change to command grammar, provider/model/reasoning selection, Code/PTC behavior, permission/approval semantics, instruction loading, skill discovery, session semantics, task/result transport or evidence behavior requires SAFE_STOP and L1 route resolution.
 
 ---
 
@@ -197,7 +231,7 @@ A successful DSH process exit or Writer self-reported `PASS` is execution eviden
 
 The one-paste block should preserve enough raw output to identify:
 
-- executor/version/provider/model/reasoning where available;
+- executor/version/provider/model/reasoning;
 - task/session identity where available;
 - exact repository/worktree/branch/head;
 - files changed;
@@ -226,7 +260,9 @@ The default one-paste DSH route must fail closed for at least these cases:
 - main-worktree mutation attempt;
 - conflicting branch/worktree ownership;
 - missing/stale L1 preflight attestations;
-- provider/preset/permission/instruction/skill baseline failure;
+- provider/model/reasoning mismatch;
+- preset/permission/instruction/skill baseline failure;
+- an operation requires approval but native headless has no configured answerer;
 - task packet corruption/truncation;
 - new material route or scope decision discovered by the Writer;
 - required allowlist expansion;
@@ -247,9 +283,13 @@ UPSTREAM_REPOSITORY=deepseek-ai/deepseek-harness
 UPSTREAM_RELEASE_SHA=141eb6fef83422698aef7a981029e843e8161534
 CLI_README=apps/cli/README.md
 CLI_BEHAVIOR_REFERENCE=apps/cli/reference/README.md
+AGENT_DEFAULT_MODEL_README=packages/core/agent-default-model/README.md
+USER_APPROVAL_README=packages/interaction/user-approval/README.md
+BASE_BUNDLE_PATCH=packages/bundle/base/cordis.patch.yml
+HEADLESS_BUNDLE_PATCH=packages/bundle/headless/cordis.patch.yml
 ```
 
-The first-party CLI documentation confirms:
+The first-party material confirms:
 
 - `dsh --profile headless "job"` is a supported entry mode;
 - the invoking directory is the default workspace root;
@@ -257,9 +297,11 @@ The first-party CLI documentation confirms:
 - headless mounts no Host/HTTP/Web/browser layer;
 - `dsh web` remains a separate browser-surface alias;
 - `DSH_TOOLS_MODE=code` is a supported process tool-mode selector;
-- new sessions default to the `workspace-write` permission preset.
+- new sessions default to the `workspace-write` permission preset with approval policy `ask`;
+- headless Agent creation reads the shared `agent-default-model` selection, including a Settings-layer provider/model and optional `reasoningEffort`;
+- the approval service has no built-in answerer, so headless approval-required operations fail closed unless a separately configured answerer exists.
 
-This evidence confirms the independent conclusion that native headless execution is the simplest provider-native path for Codex-like one-paste operator UX and that a Web server/browser should not be inserted into routine bounded Writer execution without a task-specific reason.
+This evidence confirms the independent conclusion that native headless execution is the simplest provider-native path for Codex-like one-paste operator UX. It also tightens the route: model/reasoning authority must be proven before mutation, and `ask` in native headless is a fail-closed boundary rather than an implied interactive Terminal approval surface.
 
 ---
 
@@ -272,6 +314,8 @@ WEB_UI_DEFAULT=NO
 WEB_UI_OPTIONAL=YES
 HERMES_REQUIRED=NO
 CUSTOM_DSH_PLUGIN_REQUIRED=NO
+L1_MODEL_REASONING_MUST_MATCH_BEFORE_MUTATION=YES
+HEADLESS_APPROVAL_REQUIRED_ACTION=SAFE_STOP
 FIRST_REAL_TASK_DOUBLES_AS_RC8_SEAM_AND_CAPABILITY_VALIDATION=YES
 INDEPENDENT_REVIEW_REQUIRED=YES
 ```
