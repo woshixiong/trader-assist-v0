@@ -973,11 +973,11 @@ MARK_READY_MERGE_DEPLOY_RUNTIME_CREDENTIAL_ACCOUNT_EXCHANGE=SEPARATE_USER_AUTHOR
 
 ---
 
-## 29. High-constraint prompt discipline for GLM and DeepSeek coding executors
+## 29. High-constraint prompt discipline for GLM and DeepSeek coding models
 
-GLM-family and DeepSeek-family models may be used as peer L2 coding executors only with an explicit **high-constraint task packet**. For these executors, prompt brevity is subordinate to execution clarity. A materially underspecified prompt is a capability mismatch, not token efficiency.
+GLM-family and DeepSeek-family models are **models selected within an already-approved L2 coding-executor path**; they are not themselves additional executor authorities. When either model family is selected for material coding work, the approved executor path must use an explicit **high-constraint task packet**. This section does not create or authorize a new executor path. The existing executor pool remains `CODEX_CLI | TRAE_COMPUTER_USE / TRAE | DEEPSEEK_HARNESS`; DeepSeek API coding remains fixed to the first-party `DEEPSEEK_HARNESS` route under its specialized rules. When GLM is selected in the current Trae workflow, GLM is the model and Trae is the executor. Prompt brevity is subordinate to execution clarity. A materially underspecified prompt is a capability mismatch, not token efficiency.
 
-This rule is based on repeated project execution evidence that these coding executors are materially more reliable when the task is narrowed mechanically, and is consistent with provider guidance that coding-agent tasks should state the goal, relevant context, engineering constraints, completion criteria and controlled execution environment explicitly.
+This rule is based on repeated project execution evidence that these model families are materially more reliable on coding tasks when the task is narrowed mechanically, and is consistent with provider guidance that coding-agent tasks should state the goal, relevant context, engineering constraints, completion criteria and controlled execution environment explicitly.
 
 For every material GLM or DeepSeek coding task, Engineering Control must make the prompt concrete enough that the executor does not need to invent the route, scope, authority or acceptance semantics. The packet must include, where applicable:
 
