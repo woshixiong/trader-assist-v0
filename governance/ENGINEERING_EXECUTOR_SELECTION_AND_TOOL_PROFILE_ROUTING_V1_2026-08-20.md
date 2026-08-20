@@ -102,16 +102,39 @@ In the current workflow:
 
 ```text
 EXECUTOR=TRAE
-MODEL=GLM-family model explicitly selected by the user, currently GLM-5.3 where available in the user's Trae surface
+MODEL=GLM-family model explicitly selected by the user
 ```
 
-GLM is a model, not a fourth executor authority.
+The user's current model label is `GLM-5.3` in the present Trae surface, but that label is a **current snapshot**, not permanent architecture. GLM is a model, not a fourth executor authority.
 
 ### 3.3 Codex selected
 
 Until a later Codex-specific profile is independently accepted and merged, use the canonical Codex/session/token rules already present in the Unified Engineering Governance and the normal one-paste Terminal rule.
 
 Draft PR #111 is a research/proposal input only and is **not** canonical authority while it remains unmerged. When Codex work resumes, reconcile/retarget that work against live `main` before any later acceptance/merge.
+
+### 3.4 Model-version refresh rule
+
+Tool profiles must not freeze one model generation indefinitely.
+
+For any selected executor whose model can change over time:
+
+```text
+VERSION_INDEPENDENT_TOOL_WORKFLOW_CORE = STABLE BY DEFAULT
+CURRENT_MODEL_SNAPSHOT = REFRESHABLE
+```
+
+Before a material task using a newly selected/newly released model that differs from the profile's last verified snapshot, Engineering must perform a **narrow model-profile refresh**, not a full tooling redesign:
+
+```text
+VERIFY CURRENT TOOL-SURFACE MODEL LABEL
+→ CHECK CURRENT FIRST-PARTY MODEL/TOOL DOCUMENTATION
+→ VERIFY ONLY ACTUALLY EXPOSED MODEL CONTROLS/LIMITS
+→ COMPARE AGAINST REAL PROJECT EVIDENCE
+→ UPDATE MODEL-SPECIFIC DELTA ONLY IF NEEDED
+```
+
+Do not create a separate full constitution for every `GLM-x.y`, Codex model, or future DeepSeek model. Do not invent hidden reasoning/cache/API controls from a previous or adjacent model generation.
 
 ---
 
@@ -135,9 +158,10 @@ CURRENT_USER_SELECTED_EXECUTOR=
 CURRENT_USER_SELECTED_MODEL=
 SELECTION_SCOPE=THIS_BOUNDED_TASK_OR_COHERENT_STAGE
 PROFILE_ROUTING=
+MODEL_PROFILE_LAST_VERIFIED_AT=
 ```
 
-A task-specific Issue or PR may still record the selected executor/model as an execution snapshot. That snapshot does not prevent the user from selecting a different approved executor for a later bounded task/stage.
+A task-specific Issue or PR may still record the selected executor/model as an execution snapshot. That snapshot does not prevent the user from selecting a different approved executor/model for a later bounded task/stage.
 
 ---
 
@@ -150,12 +174,13 @@ Before producing a Writer prompt/Terminal block, Engineering Control must:
 3. complete `ENGINEERING_PREFLIGHT_GATE=PASS` for material Writer work;
 4. freeze the user's current executor/model selection;
 5. load the selected tool profile from GitHub;
-6. load current task-specific authority;
-7. create one complete high-constraint Task Packet;
-8. choose the selected tool's operator transport;
-9. preserve all retained user gates.
+6. if the model changed since the profile's last verified snapshot, perform the narrow model-version refresh in section 3.4;
+7. load current task-specific authority;
+8. create one complete high-constraint Task Packet;
+9. choose the selected tool's operator transport;
+10. preserve all retained user gates.
 
-The user must not be asked to manually combine generic project rules with a separate executor addendum when Engineering can produce the complete current packet itself.
+The user must not be asked to manually combine generic project rules with a separate executor/model addendum when Engineering can produce the complete current packet itself.
 
 The downstream packet must identify at minimum where applicable:
 
@@ -209,7 +234,7 @@ Examples of real capability gaps include:
 
 ## 7. Review and publication independence
 
-Changing executor does not change acceptance rules.
+Changing executor or model does not change acceptance rules.
 
 ```text
 WRITER_PASS != INDEPENDENT_ACCEPTANCE
@@ -225,9 +250,7 @@ Mark Ready, merge, deployment, runtime/cloud mutation, credentials/private API, 
 
 Issue #112's technical acceptance matrix remains unchanged.
 
-Its body currently contains an old sequencing sentence that names `DEEPSEEK_HARNESS` as Primary Writer. Under this routing rule that sentence is a stale executor snapshot only.
-
-The user's current task-level selection for the ongoing Issue #112 development flow is:
+The old sequencing text that named `DEEPSEEK_HARNESS` as Primary Writer has been replaced by task-level routing. The user's current task-level selection for the ongoing Issue #112 development flow is:
 
 ```text
 EXECUTOR=TRAE
@@ -236,7 +259,7 @@ MODEL=GLM-5.3
 
 until the user changes it. This changes no Issue #112 production semantics, accepted baseline, scope, test authenticity requirement, repair budget, publication gate or host/runtime authority.
 
-A separate live Issue #112 coordination note should point future windows to this interpretation rather than rewriting the technical acceptance matrix merely to change executor routing.
+The integrity-bound Issue #112 dirty artifact remains rooted at its accepted repair baseline; later governance-only movement of `main` does not authorize rebase/reset/normalization of that artifact.
 
 ---
 
@@ -259,8 +282,9 @@ DECISION=PROCEED
 USER_CONTROLS_TASK_LEVEL_EXECUTOR_MODEL_SELECTION=YES
 GLOBAL_FIXED_PRIMARY_WRITER=NO
 ENGINEERING_AUTO_LOADS_SELECTED_TOOL_PROFILE=YES
+MODEL_PROFILES_VERSION_REFRESHABLE=YES
 ONE_PRIMARY_WRITER_PER_COHERENT_STAGE=YES
-SILENT_EXECUTOR_SUBSTITUTION=NO
+SILENT_EXECUTOR_OR_MODEL_SUBSTITUTION=NO
 STALE_TOOLING_PRIORITY_SNAPSHOT_BINDS_NEW_TASK=NO
 ISSUE112_CURRENT_SELECTION=TRAE+GLM-5.3
 INDEPENDENT_REVIEW_REQUIRED=YES
