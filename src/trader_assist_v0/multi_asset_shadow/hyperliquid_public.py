@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import json
 import ssl
-from collections.abc import Mapping
+import time
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
 from itertools import pairwise
@@ -45,6 +46,10 @@ class PublicDataError(RuntimeError):
 
 
 _MAX_PUBLIC_EVIDENCE_AGE_MS = 10_000
+
+
+def _default_wall_clock_ms() -> int:
+    return time.time_ns() // 1_000_000
 
 
 @dataclass(frozen=True)
@@ -228,6 +233,7 @@ class HyperliquidPublicPlanningAdapter:
 
     client: HyperliquidPublicClient
     max_age_ms: int = _MAX_PUBLIC_EVIDENCE_AGE_MS
+    wall_clock_ms: Callable[[], int] = _default_wall_clock_ms
     _pending: dict[str, _NormalizedL2] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
@@ -235,13 +241,7 @@ class HyperliquidPublicPlanningAdapter:
             raise ValueError("public L2 maximum age must be non-negative")
 
     def fetch_bbo(self, *, market: RegistryMarket, now_ms: int) -> PublicBbo:
-        normalized = _normalize_l2(
-            market_id=market.identity.market_id,
-            coin=market.identity.coin,
-            response=self.client.l2_book(coin=market.identity.coin),
-        )
-        if not 0 <= now_ms - normalized.observed_at_ms <= self.max_age_ms:
-            raise PublicDataError("public L2 response is stale or future-dated")
+        normalized = self._fresh_l2(market)
         self._pending[normalized.market_id] = normalized
         return PublicBbo(
             best_bid=normalized.best_bid,
@@ -285,13 +285,7 @@ class HyperliquidPublicPlanningAdapter:
     ) -> ScannerPublicSnapshot:
         from .integration import ScannerPublicSnapshot
 
-        normalized = _normalize_l2(
-            market_id=market.identity.market_id,
-            coin=market.identity.coin,
-            response=self.client.l2_book(coin=market.identity.coin),
-        )
-        if not 0 <= now_ms - normalized.observed_at_ms <= self.max_age_ms:
-            raise PublicDataError("public L2 response is stale or future-dated")
+        normalized = self._fresh_l2(market)
         assessments = tuple(
             assess_l2(
                 market_id=normalized.market_id,
@@ -321,6 +315,18 @@ class HyperliquidPublicPlanningAdapter:
             liquidity_healthy=healthy,
             btc_returns=btc_returns,
         )
+
+    def _fresh_l2(self, market: RegistryMarket) -> _NormalizedL2:
+        response = self.client.l2_book(coin=market.identity.coin)
+        post_response_wall_ms = self.wall_clock_ms()
+        normalized = _normalize_l2(
+            market_id=market.identity.market_id,
+            coin=market.identity.coin,
+            response=response,
+        )
+        if not 0 <= post_response_wall_ms - normalized.observed_at_ms <= self.max_age_ms:
+            raise PublicDataError("public L2 response is stale or future-dated")
+        return normalized
 
 
 @dataclass

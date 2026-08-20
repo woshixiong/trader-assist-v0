@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -19,7 +19,10 @@ from trader_assist_v0.multi_asset_shadow.bootstrap import (
 )
 from trader_assist_v0.multi_asset_shadow.correlation_engine import CorrelationEngineError
 from trader_assist_v0.multi_asset_shadow.data import ClosedBarStore, MultiAssetDataAuthority
-from trader_assist_v0.multi_asset_shadow.hyperliquid_public import PublicDataError
+from trader_assist_v0.multi_asset_shadow.hyperliquid_public import (
+    HyperliquidPublicClient,
+    PublicDataError,
+)
 from trader_assist_v0.multi_asset_shadow.integration import (
     CorrelationMarketMetrics,
     CorrelationResearchAdapter,
@@ -202,6 +205,7 @@ class MutableReadiness:
         self.latest_open_ms = latest_open_ms
         self.connected = True
         self.failed: set[str] = set()
+        self.observed_at_offset_ms = 300_001
 
     def readiness_snapshot(self) -> RuntimeReadinessSnapshot:
         active = self.registry.active()
@@ -221,7 +225,7 @@ class MutableReadiness:
             ready_market_ids=ready,
             failed_market_ids=tuple(self.failed),
             latest_closed_5m_open_time_ms=self.latest_open_ms,
-            observed_at_ms=self.latest_open_ms + 300_001,
+            observed_at_ms=self.latest_open_ms + self.observed_at_offset_ms,
         )
 
 
@@ -419,6 +423,29 @@ def _route(
         readiness,
         coordinator,
     )
+
+
+def _activate_successor(
+    route: Route, *, version: str, market: RegistryMarket
+) -> RegistryVersion:
+    base = route.registry.active()
+    assert base is not None
+    successor = route.registry.successor(
+        version=version,
+        now=NOW,
+        update_market=market,
+    )
+    route.registry.request_apply(successor.version)
+    witness = route.registry._issue_cohort_witness(
+        boundary_open_time_ms=route.latest.open_time_ms,
+        base_registry_version=base.version,
+        base_registry_hash=base.content_hash,
+        expected_successor_version=successor.version,
+        expected_successor_hash=successor.content_hash,
+        required_evidence_market_ids=frozenset({route.market.identity.market_id}),
+    )
+    assert route.registry.apply_witness(witness, evidence_authority=route.data) == successor
+    return successor
 
 
 def _compose_bootstrap(
@@ -840,6 +867,284 @@ def test_explicit_strategy_boundary_recovery_uses_ordered_real_prefixes(
     assert {item["evaluation_mode"] for item in payloads} == {
         BoundaryMode.RECOVERY_CONTEXT_ONLY.value
     }
+
+
+def test_predecessor_context_uses_source_epoch_not_current_live_admission(
+    tmp_path: Path,
+) -> None:
+    route = _route(tmp_path)
+    source = route.registry.active()
+    assert source is not None
+    current = _activate_successor(
+        route,
+        version="registry-2",
+        market=route.market.model_copy(update={"growth_mode": "HOT_ADD"}),
+    )
+    source_open_time_ms = route.latest.open_time_ms - 300_000
+    route.readiness.connected = False
+    current_snapshot = route.readiness.readiness_snapshot()
+
+    receipt = route.coordinator.evaluate_finalized_market(
+        market_id=route.market.identity.market_id,
+        source_open_time_ms=source_open_time_ms,
+        evaluation_mode=BoundaryMode.RECOVERY_CONTEXT_ONLY,
+    )
+
+    retained = route.evidence.get(receipt.evaluation_record_id)
+    assert isinstance(retained, StrategyEvaluation)
+    assert receipt.registry_version == source.version
+    assert receipt.registry_hash == source.content_hash
+    assert retained.payload["registry_version"] == source.version
+    assert retained.payload["registry_hash"] == source.content_hash
+    assert retained.payload["runtime_readiness_hash"] == current_snapshot.snapshot_hash
+    assert current.version != source.version
+    assert route.coordinator.pending_formal_decisions() == ()
+    assert route.evidence._connection.execute(
+        "SELECT COUNT(*) FROM formal_signals"
+    ).fetchone()[0] == 0
+    assert route.evidence._connection.execute(
+        "SELECT COUNT(*) FROM shadow_orders"
+    ).fetchone()[0] == 0
+    with pytest.raises(IntegrationError, match="disconnected or data is not ready"):
+        route.coordinator.evaluate_finalized_market(
+            market_id=route.market.identity.market_id,
+            source_open_time_ms=source_open_time_ms,
+            evaluation_mode=BoundaryMode.LIVE_ACTIONABLE,
+        )
+
+
+def test_predecessor_warming_epoch_is_context_not_live_admission(tmp_path: Path) -> None:
+    # Recreate the route with its original source epoch marked WARMING before
+    # any bar is admitted, then advance it one legitimate lifecycle epoch.
+    warming = _market(tier=RegistryTier.P0, lifecycle=MarketLifecycle.WARMING)
+    registry = MarketRegistryManager(
+        tmp_path / "warming-registry", metadata_validator=lambda _: True
+    )
+    source = RegistryVersion.create(version="warming-1", created_at=NOW, markets=(warming,))
+    registry.stage(source)
+    registry.request_apply(source.version)
+    store = ClosedBarStore(tmp_path / "warming-closed.sqlite")
+    data = MultiAssetDataAuthority(store=store, registry=registry)
+    data.admit_rest_history(
+        market=warming,
+        snapshot=[_payload(index, final=index == 63) for index in range(64)],
+        received_at=datetime.fromtimestamp((64 * 300_000 + 1_000) / 1000, UTC),
+    )
+    successor = registry.lifecycle_successor(
+        version="history-ready-2",
+        updates={warming.identity.market_id: MarketLifecycle.HISTORY_READY},
+        now=NOW,
+    )
+    registry.request_apply(successor.version)
+    witness = registry._issue_cohort_witness(
+        boundary_open_time_ms=63 * 300_000,
+        base_registry_version=source.version,
+        base_registry_hash=source.content_hash,
+        expected_successor_version=successor.version,
+        expected_successor_hash=successor.content_hash,
+        required_evidence_market_ids=frozenset({warming.identity.market_id}),
+    )
+    registry.apply_witness(witness, evidence_authority=data)
+    evidence = EvidenceStore(tmp_path / "warming-evidence.sqlite")
+    outbox = EvidenceOutbox(evidence)
+    adapter = EvidenceOutcomeAdapter(evidence)
+    readiness = MutableReadiness(
+        registry=registry, closed_store=store, latest_open_ms=63 * 300_000
+    )
+    coordinator = MultiAssetShadowCoordinator(
+        registry=registry,
+        data_authority=data,
+        evidence=evidence,
+        outbox=outbox,
+        outcome_engine=OutcomeEngine(provider=FakeOneMinuteProvider(), sink=adapter),
+        outcome_adapter=adapter,
+        planning_data=FakePlanningData(),
+        cost_model=CostModel("cost-1", Decimal(), Decimal(), Decimal("2")),
+        release_sha=RELEASE_SHA,
+        runtime_readiness=readiness,
+    )
+
+    receipt = coordinator.evaluate_finalized_market(
+        market_id=warming.identity.market_id,
+        evaluation_mode=BoundaryMode.RECOVERY_CONTEXT_ONLY,
+    )
+    assert receipt.registry_version == source.version
+    assert receipt.registry_hash == source.content_hash
+    with pytest.raises(IntegrationError, match="market lifecycle prohibits new activity"):
+        coordinator.evaluate_finalized_market(
+            market_id=warming.identity.market_id,
+            evaluation_mode=BoundaryMode.LIVE_ACTIONABLE,
+        )
+
+
+def test_context_source_epoch_rejects_bad_registry_identity_matrix(tmp_path: Path) -> None:
+    route = _route(tmp_path)
+    source = route.registry.active()
+    assert source is not None
+    _activate_successor(
+        route,
+        version="registry-2",
+        market=route.market.model_copy(update={"growth_mode": "HOT_ADD"}),
+    )
+    staged = route.registry.successor(
+        version="staged-never-active",
+        now=NOW,
+        update_market=route.market.model_copy(update={"growth_mode": "SEED"}),
+    )
+    readiness = route.readiness.readiness_snapshot()
+    market_id = route.market.identity.market_id
+
+    with pytest.raises(IntegrationError, match="unknown Registry epoch"):
+        route.coordinator._source_registry_epoch(
+            version="does-not-exist", content_hash=source.content_hash, market_id=market_id
+        )
+    with pytest.raises(IntegrationError, match="hash conflicts"):
+        route.coordinator._source_registry_epoch(
+            version=source.version, content_hash="0" * 64, market_id=market_id
+        )
+    with pytest.raises(IntegrationError, match="never the live authority"):
+        route.coordinator._source_registry_epoch(
+            version=staged.version, content_hash=staged.content_hash, market_id=market_id
+        )
+    with pytest.raises(IntegrationError, match="absent from its Registry epoch"):
+        route.coordinator._source_registry_epoch(
+            version=source.version, content_hash=source.content_hash, market_id="MAIN:ETH"
+        )
+    # The retained-row route invokes the same strict resolver rather than
+    # treating current readiness as a substitute for source provenance.
+    route.data.store.connection.execute(
+        "UPDATE closed_bars SET registry_version=? WHERE market_id=? AND interval='5m' "
+        "AND open_time_ms=?",
+        ("does-not-exist", market_id, route.latest.open_time_ms),
+    )
+    route.data.store.connection.commit()
+    with pytest.raises(IntegrationError, match="unknown Registry epoch"):
+        route.coordinator.evaluate_finalized_market(
+            market_id=market_id,
+            source_open_time_ms=readiness.latest_closed_5m_open_time_ms,
+            evaluation_mode=BoundaryMode.RECOVERY_CONTEXT_ONLY,
+        )
+
+
+def test_context_then_fresh_live_keeps_authorities_and_conflicts_strict(tmp_path: Path) -> None:
+    route = _route(tmp_path)
+    source = route.registry.active()
+    assert source is not None
+    current = _activate_successor(
+        route,
+        version="registry-2",
+        market=route.market.model_copy(update={"growth_mode": "HOT_ADD"}),
+    )
+    historical_open = route.latest.open_time_ms - 300_000
+    # The live freshness gate has no ready market at this observed boundary,
+    # even though the immutable predecessor row remains valid context.
+    route.readiness.latest_open_ms = historical_open
+    assert route.readiness.readiness_snapshot().ready_market_ids == ()
+    historical = route.coordinator.evaluate_finalized_market(
+        market_id=route.market.identity.market_id,
+        source_open_time_ms=historical_open,
+        evaluation_mode=BoundaryMode.RECOVERY_CONTEXT_ONLY,
+    )
+    assert historical.registry_version == source.version
+
+    next_index = route.latest.open_time_ms // 300_000 + 1
+    current_market = next(
+        item
+        for item in current.markets
+        if item.identity.market_id == route.market.identity.market_id
+    )
+    route.data.admit_rest_history(
+        market=current_market,
+        snapshot=[_payload(next_index, final=True)],
+        received_at=datetime.fromtimestamp(
+            ((next_index + 1) * 300_000 + 1_000) / 1000, UTC
+        ),
+    )
+    route.readiness.latest_open_ms = next_index * 300_000
+    live = route.coordinator.evaluate_finalized_market(
+        market_id=route.market.identity.market_id,
+        evaluation_mode=BoundaryMode.LIVE_ACTIONABLE,
+    )
+    assert live.registry_version == current.version
+    assert live.registry_hash == current.content_hash
+    assert live.evaluation_mode is BoundaryMode.LIVE_ACTIONABLE
+
+    route.readiness.observed_at_offset_ms += 1
+    with pytest.raises(IntegrationError, match="conflicts with current context"):
+        route.coordinator.evaluate_finalized_market(
+            market_id=route.market.identity.market_id,
+            source_open_time_ms=historical_open,
+            evaluation_mode=BoundaryMode.RECOVERY_CONTEXT_ONLY,
+        )
+
+
+def test_context_boundary_ahead_of_runtime_authority_fails_closed(
+    tmp_path: Path,
+) -> None:
+    route = _route(tmp_path)
+    market_id = route.market.identity.market_id
+    future_boundary = route.latest.open_time_ms
+    # Reconciliation-time authority lags the durable store: the bar at
+    # future_boundary is retained, but the runtime has not closed it yet, and
+    # LIVE admission is not actionable at the observed boundary.
+    route.readiness.latest_open_ms = future_boundary - 300_000
+    snapshot = route.readiness.readiness_snapshot()
+    assert snapshot.latest_closed_5m_open_time_ms < future_boundary
+    assert snapshot.ready_market_ids == ()
+
+    with pytest.raises(IntegrationError, match="ahead of runtime authority"):
+        route.coordinator.evaluate_finalized_market(
+            market_id=market_id,
+            source_open_time_ms=future_boundary,
+            evaluation_mode=BoundaryMode.RECOVERY_CONTEXT_ONLY,
+        )
+    assert route.evidence._connection.execute(
+        "SELECT COUNT(*) FROM immutable_records WHERE record_type='strategy_evaluation'"
+    ).fetchone()[0] == 0
+
+    historical = route.coordinator.evaluate_finalized_market(
+        market_id=market_id,
+        source_open_time_ms=snapshot.latest_closed_5m_open_time_ms,
+        evaluation_mode=BoundaryMode.RECOVERY_CONTEXT_ONLY,
+    )
+    assert historical.evaluation_mode is BoundaryMode.RECOVERY_CONTEXT_ONLY
+    with pytest.raises(IntegrationError, match="runtime readiness prohibits new activity"):
+        route.coordinator.evaluate_finalized_market(
+            market_id=market_id,
+            source_open_time_ms=snapshot.latest_closed_5m_open_time_ms,
+            evaluation_mode=BoundaryMode.LIVE_ACTIONABLE,
+        )
+
+
+def test_invalid_context_epoch_escapes_maintenance_and_poison_runtime(tmp_path: Path) -> None:
+    route = _route(tmp_path)
+    _activate_successor(
+        route,
+        version="registry-2",
+        market=route.market.model_copy(update={"growth_mode": "HOT_ADD"}),
+    )
+    # This is a durable source-provenance contradiction, not an operational
+    # public-data error that Bootstrap is allowed to isolate per market.
+    route.data.store.connection.execute(
+        "UPDATE closed_bars SET registry_version=? WHERE market_id=? AND interval='5m' "
+        "AND open_time_ms=?",
+        ("unknown-source-epoch", route.market.identity.market_id, route.latest.open_time_ms),
+    )
+    route.data.store.connection.commit()
+    bootstrap = _bootstrap_for_route(route)
+    bootstrap.runtime.on_maintenance_5m = bootstrap.on_maintenance_5m
+
+    with pytest.raises(IntegrationError, match="unknown Registry epoch"):
+        asyncio.run(bootstrap.runtime._run_maintenance(route.latest.open_time_ms + 300_000))
+    assert bootstrap.runtime._integrity_failed is True
+    assert bootstrap.runtime.health.callback_failures[-1].error_type == "IntegrationError"
+
+    async def harmless_maintenance(_boundary_open_time_ms: int) -> None:
+        return None
+
+    bootstrap.runtime.on_maintenance_5m = harmless_maintenance
+    asyncio.run(bootstrap.runtime._run_maintenance(route.latest.open_time_ms + 600_000))
+    assert bootstrap.runtime._integrity_failed is True
 
 
 def test_retained_formal_decision_uses_frozen_prefix_and_completes_idempotently(
@@ -3068,3 +3373,471 @@ def test_correlation_unavailability_is_not_a_live_formal_gate(tmp_path: Path) ->
     assert research.completed_signals() == ()
     assert research.build_report({}).raw_market_level.raw_shadow_order_count == 0
     assert len(SetupFamily) == 3
+
+
+# ---------------------------------------------------------------------------
+# Issue #112 Stage C: realistic composition acceptance.  The coverage below
+# drives the real MultiAssetPublicRuntime -> MultiAssetProductionBootstrap ->
+# MultiAssetShadowCoordinator -> MarketRegistryManager -> Data authority ->
+# EvidenceStore composition built by Bootstrap.compose; only the official
+# public HTTP transport is scripted.
+# ---------------------------------------------------------------------------
+
+
+class _PostResponseClock:
+    """Fixed composition clock that advances only across one L2 round trip.
+
+    Ordinary observations return ``base_ms`` so every runtime readiness
+    snapshot in one boundary pass is deterministic.  The scripted public
+    transport arms the clock, so the next observation -- the real adapter's
+    post-response wall clock -- returns ``base_ms + 3_000``.  A provider L2
+    timestamp stamped between the request start and that post-response wall
+    clock therefore passes the real freshness gate exactly as in production.
+    """
+
+    def __init__(self, base_ms: int) -> None:
+        self.base_ms = base_ms
+        self._post_response_pending = False
+
+    def arm_post_response(self) -> None:
+        self._post_response_pending = True
+
+    def now(self) -> datetime:
+        if self._post_response_pending:
+            self._post_response_pending = False
+            return datetime.fromtimestamp((self.base_ms + 3_000) / 1_000, UTC)
+        return datetime.fromtimestamp(self.base_ms / 1_000, UTC)
+
+
+class _ScriptedPublicTransport:
+    """Deterministic official-public transport carrying only l2Book responses."""
+
+    def __init__(self, clock: _PostResponseClock) -> None:
+        self.clock = clock
+        self.stale = True
+        self.l2_calls = 0
+
+    def __call__(self, _url: str, body: bytes, _timeout_seconds: float) -> bytes:
+        request = json.loads(body)
+        if request.get("type") == "candleSnapshot":
+            # The real one-minute provider may backfill closed 1m bars for an
+            # attached outcome stream; none are available yet in this window.
+            return json.dumps([]).encode()
+        if request.get("type") != "l2Book":
+            raise AssertionError(f"unexpected public request: {request!r}")
+        self.l2_calls += 1
+        provider_time_ms = self.clock.base_ms + (-600_000 if self.stale else 1_000)
+        self.clock.arm_post_response()
+        return json.dumps(
+            {
+                "coin": request["coin"],
+                "time": provider_time_ms,
+                "levels": [
+                    [{"px": "100", "sz": "20"}],
+                    [{"px": "100.1", "sz": "20"}],
+                ],
+            }
+        ).encode()
+
+
+@dataclass
+class _StageCComposition:
+    bootstrap: MultiAssetProductionBootstrap
+    route: Route
+    transport: _ScriptedPublicTransport
+    clock: _PostResponseClock
+    market_id: str
+    source_registry: RegistryVersion
+    active_registry: RegistryVersion
+    current_market: RegistryMarket
+    deferred_open_ms: int
+
+
+def _stage_c_deferred_boundary_composition(tmp_path: Path) -> _StageCComposition:
+    """Real composition with R1 history, ACTIVE successor R2, and boundary T durable.
+
+    Bootstrap.compose wires the real runtime, bootstrap, coordinator, Registry,
+    Data authority, and EvidenceStore; the only scripted element is the public
+    HTTP transport, whose stale L2 makes the real Scanner public-data path fail
+    at T through the established freshness failure path.
+    """
+    route = _route(tmp_path)
+    market_id = route.market.identity.market_id
+    source = route.registry.active()
+    assert source is not None
+    active = _activate_successor(
+        route,
+        version="registry-2",
+        market=route.market.model_copy(update={"growth_mode": "HOT_ADD"}),
+    )
+    current_market = next(
+        item for item in active.markets if item.identity.market_id == market_id
+    )
+    deferred_open_ms = route.latest.open_time_ms + 300_000
+    route.data.admit_rest_history(
+        market=current_market,
+        snapshot=[_payload(deferred_open_ms // 300_000, final=False)],
+        received_at=datetime.fromtimestamp((deferred_open_ms + 300_001) / 1_000, UTC),
+    )
+    clock = _PostResponseClock(base_ms=deferred_open_ms + 305_000)
+    transport = _ScriptedPublicTransport(clock)
+    bootstrap = MultiAssetProductionBootstrap.compose(
+        registry=route.registry,
+        data_authority=route.data,
+        public_client=HyperliquidPublicClient(post=transport),
+        evidence_db_path=tmp_path / "stage-c-evidence.sqlite",
+        cost_model=CostModel("cost-1", Decimal(), Decimal(), Decimal("2")),
+        release_sha=RELEASE_SHA,
+        clock=clock.now,
+        sleep=lambda _: asyncio.sleep(0),
+    )
+    bootstrap.runtime.health.data_ready = True
+    return _StageCComposition(
+        bootstrap=bootstrap,
+        route=route,
+        transport=transport,
+        clock=clock,
+        market_id=market_id,
+        source_registry=source,
+        active_registry=active,
+        current_market=current_market,
+        deferred_open_ms=deferred_open_ms,
+    )
+
+
+def _stage_c_strategy_payloads(
+    bootstrap: MultiAssetProductionBootstrap,
+) -> list[dict[str, object]]:
+    return [
+        json.loads(row[0])
+        for row in bootstrap.evidence._connection.execute(
+            "SELECT payload_json FROM immutable_records "
+            "WHERE record_type='strategy_evaluation' "
+            "ORDER BY json_extract(payload_json, '$.source_open_time_ms')"
+        )
+    ]
+
+
+def _stage_c_authority_counts(
+    bootstrap: MultiAssetProductionBootstrap,
+) -> dict[str, int]:
+    connection = bootstrap.evidence._connection
+
+    def count(sql: str) -> int:
+        return int(connection.execute(sql).fetchone()[0])
+
+    return {
+        "scanner_evidence": count("SELECT COUNT(*) FROM scanner_evidence"),
+        "strategy_evaluations": count("SELECT COUNT(*) FROM strategy_evaluations"),
+        "candidates": count("SELECT COUNT(*) FROM candidates"),
+        "formal_signals": count("SELECT COUNT(*) FROM formal_signals"),
+        "shadow_orders": count("SELECT COUNT(*) FROM shadow_orders"),
+        "formalization_dispositions": count(
+            "SELECT COUNT(*) FROM formalization_dispositions"
+        ),
+        "notifications": count("SELECT COUNT(*) FROM notification_outbox"),
+    }
+
+
+def test_stage_c_predecessor_context_reconciles_under_live_public_data_defer(
+    tmp_path: Path,
+) -> None:
+    """Attack A: strictly-prior durable reconciliation under a live public-data defer.
+
+    R1-era closed-5m evidence is retained by the real Data authority, the
+    successor R2 is the ACTIVE Registry, and no Strategy authority exists yet.
+    The real runtime barrier wakes the real Bootstrap at the current boundary T;
+    the real HyperliquidPublicPlanningAdapter rejects the stale scripted L2
+    through the established public-data failure path, so no LIVE
+    Scanner/Strategy/Formal authority is created for T -- while the same
+    barrier's maintenance lane reconciles every strictly-prior checkpoint as
+    RECOVERY_CONTEXT_ONLY under its source R1 epoch with current
+    reconciliation-time readiness provenance, without poisoning runtime
+    integrity.  The live freshness failure therefore blocks new LIVE activity
+    without turning legitimate strictly-prior durable reconciliation into
+    prohibited new activity.
+    """
+    composition = _stage_c_deferred_boundary_composition(tmp_path)
+    bootstrap = composition.bootstrap
+    route = composition.route
+    market_id = composition.market_id
+    source = composition.source_registry
+    active = composition.active_registry
+    deferred_open_ms = composition.deferred_open_ms
+
+    # A1: durable historical evidence retains its authorizing R1 epoch, and the
+    # current boundary row is bound to the ACTIVE successor R2.
+    historical_rows = route.closed_store.connection.execute(
+        "SELECT registry_version, registry_content_hash FROM closed_bars "
+        "WHERE market_id=? AND interval='5m' AND open_time_ms<?",
+        (market_id, deferred_open_ms),
+    ).fetchall()
+    assert historical_rows
+    assert all(row == (source.version, source.content_hash) for row in historical_rows)
+    # A2: the later/current Registry epoch is ACTIVE.
+    assert route.registry.active() is not None
+    assert route.registry.active().version == active.version
+    # A3: initially zero retained StrategyEvaluation authority.
+    assert _stage_c_authority_counts(bootstrap)["strategy_evaluations"] == 0
+
+    # A4/A5: the real barrier wake; the live Scanner public-data path fails
+    # stale, so the live application lane cannot complete at T.
+    asyncio.run(bootstrap.runtime.process_cohort_boundary(deferred_open_ms))
+    assert composition.transport.l2_calls == 1
+    assert _stage_c_authority_counts(bootstrap)["scanner_evidence"] == 0
+
+    # A6: strictly-prior historical Strategy reconciliation succeeded as
+    # RECOVERY_CONTEXT_ONLY despite the live defer at T.
+    payloads = _stage_c_strategy_payloads(bootstrap)
+    historical = [44 * 300_000 + offset * 300_000 for offset in range(20)]
+    assert [item["source_open_time_ms"] for item in payloads] == historical
+    assert all(
+        item["evaluation_mode"] == BoundaryMode.RECOVERY_CONTEXT_ONLY.value
+        for item in payloads
+    )
+    assert not any(
+        item["evaluation_mode"] == BoundaryMode.LIVE_ACTIONABLE.value
+        for item in payloads
+    )
+
+    # A7: source historical Registry epoch retained; current reconciliation-time
+    # runtime readiness provenance retained.
+    assert all(item["registry_version"] == source.version for item in payloads)
+    assert all(item["registry_hash"] == source.content_hash for item in payloads)
+    expected_readiness = RuntimeReadinessSnapshot.create(
+        registry_version=active.version,
+        registry_content_hash=active.content_hash,
+        data_ready=True,
+        ready_market_ids=(market_id,),
+        failed_market_ids=(),
+        latest_closed_5m_open_time_ms=deferred_open_ms,
+        observed_at_ms=deferred_open_ms + 305_000,
+    )
+    assert all(
+        item["runtime_readiness_hash"] == expected_readiness.snapshot_hash
+        for item in payloads
+    )
+
+    # A8: zero retrospective Scanner run/candidate authority, Formal
+    # signal/disposition, ShadowOrder, or real notification.
+    assert _stage_c_authority_counts(bootstrap) == {
+        "scanner_evidence": 0,
+        "strategy_evaluations": 20,
+        "candidates": 0,
+        "formal_signals": 0,
+        "shadow_orders": 0,
+        "formalization_dispositions": 0,
+        "notifications": 0,
+    }
+
+    # A9: no escaping IntegrationError for a valid known prior-active epoch;
+    # runtime integrity remains unpoisoned for this valid reconciliation.
+    assert bootstrap.runtime._integrity_failed is False
+    assert bootstrap.runtime.health.callback_failures == []
+    assert bootstrap.runtime.health.failed_markets == set()
+    assert bootstrap.runtime.health.nonrecoverable_markets == set()
+
+
+def test_stage_c_next_fresh_live_exactly_once_and_duplicate_wake_idempotent(
+    tmp_path: Path,
+) -> None:
+    """Attacks B and C: fresh LIVE boundary exactly once; duplicate wake is a no-op.
+
+    Continuing from the deferred-boundary composition, the scripted public
+    transport recovers, the next fresh closed-5m boundary is admitted under the
+    ACTIVE Registry, and the real runtime barrier processes it LIVE through the
+    real adapter: the provider L2 timestamp sits between the request start and
+    the post-response injected wall clock, Scanner runs exactly once for the
+    boundary, Strategy is evaluated exactly once for the current boundary (the
+    deferred predecessor reconciles as context in the same pass), and the
+    evaluation binds the current ACTIVE Registry with its exact evaluation-time
+    readiness hash.  A later duplicate wake for the same completed boundary --
+    under an advanced wall clock with a different readiness snapshot hash --
+    creates no second Scanner/Strategy/Formal/Shadow authority and no Bootstrap
+    failure: durable retained authority, not the changed snapshot, decides the
+    work is already done.  The real Bootstrap BoundaryReport returned through
+    the Runtime application callback is captured for both wakes by an
+    observer-only wrapper, so a failure Bootstrap swallows into
+    BoundaryReport.failures cannot false-pass as clean idempotency.
+    """
+    composition = _stage_c_deferred_boundary_composition(tmp_path)
+    bootstrap = composition.bootstrap
+    route = composition.route
+    market_id = composition.market_id
+    active = composition.active_registry
+    deferred_open_ms = composition.deferred_open_ms
+    connection = bootstrap.evidence._connection
+
+    # Phase A state: the live boundary T was deferred by the stale public L2 and
+    # strictly-prior history reconciled as context.
+    asyncio.run(bootstrap.runtime.process_cohort_boundary(deferred_open_ms))
+    assert composition.transport.l2_calls == 1
+    assert not any(
+        item["evaluation_mode"] == BoundaryMode.LIVE_ACTIONABLE.value
+        for item in _stage_c_strategy_payloads(bootstrap)
+    )
+
+    # Observer-only instrumentation, installed before the fresh LIVE B pass:
+    # wrap the REAL Bootstrap callback that Bootstrap.compose installed on the
+    # real Runtime.  The wrapper delegates to that exact real callback, awaits
+    # it, records the real BoundaryReport it returns, and returns that same
+    # report unchanged.  It adds no authority, no durable state, and no
+    # exception handling: Bootstrap converts a caught IntegrationError into
+    # BoundaryReport.failures, which durable counts and Runtime health alone
+    # can never observe.
+    real_finalized_callback = bootstrap.runtime.on_finalized_5m
+    assert real_finalized_callback is not None
+    captured_reports: list[BoundaryReport] = []
+
+    async def observing_finalized_5m(bar: ClosedBar, mode: BoundaryMode) -> object:
+        result = real_finalized_callback(bar, mode)
+        if isinstance(result, Awaitable):
+            result = await result
+        assert isinstance(result, BoundaryReport)
+        captured_reports.append(result)
+        return result
+
+    bootstrap.runtime.on_finalized_5m = observing_finalized_5m
+
+    # B1: advance to the next valid fresh closed-5m boundary under the ACTIVE
+    # Registry, with the public data path recovered.
+    next_open_ms = deferred_open_ms + 300_000
+    composition.transport.stale = False
+    route.data.admit_rest_history(
+        market=composition.current_market,
+        snapshot=[_payload(next_open_ms // 300_000, final=False)],
+        received_at=datetime.fromtimestamp((next_open_ms + 300_001) / 1_000, UTC),
+    )
+    composition.clock.base_ms = next_open_ms + 305_000
+
+    # B2/B3: the real barrier processes the fresh boundary LIVE through the real
+    # HyperliquidPublicPlanningAdapter (provider time between request start and
+    # the post-response injected wall clock).
+    asyncio.run(bootstrap.runtime.process_cohort_boundary(next_open_ms))
+    assert composition.transport.l2_calls >= 2
+    # Exactly one captured report for the fresh LIVE wake, observed through the
+    # real Runtime barrier callback.  This is the report Bootstrap actually
+    # returned -- including any failure it swallowed into BoundaryReport.failures
+    # instead of raising -- so a false pass through silently-caught failures is
+    # impossible.
+    assert len(captured_reports) == 1
+    live_report = captured_reports[0]
+    assert isinstance(live_report, BoundaryReport)
+    assert live_report.boundary_open_time_ms == next_open_ms
+    assert live_report.evaluation_mode == BoundaryMode.LIVE_ACTIONABLE
+    assert live_report.failures == ()
+    assert live_report.scanner_run_count == 1
+    expected_live_readiness = RuntimeReadinessSnapshot.create(
+        registry_version=active.version,
+        registry_content_hash=active.content_hash,
+        data_ready=True,
+        ready_market_ids=(market_id,),
+        failed_market_ids=(),
+        latest_closed_5m_open_time_ms=next_open_ms,
+        observed_at_ms=next_open_ms + 305_000,
+    )
+    scanner_payloads = [
+        json.loads(row[0])
+        for row in connection.execute(
+            "SELECT payload_json FROM immutable_records "
+            "WHERE record_type='scanner_evidence'"
+        )
+    ]
+    assert len(scanner_payloads) == 1
+    assert scanner_payloads[0]["scan_boundary_open_time_ms"] == next_open_ms
+    assert (
+        scanner_payloads[0]["runtime_readiness_hash"]
+        == expected_live_readiness.snapshot_hash
+    )
+    payloads = _stage_c_strategy_payloads(bootstrap)
+    live_payloads = [
+        item
+        for item in payloads
+        if item["evaluation_mode"] == BoundaryMode.LIVE_ACTIONABLE.value
+    ]
+    assert len(live_payloads) == 1
+    live = live_payloads[0]
+    assert live["source_open_time_ms"] == next_open_ms
+    assert live["registry_version"] == active.version
+    assert live["registry_hash"] == active.content_hash
+    assert live["runtime_readiness_hash"] == expected_live_readiness.snapshot_hash
+    # The deferred predecessor boundary reconciled exactly once as context in
+    # the same live pass, bound to its own source epoch (R2 for T's rows).
+    recovered = [
+        item for item in payloads if item["source_open_time_ms"] == deferred_open_ms
+    ]
+    assert len(recovered) == 1
+    assert recovered[0]["evaluation_mode"] == BoundaryMode.RECOVERY_CONTEXT_ONLY.value
+    assert recovered[0]["registry_version"] == active.version
+    # No Bootstrap failure: runtime integrity and health remain clean.
+    assert bootstrap.runtime._integrity_failed is False
+    assert bootstrap.runtime.health.callback_failures == []
+
+    # C1: record durable authority counts and IDs for Scanner, Strategy,
+    # Formal, Shadow, disposition, and notification authority.
+    before_counts = _stage_c_authority_counts(bootstrap)
+    before_scanner_ids = tuple(
+        row[0]
+        for row in connection.execute("SELECT record_id FROM scanner_evidence ORDER BY record_id")
+    )
+    before_strategy_ids = tuple(
+        row[0]
+        for row in connection.execute(
+            "SELECT record_id FROM strategy_evaluations ORDER BY record_id"
+        )
+    )
+
+    # C2: advance the injected wall clock so the next readiness snapshot has a
+    # different observed_at_ms and snapshot hash.
+    before_snapshot = bootstrap.runtime.readiness_snapshot()
+    assert before_snapshot.snapshot_hash == expected_live_readiness.snapshot_hash
+    composition.clock.base_ms += 5_000
+    after_snapshot = bootstrap.runtime.readiness_snapshot()
+    assert after_snapshot.observed_at_ms != before_snapshot.observed_at_ms
+    assert after_snapshot.snapshot_hash != before_snapshot.snapshot_hash
+
+    # C3: duplicate wake for the same already-completed boundary.
+    asyncio.run(bootstrap.runtime.process_cohort_boundary(next_open_ms))
+
+    # C3-report: exactly one ADDITIONAL captured report for the duplicate wake.
+    # The real Bootstrap genuinely re-processed the same boundary, and its
+    # actual BoundaryReport must be clean: no failure was swallowed into
+    # BoundaryReport.failures (a silently-caught Strategy authority conflict
+    # would land exactly there, invisible to durable counts and Runtime health),
+    # and no Scanner was re-run for the already-retained boundary.
+    assert len(captured_reports) == 2
+    duplicate_report = captured_reports[1]
+    assert isinstance(duplicate_report, BoundaryReport)
+    assert duplicate_report.boundary_open_time_ms == next_open_ms
+    assert duplicate_report.evaluation_mode == BoundaryMode.LIVE_ACTIONABLE
+    assert duplicate_report.failures == ()
+    assert duplicate_report.scanner_run_count == 0
+
+    # C4: durable-state-derived idempotency -- no new Scanner/Strategy/Formal/
+    # Shadow authority, no conflict, no Bootstrap failure.  Still-pending Formal
+    # work (if any) may legitimately retry, but no new authority may appear.
+    assert _stage_c_authority_counts(bootstrap) == before_counts
+    assert tuple(
+        row[0]
+        for row in connection.execute("SELECT record_id FROM scanner_evidence ORDER BY record_id")
+    ) == before_scanner_ids
+    assert tuple(
+        row[0]
+        for row in connection.execute(
+            "SELECT record_id FROM strategy_evaluations ORDER BY record_id"
+        )
+    ) == before_strategy_ids
+    final_live = [
+        item
+        for item in _stage_c_strategy_payloads(bootstrap)
+        if item["evaluation_mode"] == BoundaryMode.LIVE_ACTIONABLE.value
+    ]
+    assert len(final_live) == 1
+    assert final_live[0]["runtime_readiness_hash"] == (
+        expected_live_readiness.snapshot_hash
+    )
+    assert bootstrap.runtime._integrity_failed is False
+    assert bootstrap.runtime.health.callback_failures == []
+    assert bootstrap.runtime.health.nonrecoverable_markets == set()
+    assert route.registry.active() is not None
+    assert route.registry.active().version == active.version

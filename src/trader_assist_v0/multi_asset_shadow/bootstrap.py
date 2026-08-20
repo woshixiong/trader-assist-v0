@@ -142,7 +142,9 @@ class MultiAssetProductionBootstrap:
         outcome = outcome_adapter.restore_engine(
             now_ms=_clock_ms(clock), provider=one_minute
         )
-        planning = HyperliquidPublicPlanningAdapter(public_client)
+        planning = HyperliquidPublicPlanningAdapter(
+            public_client, wall_clock_ms=lambda: _clock_ms(clock)
+        )
         runtime = MultiAssetPublicRuntime(
             registry=registry,
             authority=data_authority,

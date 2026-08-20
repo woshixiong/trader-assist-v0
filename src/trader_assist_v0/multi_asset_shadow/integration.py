@@ -1465,6 +1465,48 @@ class MultiAssetShadowCoordinator:
             raise IntegrationError("runtime is disconnected or data is not ready")
         return snapshot
 
+    def _context_readiness(self) -> RuntimeReadinessSnapshot:
+        """Capture current reconciliation observation without admitting new activity."""
+        snapshot = self._runtime_readiness.readiness_snapshot()
+        active = self._active_registry()
+        if (
+            snapshot.registry_version != active.version
+            or snapshot.registry_content_hash != active.content_hash
+        ):
+            raise IntegrationError("runtime readiness does not bind active Registry authority")
+        return snapshot
+
+    def _source_registry_epoch(
+        self,
+        *,
+        version: str,
+        content_hash: str,
+        market_id: str,
+    ) -> RegistryVersion:
+        """Resolve one retained source epoch, never a merely staged Registry."""
+        active = self._active_registry()
+        if version == active.version:
+            epoch = active
+        else:
+            try:
+                self._registry.load_version(version)
+            except RegistryError as exc:
+                raise IntegrationError("source bar references an unknown Registry epoch") from exc
+            try:
+                prior_epoch = self._registry.prior_active(version)
+            except RegistryError as exc:
+                raise IntegrationError("source bar Registry epoch is invalid") from exc
+            if prior_epoch is None:
+                raise IntegrationError(
+                    "source bar Registry epoch was never the live authority"
+                )
+            epoch = prior_epoch
+        if content_hash != epoch.content_hash:
+            raise IntegrationError("source bar Registry hash conflicts with its epoch")
+        if market_id not in {item.identity.market_id for item in epoch.markets}:
+            raise IntegrationError("source bar market is absent from its Registry epoch")
+        return epoch
+
     def _market(
         self,
         market_id: str,
@@ -1530,12 +1572,55 @@ class MultiAssetShadowCoordinator:
             raise IntegrationError("selected 5m boundary is not bound to active Registry authority")
         return all_values[: last_index + 1]
 
+    def _context_retained_closed_5m(
+        self,
+        *,
+        market_id: str,
+        source_open_time_ms: int | None,
+        readiness: RuntimeReadinessSnapshot,
+    ) -> tuple[RegistryMarket, RegistryVersion, tuple[ClosedBar, ...]]:
+        """Load immutable context under its selected bar's source Registry epoch."""
+        rows = self._data.store.connection.execute(
+            """SELECT payload_json, registry_version, registry_content_hash
+               FROM closed_bars
+               WHERE market_id = ? AND interval = '5m'
+               ORDER BY open_time_ms""",
+            (market_id,),
+        ).fetchall()
+        if not rows:
+            raise IntegrationError("market has no retained provider-finalized 5m evidence")
+        all_values = tuple(ClosedBar.model_validate_json(row[0]) for row in rows)
+        requested = (
+            readiness.latest_closed_5m_open_time_ms
+            if source_open_time_ms is None
+            else source_open_time_ms
+        )
+        if requested > readiness.latest_closed_5m_open_time_ms:
+            raise IntegrationError("requested Strategy boundary is ahead of runtime authority")
+        indexes = tuple(
+            index for index, value in enumerate(all_values) if value.open_time_ms <= requested
+        )
+        if not indexes or all_values[indexes[-1]].open_time_ms != requested:
+            raise IntegrationError("requested closed 5m boundary is not retained")
+        selected_index = indexes[-1]
+        selected = rows[selected_index]
+        source_epoch = self._source_registry_epoch(
+            version=str(selected[1]),
+            content_hash=str(selected[2]),
+            market_id=market_id,
+        )
+        market = next(
+            item for item in source_epoch.markets if item.identity.market_id == market_id
+        )
+        return market, source_epoch, all_values[: selected_index + 1]
+
     def _resolve_scanner_linkage(
         self,
         *,
         market_id: str,
         linkage: ScannerLinkage | None,
         candidate_record_id: str | None = None,
+        registry_epoch: RegistryVersion | None = None,
     ) -> tuple[ScannerLinkage | None, EvidenceCandidate | None]:
         if linkage is None:
             if candidate_record_id is not None:
@@ -1559,7 +1644,7 @@ class MultiAssetShadowCoordinator:
         candidate = matches[0]
         payload = candidate.payload
         scan = self._evidence.get(str(payload.get("scanner_evidence_id")))
-        active = self._active_registry()
+        authority_epoch = registry_epoch or self._active_registry()
         content = payload.get("candidate_content")
         observations = None if not isinstance(scan, ScannerEvidence) else scan.payload.get(
             "observations"
@@ -1569,8 +1654,8 @@ class MultiAssetShadowCoordinator:
             or scan.payload.get("scan_id") != payload.get("scan_id")
             or scan.payload.get("scanner_version") != SCANNER_VERSION
             or scan.payload.get("parameter_version") != PARAMETER_VERSION
-            or scan.payload.get("registry_version") != active.version
-            or scan.payload.get("registry_hash") != active.content_hash
+            or scan.payload.get("registry_version") != authority_epoch.version
+            or scan.payload.get("registry_hash") != authority_epoch.content_hash
             or payload.get("market_id") != market_id
             or payload.get("state") != linkage.state.value
             or payload.get("scanner_version") != linkage.scanner_version
@@ -1614,7 +1699,7 @@ class MultiAssetShadowCoordinator:
         linkage = decision.scanner_linkage
         if linkage is None:
             return None
-        matches: set[str] = set()
+        matches: dict[str, RegistryVersion] = {}
         for record_id in _record_ids(self._evidence, "strategy_evaluation"):
             record = self._evidence.get(record_id)
             if not isinstance(record, StrategyEvaluation):
@@ -1632,15 +1717,25 @@ class MultiAssetShadowCoordinator:
                     and prior.scanner_linkage == linkage
                     and isinstance(candidate_id, str)
                 ):
-                    matches.add(candidate_id)
+                    epoch = self._source_registry_epoch(
+                        version=str(record.payload["registry_version"]),
+                        content_hash=str(record.payload["registry_hash"]),
+                        market_id=decision.market_id,
+                    )
+                    prior_epoch = matches.setdefault(candidate_id, epoch)
+                    if prior_epoch != epoch:
+                        raise IntegrationError(
+                            "Strategy decision has conflicting causal Registry authority"
+                        )
         if len(matches) > 1:
             raise IntegrationError(
                 "Strategy decision lacks one frozen causal Candidate record"
             )
         if matches:
-            candidate_id = next(iter(matches))
+            candidate_id, registry_epoch = next(iter(matches.items()))
         elif current_linkage == linkage and current_candidate is not None:
             candidate_id = current_candidate.record_id
+            registry_epoch = self._active_registry()
         else:
             raise IntegrationError(
                 "Strategy decision lacks one frozen causal Candidate record"
@@ -1649,6 +1744,7 @@ class MultiAssetShadowCoordinator:
             market_id=decision.market_id,
             linkage=linkage,
             candidate_record_id=candidate_id,
+            registry_epoch=registry_epoch,
         )
         return candidate_id
 
@@ -1701,19 +1797,28 @@ class MultiAssetShadowCoordinator:
             raise IntegrationError(
                 "production strategy authority requires canonical ZoneBook input"
             )
-        readiness = self._readiness()
-        market = self._market(market_id, readiness=readiness)
         if evaluation_mode is not BoundaryMode.LIVE_ACTIONABLE and (
             scanner_linkage is not None or scanner_candidate_record_id is not None
         ):
             raise IntegrationError(
                 "context-only Strategy evaluation cannot receive Scanner linkage"
             )
-        retained = self._retained_closed_5m(
-            market,
-            readiness=readiness,
-            source_open_time_ms=source_open_time_ms,
-        )
+        if evaluation_mode is BoundaryMode.LIVE_ACTIONABLE:
+            readiness = self._readiness()
+            market = self._market(market_id, readiness=readiness)
+            retained = self._retained_closed_5m(
+                market,
+                readiness=readiness,
+                source_open_time_ms=source_open_time_ms,
+            )
+            authority_registry = self._active_registry()
+        else:
+            readiness = self._context_readiness()
+            market, authority_registry, retained = self._context_retained_closed_5m(
+                market_id=market_id,
+                readiness=readiness,
+                source_open_time_ms=source_open_time_ms,
+            )
         bars_5m = tuple(self._strategy_bar(item) for item in retained)
         bars_15m = aggregate_closed_5m_causally(bars_5m, minutes=15)
         bars_1h = aggregate_closed_5m_causally(bars_5m, minutes=60)
@@ -1727,12 +1832,11 @@ class MultiAssetShadowCoordinator:
             linkage=scanner_linkage,
             candidate_record_id=scanner_candidate_record_id,
         )
-        active = self._active_registry()
         evaluation_boundary_ms = retained[-1].close_time_ms + 1
         authority_slot = {
             "strategy_version": STRATEGY_VERSION,
             "parameter_version": PARAMETER_VERSION,
-            "registry_version": active.version,
+            "registry_version": authority_registry.version,
             "market_id": market_id,
             "source_interval": "5m",
             "source_open_time_ms": retained[-1].open_time_ms,
@@ -1786,7 +1890,7 @@ class MultiAssetShadowCoordinator:
                 "evaluation_id": evaluation_id,
                 "latest_closed_5m_hash": retained[-1].canonical_hash,
                 "runtime_readiness_hash": readiness.snapshot_hash,
-                "registry_hash": active.content_hash,
+                "registry_hash": authority_registry.content_hash,
                 "release_sha": self._release_sha,
                 "authoritative_input_hash": authoritative_input_hash,
                 "authoritative_input": authoritative_input,
@@ -1845,8 +1949,8 @@ class MultiAssetShadowCoordinator:
             source_open_time_ms=retained[-1].open_time_ms,
             evaluation_boundary_ms=evaluation_boundary_ms,
             runtime_readiness_hash=readiness.snapshot_hash,
-            registry_version=active.version,
-            registry_hash=active.content_hash,
+            registry_version=authority_registry.version,
+            registry_hash=authority_registry.content_hash,
             strategy_version=STRATEGY_VERSION,
             parameter_version=PARAMETER_VERSION,
             release_sha=self._release_sha,
@@ -1878,8 +1982,8 @@ class MultiAssetShadowCoordinator:
             evaluation_record_hash=record.canonical_hash,
             market_id=market_id,
             latest_closed_5m_hash=retained[-1].canonical_hash,
-            registry_version=active.version,
-            registry_hash=active.content_hash,
+            registry_version=authority_registry.version,
+            registry_hash=authority_registry.content_hash,
             strategy_version=STRATEGY_VERSION,
             parameter_version=PARAMETER_VERSION,
             evaluation_boundary_ms=evaluation_boundary_ms,
