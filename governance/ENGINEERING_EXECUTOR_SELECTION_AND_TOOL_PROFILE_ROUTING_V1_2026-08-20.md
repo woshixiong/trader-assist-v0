@@ -5,7 +5,7 @@
 **Repository:** `woshixiong/trader-assist-v0`  
 **Scope:** task-level selection and switching among approved L2 coding executors/models, plus automatic routing to the selected tool's GitHub-resident usage profile.
 
-This file is a narrow execution companion to the canonical Unified Engineering Governance, Mandatory Engineering Preflight, Research/Evidence/Decision Method and existing executor-specific profiles. It does not change product/strategy/runtime semantics and grants no Mark Ready, merge, deployment, runtime/cloud mutation, credential/private-API, signing/wallet, exchange-write, order-submission, cancellation or trading authority.
+This file is the stable switching layer. It must not absorb model-version-specific tuning. Current model details belong in the selected executor/model profile. It does not change product/strategy/runtime semantics and grants no Mark Ready, merge, deployment, runtime/cloud mutation, credential/private-API, signing/wallet, exchange-write, order-submission, cancellation or trading authority.
 
 ---
 
@@ -21,8 +21,6 @@ DEEPSEEK_HARNESS
 
 No current issue, backlog item, old tooling-priority file, historical PR body or prior chat permanently assigns all future engineering work to one of them.
 
-The binding selection rule is:
-
 ```text
 USER_CURRENT_SELECTION = FINAL TASK-LEVEL EXECUTOR/MODEL CHOICE
 ENGINEERING_CONTROL = MAY RECOMMEND, MUST FREEZE AND ENCODE THE USER'S CURRENT CHOICE
@@ -30,55 +28,45 @@ GLOBAL_FIXED_PRIMARY_WRITER = NO
 STALE_EXECUTOR_SEQUENCING_SNAPSHOT = NON_BINDING FOR A NEW TASK
 ```
 
-If the user has already selected an executor/model for the current coherent task/stage, Engineering must use that selection until the user changes it or a real capability/safety blocker forces `SAFE_STOP` and a new route decision.
+If the user has selected an executor/model for the current coherent task/stage, Engineering uses that selection until the user changes it or a real capability/safety blocker forces `SAFE_STOP` and a new route decision.
 
-If the user has not yet selected an executor/model for a material Writer stage, Engineering may recommend the capability/cost/quality fit, but it must not silently override an explicit user choice or treat an old sequencing snapshot as current authority.
+If the user has not yet selected one for a material Writer stage, Engineering may recommend the capability/cost/quality fit. It must not silently override an explicit user choice or treat an old sequencing snapshot as current authority.
 
-A current user selection may supersede only the executor/model-routing field of an older task snapshot. It does **not** supersede technical acceptance criteria, authority invariants, repair budget, allowed scope, tests, exact-artifact review, CI, independent Review or retained user gates.
+A current user selection changes only executor/model routing. It does not supersede technical acceptance criteria, authority invariants, repair budget, allowed scope, tests, exact-artifact review, CI, independent Review or retained user gates.
 
 ---
 
 ## 2. Switching semantics
 
-"Free switching" means the user may select any approved peer executor for each bounded task or coherent stage. It does **not** mean competing Writers may mutate the same authority concurrently.
-
-Preserve:
+"Free switching" means the user may select any approved peer executor for each bounded task or coherent stage. It does not mean competing Writers may mutate the same authority concurrently.
 
 ```text
 ONE_PRIMARY_WRITER_PER_COHERENT_SHARED_AUTHORITY_STAGE=YES
 COMPETING_WRITERS_ON_SAME_ARTIFACT=NO
 ```
 
-If the user switches executor/model between coherent stages:
+If switching between coherent stages:
 
 ```text
 FREEZE EXACT CURRENT ARTIFACT / HEAD / DIRTY HASH
-→ CLOSE OR PAUSE THE OLD WRITER CONTEXT
-→ RE-RUN NORMAL L1 PREFLIGHT FOR THE NEXT STAGE
-→ SELECT THE NEW TOOL PROFILE
-→ ISSUE ONE COMPLETE TASK PACKET FOR THE NEW EXECUTOR
+→ CLOSE OR PAUSE OLD WRITER CONTEXT
+→ RE-RUN NORMAL L1 PREFLIGHT FOR NEXT STAGE
+→ SELECT NEW EXECUTOR + MODEL
+→ LOAD SELECTED TOOL/FAMILY PROFILE + CURRENT MODEL PROFILE
+→ ISSUE ONE COMPLETE TASK PACKET
 → NEW EXECUTOR ACKNOWLEDGES EXACT WORKTREE / ARTIFACT / AUTHORITY
 → EXECUTE
 ```
 
-If the user requests a switch in the middle of a shared-authority mutation stage, Engineering must first choose a safe handoff boundary. Do not leave two Writers live against the same worktree/branch or make the user manually reconstruct state.
+If a switch is requested mid-mutation stage, Engineering first establishes a safe handoff boundary. Never leave two Writers active on the same worktree/branch or make the user manually reconstruct authoritative state.
 
-A Writer may be reused in the same session only where that tool's accepted profile permits it and all of the following remain unchanged:
-
-- role;
-- coherent stage;
-- worktree/artifact;
-- authority;
-- task objective;
-- independence is not required.
-
-A new session is required when independence is required or when task/role/worktree/authority/material stage changes materially.
+A session may be reused only where the selected tool profile permits it and role, coherent stage, worktree/artifact, authority, objective and required independence remain compatible.
 
 ---
 
-## 3. Automatic tool-profile routing
+## 3. Automatic profile routing
 
-After the user/existing stage selects the executor/model, Engineering Control must automatically read the corresponding GitHub profile before writing the downstream command/prompt.
+After the executor/model is selected, Engineering Control automatically reads the corresponding GitHub profile before generating the downstream command/prompt.
 
 ### 3.1 DeepSeek Harness selected
 
@@ -88,61 +76,67 @@ Read and apply:
 - `governance/DEEPSEEK_HARNESS_MANDATORY_USAGE_RULES_V1_2026-08-18.md`;
 - `governance/DEEPSEEK_HARNESS_NATIVE_HEADLESS_ONE_PASTE_WORKFLOW_V1_2026-08-20.md`.
 
-Default operator UX remains the merged one-paste native-headless route when applicable.
+Default bounded operator UX remains the merged one-paste native-headless route when applicable.
 
 ### 3.2 Trae + GLM selected
 
 Read and apply:
 
-- `governance/TRAE_GLM_ENGINEERING_USAGE_PROFILE_V1_2026-08-20.md`;
-- the canonical high-constraint GLM baseline in `governance/UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V1_2026-08-17.md` section 29;
+- `governance/TRAE_GLM_ENGINEERING_USAGE_PROFILE_V1_2026-08-20.md` — stable version-independent family/tool core;
+- `governance/TRAE_GLM_CURRENT_MODEL_PROFILE.md` — refreshable current GLM model snapshot/delta;
+- section 29 of `governance/UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V1_2026-08-17.md`;
 - current task-specific Product/Strategy/Operations/Security authority.
-
-In the current workflow:
 
 ```text
 EXECUTOR=TRAE
 MODEL=GLM-family model explicitly selected by the user
 ```
 
-The user's current model label is `GLM-5.3` in the present Trae surface, but that label is a **current snapshot**, not permanent architecture. GLM is a model, not a fourth executor authority.
+GLM is a model, not a fourth executor authority.
 
 ### 3.3 Codex selected
 
-Until a later Codex-specific profile is independently accepted and merged, use the canonical Codex/session/token rules already present in the Unified Engineering Governance and the normal one-paste Terminal rule.
+Until a later Codex-specific profile is independently accepted and merged, use the canonical Codex/session/token rules already present in Unified Engineering Governance and the normal one-paste Terminal rule.
 
-Draft PR #111 is a research/proposal input only and is **not** canonical authority while it remains unmerged. When Codex work resumes, reconcile/retarget that work against live `main` before any later acceptance/merge.
+Draft PR #111 remains proposal/history input only until reconciled against current `main`, independently accepted and merged.
 
-### 3.4 Model-version refresh rule
+---
 
-Tool profiles must not freeze one model generation indefinitely.
+## 4. Model-version refresh rule — switching architecture stays stable
 
-For any selected executor whose model can change over time:
+Tool/executor switching is intentionally separated from model-version tuning.
 
 ```text
-VERSION_INDEPENDENT_TOOL_WORKFLOW_CORE = STABLE BY DEFAULT
-CURRENT_MODEL_SNAPSHOT = REFRESHABLE
+EXECUTOR_SWITCHING_ARCHITECTURE = STABLE BY DEFAULT
+VERSION_INDEPENDENT_TOOL_FAMILY_CORE = STABLE BY DEFAULT
+CURRENT_MODEL_PROFILE = REFRESHABLE
 ```
 
-Before a material task using a newly selected/newly released model that differs from the profile's last verified snapshot, Engineering must perform a **narrow model-profile refresh**, not a full tooling redesign:
+For Trae+GLM specifically, a new GLM version should normally change only:
+
+`governance/TRAE_GLM_CURRENT_MODEL_PROFILE.md`
+
+Refresh sequence:
 
 ```text
 VERIFY CURRENT TOOL-SURFACE MODEL LABEL
 → CHECK CURRENT FIRST-PARTY MODEL/TOOL DOCUMENTATION
-→ VERIFY ONLY ACTUALLY EXPOSED MODEL CONTROLS/LIMITS
-→ COMPARE AGAINST REAL PROJECT EVIDENCE
-→ UPDATE MODEL-SPECIFIC DELTA ONLY IF NEEDED
+→ VERIFY ONLY ACTUALLY EXPOSED CONTROLS/LIMITS
+→ COMPARE WITH RECENT REAL PROJECT EVIDENCE
+→ UPDATE CURRENT MODEL PROFILE ONLY
 ```
 
-Do not create a separate full constitution for every `GLM-x.y`, Codex model, or future DeepSeek model. Do not invent hidden reasoning/cache/API controls from a previous or adjacent model generation.
+Change the version-independent Trae+GLM core only if a durable tool/family workflow semantic changes. Change this executor-routing file only if the executor pool or L1/L2 routing/authority model changes.
+
+Do not create a new switching constitution for `GLM-5.4`, `GLM-6`, a newer Codex model or a newer DeepSeek model. Do not inherit hidden reasoning/cache/API controls from adjacent model generations.
 
 ---
 
-## 4. No stale "current tooling priority" can pin a task
+## 5. Stale tooling priority cannot pin a task
 
-`governance/CURRENT_TOOLING_EXECUTOR_PRIORITY_V1_2026-08-18.md` is a historical sequencing snapshot and must no longer be interpreted as a universal current Primary-Writer rule.
+`governance/CURRENT_TOOLING_EXECUTOR_PRIORITY_V1_2026-08-18.md` is historical sequencing provenance and no longer a universal Primary-Writer rule.
 
-The following old-style fields are therefore not durable executor authority:
+Old fields such as:
 
 ```text
 NOW=FIRST_REAL_BOUNDED_DEEPSEEK_HARNESS_TASK
@@ -151,7 +145,9 @@ NEXT_2=...
 CURRENT_TOOLING_PRIORITY_SELECTS_<TOOL>
 ```
 
-For future tasks, replace them with:
+are not durable task-routing authority.
+
+For current tasks record:
 
 ```text
 CURRENT_USER_SELECTED_EXECUTOR=
@@ -161,35 +157,34 @@ PROFILE_ROUTING=
 MODEL_PROFILE_LAST_VERIFIED_AT=
 ```
 
-A task-specific Issue or PR may still record the selected executor/model as an execution snapshot. That snapshot does not prevent the user from selecting a different approved executor/model for a later bounded task/stage.
+A task-specific Issue/PR may record the current selection as an execution snapshot. That snapshot does not bind a later bounded stage after the user changes the selection.
 
 ---
 
-## 5. Engineering Control generation rule
+## 6. Engineering Control generation rule
 
 Before producing a Writer prompt/Terminal block, Engineering Control must:
 
 1. live-verify `main`, active Issue/PR, exact artifact/head and relevant CI;
 2. complete `PROJECT_ENGINEERING_RULESET_PREFLIGHT=PASS`;
 3. complete `ENGINEERING_PREFLIGHT_GATE=PASS` for material Writer work;
-4. freeze the user's current executor/model selection;
-5. load the selected tool profile from GitHub;
-6. if the model changed since the profile's last verified snapshot, perform the narrow model-version refresh in section 3.4;
-7. load current task-specific authority;
-8. create one complete high-constraint Task Packet;
-9. choose the selected tool's operator transport;
-10. preserve all retained user gates.
+4. freeze current executor/model selection;
+5. load the selected executor/tool family profile;
+6. load the current model profile/snapshot where one exists;
+7. if the selected model differs from the current verified snapshot, perform the narrow model-profile refresh before relying on model-specific controls;
+8. load current task-specific authority;
+9. create one complete high-constraint Task Packet;
+10. choose the selected tool's operator transport;
+11. preserve all retained user gates.
 
-The user must not be asked to manually combine generic project rules with a separate executor/model addendum when Engineering can produce the complete current packet itself.
-
-The downstream packet must identify at minimum where applicable:
+The downstream packet identifies, where applicable:
 
 ```text
 ROLE / MODE
 TASK_ID
 EXECUTOR
 MODEL
-REASONING/PRESET IF THE CURRENT TOOL SURFACE ACTUALLY EXPOSES AND L1 FREEZES IT
+REASONING/PRESET ONLY IF CURRENT TOOL SURFACE ACTUALLY EXPOSES AND L1 FREEZES IT
 REPOSITORY
 LIVE_MAIN / EXACT_BASE / EXPECTED_HEAD
 BRANCH / WORKTREE
@@ -204,85 +199,80 @@ OUTPUT / EVIDENCE CONTRACT
 FINAL USER AUTHORITY BOUNDARY
 ```
 
-Do not invent model flags, reasoning controls, sandbox semantics, resume commands or provider settings that are not verified on the selected current tool surface.
+Do not invent model flags, reasoning controls, sandbox semantics, resume commands or provider settings that are not verified on the current selected surface.
 
 ---
 
-## 6. Capability mismatch does not silently reroute
+## 7. Capability mismatch does not silently reroute
 
-If the selected tool cannot perform a mandatory task gate:
+If the selected tool cannot perform a mandatory gate:
 
 ```text
 SAFE_STOP
-→ REPORT THE EXACT CAPABILITY GAP
+→ REPORT EXACT CAPABILITY GAP
 → ENGINEERING MAY RECOMMEND ANOTHER APPROVED EXECUTOR
-→ USER SELECTS / CONFIRMS THE NEW ROUTE
+→ USER SELECTS / CONFIRMS NEW ROUTE
 ```
 
-Do not silently switch executor, model, worktree, permission scope, provider, reasoning tier or UI/CLI surface merely because execution is inconvenient.
+Do not silently change executor, model, worktree, permission scope, provider, reasoning tier or UI/CLI surface.
 
-Examples of real capability gaps include:
-
-- no access to the required local worktree;
-- inability to run the required test/runtime;
-- inability to preserve exact artifact identity;
-- missing authorized Git/GitHub action needed by the coherent stage;
-- inability to enforce the required write boundary;
-- tool/model behavior that repeatedly violates the frozen high-constraint packet after the allowed repair budget.
+Examples include lack of required worktree access, inability to run mandatory tests/runtime, inability to preserve exact artifact identity, missing authorized Git/GitHub capability, inability to enforce write scope, or repeated model/tool behavior violating the frozen packet after the repair budget.
 
 ---
 
-## 7. Review and publication independence
+## 8. Review and publication independence
 
-Changing executor or model does not change acceptance rules.
+Changing executor/model does not change acceptance rules.
 
 ```text
 WRITER_PASS != INDEPENDENT_ACCEPTANCE
 ```
 
-Independent Review must inspect the actual exact artifact/delta/head and relevant CI. The Reviewer must not simply inherit the Writer's reasoning or use the same session when independence is a control objective.
+Independent Review inspects the exact artifact/delta/head and relevant CI and does not inherit the Writer session when independence matters.
 
 Mark Ready, merge, deployment, runtime/cloud mutation, credentials/private API, signing/wallet, exchange write, order submission/cancellation and autonomous trading remain separate explicit current user gates.
 
 ---
 
-## 8. Current Issue #112 coordination
+## 9. Current Issue #112 coordination
 
 Issue #112's technical acceptance matrix remains unchanged.
 
-The old sequencing text that named `DEEPSEEK_HARNESS` as Primary Writer has been replaced by task-level routing. The user's current task-level selection for the ongoing Issue #112 development flow is:
+Current task-level selection:
 
 ```text
 EXECUTOR=TRAE
 MODEL=GLM-5.3
 ```
 
-until the user changes it. This changes no Issue #112 production semantics, accepted baseline, scope, test authenticity requirement, repair budget, publication gate or host/runtime authority.
+until the user changes it. This changes no production semantics, accepted baseline, scope, test authenticity requirement, repair budget, publication gate or runtime authority.
 
-The integrity-bound Issue #112 dirty artifact remains rooted at its accepted repair baseline; later governance-only movement of `main` does not authorize rebase/reset/normalization of that artifact.
+The integrity-bound Issue #112 artifact remains rooted at its accepted repair baseline; governance-only `main` movement does not authorize rebase/reset/normalization of that artifact.
 
 ---
 
-## 9. Tooling backlog
+## 10. Tooling backlog
 
-Deferred setup work is tracked in GitHub Issue #115:
+Issue #115 tracks:
 
-- two DeepSeek Harness real-task validations;
+- two future DSH real-task validations;
 - Codex settings/profile work;
 - Hermes installation/configuration.
 
-DeepSeek Harness installation/configuration and the merged one-paste workflow are complete enough to pause; the two remaining DSH items are evidence to collect during a future real DSH task, not another standalone setup stage.
+DeepSeek Harness installation/configuration and the merged one-paste workflow are complete enough to pause. Remaining DSH checks are collected during a future real DSH task rather than a synthetic paid stage.
 
 ---
 
-## 10. Decision
+## 11. Frozen decision
 
 ```text
 DECISION=PROCEED
 USER_CONTROLS_TASK_LEVEL_EXECUTOR_MODEL_SELECTION=YES
+APPROVED_PEER_EXECUTORS=CODEX_CLI|TRAE|DEEPSEEK_HARNESS
 GLOBAL_FIXED_PRIMARY_WRITER=NO
 ENGINEERING_AUTO_LOADS_SELECTED_TOOL_PROFILE=YES
-MODEL_PROFILES_VERSION_REFRESHABLE=YES
+MODEL_PROFILE_SEPARATE_FROM_SWITCHING_ARCHITECTURE=YES
+GLM_MODEL_UPGRADE_DEFAULT_CHANGE_SCOPE=TRAE_GLM_CURRENT_MODEL_PROFILE.md_ONLY
 ONE_PRIMARY_WRITER_PER_COHERENT_STAGE=YES
 SILENT_EXECUTOR_OR_MODEL_SUBSTITUTION=NO
 STALE_TOOLING_PRIORITY_SNAPSHOT_BINDS_NEW_TASK=NO
