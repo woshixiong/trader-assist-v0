@@ -25,14 +25,17 @@ MODEL_PROFILE_LAST_VERIFIED_AT=2026-08-20
 
 A fresh first-party public-source check on 2026-08-20 found:
 
-- Z.AI release notes and model overview identify `GLM-5.1` as the latest publicly documented flagship model;
-- the public Z.AI Chat Completion model enumeration exposes `glm-5.1`, `glm-5-turbo`, `glm-5` and older models, but not `glm-5.3`;
+- Z.AI release notes record `GLM-5.2` as released on 2026-06-16, and the current first-party GLM-5.2 page identifies it as a flagship foundation model;
+- the public Z.AI Chat Completion model enumeration exposes `glm-5.2`, `glm-5.1`, `glm-5-turbo`, `glm-5` and older models, but not `glm-5.3`;
 - no first-party public Z.AI model page for `GLM-5.3` was found;
 - no first-party public Trae changelog/model page for `GLM-5.3` was found in the checked current public material.
 
 Therefore:
 
 ```text
+PUBLIC_ZAI_CURRENT_PUBLIC_FLAGSHIP_BASELINE=GLM-5.2
+PUBLIC_ZAI_GLM_5_2_RELEASE_DATE=2026-06-16
+GLM_5_2_PUBLIC_API_MODEL_ID=glm-5.2
 GLM_5_3_PUBLIC_FIRST_PARTY_MODEL_SPEC=NOT_FOUND
 GLM_5_3_PUBLIC_API_MODEL_ID=NOT_VERIFIED
 GLM_5_3_CONTEXT_LIMIT=NOT_VERIFIED
@@ -70,7 +73,7 @@ For current work:
 6. Use deterministic shell/Git/test commands for hashes, diffs, tests and identity evidence before spending model reasoning tokens on those facts.
 7. Keep a stable control prefix and place SHA/branch/log/CI/timestamp facts in the mutable tail to improve repeated-context cacheability where the provider path supports it.
 8. Reuse a Trae/GLM session only while Writer role, coherent stage, worktree/artifact, authority and objective remain the same and independence is not required. Start a new session for materially new stages, publication authority changes, unrelated exploration, security/authority review or independent acceptance.
-9. Do not assume hidden thinking, context-window, cache, API or pricing semantics from GLM-5/5.1 apply identically to the Trae-visible `GLM-5.3` label.
+9. Do not assume hidden thinking, context-window, cache, API or pricing semantics from public `GLM-5`, `GLM-5.1` or `GLM-5.2` documentation apply identically to the Trae-visible `GLM-5.3` label.
 10. Record model/token/cache/time evidence only where Trae/provider naturally exposes it; do not create synthetic paid calls solely to prove a cache ratio.
 
 ---
@@ -153,6 +156,7 @@ First-party sources rechecked 2026-08-20:
 ### Z.AI
 
 - `https://docs.z.ai/release-notes/new-released`
+- `https://docs.z.ai/guides/llm/glm-5.2`
 - `https://docs.z.ai/guides/llm/glm-5.1`
 - `https://docs.z.ai/api-reference/llm/chat-completion`
 - `https://docs.z.ai/devpack/resources/best-practice`
@@ -201,7 +205,8 @@ MODEL_FAMILY=GLM
 CURRENT_MODEL_LABEL=GLM-5.3
 CURRENT_MODEL_LABEL_AUTHORITY=USER-CONFIRMED_TRAE_SURFACE
 PUBLIC_FIRST_PARTY_GLM_5_3_SPEC=NOT_FOUND_AS_OF_2026-08-20
-PUBLIC_ZAI_LATEST_FLAGSHIP_FOUND=GLM-5.1
+PUBLIC_ZAI_LATEST_FLAGSHIP_FOUND=GLM-5.2
+PUBLIC_ZAI_GLM_5_2_RELEASE_DATE=2026-06-16
 MODEL_SPECIFIC_HIDDEN_TUNING=PROHIBITED
 VERSION_INDEPENDENT_CORE=TRAE_GLM_ENGINEERING_USAGE_PROFILE_V1_2026-08-20.md
 CURRENT_MODEL_PROFILE_UPDATE_PATH=THIS_FILE_ONLY_BY_DEFAULT
