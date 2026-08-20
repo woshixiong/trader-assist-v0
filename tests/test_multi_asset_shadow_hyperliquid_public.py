@@ -134,13 +134,119 @@ def test_public_planning_adapter_binds_bbo_and_l2_to_one_response(tmp_path: Path
         ).encode()
 
     _, market = _registry(tmp_path / "registry")
-    adapter = HyperliquidPublicPlanningAdapter(HyperliquidPublicClient(post=post))
+    adapter = HyperliquidPublicPlanningAdapter(
+        HyperliquidPublicClient(post=post), wall_clock_ms=lambda: 1_001
+    )
     bbo = adapter.fetch_bbo(market=market, now_ms=1_001)
     l2 = adapter.fetch_l2(market=market, side=Side.LONG, bbo=bbo)
     assert calls == 1
     assert l2.levels == ((Decimal("100.1"), Decimal("20")),)
     with pytest.raises(PublicDataError, match="one retained"):
         adapter.fetch_l2(market=market, side=Side.LONG, bbo=bbo)
+
+
+@pytest.mark.parametrize("fetch", ["bbo", "scanner"])
+def test_l2_freshness_uses_post_response_wall_clock(
+    tmp_path: Path, fetch: str
+) -> None:
+    events: list[str] = []
+    calls = 0
+    wall_clock_ms = 1_000
+
+    def post(_url: str, body: bytes, _timeout: float) -> bytes:
+        nonlocal calls, wall_clock_ms
+        calls += 1
+        assert json.loads(body) == {"type": "l2Book", "coin": "BTC"}
+        wall_clock_ms = 1_100
+        events.append("l2Book returned")
+        return json.dumps(
+            {
+                "coin": "BTC",
+                "time": 1_050,
+                "levels": [
+                    [{"px": "100", "sz": "20"}],
+                    [{"px": "100.1", "sz": "20"}],
+                ],
+            }
+        ).encode()
+
+    def post_response_wall_clock_ms() -> int:
+        assert events == ["l2Book returned"]
+        events.append("wall clock sampled")
+        return wall_clock_ms
+
+    _, market = _registry(tmp_path / "registry")
+    adapter = HyperliquidPublicPlanningAdapter(
+        HyperliquidPublicClient(post=post), wall_clock_ms=post_response_wall_clock_ms
+    )
+
+    if fetch == "bbo":
+        assert adapter.fetch_bbo(market=market, now_ms=1_000).observed_at_ms == 1_050
+    else:
+        snapshot = adapter.fetch_scanner_snapshot(
+            market=market,
+            now_ms=1_000,
+            btc_returns=(None, None, None),
+        )
+        assert snapshot.current_spread_price == Decimal("0.1")
+
+    assert events == ["l2Book returned", "wall clock sampled"]
+    assert calls == 1
+
+
+@pytest.mark.parametrize("fetch", ["bbo", "scanner"])
+@pytest.mark.parametrize(
+    ("provider_time_ms", "post_response_wall_ms"),
+    [(99, 11_100), (1_101, 1_100)],
+    ids=["stale-at-response", "future-at-response"],
+)
+def test_l2_freshness_fails_closed_relative_to_response_observation(
+    tmp_path: Path,
+    fetch: str,
+    provider_time_ms: int,
+    post_response_wall_ms: int,
+) -> None:
+    calls = 0
+
+    def post(_url: str, body: bytes, _timeout: float) -> bytes:
+        nonlocal calls
+        calls += 1
+        assert json.loads(body)["type"] == "l2Book"
+        return json.dumps(
+            {
+                "coin": "BTC",
+                "time": provider_time_ms,
+                "levels": [
+                    [{"px": "100", "sz": "20"}],
+                    [{"px": "100.1", "sz": "20"}],
+                ],
+            }
+        ).encode()
+
+    _, market = _registry(tmp_path / "registry")
+    adapter = HyperliquidPublicPlanningAdapter(
+        HyperliquidPublicClient(post=post),
+        wall_clock_ms=lambda: post_response_wall_ms,
+    )
+
+    with pytest.raises(PublicDataError, match="stale or future-dated"):
+        if fetch == "bbo":
+            adapter.fetch_bbo(market=market, now_ms=1_000)
+        else:
+            adapter.fetch_scanner_snapshot(
+                market=market,
+                now_ms=1_000,
+                btc_returns=(None, None, None),
+            )
+
+    assert calls == 1
+
+
+def test_public_planning_adapter_preserves_existing_default_maximum_age() -> None:
+    adapter = HyperliquidPublicPlanningAdapter(
+        HyperliquidPublicClient(post=lambda *_: pytest.fail("transport must not run"))
+    )
+    assert adapter.max_age_ms == 10_000
 
 
 def test_public_one_minute_provider_accepts_only_closed_provider_bars(tmp_path: Path) -> None:
