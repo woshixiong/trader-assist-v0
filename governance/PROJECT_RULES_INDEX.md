@@ -16,7 +16,8 @@ Every successor window / Agent reads this order before acting:
 10. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_LOWEST_PRIORITY_BACKLOG_RULING_V1.md`
 11. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_FAILURE_AND_DEFERRED_WORK_V1.md`
 12. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_AUTOMATION_ABANDONMENT_RULING_V1.md`
-13. current live GitHub objects and exact-head CI state.
+13. `governance/ENGINEERING_EXECUTOR_SELECTION_AND_TOOL_PROFILE_ROUTING_V1_2026-08-20.md` for current task-level executor/model selection and automatic tool-profile routing.
+14. current live GitHub objects and exact-head CI state.
 
 When the role is `HERMES_EXECUTION_OPERATOR`, additionally read:
 
@@ -28,8 +29,19 @@ When DeepSeek Harness is selected as the L2 coding executor, additionally read:
 
 - `governance/ENGINEERING_EXECUTOR_POOL_AND_DEEPSEEK_HARNESS_PROFILE_V1_2026-08-18.md`;
 - `governance/DEEPSEEK_HARNESS_MANDATORY_USAGE_RULES_V1_2026-08-18.md`;
-- `governance/CURRENT_TOOLING_EXECUTOR_PRIORITY_V1_2026-08-18.md` for current sequencing and first-real-task setup-verification timing;
-- `governance/DEEPSEEK_HARNESS_NATIVE_HEADLESS_ONE_PASTE_WORKFLOW_V1_2026-08-20.md` for the user-operated macOS one-paste native-headless route and the bounded `0.1.0-rc.8` first-real-task upgrade-validation transition.
+- `governance/DEEPSEEK_HARNESS_NATIVE_HEADLESS_ONE_PASTE_WORKFLOW_V1_2026-08-20.md`.
+
+`governance/CURRENT_TOOLING_EXECUTOR_PRIORITY_V1_2026-08-18.md` is now historical sequencing provenance only. It must not pin a new task to DeepSeek Harness.
+
+When Trae + a GLM-family model is selected, additionally read:
+
+- `governance/TRAE_GLM_ENGINEERING_USAGE_PROFILE_V1_2026-08-20.md`;
+- section 29 of `governance/UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V1_2026-08-17.md`;
+- the active task's current Product / Strategy / Operations / Security authority.
+
+The exact GLM model is selected per task and is not permanent architecture. The current user-visible `GLM-5.3` selection is a current task/tool-surface snapshot only; when the user moves to a newer GLM model, refresh the model-specific guidance narrowly against the then-current Trae surface and first-party Z.AI/Trae documentation while keeping the version-independent workflow core unless evidence requires a change.
+
+When Codex is selected, use the Unified Engineering Governance's Codex session/prompt/token-efficiency rules and one-paste Terminal rule. Draft PR #111 remains non-canonical until it is reconciled against current `main`, independently accepted and merged.
 
 Live GitHub objects override stale chat snapshots and stale PR-body snapshots. Future windows must resolve live GitHub state before relying on historical text.
 
@@ -128,11 +140,13 @@ If a new architecture-critical requirement is discovered after a Writer prompt i
 
 ## Operator delivery rule — current ruling
 
-The current default for user-operated macOS engineering work is **one contiguous ordinary-Terminal paste**.
+The current default for user-operated macOS engineering work is **one contiguous ordinary-Terminal paste** when the selected executor/transport can support it safely.
 
-Engineering owns the routing inside the block. The user should not have to separately `cd`, launch Codex, choose shell-vs-agent text, paste a second prompt, manually select the branch/worktree, or create a transport file when those steps can safely be encoded.
+Engineering owns the routing inside the block. The user should not have to separately `cd`, launch a CLI executor, choose shell-vs-agent text, paste a second authoritative prompt, manually select the branch/worktree, or create a transport file when those steps can safely be encoded.
 
-When `DEEPSEEK_HARNESS` is the selected L2 Writer, the same operator principle applies through the first-party native headless seam: Engineering should generate one contiguous Terminal block that resolves the exact repo/worktree/preflight/frozen Task Packet and launches `dsh --profile headless` directly. The Web UI is optional for interactive use and is not required for normal bounded Writer dispatch. The binding DSH-specific details and current `rc.8` validation transition are in `governance/DEEPSEEK_HARNESS_NATIVE_HEADLESS_ONE_PASTE_WORKFLOW_V1_2026-08-20.md`.
+When `DEEPSEEK_HARNESS` is selected, the first-party native headless seam is the default bounded Writer route: Engineering generates one contiguous Terminal block that resolves the exact repo/worktree/preflight/frozen Task Packet and launches `dsh --profile headless`. The Web UI is optional for interactive/manual use.
+
+When Trae + GLM is selected, Engineering generates the complete Trae/GLM high-constraint packet using the GLM profile. Direct paste remains acceptable while the complete packet fits the current verified interface boundary; if it would exceed the canonical 20,000-character direct-paste ceiling, use the lossless Terminal/file/task-packet route rather than truncating or fragmenting authority-critical instructions.
 
 The older requirement that every user-facing handoff separately expose `Terminal local command` versus `Terminal -> Codex CLI` is superseded when it adds no safety value. The orchestrator must still know and encode the execution class internally, but it must not turn that distinction into extra user work.
 
@@ -152,7 +166,7 @@ Raw executor evidence remains authoritative.
 
 ---
 
-## Specialized coding-executor pool / DeepSeek Harness rule
+## Specialized coding-executor pool / dynamic routing rule
 
 Engineering uses three peer L2 coding executors:
 
@@ -160,36 +174,68 @@ Engineering uses three peer L2 coding executors:
 CODEX_CLI | TRAE_COMPUTER_USE / TRAE | DEEPSEEK_HARNESS
 ```
 
-GLM-family and DeepSeek-family names identify **models/model families**, not additional L2 executor authorities. A material coding task using either family must run inside an already-approved executor path and obey the unified standard's high-constraint complete-task-packet rule. In the current GLM/Trae workflow, Trae is the executor and GLM is the selected model. DeepSeek API coding remains fixed to the first-party `DEEPSEEK_HARNESS` route. This prompt-discipline rule does not authorize an alternate harness or fourth coding executor.
+GLM-family and DeepSeek-family names identify **models/model families**, not additional L2 executor authorities. A material coding task using either family must run inside an already-approved executor path and obey the unified standard's high-constraint complete-task-packet rule. In the current GLM/Trae workflow, Trae is the executor and GLM is the selected model. DeepSeek API coding remains fixed to the first-party `DEEPSEEK_HARNESS` route.
 
 Hermes plus an approved low-cost/free model is a separate L3 routine operator, not a fourth coding or decision authority.
 
-When DeepSeek Harness is selected, the binding specialized files are:
+### Task-level selection
+
+For each bounded task or coherent stage:
+
+```text
+TASK ARRIVES
+→ USER/L1 SELECTS EXECUTOR + MODEL
+→ ENGINEERING LOADS SELECTED TOOL PROFILE
+→ ENGINEERING FREEZES COMPLETE TASK PACKET
+→ ONE PRIMARY WRITER EXECUTES
+→ NORMAL EXACT-ARTIFACT / CI / INDEPENDENT-REVIEW GATES APPLY
+```
+
+No tool is the universal Primary Writer. Current user selection is final for task-level routing unless a capability/safety blocker requires `SAFE_STOP` and a new user/L1 route decision. Engineering may recommend a tool based on capability, quality, speed, cost or availability, but may not silently substitute it.
+
+Switching tools between coherent stages is allowed and expected. Preserve exact artifact/worktree identity at the handoff; do not leave competing Writers live on the same shared authority.
+
+### DeepSeek Harness selected
+
+Binding specialized files:
 
 - `governance/ENGINEERING_EXECUTOR_POOL_AND_DEEPSEEK_HARNESS_PROFILE_V1_2026-08-18.md`;
 - `governance/DEEPSEEK_HARNESS_MANDATORY_USAGE_RULES_V1_2026-08-18.md`;
-- `governance/CURRENT_TOOLING_EXECUTOR_PRIORITY_V1_2026-08-18.md` for current sequencing and setup-verification timing;
-- `governance/DEEPSEEK_HARNESS_NATIVE_HEADLESS_ONE_PASTE_WORKFLOW_V1_2026-08-20.md` for user-operated one-paste native headless execution and the bounded `rc.8` first-real-task seam validation.
+- `governance/DEEPSEEK_HARNESS_NATIVE_HEADLESS_ONE_PASTE_WORKFLOW_V1_2026-08-20.md`.
 
-DeepSeek API use is fixed to first-party DeepSeek Harness with `deepseek-official`. Normal coding uses PTC/Code Mode, `workspace-write + ask`, stable small repository instructions, project-local progressive skills, stable-prefix/cache discipline, bounded normal provider retries, L1-frozen model/reasoning and official off-peak scheduling where practical.
+DeepSeek API use remains first-party DeepSeek Harness with `deepseek-official`. Normal coding uses the accepted PTC/Code, permission, worktree, cache/skill and fail-closed authority rules in those specialized documents.
 
-No separate synthetic coding qualification, Harness-only review, or standalone paid setup-verification stage is required before the first real bounded DeepSeek task.
+DeepSeek Harness installation/configuration and its one-paste workflow are complete enough to pause. The remaining rc.8 execution-seam/capability check and token/cache/progressive-skill evidence are deferred to the next real task in which the user selects DeepSeek Harness; no synthetic paid task is required.
 
-For the first real task, before Writer file mutation, mechanically verify the execution baseline required for safe use: expected DSH version, `deepseek-official`, PTC/Code, `workspace-write + ask`, root `AGENTS.md` autoload, and discovery of all four project skills. If one of those checks fails, SAFE_STOP before file mutation.
+### Trae + GLM selected
 
-The previous accepted DSH baseline remains `0.1.0-rc.7`. The current `0.1.0-rc.8` first-party release is a bounded upgrade candidate for the first real DSH task under the native-headless workflow file; successful install/launch alone is not acceptance. The first real task may validate the candidate before mutation and proceed only if the required seam checks pass; promotion of `rc.8` to the accepted project baseline requires subsequent task evidence, independent acceptance and a narrow governance update.
+Binding specialized file:
 
-Skill-body progressive loading and cache telemetry/cache reuse are efficiency evidence collected during the real task where naturally observable. They are not prerequisites to start that task, no synthetic requests are required, and no arbitrary cache-hit percentage is required. The first actual assigned task supplies real coding capability evidence under that task's normal project validation/review requirements.
+- `governance/TRAE_GLM_ENGINEERING_USAGE_PROFILE_V1_2026-08-20.md`.
 
-Current tooling priority is unambiguous:
+Durable GLM/Trae principles include:
 
-```text
-1. FIRST_REAL_BOUNDED_DEEPSEEK_HARNESS_TASK = NOW
-2. CODEX_CONFIGURATION_AND_EFFICIENCY_PROFILE = DEFERRED_UNTIL_USER_RESUMES
-3. HERMES_CONFIGURATION = LATER / WHEN USER NEXT PRIORITIZES
-```
+- one coherent bounded stage rather than arbitrary one-file microtasks;
+- high-constraint complete packet;
+- stable control prefix + mutable evidence tail;
+- exact scoped context before broad workspace context;
+- deterministic shell/Git/test proof before model reasoning;
+- same-session reuse only for the same Writer/stage/worktree/artifact/authority;
+- new session on material stage/authority/independence boundary;
+- no duplicate full governance corpus in Trae Rules;
+- no undocumented model-specific tuning.
 
-`governance/CURRENT_TOOLING_EXECUTOR_PRIORITY_V1_2026-08-18.md` is the authoritative current sequencing/timing record and explicitly supersedes stale sequencing or pre-first-task readiness phrases in the two DeepSeek draft technical documents and prior PR-body text. This current priority changes no technical safety rule and grants no retained authority gate.
+Model-specific guidance is refreshable. The current user uses the Trae-visible `GLM-5.3` label, but future newer GLM models should trigger a narrow current-surface/first-party refresh rather than freezing a stale `GLM-5.3` constitution.
+
+### Codex selected
+
+Use the Unified Engineering Governance's current Codex session/prompt/token-efficiency and one-paste rules. Codex-specific setup/profile work remains deferred in Issue #115. Draft PR #111 is proposal/history input and is not canonical until reconciled against current main, independently accepted and merged.
+
+### Historical sequencing snapshot
+
+`governance/CURRENT_TOOLING_EXECUTOR_PRIORITY_V1_2026-08-18.md` now exists for provenance of the earlier DeepSeek-first setup sequence. Its `NOW=FIRST_REAL_BOUNDED_DEEPSEEK_HARNESS_TASK` text is not current universal task-routing authority.
+
+Current deferred tooling backlog is tracked in GitHub Issue #115.
 
 ---
 
