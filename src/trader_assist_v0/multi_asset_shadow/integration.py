@@ -1493,13 +1493,14 @@ class MultiAssetShadowCoordinator:
             except RegistryError as exc:
                 raise IntegrationError("source bar references an unknown Registry epoch") from exc
             try:
-                epoch = self._registry.prior_active(version)
+                prior_epoch = self._registry.prior_active(version)
             except RegistryError as exc:
                 raise IntegrationError("source bar Registry epoch is invalid") from exc
-            if epoch is None:
+            if prior_epoch is None:
                 raise IntegrationError(
                     "source bar Registry epoch was never the live authority"
                 )
+            epoch = prior_epoch
         if content_hash != epoch.content_hash:
             raise IntegrationError("source bar Registry hash conflicts with its epoch")
         if market_id not in {item.identity.market_id for item in epoch.markets}:
