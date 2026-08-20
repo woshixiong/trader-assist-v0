@@ -16,7 +16,7 @@ Every successor window / Agent reads this order before acting:
 10. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_LOWEST_PRIORITY_BACKLOG_RULING_V1.md`
 11. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_FAILURE_AND_DEFERRED_WORK_V1.md`
 12. `governance/FIRST_LAUNCH_HOST_QUALIFICATION_AUTOMATION_ABANDONMENT_RULING_V1.md`
-13. `governance/ENGINEERING_EXECUTOR_SELECTION_AND_TOOL_PROFILE_ROUTING_V1_2026-08-20.md` for current task-level executor/model selection and automatic tool-profile routing.
+13. `governance/ENGINEERING_EXECUTOR_SELECTION_AND_TOOL_PROFILE_ROUTING_V1_2026-08-20.md` for execution-class routing, current task-level executor/model selection and automatic tool-profile routing.
 14. current live GitHub objects and exact-head CI state.
 
 When the role is `HERMES_EXECUTION_OPERATOR`, additionally read:
@@ -37,12 +37,19 @@ When Trae + a GLM-family model is selected, additionally read:
 
 - `governance/TRAE_GLM_ENGINEERING_USAGE_PROFILE_V1_2026-08-20.md` — stable version-independent Trae+GLM family/tool core;
 - `governance/TRAE_GLM_CURRENT_MODEL_PROFILE.md` — refreshable current GLM model snapshot/delta;
-- section 29 of `governance/UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V1_2026-08-17.md`;
+- relevant Unified Governance sections;
 - the active task's current Product / Strategy / Operations / Security authority.
 
-The exact GLM model is selected per task and is not permanent architecture. A newer GLM version should update only `governance/TRAE_GLM_CURRENT_MODEL_PROFILE.md` by default after a narrow current-Trae-surface + first-party Z.AI/Trae verification. Keep the version-independent Trae+GLM core and the three-executor switching architecture unchanged unless the new model/tool actually changes durable workflow or authority semantics.
+The exact GLM model is selected per task and is not permanent architecture. A newer GLM version should update only `governance/TRAE_GLM_CURRENT_MODEL_PROFILE.md` by default after a narrow current-Trae-surface + first-party Z.AI/Trae verification. Keep the version-independent Trae+GLM core and execution-class/three-executor routing unchanged unless the new model/tool actually changes durable workflow or authority semantics.
 
-When Codex is selected, use the Unified Engineering Governance's Codex session/prompt/token-efficiency rules and one-paste Terminal rule. Draft PR #111 remains non-canonical until it is reconciled against current `main`, independently accepted and merged.
+When Codex is selected, additionally read:
+
+- `governance/CODEX_CLI_ENGINEERING_USAGE_PROFILE_V1_2026-08-20.md` — stable version-independent Codex CLI core;
+- `governance/CODEX_CURRENT_MODEL_PROFILE.md` — refreshable current Codex model/reasoning/service-tier snapshot;
+- the Unified Engineering Governance Codex session/prompt/token-efficiency and one-paste rules;
+- the active task's current Product / Strategy / Operations / Security authority.
+
+A newer Codex/OpenAI model should update only `governance/CODEX_CURRENT_MODEL_PROFILE.md` by default after a narrow current-Codex-surface + first-party OpenAI verification. Draft PR #111 is historical/salvage input and not a competing canonical Codex profile.
 
 Live GitHub objects override stale chat snapshots and stale PR-body snapshots. Future windows must resolve live GitHub state before relying on historical text.
 
@@ -83,6 +90,7 @@ The unified standard consolidates the durable project-wide rules covering:
 - scale/provider/freshness budgets and realistic-size tests;
 - capability-matched task allocation;
 - coherent continuous execution without using the user as a routine message bus;
+- GPT-control/direct/deterministic execution before coding Agents when coding capability is unnecessary;
 - one primary Writer for shared authority plus independent review;
 - exact artifact / exact-head CI / delta-first review;
 - one normal repair + at most one exceptional repair, then holistic convergence;
@@ -108,7 +116,7 @@ in this exact order:
 
 1. independent analysis and preliminary position;
 2. broad external research, including mature solutions, validated cases, counterexamples and disconfirming evidence;
-3. explicit synthesis showing what the external evidence confirms, modifies, rejects or leaves uncertain before final recommendation.
+3. explicit synthesis showing what external evidence confirms, modifies, rejects or leaves uncertain before final recommendation.
 
 Purely mechanical execution and exact state verification are exempt unless they expose a new material design choice.
 
@@ -139,17 +147,43 @@ If a new architecture-critical requirement is discovered after a Writer prompt i
 
 ---
 
+## Execution-class routing — ordinary GPT control before coding Agents
+
+Before selecting an L2 coding executor, Engineering Control applies:
+
+```text
+GPT_CONTROL_DIRECT
+→ GPT_CONTROL_DETERMINISTIC_TERMINAL
+→ L2_CODING_EXECUTOR only when local agentic coding is required
+```
+
+`GPT_CONTROL_DIRECT` covers work the ordinary Engineering/Review GPT window can perform with current connectors/reasoning, such as GitHub state/PR/CI operations, material L1 research/decision work, connector-sufficient independent review, and GitHub-side publication after the branch is already pushed.
+
+`GPT_CONTROL_DETERMINISTIC_TERMINAL` covers local shell/Git mechanics where the exact operation is already frozen and no code/architecture judgment is required. The GPT window generates one fail-closed Terminal block; the user pastes it once. This is the preferred route for deterministic commit/push of an already independently accepted local artifact.
+
+`L2_CODING_EXECUTOR` is reserved for local semantic code inspection, mutation, debugging, refactoring or implementation/test/repair loops. The ordinary GPT window is not a fourth L2 executor.
+
+If a deterministic/publication stage discovers a problem requiring code judgment, stop and create a new bounded coding task. Do not silently turn publication into implementation.
+
+Having a GitHub connector or ability to generate Terminal commands is capability only; it never bypasses the explicit user gates for Mark Ready, merge, deployment, runtime/cloud, credentials, signing or exchange write.
+
+---
+
 ## Operator delivery rule — current ruling
 
-The current default for user-operated macOS engineering work is **one contiguous ordinary-Terminal paste** when the selected executor/transport can support it safely.
+The current default for user-operated macOS engineering work is **one contiguous ordinary-Terminal paste** when local Terminal execution is actually required and the selected transport can support it safely.
 
 Engineering owns the routing inside the block. The user should not have to separately `cd`, launch a CLI executor, choose shell-vs-agent text, paste a second authoritative prompt, manually select the branch/worktree, or create a transport file when those steps can safely be encoded.
 
+When no local execution is needed and the GPT control window has a sufficient connector, prefer direct connector execution rather than generating a Terminal block merely for ritual consistency.
+
 When `DEEPSEEK_HARNESS` is selected, the first-party native headless seam is the default bounded Writer route: Engineering generates one contiguous Terminal block that resolves the exact repo/worktree/preflight/frozen Task Packet and launches `dsh --profile headless`. The Web UI is optional for interactive/manual use.
 
-When Trae + GLM is selected, Engineering generates the complete Trae+GLM high-constraint packet using the stable family profile plus the current model profile. Direct paste remains acceptable while the complete packet fits the current verified interface boundary; if it would exceed the canonical 20,000-character direct-paste ceiling, use the lossless Terminal/file/task-packet route rather than truncating or fragmenting authority-critical instructions.
+When `CODEX_CLI` is selected, Engineering generates one contiguous Terminal block that performs deterministic identity/preflight, freezes the selected model/reasoning/sandbox/approval settings, and launches provider-native `codex exec` with the complete Task Packet. Interactive TUI is opt-in rather than the normal bounded Writer transport.
 
-The older requirement that every user-facing handoff separately expose `Terminal local command` versus `Terminal -> Codex CLI` is superseded when it adds no safety value. The orchestrator must still know and encode the execution class internally, but it must not turn that distinction into extra user work.
+When Trae + GLM is selected, Engineering generates the complete Trae+GLM high-constraint packet using the stable family profile plus current model profile. Direct paste remains acceptable while the complete packet fits the current verified interface boundary; if it exceeds the canonical 20,000-character direct-paste ceiling, use the lossless Terminal/file/task-packet route rather than truncating or fragmenting authority-critical instructions.
+
+The older requirement that every user-facing handoff separately expose `Terminal local command` versus `Terminal -> Codex CLI` is superseded when it adds no safety value. The orchestrator still knows and freezes the execution class internally, but must not turn that distinction into extra user work.
 
 Extra human steps are allowed only when technically unavoidable or required by a security/authority gate, such as MFA, OS credential approval, secret handling, GUI-only action, explicit Mark Ready/merge/deploy/runtime authorization, credentials/private API/signing or exchange-write authority.
 
@@ -169,30 +203,26 @@ Raw executor evidence remains authoritative.
 
 ## Specialized coding-executor pool / dynamic routing rule
 
-Engineering uses three peer L2 coding executors:
+After execution-class routing establishes that a coding executor is actually required, Engineering uses three peer L2 coding executors:
 
 ```text
 CODEX_CLI | TRAE_COMPUTER_USE / TRAE | DEEPSEEK_HARNESS
 ```
 
-GLM-family and DeepSeek-family names identify **models/model families**, not additional L2 executor authorities. A material coding task using either family must run inside an already-approved executor path and obey the unified standard's high-constraint complete-task-packet rule. In the current GLM/Trae workflow, Trae is the executor and GLM is the selected model. DeepSeek API coding remains fixed to the first-party `DEEPSEEK_HARNESS` route.
+GLM-family and DeepSeek-family names identify **models/model families**, not additional L2 executor authorities. Hermes plus an approved low-cost/free model is a separate L3 routine operator, not a fourth coding or decision authority.
 
-Hermes plus an approved low-cost/free model is a separate L3 routine operator, not a fourth coding or decision authority.
-
-### Task-level selection
-
-For each bounded task or coherent stage:
+For each bounded L2 task or coherent coding stage:
 
 ```text
-TASK ARRIVES
+L2 CODING NEED CONFIRMED
 → USER/L1 SELECTS EXECUTOR + MODEL
-→ ENGINEERING LOADS SELECTED TOOL/FAMILY PROFILE + CURRENT MODEL PROFILE WHERE APPLICABLE
+→ ENGINEERING LOADS SELECTED TOOL CORE + CURRENT MODEL PROFILE
 → ENGINEERING FREEZES COMPLETE TASK PACKET
 → ONE PRIMARY WRITER EXECUTES
 → NORMAL EXACT-ARTIFACT / CI / INDEPENDENT-REVIEW GATES APPLY
 ```
 
-No tool is the universal Primary Writer. Current user selection is final for task-level routing unless a capability/safety blocker requires `SAFE_STOP` and a new user/L1 route decision. Engineering may recommend a tool based on capability, quality, speed, cost or availability, but may not silently substitute it.
+No tool is the universal Primary Writer. Current user selection is final for task-level L2 routing unless a capability/safety blocker requires `SAFE_STOP` and a new user/L1 route decision. Engineering may recommend based on capability, quality, speed, cost or availability, but may not silently substitute.
 
 Switching tools between coherent stages is allowed and expected. Preserve exact artifact/worktree identity at the handoff; do not leave competing Writers live on the same shared authority.
 
@@ -215,30 +245,29 @@ Binding specialized files:
 - `governance/TRAE_GLM_ENGINEERING_USAGE_PROFILE_V1_2026-08-20.md` — stable version-independent core;
 - `governance/TRAE_GLM_CURRENT_MODEL_PROFILE.md` — refreshable current model snapshot/delta.
 
-Durable GLM/Trae principles include:
+Durable GLM/Trae principles include one coherent bounded stage, high-constraint complete packet, stable control prefix + mutable evidence tail, exact scoped context before broad workspace context, deterministic proof before model tokens, deliberate same-stage session reuse, Regular when sufficient and no undocumented model-specific tuning.
 
-- one coherent bounded stage rather than arbitrary one-file microtasks;
-- high-constraint complete packet;
-- stable control prefix + mutable evidence tail;
-- exact scoped context before broad workspace context;
-- deterministic shell/Git/test proof before model reasoning;
-- same-session reuse only for the same Writer/stage/worktree/artifact/authority/objective;
-- new session on material stage/authority/independence boundary;
-- no duplicate full governance corpus in Trae Rules;
-- regular mode when sufficient, Max only when the current model surface exposes it and the bounded task genuinely needs the extra budget;
-- no undocumented model-specific tuning.
-
-Model-specific guidance is refreshable through the stable current-model profile path. A future newer GLM model updates that file only by default. It does not require changing this index, the executor-routing architecture or the family core unless durable workflow semantics actually changed.
+A future newer GLM model updates the current-model profile only by default. It does not require changing this index, execution-class/executor-routing architecture or family core unless durable workflow semantics actually changed.
 
 ### Codex selected
 
-Use the Unified Engineering Governance's current Codex session/prompt/token-efficiency and one-paste rules. Codex-specific setup/profile work remains deferred in Issue #115. Draft PR #111 is proposal/history input and is not canonical until reconciled against current main, independently accepted and merged.
+Binding specialized files:
+
+- `governance/CODEX_CLI_ENGINEERING_USAGE_PROFILE_V1_2026-08-20.md` — stable version-independent CLI core;
+- `governance/CODEX_CURRENT_MODEL_PROFILE.md` — refreshable current model/reasoning/service-tier matrix;
+- Unified Engineering Governance Codex/session/token and one-paste rules.
+
+Durable Codex principles include provider-native `codex exec`, task-local explicit model/reasoning/sandbox settings, exact-session resume only inside one trusted Writer/stage/worktree/authority, `--json` passive usage/evidence, stable-prefix/mutable-tail prompts, small stable `AGENTS.md`, deterministic mechanics before model tokens, no speculative skills/plugins/MCP, Standard service tier by default and no Max/Ultra/broad-permission default.
+
+A future newer Codex/OpenAI model updates `governance/CODEX_CURRENT_MODEL_PROFILE.md` only by default. It does not require changing execution-class routing, L2 executor architecture or the Codex CLI core unless durable tool semantics actually changed.
+
+Draft PR #111 is historical/salvage input. Do not resume or merge it as a second active Codex constitution once the reconciled current-main profile is accepted.
 
 ### Historical sequencing snapshot
 
 `governance/CURRENT_TOOLING_EXECUTOR_PRIORITY_V1_2026-08-18.md` exists for provenance of the earlier DeepSeek-first setup sequence. Its `NOW=FIRST_REAL_BOUNDED_DEEPSEEK_HARNESS_TASK` text is not current universal task-routing authority.
 
-Current deferred tooling backlog is tracked in GitHub Issue #115.
+Current tooling backlog is tracked in GitHub Issue #115.
 
 ---
 
@@ -247,14 +276,16 @@ Current deferred tooling backlog is tracked in GitHub Issue #115.
 The unified standard intentionally absorbs the durable project-wide principles from these Draft governance lines:
 
 - PR #101 — continuity / scale-provider gate;
-- PR #96 — one-paste Terminal delivery;
+- PR #96 — one-paste Terminal delivery rule;
 - PR #86 — Engineering Workflow V4 efficiency method;
 - PR #79 — Codex token-efficiency rules;
 - PR #67 — mature-solution-first and cumulative small-step delivery;
-- PR #58 — capability-matched continuous-stage execution;
+- PR #58 — capability-matched continuous-stage execution rules;
 - PR #51 — simplicity-first and route stop-loss.
 
 After the unified rule is independently accepted and merged, these Drafts are historical/salvage inputs rather than competing active constitutions. Do not resume patching an old governance branch merely because it contains an earlier version of an absorbed rule.
+
+PR #111 is also now historical/salvage input for the current-main Codex profile route; its useful native `codex exec`, exact-session and JSONL principles are reconciled into the new specialized Codex files rather than making the stale stacked branch authoritative.
 
 PR #35 and PR #44 remain salvage/history inputs, not merged authority. PR #42, PR #43 and PR #45 are superseded. PR #48 is a frozen failed-design/historical research reference and has no further repair authority.
 
@@ -289,7 +320,7 @@ until measured need justifies a clean current-main design.
 
 ## User-retained authority gates
 
-No research, implementation, review, CI result, Task Packet, Agent role or governance document implicitly authorizes:
+No research, implementation, review, CI result, Task Packet, Agent role, connector availability or governance document implicitly authorizes:
 
 - Mark Ready;
 - merge;
