@@ -6,64 +6,72 @@
 **Executor:** `TRAE` / `TRAE_COMPUTER_USE`  
 **Model family:** GLM, with the exact current model selected per task by the user/L1.
 
-This profile defines the project-specific way to use Trae + GLM for bounded engineering work with high execution reliability and low avoidable token/context cost. It complements the canonical Unified Engineering Governance and the task-level executor-routing rule. It does not create a new executor authority and grants no Mark Ready, merge, deployment, runtime/cloud, credential/private-API, signing/wallet, exchange-write, order-submission, cancellation or trading authority.
+This file is the **version-independent Trae+GLM workflow core**. The current model-specific snapshot lives at the stable path:
+
+`governance/TRAE_GLM_CURRENT_MODEL_PROFILE.md`
+
+When the user changes to a newer GLM model, update that current-model file only by default. Do not rewrite this family core or the three-executor switching architecture merely because the model name changed.
+
+This profile complements the canonical Unified Engineering Governance and the task-level executor-routing rule. It grants no Mark Ready, merge, deployment, runtime/cloud mutation, credential/private-API, signing/wallet, exchange-write, order-submission, cancellation or trading authority.
 
 ---
 
-## 1. Versioning principle — do not hard-code one GLM generation
-
-The durable profile is split into two layers:
+## 1. Stable architecture — family core separate from current model
 
 ```text
-LAYER A — VERSION-INDEPENDENT GLM/TRAE WORKFLOW
+LAYER A — EXECUTOR ROUTING
+ENGINEERING_EXECUTOR_SELECTION_AND_TOOL_PROFILE_ROUTING...
+stable three-peer-executor switching architecture
+
+LAYER B — VERSION-INDEPENDENT TRAE+GLM CORE
+THIS FILE
 stable task sizing, prompt structure, context discipline, session rules,
 validation, authority boundaries and token-efficiency principles
 
-LAYER B — CURRENT MODEL SNAPSHOT
-exact GLM model visible/selected in the user's current Trae surface,
-verified model-specific controls/capabilities/limits only
+LAYER C — CURRENT GLM MODEL SNAPSHOT / DELTA
+TRAE_GLM_CURRENT_MODEL_PROFILE.md
+current Trae-visible model label plus only verified model-specific controls/limits
 ```
 
-The user normally prefers the newest useful GLM model. Therefore no model name such as `GLM-5.3` becomes permanent architecture.
+The exact GLM model is task-level state, not architecture.
 
-For each new material Trae/GLM stage, Engineering must freeze:
+Before a material Trae+GLM Writer stage, Engineering freezes:
 
 ```text
+CURRENT_USER_SELECTED_EXECUTOR=TRAE
 CURRENT_USER_SELECTED_MODEL=
 CURRENT_TRAE_VISIBLE_MODEL_LABEL=
+CURRENT_MODEL_PROFILE_PATH=governance/TRAE_GLM_CURRENT_MODEL_PROFILE.md
 MODEL_PROFILE_LAST_VERIFIED_AT=
 MODEL_SPECIFIC_CONTROLS_VERIFIED=
 MODEL_SPECIFIC_ASSUMPTIONS=NONE_UNLESS_VERIFIED
 ```
 
-If a newer model is selected later, keep Layer A unless evidence shows a workflow change is needed, and refresh only the model-specific snapshot/overrides. Do not duplicate the entire profile for every model revision.
-
-The user's current Trae surface reports `GLM-5.3` as the model in active use. At the time of this research, first-party public Z.AI documentation indexed publicly did not expose a `GLM-5.3` model page; the newest detailed public flagship documentation found was for the GLM-5/5.1 generation. Therefore this profile accepts `GLM-5.3` as the user's current **Trae-visible model selection**, but does not invent undocumented GLM-5.3 API parameters, reasoning flags, context limits, pricing or cache semantics.
+A new model version alone does not change executor switching, review independence, worktree rules, user-retained gates or the high-constraint Task Packet contract.
 
 ---
 
-## 2. Independent position before external research
+## 2. Independent position
 
-Current project execution evidence suggests GLM is more reliable when Engineering Control removes unnecessary degrees of freedom before dispatch: one coherent bounded task, exact worktree, explicit allowlist, exact tests, negative cases, `DO NOT INFER`, and fail-closed stop conditions.
+The project needs GLM to be strong at real engineering without giving it unnecessary freedom to invent route, scope or authority. The two main risks are:
 
-The main risks are:
+1. underspecification — the Writer guesses route, allowlist, acceptance or authority; and
+2. context bloat — repeated governance/history consumes tokens and makes critical constraints less salient.
 
-1. an underspecified prompt that lets the model invent route, scope, authority or acceptance semantics; and
-2. an oversized, repetitive always-loaded context that wastes tokens and makes important constraints harder to follow.
-
-The preliminary route is:
+The durable solution is:
 
 ```text
 SMALL STABLE GLOBAL RULE SURFACE
-+ ONE TOOL-SPECIFIC PROFILE
++ VERSION-INDEPENDENT TOOL PROFILE
++ REFRESHABLE CURRENT-MODEL SNAPSHOT
 + ONE COMPLETE HIGH-CONSTRAINT TASK PACKET
-+ EXACT TASK-RELEVANT FILE/ARTIFACT CONTEXT
-+ ONE COHERENT SESSION/STAGE
++ EXACT TASK-RELEVANT CONTEXT
++ ONE COHERENT BOUNDED SESSION/STAGE
 + DETERMINISTIC COMMANDS FOR MECHANICAL PROOF
-+ NEW SESSION AT MATERIAL OR INDEPENDENCE BOUNDARIES
++ NEW SESSION AT MATERIAL / AUTHORITY / INDEPENDENCE BOUNDARIES
 ```
 
-Optimize for **accepted useful work per total token/rework/review/human-relay cost**, not minimum prompt characters.
+Optimize for accepted useful work per total token/rework/review/human-relay cost, not minimum prompt length.
 
 ---
 
@@ -71,9 +79,9 @@ Optimize for **accepted useful work per total token/rework/review/human-relay co
 
 External research was performed after the independent pass.
 
-### 3.1 Z.AI coding-agent guidance
+### Z.AI
 
-First-party sources checked:
+Checked:
 
 - `https://docs.z.ai/devpack/resources/best-practice`
 - `https://docs.z.ai/devpack/resources/memory-mechanism`
@@ -81,81 +89,73 @@ First-party sources checked:
 - `https://docs.z.ai/guides/capabilities/thinking-mode`
 - `https://docs.z.ai/guides/llm/glm-5`
 - `https://docs.z.ai/guides/llm/glm-5.1`
+- `https://docs.z.ai/release-notes/new-released`
+- `https://docs.z.ai/api-reference/llm/chat-completion`
 
-Relevant first-party guidance:
+Relevant first-party guidance supports:
 
-- coding-agent task input should make **Goal / Context / Constraints / Done when** explicit;
-- complex tasks benefit from planning before mutation;
-- repeated long-lived rules belong in project-level configuration instead of every prompt;
-- repeated workflows are candidates for reusable skills/workflows;
-- unrelated tasks should not accumulate in one long session;
-- instruction memory should be separated from temporary/session learning;
-- large always-loaded memory increases context pressure and rule conflict risk;
-- automatic context caching can reuse repeated prompt/history and reports cached token usage where the provider surface exposes it;
-- preserved thinking is designed for coding/agent continuity and can increase cache reuse on supported Coding Plan/API surfaces.
+- explicit **Goal / Context / Constraints / Done when** task structure;
+- planning before execution for complex tasks;
+- long-lived rules in stable project-level configuration rather than repeated prompts;
+- layered instruction/project/session memory;
+- modular/on-demand rules instead of one oversized always-loaded memory file;
+- deliberate session management and separate sessions for unrelated tasks;
+- full implementation → tests → checks → diff review development loops;
+- automatic repeated-context caching on supported provider surfaces;
+- thinking/interleaved thinking/preserved thinking on supported GLM Coding Plan/API surfaces.
 
-The GLM-5/5.1 public documentation also describes the generation as optimized for long-horizon agentic engineering, complex backend work, debugging and sustained tool-driven execution. This supports allowing one **coherent bounded stage**, rather than mechanically forcing every GLM assignment into tiny single-file prompts.
+### Trae
 
-### 3.2 Trae first-party guidance
-
-First-party sources checked:
+Checked:
 
 - `https://www.trae.ai/blog/trae_tutorial_0825?v=1`
-- `https://www.trae.ai/blog/product_thought_0609`
+- `https://www.trae.ai/blog/product_thought_0609?v=1`
+- `https://www.trae.ai/blog/trae_update_0902?v=1`
 - `https://www.trae.ai/changelog`
 
-Relevant Trae guidance:
+Relevant first-party guidance supports:
 
-- persistent `user_rules.md` / `project_rules.md` reduce repeated prompt input;
-- Trae recommends English custom rules in most cases;
-- Rules have a 20,000-byte maximum and conflicting/unclear rules reduce adherence;
-- rule priority is `user input > Custom Agent prompt > user_rules.md > project_rules.md`;
-- complete project-relative file paths reduce context mistakes;
-- if chat history conflicts with Rules, starting a new conversation is the recommended recovery;
-- `#Code`, `#File`, `#Folder`, `#Workspace`, Docs and Ignore Files deliberately shape context;
-- Ignore Files can reduce irrelevant indexing and secret exposure;
-- current Trae releases support nested Rules including `AGENTS.md`;
-- Trae also supports isolated Worktree-based task execution, which aligns with this project's existing isolated-worktree boundary.
+- stable user/project Rules rather than repeated prompt boilerplate;
+- explicit rule priority and avoidance of conflicting rules;
+- exact `#Code` / `#File` / `#Folder` context before broad `#Workspace` when the scope is known;
+- Ignore Files for irrelevant/high-volume/sensitive context;
+- starting a fresh conversation when chat history conflicts with active rules;
+- nested Rules including `AGENTS.md`;
+- isolated Worktree support;
+- regular modes for ordinary work and Max Mode for genuinely deeper/longer context/tool-call workflows, with higher token/usage cost;
+- current sandbox/tool-execution controls that should be verified on the actual current surface before being relied on.
 
 ---
 
 ## 4. Synthesis
 
-External evidence confirms the project's high-constraint direction but changes the optimal task granularity and context strategy.
+External evidence confirms the high-constraint/context-layering route but rejects two extremes.
 
-### Confirmed
+### Reject over-splitting
 
-- explicit goal/context/constraints/completion criteria improve reliability;
-- persistent rules should be stable and modular instead of repeatedly pasted;
-- large monolithic always-on memory/rules are poor context engineering;
-- exact scoped context is preferable to indiscriminate workspace loading;
-- one coherent task/session is preferable to mixing unrelated work;
-- stable repeated prompt structure is favorable for caching where supported.
+"Make every GLM task tiny" is too crude. One file or one command per prompt can increase bootstrap context, token use, human relay and review fragmentation.
 
-### Modified
+Default unit:
 
-"Make every GLM task very small" is too crude. Over-splitting creates repeated bootstrap context, extra human relay, extra token cost and more review boundaries. The correct unit is **one coherent bounded engineering stage**, not one file or one command.
+```text
+ONE_GLM_WRITER_SESSION = ONE_COHERENT_BOUNDED_ENGINEERING_STAGE
+```
 
-A separate giant Trae project-rules corpus should not duplicate repository governance merely because Trae supports Rules. This repository already uses `AGENTS.md` plus GitHub-resident specialized authority. Duplicating the full corpus would create drift and unnecessary always-loaded context.
+A stage may include implementation plus its in-scope local validation when all authority/scope remains coherent.
 
-Session reuse is useful only while role/stage/worktree/artifact/authority remain coherent. Publication, independent review, unrelated exploration or degraded/conflicting history should use a new session.
+### Reject oversized persistent context
 
-### Rejected
+Do not copy the full Trader Assist governance corpus into Trae Rules or every prompt. Repository authority already provides small stable routing plus specialized files.
 
-- giant always-loaded `project_rules.md` containing the full Trader Assist governance;
-- vague short prompts that ask GLM to infer scope;
-- repeatedly pasting full chat/project history;
-- forcing the Writer to re-research architecture already frozen by L1;
-- broad `#Workspace` context by default when exact files/artifacts are known;
-- inventing version-specific GLM controls that are not verified in the current Trae/model surface.
+### Preserve model-version replaceability
+
+Model-specific context limits, reasoning controls, pricing, cache exposure and mode support must come from the current model snapshot/current tool surface, not from adjacent GLM generations.
 
 ---
 
-## 5. Frozen GLM/Trae packet architecture
+## 5. High-constraint Task Packet architecture
 
-For material coding work, the canonical high-constraint packet remains mandatory.
-
-Use this semantic order:
+For material coding work, use one complete packet in this semantic order:
 
 ```text
 A. STABLE CONTROL PREFIX
@@ -173,7 +173,10 @@ B. CURRENT TASK CONTRACT
    TASK_ID
    exact repository/worktree/branch
    live main/base/head/artifact identities
-   exact objective
+   exact Goal
+   exact Context
+   exact Constraints
+   exact Done-when / acceptance
    accepted baseline/root cause
    what must NOT be reopened
    write allowlist
@@ -193,109 +196,100 @@ C. MUTABLE EVIDENCE TAIL
 
 Keep stable headings/order/text identical where practical. Put volatile facts late.
 
-Prompt brevity never justifies removing allowlists, negative cases, exact tests, stop conditions, exact identities or authority gates.
+Prompt brevity never justifies removing scope, allowlists, negative cases, exact tests, stop conditions, exact identities or authority gates.
 
-For the current Trae direct-paste workflow, preserve the canonical 20,000-character ceiling unless a later verified UI limit supersedes it. If the complete packet would exceed that ceiling, use the project's lossless Terminal/file/task-packet transport rather than truncating or making the user assemble fragments.
+For current Trae direct paste, preserve the canonical 20,000-character ceiling unless a later verified interface limit supersedes it. Above that boundary, use the lossless Terminal/file/task-packet route. Never truncate or ask the user to reconstruct critical fragments.
 
 ---
 
 ## 6. Correct task size
 
-Default:
+Good coherent stages include:
 
-```text
-ONE_GLM_SESSION = ONE_COHERENT_BOUNDED_ENGINEERING_STAGE
-```
-
-Good examples:
-
-- one bounded implementation plus its in-scope tests/local validation;
-- one exact evidence-packet freeze from an already-finished artifact;
+- one bounded implementation plus in-scope tests/local validation;
+- one exact evidence-packet freeze from a finished artifact;
 - one narrow accepted-blocker repair;
 - one separately authorized publication stage: accepted exact artifact → commit → push → Draft PR → exact-head CI observation.
 
-Bad over-splitting:
+Bad over-splitting includes:
 
 - one prompt per changed file;
 - one prompt per lint/test command;
-- separate prompts for commit, push and Draft PR when those belong to one currently authorized publication stage;
-- making the user relay routine Writer/CI messages that the coherent stage can carry itself.
+- separate prompts for commit, push and Draft PR when one publication stage already authorizes them;
+- using the user as the routine Writer/CI message bus.
 
-Bad over-expansion:
+Bad over-expansion includes:
 
-- implementation + unrelated refactor + future optimization + publication + deployment in one stage;
-- current repair plus architecture redesign that L1 did not freeze;
-- Writer performing its own independent acceptance.
+- implementation + unrelated refactor + future optimization + publication + deployment;
+- current repair plus architecture redesign not frozen by L1;
+- Writer self-declaring independent acceptance.
 
 ---
 
 ## 7. Session reuse and reset
 
-Reuse the current Trae/GLM session only when all are true:
+Reuse the current Trae+GLM Writer session only when all are true:
 
 ```text
 SAME_PRIMARY_WRITER=YES
 SAME_COHERENT_STAGE=YES
 SAME_WORKTREE_ARTIFACT=YES
 SAME_AUTHORITY=YES
+SAME_OBJECTIVE=YES
 CONTEXT_REMAINS_TRUSTWORTHY=YES
 INDEPENDENCE_REQUIRED=NO
 ```
 
-Start a **new** Trae/GLM session when any is true:
+Start a new session when any is true:
 
 - task or material stage changes;
-- mutation authority changes materially, such as evidence-only → commit/push/PR publication;
+- authority changes materially, such as evidence-only → publication;
 - worktree/branch/artifact changes;
-- independent review is required;
-- security/authority adjudication is required;
-- current session has accumulated unrelated history;
-- model behavior shows instruction loss, repeated drift, contradictory context or stale assumptions.
+- independent review or security/authority adjudication is required;
+- unrelated history has accumulated;
+- current history conflicts with active Rules;
+- repeated drift/instruction loss/stale assumptions appear.
 
-For the current Issue #112 flow, reusing the Stage-C GLM session for a read-only D0A evidence freeze is reasonable; a later D1 publication stage should use a new complete session/packet because stage and authority change.
+Do not reuse a session merely because the same model or Terminal window remains open.
 
 ---
 
-## 8. Planning rule — L1 plans architecture; GLM plans local execution only
+## 8. Planning rule
 
-For material route/architecture decisions, L1 Engineering Control performs the mandatory independent analysis → external research → synthesis → preflight before Writer dispatch.
+L1 Engineering Control owns architecture/research/route decisions. GLM owns only bounded local execution planning inside the frozen route.
 
-GLM must not repeat the architecture study or invent a competing route after receiving a frozen packet.
-
-Before mutation on a complex task, GLM may produce a short local execution plan only to verify its understanding, for example:
+For a complex implementation, a short pre-mutation plan is appropriate:
 
 ```text
-1. verify identities and allowed paths
+1. verify identities and allowlist
 2. inspect exact affected code
-3. implement the frozen change
+3. implement frozen change
 4. run focused tests
 5. run required regressions/static gates
 6. inspect diff/scope
-7. return the Result Packet
+7. return Result Packet
 ```
 
-For a purely mechanical task with exact commands, do not spend a separate model turn generating an obvious plan; execute the frozen sequence directly.
+For purely mechanical exact-command work, do not spend a separate model turn restating an obvious plan.
 
-If local inspection exposes a new material decision, missing requirement, allowlist expansion or authority conflict: `SAFE_STOP`. Do not solve it by creative inference.
+If inspection exposes a new material decision, missing requirement, allowlist expansion or authority conflict: `SAFE_STOP`.
 
 ---
 
-## 9. Static Trae rules — small, stable and non-duplicative
-
-Do **not** copy the full Trader Assist governance corpus into Trae `user_rules.md` or `project_rules.md`.
+## 9. Static Trae rules — small and non-duplicative
 
 Repository authority remains:
 
 ```text
 AGENTS.md
 → PROJECT_RULES_INDEX.md
-→ canonical/specialized governance files
-→ task-specific authority
+→ executor-routing governance
+→ THIS VERSION-INDEPENDENT TRAE+GLM CORE
+→ TRAE_GLM_CURRENT_MODEL_PROFILE.md
+→ current task-specific authority
 ```
 
-Trae's Rules/`AGENTS.md` support should be a routing surface, not a second governance database.
-
-Current default:
+Do not create a giant duplicate `user_rules.md` / `project_rules.md` containing the project governance corpus.
 
 ```text
 NEW_GIANT_TRAE_PROJECT_RULES_FILE=NO
@@ -304,107 +298,94 @@ ROOT_AGENTS_REMAINS_SMALL_STABLE_POINTER=YES
 DETAILS_LIVE_IN_SPECIALIZED_GITHUB_FILES=YES
 ```
 
-If real GLM tasks later prove that Trae does not reliably surface the repository's `AGENTS.md`/specialized pointer path, Engineering may propose a **small pointer-only Trae rule** as a measured repair. Do not add one speculatively merely because the feature exists.
-
-If such a Trae custom Rule is later justified, use English, concrete verifiable statements, exact project-relative paths, minimal overlap with other rule layers, and keep it comfortably below Trae's 20,000-byte maximum.
+If real tasks later prove Trae does not reliably surface the repository pointer path, a small pointer-only Rule may be proposed as a measured repair. If created, keep it concrete, consistent and well below Trae's current rule-size boundary.
 
 ---
 
 ## 10. Context-selection discipline
 
-Prefer exact task context over broad retrieval:
+Prefer:
 
 ```text
 EXACT FILE / FUNCTION / ARTIFACT
 → SMALL RELATED DIRECTORY
-→ TASK-SPECIFIC DOC/ISSUE
-→ BROADER WORKSPACE SEARCH ONLY WHEN NECESSARY
+→ TASK-SPECIFIC DOC / ISSUE
+→ BROADER WORKSPACE SEARCH ONLY WHEN DISCOVERY IS NECESSARY
 ```
 
-Engineering prompts should give exact project-relative or absolute worktree paths where possible.
+Do not use `#Workspace` merely to make the model "understand everything" when the task is already bounded.
 
-Do not use broad `#Workspace`/whole-repo context merely to make the model "understand everything" when the task concerns a known bounded delta.
-
-Where Trae Ignore Files configuration is available, exclude irrelevant high-volume or sensitive material from indexing when it is not needed, such as third-party dependency trees, virtual environments, caches, generated binaries and secret-bearing paths. Do not ignore canonical source/tests/evidence required by the task.
+Where Trae Ignore Files is available, exclude irrelevant dependency trees, virtual environments, caches, generated binaries and secret-bearing paths from indexing when safe. Do not ignore canonical source/tests/evidence required by the task.
 
 ---
 
-## 11. Token and cache efficiency
+## 11. Token/cache efficiency
 
-The target is not "shortest prompt". The target is:
+Target:
 
 ```text
 TOTAL_COST = INPUT + OUTPUT + RETRIES + REWORK + REVIEW + HUMAN_RELAY
 ```
 
-### Stable prefix
+Rules:
 
-Keep stable control sections, labels and ordering identical where practical. Avoid cosmetic rewrites of the same long control prefix from task to task.
+- stable control prefix, mutable evidence tail;
+- no repeated full project/chat history;
+- no repeated full governance bodies when canonical paths suffice;
+- after accepted baseline, use accepted fingerprint + exact delta + targeted regression/bypass checks;
+- deterministic shell/Git/test proof before model tokens;
+- no synthetic paid cache benchmark;
+- no arbitrary cache-hit threshold.
 
-Z.AI documents automatic context caching for repeated prompt/history and exposes cached token usage on supported API surfaces. Stable repeated context is therefore cache-friendly where Trae's provider path uses/exposes the same mechanism. Treat cache reuse as an optimization, never as a correctness dependency.
-
-### Mutable tail
-
-Put branch/SHA/hash/current log/CI/timestamp facts late in the packet so durable content remains stable.
-
-### No repeated full history
-
-Do not paste old chats, stale PR bodies, previously accepted thousands of lines or full governance bodies when exact canonical paths/identities suffice.
-
-After independent acceptance use:
-
-```text
-ACCEPTED BASELINE
-+ EXACT NEW DELTA
-+ TARGETED REGRESSION / BYPASS CHECKS
-```
-
-### Deterministic mechanics before model tokens
-
-Use shell/Git/test commands for hashes, exact file lists, diff stats, branch/head identity, tests/lint/compile and raw evidence packaging. Do not ask GLM to reason about a value a deterministic command can prove exactly.
-
-### Do not manufacture token tests
-
-If Trae/provider exposes usage/cache metrics naturally, record them. If not, do not add synthetic paid requests or custom instrumentation solely to prove a cache percentage.
-
-Useful evidence where observable:
+If Trae/provider exposes metrics naturally, retain:
 
 ```text
 MODEL
 SESSION/STAGE IDENTITY
-INPUT / OUTPUT TOKENS
-CACHE READ/HIT/MISS TOKENS OR RATIO
+INPUT/OUTPUT TOKENS
+CACHE READ/HIT/MISS OR RATIO
 ELAPSED TIME
 MODEL RETRY COUNT
 ENGINEERING REPAIR/REWORK COUNT
 ```
 
-The decisive metric is whether the profile reduces total rework/context cost while preserving accepted output quality.
+Cache is an optimization, never correctness or authority.
 
 ---
 
-## 12. Thinking/reasoning controls
+## 12. Trae mode and reasoning controls
 
-Z.AI documents thinking, interleaved thinking and preserved thinking on supported GLM Coding Plan/API surfaces. Preserved thinking is specifically intended to help coding/agent continuity and cache behavior.
+### Mode selection
 
-However, provider capability must be separated from controls actually exposed by the user's current Trae model surface.
+```text
+REGULAR_MODE=DEFAULT_WHEN_SUFFICIENT
+MAX_MODE=CONDITIONAL_NOT_DEFAULT
+```
 
-Therefore:
+Use Max Mode only when:
+
+1. the current Trae surface actually exposes it for the user-selected model; and
+2. the bounded task genuinely needs additional context/tool-call budget.
+
+Do not select Max merely because the task is material or because the feature exists. It can consume more token-based usage.
+
+### Reasoning/thinking controls
+
+Z.AI provider capability is not identical to controls exposed inside Trae.
 
 ```text
 USE_VERIFIED_TRAE_VISIBLE_REASONING_CONTROL_ONLY=YES
-INVENT_HIDDEN_MODEL_REASONING_FLAG=NO
+INVENT_HIDDEN_REASONING_FLAG=NO
+INHERIT_ADJACENT_GLM_MODEL_LIMITS=NO
 ```
 
-If the current Trae UI exposes a verified reasoning/deep-thinking/Max-style control for the selected model, L1 may freeze it per task based on complexity. If it does not, do not pretend the Task Packet can control it by prose or undocumented settings.
-
-Do not freeze a permanent GLM reasoning-tier table across model generations. Refresh model-specific guidance when the selected model changes.
+Any current-model-specific reasoning/cache/context behavior belongs in `TRAE_GLM_CURRENT_MODEL_PROFILE.md`.
 
 ---
 
-## 13. Validation and self-check
+## 13. Validation and Writer self-check
 
-Within the authorized coherent stage, the GLM Writer should complete its own mechanical validation before stopping:
+Within the authorized coherent stage:
 
 ```text
 IMPLEMENT
@@ -415,36 +396,32 @@ IMPLEMENT
 → EXACT RESULT PACKET
 ```
 
-Do not confuse Writer self-check with independent acceptance.
+Writer self-check is not independent acceptance.
 
-For evidence-only/read-only stages, production mutation is prohibited. If GLM discovers a production defect outside the frozen scope, it must report it and `SAFE_STOP`; discovery does not grant repair authority.
+For read-only/evidence stages, production mutation remains prohibited. Discovery of an out-of-scope defect does not grant repair authority.
 
 ---
 
-## 14. Model-profile refresh trigger
+## 14. Model refresh contract
 
-This profile must be revisited narrowly when any occurs:
-
-```text
-USER_SELECTS_NEW_GLM_MODEL=YES
-TRAE_MODEL_SURFACE_CHANGES_MATERIALLY=YES
-TRAE_RULES/CONTEXT/WORKTREE_BEHAVIOR_CHANGES_MATERIALLY=YES
-FIRST_PARTY_ZAI_MODEL_GUIDANCE_CHANGES_MATERIALLY=YES
-REAL_PROJECT_EVIDENCE_SHOWS_CURRENT_RULE_IS_INEFFICIENT_OR_UNRELIABLE=YES
-```
-
-Refresh process:
+The default refresh target is the stable current-model file only:
 
 ```text
-KEEP VERSION-INDEPENDENT CORE BY DEFAULT
-→ VERIFY CURRENT TRAE MODEL LABEL/SURFACE
-→ CHECK CURRENT FIRST-PARTY Z.AI + TRAE DOCUMENTATION
-→ COMPARE WITH REAL PROJECT EVIDENCE
-→ UPDATE ONLY THE MODEL-SPECIFIC OR TOOL-SPECIFIC DELTA
-→ INDEPENDENT REVIEW BEFORE MERGE IF GOVERNANCE CHANGES
+USER_SELECTS_NEW_GLM_MODEL
+→ VERIFY_CURRENT_TRAE_VISIBLE_LABEL/SURFACE
+→ CHECK_CURRENT_FIRST-PARTY_ZAI + TRAE DOCUMENTATION
+→ VERIFY_ONLY_ACTUALLY_EXPOSED_CONTROLS/LIMITS
+→ COMPARE_WITH_RECENT_REAL_PROJECT_EVIDENCE
+→ UPDATE governance/TRAE_GLM_CURRENT_MODEL_PROFILE.md
+→ KEEP THIS FAMILY CORE UNCHANGED
+→ KEEP EXECUTOR ROUTING UNCHANGED
 ```
 
-Do not create `GLM-5.3_RULES`, `GLM-5.4_RULES`, `GLM-6_RULES` as separate full constitutions unless a future model genuinely requires incompatible workflow semantics.
+Change this family core only if evidence shows a durable Trae+GLM workflow semantic changed, such as Rules/context loading, session semantics, permission/sandbox behavior, tool execution, worktree support or validation workflow.
+
+Change the executor-routing architecture only if the approved executor pool or L1/L2 authority model itself changes.
+
+A new model name by itself is not enough.
 
 ---
 
@@ -453,12 +430,14 @@ Do not create `GLM-5.3_RULES`, `GLM-5.4_RULES`, `GLM-6_RULES` as separate full c
 ```text
 EXECUTOR=TRAE
 MODEL=USER/L1_SELECTED_CURRENT_GLM_MODEL
-CURRENT_USER_TRAE_MODEL_SNAPSHOT=GLM-5.3
+CURRENT_MODEL_PROFILE=governance/TRAE_GLM_CURRENT_MODEL_PROFILE.md
 MODEL_NAME_NOT_PERMANENT_ARCHITECTURE=YES
-VERSION_INDEPENDENT_CORE_PLUS_REFRESHABLE_MODEL_DELTA=YES
+MODEL_UPGRADE_DEFAULT_CHANGE_SCOPE=CURRENT_MODEL_PROFILE_ONLY
+EXECUTOR_ROUTING_CHANGE_ON_MODEL_UPGRADE=NO_BY_DEFAULT
+VERSION_INDEPENDENT_CORE=THIS_FILE
 MATERIAL_PACKET=HIGH_CONSTRAINT_COMPLETE
 TASK_UNIT=ONE_COHERENT_BOUNDED_STAGE
-SAME_SESSION_REUSE=SAME_ROLE_STAGE_WORKTREE_ARTIFACT_AUTHORITY_ONLY
+SAME_SESSION_REUSE=SAME_ROLE_STAGE_WORKTREE_ARTIFACT_AUTHORITY_OBJECTIVE_ONLY
 NEW_SESSION_ON_MATERIAL_STAGE_OR_AUTHORITY_CHANGE=YES
 NEW_SESSION_FOR_INDEPENDENT_REVIEW=YES
 L1_ARCHITECTURE_RESEARCH_NOT_REPEATED_BY_WRITER=YES
@@ -467,6 +446,8 @@ FULL_GOVERNANCE_DUPLICATED_IN_TRAE_RULES=NO
 EXACT_CONTEXT_BEFORE_WORKSPACE_CONTEXT=YES
 STABLE_PREFIX_MUTABLE_TAIL=YES
 DETERMINISTIC_MECHANICS_BEFORE_MODEL_TOKENS=YES
+REGULAR_MODE_DEFAULT_WHEN_SUFFICIENT=YES
+MAX_MODE_CONDITIONAL=YES
 SYNTHETIC_CACHE_BENCHMARK=NO
 UNDOCUMENTED_MODEL_SPECIFIC_TUNING=NO
 WRITER_PASS_NOT_INDEPENDENT_ACCEPTANCE=YES
