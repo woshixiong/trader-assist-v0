@@ -40,6 +40,27 @@ MAX:
 
 When migrating/tuning, compare the current level with one level lower on representative real tasks; do not assume more reasoning always improves accepted work per quota.
 
+## Task-local Engineering Control decision — mandatory
+
+For every Codex Writer stage, Engineering Control/Router must explicitly decide and freeze before prompt/launch generation:
+
+```text
+CODEX_MODEL=
+CODEX_REASONING_EFFORT=
+CODEX_WEB_SEARCH_REQUIRED=YES|NO
+CODEX_WEB_SEARCH_MODE=disabled|cached|indexed|live
+```
+
+Rules:
+
+- model and reasoning level are Engineering Control decisions based on task complexity/consequence and current quota state; the Codex Writer does not self-upgrade;
+- `CODEX_WEB_SEARCH_REQUIRED=NO` normally means `CODEX_WEB_SEARCH_MODE=disabled`;
+- if current external/provider/library facts are genuinely needed inside the Writer stage, Engineering Control may set Web Search to the verified current Codex mode that fits the task and must state this explicitly in the Task Packet/launch contract;
+- do not enable Web Search merely because it is available; do not disable it when the frozen task genuinely depends on current external evidence;
+- a required mid-stage model/reasoning/Web-Search shape change is normally a stage/session boundary because it changes execution/prefix/tool shape.
+
+The current Codex source exposes top-level `web_search` modes `disabled`, `cached`, `indexed`, and `live`; the current task launcher must use only a mode verified in the installed Codex surface.
+
 ## Service tier
 
 ```text
@@ -72,7 +93,7 @@ When the current Codex model family/CLI changes:
 ```text
 VERIFY codex --version
 -> check current first-party Codex/model/config docs
--> verify exact model/reasoning/service-tier controls in the installed surface
+-> verify exact model/reasoning/service-tier/Web-Search controls in the installed surface
 -> compare with recent accepted Trader Assist evidence
 -> update THIS FILE by default
 ```
