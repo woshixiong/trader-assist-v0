@@ -28,6 +28,8 @@ Current Codex availability material says Terra is available in Codex for Free/Go
 
 Current minimum Codex CLI version for GPT-5.6 access is `0.144.0`. This is a **current compatibility floor**, not a permanently pinned project version.
 
+The current public `@openai/codex` npm distribution observed on 2026-08-23 is `0.149.0`. This is a moving distribution fact, not a project pin. A real Writer dispatch must run `codex --version` mechanically and use the actually installed/current surface rather than assuming this snapshot is still latest.
+
 Current public Sol/Terra/Luna model pages report:
 
 ```text
@@ -40,7 +42,7 @@ Large context is capacity, not a target. Project context remains the smallest co
 
 ---
 
-## 2. Reasoning controls — use the verified intersection
+## 2. Reasoning controls — distinguish product availability from documented CLI invocation controls
 
 Current GPT-5.6 provider guidance supports:
 
@@ -48,15 +50,24 @@ Current GPT-5.6 provider guidance supports:
 none | low | medium | high | xhigh | max
 ```
 
-Current Codex documentation/source surfaces are evolving and are not assumed to expose every API-only reasoning mode identically. The project default safe task-local set is:
+Current OpenAI GPT-5.6 product material also states that GPT-5.6 users in Codex can use `max`, and that `ultra` is available in Codex for eligible Plus-and-higher plans. However, the current public Codex config reference still documents the task/config field `model_reasoning_effort` as:
+
+```text
+minimal | low | medium | high | xhigh
+```
+
+Therefore product-level availability must not be confused with a stable documented one-paste CLI/config invocation contract.
+
+Project default task-local set:
 
 ```text
 DEFAULT_ALLOWED_TASK_EFFORTS=low|medium|high|xhigh
-MAX=VERIFY_CURRENT_CODEX_CLI_SURFACE_BEFORE_USE
-ULTRA_OR_PRO_LIKE_MODE=VERIFY_CURRENT_CODEX_SURFACE_BEFORE_USE
+MAX=PRODUCT_AVAILABLE_BUT_VERIFY_CURRENT_INSTALLED_CODEX_CLI_TASK_LOCAL_SEAM_BEFORE_ENCODING
+ULTRA=PRODUCT_AVAILABLE_ON_ELIGIBLE_PLANS_BUT_VERIFY_CURRENT_INSTALLED_CODEX_CLI_TASK_LOCAL_SEAM_BEFORE_ENCODING
+PRO_OR_SOL_PRO=DO_NOT_ASSUME_AS_CODEX_CLI_MODEL_ID_OR_TASK_LOCAL_CONTROL_WITHOUT_CURRENT_CODEX_SPECIFIC_EVIDENCE
 ```
 
-Do not transfer API-only controls such as persisted reasoning, Pro mode or explicit cache controls into Codex CLI unless the current Codex surface independently exposes them.
+Do not transfer API-only controls such as persisted reasoning, Pro model IDs or explicit cache controls into Codex CLI unless the current installed Codex surface independently exposes them.
 
 Starting heuristic:
 
@@ -65,7 +76,8 @@ LOW    = narrow/obvious/cheaply validated
 MEDIUM = normal bounded coding default
 HIGH   = hard multi-step implementation/debugging
 XHIGH  = exceptional difficult/high-consequence bounded work
-MAX    = exceptional + current-surface verified only
+MAX    = exceptional + current installed task-local surface verified
+ULTRA  = exceptional + current installed task-local surface verified + eligible plan
 ```
 
 Choose the lowest effort likely to finish correctly in one pass, not the lowest effort that can merely start. OpenAI's GPT-5.6 migration guidance specifically recommends comparing the existing effort with one level lower on representative work; use real Trader Assist tasks/evidence rather than synthetic paid benchmarks.
@@ -127,7 +139,7 @@ SOL_XHIGH=exceptional
 DEFAULT=OFF
 ```
 
-Enable only after current Codex-surface verification and an explicit L1 reason that the bounded task benefits enough to justify added tokens/credits/latency. Parallel exploration must not create competing mutation authority.
+Enable only after current installed Codex-surface verification and an explicit L1 reason that the bounded task benefits enough to justify added tokens/credits/latency. Parallel exploration must not create competing mutation authority. Current product availability alone does not authorize Engineering to invent a CLI flag/config value that the current documented/installed surface does not expose.
 
 ---
 
@@ -276,12 +288,16 @@ CURRENT_CODEX_MODEL_FAMILY=GPT-5.6
 CURRENT_SOL=gpt-5.6-sol
 CURRENT_TERRA=gpt-5.6-terra
 CURRENT_LUNA=gpt-5.6-luna
+CURRENT_PUBLIC_CODEX_NPM_LATEST_OBSERVED=0.149.0
+MIN_GPT_5_6_CODEX_CLI_COMPATIBILITY_FLOOR=0.144.0
 EVERYDAY_BOUNDED_CODEX_START=TERRA_MEDIUM_WHEN_CLEARLY_SUFFICIENT
 UNCERTAIN_MODEL_FIT_START=SOL_MEDIUM
 HARD_COMPLEX_START=SOL_HIGH
 LUNA=ONLY_LOW_AMBIGUITY_STRONGLY_VALIDATED_CODE_TASKS
 XHIGH=EXCEPTIONAL
-MAX=VERIFY_CURRENT_CODEX_CLI_SURFACE_BEFORE_USE
+MAX=PRODUCT_AVAILABLE_BUT_VERIFY_CURRENT_INSTALLED_TASK_LOCAL_CLI_SEAM_BEFORE_USE
+ULTRA=PRODUCT_AVAILABLE_ON_ELIGIBLE_PLANS_BUT_VERIFY_CURRENT_INSTALLED_TASK_LOCAL_CLI_SEAM_BEFORE_USE
+PRO_OR_SOL_PRO=DO_NOT_ASSUME_AS_CLI_MODEL_ID_WITHOUT_CODEX_SPECIFIC_EVIDENCE
 FAST_MODE_DEFAULT=OFF
 CACHE_METRIC=PASSIVE_CACHED_INPUT_TOKENS
 FULL_SPECIALIZED_PROFILE_RELOAD_IN_DOWNSTREAM_WRITER=NO_BY_DEFAULT
