@@ -1,29 +1,151 @@
-# Agent Operating Rules
+# Trader Assist / Trade OS — Agent Operating Map
 
-1. GitHub is the shared source of truth. Read the merged TraderOS V0 architecture and the active bounded issue before changing files.
-2. For any research plan, product/strategy/engineering route, architecture or technical direction, framework/tool/provider selection, or other material design decision, follow `governance/PROJECT_RESEARCH_EVIDENCE_DECISION_METHOD_V1_2026-08-16.md` in this exact order: independent analysis first; external research and evidence second; synthesis and final decision third. Do not reverse the order, search only for confirming evidence, or present externally anchored conclusions as independent reasoning. Purely mechanical execution and exact state verification are exempt unless they expose a new material design choice.
-3. Work on one bounded issue and one branch at a time. Report repository, main/base SHA, branch/worktree, task, allowed files, tests, credential state, and rollback before edits.
-4. Preserve the repository boundary: TraderOS production authorities cannot be replaced or weakened by V0.
-5. AI, strategy, dashboard, research, and context modules never receive exchange credentials and never call an exchange write endpoint.
-6. Uncertain, stale, gapped, disconnected, conflicted, or unreconciled mandatory state means no new risk.
-7. Never use simulated, sentinel, or default market/account data as decision evidence.
-8. Historical code is `SEED` or `REFERENCE` until ported behind a reviewed V0 contract with provenance and tests.
-9. V0-01 may add bounded offline evidence runtime and public read-only source definitions. Any public network transport requires its own later bounded authorization and review.
-10. Credentials, wallets, signing, exchange-write endpoints, order mutation, Testnet/Mainnet execution enablement, strategy logic, AI recommendations, and risk sizing remain prohibited unless a later task explicitly authorizes them.
-11. Do not commit raw market/account data, databases, logs, virtual environments, caches, secrets, source archives, or real account identifiers.
-12. No direct commits to `main`, no force-push after review begins, no auto-merge, and no shared-history rewrite.
-13. Every completion report lists exact changed files, commands/tests actually observed, artifacts/hashes, residual risks, rollback, issue/PR, and merge state.
-14. Successor windows read `governance/PROJECT_RULES_INDEX.md`, `governance/UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V1_2026-08-17.md`, `governance/MANDATORY_ENGINEERING_PREFLIGHT_AND_CONVERGENCE_GATE_V1_2026-08-17.md`, `governance/PROJECT_RESEARCH_EVIDENCE_DECISION_METHOD_V1_2026-08-16.md`, `governance/PROJECT_STATE.json`, `governance/V0_FAST_LAUNCH_PROGRAM.json`, and `governance/POST_PR46_FIRST_LAUNCH_STATE_AND_NEXT_GATE_V1.md` after this file, then resolve live GitHub and CI state before acting.
-15. When acting in the role `HERMES_EXECUTION_OPERATOR`, also read and obey `governance/HERMES_EXECUTION_OPERATOR_CONTRACT_V1_2026-08-16.md` and `schemas/control/lossless-task-packet-v1.schema.json`; when `executor.kind=TRAE_COMPUTER_USE`, additionally obey `governance/HERMES_TRAE_COMPUTER_USE_PROFILE_V1_2026-08-16.md`. In that role Hermes is transport/execution infrastructure only: it may execute only a schema-valid frozen Task Packet whose canonical hash verifies; `stage`, `destination`, executor/model, target, permissions and gates must be explicit machine-readable fields; Hermes must not paraphrase authoritative handoffs, choose routing/technical routes, make research/review/approval decisions, or infer missing fields; it must fail closed on ambiguity, integrity mismatch, invalid stage/M2 gate, or any action outside the packet. No Hermes pilot begins until the current repaired PR exact head receives independent acceptance.
-16. Before issuing any Writer implementation prompt for a material task, run `governance/MANDATORY_ENGINEERING_PREFLIGHT_AND_CONVERGENCE_GATE_V1_2026-08-17.md` and obtain `ENGINEERING_PREFLIGHT_GATE=PASS`. The gate must cover live authority, independent analysis, external mature-solution research where applicable, root cause, cross-layer invariants, future continuation/replaceability, scale/provider/freshness, attack matrix, repair stage and stop condition. If any mandatory field is unresolved, Writer dispatch is prohibited.
-17. Every material technical route must preserve an explicit continuation path into the next expected development stage. Do not choose a host-specific, launch-size, provider-specific or implementation-policy shortcut that predictably forces a near-term rewrite or authority-model change. Preserve stable narrow interfaces and replaceable implementation seams without building speculative future platforms. Scale-sensitive values remain tuning parameters where practical.
-18. A normal repair plus one exceptional repair is the maximum for one bounded design route. If independent acceptance still fails, or a blocker crosses previously assumed layer/authority boundaries, stop coding and enter `HOLISTIC_CONVERGENCE_GATE`; re-review the whole affected architecture/state machine before any further Writer task. Do not continue from sunk cost.
-19. If a new architecture-critical rule or invariant is discovered after a Writer prompt has been issued but before execution, void that prompt and regenerate one complete replacement prompt. Do not make the user assemble architecture-critical addenda.
-20. Before any project work, every participant must compare the task against `governance/UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V1_2026-08-17.md` and record `PROJECT_ENGINEERING_RULESET_PREFLIGHT=PASS` (or `SAFE_STOP`). The unified standard is the canonical future engineering-process entry point; older overlapping workflow/governance proposals are historical/salvage inputs unless explicitly retained as specialized companions.
-21. Engineering execution uses the specialized `governance/ENGINEERING_EXECUTOR_POOL_AND_DEEPSEEK_HARNESS_PROFILE_V1_2026-08-18.md`: Codex, Trae and lightweight-setup-verified DeepSeek Harness are the peer coding-executor pool; Hermes plus an approved low-cost/free model is a separate routine operator/automation layer, never a fourth coding/decision/review authority. L1 must freeze the exact executor/model per task, one primary Writer owns each shared-authority stage, and Hermes may not choose or substitute them. DeepSeek Harness requires only the bounded preset/skills/cache setup verification defined by its specialized rule before a first real small bounded task; no separate synthetic coding qualification or harness-only independent review is required. No Hermes H2 dispatch to DeepSeek Harness is allowed until the Lossless Task Packet schema/operator profile is separately updated and independently accepted.
-22. Whenever a DeepSeek model or `DEEPSEEK_HARNESS` is used for project engineering, prompt generation and session setup must also read and obey `governance/DEEPSEEK_HARNESS_MANDATORY_USAGE_RULES_V1_2026-08-18.md`. The frozen rules include PTC/Code Mode-first coding, canonical small `AGENTS.md` context, project-local on-demand mechanical skills, stable-prefix/cache discipline, provider usage measurement, same-role/stage session reuse only, pruning before unnecessary compaction, bounded normal provider retry with unbounded retry prohibited, L1-frozen model/reasoning economy, shipped-capability-before-custom-plugin discipline, and DeepSeek off-peak scheduling at Beijing time 00:00-09:00 / 12:00-14:00 / 18:00-24:00 while the official provider schedule remains unchanged.
-23. Task-level executor/model routing is governed by `governance/ENGINEERING_EXECUTOR_SELECTION_AND_TOOL_PROFILE_ROUTING_V1_2026-08-20.md`: `CODEX_CLI`, `TRAE / TRAE_COMPUTER_USE`, and `DEEPSEEK_HARNESS` remain peer L2 coding executors; the user/L1 selects the exact executor/model per bounded task or coherent stage, and Engineering must automatically load that selected tool's GitHub-resident profile before generating the downstream command/prompt. No tool is the universal Primary Writer, and `governance/CURRENT_TOOLING_EXECUTOR_PRIORITY_V1_2026-08-18.md` is a historical sequencing snapshot rather than a permanent task-routing authority. Silent executor/model substitution is prohibited; a capability mismatch requires `SAFE_STOP` and a new user/L1 route decision.
-24. When a GLM-family or DeepSeek-family model is selected within an already-approved L2 coding-executor path for material coding work, prompt generation must obey the high-constraint complete-task-packet discipline in `governance/UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V1_2026-08-17.md`: exact working directory/worktree, allowed and prohibited scope, must-preserve semantics, negative/attack cases, exact validation commands, SAFE_STOP conditions and output evidence must be explicit. These model families are not additional executor authorities. DeepSeek API coding remains on the approved `DEEPSEEK_HARNESS` route; when GLM is selected in the current Trae workflow, Trae is the executor and GLM is the model. Do not truncate or fragment authority-critical instructions to save tokens; if the current GLM/Trae direct-paste packet would exceed 20,000 characters, use the lossless Terminal/file task-packet route unless a later verified interface limit supersedes that ceiling.
-25. For user-operated macOS work when `DEEPSEEK_HARNESS` is the selected L2 Writer, also read and obey `governance/DEEPSEEK_HARNESS_NATIVE_HEADLESS_ONE_PASTE_WORKFLOW_V1_2026-08-20.md`: the default operator UX is one contiguous ordinary-Terminal paste that resolves the exact worktree/preflight/frozen Task Packet and launches native `dsh --profile headless` directly; the Web UI is optional rather than required. The first real bounded DSH task may use the `0.1.0-rc.8` candidate only under that file's pre-mutation seam-validation rule. Writer PASS remains non-independent, and all retained user authority gates remain unchanged.
-26. Whenever Trae + a GLM-family model is selected for project engineering, read both `governance/TRAE_GLM_ENGINEERING_USAGE_PROFILE_V1_2026-08-20.md` (stable version-independent family/tool core) and `governance/TRAE_GLM_CURRENT_MODEL_PROFILE.md` (refreshable current model snapshot/delta). The exact GLM model is task-level state, not permanent architecture. A newer GLM version should update only the current-model profile by default after a narrow current-Trae-surface + first-party Z.AI/Trae verification; do not change executor-switching governance or the family core unless the new model/tool actually changes durable workflow semantics. The durable core keeps one coherent bounded stage, high-constraint packet, exact scoped context before broad workspace context, deterministic mechanics before model tokens, deliberate session boundaries, and no undocumented model-specific tuning.
-27. Deferred tooling work is tracked in GitHub Issue #115. DeepSeek Harness installation/configuration and its merged one-paste workflow are complete enough to pause; its remaining rc.8 seam/capability and token/cache/skill checks are collected during a future real DSH task. Codex settings/profile work and Hermes installation/configuration remain deferred until the user reprioritizes them.
+This file is a compact entry map, not the project encyclopedia. GitHub is the engineering source of truth. Detailed authority lives in the indexed governance files and the current frozen Task Packet.
+
+## 1. Mandatory control-plane path
+
+Before material research, routing, architecture or Writer dispatch, Engineering Control reads and applies:
+
+1. `governance/PROJECT_RULES_INDEX.md`
+2. `governance/UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V1_2026-08-17.md`
+3. `governance/MANDATORY_ENGINEERING_PREFLIGHT_AND_CONVERGENCE_GATE_V1_2026-08-17.md`
+4. `governance/PROJECT_RESEARCH_EVIDENCE_DECISION_METHOD_V1_2026-08-16.md`
+5. current product/strategy/operations/security authority and live GitHub/CI state.
+
+Material route decisions use: independent analysis -> external/mature evidence -> synthesis. No material Writer dispatch without `PROJECT_ENGINEERING_RULESET_PREFLIGHT=PASS` and `ENGINEERING_PREFLIGHT_GATE=PASS`.
+
+## 2. Task-level execution routing
+
+After independent acceptance and merge, task/model routing is governed by:
+
+`governance/ENGINEERING_EXECUTOR_ROUTER_V2_2026-08-23.md`
+
+Permanent rules:
+
+- the user retains manual executor/model override;
+- no silent substitution;
+- one primary Writer per coherent shared-authority stage;
+- free/cheap is never a reason to violate a quality requirement;
+- human relay/time is part of total engineering cost;
+- Writer self-check is not independent acceptance.
+
+Load only the selected tool/model profile needed for the current stage.
+
+## 3. Codex selected
+
+Read:
+
+- `governance/CODEX_CLI_ENGINEERING_USAGE_PROFILE_V2_2026-08-23.md`
+- `governance/CODEX_CURRENT_MODEL_PROFILE.md`
+
+Core efficiency invariants:
+
+```text
+codex exec for bounded Writer automation
+material/resumable work -> --json telemetry
+root AGENTS = map, not full manual
+stable control prefix + mutable evidence tail
+small repo-scoped skills loaded on demand
+exact-session resume only inside the same trusted stage
+```
+
+Within one coherent Codex stage keep stable unless a new stage is deliberately opened:
+
+```text
+MODEL
+REASONING
+SERVICE TIER
+CWD / WORKTREE
+SANDBOX
+APPROVAL POLICY
+ENABLED TOOL / MCP / PLUGIN SHAPE
+CONTROL PREFIX / OUTPUT CONTRACT SHAPE
+```
+
+Do not casually change these mid-stage; a required material change means freeze evidence, return to Router/preflight as applicable, and start a new stage/session. This protects execution semantics and repeated-prefix cache reuse.
+
+Use repo Skills when their stage is reached:
+
+- `$trade-os-writer-preflight`
+- `$trade-os-local-gates`
+- `$trade-os-evidence`
+- `$trade-os-result-packet`
+
+Do not enable unrelated web/MCP/plugins/subagents merely because they are available.
+
+## 4. OpenCode selected
+
+Read:
+
+`governance/OPENCODE_ENGINEERING_USAGE_PROFILE_V1_2026-08-23.md`
+
+Current default free OpenCode model is Opus 4.6 when available. Sonnet 4.6 is fallback/task-specific. DeepSeek V4 Flash is mainly Scout/triage/high-volume mechanical work. OpenCode may be a semantic Writer or a free deterministic operator, but role/authority must be explicit.
+
+## 5. Trae selected
+
+For GLM-5.3 read:
+
+- `governance/TRAE_GLM_ENGINEERING_USAGE_PROFILE_V1_2026-08-20.md`
+- `governance/TRAE_GLM_CURRENT_MODEL_PROFILE.md`
+
+For DeepSeek V4 Pro read:
+
+- `governance/TRAE_DEEPSEEK_V4_PRO_CURRENT_MODEL_PROFILE.md`
+- Router V2 and the current complete Task Packet.
+
+Both are first-class advanced Writer candidates. Do not encode an unsupported universal ranking against OpenCode Opus 4.6.
+
+## 6. DeepSeek Harness selected
+
+Read:
+
+- `governance/ENGINEERING_EXECUTOR_POOL_AND_DEEPSEEK_HARNESS_PROFILE_V1_2026-08-18.md`
+- `governance/DEEPSEEK_HARNESS_MANDATORY_USAGE_RULES_V1_2026-08-18.md`
+- `governance/DEEPSEEK_HARNESS_NATIVE_HEADLESS_ONE_PASTE_WORKFLOW_V1_2026-08-20.md`
+
+Its existing `.dsh/skills` remain DSH-specific. Shared cross-executor procedural skills live under `.agents/skills`.
+
+## 7. Hermes operator selected
+
+Read:
+
+- `governance/HERMES_EXECUTION_OPERATOR_CONTRACT_V1_2026-08-16.md`
+- `schemas/control/lossless-task-packet-v1.schema.json`
+- the exact frozen task authority.
+
+Hermes is transport/operator/orchestration infrastructure. It must not choose technical route/model, reinterpret authoritative handoffs, conduct independent review, weaken validation or infer missing authority. It fails closed on packet/integrity/scope mismatch.
+
+## 8. Universal repository safety / authority
+
+- One bounded issue/branch/worktree at a time for mutation.
+- No direct commit to `main`; no force-push after review begins; no shared-history rewrite.
+- Do not commit secrets, credentials, wallets, raw private/account data, production databases/logs/caches or real account identifiers.
+- AI/strategy/research/context modules never receive exchange credentials or exchange-write authority.
+- Uncertain/stale/gapped/conflicted mandatory state means no new risk.
+- Never use simulated/default market/account data as real decision evidence.
+- Scope expansion, new dependency/provider, new material architecture/authority decision or exhausted repair budget => `SAFE_STOP` / `L1_DECISION_REQUIRED`.
+- One normal repair + at most one exceptional repair; otherwise enter `HOLISTIC_CONVERGENCE_GATE`.
+- Completion evidence lists exact changed files, observed tests/checks, exact artifact/head, residual risks and retained gates.
+
+## 9. User-retained gates
+
+No Task Packet, Writer, operator, CI result or review implicitly grants:
+
+```text
+Mark Ready
+merge
+branch deletion
+production deploy/runtime/cloud mutation
+service start/restart/enable/reboot
+credentials/private API
+wallet/signing/nonce
+exchange write
+order submission/cancellation
+autonomous trading
+```
+
+These require explicit current user authority.
+
+## 10. Stale/special files
+
+`CODEX.md` is historical stale task state and is not a Codex instruction authority. Do not add it to instruction fallback discovery. Current rules are this map + `PROJECT_RULES_INDEX.md` + the selected profile + the frozen Task Packet.
