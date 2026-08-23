@@ -19,18 +19,21 @@ Fresh OpenAI first-party verification on 2026-08-23 establishes:
 FRONTIER_COMPLEX_MODEL=gpt-5.6-sol
 BALANCED_MODEL=gpt-5.6-terra
 COST_SENSITIVE_MODEL=gpt-5.6-luna
+CURRENT_SPECIALIST_AGENTIC_CODING_MODEL=gpt-5.3-codex
 UNSUFFIXED_ALIAS=gpt-5.6 -> gpt-5.6-sol
 ```
 
-Current OpenAI guidance: Sol is the frontier choice for complex professional work/reasoning/coding; Terra balances intelligence and cost; Luna is the low-cost/high-volume choice. If model fit is genuinely uncertain, current OpenAI model guidance says to start with Sol rather than assume a smaller model is sufficient.
+Current OpenAI general model guidance says to start with GPT-5.6 Sol for complex reasoning and coding, use Terra to balance intelligence and cost, and use Luna for cost-sensitive/high-volume work. The later GPT-5.6 launch also calls Sol OpenAI's best coding model yet and reports strong coding-agent/terminal results with improved token efficiency.
 
-Current Codex availability material says Terra is available in Codex for Free/Go and Sol/Terra/Luna for eligible paid plans. Availability is still mechanically verified at dispatch because account/workspace rollout can differ.
+GPT-5.3-Codex remains a current supported specialist model optimized for agentic coding. Its dedicated model page still describes it as an agentic-coding model and the current Codex rate card still lists it. The same current rate-card material says Codex's built-in code-review feature uses GPT-5.3-Codex. Those facts make it a real current specialist route, but **not** the project's default Writer model: the later GPT-5.6 guidance supersedes the older February 2026 launch claim for general best-model selection.
+
+Current Codex availability material says Terra is available in Codex for Free/Go and Sol/Terra/Luna for eligible paid plans. GPT-5.3-Codex was launched across paid Codex surfaces and remains present in current Codex rate material. Exact local/account/model-picker availability must still be mechanically verified at dispatch.
 
 Current minimum Codex CLI version for GPT-5.6 access is `0.144.0`. This is a **current compatibility floor**, not a permanently pinned project version.
 
 The current public `@openai/codex` npm distribution observed on 2026-08-23 is `0.149.0`. This is a moving distribution fact, not a project pin. A real Writer dispatch must run `codex --version` mechanically and use the actually installed/current surface rather than assuming this snapshot is still latest.
 
-Current public Sol/Terra/Luna model pages report:
+Current public GPT-5.6 Sol/Terra/Luna model pages report:
 
 ```text
 CONTEXT_WINDOW=1,050,000
@@ -38,7 +41,16 @@ MAX_OUTPUT=128,000
 KNOWLEDGE_CUTOFF=2026-02-16
 ```
 
-Large context is capacity, not a target. Project context remains the smallest complete authority/code context needed for the bounded task.
+The current GPT-5.3-Codex model page reports:
+
+```text
+CONTEXT_WINDOW=400,000
+MAX_OUTPUT=128,000
+KNOWLEDGE_CUTOFF=2025-08-31
+REASONING=low|medium|high|xhigh
+```
+
+Do not inherit GPT-5.6 context/reasoning semantics into GPT-5.3-Codex or vice versa. Large context is capacity, not a target; project context remains the smallest complete authority/code context needed for the bounded task.
 
 ---
 
@@ -58,7 +70,7 @@ minimal | low | medium | high | xhigh
 
 Therefore product-level availability must not be confused with a stable documented one-paste CLI/config invocation contract.
 
-Project default task-local set:
+Project default task-local set for GPT-5.6:
 
 ```text
 DEFAULT_ALLOWED_TASK_EFFORTS=low|medium|high|xhigh
@@ -66,6 +78,8 @@ MAX=PRODUCT_AVAILABLE_BUT_VERIFY_CURRENT_INSTALLED_CODEX_CLI_TASK_LOCAL_SEAM_BEF
 ULTRA=PRODUCT_AVAILABLE_ON_ELIGIBLE_PLANS_BUT_VERIFY_CURRENT_INSTALLED_CODEX_CLI_TASK_LOCAL_SEAM_BEFORE_ENCODING
 PRO_OR_SOL_PRO=DO_NOT_ASSUME_AS_CODEX_CLI_MODEL_ID_OR_TASK_LOCAL_CONTROL_WITHOUT_CURRENT_CODEX_SPECIFIC_EVIDENCE
 ```
+
+For GPT-5.3-Codex, use only its currently documented `low|medium|high|xhigh` set unless a newer first-party/current installed Codex surface explicitly changes that contract. Do not apply GPT-5.6 `max`/`ultra` semantics to it by inheritance.
 
 Do not transfer API-only controls such as persisted reasoning, Pro model IDs or explicit cache controls into Codex CLI unless the current installed Codex surface independently exposes them.
 
@@ -76,11 +90,11 @@ LOW    = narrow/obvious/cheaply validated
 MEDIUM = normal bounded coding default
 HIGH   = hard multi-step implementation/debugging
 XHIGH  = exceptional difficult/high-consequence bounded work
-MAX    = exceptional + current installed task-local surface verified
-ULTRA  = exceptional + current installed task-local surface verified + eligible plan
+MAX    = GPT-5.6 exceptional + current installed task-local surface verified
+ULTRA  = GPT-5.6 exceptional + current installed task-local surface verified + eligible plan
 ```
 
-Choose the lowest effort likely to finish correctly in one pass, not the lowest effort that can merely start. OpenAI's GPT-5.6 migration guidance specifically recommends comparing the existing effort with one level lower on representative work; use real Trader Assist tasks/evidence rather than synthetic paid benchmarks.
+Choose the lowest effort likely to finish correctly in one pass, not the lowest effort that can merely start. OpenAI's GPT-5.6 migration guidance recommends comparing the existing effort with one level lower on representative work; use real Trader Assist tasks/evidence rather than synthetic paid benchmarks.
 
 Model/reasoning are frozen before the Writer starts. No silent mid-stage changes.
 
@@ -92,7 +106,7 @@ First ask whether Codex is needed at all. GitHub-only publication and determinis
 
 When `CODEX_CLI` is genuinely required:
 
-### Luna
+### GPT-5.6 Luna
 
 Use for highly bounded, low-ambiguity coding with strong deterministic validation, such as repetitive narrow code transformations or low-risk fixture/test maintenance.
 
@@ -103,7 +117,7 @@ LUNA_LOW=only_when_exceptionally_clear_and_cheaply_validated
 
 If no semantic code judgment is required, route to deterministic Terminal instead of Luna.
 
-### Terra
+### GPT-5.6 Terra
 
 Default starting model for ordinary well-bounded coding when the route/invariants are already frozen:
 
@@ -117,7 +131,7 @@ TERRA_START=medium
 TERRA_HARD_BOUND=high_when_still_clearly_in_balanced_model_class
 ```
 
-### Sol
+### GPT-5.6 Sol
 
 Use when capability/reliability dominates model cost:
 
@@ -125,13 +139,27 @@ Use when capability/reliability dominates model cost:
 - cross-layer implementation with important invariants;
 - unfamiliar/complex code paths;
 - security/authority/execution-boundary work;
-- hard local semantic adjudication/review when Codex is explicitly selected;
+- hard local semantic adjudication when Codex is explicitly selected;
 - model-fit uncertainty where a weak first attempt is likely to cause rework.
 
 ```text
 SOL_START=medium_or_high
 SOL_XHIGH=exceptional
 ```
+
+### GPT-5.3-Codex — current specialist, not project default
+
+Keep GPT-5.3-Codex as a **specialist/empirical candidate**, not as an automatically preferred Writer merely because it has `Codex` in the model name.
+
+Use/consider it only when at least one is true:
+
+- the user/L1 explicitly selects it and the current local Codex surface exposes it;
+- a bounded agentic-coding workload has recent real project evidence showing better accepted-work-per-credit/time than the chosen GPT-5.6 alternative;
+- the project deliberately invokes a Codex-native feature whose current first-party contract uses GPT-5.3-Codex, such as the current built-in code-review feature.
+
+Project review policy remains separate: when exact GitHub artifacts/diffs and exact-head CI suffice, a separate ordinary GPT review window using the strongest appropriate reasoning is preferred over spending a Codex review turn. The fact that Codex's own built-in review feature currently uses GPT-5.3-Codex does not override that routing rule.
+
+Do not claim GPT-5.3-Codex is better than GPT-5.6 for current Trader Assist Writer work without representative real evidence. Its February launch called it the most capable agentic coding model at that time; the later July GPT-5.6 launch explicitly calls GPT-5.6 Sol OpenAI's best coding model yet and current general model guidance recommends the GPT-5.6 family.
 
 ### Max / Ultra / Pro-like / subagent-heavy behavior
 
@@ -147,7 +175,7 @@ Enable only after current installed Codex-surface verification and an explicit L
 
 Current first-party materials establish that Fast is a latency/service-tier feature with a usage premium; it is **not an intelligence upgrade**. Current public surfaces do not present one single universal speed/credit multiplier for every plan/account, so this profile deliberately does not freeze a universal multiplier.
 
-Current first-party examples include faster GPT-5.6 inference and current token-based Enterprise material showing a GPT-5.6 Fast premium over Standard. Exact speed/rate for the user's current Codex product/plan must be verified when Fast is actually considered.
+Exact speed/rate for the user's current Codex product/plan must be verified when Fast is actually considered.
 
 ```text
 CODEX_SERVICE_TIER_DEFAULT=STANDARD
@@ -161,18 +189,21 @@ Do not pay a latency premium for routine engineering.
 
 ## 5. Current Codex credit/cache facts
 
-The current OpenAI Codex rate card checked on 2026-08-23 reports these token-based credits per 1M tokens for the current general rate-card path:
+The current OpenAI Codex rate card checked on 2026-08-23 reports these token-based credits per 1M tokens for the relevant current choices:
 
 ```text
 MODEL              INPUT    CACHED_INPUT    OUTPUT
 GPT-5.6 Sol         125      12.5            750
 GPT-5.6 Terra       50       5               300
 GPT-5.6 Luna        5        0.5             30
+GPT-5.3-Codex       43.75    4.375           350
 ```
 
 The same current rate material states Codex does not charge for cache writes. These values are **refreshable commercial facts**, not architecture; plan/workspace exceptions and future changes must not be inferred from this snapshot.
 
-Direct API economics are a different surface. Current GPT-5.6 API pages report different dollar prices and cache-write/long-context rules. Therefore:
+Cost comparison must use total accepted-work economics rather than input price alone. GPT-5.3-Codex currently has lower input/cached-input credit rates than Terra but a higher output credit rate, while GPT-5.6 has newer capability/efficiency guidance. Do not infer a universal cheaper/better winner without real task evidence.
+
+Direct API economics are a different surface. Current API pages report different dollar prices and cache/write/long-context rules. Therefore:
 
 ```text
 DO_NOT_TRANSFER_API_BILLING_TO_CHATGPT_CODEX=YES
@@ -276,7 +307,7 @@ ENGINEERING_REPAIR_REWORK_COUNT
 FINAL_TASK_ACCEPTANCE
 ```
 
-Use accumulated real-task evidence to refine the Luna/Terra/Sol boundary. Token efficiency is judged by accepted useful work per total token/credit/rework/review cost, not by a single cache ratio.
+Use accumulated real-task evidence to refine the Luna/Terra/Sol/GPT-5.3-Codex boundary. Token efficiency is judged by accepted useful work per total token/credit/rework/review cost, not by a single cache ratio.
 
 ---
 
@@ -288,6 +319,9 @@ CURRENT_CODEX_MODEL_FAMILY=GPT-5.6
 CURRENT_SOL=gpt-5.6-sol
 CURRENT_TERRA=gpt-5.6-terra
 CURRENT_LUNA=gpt-5.6-luna
+CURRENT_SPECIALIST_AGENTIC_CODING_MODEL=gpt-5.3-codex
+GPT_5_3_CODEX_PROJECT_DEFAULT=NO
+GPT_5_3_CODEX_BUILTIN_CODE_REVIEW_CURRENT_USE=YES_PER_CURRENT_RATE_CARD
 CURRENT_PUBLIC_CODEX_NPM_LATEST_OBSERVED=0.149.0
 MIN_GPT_5_6_CODEX_CLI_COMPATIBILITY_FLOOR=0.144.0
 EVERYDAY_BOUNDED_CODEX_START=TERRA_MEDIUM_WHEN_CLEARLY_SUFFICIENT
@@ -295,8 +329,8 @@ UNCERTAIN_MODEL_FIT_START=SOL_MEDIUM
 HARD_COMPLEX_START=SOL_HIGH
 LUNA=ONLY_LOW_AMBIGUITY_STRONGLY_VALIDATED_CODE_TASKS
 XHIGH=EXCEPTIONAL
-MAX=PRODUCT_AVAILABLE_BUT_VERIFY_CURRENT_INSTALLED_TASK_LOCAL_CLI_SEAM_BEFORE_USE
-ULTRA=PRODUCT_AVAILABLE_ON_ELIGIBLE_PLANS_BUT_VERIFY_CURRENT_INSTALLED_TASK_LOCAL_CLI_SEAM_BEFORE_USE
+MAX=GPT_5_6_PRODUCT_AVAILABLE_BUT_VERIFY_CURRENT_INSTALLED_TASK_LOCAL_CLI_SEAM_BEFORE_USE
+ULTRA=GPT_5_6_PRODUCT_AVAILABLE_ON_ELIGIBLE_PLANS_BUT_VERIFY_CURRENT_INSTALLED_TASK_LOCAL_CLI_SEAM_BEFORE_USE
 PRO_OR_SOL_PRO=DO_NOT_ASSUME_AS_CLI_MODEL_ID_WITHOUT_CODEX_SPECIFIC_EVIDENCE
 FAST_MODE_DEFAULT=OFF
 CACHE_METRIC=PASSIVE_CACHED_INPUT_TOKENS
