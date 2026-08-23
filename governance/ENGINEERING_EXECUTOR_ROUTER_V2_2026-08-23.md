@@ -152,7 +152,16 @@ REASONING = highest appropriate level
 
 Do not spend a coding-agent turn merely to reproduce a GitHub-only independent review.
 
-If independent review genuinely requires local execution/inspection unavailable to the ChatGPT window, use a different strong local Writer/harness from the implementation Writer where practical, then return the exact evidence to independent adjudication. Writer self-review never becomes independent acceptance.
+If independent review genuinely requires local execution/inspection unavailable to the ChatGPT window, eligible strong local Reviewer candidates include:
+
+```text
+CODEX_CLI + appropriate strong Codex model
+OPENCODE + OPUS_4_6
+TRAE + GLM_5_3
+TRAE + DEEPSEEK_V4_PRO
+```
+
+Select a genuinely independent session/role and, where practical, a different model/harness from the implementation Writer. These local candidates supply execution/inspection evidence; final adjudication may still return to the independent ChatGPT control window. Writer self-review never becomes independent acceptance.
 
 ## 5. Quota-state behavior
 
@@ -163,16 +172,16 @@ T0 -> OpenCode Opus / Flash
 T1 -> OpenCode Opus; GLM/V4 Pro valid alternatives
 T2 -> Codex Terra/Sol default; Opus/GLM/V4 Pro alternatives
 T3 -> Codex Sol default; Opus/GLM/V4 Pro alternatives
-T4 -> independent ChatGPT
+T4 -> independent ChatGPT; local Codex/Opus/GLM/V4 Pro only when local execution is genuinely required
 ```
 
 ### CODEX_QUOTA_STATE=CONSTRAINED
 
-Move T0/T1 entirely off Codex. Move routine T2 to Opus/GLM/V4 Pro unless Codex has a material expected-quality advantage. Preserve Codex Sol preferentially for T3/high-value hard work.
+Move T0/T1 entirely off Codex. Move routine T2 to Opus/GLM/V4 Pro unless Codex has a material expected-quality advantage. Preserve Codex Sol preferentially for T3/high-value hard work. T4 remains independent ChatGPT by default; local Reviewer selection is capability-driven, not quota-burning.
 
 ### CODEX_QUOTA_STATE=EXHAUSTED
 
-Select Opus 4.6 vs GLM-5.3 vs DeepSeek V4 Pro by task fit. Trae points are a secondary factor, not a reason to accept lower expected quality. If quality difference is not decisive and Opus is available free, prefer Opus.
+Select Opus 4.6 vs GLM-5.3 vs DeepSeek V4 Pro by task fit for local Writer work. Trae points are a secondary factor, not a reason to accept lower expected quality. If quality difference is not decisive and Opus is available free, prefer Opus. For T4 GitHub-only review, independent ChatGPT remains the default and does not depend on Codex quota.
 
 ## 6. One coherent stage; no microtask tax
 
