@@ -1,0 +1,9 @@
+# Trader Assist stable Codex defaults.
+# Model/reasoning/sandbox/approval remain task-local Router decisions.
+service_tier = "default"
+model_verbosity = "low"
+model_reasoning_summary = "none"
+web_search = "disabled"
+
+[agents]
+enabled = false
