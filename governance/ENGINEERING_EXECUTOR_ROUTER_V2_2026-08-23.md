@@ -142,17 +142,28 @@ Choose by the known task-fit guidance above. Do not manufacture a universal rank
 
 ### T4 — INDEPENDENT REVIEW / ADJUDICATION
 
-If exact GitHub artifacts/diffs plus exact-head CI are sufficient:
+Default final adjudicator:
 
 ```text
-DEFAULT = SEPARATE ORDINARY CHATGPT REVIEW WINDOW
+SURFACE = SEPARATE ORDINARY CHATGPT REVIEW WINDOW
 MODEL = strongest appropriate available model
 REASONING = highest appropriate level
 ```
 
-Do not spend a coding-agent turn merely to reproduce a GitHub-only independent review.
+If exact GitHub artifacts/diffs plus exact-head CI are sufficient, review directly through GitHub/connectors. Do not spend a coding-agent turn merely to reproduce a GitHub-only independent review.
 
-If independent review genuinely requires local execution/inspection unavailable to the ChatGPT window, eligible strong local Reviewer candidates include:
+If local execution/inspection evidence is required, the preferred route is **not** to downgrade the final Reviewer to a weaker local coding model. Prefer:
+
+```text
+DETERMINISTIC TERMINAL / LOCAL TOOLING
+-> exact hash-manifested review bundle
+-> upload bundle to a NEW independent strongest-ChatGPT review window
+-> strongest ChatGPT performs final review/adjudication
+```
+
+Use `$trade-os-independent-review-bundle` for this path when available. Before Hermes qualification the user may upload the exact bundle manually. After Hermes is independently qualified, Hermes may automate deterministic bundle generation/verification and exact upload/prompt transport under its checkpointed review-transport profile.
+
+A separate local coding model is an exceptional evidence-acquisition route only when deterministic bundle generation cannot provide the necessary local observation. Eligible local evidence providers include:
 
 ```text
 CODEX_CLI + appropriate strong Codex model
@@ -161,7 +172,7 @@ TRAE + GLM_5_3
 TRAE + DEEPSEEK_V4_PRO
 ```
 
-Select a genuinely independent session/role and, where practical, a different model/harness from the implementation Writer. These local candidates supply execution/inspection evidence; final adjudication may still return to the independent ChatGPT control window. Writer self-review never becomes independent acceptance.
+Their output is evidence for the independent ChatGPT adjudicator unless L1/user explicitly freezes a different independently accepted review route. Writer self-review never becomes independent acceptance.
 
 ## 5. Quota-state behavior
 
@@ -172,16 +183,16 @@ T0 -> OpenCode Opus / Flash
 T1 -> OpenCode Opus; GLM/V4 Pro valid alternatives
 T2 -> Codex Terra/Sol default; Opus/GLM/V4 Pro alternatives
 T3 -> Codex Sol default; Opus/GLM/V4 Pro alternatives
-T4 -> independent ChatGPT; local Codex/Opus/GLM/V4 Pro only when local execution is genuinely required
+T4 -> strongest independent ChatGPT; local evidence bundle when needed
 ```
 
 ### CODEX_QUOTA_STATE=CONSTRAINED
 
-Move T0/T1 entirely off Codex. Move routine T2 to Opus/GLM/V4 Pro unless Codex has a material expected-quality advantage. Preserve Codex Sol preferentially for T3/high-value hard work. T4 remains independent ChatGPT by default; local Reviewer selection is capability-driven, not quota-burning.
+Move T0/T1 entirely off Codex. Move routine T2 to Opus/GLM/V4 Pro unless Codex has a material expected-quality advantage. Preserve Codex Sol preferentially for T3/high-value hard work. T4 remains strongest independent ChatGPT; local evidence generation should normally be deterministic rather than consuming scarce Codex quota.
 
 ### CODEX_QUOTA_STATE=EXHAUSTED
 
-Select Opus 4.6 vs GLM-5.3 vs DeepSeek V4 Pro by task fit for local Writer work. Trae points are a secondary factor, not a reason to accept lower expected quality. If quality difference is not decisive and Opus is available free, prefer Opus. For T4 GitHub-only review, independent ChatGPT remains the default and does not depend on Codex quota.
+Select Opus 4.6 vs GLM-5.3 vs DeepSeek V4 Pro by task fit for local Writer work. Trae points are a secondary factor, not a reason to accept lower expected quality. If quality difference is not decisive and Opus is available free, prefer Opus. T4 final adjudication remains strongest independent ChatGPT and does not depend on Codex quota.
 
 ## 6. One coherent stage; no microtask tax
 
@@ -196,11 +207,11 @@ ONE COMPLETE HIGH-CONSTRAINT TASK PACKET
 
 Split only at real architecture, authority, worktree, model/harness or independence boundaries.
 
-## 7. Semantic Writer vs free operator tail
+## 7. Semantic Writer vs operator tail
 
 A coding Writer should spend reasoning on semantic code work, not routine transport.
 
-Default optimized flow:
+Before Hermes is qualified:
 
 ```text
 ENGINEERING CONTROL / ROUTER
@@ -208,34 +219,43 @@ ENGINEERING CONTROL / ROUTER
 -> semantic Writer
 -> in-scope tests/self-check
 -> exact artifact/evidence boundary
--> FREE OPERATOR (normally OpenCode; later Hermes where configured)
+-> optional FREE OPERATOR (normally OpenCode)
    for remaining deterministic commit/push/evidence mechanics when useful
 -> exact-head CI
 -> independent ChatGPT review
 ```
 
-Do **not** force a free-operator handoff when the current Writer can safely finish a tiny already-authorized mechanical tail with less total burden. The decision criterion is total engineering cost, not a ceremonial role boundary.
-
-The operator may execute already-frozen actions; it may not redesign, widen scope, choose a different model/route, declare independent PASS, Mark Ready, merge or deploy.
-
-## 8. Hermes future insertion
-
-Hermes is an L3 transport/operator/orchestration layer, not a model-quality or engineering-decision authority.
-
-After Hermes is independently qualified, the intended path is:
+After Hermes is independently qualified, Hermes becomes the preferred transport/operator layer when doing so reduces total burden:
 
 ```text
-L1 CHATGPT ENGINEERING CONTROL / ROUTER
--> canonical frozen lossless Task Packet
--> HERMES TRANSPORT / OPERATOR
-   -> dispatch selected Writer (Codex | OpenCode | Trae | DeepSeek Harness)
-   -> perform authorized deterministic terminal/browser/file mechanics
-   -> collect exact Result Packet/evidence
-   -> commit/push/CI observation only when explicitly included
--> INDEPENDENT CHATGPT REVIEW
+ENGINEERING CONTROL / ROUTER
+-> frozen lossless Task Packet
+-> HERMES
+   -> dispatch selected semantic Writer
+   -> wait / checkpoint / collect result
+   -> perform remaining authorized deterministic mechanics
+   -> commit/push/CI observation only when explicitly frozen
+   -> build/transport review bundle when T4 needs local evidence
+-> strongest independent ChatGPT review
 ```
 
-Hermes should use a low-cost/free model for transport/automation and must not add a second semantic reasoning pass before every Codex action. It reduces user copy/paste and waiting; it must not duplicate the Writer's code reasoning.
+Do **not** force an operator handoff when the current Writer can safely finish a tiny already-authorized mechanical tail with less total burden. Conversely, do not spend a fresh Codex reasoning turn on mechanics that a qualified Hermes operator can deterministically perform. The decision criterion is total engineering cost and accepted-work latency, not ceremonial role boundaries.
+
+The operator may execute already-frozen actions; it may not redesign, widen scope, choose a different model/reasoning/Web-Search state, declare independent PASS, Mark Ready, merge or deploy.
+
+## 8. Hermes insertion requirements
+
+Hermes is an L3 transport/operator/orchestration layer, not a model-quality, routing or engineering-decision authority.
+
+Its detailed candidate insertion/diagnostic/review-transport rules live in:
+
+`governance/HERMES_TOOLING_V2_INSERTION_PLAN_2026-08-23.md`
+
+Before first project use, the actual installed Hermes configuration and any schema/contract extension must receive independent acceptance under:
+
+`governance/ENGINEERING_TOOL_ONBOARDING_AND_CHANGE_ACCEPTANCE_RULE_V1_2026-08-23.md`
+
+Hermes must expose checkpointed run state sufficient for human takeover. It must not become a black-box multi-step automation whose failure location cannot be reconstructed.
 
 ## 9. Frozen routing invariants
 
@@ -249,6 +269,9 @@ DEEPSEEK_V4_PRO_FIRST_CLASS_ADVANCED_WRITER=YES
 NO_UNIVERSAL_OPUS_VS_GLM_VS_V4PRO_RANKING=YES
 USER_OVERRIDE_PRESERVED=YES
 ONE_PRIMARY_WRITER_PER_SHARED_AUTHORITY_STAGE=YES
+T4_FINAL_REVIEW_STRONGEST_CHATGPT_DEFAULT=YES
+T4_LOCAL_EVIDENCE_BUNDLE_BEFORE_WEAKER_LOCAL_FINAL_REVIEW=YES
 WRITER_PASS_NE_INDEPENDENT_ACCEPTANCE=YES
 HERMES_IS_OPERATOR_TRANSPORT_NOT_L1_OR_REVIEWER=YES
+HERMES_CHECKPOINTED_RECOVERABLE_AUTOMATION_REQUIRED=YES
 ```
