@@ -136,3 +136,23 @@ These were repaired before independent review by:
 - retaining Standard/Fast policy while moving exact current commercial/speed facts behind current-surface verification.
 
 This is the route's Writer-side `NORMAL_REPAIR`; Writer PASS remains non-independent.
+
+## 6. 2026-08-23 first-party re-verification addendum
+
+Before final independent-review dispatch, the material first-party claims were refreshed again on 2026-08-23. This addendum does not replace the original independent-analysis record above and does not create a new design route.
+
+Current first-party recheck confirms:
+
+- OpenAI's current model guidance still routes `gpt-5.6` to `gpt-5.6-sol`, recommends Sol for complex/uncertain work, Terra for intelligence/cost balance, and Luna for cost-sensitive/high-volume work.
+- OpenAI's GPT-5.6 launch/availability material says Codex exposes Sol, Terra and Luna on eligible plans, with task-selectable reasoning; exact local/account availability is still verified at dispatch.
+- Current Codex non-interactive documentation still defines `codex exec` as the script/pipeline/CLI surface, supports explicit sandbox/approval settings, JSONL output, and exact `codex exec resume <SESSION_ID>` continuation.
+- Current JSONL examples expose `input_tokens`, `cached_input_tokens`, `output_tokens`, and `reasoning_output_tokens`, so passive cache/usage measurement does not require an extra model turn.
+- Current `AGENTS.md` guidance still uses root-to-working-directory instruction layering and a 32 KiB default combined project-instruction ceiling, reinforcing the small stable root-instruction policy.
+- Current Skills guidance explicitly uses progressive disclosure: initial name/description/path metadata, then full `SKILL.md` only when selected. This supports measured focused Skills rather than always-loaded workflow duplication.
+- Current API prompt-caching guidance still requires exact prefix matches and recommends static instructions/examples first with mutable content later. API-specific cache keys/breakpoints/write billing remain API facts and are not treated as Codex CLI controls unless separately exposed there.
+- Current Codex rate material still reports cached input at a substantial discount and the current GPT-5.6 Codex credit table used by Layer C. Commercial facts remain refreshable and plan/surface-specific.
+- Current GPT-5.6 help material still gives Codex CLI `0.144.0` as the minimum GPT-5.6 access version; this remains a compatibility floor rather than a permanent project pin.
+
+The re-verification changed no Layer A or Layer B decision. It refreshed Layer C's verification date only before this evidence addendum was recorded.
+
+Current live repository context at this addendum is `main=a97fff5c45eaffe86157c9ebfa2d01a58188586b`. The Codex proposal branch was created from earlier main `c8946512cc77254b53093ebac29a6fdc51d17721`; the intervening PR #118 touched only Issue #112 runtime/test paths and does not overlap this proposal's six governance/docs paths. Final independent review must verify that live non-overlap/current-main drift rather than relying on this statement.
