@@ -1,0 +1,15 @@
+# Tooling Router / Codex V2 — Candidate Status
+
+```text
+BASE_MAIN=a97fff5c45eaffe86157c9ebfa2d01a58188586b
+BRANCH=governance/tooling-router-codex-v2-20260823
+ROUTE=HOLISTIC_CONVERGENCE_CLEAN_CURRENT_MAIN
+PRIOR_PR117=SALVAGE_INPUT_ONLY
+WRITER_SCOPE=GOVERNANCE_TOOLING_CONFIG_SKILLS_ONLY
+INDEPENDENT_REVIEW_REQUIRED=YES
+MARK_READY_AUTHORITY=NOT_GRANTED
+MERGE_AUTHORITY=NOT_GRANTED
+DEPLOYMENT_RUNTIME_AUTHORITY=NOT_GRANTED
+```
+
+The exact candidate HEAD and exact-head CI are resolved from live GitHub at review time; do not copy a stale SHA into future acceptance.
