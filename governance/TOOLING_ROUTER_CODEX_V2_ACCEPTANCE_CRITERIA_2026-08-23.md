@@ -13,12 +13,17 @@ A7 CODEX_SESSION_JSONL_TELEMETRY_AND_BOUNDED_LOG_RULE
 A8 SHARED_SKILLS_PROGRESSIVE_DISCLOSURE_AND_EXECUTOR_NEUTRALITY
 A9 STALE_CODEX_MD_RETIREMENT
 A10 GOVERNANCE_AUTHORITY_AND_REPAIR_GATES_PRESERVED
-A11 FREE_OPERATOR_TAIL_REDUCES_HUMAN_RELAY_WITHOUT_DUPLICATE_REASONING
+A11 OPERATOR_TAIL_REDUCES_HUMAN_RELAY_WITHOUT_DUPLICATE_REASONING
 A12 HERMES_INSERTION_PRESERVES_OPERATOR_ONLY_AUTHORITY
-A13 CHANGED_SCOPE_GOVERNANCE_TOOLING_ONLY
-A14 EXACT_HEAD_CI_SUCCESS
+A13 T4_STRONGEST_CHATGPT_FINAL_REVIEW_WITH_LOCAL_EVIDENCE_BUNDLE_ROUTE
+A14 CODEX_TASK_LOCAL_MODEL_REASONING_WEB_SEARCH_DECISION_IS_EXPLICIT
+A15 HERMES_CHECKPOINT_TRACEABILITY_FAIL_CLOSED_AND_HUMAN_TAKEOVER
+A16 ENGINEERING_TOOL_ONBOARDING_REQUIRES_INDEPENDENT_ACCEPTANCE
+A17 HERMES_REVIEW_TRANSPORT_SCHEMA_GAP_IS_EXPLICIT_NOT_FALSELY_AUTHORIZED
+A18 CHANGED_SCOPE_GOVERNANCE_TOOLING_ONLY
+A19 EXACT_HEAD_CI_SUCCESS
 ```
 
-A failure in an authority/routing/context architecture item returns `REPLAN` rather than starting another local patch loop. Narrow documentation/config defects may be dispositioned by the independent reviewer under the canonical repair-budget rules.
+A failure in an authority/routing/context/review-independence architecture item returns `REPLAN` rather than starting another local patch loop. Narrow documentation/config defects may be dispositioned by the independent reviewer under canonical repair-budget rules.
 
-PASS grants no Mark Ready or merge authority.
+PASS grants no Mark Ready, merge, Hermes activation, first-project-use, deployment or runtime authority.
