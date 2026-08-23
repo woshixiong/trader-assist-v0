@@ -1,134 +1,124 @@
-# Codex Profile Research Evidence Snapshot V1 — 2026-08-20
+# Trader Assist / Trade OS — Codex Profile Research Evidence Snapshot V1
 
-**Status:** REVIEW EVIDENCE / NON-RUNTIME GOVERNANCE  
-**Repository base at research start:** `c8946512cc77254b53093ebac29a6fdc51d17721`
+**Status:** RESEARCH / EVIDENCE SNAPSHOT FOR PR #117  
+**Original research date:** 2026-08-20  
+**Latest re-verification:** 2026-08-23  
+**Repository:** `woshixiong/trader-assist-v0`
 
-This file records the required three-stage research trail for the Codex configuration/profile decision. It grants no implementation/publication/runtime/account/trading authority.
+This file records the evidence used to design the Codex CLI profile and GPT-control-first execution-class routing. It is not an independent acceptance and grants no publication/runtime/trading authority.
 
-## 1. Independent analysis — before external solution research
+## 1. Independent analysis before external research
 
-The project problem is not simply "configure Codex." It has three coupled cost/correctness questions:
+The project should not pay coding-Agent token/credit/context cost for work that an Engineering/Review GPT window can complete directly with GitHub/connectors or with a deterministic one-paste Terminal block. Once a task genuinely requires local semantic code inspection/mutation/debug/repair, Codex should use the narrowest provider-native execution seam with explicit task-local model/reasoning/permission configuration, exact session identity, small stable project instructions, local repository context discovery, and passive usage evidence.
 
-1. which tasks genuinely require a local coding Agent versus ordinary GPT control or deterministic shell/Git mechanics;
-2. when Codex is required, which provider-native execution/session/context pattern minimizes duplicate work and user relay;
-3. how model/reasoning choice should trade first-pass success against token/credit cost without becoming model-version architecture.
-
-Pre-research position:
+The main optimization target is accepted useful work per total cost:
 
 ```text
-A. ROUTE EXECUTION CLASS BEFORE MODEL
-   ordinary GPT/connectors for connector-sufficient work
-   deterministic Terminal for frozen mechanics
-   coding Agent only for semantic local code work
-
-B. CODEX CLI-FIRST
-   use the provider-native non-interactive CLI if it supports exact workdir,
-   model/reasoning, sandbox, persisted session continuation and usage evidence
-
-C. CONTEXT ECONOMY
-   small stable repository instruction surface
-   stable control prefix + mutable task tail
-   exact local code inspection rather than repasting source/history
-   resume only inside one trustworthy coherent stage
-
-D. MODEL VERSION IS A REFRESHABLE POLICY
-   stable CLI/session rules must survive model upgrades
-   current model/reasoning/cost facts belong in a replaceable Layer C profile
-
-E. PUBLICATION IS NOT CODING
-   accepted artifact publication should not consume coding-Agent tokens unless
-   a new code judgment/repair is actually required
+MODEL INPUT/OUTPUT/REASONING
++ CACHED/UNCACHED INPUT ECONOMICS
++ RETRIES/REWORK
++ REVIEW
++ HUMAN RELAY
++ TOOL/CONTEXT BOOTSTRAP
 ```
 
-Evidence that could falsify/modify this view included: Codex CLI lacking reliable noninteractive/exact-session controls; first-party guidance requiring persistent TUI; current model surfaces lacking task-local model/reasoning control; provider cache behavior making session/prefix discipline irrelevant; or GitHub/publication steps materially requiring code-agent semantics.
+Candidate routes considered before external research:
 
-## 2. External first-party evidence
+1. use Codex for every engineering stage including publication/review;
+2. route noncoding stages to GPT Control / deterministic Terminal and reserve Codex for code-semantic work;
+3. persistent interactive TUI versus non-interactive `codex exec`;
+4. new session every turn versus exact trusted-stage resume;
+5. one large permanent Codex context versus small stable project instructions + exact task packet + local inspection;
+6. hidden global model defaults versus explicit task-local model/reasoning/sandbox choices;
+7. general-purpose model default versus task-tiered Sol/Terra/Luna routing;
+8. speculative SDK/App Server/MCP/Skills versus provider-native CLI first.
 
-Research then checked current OpenAI first-party Codex/API/help material and current `openai/codex` source. Key findings:
+Pre-research preference: route noncoding mechanics away from Codex, use `codex exec` for bounded code work, keep project instructions small, make model/version facts refreshable, use exact-session continuation only inside one coherent trusted stage, and measure cache/token evidence passively rather than creating benchmark calls.
 
-- OpenAI positions Codex for understanding codebases, building/testing features, fixing bugs and reviewing changes, while Chat/Work cover broader conversational/research/knowledge work. This supports capability-based routing rather than using Codex for every engineering-adjacent action.
-- Codex provides native noninteractive `codex exec`, task-local working-directory/model/sandbox/config controls, JSONL execution evidence and exact session resume. The narrower CLI route is sufficient for the current one-paste workflow; SDK/App Server/MCP are not required merely to reproduce it.
-- Codex project instructions use `AGENTS.md`; current guidance supports layered repository instructions. Keeping the root instruction surface small is compatible with provider-native behavior.
-- Codex Skills use progressive disclosure. This supports adding skills only for measured repeated workflows rather than duplicating static governance into always-loaded context.
-- GPT-5.6 current model guidance distinguishes Sol for frontier complex reasoning/coding, Terra for intelligence/cost balance, and Luna for cost-sensitive high-volume work. OpenAI recommends Sol when model fit is genuinely uncertain.
-- GPT-5.6 guidance recommends intentionally selecting reasoning effort and comparing representative workloads at the same and one-lower effort instead of assuming more reasoning is always better.
-- Current Codex rate material prices cached input substantially below uncached input and states Codex cache writes are not charged on the current token-based rate-card path. Current direct API cache/billing controls differ, so API-only cache semantics must not be assumed to be Codex CLI controls.
-- Current GPT-5.6 API guidance emphasizes exact-prefix prompt caching and mutable content later; Codex JSONL exposes cached-input usage evidence. This supports stable-prefix/mutable-tail design and passive real-task measurement.
-- Current first-party material shows Fast is a latency/service-tier feature with a usage premium rather than an intelligence tier. Exact plan/rate behavior can change, so it belongs in the refreshable current-model profile.
-- Current GPT-5.6 access material requires Codex CLI `0.144.0` or later for GPT-5.6 access; this is a current compatibility floor, not a permanent project pin.
+## 2. External first-party evidence checked
 
-Primary sources checked include current pages under:
+OpenAI/Codex first-party material checked includes current documentation for:
 
-- `developers.openai.com/codex/...`
-- `developers.openai.com/api/docs/models`
-- `developers.openai.com/api/docs/guides/latest-model`
-- `developers.openai.com/api/docs/guides/prompt-caching`
-- `help.openai.com` current GPT-5.6/Codex availability and Codex rate-card material
-- `github.com/openai/codex` current source for evolving reasoning-effort support.
+- Codex non-interactive mode and `codex exec`;
+- Codex CLI/reference and configuration reference;
+- Codex `AGENTS.md` instruction discovery;
+- Codex Skills/progressive disclosure;
+- GPT-5.6 model guidance and Sol/Terra/Luna model pages;
+- GPT-5.6 availability in Codex;
+- Codex rate card / cached-input accounting;
+- prompt caching principles;
+- current Codex distribution/package surface.
 
-## 3. Synthesis and final route
+Key current first-party findings:
 
-External evidence **confirmed** the independent CLI-first, exact-session, stable-prefix, capability-routing approach. It also refined the route in three ways:
+- `codex exec` is the native non-interactive route for scripting/pipeline/CLI work and can return control to the ordinary shell after the turn.
+- `codex exec --json` exposes structured JSONL events including session/thread identity and usage; current examples include input, cached-input, output and reasoning-output token fields.
+- `codex exec resume <SESSION_ID>` can continue an exact persisted session. `--last` exists as convenience but does not carry authority-grade identity.
+- Codex supports task-local model, working-directory, sandbox, approval and config overrides. Explicit launch choices can override ordinary defaults.
+- Current public Codex configuration documents `model_reasoning_effort` through `xhigh`; product-level GPT-5.6 materials additionally advertise `max` in Codex and `ultra` for eligible plans. Therefore a one-paste CLI workflow must verify the installed task-local seam before encoding Max/Ultra rather than assuming a product/UI control is a documented CLI config value.
+- GPT-5.6 Sol is the frontier choice for complex reasoning/coding; Terra balances intelligence/cost; Luna is optimized for cost-sensitive/high-volume work.
+- Current Codex availability includes Sol/Terra/Luna for eligible paid plans and Terra for Free/Go.
+- Current GPT-5.6 model pages expose very large context, but this is capacity rather than a reason to provide unnecessary context.
+- Prompt-cache reuse benefits stable exact prefixes with dynamic content later; Codex JSONL can passively reveal cached input without an extra model turn.
+- Current Codex rate material shows cached input much cheaper than uncached input; rate/plan facts are refreshable and must not be confused with direct API billing semantics.
+- `AGENTS.md` is loaded before Codex works. Global `$CODEX_HOME/AGENTS.md` is inherited by every repository, while project instructions are layered from repository root toward the working directory. The default combined project-instruction ceiling is 32 KiB.
+- `$CODEX_HOME/AGENTS.override.md` overrides the global base file and is designed for override behavior, not as a permanent project-specific rule store.
+- Skills support progressive disclosure; this supports adding a focused Skill only after repeated real tasks prove the workflow is worth encoding, rather than turning all governance into always-loaded Skills.
 
-1. current model guidance justifies a three-level practical matrix: Luna only for very low-ambiguity strongly validated coding, Terra for ordinary bounded coding when clearly sufficient, and Sol for difficult/uncertain/high-consequence work;
-2. model/reasoning/service-tier facts must be a refreshable Layer C because current surfaces evolve faster than durable project workflow;
-3. provider/API capabilities such as explicit cache keys, persisted reasoning, Pro/Max/Ultra-like modes or exact Fast multipliers must not be transferred into Codex CLI without current surface verification.
+## 3. Synthesis and selected route
 
-The selected route is therefore:
+External evidence confirms the independent route with two important refinements.
+
+First, context/cache efficiency is not only about shorter prompts. A stable prefix, small `AGENTS.md`, exact local code discovery, coherent session reuse and deterministic shell/Git mechanics outside model tokens all reduce total cost without weakening authority.
+
+Second, model/reasoning/provider facts move faster than the durable CLI workflow. Therefore:
 
 ```text
-EXECUTION CLASS
+Layer A = stable execution-class + executor routing
+Layer B = stable Codex CLI workflow core
+Layer C = refreshable current model/reasoning/rate/service snapshot
+```
+
+Routine model upgrades update Layer C only. Layer B changes only when durable CLI/session/context/permission/evidence semantics change. Layer A changes only when the execution-class or L1/L2 authority model changes.
+
+The selected route is:
+
+```text
 GPT_CONTROL_DIRECT
 → GPT_CONTROL_DETERMINISTIC_TERMINAL
-→ L2_CODING_EXECUTOR only when genuinely required
-
-IF L2=CODEX_CLI
-→ LAYER B stable Codex CLI core
-→ LAYER C refreshable current model profile
-→ one-paste `codex exec`
-→ task-local model/reasoning/sandbox
-→ exact session resume only within one trusted stage
-→ JSONL passive token/cache evidence
-→ independent review
-→ publication routed back to GPT Control where possible
+→ L2_CODING_EXECUTOR only if local semantic code work is required
+   → when Codex selected: one-paste `codex exec`
+      + explicit task-local model/reasoning/sandbox
+      + small project instructions
+      + complete frozen Task Packet
+      + local exact code inspection
+      + exact-session resume only inside same trusted stage
+      + JSONL passive usage/evidence
 ```
 
-Rejected current defaults:
+## 4. Counterexamples / rejected defaults
 
-- coding Agent for GitHub-only publication;
+Rejected as project defaults:
+
+- coding Agent for GitHub-only publication or other connector-sufficient work;
 - coding Agent for deterministic commit/push of an already accepted artifact;
-- persistent TUI as bounded Writer default;
-- new session every turn;
-- resume-everything merely for cache hits;
-- Fast as default;
-- Max/Ultra/Pro-like mode as default;
-- speculative Skills/MCP/App Server/SDK orchestration;
-- global model defaults as hidden authority;
-- API-only cache controls treated as Codex CLI controls.
+- persistent TUI for every bounded Writer stage;
+- `resume --last` as automation identity;
+- new session after every process exit;
+- stale-session resume solely for cache savings;
+- global project-specific `~/.codex/AGENTS.md` duplicating repository governance;
+- giant always-loaded Codex instruction corpus;
+- hidden remembered model/reasoning defaults;
+- Fast/Max/Ultra/Pro-like/broad-permission modes as prestige defaults;
+- API-only cache controls treated as if they were Codex CLI controls;
+- speculative Skills, MCP, App Server or SDK layers without measured need.
 
-## 4. Residual validation plan
+## 5. Writer-side normal repair before independent review
 
-Do not manufacture paid benchmark tasks. On real Codex tasks, passively retain:
+The initial route exposed two self-review problems:
 
-```text
-CODEX_VERSION
-MODEL / REASONING / SERVICE_TIER
-NEW_OR_RESUME_EXACT + SESSION_ID
-INPUT / CACHED_INPUT / OUTPUT / REASONING_OUTPUT where exposed
-ELAPSED_TIME
-MODEL_RETRY_COUNT
-ENGINEERING_REPAIR_REWORK_COUNT
-FINAL_ACCEPTANCE
-```
-
-Use accumulated real evidence to refine the Luna/Terra/Sol and reasoning-effort boundaries. No arbitrary cache-hit percentage is a correctness gate.
-
-## 5. Writer-side repair note
-
-Writer self-review found two issues before independent review:
-
-1. the first draft could cause downstream Codex to reread large specialized profiles on every run, conflicting with the token-efficiency objective;
-2. the first draft froze Fast speed/credit multipliers too aggressively despite current first-party surface/plan variation.
+1. making downstream Codex reread the full specialized governance profiles on every Writer run would undercut token/context efficiency;
+2. freezing universal Fast speed/credit multipliers would make a durable workflow depend on moving commercial facts.
 
 These were repaired before independent review by:
 
@@ -144,15 +134,17 @@ Before final independent-review dispatch, the material first-party claims were r
 Current first-party recheck confirms:
 
 - OpenAI's current model guidance still routes `gpt-5.6` to `gpt-5.6-sol`, recommends Sol for complex/uncertain work, Terra for intelligence/cost balance, and Luna for cost-sensitive/high-volume work.
-- OpenAI's GPT-5.6 launch/availability material says Codex exposes Sol, Terra and Luna on eligible plans, with task-selectable reasoning; exact local/account availability is still verified at dispatch.
+- Current Codex availability exposes Sol, Terra and Luna to eligible paid plans and Terra to Free/Go; exact local/account availability is still verified at dispatch.
+- Current GPT-5.6 product material says `max` is available in Codex for users with GPT-5.6 access and `ultra` is available to eligible Plus-and-higher Codex plans, while the public Codex config reference still documents task/config `model_reasoning_effort` only through `xhigh`. The project therefore verifies the installed one-paste CLI seam before encoding Max/Ultra.
 - Current Codex non-interactive documentation still defines `codex exec` as the script/pipeline/CLI surface, supports explicit sandbox/approval settings, JSONL output, and exact `codex exec resume <SESSION_ID>` continuation.
 - Current JSONL examples expose `input_tokens`, `cached_input_tokens`, `output_tokens`, and `reasoning_output_tokens`, so passive cache/usage measurement does not require an extra model turn.
-- Current `AGENTS.md` guidance still uses root-to-working-directory instruction layering and a 32 KiB default combined project-instruction ceiling, reinforcing the small stable root-instruction policy.
-- Current Skills guidance explicitly uses progressive disclosure: initial name/description/path metadata, then full `SKILL.md` only when selected. This supports measured focused Skills rather than always-loaded workflow duplication.
-- Current API prompt-caching guidance still requires exact prefix matches and recommends static instructions/examples first with mutable content later. API-specific cache keys/breakpoints/write billing remain API facts and are not treated as Codex CLI controls unless separately exposed there.
+- Current `AGENTS.md` guidance still uses global plus root-to-working-directory project layering and a 32 KiB default combined project-instruction ceiling. Because global `$CODEX_HOME/AGENTS.md` is inherited across repositories, Trader Assist project rules remain in the repository root; a global file, if present, should remain small and cross-repository only. `AGENTS.override.md` is not a permanent Trader Assist rule location.
+- Current Skills guidance explicitly uses progressive disclosure. This supports measured focused Skills rather than always-loaded workflow duplication.
+- Current prompt-caching guidance still favors exact stable prefixes with mutable content later. API-specific cache keys/breakpoints/write billing remain API facts and are not treated as Codex CLI controls unless separately exposed there.
 - Current Codex rate material still reports cached input at a substantial discount and the current GPT-5.6 Codex credit table used by Layer C. Commercial facts remain refreshable and plan/surface-specific.
 - Current GPT-5.6 help material still gives Codex CLI `0.144.0` as the minimum GPT-5.6 access version; this remains a compatibility floor rather than a permanent project pin.
+- The current public `@openai/codex` npm distribution observed on 2026-08-23 is `0.149.0`. This is recorded only as a moving evidence point. Real Writer dispatches mechanically run `codex --version` and do not assume this evidence snapshot remains latest.
 
-The re-verification changed no Layer A or Layer B decision. It refreshed Layer C's verification date only before this evidence addendum was recorded.
+The re-verification does not change the Layer A/B architecture. The user's additional 2026-08-23 scope clarification is now also explicit in root `AGENTS.md`: when exact GitHub artifacts and exact-head CI are sufficient, a separate ordinary GPT window with the strongest appropriate reasoning is the default independent-review route; coding-Agent review is reserved for cases that actually require local execution or local semantic code-environment access.
 
-Current live repository context at this addendum is `main=a97fff5c45eaffe86157c9ebfa2d01a58188586b`. The Codex proposal branch was created from earlier main `c8946512cc77254b53093ebac29a6fdc51d17721`; the intervening PR #118 touched only Issue #112 runtime/test paths and does not overlap this proposal's six governance/docs paths. Final independent review must verify that live non-overlap/current-main drift rather than relying on this statement.
+Current live repository context at this addendum is `main=a97fff5c45eaffe86157c9ebfa2d01a58188586b`. The proposal branch was created from earlier main `c8946512cc77254b53093ebac29a6fdc51d17721`; intervening PR #118 touched Issue #112 runtime/test paths rather than this proposal's governance/docs paths. Final independent review must verify live drift/non-overlap itself rather than trusting this statement.
