@@ -1,7 +1,7 @@
 # Trader Assist / Trade OS — Codex Current Model Profile
 
 **Status:** REFRESHABLE SPECIALIZED GOVERNANCE PROPOSAL  
-**Last first-party verification:** 2026-08-20  
+**Last first-party verification:** 2026-08-23  
 **Stable path:** `governance/CODEX_CURRENT_MODEL_PROFILE.md`  
 **Scope:** current Codex-visible model/reasoning/service-tier facts and project task-to-model guidance only.
 
@@ -13,7 +13,7 @@ Change Layer B only if durable Codex CLI/session/context/permission/evidence sem
 
 ## 1. Current first-party baseline
 
-Fresh OpenAI first-party verification on 2026-08-20 establishes:
+Fresh OpenAI first-party verification on 2026-08-23 establishes:
 
 ```text
 FRONTIER_COMPLEX_MODEL=gpt-5.6-sol
@@ -149,7 +149,7 @@ Do not pay a latency premium for routine engineering.
 
 ## 5. Current Codex credit/cache facts
 
-The current OpenAI Codex rate card checked on 2026-08-20 reports these token-based credits per 1M tokens for the current general rate-card path:
+The current OpenAI Codex rate card checked on 2026-08-23 reports these token-based credits per 1M tokens for the current general rate-card path:
 
 ```text
 MODEL              INPUT    CACHED_INPUT    OUTPUT
@@ -271,7 +271,7 @@ Use accumulated real-task evidence to refine the Luna/Terra/Sol boundary. Token 
 ## 10. Current frozen snapshot
 
 ```text
-PROFILE_LAST_VERIFIED=2026-08-20
+PROFILE_LAST_VERIFIED=2026-08-23
 CURRENT_CODEX_MODEL_FAMILY=GPT-5.6
 CURRENT_SOL=gpt-5.6-sol
 CURRENT_TERRA=gpt-5.6-terra
