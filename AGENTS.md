@@ -74,6 +74,8 @@ Do not enable unrelated web/MCP/plugins/subagents merely because they are availa
 
 OpenCode: read `governance/OPENCODE_ENGINEERING_USAGE_PROFILE_V1_2026-08-23.md`. Opus 4.6 is current default free model when available; Sonnet 4.6 fallback/task-specific; DeepSeek V4 Flash mainly Scout/triage/high-volume mechanics.
 
+When Router V2 has already selected a local `OPENCODE` stage and the frozen task is compatible with the independently accepted Local Task Runner V0, also read `governance/LOCAL_TASK_RUNNER_V0_ENGINEERING_USAGE_PROFILE_V1_2026-08-24.md` and use `$trade-os-local-task-runner`. Engineering Control generates the complete one-paste Terminal block, including Runner identity preflight, Task Packet creation/hash, one `validate`, exactly one `run`, result/evidence capture and telemetry. Do not ask the user to hand-author Runner JSON/hashes, do not manufacture a synthetic first-real-task benchmark, and do not route normal application-code/test failures to the tooling window. Return to tooling control only for a genuine Runner/workflow defect or accepted-identity drift.
+
 Trae GLM-5.3: read `governance/TRAE_GLM_ENGINEERING_USAGE_PROFILE_V1_2026-08-20.md` and `governance/TRAE_GLM_CURRENT_MODEL_PROFILE.md`.
 
 Trae DeepSeek V4 Pro: read `governance/TRAE_DEEPSEEK_V4_PRO_CURRENT_MODEL_PROFILE.md`.
