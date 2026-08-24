@@ -44,6 +44,18 @@ Efficiency rules include compact AGENTS map; task-local model/reasoning/sandbox/
 
 OpenCode: read `governance/OPENCODE_ENGINEERING_USAGE_PROFILE_V1_2026-08-23.md`. Opus 4.6 is default free OpenCode model when available; Sonnet 4.6 fallback/task-specific; V4 Flash mainly Scout/triage/high-volume mechanics.
 
+For a Router-selected local OpenCode stage compatible with the accepted Local Task Runner V0, also read:
+
+- `governance/LOCAL_TASK_RUNNER_V0_ENGINEERING_USAGE_PROFILE_V1_2026-08-24.md`
+- `governance/LOCAL_TASK_RUNNER_V0_OPERATOR_OBSERVABILITY_GUIDE_V1_2026-08-24.md`
+- `.agents/skills/trade-os-local-task-runner/SKILL.md`
+
+Engineering Control owns the complete Runner lifecycle visible to the user: generate one complete Terminal paste block; create/hash the frozen Runner Task Packet; verify exact runner/Git/OpenCode identity; call `validate`; call `run` exactly once; collect result/evidence/telemetry; then, after the user pastes the complete Terminal output once back into the same Engineering window, review **both** the normal code/task outcome and Runner workflow health. The user does not manually author Runner JSON/hashes, search the Terminal transcript for Runner status fields, classify red flags, or compose tooling escalation reports.
+
+Normal application-code/test/task/model-provider issues stay with Engineering Control/Router. If Engineering Control identifies a genuine Runner identity/schema/state/evidence/policy/preflight/retry/substitution defect, it must explicitly tell the user that tooling control is required, prohibit automatic rerun, and generate one complete ready-to-copy `TOOLING_CONTROL_ESCALATION_PROMPT_BEGIN ... END` prompt in a fenced code block using exact evidence. For the first real Runner project task only, Engineering Control must also generate the one-time `LOCAL_TASK_RUNNER_OBSERVATION_PACKET` prompt regardless of PASS/FAIL so tooling control can validate the live workflow once.
+
+Do not manufacture a synthetic first-real-task benchmark or force OpenCode merely to exercise the Runner.
+
 Trae GLM-5.3: read `governance/TRAE_GLM_ENGINEERING_USAGE_PROFILE_V1_2026-08-20.md` + `governance/TRAE_GLM_CURRENT_MODEL_PROFILE.md`.
 
 Trae DeepSeek V4 Pro: read `governance/TRAE_DEEPSEEK_V4_PRO_CURRENT_MODEL_PROFILE.md`.
@@ -82,6 +94,13 @@ Read `governance/ENGINEERING_TOOL_ONBOARDING_AND_CHANGE_ACCEPTANCE_RULE_V1_2026-
 
 Every new engineering executor/operator/orchestrator and every material tool configuration change must receive separate independent ChatGPT acceptance before first project use. The actual installed Hermes configuration and any schema/contract extension therefore require acceptance after configuration and before activation.
 
+Local Task Runner V0 has completed its separate tool onboarding and first-real-project-use activation gate; its exact accepted identity, usage boundary, post-run Engineering triage, tooling escalation UX, failure routing and telemetry requirements are recorded in:
+
+- `governance/LOCAL_TASK_RUNNER_V0_ENGINEERING_USAGE_PROFILE_V1_2026-08-24.md`
+- `governance/LOCAL_TASK_RUNNER_V0_OPERATOR_OBSERVABILITY_GUIDE_V1_2026-08-24.md`
+
+Material Runner changes still require re-acceptance.
+
 ## 8. Shared repo skills
 
 Cross-executor procedural skills:
@@ -92,6 +111,7 @@ Cross-executor procedural skills:
 .agents/skills/trade-os-evidence
 .agents/skills/trade-os-result-packet
 .agents/skills/trade-os-independent-review-bundle
+.agents/skills/trade-os-local-task-runner
 ```
 
 They provide progressive on-demand procedural context. Existing `.dsh/skills` remain DSH-specific.
@@ -113,4 +133,4 @@ No governance file, Agent, Task Packet, implementation result, CI result or revi
 
 ## 12. Deferred tooling backlog
 
-Issue #115 tracks PR #120 independent acceptance, post-acceptance local Codex fallback adjustment, first-real-task Codex/Router telemetry, Hermes installation/configuration/schema qualification and future DSH real-task evidence.
+Issue #115 tracks PR #120 independent acceptance, post-acceptance local Codex fallback adjustment, first-real-task Codex/Router telemetry, Hermes installation/configuration/schema qualification and future DSH real-task evidence. Issue #121 tracks canonical Local Task Runner V0 workflow adoption and its first naturally occurring real OpenCode-compatible project evidence.

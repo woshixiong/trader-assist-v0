@@ -74,6 +74,16 @@ Do not enable unrelated web/MCP/plugins/subagents merely because they are availa
 
 OpenCode: read `governance/OPENCODE_ENGINEERING_USAGE_PROFILE_V1_2026-08-23.md`. Opus 4.6 is current default free model when available; Sonnet 4.6 fallback/task-specific; DeepSeek V4 Flash mainly Scout/triage/high-volume mechanics.
 
+When Router V2 has already selected a local `OPENCODE` stage and the frozen task is compatible with the independently accepted Local Task Runner V0, also read:
+
+- `governance/LOCAL_TASK_RUNNER_V0_ENGINEERING_USAGE_PROFILE_V1_2026-08-24.md`
+- `governance/LOCAL_TASK_RUNNER_V0_OPERATOR_OBSERVABILITY_GUIDE_V1_2026-08-24.md`
+- `.agents/skills/trade-os-local-task-runner/SKILL.md`
+
+Engineering Control generates the complete one-paste Terminal block, including Runner identity preflight, Task Packet creation/hash, one `validate`, exactly one `run`, result/evidence capture and telemetry. After the user pastes the complete Terminal output back into the same Engineering window, Engineering Control must review **both** the normal code/task outcome and Runner workflow health. The user must not manually search the Terminal transcript for Runner states or red flags.
+
+If a genuine Runner/workflow defect is detected, Engineering Control must explicitly tell the user to return to tooling control, prohibit automatic rerun, and generate one complete ready-to-copy `TOOLING_CONTROL_ESCALATION_PROMPT_BEGIN ... END` prompt in a fenced code block. For the first real Runner project use only, Engineering Control also generates the one-time `LOCAL_TASK_RUNNER_OBSERVATION_PACKET` prompt regardless of PASS/FAIL. Do not ask the user to hand-author Runner JSON/hashes, do not manufacture a synthetic first-real-task benchmark, and do not route normal application-code/test failures to the tooling window.
+
 Trae GLM-5.3: read `governance/TRAE_GLM_ENGINEERING_USAGE_PROFILE_V1_2026-08-20.md` and `governance/TRAE_GLM_CURRENT_MODEL_PROFILE.md`.
 
 Trae DeepSeek V4 Pro: read `governance/TRAE_DEEPSEEK_V4_PRO_CURRENT_MODEL_PROFILE.md`.
