@@ -44,6 +44,8 @@ Efficiency rules include compact AGENTS map; task-local model/reasoning/sandbox/
 
 OpenCode: read `governance/OPENCODE_ENGINEERING_USAGE_PROFILE_V1_2026-08-23.md`. Opus 4.6 is default free OpenCode model when available; Sonnet 4.6 fallback/task-specific; V4 Flash mainly Scout/triage/high-volume mechanics.
 
+For a Router-selected local OpenCode stage compatible with the accepted Local Task Runner V0, also read `governance/LOCAL_TASK_RUNNER_V0_ENGINEERING_USAGE_PROFILE_V1_2026-08-24.md` and load `.agents/skills/trade-os-local-task-runner`. Engineering Control owns routine command generation: one complete Terminal paste block must create/hash the frozen Runner Task Packet, verify exact runner/Git/OpenCode identity, call `validate`, call `run` exactly once, collect result/evidence/telemetry, and stop on failure. The user does not manually author Runner JSON/hashes and does not return to tooling control for normal application-code/test failures. Do not manufacture a synthetic first-real-task benchmark or force OpenCode merely to exercise the Runner.
+
 Trae GLM-5.3: read `governance/TRAE_GLM_ENGINEERING_USAGE_PROFILE_V1_2026-08-20.md` + `governance/TRAE_GLM_CURRENT_MODEL_PROFILE.md`.
 
 Trae DeepSeek V4 Pro: read `governance/TRAE_DEEPSEEK_V4_PRO_CURRENT_MODEL_PROFILE.md`.
@@ -82,6 +84,8 @@ Read `governance/ENGINEERING_TOOL_ONBOARDING_AND_CHANGE_ACCEPTANCE_RULE_V1_2026-
 
 Every new engineering executor/operator/orchestrator and every material tool configuration change must receive separate independent ChatGPT acceptance before first project use. The actual installed Hermes configuration and any schema/contract extension therefore require acceptance after configuration and before activation.
 
+Local Task Runner V0 has completed its separate tool onboarding and first-real-project-use activation gate; its exact accepted identity, usage boundary, failure routing and telemetry requirements are recorded in `governance/LOCAL_TASK_RUNNER_V0_ENGINEERING_USAGE_PROFILE_V1_2026-08-24.md`. Material Runner changes still require re-acceptance.
+
 ## 8. Shared repo skills
 
 Cross-executor procedural skills:
@@ -92,6 +96,7 @@ Cross-executor procedural skills:
 .agents/skills/trade-os-evidence
 .agents/skills/trade-os-result-packet
 .agents/skills/trade-os-independent-review-bundle
+.agents/skills/trade-os-local-task-runner
 ```
 
 They provide progressive on-demand procedural context. Existing `.dsh/skills` remain DSH-specific.
@@ -113,4 +118,4 @@ No governance file, Agent, Task Packet, implementation result, CI result or revi
 
 ## 12. Deferred tooling backlog
 
-Issue #115 tracks PR #120 independent acceptance, post-acceptance local Codex fallback adjustment, first-real-task Codex/Router telemetry, Hermes installation/configuration/schema qualification and future DSH real-task evidence.
+Issue #115 tracks PR #120 independent acceptance, post-acceptance local Codex fallback adjustment, first-real-task Codex/Router telemetry, Hermes installation/configuration/schema qualification and future DSH real-task evidence. Issue #121 tracks canonical Local Task Runner V0 workflow adoption and its first naturally occurring real OpenCode-compatible project evidence.
