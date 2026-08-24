@@ -58,6 +58,8 @@ ENGINEERING CONTROL / L1
      -> frozen deterministic checks
      -> final Git/mutation gate
      -> result/evidence/log artifacts
+-> USER returns complete Terminal output once to the same Engineering window
+-> Engineering Control triages BOTH normal code outcome AND Runner workflow health
 -> normal Engineering Control disposition
 -> exact-head CI when applicable
 -> separate strongest-ChatGPT T4 independent review
@@ -94,7 +96,7 @@ The first real task is genuine project work. Its output may become a real implem
 
 ## 4. Engineering-window generation contract
 
-For normal use the user should **not** manually author Runner JSON, calculate packet hashes, construct Runner commands or return to a tooling window to obtain routine commands.
+For normal use the user should **not** manually author Runner JSON, calculate packet hashes, construct Runner commands, inspect Runner health fields, or return to a tooling window to obtain routine commands.
 
 Once Engineering Control has frozen the real task, **the Engineering window must generate one complete ordinary-Terminal paste block** that performs the authorized local stage end-to-end.
 
@@ -109,9 +111,10 @@ The block must contain, in this order where applicable:
 7. compute the packet SHA-256 locally;
 8. call `runner.py validate` with the exact packet hash;
 9. call `runner.py run` **once** with the exact packet hash;
-10. capture the emitted `RUN_ID` and display/read the final `result.json` and `evidence.md` (or equivalent accepted evidence files);
-11. print a compact telemetry/result summary sufficient for Engineering Control and later independent review;
-12. stop on failure. No automatic second `run`, hidden retry, silent fallback or guessed resume.
+10. capture the emitted `RUN_ID` and display/read the final `result.json` and `evidence.md` or equivalent accepted evidence files;
+11. print the compact machine-readable `LOCAL_TASK_RUNNER_STATUS_BEGIN ... END` sentinel and enough exact telemetry for Engineering Control to classify the workflow after the Terminal output is pasted back;
+12. for the first real Runner task, expose enough exact fields for Engineering Control to generate the one-time `LOCAL_TASK_RUNNER_OBSERVATION_PACKET` tooling handoff;
+13. stop on failure. No automatic second `run`, hidden retry, silent fallback or guessed resume.
 
 The ordinary primitive is:
 
@@ -130,6 +133,8 @@ python3 "$LOCAL_TASK_RUNNER_HOME/runner.py" run \
 ```
 
 This snippet is explanatory only. Engineering Control must generate the full task-specific one-paste block; the user is not expected to assemble it.
+
+After the run, the user's ordinary action is to paste the complete Terminal output once back into the same Engineering window. Engineering Control then owns Runner-health parsing/classification under `LOCAL_TASK_RUNNER_V0_OPERATOR_OBSERVABILITY_GUIDE_V1_2026-08-24.md`.
 
 ## 5. Frozen Task Packet requirements
 
@@ -204,7 +209,7 @@ NOT_COVERED
 - network sandboxing
 ```
 
-In simple words: **Engineering decides what to build and which Writer should build it; the Runner makes one selected OpenCode local implementation attempt observable, bounded and mechanically verifiable.**
+In simple words: **Engineering decides what to build and which Writer should build it; the Runner makes one selected OpenCode local implementation attempt observable, bounded and mechanically verifiable; Engineering Control then interprets both the code outcome and Runner health so the user does not have to.**
 
 ## 7. Required operational telemetry
 
@@ -245,7 +250,9 @@ INDEPENDENT_REVIEW_BLOCKERS
 
 For the **first real project use**, Engineering Control must preserve this telemetry in the normal task/result evidence or PR/Issue evidence trail. Do not create a separate benchmark task just to collect it.
 
-The metrics are used to answer practical questions:
+The user is not required to mine these fields from the Terminal transcript. Engineering Control extracts/classifies them from the returned output/result evidence.
+
+The metrics answer:
 
 - Did the Runner reduce user copy/paste and handoff burden?
 - Did it preserve exact task/model/Git identity?
@@ -254,7 +261,7 @@ The metrics are used to answer practical questions:
 - Did the Runner itself create any new tooling blocker?
 - How much elapsed time / human intervention did the flow add or save?
 
-## 8. Failure routing
+## 8. Failure routing and tooling escalation UX
 
 Normal failures stay with the component that owns them.
 
@@ -277,11 +284,18 @@ RUNNER_SCHEMA_OR_RESULT_CORRUPTION
 RUNNER_FALSE_SUCCESS_OR_FALSE_POLICY_BEHAVIOR
 RUNNER_CLI_PREFLIGHT_BUG
 RUNNER_EVIDENCE/STATE_MACHINE_DEFECT
+HIDDEN_OR_DUPLICATE_RUNNER_EXECUTION
+UNAUTHORIZED_RETRY_OR_SILENT_ROUTE_SUBSTITUTION
 -> TOOLING CONTROL
--> do not treat as normal application-code repair
 ```
 
-The user should return to the tooling-control window only for the last class or another genuine workflow/tool defect. Normal project implementation problems remain in the Engineering window.
+Engineering Control, not the user, decides this routing from the returned Terminal/result evidence.
+
+When tooling control is required, Engineering Control must explicitly tell the user and provide one complete ready-to-copy fenced-code-block prompt using the `TOOLING_CONTROL_ESCALATION_PROMPT_BEGIN ... END` contract in `LOCAL_TASK_RUNNER_V0_OPERATOR_OBSERVABILITY_GUIDE_V1_2026-08-24.md`.
+
+The user should not manually compose the tooling report or search the Terminal transcript for fields.
+
+For the first real Runner project use only, Engineering Control must generate the one-time `LOCAL_TASK_RUNNER_OBSERVATION_PACKET` prompt regardless of PASS/FAIL classification so tooling control can validate the live workflow once.
 
 ## 9. No hidden retry / rerun discipline
 
@@ -318,7 +332,7 @@ These limitations do not authorize weakening the existing policy gates. If a fut
 
 ## 12. Current workflow disposition
 
-After this profile is independently accepted and merged, the intended user workflow is:
+After this profile is independently accepted and merged, the intended steady state is:
 
 ```text
 USER <-> ENGINEERING WINDOW for normal development
@@ -329,12 +343,18 @@ ENGINEERING WINDOW
 -> Router selects executor/model
 -> when OPENCODE + Runner-compatible:
      generate one complete Terminal block containing Runner workflow
--> user pastes once
--> Engineering Window receives/reads result evidence
--> Engineering Window handles normal code/test outcome
+-> user pastes once into Terminal
+-> user pastes the complete Terminal output once back into the SAME Engineering window
+-> Engineering Window reviews BOTH code/task outcome and Runner workflow health
+-> if normal code/test/task issue: Engineering Window continues
+-> if genuine Runner/workflow defect: Engineering Window explicitly tells user and emits one ready-to-copy Tooling Control prompt
 -> normal CI + independent review gates
 
-USER -> TOOLING WINDOW only when the Runner/workflow itself is defective or its accepted identity changes materially
+FIRST REAL RUNNER TASK ONLY
+-> Engineering Window also emits the one-time observation packet for tooling control regardless of PASS/FAIL
+
+AFTER FIRST-RUN TOOLING OBSERVATION IS ACCEPTED
+-> USER visits TOOLING WINDOW only when Engineering Control identifies a genuine Runner/workflow defect or accepted-identity drift
 ```
 
-This is the canonical handoff objective: **the user should not need a separate tooling-window round trip for every normal Runner invocation.**
+This is the canonical handoff objective: **the user should neither make a tooling-window round trip for every normal Runner invocation nor personally diagnose Runner health from a long Terminal transcript.**
