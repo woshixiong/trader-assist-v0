@@ -7,7 +7,10 @@ description: Generate and execute the accepted Local Task Runner V0 one-paste Op
 
 Use only after Engineering Control has completed the mandatory live preflight and Router V2 has already selected `OPENCODE` for the bounded stage.
 
-Read `governance/LOCAL_TASK_RUNNER_V0_ENGINEERING_USAGE_PROFILE_V1_2026-08-24.md` before generating the command.
+Read before generating the command:
+
+- `governance/LOCAL_TASK_RUNNER_V0_ENGINEERING_USAGE_PROFILE_V1_2026-08-24.md`
+- `governance/LOCAL_TASK_RUNNER_V0_OPERATOR_OBSERVABILITY_GUIDE_V1_2026-08-24.md`
 
 ## Required behavior
 
@@ -23,6 +26,8 @@ Read `governance/LOCAL_TASK_RUNNER_V0_ENGINEERING_USAGE_PROFILE_V1_2026-08-24.md
 - `runner.py run` is executed once. No hidden retry, automatic resume or silent model fallback.
 - An OpenCode exit code of `0` is not success by itself; final Runner policy/check status governs.
 - Do not commit/push, Mark Ready, merge, deploy or access production/private trading authority unless a separate current gate explicitly authorizes that distinct action.
+- The Terminal block must finish by printing the mandatory `LOCAL_TASK_RUNNER_STATUS_BEGIN ... END` sentinel defined in the operator observability guide.
+- On the first naturally occurring real Runner task, the same block must additionally print the complete `LOCAL_TASK_RUNNER_OBSERVATION_PACKET_BEGIN ... END` block. The user must not manually reconstruct its fields.
 
 ## Failure ownership
 
@@ -70,3 +75,25 @@ INDEPENDENT_REVIEW_BLOCKERS
 ```
 
 For the first real project use, collect these naturally inside the normal task evidence trail; do not create a separate benchmark task.
+
+## User-facing classification
+
+Derive the final status mechanically from Runner/preflight/evidence facts and print one of:
+
+```text
+RUNNER_FLOW_STATUS=PASS
+RUNNER_FLOW_STATUS=ENGINEERING_ACTION_REQUIRED
+RUNNER_FLOW_STATUS=TOOLING_ACTION_REQUIRED
+RUNNER_FLOW_STATUS=SAFE_STOP
+```
+
+Also print:
+
+```text
+TOOLING_ESCALATION_REQUIRED=YES|NO
+ENGINEERING_CONTINUE_ALLOWED=YES|NO
+```
+
+Do not classify an ordinary source-code/test/model-provider problem as a Runner defect. Do not classify Runner identity/schema/state/evidence/policy failure as an ordinary source-code repair.
+
+For first real use, the user returns only the generated observation packet to tooling control unless tooling control later requests specific existing `RUN_ID` artifacts. Routine successful later runs require no tooling-window round trip.
