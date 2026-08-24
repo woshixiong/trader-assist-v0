@@ -62,6 +62,32 @@ for already-frozen deterministic mechanics such as status/diff/evidence/commit/p
 
 Operator role must not reinterpret requirements, redesign, widen allowlists, choose another model/route, or declare independent acceptance.
 
+## Accepted Local Task Runner V0 execution envelope
+
+When Router V2 has already selected a **local OpenCode stage**, use the independently accepted Local Task Runner V0 as the default local execution/validation/evidence envelope when the frozen task fits its bounded contract.
+
+Read:
+
+- `governance/LOCAL_TASK_RUNNER_V0_ENGINEERING_USAGE_PROFILE_V1_2026-08-24.md`
+- `.agents/skills/trade-os-local-task-runner/SKILL.md`
+
+The Runner does not select OpenCode or choose the model. Engineering Control must freeze the task and exact model first.
+
+For a compatible stage, Engineering Control generates one complete ordinary-Terminal block containing Runner identity preflight, exact Git worktree/branch/HEAD checks, Task Packet creation, packet SHA-256, `validate`, exactly one `run`, result/evidence capture and telemetry. The user is not expected to manually write Runner JSON, calculate hashes or return to a tooling window for routine command generation.
+
+Do not manufacture a synthetic first-real-task benchmark and do not force OpenCode merely to exercise the Runner. The first real Runner task is the first naturally occurring genuine Trader Assist stage for which Router V2 legitimately selects OpenCode and the frozen task is compatible.
+
+Failure ownership remains separated:
+
+```text
+normal application-code/test failure -> Engineering Control
+scope/authority ambiguity -> Engineering Control / L1 SAFE_STOP
+model/provider availability -> Engineering Control / Router; no silent substitution
+Runner identity/schema/state/evidence/policy defect -> tooling control
+```
+
+Runner V0 has no hidden retry, automatic resume, model fallback or publication primitive. A second run requires an explicit Engineering-Control disposition and newly frozen authority as applicable.
+
 ## Task/session discipline
 
 Use one complete high-constraint Task Packet and one coherent bounded stage. Preserve exact worktree/artifact identity. New task, material authority change, independent review or conflicting/stale context => new session.
@@ -88,4 +114,4 @@ ELAPSED_TIME
 INDEPENDENT_REVIEW_BLOCKERS
 ```
 
-Use this evidence to refine Router V2; do not create synthetic work just to rank models.
+When Local Task Runner V0 is used, also retain its profile-required `RUN_ID`, input packet hash, Git identity, changed paths, policy/check result, final status/stop reason and retry count. Use real project evidence to refine Router V2; do not create synthetic work just to rank models or the Runner.
