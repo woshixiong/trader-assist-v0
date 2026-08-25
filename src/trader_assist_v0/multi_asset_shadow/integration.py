@@ -8,7 +8,7 @@ or exchange-write surface.  Public BBO/L2 and 1m providers are injected.
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -109,6 +109,11 @@ from .shadow_records import (
     MarketEvent as EvidenceMarketEvent,
 )
 from .shadow_records.records import ImmutableRecord
+from .strategy_continuation import (
+    REPRESENTATION_VERSION,
+    IncrementalStrategyState,
+    RollingAtr,
+)
 from .strategy_kernel import (
     PARAMETER_VERSION,
     SCANNER_VERSION,
@@ -134,14 +139,12 @@ from .strategy_kernel import (
     SetupFamily,
     SetupMode,
     StrategyDecision,
-    StrategyEvaluationInput,
     TargetKind,
     TargetReference,
     ZoneBook,
     ZoneQuality,
     ZoneSnapshot,
     ZoneType,
-    aggregate_closed_5m_causally,
     evaluate_strategy,
     scan_cross_section,
 )
@@ -330,9 +333,7 @@ def _scanner_metrics_from_payload(value: object) -> ScannerMetrics | None:
 
     def optional(name: str) -> Decimal | None:
         return (
-            None
-            if value.get(name) is None
-            else _as_decimal(value[name], f"Scanner metric {name}")
+            None if value.get(name) is None else _as_decimal(value[name], f"Scanner metric {name}")
         )
 
     return ScannerMetrics(
@@ -515,10 +516,201 @@ def _ledger_payload(value: EventLedger) -> dict[str, object]:
     return {"events": [_canonical_dataclass(event) for event in value.events]}
 
 
+def _v2_ledger_state_hash(
+    ledger_payload: Mapping[str, object], terminal_history_commitment: str
+) -> str:
+    return _typed_hash(
+        "event-ledger-state-v2",
+        {
+            "current_ledger": dict(ledger_payload),
+            "terminal_history_commitment": terminal_history_commitment,
+        },
+    )
+
+
 def _ledger_from_payload(value: object) -> EventLedger:
     if not isinstance(value, dict) or not isinstance(value.get("events"), list):
         raise IntegrationError("retained EventLedger checkpoint is invalid")
     return EventLedger(tuple(_market_event_from_payload(item) for item in value["events"]))
+
+
+def _atr_payload(value: RollingAtr) -> dict[str, object]:
+    return {
+        "bar_count": value.bar_count,
+        "previous_close": _optional_decimal(value.previous_close),
+        "seed_sum": _decimal(value.seed_sum),
+        "value": _optional_decimal(value.value),
+    }
+
+
+def _atr_from_payload(value: object) -> RollingAtr:
+    if not isinstance(value, dict):
+        raise IntegrationError("Strategy ATR continuation is invalid")
+    bar_count = value.get("bar_count")
+    if type(bar_count) is not int or bar_count < 0:
+        raise IntegrationError("Strategy ATR continuation count is invalid")
+    return RollingAtr(
+        bar_count=bar_count,
+        previous_close=(
+            None
+            if value.get("previous_close") is None
+            else _as_decimal(value["previous_close"], "ATR previous_close")
+        ),
+        seed_sum=_as_decimal(value.get("seed_sum"), "ATR seed_sum"),
+        value=(None if value.get("value") is None else _as_decimal(value["value"], "ATR value")),
+    )
+
+
+def _continuation_payload(value: IncrementalStrategyState) -> dict[str, object]:
+    return {
+        "representation_version": REPRESENTATION_VERSION,
+        "checkpoint": True,
+        "market_id": value.market_id,
+        "bars_5m": [_canonical_dataclass(item) for item in value.bars_5m],
+        "bars_15m": [_canonical_dataclass(item) for item in value.bars_15m],
+        "atr_15m_values": [_optional_decimal(item) for item in value.atr_15m_values],
+        "bars_1h": [_canonical_dataclass(item) for item in value.bars_1h],
+        "atr_5m": _atr_payload(value.atr_5m),
+        "atr_15m": _atr_payload(value.atr_15m),
+        "atr_1h": _atr_payload(value.atr_1h),
+        "total_5m": value.total_5m,
+        "total_15m": value.total_15m,
+        "total_1h": value.total_1h,
+        "pivot_highs_1h": [_decimal(item) for item in value.pivot_highs_1h],
+        "pivot_lows_1h": [_decimal(item) for item in value.pivot_lows_1h],
+        "active_ledger": _ledger_payload(value.ledger),
+        "source_history_commitment": value.source_history_commitment,
+        "terminal_history_commitment": value.terminal_history_commitment,
+        "last_source_open_time_ms": value.last_source_open_time_ms,
+    }
+
+
+@dataclass(frozen=True)
+class _ContinuationSemantics:
+    market_id: str
+    total_5m: int
+    total_15m: int
+    total_1h: int
+    ledger: EventLedger
+    source_history_commitment: str
+    terminal_history_commitment: str
+    last_source_open_time_ms: int
+
+
+def _continuation_state_payload(value: IncrementalStrategyState) -> dict[str, object]:
+    """Small authority state retained between sparse recomputable checkpoints."""
+    if value.last_source_open_time_ms is None:
+        raise IntegrationError("Strategy continuation boundary is absent")
+    return {
+        "representation_version": REPRESENTATION_VERSION,
+        "checkpoint": False,
+        "market_id": value.market_id,
+        "total_5m": value.total_5m,
+        "total_15m": value.total_15m,
+        "total_1h": value.total_1h,
+        "active_ledger": _ledger_payload(value.ledger),
+        "source_history_commitment": value.source_history_commitment,
+        "terminal_history_commitment": value.terminal_history_commitment,
+        "last_source_open_time_ms": value.last_source_open_time_ms,
+    }
+
+
+def _continuation_semantics(value: object) -> _ContinuationSemantics:
+    if not isinstance(value, dict) or value.get("representation_version") != REPRESENTATION_VERSION:
+        raise IntegrationError("Strategy continuation representation is invalid")
+    market_id = value.get("market_id")
+    totals = tuple(value.get(name) for name in ("total_5m", "total_15m", "total_1h"))
+    last = value.get("last_source_open_time_ms")
+    source_commitment = value.get("source_history_commitment")
+    terminal_commitment = value.get("terminal_history_commitment")
+    if (
+        not isinstance(market_id, str)
+        or not market_id
+        or any(type(item) is not int or item < 0 for item in totals)
+        or type(last) is not int
+        or last < 0
+        or not isinstance(source_commitment, str)
+        or len(source_commitment) != 64
+        or not isinstance(terminal_commitment, str)
+        or len(terminal_commitment) != 64
+    ):
+        raise IntegrationError("Strategy continuation semantic state is invalid")
+    return _ContinuationSemantics(
+        market_id=market_id,
+        total_5m=cast(int, totals[0]),
+        total_15m=cast(int, totals[1]),
+        total_1h=cast(int, totals[2]),
+        ledger=_ledger_from_payload(value.get("active_ledger")),
+        source_history_commitment=source_commitment,
+        terminal_history_commitment=terminal_commitment,
+        last_source_open_time_ms=last,
+    )
+
+
+def _is_full_continuation(value: object) -> bool:
+    return isinstance(value, dict) and isinstance(value.get("bars_5m"), list)
+
+
+def _continuation_from_payload(value: object) -> IncrementalStrategyState:
+    if (
+        not isinstance(value, dict)
+        or value.get("representation_version") != REPRESENTATION_VERSION
+        or not _is_full_continuation(value)
+    ):
+        raise IntegrationError("Strategy continuation representation is invalid")
+    market_id = value.get("market_id")
+    if not isinstance(market_id, str) or not market_id:
+        raise IntegrationError("Strategy continuation market identity is invalid")
+    bars_5m = value.get("bars_5m")
+    bars_15m = value.get("bars_15m")
+    bars_1h = value.get("bars_1h")
+    atr_15m_values = value.get("atr_15m_values")
+    if not all(isinstance(item, list) for item in (bars_5m, bars_15m, bars_1h, atr_15m_values)):
+        raise IntegrationError("Strategy continuation bars are invalid")
+    totals = tuple(value.get(name) for name in ("total_5m", "total_15m", "total_1h"))
+    if any(type(item) is not int or item < 0 for item in totals):
+        raise IntegrationError("Strategy continuation offsets are invalid")
+    last = value.get("last_source_open_time_ms")
+    if last is not None and (type(last) is not int or last < 0):
+        raise IntegrationError("Strategy continuation boundary is invalid")
+    state = IncrementalStrategyState(
+        market_id=market_id,
+        bars_5m=[_bar_from_payload(item) for item in cast(list[object], bars_5m)],
+        bars_15m=[_bar_from_payload(item) for item in cast(list[object], bars_15m)],
+        atr_15m_values=[
+            None if item is None else _as_decimal(item, "A15 continuation")
+            for item in cast(list[object], atr_15m_values)
+        ],
+        bars_1h=[_bar_from_payload(item) for item in cast(list[object], bars_1h)],
+        atr_5m=_atr_from_payload(value.get("atr_5m")),
+        atr_15m=_atr_from_payload(value.get("atr_15m")),
+        atr_1h=_atr_from_payload(value.get("atr_1h")),
+        total_5m=cast(int, totals[0]),
+        total_15m=cast(int, totals[1]),
+        total_1h=cast(int, totals[2]),
+        pivot_highs_1h=[
+            _as_decimal(item, "1h pivot high")
+            for item in cast(list[object], value.get("pivot_highs_1h", []))
+        ],
+        pivot_lows_1h=[
+            _as_decimal(item, "1h pivot low")
+            for item in cast(list[object], value.get("pivot_lows_1h", []))
+        ],
+        ledger=_ledger_from_payload(value.get("active_ledger")),
+        source_history_commitment=str(value.get("source_history_commitment", "")),
+        terminal_history_commitment=str(value.get("terminal_history_commitment", "")),
+        last_source_open_time_ms=last,
+    )
+    if (
+        len(state.bars_5m) > 21
+        or len(state.bars_15m) > 98
+        or len(state.bars_1h) > 10
+        or len(state.atr_15m_values) != len(state.bars_15m)
+        or len(state.source_history_commitment) != 64
+        or len(state.terminal_history_commitment) != 64
+    ):
+        raise IntegrationError("Strategy continuation bounds are invalid")
+    return state
 
 
 def _payload_int(payload: Mapping[str, object], key: str) -> int:
@@ -545,9 +737,15 @@ def _kernel_result_from_payload(payload: Mapping[str, object]) -> KernelResult:
             raise IntegrationError("retained StrategyDecision identity is invalid")
         decoded_decisions.append(decision)
     ledger = _ledger_from_payload(payload.get("output_ledger"))
-    if payload.get("output_ledger_hash") != _typed_hash(
-        "event-ledger", _ledger_payload(ledger)
-    ):
+    if payload.get("representation_version") == REPRESENTATION_VERSION:
+        continuation = _continuation_semantics(payload.get("continuation"))
+        expected_ledger_hash = _v2_ledger_state_hash(
+            _ledger_payload(continuation.ledger),
+            continuation.terminal_history_commitment,
+        )
+    else:
+        expected_ledger_hash = _typed_hash("event-ledger", _ledger_payload(ledger))
+    if payload.get("output_ledger_hash") != expected_ledger_hash:
         raise IntegrationError("retained EventLedger checkpoint hash is invalid")
     return KernelResult(
         ledger=ledger,
@@ -566,12 +764,8 @@ def _kernel_result_from_payload(payload: Mapping[str, object]) -> KernelResult:
         htf_context=HtfContext(
             momentum=HtfMomentum(str(htf["momentum"])),
             structure=HtfStructure(str(htf["structure"])),
-            er8_1h=(
-                None if htf.get("er8_1h") is None else _as_decimal(htf["er8_1h"], "er8_1h")
-            ),
-            d8_1h=(
-                None if htf.get("d8_1h") is None else _as_decimal(htf["d8_1h"], "d8_1h")
-            ),
+            er8_1h=(None if htf.get("er8_1h") is None else _as_decimal(htf["er8_1h"], "er8_1h")),
+            d8_1h=(None if htf.get("d8_1h") is None else _as_decimal(htf["d8_1h"], "d8_1h")),
         ),
     )
 
@@ -787,6 +981,13 @@ class EvidenceOutcomeAdapter(OutcomeSink):
 
     def __init__(self, store: EvidenceStore) -> None:
         self._store = store
+        self._engine: OutcomeEngine | None = None
+
+    def bind_engine(self, engine: OutcomeEngine) -> None:
+        """Bind the event-loop-owned live working set used for persistence checks."""
+        if engine.sink is not self:
+            raise RecordError("Outcome Engine sink differs from Evidence adapter")
+        self._engine = engine
 
     @property
     def evidence_store(self) -> EvidenceStore:
@@ -830,13 +1031,29 @@ class EvidenceOutcomeAdapter(OutcomeSink):
         )
 
     def save_outcome(self, outcome: FormalShadowOutcome) -> None:
-        engine = self.restore_engine(now_ms=outcome.evaluated_at_ms)
+        engine = self._engine
+        if engine is None:
+            raise RecordError("outcome persistence lacks active engine authority")
         if outcome.shadow_order_id not in engine.attached_shadow_ids:
             raise RecordError("outcome has no reconstructable ShadowOrder")
-        if engine.evaluate(
-            outcome.shadow_order_id, as_of_ms=outcome.evaluated_at_ms
-        ) != outcome:
+        if engine.evaluate(outcome.shadow_order_id, as_of_ms=outcome.evaluated_at_ms) != outcome:
             raise RecordError("outcome contradicts retained transition or 1m authority")
+        state = engine._states[outcome.shadow_order_id]
+        retained_end = min(outcome.evaluated_at_ms, outcome.required_end_ms)
+        for bar in engine._bars.get(outcome.market_id, {}).values():
+            if not state.view.outcome_start_ms <= bar.open_time_ms < retained_end:
+                continue
+            retained = self._store._connection.execute(
+                """SELECT 1 FROM immutable_records
+                   WHERE record_type = 'outcome_bar'
+                     AND json_extract(payload_json, '$.market_id') = ?
+                     AND json_extract(payload_json, '$.open_time_ms') = ?
+                     AND json_extract(payload_json, '$.canonical_hash') = ?
+                   LIMIT 1""",
+                (bar.market_id, bar.open_time_ms, bar.canonical_hash),
+            ).fetchone()
+            if retained is None:
+                raise RecordError("outcome contradicts retained transition or 1m authority")
         self._store._write_controlled((self._outcome_record(outcome),))
 
     def canonical_outcome(self, record: OutcomeEnvelope) -> FormalShadowOutcome:
@@ -844,13 +1061,18 @@ class EvidenceOutcomeAdapter(OutcomeSink):
         payload = record.payload
         evaluated_value = payload.get("evaluated_at_ms")
         shadow_value = payload.get("shadow_order_id")
-        if type(evaluated_value) is not int or evaluated_value < 0 or not isinstance(
-            shadow_value, str
+        if (
+            type(evaluated_value) is not int
+            or evaluated_value < 0
+            or not isinstance(shadow_value, str)
         ):
             raise RecordError("outcome projection identity is invalid")
         evaluated_at_ms = evaluated_value
         shadow_order_id = shadow_value
-        engine = self.restore_engine(now_ms=evaluated_at_ms)
+        engine = self.restore_engine(
+            now_ms=evaluated_at_ms,
+            include_completed_shadow_ids=frozenset({shadow_order_id}),
+        )
         if shadow_order_id not in engine.attached_shadow_ids:
             raise RecordError("outcome projection has no reconstructable ShadowOrder")
         outcome = engine.evaluate(shadow_order_id, as_of_ms=evaluated_at_ms)
@@ -891,17 +1113,25 @@ class EvidenceOutcomeAdapter(OutcomeSink):
             raise RecordError("retained Outcome transitions have no production authority")
         return ()
 
-    def _retained_bars(self) -> tuple[OneMinuteBar, ...]:
+    def _retained_bars(
+        self, required_windows: Mapping[str, tuple[tuple[int, int], ...]] | None = None
+    ) -> tuple[OneMinuteBar, ...]:
         values: list[OneMinuteBar] = []
         for record_id in _record_ids(self._store, "outcome_bar"):
             record = self._store.get(record_id)
             if not isinstance(record, OutcomeBarEvidence):
                 continue
             payload = record.payload
+            market_id = str(payload["market_id"])
+            open_time_ms = int(payload["open_time_ms"])
+            if required_windows is not None and not any(
+                start <= open_time_ms < end for start, end in required_windows.get(market_id, ())
+            ):
+                continue
             values.append(
                 OneMinuteBar(
-                    market_id=str(payload["market_id"]),
-                    open_time_ms=int(payload["open_time_ms"]),
+                    market_id=market_id,
+                    open_time_ms=open_time_ms,
                     close_time_ms=int(payload["close_time_ms"]),
                     open=_as_decimal(payload["open"], "1m open"),
                     high=_as_decimal(payload["high"], "1m high"),
@@ -914,8 +1144,32 @@ class EvidenceOutcomeAdapter(OutcomeSink):
         return tuple(values)
 
     def restore_engine(
-        self, *, now_ms: int, provider: OneMinuteProvider | None = None
+        self,
+        *,
+        now_ms: int,
+        provider: OneMinuteProvider | None = None,
+        include_completed_shadow_ids: frozenset[str] = frozenset(),
     ) -> OutcomeEngine:
+        latest_outcomes: dict[str, tuple[int, bool, int]] = {}
+        for record_id in _record_ids(self._store, "outcome_envelope"):
+            outcome = self._store.get(record_id)
+            if not isinstance(outcome, OutcomeEnvelope):
+                continue
+            payload = outcome.payload
+            shadow_id = payload.get("shadow_order_id")
+            evaluated = payload.get("evaluated_at_ms")
+            required_end = payload.get("required_end_ms")
+            unresolved = payload.get("unresolved")
+            if (
+                not isinstance(shadow_id, str)
+                or type(evaluated) is not int
+                or type(required_end) is not int
+                or type(unresolved) is not bool
+            ):
+                raise RecordError("retained Outcome completion identity is invalid")
+            prior = latest_outcomes.get(shadow_id)
+            if prior is None or evaluated > prior[0]:
+                latest_outcomes[shadow_id] = (evaluated, unresolved, required_end)
         views: list[FormalShadowView] = []
         for record_id in _record_ids(self._store, "shadow_order"):
             record = self._store.get(record_id)
@@ -933,6 +1187,14 @@ class EvidenceOutcomeAdapter(OutcomeSink):
                 "setup_family",
             }
             if required - payload.keys():
+                continue
+            latest = latest_outcomes.get(record.record_id)
+            if (
+                record.record_id not in include_completed_shadow_ids
+                and latest is not None
+                and latest[1] is False
+                and now_ms >= latest[2]
+            ):
                 continue
             views.append(
                 FormalShadowView(
@@ -963,27 +1225,30 @@ class EvidenceOutcomeAdapter(OutcomeSink):
                 )
             )
         evidence_provider = (
-            None
-            if provider is None
-            else EvidenceOneMinuteProvider(provider=provider, adapter=self)
+            None if provider is None else EvidenceOneMinuteProvider(provider=provider, adapter=self)
         )
-        return OutcomeEngine.reconstruct(
+        windows: dict[str, list[tuple[int, int]]] = {}
+        for view in views:
+            windows.setdefault(view.market_id, []).append(
+                (view.outcome_start_ms, view.original_deadline_ms)
+            )
+        engine = OutcomeEngine.reconstruct(
             shadows=tuple(views),
             transitions=self._retained_transitions(),
-            bars=self._retained_bars(),
+            bars=self._retained_bars({market: tuple(values) for market, values in windows.items()}),
             now_ms=now_ms,
             provider=evidence_provider,
             sink=self,
             recover=False,
         )
+        self._engine = engine
+        return engine
 
 
 class EvidenceOneMinuteProvider:
     """Persist configured public-provider bars before Outcome Engine admission."""
 
-    def __init__(
-        self, *, provider: OneMinuteProvider, adapter: EvidenceOutcomeAdapter
-    ) -> None:
+    def __init__(self, *, provider: OneMinuteProvider, adapter: EvidenceOutcomeAdapter) -> None:
         self.provider = provider
         self.adapter = adapter
 
@@ -996,9 +1261,7 @@ class EvidenceOneMinuteProvider:
     def backfill_1m(
         self, *, market_id: str, start_ms: int, end_ms: int
     ) -> tuple[OneMinuteBar, ...]:
-        bars = self.provider.backfill_1m(
-            market_id=market_id, start_ms=start_ms, end_ms=end_ms
-        )
+        bars = self.provider.backfill_1m(market_id=market_id, start_ms=start_ms, end_ms=end_ms)
         if type(bars) is not tuple or any(
             type(bar) is not OneMinuteBar
             or bar.market_id != market_id
@@ -1006,6 +1269,44 @@ class EvidenceOneMinuteProvider:
             for bar in bars
         ):
             raise OutcomeEngineError("backfill returned a bar outside its request")
+        self.adapter._persist_provider_bars(bars)
+        return bars
+
+    def capture_raw_request(self, *, market_id: str) -> RegistryMarket:
+        from .hyperliquid_public import HyperliquidRestOneMinuteProvider
+
+        if not isinstance(self.provider, HyperliquidRestOneMinuteProvider):
+            raise OutcomeEngineError("configured 1m provider lacks raw public-read seam")
+        return self.provider.market_identity(market_id)
+
+    def raw_read_1m(
+        self,
+        *,
+        market: RegistryMarket,
+        start_ms: int,
+        end_ms: int,
+    ) -> object:
+        from .hyperliquid_public import HyperliquidRestOneMinuteProvider
+
+        if not isinstance(self.provider, HyperliquidRestOneMinuteProvider):
+            raise OutcomeEngineError("configured 1m provider lacks raw public-read seam")
+        return self.provider.raw_read_1m(market=market, start_ms=start_ms, end_ms=end_ms)
+
+    def admit_raw_1m(
+        self,
+        *,
+        market: RegistryMarket,
+        response: object,
+        start_ms: int,
+        end_ms: int,
+    ) -> tuple[OneMinuteBar, ...]:
+        from .hyperliquid_public import HyperliquidRestOneMinuteProvider
+
+        if not isinstance(self.provider, HyperliquidRestOneMinuteProvider):
+            raise OutcomeEngineError("configured 1m provider lacks raw public-read seam")
+        bars = self.provider.normalize_raw_1m(
+            market=market, response=response, start_ms=start_ms, end_ms=end_ms
+        )
         self.adapter._persist_provider_bars(bars)
         return bars
 
@@ -1099,19 +1400,11 @@ class CorrelationResearchAdapter:
                         )
                     ),
                     outcome_mfe=next(
-                        (
-                            item.mfe
-                            for item in outcome.horizons
-                            if item.horizon_minutes == 120
-                        ),
+                        (item.mfe for item in outcome.horizons if item.horizon_minutes == 120),
                         None,
                     ),
                     outcome_mae=next(
-                        (
-                            item.mae
-                            for item in outcome.horizons
-                            if item.horizon_minutes == 120
-                        ),
+                        (item.mae for item in outcome.horizons if item.horizon_minutes == 120),
                         None,
                     ),
                 )
@@ -1196,6 +1489,14 @@ class EvaluationReceipt:
 
 
 @dataclass(frozen=True)
+class PreparedEvaluation:
+    receipt: EvaluationReceipt
+    record: StrategyEvaluation | None
+    continuation: IncrementalStrategyState
+    existing: bool = False
+
+
+@dataclass(frozen=True)
 class ScannerCompositionReceipt:
     scan_receipt: ScannerRunReceipt
     market_id: str
@@ -1243,11 +1544,13 @@ class MultiAssetShadowCoordinator:
         cost_model: CostModel,
         release_sha: str,
         runtime_readiness: RuntimeReadinessAuthority,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         if outbox.evidence_store is not evidence or outcome_adapter.evidence_store is not evidence:
             raise IntegrationError("outbox and outcome persistence must use the Evidence store")
         if outcome_engine.sink is not outcome_adapter:
             raise IntegrationError("Outcome Engine sink must be the Evidence adapter")
+        outcome_adapter.bind_engine(outcome_engine)
         if isinstance(outcome_engine.provider, EvidenceOneMinuteProvider):
             if outcome_engine.provider.adapter is not outcome_adapter:
                 raise IntegrationError("1m provider persistence must use the Evidence adapter")
@@ -1268,13 +1571,23 @@ class MultiAssetShadowCoordinator:
         self._cost_model = cost_model
         self._release_sha = release_sha
         self._runtime_readiness = runtime_readiness
+        # Production composition supplies the same injected project clock used
+        # by the Runtime/Bootstrap owner.  None preserves the stable direct
+        # constructor surface for context-only and historical callers, which
+        # have no independent wall-clock authority to inject.
+        self._clock = clock
         self._ledgers: dict[str, EventLedger] = {}
+        self._continuations: dict[str, IncrementalStrategyState] = {}
+        self._legacy_boundaries: dict[str, int] = {}
+        self._strategy_boundaries: dict[str, set[int]] = {}
+        self._strategy_registry_epochs: dict[str, set[tuple[str, str]]] = {}
+        self._strategy_checkpoint_boundaries: dict[str, int] = {}
         self._restore_ledgers()
 
-    def _validated_retained_strategy_payloads(
-        self, *, active: RegistryVersion
-    ) -> list[dict[str, object]]:
-        """Validate every retained Strategy evaluation across Registry epochs.
+    def _validated_retained_strategy_payload(
+        self, record: StrategyEvaluation, *, active: RegistryVersion
+    ) -> dict[str, object]:
+        """Validate one targeted Strategy evaluation across Registry epochs.
 
         A retained StrategyEvaluation for a boundary dominates across Registry
         epochs (packet section 12): the exact referenced RegistryVersion is
@@ -1283,61 +1596,38 @@ class MultiAssetShadowCoordinator:
         Records produced by a different Strategy/Parameter release stay
         invisible to this authority, exactly as before.
         """
-        validated: list[dict[str, object]] = []
-        authority_slots: set[tuple[str, str, str, str, int, int]] = set()
-        for record_id in _record_ids(self._evidence, "strategy_evaluation"):
-            record = self._evidence.get(record_id)
-            if not isinstance(record, StrategyEvaluation):
-                continue
-            payload = record.payload
-            if (
-                payload.get("strategy_version") != STRATEGY_VERSION
-                or payload.get("parameter_version") != PARAMETER_VERSION
-            ):
-                continue
-            market_id = str(payload["market_id"])
-            source_open_time_ms = int(payload.get("source_open_time_ms", -1))
-            evaluation_boundary_ms = int(payload["evaluation_boundary_ms"])
-            slot = (
-                STRATEGY_VERSION,
-                PARAMETER_VERSION,
-                market_id,
-                str(payload.get("source_interval", "")),
-                source_open_time_ms,
-                evaluation_boundary_ms,
-            )
-            if slot in authority_slots:
-                raise IntegrationError("duplicate retained Strategy authority checkpoint")
-            authority_slots.add(slot)
-            version = str(payload["registry_version"])
-            if version == active.version:
-                if payload.get("registry_hash") != active.content_hash:
-                    raise IntegrationError(
-                        "Registry version has conflicting retained strategy authority"
-                    )
-                epoch = active
-            else:
-                try:
-                    epoch = self._registry.load_version(version)
-                except RegistryError as exc:
-                    raise IntegrationError(
-                        "retained Strategy references an unknown Registry epoch"
-                    ) from exc
-                if payload.get("registry_hash") != epoch.content_hash:
-                    raise IntegrationError(
-                        "retained Strategy checkpoint conflicts with its Registry epoch"
-                    )
-                if self._registry.prior_active(version) is None:
-                    raise IntegrationError(
-                        "retained Strategy references a Registry epoch that was "
-                        "never the live authority"
-                    )
-            if market_id not in {item.identity.market_id for item in epoch.markets}:
+        payload = record.payload
+        if (
+            payload.get("strategy_version") != STRATEGY_VERSION
+            or payload.get("parameter_version") != PARAMETER_VERSION
+        ):
+            raise IntegrationError("targeted Strategy record has incompatible semantics")
+        market_id = str(payload["market_id"])
+        version = str(payload["registry_version"])
+        if version == active.version:
+            if payload.get("registry_hash") != active.content_hash:
                 raise IntegrationError(
-                    "retained Strategy market is not valid in its Registry epoch"
+                    "Registry version has conflicting retained strategy authority"
                 )
-            validated.append(payload)
-        return validated
+            epoch = active
+        else:
+            try:
+                epoch = self._registry.load_version(version)
+            except RegistryError as exc:
+                raise IntegrationError(
+                    "retained Strategy references an unknown Registry epoch"
+                ) from exc
+            if payload.get("registry_hash") != epoch.content_hash:
+                raise IntegrationError(
+                    "retained Strategy checkpoint conflicts with its Registry epoch"
+                )
+            if self._registry.prior_active(version) is None:
+                raise IntegrationError(
+                    "retained Strategy references a Registry epoch that was never live authority"
+                )
+        if market_id not in {item.identity.market_id for item in epoch.markets}:
+            raise IntegrationError("retained Strategy market is not valid in its Registry epoch")
+        return payload
 
     def _restore_ledgers(self) -> None:
         active = self._registry.active()
@@ -1363,40 +1653,131 @@ class MultiAssetShadowCoordinator:
         # across Registry epochs, never only the current active one: after
         # R1->R2 with an immediate restart, T's R1 ledger is the authoritative
         # input for the first R2 evaluation.
-        latest: dict[str, tuple[int, EventLedger]] = {}
-        for payload in self._validated_retained_strategy_payloads(active=active):
+        latest: dict[str, tuple[int, EventLedger, dict[str, object]]] = {}
+        for market in active.markets:
+            records = self._evidence._query_records(
+                "strategy.latest",
+                """SELECT record_id, record_type, canonical_hash, identity_json, payload_json
+                   FROM immutable_records
+                   WHERE record_type = 'strategy_evaluation'
+                     AND json_extract(payload_json, '$.strategy_version') = ?
+                     AND json_extract(payload_json, '$.parameter_version') = ?
+                     AND json_extract(payload_json, '$.market_id') = ?
+                   ORDER BY json_extract(payload_json, '$.source_open_time_ms') DESC
+                   LIMIT 1""",
+                (STRATEGY_VERSION, PARAMETER_VERSION, market.identity.market_id),
+            )
+            if not records:
+                continue
+            record = records[0]
+            if not isinstance(record, StrategyEvaluation):  # pragma: no cover - SQL invariant
+                raise IntegrationError("targeted Strategy row has invalid type")
+            payload = self._validated_retained_strategy_payload(record, active=active)
             market_id = str(payload["market_id"])
             source_open_time_ms = _payload_int(payload, "source_open_time_ms")
+            self._strategy_boundaries.setdefault(market_id, set()).add(source_open_time_ms)
+            self._strategy_registry_epochs.setdefault(market_id, set()).add(
+                (str(payload["registry_version"]), str(payload["registry_hash"]))
+            )
             ledger = _kernel_result_from_payload(payload).ledger
-            prior = latest.get(market_id)
-            if prior is None or source_open_time_ms > prior[0]:
-                latest[market_id] = (source_open_time_ms, ledger)
+            latest[market_id] = (source_open_time_ms, ledger, payload)
         self._ledgers = {market_id: value[1] for market_id, value in latest.items()}
+        for market_id, (boundary, ledger, payload) in latest.items():
+            continuation = payload.get("continuation")
+            if payload.get("representation_version") == REPRESENTATION_VERSION:
+                state = self._restore_v2_continuation(
+                    market_id=market_id,
+                    boundary=boundary,
+                    latest_continuation=continuation,
+                )
+                if (
+                    state.market_id != market_id
+                    or state.last_source_open_time_ms != boundary
+                    or state.ledger
+                    != EventLedger(
+                        tuple(item for item in ledger.events if not item.status.terminal)
+                    )
+                ):
+                    raise IntegrationError("Strategy continuation conflicts with retained result")
+                self._continuations[market_id] = state
+            else:
+                # Legacy full-ledger records remain readable.  Their bounded
+                # indicator continuation is recomputed once, chronologically,
+                # before the next missing boundary can create authority.
+                self._legacy_boundaries[market_id] = boundary
+                self._ledgers[market_id] = ledger
+
+    def _restore_v2_continuation(
+        self,
+        *,
+        market_id: str,
+        boundary: int,
+        latest_continuation: object,
+    ) -> IncrementalStrategyState:
+        semantics = _continuation_semantics(latest_continuation)
+        records = self._evidence._query_records(
+            "strategy.checkpoint",
+            """SELECT record_id, record_type, canonical_hash, identity_json, payload_json
+               FROM immutable_records
+               WHERE record_type = 'strategy_evaluation'
+                 AND json_extract(payload_json, '$.continuation.checkpoint') = 1
+                 AND json_extract(payload_json, '$.market_id') = ?
+                 AND json_extract(payload_json, '$.strategy_version') = ?
+                 AND json_extract(payload_json, '$.parameter_version') = ?
+                 AND json_extract(payload_json, '$.source_open_time_ms') <= ?
+               ORDER BY json_extract(payload_json, '$.source_open_time_ms') DESC
+               LIMIT 1""",
+            (market_id, STRATEGY_VERSION, PARAMETER_VERSION, boundary),
+        )
+        if not records or not isinstance(records[0], StrategyEvaluation):
+            raise IntegrationError("Strategy recovery lacks a durable checkpoint")
+        checkpoint = self._validated_retained_strategy_payload(
+            records[0], active=self._active_registry()
+        )
+        checkpoint_boundary = _payload_int(checkpoint, "source_open_time_ms")
+        state = _continuation_from_payload(checkpoint.get("continuation"))
+        for bar in self._data.store.bars_between(
+            market_id,
+            after_open_time_ms=checkpoint_boundary,
+            at_or_before_ms=boundary,
+        ):
+            state.ingest(self._strategy_bar(bar))
+        if (
+            semantics.market_id != market_id
+            or semantics.last_source_open_time_ms != boundary
+            or state.last_source_open_time_ms != boundary
+            or state.total_5m != semantics.total_5m
+            or state.total_15m != semantics.total_15m
+            or state.total_1h != semantics.total_1h
+            or state.source_history_commitment != semantics.source_history_commitment
+        ):
+            raise IntegrationError("Strategy checkpoint derivation conflicts with retained state")
+        state.ledger = semantics.ledger
+        state.terminal_history_commitment = semantics.terminal_history_commitment
+        self._strategy_checkpoint_boundaries[market_id] = checkpoint_boundary
+        return state
 
     def strategy_recovery_boundaries(
         self, *, market_id: str, current_source_open_time_ms: int
     ) -> tuple[int, ...]:
         """Derive missing chronological checkpoints from retained evidence and bars."""
-        active = self._active_registry()
-        latest: int | None = None
-        seen: set[int] = set()
-        for payload in self._validated_retained_strategy_payloads(active=active):
-            if payload.get("market_id") != market_id:
-                continue
-            boundary = _payload_int(payload, "source_open_time_ms")
-            if boundary in seen:
-                raise IntegrationError("duplicate retained Strategy boundary authority")
-            seen.add(boundary)
-            latest = boundary if latest is None else max(latest, boundary)
+        self._active_registry()
+        for version, content_hash in self._strategy_registry_epochs.get(market_id, set()):
+            self._source_registry_epoch(
+                version=version, content_hash=content_hash, market_id=market_id
+            )
+        seen = self._strategy_boundaries.get(market_id, set())
+        latest = max(seen) if seen else None
         if latest is not None and latest > current_source_open_time_ms:
             raise IntegrationError("Strategy checkpoint is ahead of requested boundary")
         if latest == current_source_open_time_ms:
             return ()
         rows = self._data.store.connection.execute(
             """SELECT open_time_ms FROM closed_bars
-               WHERE market_id = ? AND interval = '5m' AND open_time_ms <= ?
+               WHERE market_id = ? AND interval = '5m'
+                 AND open_time_ms > ? AND open_time_ms <= ?
                ORDER BY open_time_ms""",
-            (market_id, current_source_open_time_ms),
+            (market_id, -1 if latest is None else latest, current_source_open_time_ms),
         ).fetchall()
         available = tuple(int(row[0]) for row in rows)
         if not available or available[-1] != current_source_open_time_ms:
@@ -1413,15 +1794,15 @@ class MultiAssetShadowCoordinator:
             )
             # The frozen Kernel requires M20 plus a current A15. Earlier
             # prefixes remain data context but are not valid Strategy inputs.
+            minimum_15m_boundary = (
+                fifteen_minute_opens[14] + 600_000 if len(fifteen_minute_opens) >= 15 else None
+            )
             eligible = tuple(
                 boundary
                 for index, boundary in enumerate(available)
                 if index >= 20
-                and sum(
-                    open_time_ms + 600_000 <= boundary
-                    for open_time_ms in fifteen_minute_opens
-                )
-                >= 15
+                and minimum_15m_boundary is not None
+                and boundary >= minimum_15m_boundary
             )
             if not eligible:
                 raise IntegrationError("Strategy recovery context is insufficient")
@@ -1431,21 +1812,25 @@ class MultiAssetShadowCoordinator:
             raise IntegrationError("Strategy recovery cannot reach requested boundary")
         return missing
 
-    def has_retained_strategy_evaluation(
-        self, *, market_id: str, source_open_time_ms: int
-    ) -> bool:
+    def has_retained_strategy_evaluation(self, *, market_id: str, source_open_time_ms: int) -> bool:
         """Report exact durable Strategy completion across Registry epochs."""
-        active = self._active_registry()
-        matches = 0
-        for payload in self._validated_retained_strategy_payloads(active=active):
-            if (
-                payload.get("market_id") == market_id
-                and payload.get("source_open_time_ms") == source_open_time_ms
-            ):
-                matches += 1
-        if matches > 1:
-            raise IntegrationError("duplicate retained Strategy boundary authority")
-        return matches > 0
+        self._active_registry()
+        if source_open_time_ms in self._strategy_boundaries.get(market_id, set()):
+            return True
+        records = self._evidence._query_records(
+            "strategy.boundary_exact",
+            """SELECT record_id, record_type, canonical_hash, identity_json, payload_json
+               FROM immutable_records
+               WHERE record_type = 'strategy_evaluation'
+                 AND json_extract(payload_json, '$.strategy_version') = ?
+                 AND json_extract(payload_json, '$.parameter_version') = ?
+                 AND json_extract(payload_json, '$.market_id') = ?
+                 AND json_extract(payload_json, '$.source_open_time_ms') = ?""",
+            (STRATEGY_VERSION, PARAMETER_VERSION, market_id, source_open_time_ms),
+        )
+        if len(records) > 1:
+            raise IntegrationError("Strategy boundary has multiple retained authorities")
+        return bool(records)
 
     def _active_registry(self) -> RegistryVersion:
         active = self._registry.active()
@@ -1497,9 +1882,7 @@ class MultiAssetShadowCoordinator:
             except RegistryError as exc:
                 raise IntegrationError("source bar Registry epoch is invalid") from exc
             if prior_epoch is None:
-                raise IntegrationError(
-                    "source bar Registry epoch was never the live authority"
-                )
+                raise IntegrationError("source bar Registry epoch was never the live authority")
             epoch = prior_epoch
         if content_hash != epoch.content_hash:
             raise IntegrationError("source bar Registry hash conflicts with its epoch")
@@ -1544,16 +1927,6 @@ class MultiAssetShadowCoordinator:
         source_open_time_ms: int | None = None,
     ) -> tuple[ClosedBar, ...]:
         active = self._active_registry()
-        rows = self._data.store.connection.execute(
-            """SELECT payload_json, registry_version, registry_content_hash
-               FROM closed_bars
-               WHERE market_id = ? AND interval = '5m'
-               ORDER BY open_time_ms""",
-            (market.identity.market_id,),
-        ).fetchall()
-        if not rows:
-            raise IntegrationError("market has no retained provider-finalized 5m evidence")
-        all_values = tuple(ClosedBar.model_validate_json(row[0]) for row in rows)
         requested = (
             readiness.latest_closed_5m_open_time_ms
             if source_open_time_ms is None
@@ -1561,16 +1934,17 @@ class MultiAssetShadowCoordinator:
         )
         if requested > readiness.latest_closed_5m_open_time_ms:
             raise IntegrationError("requested Strategy boundary is ahead of runtime authority")
-        indexes = tuple(
-            index for index, value in enumerate(all_values) if value.open_time_ms <= requested
-        )
-        if not indexes or all_values[indexes[-1]].open_time_ms != requested:
+        row = self._data.store.connection.execute(
+            """SELECT payload_json, registry_version, registry_content_hash
+               FROM closed_bars
+               WHERE market_id = ? AND interval = '5m' AND open_time_ms = ?""",
+            (market.identity.market_id, requested),
+        ).fetchone()
+        if row is None:
             raise IntegrationError("requested closed 5m boundary is not retained")
-        last_index = indexes[-1]
-        selected = rows[last_index]
-        if selected[1] != active.version or selected[2] != active.content_hash:
+        if row[1] != active.version or row[2] != active.content_hash:
             raise IntegrationError("selected 5m boundary is not bound to active Registry authority")
-        return all_values[: last_index + 1]
+        return (ClosedBar.model_validate_json(row[0]),)
 
     def _context_retained_closed_5m(
         self,
@@ -1609,9 +1983,7 @@ class MultiAssetShadowCoordinator:
             content_hash=str(selected[2]),
             market_id=market_id,
         )
-        market = next(
-            item for item in source_epoch.markets if item.identity.market_id == market_id
-        )
+        market = next(item for item in source_epoch.markets if item.identity.market_id == market_id)
         return market, source_epoch, all_values[: selected_index + 1]
 
     def _resolve_scanner_linkage(
@@ -1630,15 +2002,19 @@ class MultiAssetShadowCoordinator:
             exact = self._evidence.get(candidate_record_id)
             matches = [exact] if isinstance(exact, EvidenceCandidate) else []
         else:
-            matches = []
-            for record_id in _record_ids(self._evidence, "candidate"):
-                record = self._evidence.get(record_id)
-                if (
-                    isinstance(record, EvidenceCandidate)
-                    and record.payload.get("scanner_candidate_id") == linkage.candidate_id
-                    and record.payload.get("state") == linkage.state.value
-                ):
-                    matches.append(record)
+            matches = [
+                record
+                for record in self._evidence._query_records(
+                    "candidate.linkage_exact",
+                    """SELECT record_id, record_type, canonical_hash, identity_json, payload_json
+                       FROM immutable_records
+                       WHERE record_type = 'candidate'
+                         AND json_extract(payload_json, '$.scanner_candidate_id') = ?
+                         AND json_extract(payload_json, '$.state') = ?""",
+                    (linkage.candidate_id, linkage.state.value),
+                )
+                if isinstance(record, EvidenceCandidate)
+            ]
         if len(matches) != 1:
             raise IntegrationError("Scanner linkage does not resolve to one retained Candidate")
         candidate = matches[0]
@@ -1646,8 +2022,8 @@ class MultiAssetShadowCoordinator:
         scan = self._evidence.get(str(payload.get("scanner_evidence_id")))
         authority_epoch = registry_epoch or self._active_registry()
         content = payload.get("candidate_content")
-        observations = None if not isinstance(scan, ScannerEvidence) else scan.payload.get(
-            "observations"
+        observations = (
+            None if not isinstance(scan, ScannerEvidence) else scan.payload.get("observations")
         )
         if (
             not isinstance(scan, ScannerEvidence)
@@ -1668,8 +2044,7 @@ class MultiAssetShadowCoordinator:
             or content.get("side") != payload.get("side")
             or content.get("scanner_version") != payload.get("scanner_version")
             or content.get("parameter_version") != payload.get("parameter_version")
-            or payload.get("candidate_content_hash")
-            != _typed_hash("scanner-candidate", content)
+            or payload.get("candidate_content_hash") != _typed_hash("scanner-candidate", content)
             or not isinstance(observations, list)
             or not any(
                 isinstance(observation, dict)
@@ -1699,47 +2074,29 @@ class MultiAssetShadowCoordinator:
         linkage = decision.scanner_linkage
         if linkage is None:
             return None
-        matches: dict[str, RegistryVersion] = {}
-        for record_id in _record_ids(self._evidence, "strategy_evaluation"):
-            record = self._evidence.get(record_id)
-            if not isinstance(record, StrategyEvaluation):
-                continue
-            decisions = record.payload.get("decisions")
-            if not isinstance(decisions, list):
-                raise IntegrationError("retained Strategy decisions are invalid")
-            for item in decisions:
-                if not isinstance(item, dict):
-                    raise IntegrationError("retained Strategy decision is invalid")
-                prior = _decision_from_payload(item.get("content"))
-                candidate_id = item.get("scanner_candidate_record_id")
-                if (
-                    prior.market_event_id == decision.market_event_id
-                    and prior.scanner_linkage == linkage
-                    and isinstance(candidate_id, str)
-                ):
-                    epoch = self._source_registry_epoch(
-                        version=str(record.payload["registry_version"]),
-                        content_hash=str(record.payload["registry_hash"]),
-                        market_id=decision.market_id,
-                    )
-                    prior_epoch = matches.setdefault(candidate_id, epoch)
-                    if prior_epoch != epoch:
-                        raise IntegrationError(
-                            "Strategy decision has conflicting causal Registry authority"
-                        )
-        if len(matches) > 1:
-            raise IntegrationError(
-                "Strategy decision lacks one frozen causal Candidate record"
-            )
-        if matches:
-            candidate_id, registry_epoch = next(iter(matches.items()))
-        elif current_linkage == linkage and current_candidate is not None:
-            candidate_id = current_candidate.record_id
-            registry_epoch = self._active_registry()
-        else:
-            raise IntegrationError(
-                "Strategy decision lacks one frozen causal Candidate record"
-            )
+        del current_linkage, current_candidate
+        candidates = self._evidence._query_records(
+            "candidate.causal_linkage",
+            """SELECT record_id, record_type, canonical_hash, identity_json, payload_json
+               FROM immutable_records
+               WHERE record_type = 'candidate'
+                 AND json_extract(payload_json, '$.scanner_candidate_id') = ?
+                 AND json_extract(payload_json, '$.state') = ?
+               ORDER BY json_extract(payload_json, '$.source_boundary_open_time_ms')
+               LIMIT 1""",
+            (linkage.candidate_id, linkage.state.value),
+        )
+        if len(candidates) != 1 or not isinstance(candidates[0], EvidenceCandidate):
+            raise IntegrationError("Strategy decision lacks one frozen causal Candidate record")
+        candidate_id = candidates[0].record_id
+        scan = self._evidence.get(str(candidates[0].payload.get("scanner_evidence_id")))
+        if not isinstance(scan, ScannerEvidence):
+            raise IntegrationError("Strategy Candidate lacks retained Scanner authority")
+        registry_epoch = self._source_registry_epoch(
+            version=str(scan.payload["registry_version"]),
+            content_hash=str(scan.payload["registry_hash"]),
+            market_id=decision.market_id,
+        )
         self._resolve_scanner_linkage(
             market_id=decision.market_id,
             linkage=linkage,
@@ -1783,7 +2140,59 @@ class MultiAssetShadowCoordinator:
             source_identity=value.canonical_hash,
         )
 
-    def evaluate_finalized_market(
+    def _continuation_for_boundary(
+        self, *, market_id: str, source_open_time_ms: int
+    ) -> IncrementalStrategyState:
+        state = self._continuations.get(market_id)
+        if state is None:
+            state = IncrementalStrategyState(market_id=market_id)
+            legacy_boundary = self._legacy_boundaries.get(market_id)
+            bootstrap_end = source_open_time_ms if legacy_boundary is None else legacy_boundary
+            rows = self._data.store.connection.execute(
+                """SELECT payload_json FROM closed_bars
+                   WHERE market_id = ? AND interval = '5m' AND open_time_ms <= ?
+                   ORDER BY open_time_ms""",
+                (market_id, bootstrap_end),
+            ).fetchall()
+            for row in rows:
+                state.ingest(self._strategy_bar(ClosedBar.model_validate_json(row[0])))
+            if market_id in self._ledgers:
+                state.ledger = self._ledgers[market_id]
+            if legacy_boundary is not None:
+                if state.last_source_open_time_ms != legacy_boundary:
+                    raise IntegrationError("legacy Strategy continuation cannot be derived")
+                state.ledger = EventLedger(
+                    tuple(
+                        item
+                        for item in self._ledgers.get(market_id, EventLedger()).events
+                        if not item.status.terminal
+                    )
+                )
+        state = state.clone()
+        last = state.last_source_open_time_ms
+        if last is not None and last > source_open_time_ms:
+            raise IntegrationError("Strategy continuation is ahead of requested boundary")
+        for bar in self._data.store.bars_between(
+            market_id,
+            after_open_time_ms=-1 if last is None else last,
+            at_or_before_ms=source_open_time_ms,
+        ):
+            state.ingest(self._strategy_bar(bar))
+        if state.last_source_open_time_ms != source_open_time_ms:
+            raise IntegrationError("requested Strategy continuation boundary is unavailable")
+        return state
+
+    def _recompute_retained_continuation(
+        self, *, market_id: str, source_open_time_ms: int, retained: object
+    ) -> IncrementalStrategyState:
+        """Exact duplicate derives from the nearest checkpoint plus bounded gap."""
+        return self._restore_v2_continuation(
+            market_id=market_id,
+            boundary=source_open_time_ms,
+            latest_continuation=retained,
+        )
+
+    def prepare_finalized_market(
         self,
         *,
         market_id: str,
@@ -1792,7 +2201,8 @@ class MultiAssetShadowCoordinator:
         scanner_candidate_record_id: str | None = None,
         source_open_time_ms: int | None = None,
         evaluation_mode: BoundaryMode = BoundaryMode.LIVE_ACTIONABLE,
-    ) -> EvaluationReceipt:
+        readiness: RuntimeReadinessSnapshot | None = None,
+    ) -> PreparedEvaluation:
         if zone_book is not None:
             raise IntegrationError(
                 "production strategy authority requires canonical ZoneBook input"
@@ -1803,81 +2213,62 @@ class MultiAssetShadowCoordinator:
             raise IntegrationError(
                 "context-only Strategy evaluation cannot receive Scanner linkage"
             )
+        snapshot = readiness or (
+            self._readiness()
+            if evaluation_mode is BoundaryMode.LIVE_ACTIONABLE
+            else self._context_readiness()
+        )
+        requested = (
+            snapshot.latest_closed_5m_open_time_ms
+            if source_open_time_ms is None
+            else source_open_time_ms
+        )
+        if requested > snapshot.latest_closed_5m_open_time_ms:
+            raise IntegrationError("requested Strategy boundary is ahead of runtime authority")
+        row = self._data.store.connection.execute(
+            """SELECT payload_json, registry_version, registry_content_hash
+               FROM closed_bars
+               WHERE market_id = ? AND interval = '5m' AND open_time_ms = ?""",
+            (market_id, requested),
+        ).fetchone()
+        if row is None:
+            raise IntegrationError("requested closed 5m boundary is not retained")
+        source_bar = ClosedBar.model_validate_json(row[0])
         if evaluation_mode is BoundaryMode.LIVE_ACTIONABLE:
-            readiness = self._readiness()
-            market = self._market(market_id, readiness=readiness)
-            retained = self._retained_closed_5m(
-                market,
-                readiness=readiness,
-                source_open_time_ms=source_open_time_ms,
-            )
+            market = self._market(market_id, readiness=snapshot)
             authority_registry = self._active_registry()
+            if row[1] != authority_registry.version or row[2] != authority_registry.content_hash:
+                raise IntegrationError(
+                    "selected 5m boundary is not bound to active Registry authority"
+                )
         else:
-            readiness = self._context_readiness()
-            market, authority_registry, retained = self._context_retained_closed_5m(
-                market_id=market_id,
-                readiness=readiness,
-                source_open_time_ms=source_open_time_ms,
+            authority_registry = self._source_registry_epoch(
+                version=str(row[1]), content_hash=str(row[2]), market_id=market_id
             )
-        bars_5m = tuple(self._strategy_bar(item) for item in retained)
-        bars_15m = aggregate_closed_5m_causally(bars_5m, minutes=15)
-        bars_1h = aggregate_closed_5m_causally(bars_5m, minutes=60)
-        tick = minimum_tick(
-            bars_5m[-1].close,
-            max_decimals=market.price_max_decimals,
-            significant_figures=market.price_max_significant_figures,
-        )
-        canonical_linkage, retained_candidate = self._resolve_scanner_linkage(
-            market_id=market_id,
-            linkage=scanner_linkage,
-            candidate_record_id=scanner_candidate_record_id,
-        )
-        evaluation_boundary_ms = retained[-1].close_time_ms + 1
+            market = next(
+                item for item in authority_registry.markets if item.identity.market_id == market_id
+            )
+        evaluation_boundary_ms = source_bar.close_time_ms + 1
         authority_slot = {
             "strategy_version": STRATEGY_VERSION,
             "parameter_version": PARAMETER_VERSION,
             "registry_version": authority_registry.version,
             "market_id": market_id,
             "source_interval": "5m",
-            "source_open_time_ms": retained[-1].open_time_ms,
+            "source_open_time_ms": requested,
             "evaluation_boundary_ms": evaluation_boundary_ms,
         }
         evaluation_id = _typed_hash("strategy-evaluation-authority", authority_slot)
-        authoritative_input = {
-            "source_bars": [
-                {
-                    "open_time_ms": item.open_time_ms,
-                    "canonical_hash": item.canonical_hash,
-                }
-                for item in retained
-            ],
-            "minimum_tick": _decimal(tick),
-            "scanner_candidate_record_id": (
-                None if retained_candidate is None else retained_candidate.record_id
-            ),
-            "scanner_evidence_id": (
-                None
-                if retained_candidate is None
-                else retained_candidate.payload.get("scanner_evidence_id")
-            ),
-            "scanner_linkage": (
-                None
-                if canonical_linkage is None
-                else _canonical_dataclass(canonical_linkage)
-            ),
-        }
-        authoritative_input_hash = _typed_hash("strategy-authoritative-input", authoritative_input)
         existing = tuple(
             record
-            for row in self._evidence._connection.execute(
+            for result in self._evidence._connection.execute(
                 """SELECT record_id FROM immutable_records
                    WHERE record_type = 'strategy_evaluation'
-                   AND json_extract(payload_json, '$.evaluation_id') = ?""",
+                     AND json_extract(payload_json, '$.evaluation_id') = ?""",
                 (evaluation_id,),
             )
             if isinstance(
-                (record := self._evidence.get(str(row["record_id"]))),
-                StrategyEvaluation,
+                (record := self._evidence.get(str(result["record_id"]))), StrategyEvaluation
             )
         )
         if len(existing) > 1:
@@ -1885,49 +2276,60 @@ class MultiAssetShadowCoordinator:
         if existing:
             record = existing[0]
             payload = record.payload
-            expected = {
+            stable = {
                 **authority_slot,
                 "evaluation_id": evaluation_id,
-                "latest_closed_5m_hash": retained[-1].canonical_hash,
-                "runtime_readiness_hash": readiness.snapshot_hash,
+                "latest_closed_5m_hash": source_bar.canonical_hash,
                 "registry_hash": authority_registry.content_hash,
                 "release_sha": self._release_sha,
-                "authoritative_input_hash": authoritative_input_hash,
-                "authoritative_input": authoritative_input,
                 "evaluation_mode": evaluation_mode.value,
+                "runtime_readiness_hash": snapshot.snapshot_hash,
+                "runtime_readiness_observed_at_ms": snapshot.observed_at_ms,
             }
-            if any(payload.get(name) != value for name, value in expected.items()):
+            if any(payload.get(name) != value for name, value in stable.items()):
                 raise IntegrationError("Strategy authority slot conflicts with current context")
-            return self._evaluation_receipt(record)
-
+            retained_continuation = payload.get("continuation")
+            if payload.get("representation_version") == REPRESENTATION_VERSION and (
+                _is_full_continuation(retained_continuation)
+            ):
+                state = _continuation_from_payload(retained_continuation)
+            elif payload.get("representation_version") == REPRESENTATION_VERSION:
+                state = self._recompute_retained_continuation(
+                    market_id=market_id,
+                    source_open_time_ms=requested,
+                    retained=retained_continuation,
+                )
+            else:
+                state = self._continuation_for_boundary(
+                    market_id=market_id, source_open_time_ms=requested
+                )
+            return PreparedEvaluation(self._evaluation_receipt(record), None, state, True)
         if self.has_retained_strategy_evaluation(
-            market_id=market_id, source_open_time_ms=retained[-1].open_time_ms
+            market_id=market_id, source_open_time_ms=requested
         ):
-            # A boundary already authoritative under a predecessor Registry
-            # epoch is never re-evaluated under the current one (packet
-            # section 12): its retained output ledger dominates.
             raise IntegrationError(
                 "boundary already holds authoritative Strategy authority "
                 "under a predecessor Registry epoch"
             )
-
-        current_ledger = self._ledgers.get(market_id, EventLedger())
+        state = self._continuation_for_boundary(market_id=market_id, source_open_time_ms=requested)
+        canonical_linkage, retained_candidate = self._resolve_scanner_linkage(
+            market_id=market_id,
+            linkage=scanner_linkage,
+            candidate_record_id=scanner_candidate_record_id,
+        )
+        tick = minimum_tick(
+            source_bar.close,
+            max_decimals=market.price_max_decimals,
+            significant_figures=market.price_max_significant_figures,
+        )
+        current_ledger = state.ledger
         result = evaluate_strategy(
-            StrategyEvaluationInput(
-                bars_5m=bars_5m,
-                minimum_tick=tick,
-                bars_15m=bars_15m,
-                bars_1h=bars_1h,
-                zone_book=None,
-                scanner_linkage=canonical_linkage,
-                mandatory_data_valid=True,
-            ),
+            state.evaluation_input(minimum_tick=tick, scanner_linkage=canonical_linkage),
             current_ledger,
         )
         input_ledger = _ledger_payload(current_ledger)
         output_ledger = _ledger_payload(result.ledger)
-        input_hash = _typed_hash("event-ledger", input_ledger)
-        output_hash = _typed_hash("event-ledger", output_ledger)
+        input_hash = _v2_ledger_state_hash(input_ledger, state.terminal_history_commitment)
         decisions = tuple(
             {
                 "decision_id": _typed_hash("strategy-decision", _canonical_dataclass(decision)),
@@ -1940,48 +2342,85 @@ class MultiAssetShadowCoordinator:
             }
             for decision in result.decisions
         )
+        terminal_payload = [
+            _canonical_dataclass(item) for item in result.ledger.events if item.status.terminal
+        ]
+        state.retain_result(result.ledger, terminal_payload)
+        output_hash = _v2_ledger_state_hash(
+            _ledger_payload(state.ledger), state.terminal_history_commitment
+        )
+        authoritative_input = {
+            "representation_version": REPRESENTATION_VERSION,
+            "source_history_count": state.total_5m,
+            "source_history_commitment": state.source_history_commitment,
+            # The bounded causal window remains inspectable without copying the
+            # lifetime source history into every StrategyEvaluation record.
+            "source_bars": [_canonical_dataclass(item) for item in state.bars_5m],
+            "latest_source_open_time_ms": requested,
+            "latest_closed_5m_hash": source_bar.canonical_hash,
+            "minimum_tick": _decimal(tick),
+            "scanner_candidate_record_id": None
+            if retained_candidate is None
+            else retained_candidate.record_id,
+            "scanner_evidence_id": None
+            if retained_candidate is None
+            else retained_candidate.payload.get("scanner_evidence_id"),
+            "scanner_linkage": None
+            if canonical_linkage is None
+            else _canonical_dataclass(canonical_linkage),
+        }
+        authoritative_input_hash = _typed_hash(
+            "strategy-authoritative-input-v2", authoritative_input
+        )
+        retain_checkpoint = (
+            evaluation_mode is BoundaryMode.LIVE_ACTIONABLE
+            or market_id not in self._strategy_checkpoint_boundaries
+            or state.total_5m % 64 == 0
+        )
+        retained_continuation = (
+            _continuation_payload(state)
+            if retain_checkpoint
+            else _continuation_state_payload(state)
+        )
         record = StrategyEvaluation.create(
             identity=authority_slot,
             evaluation_id=evaluation_id,
             market_id=market_id,
-            latest_closed_5m_hash=retained[-1].canonical_hash,
+            latest_closed_5m_hash=source_bar.canonical_hash,
             source_interval="5m",
-            source_open_time_ms=retained[-1].open_time_ms,
+            source_open_time_ms=requested,
             evaluation_boundary_ms=evaluation_boundary_ms,
-            runtime_readiness_hash=readiness.snapshot_hash,
+            runtime_readiness_hash=snapshot.snapshot_hash,
+            runtime_readiness_observed_at_ms=snapshot.observed_at_ms,
             registry_version=authority_registry.version,
             registry_hash=authority_registry.content_hash,
             strategy_version=STRATEGY_VERSION,
             parameter_version=PARAMETER_VERSION,
             release_sha=self._release_sha,
             evaluation_mode=evaluation_mode.value,
+            representation_version=REPRESENTATION_VERSION,
             authoritative_input_hash=authoritative_input_hash,
             authoritative_input=authoritative_input,
             input_ledger_hash=input_hash,
             output_ledger_hash=output_hash,
             output_ledger=output_ledger,
+            continuation=retained_continuation,
             decisions=decisions,
             zones=[_canonical_dataclass(item) for item in result.zones],
-            active_support=(
-                None
-                if result.active_support is None
-                else _canonical_dataclass(result.active_support)
-            ),
-            active_resistance=(
-                None
-                if result.active_resistance is None
-                else _canonical_dataclass(result.active_resistance)
-            ),
+            active_support=None
+            if result.active_support is None
+            else _canonical_dataclass(result.active_support),
+            active_resistance=None
+            if result.active_resistance is None
+            else _canonical_dataclass(result.active_resistance),
             htf_context=_canonical_dataclass(result.htf_context),
         )
-        self._evidence._write_controlled((record,))
-        self._ledgers[market_id] = result.ledger
-        return EvaluationReceipt(
+        receipt = EvaluationReceipt(
             evaluation_id=evaluation_id,
             evaluation_record_id=record.record_id,
             evaluation_record_hash=record.canonical_hash,
             market_id=market_id,
-            latest_closed_5m_hash=retained[-1].canonical_hash,
+            latest_closed_5m_hash=source_bar.canonical_hash,
             registry_version=authority_registry.version,
             registry_hash=authority_registry.content_hash,
             strategy_version=STRATEGY_VERSION,
@@ -1992,6 +2431,58 @@ class MultiAssetShadowCoordinator:
             evaluation_mode=evaluation_mode,
             result=result,
         )
+        return PreparedEvaluation(receipt, record, state)
+
+    def commit_evaluation_cohort(
+        self, prepared: Sequence[PreparedEvaluation]
+    ) -> tuple[EvaluationReceipt, ...]:
+        values = tuple(prepared)
+        records = tuple(item.record for item in values if item.record is not None)
+        if records:
+            self._evidence._write_controlled(records)
+        for item in values:
+            if item.existing:
+                continue
+            self._continuations[item.receipt.market_id] = item.continuation
+            # Preserve the latest full audit result for the existing in-memory
+            # compatibility seam; V2 continuation authority is held separately.
+            self._ledgers[item.receipt.market_id] = item.receipt.result.ledger
+            self._legacy_boundaries.pop(item.receipt.market_id, None)
+            self._strategy_boundaries.setdefault(item.receipt.market_id, set()).add(
+                item.receipt.evaluation_boundary_ms - 300_000
+            )
+            self._strategy_registry_epochs.setdefault(item.receipt.market_id, set()).add(
+                (item.receipt.registry_version, item.receipt.registry_hash)
+            )
+            if item.record is not None and _is_full_continuation(
+                item.record.payload.get("continuation")
+            ):
+                self._strategy_checkpoint_boundaries[item.receipt.market_id] = (
+                    item.receipt.evaluation_boundary_ms - 300_000
+                )
+        return tuple(item.receipt for item in values)
+
+    def evaluate_finalized_market(
+        self,
+        *,
+        market_id: str,
+        zone_book: ZoneBook | None = None,
+        scanner_linkage: ScannerLinkage | None = None,
+        scanner_candidate_record_id: str | None = None,
+        source_open_time_ms: int | None = None,
+        evaluation_mode: BoundaryMode = BoundaryMode.LIVE_ACTIONABLE,
+        readiness: RuntimeReadinessSnapshot | None = None,
+    ) -> EvaluationReceipt:
+        prepared = self.prepare_finalized_market(
+            market_id=market_id,
+            zone_book=zone_book,
+            scanner_linkage=scanner_linkage,
+            scanner_candidate_record_id=scanner_candidate_record_id,
+            source_open_time_ms=source_open_time_ms,
+            evaluation_mode=evaluation_mode,
+            readiness=readiness,
+        )
+        return self.commit_evaluation_cohort((prepared,))[0]
 
     def scan_finalized(
         self,
@@ -1999,11 +2490,12 @@ class MultiAssetShadowCoordinator:
         *,
         observed_at: datetime,
         evaluation_mode: BoundaryMode = BoundaryMode.LIVE_ACTIONABLE,
+        readiness: RuntimeReadinessSnapshot | None = None,
     ) -> ScannerRunReceipt:
         if evaluation_mode is not BoundaryMode.LIVE_ACTIONABLE:
             raise IntegrationError("Scanner is disabled for context-only boundaries")
         observed = _utc(observed_at, "observed_at")
-        readiness = self._readiness()
+        readiness = readiness or self._readiness()
         active = self._active_registry()
         active_markets = tuple(
             market
@@ -2018,12 +2510,28 @@ class MultiAssetShadowCoordinator:
         source_bars: list[dict[str, object]] = []
         for market in active_markets:
             self._market(market.identity.market_id, readiness=readiness)
-            retained = self._retained_closed_5m(market, readiness=readiness)
+            boundary = readiness.latest_closed_5m_open_time_ms
+            retained = self._data.store.tail_bars(
+                market.identity.market_id, at_or_before_ms=boundary, limit=37
+            )
+            if not retained or retained[-1].open_time_ms != boundary:
+                raise IntegrationError("Scanner boundary is not retained")
+            state = self._continuation_for_boundary(
+                market_id=market.identity.market_id, source_open_time_ms=boundary
+            )
+            exact_atr = state.atr_5m.value
+            if state.total_5m >= 288 and exact_atr is None:
+                raise IntegrationError("mature Scanner lacks exact Wilder ATR continuation")
             bars = tuple(self._strategy_bar(item) for item in retained)
             source_bars.append(
                 {
                     "market_id": market.identity.market_id,
                     "latest_closed_5m_hash": retained[-1].canonical_hash,
+                    "source_history_count": state.total_5m,
+                    "source_history_commitment": state.source_history_commitment,
+                    "exact_wilder_atr_5m": None
+                    if exact_atr is None
+                    else _decimal(exact_atr),
                     "bars": [
                         {
                             "open_time_ms": item.open_time_ms,
@@ -2031,9 +2539,7 @@ class MultiAssetShadowCoordinator:
                         }
                         for item in retained[-37:]
                     ],
-                    "public_snapshot": _canonical_dataclass(
-                        snapshots[market.identity.market_id]
-                    ),
+                    "public_snapshot": _canonical_dataclass(snapshots[market.identity.market_id]),
                 }
             )
             snapshot = snapshots[market.identity.market_id]
@@ -2049,6 +2555,8 @@ class MultiAssetShadowCoordinator:
                     current_spread_price=snapshot.current_spread_price,
                     liquidity_healthy=snapshot.liquidity_healthy,
                     btc_returns=snapshot.btc_returns,
+                    history_count=state.total_5m,
+                    exact_wilder_atr_5m=exact_atr,
                 )
             )
         observations = scan_cross_section(tuple(inputs))
@@ -2132,17 +2640,17 @@ class MultiAssetShadowCoordinator:
             raw_scanner_evidence_id=scan.record_id,
         )
 
-    def retained_scanner_run(
-        self, *, boundary_open_time_ms: int
-    ) -> ScannerRunReceipt | None:
+    def retained_scanner_run(self, *, boundary_open_time_ms: int) -> ScannerRunReceipt | None:
         active = self._active_registry()
-        matches = tuple(
-            record
-            for record_id in _record_ids(self._evidence, "scanner_evidence")
-            if isinstance((record := self._evidence.get(record_id)), ScannerEvidence)
-            and record.payload.get("scan_boundary_open_time_ms") == boundary_open_time_ms
-            and record.payload.get("registry_version") == active.version
-            and record.payload.get("evidence_role", "RAW_DISCOVERY") == "RAW_DISCOVERY"
+        matches = self._evidence._query_records(
+            "scanner.raw_boundary",
+            """SELECT record_id, record_type, canonical_hash, identity_json, payload_json
+               FROM immutable_records
+               WHERE record_type = 'scanner_evidence'
+                 AND json_extract(payload_json, '$.registry_version') = ?
+                 AND json_extract(payload_json, '$.scan_boundary_open_time_ms') = ?
+                 AND json_extract(payload_json, '$.evidence_role') = 'RAW_DISCOVERY'""",
+            (active.version, boundary_open_time_ms),
         )
         if len(matches) > 1:
             raise IntegrationError("Scanner boundary has multiple retained raw discoveries")
@@ -2166,15 +2674,25 @@ class MultiAssetShadowCoordinator:
             observations=observations,
             candidate_record_ids=tuple(
                 record.record_id
-                for record_id in _record_ids(self._evidence, "candidate")
-                if isinstance((record := self._evidence.get(record_id)), EvidenceCandidate)
-                and record.payload.get("raw_scanner_evidence_id") == scan.record_id
-                and record.payload.get("live_authority") is True
+                for record in self._evidence._query_records(
+                    "candidate.raw_scan",
+                    """SELECT record_id, record_type, canonical_hash, identity_json, payload_json
+                       FROM immutable_records
+                       WHERE record_type = 'candidate'
+                         AND json_extract(payload_json, '$.live_authority') = 1
+                         AND json_extract(payload_json, '$.raw_scanner_evidence_id') = ?""",
+                    (scan.record_id,),
+                )
+                if isinstance(record, EvidenceCandidate)
             ),
         )
 
     def compose_scanner_market(
-        self, *, receipt: ScannerRunReceipt, market_id: str
+        self,
+        *,
+        receipt: ScannerRunReceipt,
+        market_id: str,
+        readiness: RuntimeReadinessSnapshot | None = None,
     ) -> ScannerCompositionReceipt:
         """Retain raw discovery, but select at most one live path per market."""
         raw_scan = self._validated_scanner_receipt(receipt)
@@ -2187,9 +2705,7 @@ class MultiAssetShadowCoordinator:
         if len(raw_matches) != 1:
             raise IntegrationError("Scanner run lacks one raw market observation")
         raw = raw_matches[0]
-        current = self._candidate_records(
-            market_id=market_id, boundary_open_time_ms=boundary
-        )
+        current = self._candidate_records(market_id=market_id, boundary_open_time_ms=boundary)
         if len(current) > 1:
             raise IntegrationError("Scanner boundary has contradictory live Candidate authority")
         if current:
@@ -2211,11 +2727,18 @@ class MultiAssetShadowCoordinator:
         if active:
             prior = active[0]
             candidate = self._candidate_from_record(prior)
-            readiness = self._readiness()
+            readiness = readiness or self._readiness()
             market = self._market(market_id, readiness=readiness)
-            retained = self._retained_closed_5m(
-                market, readiness=readiness, source_open_time_ms=boundary
+            retained = self._data.store.tail_bars(
+                market.identity.market_id, at_or_before_ms=boundary, limit=37
             )
+            if not retained or retained[-1].open_time_ms != boundary:
+                raise IntegrationError("Scanner progression boundary is not retained")
+            state = self._continuation_for_boundary(
+                market_id=market.identity.market_id, source_open_time_ms=boundary
+            )
+            if state.atr_5m.value is None:
+                raise IntegrationError("Scanner progression lacks exact Wilder ATR continuation")
             source = raw_scan.payload.get("ready_universe")
             if not isinstance(source, list):
                 raise IntegrationError("Scanner progression lacks retained public snapshot")
@@ -2237,6 +2760,7 @@ class MultiAssetShadowCoordinator:
                     public.get("current_spread_price"), "Scanner spread"
                 ),
                 liquidity_healthy=bool(public["liquidity_healthy"]),
+                exact_wilder_atr_5m=state.atr_5m.value,
             )
             projection_scan = self._progression_scanner_evidence(
                 raw_scan=raw_scan,
@@ -2284,11 +2808,17 @@ class MultiAssetShadowCoordinator:
     ) -> tuple[EvidenceCandidate, ...]:
         return tuple(
             record
-            for record_id in _record_ids(self._evidence, "candidate")
-            if isinstance((record := self._evidence.get(record_id)), EvidenceCandidate)
-            and record.payload.get("live_authority") is True
-            and record.payload.get("market_id") == market_id
-            and record.payload.get("source_boundary_open_time_ms") == boundary_open_time_ms
+            for record in self._evidence._query_records(
+                "candidate.boundary_exact",
+                """SELECT record_id, record_type, canonical_hash, identity_json, payload_json
+                   FROM immutable_records
+                   WHERE record_type = 'candidate'
+                     AND json_extract(payload_json, '$.live_authority') = 1
+                     AND json_extract(payload_json, '$.market_id') = ?
+                     AND json_extract(payload_json, '$.source_boundary_open_time_ms') = ?""",
+                (market_id, boundary_open_time_ms),
+            )
+            if isinstance(record, EvidenceCandidate)
         )
 
     def _candidate_from_record(self, record: EvidenceCandidate) -> ScannerCandidate:
@@ -2314,12 +2844,35 @@ class MultiAssetShadowCoordinator:
     ) -> tuple[EvidenceCandidate, ...]:
         latest: dict[str, tuple[int, EvidenceCandidate]] = {}
         slots: set[tuple[str, int]] = set()
-        for record_id in _record_ids(self._evidence, "candidate"):
-            record = self._evidence.get(record_id)
+        lower_bound = before_boundary_open_time_ms - 13 * 300_000
+        records = list(self._evidence._query_records(
+            "candidate.progression_window",
+            """SELECT record_id, record_type, canonical_hash, identity_json, payload_json
+               FROM immutable_records
+               WHERE record_type = 'candidate'
+                 AND json_extract(payload_json, '$.live_authority') = 1
+                 AND json_extract(payload_json, '$.market_id') = ?
+                 AND json_extract(payload_json, '$.source_boundary_open_time_ms') >= ?
+                 AND json_extract(payload_json, '$.source_boundary_open_time_ms') < ?
+               ORDER BY json_extract(payload_json, '$.source_boundary_open_time_ms') DESC""",
+            (market_id, lower_bound, before_boundary_open_time_ms),
+        ))
+        predecessor = self._evidence._query_records(
+            "candidate.progression_predecessor",
+            """SELECT record_id, record_type, canonical_hash, identity_json, payload_json
+               FROM immutable_records
+               WHERE record_type = 'candidate'
+                 AND json_extract(payload_json, '$.live_authority') = 1
+                 AND json_extract(payload_json, '$.market_id') = ?
+                 AND json_extract(payload_json, '$.source_boundary_open_time_ms') < ?
+               ORDER BY json_extract(payload_json, '$.source_boundary_open_time_ms') DESC
+               LIMIT 1""",
+            (market_id, lower_bound),
+        )
+        records.extend(predecessor)
+        for record in records:
             if (
                 not isinstance(record, EvidenceCandidate)
-                or record.payload.get("live_authority") is not True
-                or record.payload.get("market_id") != market_id
             ):
                 continue
             boundary = int(record.payload.get("source_boundary_open_time_ms", -1))
@@ -2457,17 +3010,28 @@ class MultiAssetShadowCoordinator:
         if market is None or market.tier is not view.tier:
             raise IntegrationError("WATCH presentation does not bind Registry market")
         self._market(market.identity.market_id, readiness=readiness)
-        matches: list[EvidenceCandidate] = []
-        for record_id in _record_ids(self._evidence, "candidate"):
-            record = self._evidence.get(record_id)
-            if (
-                isinstance(record, EvidenceCandidate)
-                and record.payload.get("scanner_candidate_id") == view.watch_id
-                and record.payload.get("market_id") == market.identity.market_id
-                and record.payload.get("state") == view.scanner_r3_state
-                and record.payload.get("parameter_version") == view.scanner_parameter_version
-            ):
-                matches.append(record)
+        matches = [
+            record
+            for record in self._evidence._query_records(
+                "candidate.watch_latest",
+                """SELECT record_id, record_type, canonical_hash, identity_json, payload_json
+                   FROM immutable_records
+                   WHERE record_type = 'candidate'
+                     AND json_extract(payload_json, '$.scanner_candidate_id') = ?
+                     AND json_extract(payload_json, '$.market_id') = ?
+                     AND json_extract(payload_json, '$.state') = ?
+                     AND json_extract(payload_json, '$.parameter_version') = ?
+                   ORDER BY json_extract(payload_json, '$.source_boundary_open_time_ms') DESC
+                   LIMIT 2""",
+                (
+                    view.watch_id,
+                    market.identity.market_id,
+                    view.scanner_r3_state,
+                    view.scanner_parameter_version,
+                ),
+            )
+            if isinstance(record, EvidenceCandidate)
+        ]
         if matches:
             latest_boundary = max(
                 int(item.payload.get("source_boundary_open_time_ms", -1)) for item in matches
@@ -2558,34 +3122,25 @@ class MultiAssetShadowCoordinator:
 
     def pending_formal_decisions(self) -> tuple[RetainedFormalDecision, ...]:
         """Derive pending Formal work only from immutable retained completion truth."""
-        successful: set[tuple[str, str]] = set()
-        for record_id in _record_ids(self._evidence, "formal_signal"):
-            record = self._evidence.get(record_id)
-            if not isinstance(record, FormalSignal):
-                continue
-            evaluation_id = record.payload.get("strategy_evaluation_id")
-            decision_id = record.payload.get("strategy_decision_id")
-            if isinstance(evaluation_id, str) and isinstance(decision_id, str):
-                successful.add((evaluation_id, decision_id))
-        completed: set[tuple[str, str]] = set()
-        for record_id in _record_ids(self._evidence, "formalization_disposition"):
-            record = self._evidence.get(record_id)
-            if not isinstance(record, FormalizationDisposition):
-                continue
-            completed.add(
-                (
-                    str(record.payload["strategy_evaluation_id"]),
-                    str(record.payload["strategy_decision_id"]),
-                )
-            )
         pending: list[RetainedFormalDecision] = []
-        for record_id in _record_ids(self._evidence, "strategy_evaluation"):
-            record = self._evidence.get(record_id)
-            if not isinstance(record, StrategyEvaluation):
-                continue
+        evaluations = self._evidence._query_records(
+            "formal.latest_live_boundary",
+            """SELECT record_id, record_type, canonical_hash, identity_json, payload_json
+               FROM immutable_records
+               WHERE record_type = 'strategy_evaluation'
+                 AND json_extract(payload_json, '$.evaluation_mode') = ?
+                 AND json_extract(payload_json, '$.source_open_time_ms') = (
+                     SELECT MAX(json_extract(payload_json, '$.source_open_time_ms'))
+                     FROM immutable_records
+                     WHERE record_type = 'strategy_evaluation'
+                       AND json_extract(payload_json, '$.evaluation_mode') = ?
+                 )""",
+            (BoundaryMode.LIVE_ACTIONABLE.value, BoundaryMode.LIVE_ACTIONABLE.value),
+        )
+        for record in evaluations:
+            if not isinstance(record, StrategyEvaluation):  # pragma: no cover - SQL invariant
+                raise IntegrationError("retained Strategy row has invalid type")
             payload = record.payload
-            if payload.get("evaluation_mode") != BoundaryMode.LIVE_ACTIONABLE.value:
-                continue
             decisions = payload.get("decisions")
             if not isinstance(decisions, list):
                 raise IntegrationError("retained Strategy decisions are invalid")
@@ -2597,7 +3152,25 @@ class MultiAssetShadowCoordinator:
                 if decision.decision is not DecisionKind.FORMAL_SETUP_CONFIRMED:
                     continue
                 key = (str(payload["evaluation_id"]), decision_id)
-                if key in successful or key in completed:
+                successful = self._evidence._query_records(
+                    "formal.success_exact",
+                    """SELECT record_id, record_type, canonical_hash, identity_json, payload_json
+                       FROM immutable_records
+                       WHERE record_type = 'formal_signal'
+                         AND json_extract(payload_json, '$.strategy_evaluation_id') = ?
+                         AND json_extract(payload_json, '$.strategy_decision_id') = ?""",
+                    key,
+                )
+                completed = self._evidence._query_records(
+                    "formal.disposition_exact",
+                    """SELECT record_id, record_type, canonical_hash, identity_json, payload_json
+                       FROM immutable_records
+                       WHERE record_type = 'formalization_disposition'
+                         AND json_extract(payload_json, '$.strategy_evaluation_id') = ?
+                         AND json_extract(payload_json, '$.strategy_decision_id') = ?""",
+                    key,
+                )
+                if successful or completed:
                     continue
                 pending.append(
                     RetainedFormalDecision(
@@ -2645,20 +3218,24 @@ class MultiAssetShadowCoordinator:
         strategy_evaluation_id: str,
         strategy_decision_id: str,
         now_ms: int,
+        deadline_ms: int | None = None,
     ) -> FormalizationArtifacts | PlanRejection:
-        matches = tuple(
-            record
-            for record_id in _record_ids(self._evidence, "strategy_evaluation")
-            if isinstance((record := self._evidence.get(record_id)), StrategyEvaluation)
-            and record.payload.get("evaluation_id") == strategy_evaluation_id
+        matches = self._evidence._query_records(
+            "formal.evaluation_exact",
+            """SELECT record_id, record_type, canonical_hash, identity_json, payload_json
+               FROM immutable_records
+               WHERE record_type = 'strategy_evaluation'
+                 AND json_extract(payload_json, '$.evaluation_id') = ?""",
+            (strategy_evaluation_id,),
         )
-        if len(matches) != 1:
+        if len(matches) != 1 or not isinstance(matches[0], StrategyEvaluation):
             raise IntegrationError("retained Formal decision lacks one StrategyEvaluation")
         receipt = self._evaluation_receipt(matches[0])
         return self.process_formal_decision(
             evaluation_receipt=receipt,
             decision_id=strategy_decision_id,
             now_ms=now_ms,
+            deadline_ms=deadline_ms,
         )
 
     def _candidate_link(self, decision: StrategyDecision, candidate_id: str | None) -> str | None:
@@ -2749,6 +3326,7 @@ class MultiAssetShadowCoordinator:
         resolved_structural_target: Decimal | None = None,
         correlation_market_metrics: CorrelationMarketMetrics | None = None,
         session_warning: str | None = None,
+        deadline_ms: int | None = None,
     ) -> FormalizationArtifacts | PlanRejection:
         readiness = self._readiness()
         retained_evaluation = self._evidence.get(evaluation_receipt.evaluation_record_id)
@@ -2788,9 +3366,7 @@ class MultiAssetShadowCoordinator:
                 not isinstance(retained, dict)
                 or retained.get("decision_id") != expected["decision_id"]
                 or retained.get("content") != expected["content"]
-                for retained, expected in zip(
-                    retained_decisions, result_decisions, strict=True
-                )
+                for retained, expected in zip(retained_decisions, result_decisions, strict=True)
             )
         ):
             raise IntegrationError("evaluation receipt StrategyDecision content was changed")
@@ -2807,9 +3383,7 @@ class MultiAssetShadowCoordinator:
         if decision is None:
             raise IntegrationError("decision identity is absent from retained evaluation")
         retained_decision = next(
-            item
-            for item in retained_decisions
-            if item.get("decision_id") == decision_id
+            item for item in retained_decisions if item.get("decision_id") == decision_id
         )
         if decision.decision is not DecisionKind.FORMAL_SETUP_CONFIRMED:
             raise IntegrationError("only a Formal Setup decision can enter planning")
@@ -2880,25 +3454,29 @@ class MultiAssetShadowCoordinator:
             )
         except PlanningError:
             return PlanRejection.LIQUIDITY_HARD_LIMIT
-        planned = make_plan(
-            PlanInputs(
-                market_id=market.identity.market_id,
-                side=side,
-                ideal_entry_low=ideal_low,
-                ideal_entry_high=ideal_high,
-                chase_limit=chase,
-                structural_stop=stop,
-                structural_target=target,
-                liquidity=liquidity,
-                cost_model=self._cost_model,
-                now_ms=now_ms,
-                price_max_decimals=market.price_max_decimals,
-                price_max_significant_figures=market.price_max_significant_figures,
-                size_decimals=market.size_decimals,
-                max_leverage=market.max_leverage,
-            ),
-            bbo,
-        )
+
+        def plan_at(use_now_ms: int) -> PlanDraft | PlanRejection:
+            return make_plan(
+                PlanInputs(
+                    market_id=market.identity.market_id,
+                    side=side,
+                    ideal_entry_low=ideal_low,
+                    ideal_entry_high=ideal_high,
+                    chase_limit=chase,
+                    structural_stop=stop,
+                    structural_target=target,
+                    liquidity=liquidity,
+                    cost_model=self._cost_model,
+                    now_ms=use_now_ms,
+                    price_max_decimals=market.price_max_decimals,
+                    price_max_significant_figures=market.price_max_significant_figures,
+                    size_decimals=market.size_decimals,
+                    max_leverage=market.max_leverage,
+                ),
+                bbo,
+            )
+
+        planned = plan_at(now_ms)
         if isinstance(planned, PlanRejection):
             return planned
         confirmed_ms = confirmed_bar.close_time_ms + 1
@@ -3072,6 +3650,40 @@ class MultiAssetShadowCoordinator:
             published_at=_timestamp(confirmed_at),
             outbox_reference=envelope.idempotency_key,
         )
+
+        # This is the final admission point for new Formal authority.  Capture
+        # fresh time only after planning and evidence construction, then prove
+        # the same T/Registry/Runtime/evidence/plan immediately before the one
+        # atomic publication.  A late or stale result remains ordinary memory.
+        commit_now_ms = now_ms
+        if self._clock is not None:
+            commit_time = self._clock()
+            if commit_time.tzinfo is None:
+                raise IntegrationError("Formal commit clock must be timezone-aware")
+            commit_now_ms = int(commit_time.timestamp() * 1000)
+        commit_readiness = self._readiness()
+        commit_active = self._active_registry()
+        source_open_time_ms = int(payload["source_open_time_ms"])
+        if (
+            commit_now_ms < evaluation_receipt.evaluation_boundary_ms
+            or (deadline_ms is not None and commit_now_ms > deadline_ms)
+            or commit_active.version != active.version
+            or commit_active.content_hash != active.content_hash
+            or commit_readiness.registry_version != readiness.registry_version
+            or commit_readiness.registry_content_hash != readiness.registry_content_hash
+            or commit_readiness.ready_market_ids != readiness.ready_market_ids
+            or commit_readiness.failed_market_ids != readiness.failed_market_ids
+            or commit_readiness.latest_closed_5m_open_time_ms != source_open_time_ms
+            or readiness.latest_closed_5m_open_time_ms != source_open_time_ms
+            or evaluation_receipt.evaluation_boundary_ms != source_open_time_ms + 300_000
+            or self._market(decision.market_id, readiness=commit_readiness) != market
+        ):
+            raise IntegrationError("Formal causal context changed before publication")
+        planned_at_use = plan_at(commit_now_ms)
+        if isinstance(planned_at_use, PlanRejection):
+            return planned_at_use
+        if planned_at_use != planned:
+            raise IntegrationError("Formal plan changed during commit-time revalidation")
         coalesced = self._evidence.publish_formal_bundle(
             records=(provenance, event, signal, plan_record, shadow),
             notification_reference=notification_reference,
@@ -3093,7 +3705,7 @@ class MultiAssetShadowCoordinator:
                 zone_low=decision.zone_snapshot.low,
                 zone_high=decision.zone_snapshot.high,
             ),
-            now_ms=now_ms,
+            now_ms=commit_now_ms,
             recover=False,
         )
         return FormalizationArtifacts(

@@ -250,12 +250,17 @@ class Route:
 
 
 def _bootstrap_for_route(
-    route: Route, *, planning: FakePlanningData | None = None
+    route: Route,
+    *,
+    planning: FakePlanningData | None = None,
+    clock: Callable[[], datetime] | None = None,
 ) -> MultiAssetProductionBootstrap:
     planning_data = planning or route.planning
 
-    def clock() -> datetime:
+    def default_clock() -> datetime:
         return datetime.fromtimestamp((route.latest.close_time_ms + 5_000) / 1000, UTC)
+
+    project_clock = clock or default_clock
 
     class ExternalClient:
         pass
@@ -264,7 +269,7 @@ def _bootstrap_for_route(
         registry=route.registry,
         authority=route.data,
         client=ExternalClient(),  # type: ignore[arg-type]
-        clock=clock,
+        clock=project_clock,
     )
     runtime.health.data_ready = True
     coordinator = MultiAssetShadowCoordinator(
@@ -278,6 +283,7 @@ def _bootstrap_for_route(
         cost_model=CostModel("cost-1", Decimal(), Decimal(), Decimal("2")),
         release_sha=RELEASE_SHA,
         runtime_readiness=runtime,
+        clock=project_clock,
     )
     return MultiAssetProductionBootstrap(
         registry=route.registry,
@@ -289,7 +295,7 @@ def _bootstrap_for_route(
         planning_data=planning_data,  # type: ignore[arg-type]
         coordinator=coordinator,
         runtime=runtime,
-        clock=clock,
+        clock=project_clock,
         sleep=lambda _: asyncio.sleep(0),
     )
 
@@ -481,6 +487,7 @@ def _compose_bootstrap(
         cost_model=CostModel("cost-1", Decimal(), Decimal(), Decimal("2")),
         release_sha=RELEASE_SHA,
         runtime_readiness=runtime,
+        clock=clock,
     )
     bootstrap = MultiAssetProductionBootstrap(
         registry=registry,
@@ -2593,9 +2600,22 @@ def test_stale_changed_and_foreign_evaluation_receipts_fail_closed(tmp_path: Pat
         received_at=datetime.fromtimestamp(((next_index + 1) * 300_000 + 1_000) / 1000, UTC),
     )
     route.readiness.latest_open_ms = next_index * 300_000
-    # A retained live decision remains processable at its frozen historical
-    # source prefix; it no longer has to remain the coordinator ledger head.
-    assert _formalize(route, receipt).shadow_order.payload["submission_status"] == "NOT_SUBMITTED"
+    # Formal authority is current-T only.  Once Runtime advances, the retained
+    # decision remains audit evidence but cannot create retrospective action.
+    with pytest.raises(IntegrationError, match="causal context changed"):
+        _formalize(route, receipt)
+    assert (
+        route.evidence._connection.execute(
+            """SELECT COUNT(*) FROM immutable_records
+           WHERE record_type IN ('formal_signal', 'plan_record', 'shadow_order',
+                                 'notification_outbox_reference')"""
+        ).fetchone()[0]
+        == 0
+    )
+    assert (
+        route.evidence._connection.execute("SELECT COUNT(*) FROM notification_outbox").fetchone()[0]
+        == 0
+    )
 
 
 def test_event_ledger_continuation_survives_evidence_reopen(tmp_path: Path) -> None:
@@ -2882,7 +2902,7 @@ def test_draining_blocks_new_activity_but_existing_outcome_completes_and_detache
     restarted = reopened_adapter.restore_engine(
         now_ms=start + 120 * 60_000, provider=restarted_provider
     )
-    assert artifacts.shadow_order.record_id in restarted.attached_shadow_ids
+    assert artifacts.shadow_order.record_id not in restarted.attached_shadow_ids
     assert restarted.subscription_requirements == ()
     research = CorrelationResearchAdapter(reopened)
     assert len(research.completed_signals()) == 1
@@ -3101,11 +3121,9 @@ def test_normal_formal_outcome_uses_provider_bars_with_zero_transitions_and_rest
     provider = FakeOneMinuteProvider()
     adapter = EvidenceOutcomeAdapter(reopened)
     restored = adapter.restore_engine(now_ms=now_ms, provider=provider)
-    after = tuple(
-        restored.evaluate(identity, as_of_ms=now_ms)
-        for identity in restored.attached_shadow_ids
-    )
-    assert after == before
+    assert restored.attached_shadow_ids == ()
+    persisted = adapter.persisted_outcomes(artifacts.shadow_order.record_id)
+    assert adapter.canonical_outcome(persisted[-1]) == before[0]
 
 
 def test_provider_conflict_and_gap_reconstruct_deterministically(tmp_path: Path) -> None:

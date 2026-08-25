@@ -501,6 +501,8 @@ def test_shadow_store_has_no_exchange_write_or_account_surface() -> None:
         "export_hash",
         "export_jsonl",
         "get",
+        "query_counters",
+        "reset_query_counters",
         "publish_formal_bundle",
         "record_formalization_disposition",
         "write",

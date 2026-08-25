@@ -61,22 +61,23 @@ def _reaction_id(
     *, market_id: str, zone_type: ZoneType, pivot: Bar, confirmed_bar_index: int
 ) -> str:
     return _digest(
-        market_id
-        + zone_type.value
-        + pivot.candle_id
-        + str(confirmed_bar_index)
-        + PARAMETER_VERSION
+        market_id + zone_type.value + pivot.candle_id + str(confirmed_bar_index) + PARAMETER_VERSION
     )
 
 
 def _zone_id(market_id: str, zone_type: ZoneType, reaction_ids: tuple[str, ...]) -> str:
-    return _digest(
-        market_id + zone_type.value + "".join(sorted(reaction_ids)) + PARAMETER_VERSION
-    )
+    return _digest(market_id + zone_type.value + "".join(sorted(reaction_ids)) + PARAMETER_VERSION)
 
 
-def _qualified_reactions(bars: tuple[Bar, ...]) -> tuple[Reaction, ...]:
-    atr_values = wilder_atr14_series(bars)
+def _qualified_reactions(
+    bars: tuple[Bar, ...],
+    *,
+    atr_values: tuple[Decimal | None, ...] | None = None,
+    index_offset: int = 0,
+) -> tuple[Reaction, ...]:
+    resolved_atr = wilder_atr14_series(bars) if atr_values is None else atr_values
+    if len(resolved_atr) != len(bars) or index_offset < 0:
+        raise KernelInputError("zone continuation identity is invalid")
     lookback_start = max(1, len(bars) - ZONE_LOOKBACK_15M)
     candidates: list[Reaction] = []
     pivot_groups = (
@@ -89,7 +90,7 @@ def _qualified_reactions(bars: tuple[Bar, ...]) -> tuple[Reaction, ...]:
             if pivot_index < lookback_start:
                 continue
             confirmation_index = pivot_index + 1
-            a15_reaction = atr_values[confirmation_index]
+            a15_reaction = resolved_atr[confirmation_index]
             if a15_reaction is None:
                 continue
             pivot = bars[pivot_index]
@@ -101,9 +102,9 @@ def _qualified_reactions(bars: tuple[Bar, ...]) -> tuple[Reaction, ...]:
                         item.low for item in bars[pivot_index + 1 : index + 1]
                     )
                 else:
-                    move_away = max(
-                        item.high for item in bars[pivot_index + 1 : index + 1]
-                    ) - pivot.low
+                    move_away = (
+                        max(item.high for item in bars[pivot_index + 1 : index + 1]) - pivot.low
+                    )
                 if move_away >= Decimal("0.50") * a15_reaction:
                     qualifying_index = index
                     break
@@ -115,21 +116,19 @@ def _qualified_reactions(bars: tuple[Bar, ...]) -> tuple[Reaction, ...]:
                     market_id=pivot.market_id,
                     zone_type=zone_type,
                     pivot=pivot,
-                    confirmed_bar_index=qualifying_index,
+                    confirmed_bar_index=index_offset + qualifying_index,
                 ),
                 market_id=pivot.market_id,
                 zone_type=zone_type,
-                pivot_bar_index=pivot_index,
-                confirmed_bar_index=qualifying_index,
+                pivot_bar_index=index_offset + pivot_index,
+                confirmed_bar_index=index_offset + qualifying_index,
                 price=price,
                 a15_reaction=a15_reaction,
             )
-            if typed and pivot_index - typed[-1].pivot_bar_index < 2:
+            if typed and index_offset + pivot_index - typed[-1].pivot_bar_index < 2:
                 current = typed[-1]
                 better_price = (
-                    price > current.price
-                    if zone_type is ZoneType.HIGH
-                    else price < current.price
+                    price > current.price if zone_type is ZoneType.HIGH else price < current.price
                 )
                 if better_price:
                     typed[-1] = reaction
@@ -160,16 +159,12 @@ def _clusters(reactions: tuple[Reaction, ...], minimum_tick: Decimal) -> tuple[_
             distance = abs(reaction.price - cluster.center)
             threshold = max(Decimal("0.20") * reaction.a15_reaction, 2 * minimum_tick)
             if distance <= threshold:
-                eligible.append(
-                    (distance, cluster.created_bar_index, cluster.identity, cluster)
-                )
+                eligible.append((distance, cluster.created_bar_index, cluster.identity, cluster))
         if eligible:
             eligible.sort(key=lambda item: (item[0], item[1], item[2]))
             eligible[0][3].members.append(reaction)
         else:
-            clusters.append(
-                _Cluster(reaction.zone_type, [reaction], reaction.confirmed_bar_index)
-            )
+            clusters.append(_Cluster(reaction.zone_type, [reaction], reaction.confirmed_bar_index))
     return tuple(clusters)
 
 
@@ -222,17 +217,25 @@ def _suppress_overlaps(
     return tuple(sorted(output, key=lambda item: (item.zone_type.value, item.center, item.zone_id)))
 
 
-def build_zone_book(bars_15m: tuple[Bar, ...], *, minimum_tick: Decimal) -> ZoneBook:
+def build_zone_book(
+    bars_15m: tuple[Bar, ...],
+    *,
+    minimum_tick: Decimal,
+    atr_values: tuple[Decimal | None, ...] | None = None,
+    index_offset: int = 0,
+) -> ZoneBook:
     validate_series(bars_15m, interval="15m")
     if not minimum_tick.is_finite() or minimum_tick <= 0:
         raise KernelInputError("minimum tick must be positive and finite")
-    atr_values = wilder_atr14_series(bars_15m)
-    a15_current = atr_values[-1]
+    resolved_atr = wilder_atr14_series(bars_15m) if atr_values is None else atr_values
+    if len(resolved_atr) != len(bars_15m) or index_offset < 0:
+        raise KernelInputError("zone continuation identity is invalid")
+    a15_current = resolved_atr[-1]
     if a15_current is None:
         raise KernelInputError("zone engine requires current A15")
-    reactions = _qualified_reactions(bars_15m)
+    reactions = _qualified_reactions(bars_15m, atr_values=resolved_atr, index_offset=index_offset)
     clusters = _clusters(reactions, minimum_tick)
-    evaluation_index = len(bars_15m) - 1
+    evaluation_index = index_offset + len(bars_15m) - 1
     zones: list[ZoneSnapshot] = []
     for cluster in clusters:
         prices = tuple(item.price for item in cluster.members)
@@ -245,11 +248,7 @@ def build_zone_book(bars_15m: tuple[Bar, ...], *, minimum_tick: Decimal) -> Zone
         latest = max(item.confirmed_bar_index for item in cluster.members)
         count = len(cluster.members)
         quality = (
-            ZoneQuality.ZQ3
-            if count >= 3
-            else ZoneQuality.ZQ2
-            if count >= 2
-            else ZoneQuality.ZQ1
+            ZoneQuality.ZQ3 if count >= 3 else ZoneQuality.ZQ2 if count >= 2 else ZoneQuality.ZQ1
         )
         age = evaluation_index - latest
         active = quality.rank >= ZoneQuality.ZQ2.rank and age <= 24

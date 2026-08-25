@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import ROUND_DOWN, Decimal
 from enum import StrEnum
+from fractions import Fraction
 from itertools import pairwise
 
 STRATEGY_VERSION = "FL-MA-PRICE-ACTION-v0.1"
@@ -229,19 +230,24 @@ def assess_l2(
     ):
         raise PlanningError("L2 bid levels are not ordered outward")
     usable = levels
-    remaining = PRIMARY_REFERENCE_NOTIONAL_USD
-    quote = Decimal()
-    base = Decimal()
+    # Decimal division is rounded by the active context.  At the touch that
+    # can turn the mathematical identity quote/base == touch into a tiny value
+    # on the wrong side of touch.  Keep the invariant seam exact and round only
+    # the retained/display values below.
+    remaining = Fraction(PRIMARY_REFERENCE_NOTIONAL_USD)
+    quote = Fraction()
+    base = Fraction()
     consumed: list[tuple[Decimal, Decimal]] = []
     for price, size in usable:
-        available = price * size
+        exact_price = Fraction(price)
+        available = exact_price * Fraction(size)
         take = min(available, remaining)
         if take <= 0:
             continue
-        quantity = take / price
+        quantity = take / exact_price
         quote += take
         base += quantity
-        consumed.append((price, quantity))
+        consumed.append((price, Decimal(quantity.numerator) / Decimal(quantity.denominator)))
         remaining -= take
         if remaining == 0:
             break
@@ -260,12 +266,15 @@ def assess_l2(
             False,
             provenance_hash,
         )
-    vwap = quote / base
+    exact_vwap = quote / base
     touch = best_ask if side is Side.LONG else best_bid
-    directional = (vwap - touch) if side is Side.LONG else (touch - vwap)
+    exact_touch = Fraction(touch)
+    directional = exact_vwap - exact_touch if side is Side.LONG else exact_touch - exact_vwap
     if directional < 0:
         raise PlanningError("L2 VWAP direction is impossible")
-    slippage = directional / touch * Decimal("10000")
+    vwap = Decimal(exact_vwap.numerator) / Decimal(exact_vwap.denominator)
+    exact_slippage = directional / exact_touch * 10_000
+    slippage = Decimal(exact_slippage.numerator) / Decimal(exact_slippage.denominator)
     return LiquidityAssessment(
         market_id,
         coin,

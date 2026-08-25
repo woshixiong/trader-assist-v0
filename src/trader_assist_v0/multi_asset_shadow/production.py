@@ -237,7 +237,15 @@ class ThreeSetupProductionApplication:
         )
         for failure in report.failures:
             event = "FORMAL" if failure.stage.startswith("FORMAL") else failure.stage
-            _journal(self.logger, event, market_id=failure.market_id, error_type=failure.error_type)
+            _journal(
+                self.logger,
+                event,
+                market_id=failure.market_id,
+                error_type=failure.error_type,
+                provider_coin=failure.provider_coin,
+                provider_provenance=failure.provider_provenance,
+                side=failure.side,
+            )
         _journal(
             self.logger,
             "BOUNDARY_REPORT",
