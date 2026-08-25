@@ -29,6 +29,8 @@ Permanent rules:
 
 Load only the selected tool/model profile needed for the current stage.
 
+Router V2 covers every project model-backed invocation, including future executors/providers/models, model-backed operators/evidence providers, and T4 model/surface selection where applicable. Before launch, Engineering freezes the requested executor/provider/model/reasoning/tool-state/session/resource route; where exposed, it records actual execution identity. Requested-vs-actual mismatch, silent fallback/substitution, unauthorized retry/resume, ignored override or an unprovable required identity is a `ROUTER_INCIDENT`: fail closed, do not auto-rerun, proactively notify the user and emit one complete Tooling Control escalation packet. The user is not the raw-log diagnostician.
+
 ## 3. Codex selected
 
 Read:
@@ -118,6 +120,8 @@ The existing V1 Hermes schema does not automatically authorize direct OpenCode/D
 ## 7. Tool onboarding
 
 Before first project use of a new engineering executor/operator/orchestrator, or after a material configuration/permission/session/routing change, apply `governance/ENGINEERING_TOOL_ONBOARDING_AND_CHANGE_ACCEPTANCE_RULE_V1_2026-08-23.md` and obtain separate independent ChatGPT acceptance of the exact configuration/evidence.
+
+Before custom commodity tooling/orchestration development, that rule also requires the mature-solution/build-vs-buy admission gate: existing project capability -> provider-native -> standard/official -> mature maintained external -> thin adapter -> small project-specific logic -> custom commodity infrastructure only as documented last resort. A fitting mature solution prohibits the custom build; sunk cost and repeated repair do not justify continuation. Project-specific trading/domain semantics remain normal project-owned value, not commodity tooling.
 
 ## 8. Universal repository safety / authority
 
