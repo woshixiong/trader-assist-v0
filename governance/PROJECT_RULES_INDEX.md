@@ -26,6 +26,8 @@ Candidate execution paths: `CODEX_CLI`, `OPENCODE`, `TRAE`, `DEEPSEEK_HARNESS`. 
 
 Permanent rules: user manual override retained; no silent substitution; one primary Writer per coherent shared-authority stage; quality first; quota/points/free availability and human relay are routing inputs; OpenCode Opus 4.6, Trae GLM-5.3 and Trae DeepSeek V4 Pro are real Writer candidates according to task fit; Writer self-check is not independent acceptance.
 
+Router V2 applies to every project model-backed invocation, including future executors/providers/models, model-backed operators/evidence providers and T4 model/surface selection where applicable. Every model-backed launch must freeze the requested route and collect actual executor/provider/model/reasoning/tool/session identity where exposed. Requested-vs-actual mismatch, silent fallback/substitution, unauthorized retry/resume, ignored user override or an unprovable required identity is a `ROUTER_INCIDENT`: Engineering fails closed, prohibits automatic rerun, proactively notifies the user and emits one complete Tooling Control escalation packet. Deterministic non-model tools stay under onboarding/authority rather than model selection.
+
 ## 3. Codex selected
 
 Read:
@@ -94,6 +96,8 @@ Read `governance/ENGINEERING_TOOL_ONBOARDING_AND_CHANGE_ACCEPTANCE_RULE_V1_2026-
 
 Every new engineering executor/operator/orchestrator and every material tool configuration change must receive separate independent ChatGPT acceptance before first project use. The actual installed Hermes configuration and any schema/contract extension therefore require acceptance after configuration and before activation.
 
+Before custom commodity tooling/orchestration development, the same rule requires a hard mature-solution/build-vs-buy gate: reuse accepted project capability -> provider-native -> standard/official -> mature maintained external -> thin adapter -> small project-specific logic -> custom commodity infrastructure only as documented last resort. Target-host fit and total burden must be compared. A fitting mature solution prohibits custom development; sunk cost, repeated repair and high relay/maintenance burden trigger holistic convergence and mature-replacement search rather than continued patching. Project-specific trading/domain semantics are not commodity tooling.
+
 Local Task Runner V0 has completed its separate tool onboarding and first-real-project-use activation gate; its exact accepted identity, usage boundary, post-run Engineering triage, tooling escalation UX, failure routing and telemetry requirements are recorded in:
 
 - `governance/LOCAL_TASK_RUNNER_V0_ENGINEERING_USAGE_PROFILE_V1_2026-08-24.md`
@@ -133,4 +137,4 @@ No governance file, Agent, Task Packet, implementation result, CI result or revi
 
 ## 12. Deferred tooling backlog
 
-Issue #115 tracks PR #120 independent acceptance, post-acceptance local Codex fallback adjustment, first-real-task Codex/Router telemetry, Hermes installation/configuration/schema qualification and future DSH real-task evidence. Issue #121 tracks canonical Local Task Runner V0 workflow adoption and its first naturally occurring real OpenCode-compatible project evidence.
+Issue #115 is the canonical non-release-blocking tooling backlog for first-real-task Codex/Router telemetry, the first naturally occurring Local Task Runner observation after Router selects an OpenCode-compatible task, Hermes follow-up and future DSH/alternative-executor evidence. Issue #121 was completed by PR #122 and is not the remaining Runner-observation authority.

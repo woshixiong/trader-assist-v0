@@ -20,6 +20,68 @@ NEW_ENGINEERING_TOOL_OR_MATERIAL_TOOL_CONFIG
 
 A tool being installed, free, popular, provider-supported or technically functional does not make it accepted project infrastructure.
 
+### 1.1 Mandatory pre-admission mature-solution / build-vs-buy gate
+
+Before project engineering begins custom **commodity tooling, orchestration, transport, scheduling, workflow, evidence, deployment, observability, persistence or equivalent infrastructure**, decompose the required capability and evaluate in this order:
+
+```text
+REUSE_ACCEPTED_PROJECT_CAPABILITY
+-> PROVIDER_NATIVE
+-> STANDARD_OR_OFFICIAL
+-> MATURE_MAINTAINED_EXTERNAL
+-> THIN_PROJECT_ADAPTER
+-> SMALL_PROJECT_SPECIFIC_DOMAIN_LOGIC
+-> CUSTOM_COMMODITY_INFRASTRUCTURE_LAST_RESORT
+```
+
+The pre-admission record is mandatory:
+
+```text
+CUSTOM_COMMODITY_TOOL_BUILD_GATE=PASS|FAIL
+CAPABILITY_DECOMPOSED=YES|NO
+EXISTING_PROJECT_CAPABILITY_CHECKED=YES|NO
+PROVIDER_NATIVE_CAPABILITY_CHECKED=YES|NO
+STANDARD_OR_OFFICIAL_CAPABILITY_CHECKED=YES|NO
+MATURE_EXTERNAL_SOLUTIONS_CHECKED=YES|NO
+TARGET_HOST_COMPATIBILITY_CHECKED=YES|NO
+TOTAL_BURDEN_COMPARISON_DONE=YES|NO
+MATURE_SOLUTION_FIT_FOUND=YES|NO
+BLOCKING_FIT_GAPS=
+THIN_ADAPTER_SUFFICIENT=YES|NO
+EXPECTED_NET_ENGINEERING_VALUE=POSITIVE|NON_POSITIVE|UNRESOLVED
+CUSTOM_BUILD_JUSTIFICATION=PASS|FAIL
+```
+
+`TOTAL_BURDEN_COMPARISON_DONE` must include implementation, testing, independent review, operator relay, token/model cost, reliability, maintenance, recovery, migration/replacement cost and target-host constraints. Popularity or zero license cost alone is not proof of fit.
+
+`CUSTOM_COMMODITY_TOOL_BUILD_GATE=PASS` means the comparison is complete and the selected route obeys this admission order. It does **not** mean a custom build is approved. A custom-build route additionally requires `CUSTOM_BUILD_JUSTIFICATION=PASS`; a mature-fit route passes the gate by selecting the mature/thin-adapter path and prohibiting the custom build.
+
+If a mature/provider-native/standard solution fits the required capability with an acceptable thin adapter:
+
+```text
+MATURE_SOLUTION_FIT_FOUND=YES
+CUSTOM_BUILD_JUSTIFICATION=FAIL
+CUSTOM_COMMODITY_INFRASTRUCTURE_BUILD=PROHIBITED
+```
+
+Custom commodity infrastructure is admissible only when the comparison records concrete blocking fit gaps, target-host compatibility is proven, a thin adapter is insufficient, and the expected net engineering value is materially positive.
+
+```text
+SUNK_COST_IS_NOT_JUSTIFICATION
+```
+
+Repeated repair, high human relay, large one-off Bash/Python glue, maintenance burden approaching or exceeding the saved work, or exhausted repair budget triggers:
+
+```text
+STOP_CUSTOM_TOOLING
+-> HOLISTIC_CONVERGENCE_GATE
+-> SEARCH_MATURE_REPLACEMENT
+```
+
+Do not keep researching or patching the same failing custom design merely because prior effort has already been spent. This gate strengthens the mature-solution-first rule in Unified Governance; it does not create a new governance authority or permit speculative platform building.
+
+Project-specific trading/domain value such as Scanner, Setup, Strategy Kernel, Market Event, risk/trade-plan or evidence-authority semantics is not reclassified as commodity infrastructure by this gate; it remains subject to the normal research, architecture, implementation and review rules.
+
 ## 2. What requires independent acceptance
 
 Independent acceptance is required before first project use when adding a new:
