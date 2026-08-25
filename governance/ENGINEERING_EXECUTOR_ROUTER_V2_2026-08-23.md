@@ -35,6 +35,82 @@ SILENT_MODEL_OR_EXECUTOR_SUBSTITUTION=PROHIBITED
 
 If the user explicitly selects a model/executor, Engineering uses it for that bounded task/stage unless the path lacks a mandatory capability or violates a safety/authority gate. In that case return `SAFE_STOP` and explain the capability gap; do not silently substitute.
 
+### 2.1 Universal model-invocation coverage
+
+Router V2 governs **every project model-backed invocation**, not only the currently enumerated Writer candidates. This includes:
+
+```text
+CODEX_CLI
+OPENCODE
+TRAE
+DEEPSEEK_HARNESS
+FUTURE_EXECUTORS_PROVIDERS_MODELS
+MODEL_BACKED_BROWSER_OR_COMPUTER_OPERATORS
+LOCAL_MODEL_BACKED_EVIDENCE_PROVIDERS
+T4_MODEL_AND_SURFACE_SELECTION_WHERE_APPLICABLE
+```
+
+Deterministic non-model tools do not require model selection, but they remain subject to tool onboarding, authority, evidence and publication rules.
+
+The existence of a specialized profile does not create a routing exception. Specialized profiles constrain execution **after** Router V2 selects the route.
+
+### 2.2 Mandatory route freeze and requested-vs-actual attestation
+
+Before every model-backed launch, Engineering Control freezes the requested route:
+
+```text
+ROUTER_ROLE=
+ROUTER_EXECUTOR_SURFACE=
+ROUTER_PROVIDER=
+ROUTER_MODEL=
+ROUTER_REASONING_OR_EQUIVALENT=
+ROUTER_WEB_SEARCH_OR_TOOL_STATE=
+ROUTER_SESSION_POLICY=
+ROUTER_RESOURCE_STATE=
+ROUTER_SELECTION_REASON=
+```
+
+Where the execution surface exposes the information, collect the actual launch/runtime identity without asking the user to inspect raw logs:
+
+```text
+ACTUAL_EXECUTOR_SURFACE=
+ACTUAL_PROVIDER=
+ACTUAL_MODEL=
+ACTUAL_REASONING_OR_EQUIVALENT=
+ACTUAL_WEB_SEARCH_OR_TOOL_STATE=
+ACTUAL_SESSION_ID=
+```
+
+Use `NOT_EXPOSED` only when the surface genuinely does not expose an optional field. If an identity is required by the frozen task/authority contract and cannot be proven, fail closed rather than guessing. Absence of observed Web Search/tool calls proves only that no use was observed; it does not prove a disabled configuration unless the execution surface exposes that configuration state.
+
+Real-task telemetry is evidence for later Router refinement; it does not silently rewrite the current routing policy or create a universal benchmark ranking.
+
+### 2.3 Executor/model-agnostic Router incident contract
+
+Any of the following is a Router incident:
+
+- requested-vs-actual executor/provider/model/reasoning/tool-state mismatch outside an explicitly accepted equivalence;
+- silent fallback or substitution;
+- unauthorized retry, rerun or resume;
+- dynamic downstream model/executor selection outside the accepted contract;
+- ignored user manual override;
+- inability to prove an identity that the frozen task requires.
+
+On detection:
+
+```text
+ROUTER_INCIDENT=YES
+SAFE_STOP_CURRENT_STAGE=YES
+AUTOMATIC_RERUN=PROHIBITED
+SILENT_ALTERNATIVE=PROHIBITED
+PROACTIVE_USER_NOTIFICATION=REQUIRED
+TOOLING_CONTROL_ESCALATION=REQUIRED
+```
+
+Engineering Control owns incident discovery and classification. The user must not be asked to manually diagnose raw executor logs or compose the escalation record.
+
+Engineering Control must emit one complete ready-to-copy Tooling Control escalation packet containing the frozen requested route, observed actual route/evidence, exact task/session/artifact identity where available, mismatch or uncertainty, current mutation state, and the required stop condition. A new run requires a new explicit Engineering-Control disposition and applicable authority.
+
 ## 3. Resource state
 
 Engineering records, when relevant:
@@ -274,4 +350,10 @@ T4_LOCAL_EVIDENCE_BUNDLE_BEFORE_WEAKER_LOCAL_FINAL_REVIEW=YES
 WRITER_PASS_NE_INDEPENDENT_ACCEPTANCE=YES
 HERMES_IS_OPERATOR_TRANSPORT_NOT_L1_OR_REVIEWER=YES
 HERMES_CHECKPOINTED_RECOVERABLE_AUTOMATION_REQUIRED=YES
+ROUTER_COVERAGE_ALL_MODEL_INVOCATIONS=YES
+ROUTER_ROUTE_FREEZE_BEFORE_LAUNCH=YES
+ROUTER_REQUESTED_ACTUAL_ATTESTATION_WHEN_EXPOSED=YES
+ROUTER_INCIDENT_EXECUTOR_MODEL_AGNOSTIC=YES
+NO_SILENT_FALLBACK_RETRY_RESUME=YES
+ENGINEERING_PROACTIVE_ROUTER_INCIDENT_DISCOVERY=YES
 ```
