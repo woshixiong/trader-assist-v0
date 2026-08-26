@@ -127,15 +127,19 @@ AGENT_AND_LAUNCHER_STDIN_SHARED=PROHIBITED
 FILE_BACKED_PHASE_SEPARATED_LAUNCH=REQUIRED_FOR_ONE_PASTE_AGENT_WORKFLOWS
 MODEL_EXECUTOR_STDIN_SOURCE=EXPLICIT
 MODEL_EXECUTOR_MUST_NOT_CONSUME_OUTER_SCRIPT_BYTES=YES
-SEMANTIC_COMPLETION_EVIDENCE=PROVIDER_NATIVE_LIFECYCLE_WHERE_EXPOSED
+SEMANTIC_COMPLETION_EVIDENCE=PROVIDER_NATIVE_SUCCESSFUL_TERMINAL_LIFECYCLE_PLUS_FINAL_RESULT_OR_EQUIVALENT_WHERE_EXPOSED
+AUTHORITATIVE_FAILURE_ERROR_CANCEL_ABORT=PRECEDES_MERE_TERMINAL_LIFECYCLE
+WRITER_COMPLETED_REQUIRES=SUCCESSFUL_TERMINAL_LIFECYCLE+FINAL_SEMANTIC_RESULT_OR_EQUIVALENT+NO_AUTHORITATIVE_FAILURE_ERROR_CANCEL_ABORT
 SHELL_EXIT_STATUS=SUPPORTING_EVIDENCE_NOT_SOLE_SEMANTIC_COMPLETION_AUTHORITY
 POST_WRITER_DETERMINISTIC_VALIDATION=SEPARATE_PHASE
 WRITER_COMPLETED_THEN_VALIDATION_INTERRUPTED=DO_NOT_RERUN_WRITER
 ```
 
-Where the executor exposes provider-native lifecycle telemetry such as thread/session start and turn completion, Engineering must persist that telemetry before downstream deterministic validation. A completed semantic Writer turn must not be automatically repeated merely because a later wrapper, network check, evidence-packaging step, or validation phase fails.
+Where the executor exposes provider-native lifecycle, status, error and final-result telemetry, Engineering must persist that telemetry before downstream deterministic validation. A lifecycle terminal/completion event alone does not establish successful semantic completion. `WRITER_COMPLETED` may be asserted only when provider-native evidence establishes a successful terminal lifecycle, a final semantic model result or provider-native equivalent, and no authoritative failure, error, cancel or abort state. Any authoritative failure/error/cancel/abort state takes precedence over a mere terminal/completion event. If the execution surface exposes evidence needed to distinguish success from failure and successful completion cannot be proven, fail closed and do not classify the Writer as completed. Shell exit status remains supporting evidence rather than the sole semantic-completion authority.
 
-This invariant applies to Codex, OpenCode and future model-backed executors/operators whenever their actual CLI/runtime surface can read stdin. It is transport safety, not a model-specific exception. A tool profile may define a stricter provider-native launch contract, but may not weaken this invariant.
+A successfully completed semantic Writer turn must not be automatically repeated merely because a later wrapper, network check, evidence-packaging step, or deterministic validation phase fails. Such a downstream failure resumes from the exact completed semantic checkpoint rather than launching another semantic Writer turn.
+
+This invariant applies to Codex, OpenCode and future model-backed executors/operators whenever their actual CLI/runtime surface can read stdin. It is transport safety, not a model-specific exception. A tool profile may define a stricter provider-native launch or success-evidence contract, but may not weaken these invariants.
 
 ## 2. What requires independent acceptance
 
