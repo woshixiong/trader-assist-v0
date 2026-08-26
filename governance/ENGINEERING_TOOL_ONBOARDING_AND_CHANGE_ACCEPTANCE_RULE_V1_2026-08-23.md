@@ -82,6 +82,61 @@ Do not keep researching or patching the same failing custom design merely becaus
 
 Project-specific trading/domain value such as Scanner, Setup, Strategy Kernel, Market Event, risk/trade-plan or evidence-authority semantics is not reclassified as commodity infrastructure by this gate; it remains subject to the normal research, architecture, implementation and review rules.
 
+### 1.2 Mandatory stdin isolation for model-backed executors/operators
+
+Any coding Agent, model-backed executor/operator, or CLI that may read from standard input MUST NOT share the same stdin stream that carries a one-paste shell program or heredoc launcher body.
+
+The prohibited pattern is:
+
+```text
+ONE_PASTE_HEREDOC_IS_THE_RUNNING_SHELL_PROGRAM
++
+MODEL_EXECUTOR_INHERITS_THE_SAME_STDIN
+```
+
+This is prohibited even when the model prompt is supplied through argv, because an executor may still probe, consume, or wait on inherited stdin. The resulting failure can corrupt the outer shell control flow, consume later launcher lines, or make a completed semantic turn appear unstarted or failed.
+
+Required execution pattern:
+
+```text
+ONE_PASTE_TERMINAL_INPUT
+-> WRITE_PLAIN_TEXT_LAUNCHER_OR_TASK_PACKET_TO_FILE
+-> CLOSE_HEREDOC
+-> EXECUTE_FILE_BACKED_LAUNCHER
+-> GIVE_MODEL_EXECUTOR_AN_EXPLICITLY_SEPARATE_STDIN
+```
+
+Acceptable executor stdin shapes include:
+
+```text
+EXECUTOR_STDIN=/dev/null
+```
+
+when the prompt is fully supplied through supported non-stdin arguments, or:
+
+```text
+EXECUTOR_STDIN=DEDICATED_PROMPT_FILE_WITH_EXPLICIT_EOF
+```
+
+when the provider-native CLI requires or benefits from stdin prompt transport.
+
+Permanent invariants:
+
+```text
+AGENT_AND_LAUNCHER_STDIN_SHARED=PROHIBITED
+FILE_BACKED_PHASE_SEPARATED_LAUNCH=REQUIRED_FOR_ONE_PASTE_AGENT_WORKFLOWS
+MODEL_EXECUTOR_STDIN_SOURCE=EXPLICIT
+MODEL_EXECUTOR_MUST_NOT_CONSUME_OUTER_SCRIPT_BYTES=YES
+SEMANTIC_COMPLETION_EVIDENCE=PROVIDER_NATIVE_LIFECYCLE_WHERE_EXPOSED
+SHELL_EXIT_STATUS=SUPPORTING_EVIDENCE_NOT_SOLE_SEMANTIC_COMPLETION_AUTHORITY
+POST_WRITER_DETERMINISTIC_VALIDATION=SEPARATE_PHASE
+WRITER_COMPLETED_THEN_VALIDATION_INTERRUPTED=DO_NOT_RERUN_WRITER
+```
+
+Where the executor exposes provider-native lifecycle telemetry such as thread/session start and turn completion, Engineering must persist that telemetry before downstream deterministic validation. A completed semantic Writer turn must not be automatically repeated merely because a later wrapper, network check, evidence-packaging step, or validation phase fails.
+
+This invariant applies to Codex, OpenCode and future model-backed executors/operators whenever their actual CLI/runtime surface can read stdin. It is transport safety, not a model-specific exception. A tool profile may define a stricter provider-native launch contract, but may not weaken this invariant.
+
 ## 2. What requires independent acceptance
 
 Independent acceptance is required before first project use when adding a new:
