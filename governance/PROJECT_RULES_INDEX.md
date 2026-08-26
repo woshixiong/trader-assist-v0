@@ -140,3 +140,22 @@ No governance file, Agent, Task Packet, implementation result, CI result or revi
 ## 12. Deferred tooling backlog
 
 Issue #115 is the canonical non-release-blocking tooling backlog for first-real-task Codex/Router telemetry, the first naturally occurring Local Task Runner observation after Router selects an OpenCode-compatible task, Hermes follow-up and future DSH/alternative-executor evidence. Issue #121 was completed by PR #122 and is not the remaining Runner-observation authority.
+
+## 13. Target-host deployment / FinalShell workflow
+
+For any target-host deployment, redeployment, real-host qualification or release-installation task where the user operates the Linux host through FinalShell, also read:
+
+- `governance/FINALSHELL_TARGET_HOST_DEPLOYMENT_WORKFLOW_V1_2026-08-26.md`;
+- the current accepted Operations deployment runbook;
+- Issue #93 and the current release/task authority.
+
+The default operator path is:
+
+```text
+ONE MACOS LOCAL EXACT-ARTIFACT GENERATION BLOCK
+-> ONE FINALSHELL FILE-MANAGER/SFTP FOLDER UPLOAD
+-> ONE CONTIGUOUS BLOCK IN THE ALREADY-CONNECTED FINALSHELL SERVER TERMINAL
+-> EVIDENCE RETURN
+```
+
+FinalShell is the current default operator surface over standard SSH/SFTP. It does not grant deployment/runtime authority, does not replace exact GitHub release identity, and must not silently be substituted with a newly designed Mac-direct-SSH or deployment-framework workflow. Equivalent mature SSH/SFTP transport is allowed only through a visible route change that preserves the same exact-artifact/hash/authority/secret/evidence boundaries.
