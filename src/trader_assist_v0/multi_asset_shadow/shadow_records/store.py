@@ -103,7 +103,11 @@ class EvidenceStore:
         self._connection.execute("PRAGMA journal_mode = WAL")
         self._controlled_transaction_depth = 0
         self._query_counters: dict[str, EvidenceQueryCounters] = {}
-        self._create_schema()
+        try:
+            self._create_schema()
+        except BaseException:
+            self._connection.close()
+            raise
 
     def close(self) -> None:
         self._connection.close()
@@ -115,6 +119,21 @@ class EvidenceStore:
         self.close()
 
     def _create_schema(self) -> None:
+        immutable_exists = self._connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'immutable_records'"
+        ).fetchone()
+        locator_exists = self._connection.execute(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'outcome_recovery_locator'"
+        ).fetchone()
+        if immutable_exists is not None and locator_exists is None:
+            retained = int(
+                self._connection.execute("SELECT COUNT(*) FROM immutable_records").fetchone()[0]
+            )
+            if retained:
+                raise RecordError(
+                    "nonempty evidence database requires authorized outcome recovery migration"
+                )
         with self._connection:
             self._connection.executescript(
                 """
@@ -197,6 +216,16 @@ class EvidenceStore:
                     record_id TEXT PRIMARY KEY NOT NULL REFERENCES immutable_records(record_id),
                     signal_id TEXT NOT NULL REFERENCES formal_signals(record_id)
                 ) STRICT;
+                CREATE TABLE IF NOT EXISTS outcome_recovery_locator (
+                    shadow_order_id TEXT PRIMARY KEY NOT NULL
+                        REFERENCES shadow_orders(record_id),
+                    active_partition INTEGER NOT NULL DEFAULT 1
+                        CHECK (active_partition = 1)
+                ) STRICT;
+                CREATE INDEX IF NOT EXISTS outcome_recovery_active
+                    ON outcome_recovery_locator(active_partition, shadow_order_id);
+                CREATE INDEX IF NOT EXISTS outcome_envelopes_shadow_order
+                    ON outcome_envelopes(shadow_order_id, record_id);
                 CREATE TABLE IF NOT EXISTS notification_outbox (
                     idempotency_key TEXT PRIMARY KEY NOT NULL,
                     schema_version TEXT NOT NULL,
@@ -493,10 +522,17 @@ class EvidenceStore:
         connection = self._connection
         connection.execute("BEGIN IMMEDIATE")
         try:
+            shadow_inserted = False
+            shadow_id = ""
             for record in materialized:
-                self._write_one(record)
+                record_inserted = self._write_one(record)
+                if isinstance(record, ShadowOrder):
+                    shadow_inserted = record_inserted
+                    shadow_id = record.record_id
+            if shadow_inserted:
+                self._activate_outcome_recovery(shadow_id)
             created_at = envelope.created_at.isoformat().replace("+00:00", "Z")
-            inserted = self._insert_outbox(envelope, created_at=created_at)
+            outbox_inserted = self._insert_outbox(envelope, created_at=created_at)
             row = connection.execute(
                 """SELECT schema_version, kind, content, created_at
                    FROM notification_outbox WHERE idempotency_key = ?""",
@@ -518,10 +554,46 @@ class EvidenceStore:
                 )
             self._write_one(notification_reference)
             connection.commit()
-            return inserted == 0
+            return outbox_inserted == 0
         except BaseException:
             connection.rollback()
             raise
+
+    def _activate_outcome_recovery(self, shadow_order_id: str) -> None:
+        """Activate a newly published Formal Shadow in its publication transaction."""
+        self._connection.execute(
+            "INSERT INTO outcome_recovery_locator(shadow_order_id) VALUES (?)",
+            (shadow_order_id,),
+        )
+
+    def _outcome_recovery_active(self, shadow_order_id: str) -> bool:
+        return (
+            self._connection.execute(
+                "SELECT 1 FROM outcome_recovery_locator WHERE shadow_order_id = ?",
+                (shadow_order_id,),
+            ).fetchone()
+            is not None
+        )
+
+    def _persist_outcome(self, record: ImmutableRecord, *, terminal: bool) -> bool:
+        """Persist one Outcome and atomically retire terminal recovery work."""
+        if record.record_type != "outcome_envelope":
+            raise RecordError("outcome recovery persistence requires an Outcome envelope")
+        with self._controlled_transaction():
+            inserted = self._write_transaction((record,))[0]
+            if terminal:
+                deleted = self._remove_outcome_recovery(str(record.payload["shadow_order_id"]))
+                if inserted and deleted != 1:
+                    raise RecordError("terminal Outcome lacks active recovery work")
+        return inserted
+
+    def _remove_outcome_recovery(self, shadow_order_id: str) -> int:
+        return int(
+            self._connection.execute(
+                "DELETE FROM outcome_recovery_locator WHERE shadow_order_id = ?",
+                (shadow_order_id,),
+            ).rowcount
+        )
 
     def _insert_outbox(self, envelope: MessageEnvelope, *, created_at: str) -> int:
         return int(

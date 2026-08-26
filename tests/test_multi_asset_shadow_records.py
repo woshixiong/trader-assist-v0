@@ -493,6 +493,37 @@ def test_reopen_and_deterministic_research_export(tmp_path: Path) -> None:
         assert reopened.export_hash() == first_hash
 
 
+def test_outcome_recovery_projection_initializes_empty_and_legacy_nonempty_fails_closed(
+    tmp_path: Path,
+) -> None:
+    empty_database = tmp_path / "empty-evidence.sqlite"
+    with EvidenceStore(empty_database) as store:
+        assert store._connection.execute(
+            "SELECT COUNT(*) FROM outcome_recovery_locator"
+        ).fetchone()[0] == 0
+
+    legacy_database = tmp_path / "legacy-evidence.sqlite"
+    connection = sqlite3.connect(legacy_database)
+    connection.execute(
+        """CREATE TABLE immutable_records (
+               record_id TEXT PRIMARY KEY NOT NULL,
+               record_type TEXT NOT NULL,
+               canonical_hash TEXT NOT NULL,
+               identity_json TEXT NOT NULL,
+               payload_json TEXT NOT NULL
+           ) STRICT"""
+    )
+    connection.execute(
+        "INSERT INTO immutable_records VALUES (?, ?, ?, ?, ?)",
+        ("legacy", "provenance", "hash", "{}", "{}"),
+    )
+    connection.commit()
+    connection.close()
+
+    with pytest.raises(RecordError, match="authorized outcome recovery migration"):
+        EvidenceStore(legacy_database)
+
+
 def test_shadow_store_has_no_exchange_write_or_account_surface() -> None:
     public_methods = {name for name in dir(EvidenceStore) if not name.startswith("_")}
     assert public_methods == {

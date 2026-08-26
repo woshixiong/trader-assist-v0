@@ -109,6 +109,7 @@ from .shadow_records import (
     MarketEvent as EvidenceMarketEvent,
 )
 from .shadow_records.records import ImmutableRecord
+from .shadow_records.store import EvidenceQueryCounters
 from .strategy_continuation import (
     REPRESENTATION_VERSION,
     IncrementalStrategyState,
@@ -1054,7 +1055,14 @@ class EvidenceOutcomeAdapter(OutcomeSink):
             ).fetchone()
             if retained is None:
                 raise RecordError("outcome contradicts retained transition or 1m authority")
-        self._store._write_controlled((self._outcome_record(outcome),))
+        self._store._persist_outcome(
+            self._outcome_record(outcome),
+            terminal=(
+                outcome.path_maturity_status is MaturityStatus.MATURE
+                and not outcome.unresolved
+                and outcome.evaluated_at_ms >= outcome.required_end_ms
+            ),
+        )
 
     def canonical_outcome(self, record: OutcomeEnvelope) -> FormalShadowOutcome:
         """Strictly validate one projection against the accepted B05 reconstruction."""
@@ -1081,15 +1089,19 @@ class EvidenceOutcomeAdapter(OutcomeSink):
         return outcome
 
     def persisted_outcomes(self, shadow_order_id: str) -> tuple[OutcomeEnvelope, ...]:
-        values: list[OutcomeEnvelope] = []
-        for record_id in _record_ids(self._store, "outcome_envelope"):
-            record = self._store.get(record_id)
-            if (
-                isinstance(record, OutcomeEnvelope)
-                and record.payload.get("shadow_order_id") == shadow_order_id
-            ):
-                values.append(record)
-        return tuple(sorted(values, key=lambda item: int(item.payload.get("evaluated_at_ms", -1))))
+        values = self._store._query_records(
+            "outcome.persisted.shadow_exact",
+            """SELECT i.record_id, i.record_type, i.canonical_hash,
+                      i.identity_json, i.payload_json
+               FROM outcome_envelopes AS o
+               JOIN immutable_records AS i ON i.record_id = o.record_id
+               WHERE o.shadow_order_id = ?
+               ORDER BY json_extract(i.payload_json, '$.evaluated_at_ms'), i.record_id""",
+            (shadow_order_id,),
+        )
+        if not all(isinstance(record, OutcomeEnvelope) for record in values):
+            raise RecordError("retained Outcome typed-table identity is invalid")
+        return tuple(record for record in values if isinstance(record, OutcomeEnvelope))
 
     def _persist_provider_bars(
         self, bars: tuple[OneMinuteBar, ...]
@@ -1109,38 +1121,57 @@ class EvidenceOutcomeAdapter(OutcomeSink):
         return records
 
     def _retained_transitions(self) -> tuple[OutcomeTransitionView, ...]:
-        if _record_ids(self._store, "outcome_transition"):
+        if self._store._connection.execute(
+            "SELECT 1 FROM outcome_transitions LIMIT 1"
+        ).fetchone() is not None:
             raise RecordError("retained Outcome transitions have no production authority")
         return ()
 
     def _retained_bars(
         self, required_windows: Mapping[str, tuple[tuple[int, int], ...]] | None = None
     ) -> tuple[OneMinuteBar, ...]:
+        if required_windows is None:
+            raise RecordError("Outcome bar reconstruction requires bounded windows")
         values: list[OneMinuteBar] = []
-        for record_id in _record_ids(self._store, "outcome_bar"):
-            record = self._store.get(record_id)
-            if not isinstance(record, OutcomeBarEvidence):
-                continue
-            payload = record.payload
-            market_id = str(payload["market_id"])
-            open_time_ms = int(payload["open_time_ms"])
-            if required_windows is not None and not any(
-                start <= open_time_ms < end for start, end in required_windows.get(market_id, ())
-            ):
-                continue
-            values.append(
-                OneMinuteBar(
-                    market_id=market_id,
-                    open_time_ms=open_time_ms,
-                    close_time_ms=int(payload["close_time_ms"]),
-                    open=_as_decimal(payload["open"], "1m open"),
-                    high=_as_decimal(payload["high"], "1m high"),
-                    low=_as_decimal(payload["low"], "1m low"),
-                    close=_as_decimal(payload["close"], "1m close"),
-                    canonical_hash=str(payload["canonical_hash"]),
-                    source_id=str(payload["source_id"]),
+        for market_id, windows in sorted(required_windows.items()):
+            merged: list[tuple[int, int]] = []
+            for start, end in sorted(windows):
+                if merged and start <= merged[-1][1]:
+                    prior_start, prior_end = merged[-1]
+                    merged[-1] = (prior_start, max(prior_end, end))
+                else:
+                    merged.append((start, end))
+            for start, end in merged:
+                records = self._store._query_records(
+                    "outcome.restore.bars_range",
+                    """SELECT record_id, record_type, canonical_hash,
+                              identity_json, payload_json
+                       FROM immutable_records
+                       WHERE record_type = 'outcome_bar'
+                         AND json_extract(payload_json, '$.market_id') = ?
+                         AND json_extract(payload_json, '$.open_time_ms') >= ?
+                         AND json_extract(payload_json, '$.open_time_ms') < ?
+                       ORDER BY json_extract(payload_json, '$.open_time_ms'),
+                                json_extract(payload_json, '$.canonical_hash')""",
+                    (market_id, start, end),
                 )
-            )
+                for record in records:
+                    if not isinstance(record, OutcomeBarEvidence):
+                        raise RecordError("retained Outcome bar typed-table identity is invalid")
+                    payload = record.payload
+                    values.append(
+                        OneMinuteBar(
+                            market_id=str(payload["market_id"]),
+                            open_time_ms=int(payload["open_time_ms"]),
+                            close_time_ms=int(payload["close_time_ms"]),
+                            open=_as_decimal(payload["open"], "1m open"),
+                            high=_as_decimal(payload["high"], "1m high"),
+                            low=_as_decimal(payload["low"], "1m low"),
+                            close=_as_decimal(payload["close"], "1m close"),
+                            canonical_hash=str(payload["canonical_hash"]),
+                            source_id=str(payload["source_id"]),
+                        )
+                    )
         return tuple(values)
 
     def restore_engine(
@@ -1150,31 +1181,34 @@ class EvidenceOutcomeAdapter(OutcomeSink):
         provider: OneMinuteProvider | None = None,
         include_completed_shadow_ids: frozenset[str] = frozenset(),
     ) -> OutcomeEngine:
-        latest_outcomes: dict[str, tuple[int, bool, int]] = {}
-        for record_id in _record_ids(self._store, "outcome_envelope"):
-            outcome = self._store.get(record_id)
-            if not isinstance(outcome, OutcomeEnvelope):
-                continue
-            payload = outcome.payload
-            shadow_id = payload.get("shadow_order_id")
-            evaluated = payload.get("evaluated_at_ms")
-            required_end = payload.get("required_end_ms")
-            unresolved = payload.get("unresolved")
-            if (
-                not isinstance(shadow_id, str)
-                or type(evaluated) is not int
-                or type(required_end) is not int
-                or type(unresolved) is not bool
-            ):
-                raise RecordError("retained Outcome completion identity is invalid")
-            prior = latest_outcomes.get(shadow_id)
-            if prior is None or evaluated > prior[0]:
-                latest_outcomes[shadow_id] = (evaluated, unresolved, required_end)
+        locator_rows = self._store._connection.execute(
+            """SELECT shadow_order_id FROM outcome_recovery_locator
+               WHERE active_partition = 1 ORDER BY shadow_order_id"""
+        ).fetchall()
+        prior_counter = self._store._query_counters.get(
+            "outcome.restore.workset", EvidenceQueryCounters()
+        )
+        self._store._query_counters["outcome.restore.workset"] = EvidenceQueryCounters(
+            queries=prior_counter.queries + 1,
+            returned_rows=prior_counter.returned_rows + len(locator_rows),
+            decoded_records=prior_counter.decoded_records,
+        )
+        requested_ids = {str(row["shadow_order_id"]) for row in locator_rows}
+        requested_ids.update(include_completed_shadow_ids)
         views: list[FormalShadowView] = []
-        for record_id in _record_ids(self._store, "shadow_order"):
-            record = self._store.get(record_id)
-            if not isinstance(record, ShadowOrder):  # pragma: no cover - typed table invariant
-                continue
+        for record_id in sorted(requested_ids):
+            records = self._store._query_records(
+                "outcome.restore.shadow_exact",
+                """SELECT i.record_id, i.record_type, i.canonical_hash,
+                          i.identity_json, i.payload_json
+                   FROM shadow_orders AS s
+                   JOIN immutable_records AS i ON i.record_id = s.record_id
+                   WHERE s.record_id = ?""",
+                (record_id,),
+            )
+            if len(records) != 1 or not isinstance(records[0], ShadowOrder):
+                raise RecordError("outcome recovery locator lacks exact retained ShadowOrder")
+            record = records[0]
             payload = record.payload
             required = {
                 "outcome_start_ms",
@@ -1187,14 +1221,6 @@ class EvidenceOutcomeAdapter(OutcomeSink):
                 "setup_family",
             }
             if required - payload.keys():
-                continue
-            latest = latest_outcomes.get(record.record_id)
-            if (
-                record.record_id not in include_completed_shadow_ids
-                and latest is not None
-                and latest[1] is False
-                and now_ms >= latest[2]
-            ):
                 continue
             views.append(
                 FormalShadowView(
@@ -3690,7 +3716,9 @@ class MultiAssetShadowCoordinator:
             envelope=envelope,
         )
         receipt = EnqueueReceipt(envelope=envelope, coalesced=coalesced)
-        attached = self._outcome.attach(
+        attached = self._evidence._outcome_recovery_active(
+            shadow.record_id
+        ) and self._outcome.attach(
             FormalShadowView(
                 shadow_order_id=shadow.record_id,
                 market_id=decision.market_id,
