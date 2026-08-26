@@ -26,6 +26,9 @@ Permanent rules:
 - free/cheap never overrides quality;
 - human relay/time is part of total engineering cost;
 - Writer self-check is not independent acceptance.
+- an active bounded task remains owned by the current control/orchestration role until an explicit terminal disposition or an explicit acknowledged handoff;
+- CI, independent review, publication/activation authorization, Mark Ready or other intermediate gates are not task completion by themselves;
+- at an intermediate gate, proactively execute every next action that is currently authorized and capability-available, prepare the minimum blocked next step, and stop only the specific unauthorized or externally owned action rather than abandoning task ownership.
 
 Load only the selected tool/model profile needed for the current stage.
 
