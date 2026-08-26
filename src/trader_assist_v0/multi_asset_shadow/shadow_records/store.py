@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -27,6 +29,13 @@ SCHEMA_NAME = "multi_asset_shadow_evidence_v1"
 
 class RecordConflictError(RecordError):
     """A deterministic identity was retried with different immutable content."""
+
+
+@dataclass(frozen=True)
+class EvidenceQueryCounters:
+    queries: int = 0
+    returned_rows: int = 0
+    decoded_records: int = 0
 
 
 _TABLE_BY_TYPE = {
@@ -92,7 +101,13 @@ class EvidenceStore:
         self._connection.row_factory = sqlite3.Row
         self._connection.execute("PRAGMA foreign_keys = ON")
         self._connection.execute("PRAGMA journal_mode = WAL")
-        self._create_schema()
+        self._controlled_transaction_depth = 0
+        self._query_counters: dict[str, EvidenceQueryCounters] = {}
+        try:
+            self._create_schema()
+        except BaseException:
+            self._connection.close()
+            raise
 
     def close(self) -> None:
         self._connection.close()
@@ -104,6 +119,21 @@ class EvidenceStore:
         self.close()
 
     def _create_schema(self) -> None:
+        immutable_exists = self._connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'immutable_records'"
+        ).fetchone()
+        locator_exists = self._connection.execute(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'outcome_recovery_locator'"
+        ).fetchone()
+        if immutable_exists is not None and locator_exists is None:
+            retained = int(
+                self._connection.execute("SELECT COUNT(*) FROM immutable_records").fetchone()[0]
+            )
+            if retained:
+                raise RecordError(
+                    "nonempty evidence database requires authorized outcome recovery migration"
+                )
         with self._connection:
             self._connection.executescript(
                 """
@@ -186,6 +216,16 @@ class EvidenceStore:
                     record_id TEXT PRIMARY KEY NOT NULL REFERENCES immutable_records(record_id),
                     signal_id TEXT NOT NULL REFERENCES formal_signals(record_id)
                 ) STRICT;
+                CREATE TABLE IF NOT EXISTS outcome_recovery_locator (
+                    shadow_order_id TEXT PRIMARY KEY NOT NULL
+                        REFERENCES shadow_orders(record_id),
+                    active_partition INTEGER NOT NULL DEFAULT 1
+                        CHECK (active_partition = 1)
+                ) STRICT;
+                CREATE INDEX IF NOT EXISTS outcome_recovery_active
+                    ON outcome_recovery_locator(active_partition, shadow_order_id);
+                CREATE INDEX IF NOT EXISTS outcome_envelopes_shadow_order
+                    ON outcome_envelopes(shadow_order_id, record_id);
                 CREATE TABLE IF NOT EXISTS notification_outbox (
                     idempotency_key TEXT PRIMARY KEY NOT NULL,
                     schema_version TEXT NOT NULL,
@@ -206,6 +246,86 @@ class EvidenceStore:
                 CREATE UNIQUE INDEX IF NOT EXISTS notification_outbox_claim_token
                     ON notification_outbox(claim_token)
                     WHERE claim_token IS NOT NULL;
+                CREATE INDEX IF NOT EXISTS notification_outbox_pending_due
+                    ON notification_outbox(
+                        next_attempt_at, created_at, idempotency_key, claim_expires_at
+                    )
+                    WHERE state = 'PENDING';
+                CREATE INDEX IF NOT EXISTS immutable_strategy_evaluation_id
+                    ON immutable_records(json_extract(payload_json, '$.evaluation_id'))
+                    WHERE record_type = 'strategy_evaluation';
+                CREATE UNIQUE INDEX IF NOT EXISTS immutable_strategy_semantic_slot
+                    ON immutable_records(
+                        json_extract(payload_json, '$.strategy_version'),
+                        json_extract(payload_json, '$.parameter_version'),
+                        json_extract(payload_json, '$.market_id'),
+                        json_extract(payload_json, '$.source_interval'),
+                        json_extract(payload_json, '$.source_open_time_ms'),
+                        json_extract(payload_json, '$.evaluation_boundary_ms')
+                    ) WHERE record_type = 'strategy_evaluation';
+                CREATE INDEX IF NOT EXISTS immutable_strategy_latest
+                    ON immutable_records(
+                        json_extract(payload_json, '$.strategy_version'),
+                        json_extract(payload_json, '$.parameter_version'),
+                        json_extract(payload_json, '$.market_id'),
+                        json_extract(payload_json, '$.source_open_time_ms') DESC
+                    ) WHERE record_type = 'strategy_evaluation';
+                CREATE INDEX IF NOT EXISTS immutable_strategy_live_boundary
+                    ON immutable_records(
+                        json_extract(payload_json, '$.evaluation_mode'),
+                        json_extract(payload_json, '$.source_open_time_ms') DESC
+                    ) WHERE record_type = 'strategy_evaluation';
+                CREATE INDEX IF NOT EXISTS immutable_strategy_checkpoint
+                    ON immutable_records(
+                        json_extract(payload_json, '$.market_id'),
+                        json_extract(payload_json, '$.source_open_time_ms') DESC
+                    ) WHERE record_type = 'strategy_evaluation'
+                        AND json_extract(payload_json, '$.continuation.checkpoint') = 1;
+                CREATE INDEX IF NOT EXISTS immutable_scanner_raw_boundary
+                    ON immutable_records(
+                        json_extract(payload_json, '$.registry_version'),
+                        json_extract(payload_json, '$.scan_boundary_open_time_ms'),
+                        json_extract(payload_json, '$.evidence_role')
+                    ) WHERE record_type = 'scanner_evidence';
+                CREATE UNIQUE INDEX IF NOT EXISTS immutable_live_candidate_boundary
+                    ON immutable_records(
+                        json_extract(payload_json, '$.market_id'),
+                        json_extract(payload_json, '$.source_boundary_open_time_ms')
+                    ) WHERE record_type = 'candidate'
+                        AND json_extract(payload_json, '$.live_authority') = 1;
+                CREATE INDEX IF NOT EXISTS immutable_candidate_progression
+                    ON immutable_records(
+                        json_extract(payload_json, '$.market_id'),
+                        json_extract(payload_json, '$.source_boundary_open_time_ms') DESC,
+                        json_extract(payload_json, '$.scanner_candidate_id')
+                    ) WHERE record_type = 'candidate'
+                        AND json_extract(payload_json, '$.live_authority') = 1;
+                CREATE INDEX IF NOT EXISTS immutable_candidate_linkage
+                    ON immutable_records(
+                        json_extract(payload_json, '$.scanner_candidate_id'),
+                        json_extract(payload_json, '$.state')
+                    ) WHERE record_type = 'candidate';
+                CREATE INDEX IF NOT EXISTS immutable_candidate_raw_scan
+                    ON immutable_records(json_extract(payload_json, '$.raw_scanner_evidence_id'))
+                    WHERE record_type = 'candidate'
+                        AND json_extract(payload_json, '$.live_authority') = 1;
+                CREATE INDEX IF NOT EXISTS immutable_formal_signal_completion
+                    ON immutable_records(
+                        json_extract(payload_json, '$.strategy_evaluation_id'),
+                        json_extract(payload_json, '$.strategy_decision_id')
+                    ) WHERE record_type = 'formal_signal';
+                CREATE INDEX IF NOT EXISTS immutable_formal_disposition_completion
+                    ON immutable_records(
+                        json_extract(payload_json, '$.strategy_evaluation_id'),
+                        json_extract(payload_json, '$.strategy_decision_id')
+                    ) WHERE record_type = 'formalization_disposition';
+                CREATE INDEX IF NOT EXISTS immutable_outcome_bar_identity
+                    ON immutable_records(
+                        json_extract(payload_json, '$.market_id'),
+                        json_extract(payload_json, '$.open_time_ms'),
+                        json_extract(payload_json, '$.canonical_hash')
+                    )
+                    WHERE record_type = 'outcome_bar';
                 """
             )
             row = self._connection.execute(
@@ -216,6 +336,7 @@ class EvidenceStore:
                     "INSERT INTO schema_metadata(schema_name, schema_version) VALUES (?, ?)",
                     (SCHEMA_NAME, "1"),
                 )
+
             elif row["schema_version"] != "1":
                 raise RecordError("unsupported evidence schema version")
             for table in ("immutable_records", *_TABLE_BY_TYPE.values()):
@@ -229,6 +350,37 @@ class EvidenceStore:
                     BEGIN SELECT RAISE(ABORT, 'append-only evidence'); END;
                     """
                 )
+
+    @property
+    def query_counters(self) -> dict[str, EvidenceQueryCounters]:
+        return dict(self._query_counters)
+
+    def reset_query_counters(self) -> None:
+        self._query_counters.clear()
+
+    def _query_records(
+        self, name: str, sql: str, parameters: tuple[object, ...] = ()
+    ) -> tuple[ImmutableRecord, ...]:
+        """Decode one measured indexed subset; audit export remains separate."""
+        rows = self._connection.execute(sql, parameters).fetchall()
+        records: list[ImmutableRecord] = []
+        for row in rows:
+            record_class = RECORD_TYPES[str(row["record_type"])]
+            records.append(
+                record_class.from_storage(
+                    record_id=str(row["record_id"]),
+                    canonical_hash=str(row["canonical_hash"]),
+                    identity_json=str(row["identity_json"]),
+                    payload_json=str(row["payload_json"]),
+                )
+            )
+        prior = self._query_counters.get(name, EvidenceQueryCounters())
+        self._query_counters[name] = EvidenceQueryCounters(
+            queries=prior.queries + 1,
+            returned_rows=prior.returned_rows + len(rows),
+            decoded_records=prior.decoded_records + len(records),
+        )
+        return tuple(records)
 
     def write(self, records: Iterable[ImmutableRecord]) -> tuple[bool, ...]:
         """Persist only ordinary/source/user evidence through the generic surface."""
@@ -258,17 +410,17 @@ class EvidenceStore:
         release_sha: str,
     ) -> FormalizationDisposition:
         """Retain the sole bounded non-publication completion record."""
-        rows = self._connection.execute(
-            "SELECT payload_json FROM immutable_records WHERE record_type = 'strategy_evaluation'"
-        ).fetchall()
-        matching: list[dict[str, object]] = []
-        for row in rows:
-            payload = json.loads(row["payload_json"])
-            if isinstance(payload, dict) and payload.get("evaluation_id") == strategy_evaluation_id:
-                matching.append(payload)
+        matching = self._query_records(
+            "formal.disposition.evaluation_exact",
+            """SELECT record_id, record_type, canonical_hash, identity_json, payload_json
+               FROM immutable_records
+               WHERE record_type = 'strategy_evaluation'
+                 AND json_extract(payload_json, '$.evaluation_id') = ?""",
+            (strategy_evaluation_id,),
+        )
         if len(matching) != 1:
             raise RecordError("disposition requires one retained StrategyEvaluation")
-        evaluation = matching[0]
+        evaluation = matching[0].payload
         decisions = evaluation.get("decisions")
         if not isinstance(decisions, list) or not any(
             isinstance(item, dict) and item.get("decision_id") == strategy_decision_id
@@ -301,14 +453,30 @@ class EvidenceStore:
         self._write_transaction((record,))
         return record
 
-    def _write_transaction(
-        self, materialized: tuple[ImmutableRecord, ...]
-    ) -> tuple[bool, ...]:
+    def _write_transaction(self, materialized: tuple[ImmutableRecord, ...]) -> tuple[bool, ...]:
         try:
+            if self._controlled_transaction_depth:
+                return tuple(self._write_one(record) for record in materialized)
             with self._connection:
                 return tuple(self._write_one(record) for record in materialized)
         except sqlite3.IntegrityError as exc:
             raise RecordError("record linkage integrity failure") from exc
+
+    @contextmanager
+    def _controlled_transaction(self) -> Iterator[None]:
+        """One event-loop-owned transaction for a validated authority cohort."""
+        if self._controlled_transaction_depth or self._connection.in_transaction:
+            raise RecordError("nested Evidence authority transaction is prohibited")
+        self._connection.execute("BEGIN IMMEDIATE")
+        self._controlled_transaction_depth = 1
+        try:
+            yield
+            self._connection.commit()
+        except BaseException:
+            self._connection.rollback()
+            raise
+        finally:
+            self._controlled_transaction_depth = 0
 
     def publish_formal_bundle(
         self,
@@ -336,9 +504,10 @@ class EvidenceStore:
             PlanRecord,
             ShadowOrder,
         }
-        if len(materialized) != len(required_types) or {
-            type(record) for record in materialized
-        } != required_types:
+        if (
+            len(materialized) != len(required_types)
+            or {type(record) for record in materialized} != required_types
+        ):
             raise RecordError("formal publication requires one complete typed record bundle")
         if type(notification_reference) is not NotificationOutboxReference:
             raise RecordError("formal publication requires a typed outbox reference")
@@ -353,10 +522,17 @@ class EvidenceStore:
         connection = self._connection
         connection.execute("BEGIN IMMEDIATE")
         try:
+            shadow_inserted = False
+            shadow_id = ""
             for record in materialized:
-                self._write_one(record)
+                record_inserted = self._write_one(record)
+                if isinstance(record, ShadowOrder):
+                    shadow_inserted = record_inserted
+                    shadow_id = record.record_id
+            if shadow_inserted:
+                self._activate_outcome_recovery(shadow_id)
             created_at = envelope.created_at.isoformat().replace("+00:00", "Z")
-            inserted = self._insert_outbox(envelope, created_at=created_at)
+            outbox_inserted = self._insert_outbox(envelope, created_at=created_at)
             row = connection.execute(
                 """SELECT schema_version, kind, content, created_at
                    FROM notification_outbox WHERE idempotency_key = ?""",
@@ -378,10 +554,46 @@ class EvidenceStore:
                 )
             self._write_one(notification_reference)
             connection.commit()
-            return inserted == 0
+            return outbox_inserted == 0
         except BaseException:
             connection.rollback()
             raise
+
+    def _activate_outcome_recovery(self, shadow_order_id: str) -> None:
+        """Activate a newly published Formal Shadow in its publication transaction."""
+        self._connection.execute(
+            "INSERT INTO outcome_recovery_locator(shadow_order_id) VALUES (?)",
+            (shadow_order_id,),
+        )
+
+    def _outcome_recovery_active(self, shadow_order_id: str) -> bool:
+        return (
+            self._connection.execute(
+                "SELECT 1 FROM outcome_recovery_locator WHERE shadow_order_id = ?",
+                (shadow_order_id,),
+            ).fetchone()
+            is not None
+        )
+
+    def _persist_outcome(self, record: ImmutableRecord, *, terminal: bool) -> bool:
+        """Persist one Outcome and atomically retire terminal recovery work."""
+        if record.record_type != "outcome_envelope":
+            raise RecordError("outcome recovery persistence requires an Outcome envelope")
+        with self._controlled_transaction():
+            inserted = self._write_transaction((record,))[0]
+            if terminal:
+                deleted = self._remove_outcome_recovery(str(record.payload["shadow_order_id"]))
+                if inserted and deleted != 1:
+                    raise RecordError("terminal Outcome lacks active recovery work")
+        return inserted
+
+    def _remove_outcome_recovery(self, shadow_order_id: str) -> int:
+        return int(
+            self._connection.execute(
+                "DELETE FROM outcome_recovery_locator WHERE shadow_order_id = ?",
+                (shadow_order_id,),
+            ).rowcount
+        )
 
     def _insert_outbox(self, envelope: MessageEnvelope, *, created_at: str) -> int:
         return int(

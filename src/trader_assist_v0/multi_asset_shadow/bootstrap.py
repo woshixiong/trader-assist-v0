@@ -22,11 +22,13 @@ from .hyperliquid_public import (
     PublicDataError,
 )
 from .integration import (
+    EvidenceOneMinuteProvider,
     EvidenceOutbox,
     EvidenceOutcomeAdapter,
     FormalizationArtifacts,
     IntegrationError,
     MultiAssetShadowCoordinator,
+    PreparedEvaluation,
     RetainedFormalDecision,
     ScannerCompositionReceipt,
     ScannerPublicSnapshot,
@@ -37,7 +39,7 @@ from .notification_engine import NotificationKind, ScannerWatchNotificationView
 from .outcome_engine import FormalShadowOutcome, OutcomeEngine, OutcomeEngineError
 from .planning import CostModel, PlanningError, PlanRejection
 from .registry import MarketRegistryManager
-from .runtime import BoundaryMode, MultiAssetPublicRuntime
+from .runtime import BoundaryMode, MultiAssetPublicRuntime, RuntimeReadinessSnapshot
 from .shadow_records import EvidenceStore, FormalizationDispositionStatus
 from .strategy_kernel import ScannerChase, ScannerState
 
@@ -56,6 +58,16 @@ class BootstrapIntegrityError(RuntimeError):
     """A composed authority contradicted retained evidence."""
 
 
+class ScannerMarketFailure(PublicDataError):
+    """One market's public Scanner evidence failed before cohort authority."""
+
+    def __init__(self, market: RegistryMarket, error: Exception) -> None:
+        super().__init__(str(error))
+        self.market_id = market.identity.market_id
+        self.provider_coin = market.identity.coin
+        self.provider_provenance = "hyperliquid-public-info:l2Book"
+
+
 class BoundaryDisposition(StrEnum):
     """Non-durable result of one per-market runtime wakeup."""
 
@@ -69,6 +81,9 @@ class BoundaryFailure:
     market_id: str | None
     error_type: str
     reason: str
+    provider_coin: str | None = None
+    provider_provenance: str | None = None
+    side: str | None = None
 
 
 @dataclass(frozen=True)
@@ -139,9 +154,7 @@ class MultiAssetProductionBootstrap:
         outbox = EvidenceOutbox(evidence)
         outcome_adapter = EvidenceOutcomeAdapter(evidence)
         one_minute = HyperliquidRestOneMinuteProvider(public_client, registry)
-        outcome = outcome_adapter.restore_engine(
-            now_ms=_clock_ms(clock), provider=one_minute
-        )
+        outcome = outcome_adapter.restore_engine(now_ms=_clock_ms(clock), provider=one_minute)
         planning = HyperliquidPublicPlanningAdapter(
             public_client, wall_clock_ms=lambda: _clock_ms(clock)
         )
@@ -163,6 +176,7 @@ class MultiAssetProductionBootstrap:
             cost_model=cost_model,
             release_sha=release_sha,
             runtime_readiness=runtime,
+            clock=clock,
         )
         application = cls(
             registry=registry,
@@ -181,9 +195,7 @@ class MultiAssetProductionBootstrap:
         runtime.on_maintenance_5m = application.on_maintenance_5m
         return application
 
-    async def on_finalized_5m(
-        self, bar: ClosedBar, mode: BoundaryMode
-    ) -> BoundaryReport:
+    async def on_finalized_5m(self, bar: ClosedBar, mode: BoundaryMode) -> BoundaryReport:
         return await self.process_boundary(bar.open_time_ms, mode)
 
     async def on_maintenance_5m(self, boundary_open_time_ms: int) -> None:
@@ -196,7 +208,7 @@ class MultiAssetProductionBootstrap:
         """
         self._expire_prior_pending(boundary_open_time_ms)
         self._reconcile_retained_downstream(boundary_open_time_ms)
-        self.advance_outcomes()
+        await self.advance_outcomes_async()
 
     def _reconcile_retained_downstream(self, boundary_open_time_ms: int) -> None:
         active = self.registry.active()
@@ -241,7 +253,11 @@ class MultiAssetProductionBootstrap:
         if boundary_open_time_ms < 0 or boundary_open_time_ms % _FIVE_MINUTES_MS:
             raise BootstrapIntegrityError("boundary must be an aligned 5m open")
         async with self._lock:
-            markets, waiting_for_peers = self._boundary_markets(boundary_open_time_ms)
+            common_readiness = self.runtime.readiness_snapshot()
+            deadline_ms = boundary_open_time_ms + 360_000
+            markets, waiting_for_peers = self._boundary_markets(
+                boundary_open_time_ms, readiness=common_readiness
+            )
             if waiting_for_peers:
                 return BoundaryReport(
                     boundary_open_time_ms=boundary_open_time_ms,
@@ -264,24 +280,43 @@ class MultiAssetProductionBootstrap:
                         boundary_open_time_ms=boundary_open_time_ms
                     )
                     if scan is None:
-                        snapshots = await self._scanner_snapshots(markets, boundary_open_time_ms)
+                        snapshots = await self._scanner_snapshots(
+                            markets, boundary_open_time_ms, deadline_ms
+                        )
                         scan = self.coordinator.scan_finalized(
                             snapshots,
                             observed_at=self.clock(),
                             evaluation_mode=mode,
+                            readiness=common_readiness,
                         )
                         scanner_run_count = 1
+                    self._validate_live_context(
+                        common_readiness, boundary_open_time_ms, deadline_ms
+                    )
+                    with self.evidence._controlled_transaction():
+                        for market in markets:
+                            composition = self.coordinator.compose_scanner_market(
+                                receipt=scan,
+                                market_id=market.identity.market_id,
+                                readiness=common_readiness,
+                            )
+                            compositions[market.identity.market_id] = composition
                     for market in markets:
-                        composition = self.coordinator.compose_scanner_market(
-                            receipt=scan, market_id=market.identity.market_id
-                        )
-                        compositions[market.identity.market_id] = composition
+                        composition = compositions[market.identity.market_id]
                         self._publish_watch(market, composition)
                     live_scanner_ready = len(compositions) == len(markets)
                 except (IntegrationError, PlanningError, PublicDataError) as exc:
-                    failures.append(_failure("SCANNER", None, exc))
+                    failures.append(
+                        _failure(
+                            "SCANNER",
+                            exc.market_id if isinstance(exc, ScannerMarketFailure) else None,
+                            exc,
+                        )
+                    )
 
             evaluated: list[str] = []
+            live_prepared: list[PreparedEvaluation] = []
+            live_strategy_failed = False
             for market in markets:
                 if not live_scanner_ready:
                     break
@@ -323,33 +358,74 @@ class MultiAssetProductionBootstrap:
                             if source_open == boundary_open_time_ms
                             else BoundaryMode.RECOVERY_CONTEXT_ONLY
                         )
-                        self.coordinator.evaluate_finalized_market(
-                            market_id=market_id,
-                            scanner_linkage=None if selected is None else selected.linkage,
-                            scanner_candidate_record_id=(
-                                None if selected_record is None else selected_record.record_id
-                            ),
-                            source_open_time_ms=source_open,
-                            evaluation_mode=evaluation_mode,
-                        )
-                    evaluated.append(market_id)
+                        if is_current_live:
+                            live_prepared.append(
+                                self.coordinator.prepare_finalized_market(
+                                    market_id=market_id,
+                                    scanner_linkage=(
+                                        None if selected is None else selected.linkage
+                                    ),
+                                    scanner_candidate_record_id=(
+                                        None
+                                        if selected_record is None
+                                        else selected_record.record_id
+                                    ),
+                                    source_open_time_ms=source_open,
+                                    evaluation_mode=evaluation_mode,
+                                    readiness=common_readiness,
+                                )
+                            )
+                        else:
+                            self.coordinator.evaluate_finalized_market(
+                                market_id=market_id,
+                                scanner_linkage=(None if selected is None else selected.linkage),
+                                scanner_candidate_record_id=(
+                                    None if selected_record is None else selected_record.record_id
+                                ),
+                                source_open_time_ms=source_open,
+                                evaluation_mode=evaluation_mode,
+                                readiness=common_readiness,
+                            )
                 except IntegrationError as exc:
                     failures.append(_failure("STRATEGY", market_id, exc))
+                    live_strategy_failed = True
+
+            if mode is BoundaryMode.LIVE_ACTIONABLE and live_scanner_ready:
+                if not live_strategy_failed and len(live_prepared) == len(markets):
+                    try:
+                        self._validate_live_context(
+                            common_readiness, boundary_open_time_ms, deadline_ms
+                        )
+                        self.coordinator.commit_evaluation_cohort(live_prepared)
+                        evaluated.extend(item.identity.market_id for item in markets)
+                    except IntegrationError as exc:
+                        failures.append(_failure("STRATEGY_COMMIT", None, exc))
+                elif live_prepared:
+                    # Prepared values are ordinary memory only.  A partial
+                    # cohort is deliberately discarded without persistence.
+                    live_prepared.clear()
+            elif mode is not BoundaryMode.LIVE_ACTIONABLE:
+                evaluated.extend(item.identity.market_id for item in markets)
 
             formalized: list[FormalizationArtifacts] = []
             rejections: list[tuple[str, PlanRejection]] = []
             if mode is BoundaryMode.LIVE_ACTIONABLE:
-                if live_scanner_ready:
+                if live_scanner_ready and len(evaluated) == len(markets):
                     for pending in self.coordinator.pending_formal_decisions():
                         if pending.source_open_time_ms != boundary_open_time_ms:
                             continue
-                        result = await self._process_pending(pending, failures)
+                        result = await self._process_pending(
+                            pending,
+                            failures,
+                            readiness=common_readiness,
+                            deadline_ms=deadline_ms,
+                        )
                         if isinstance(result, FormalizationArtifacts):
                             formalized.append(result)
                         elif isinstance(result, PlanRejection):
                             rejections.append((pending.market_id, result))
 
-            outcome_report = self.advance_outcomes()
+            outcome_report = await self.advance_outcomes_async()
             if outcome_report.failure is not None:
                 failures.append(outcome_report.failure)
             return BoundaryReport(
@@ -358,9 +434,7 @@ class MultiAssetProductionBootstrap:
                 disposition=BoundaryDisposition.PROCESSED,
                 scanner_run_count=scanner_run_count,
                 evaluated_market_ids=tuple(evaluated),
-                formal_shadow_order_ids=tuple(
-                    item.shadow_order.record_id for item in formalized
-                ),
+                formal_shadow_order_ids=tuple(item.shadow_order.record_id for item in formalized),
                 plan_rejections=tuple(rejections),
                 failures=tuple(failures),
             )
@@ -369,27 +443,77 @@ class MultiAssetProductionBootstrap:
         """Retry still-actionable retained Formal decisions after restart/reconnect."""
         readiness = self.runtime.readiness_snapshot()
         current = readiness.latest_closed_5m_open_time_ms
+        deadline_ms = current + 360_000
         self._expire_prior_pending(current)
         artifacts: list[FormalizationArtifacts] = []
         failures: list[BoundaryFailure] = []
         for pending in self.coordinator.pending_formal_decisions():
             if pending.source_open_time_ms != current:
                 continue
-            result = await self._process_pending(pending, failures)
+            result = await self._process_pending(
+                pending,
+                failures,
+                readiness=readiness,
+                deadline_ms=deadline_ms,
+            )
             if isinstance(result, FormalizationArtifacts):
                 artifacts.append(result)
-        self.advance_outcomes()
+        await self.advance_outcomes_async()
         return tuple(artifacts)
 
     async def _process_pending(
-        self, pending: RetainedFormalDecision, failures: list[BoundaryFailure]
+        self,
+        pending: RetainedFormalDecision,
+        failures: list[BoundaryFailure],
+        *,
+        readiness: RuntimeReadinessSnapshot,
+        deadline_ms: int,
     ) -> FormalizationArtifacts | PlanRejection | None:
         for attempt in range(_MAX_FORMAL_ATTEMPTS):
             try:
+                active = self.registry.active()
+                if active is None:
+                    raise IntegrationError("Formal planning lacks active Registry")
+                market = next(
+                    (
+                        item
+                        for item in active.markets
+                        if item.identity.market_id == pending.market_id
+                    ),
+                    None,
+                )
+                if market is None:
+                    raise IntegrationError("Formal planning market is absent from Registry")
+                remaining = (deadline_ms - _clock_ms(self.clock)) / 1_000
+                if remaining <= 0:
+                    raise PublicDataError("Formal absolute boundary deadline expired")
+                now_ms = _clock_ms(self.clock)
+                if hasattr(self.planning_data, "fetch_raw_l2"):
+                    try:
+                        raw = await asyncio.wait_for(
+                            asyncio.to_thread(self.planning_data.fetch_raw_l2, market=market),
+                            timeout=remaining,
+                        )
+                    except TimeoutError as exc:
+                        raise PublicDataError(
+                            "late Formal worker result discarded "
+                            f"market_id={market.identity.market_id} "
+                            f"coin={market.identity.coin}"
+                        ) from exc
+                    now_ms = _clock_ms(self.clock)
+                    if now_ms > deadline_ms:
+                        raise PublicDataError(
+                            "late Formal worker result discarded "
+                            f"market_id={market.identity.market_id} "
+                            f"coin={market.identity.coin}"
+                        )
+                    self._validate_live_context(readiness, pending.source_open_time_ms, deadline_ms)
+                    self.planning_data.stage_raw_l2(market=market, response=raw, now_ms=now_ms)
                 result = self.coordinator.process_retained_formal_decision(
                     strategy_evaluation_id=pending.strategy_evaluation_id,
                     strategy_decision_id=pending.strategy_decision_id,
-                    now_ms=_clock_ms(self.clock),
+                    now_ms=now_ms,
+                    deadline_ms=deadline_ms,
                 )
             except TargetResolutionError as exc:
                 self.coordinator.record_formalization_disposition(
@@ -439,9 +563,50 @@ class MultiAssetProductionBootstrap:
 
     def advance_outcomes(self) -> OutcomeCadenceReport:
         try:
+            return OutcomeCadenceReport(self.outcome_engine.tick(now_ms=_clock_ms(self.clock)))
+        except (OutcomeEngineError, PublicDataError) as exc:
+            return OutcomeCadenceReport((), _failure("OUTCOME", None, exc))
+
+    async def advance_outcomes_async(self) -> OutcomeCadenceReport:
+        """Offload raw public reads only; retain Outcome authority on the loop."""
+        now_ms = _clock_ms(self.clock)
+        provider = self.outcome_engine.provider
+        if provider is None:
+            return self.advance_outcomes()
+        if not isinstance(provider, EvidenceOneMinuteProvider):
             return OutcomeCadenceReport(
-                self.outcome_engine.tick(now_ms=_clock_ms(self.clock))
+                (),
+                _failure(
+                    "OUTCOME",
+                    None,
+                    OutcomeEngineError("configured Outcome provider lacks bounded raw-read seam"),
+                ),
             )
+        try:
+            for market_id, start_ms, end_ms in self.outcome_engine.recovery_requests(now_ms=now_ms):
+                market = provider.capture_raw_request(market_id=market_id)
+                response = await asyncio.to_thread(
+                    provider.raw_read_1m,
+                    market=market,
+                    start_ms=start_ms,
+                    end_ms=end_ms,
+                )
+                for bar in provider.admit_raw_1m(
+                    market=market,
+                    response=response,
+                    start_ms=start_ms,
+                    end_ms=end_ms,
+                ):
+                    self.outcome_engine.admit_bar(bar)
+            # Raw recovery has already completed under the async owner.  Hide
+            # the provider only for this event-loop-owned tick so the stable
+            # tick surface cannot issue a second synchronous public read.
+            self.outcome_engine.provider = None
+            try:
+                outcomes = self.outcome_engine.tick(now_ms=now_ms)
+            finally:
+                self.outcome_engine.provider = provider
+            return OutcomeCadenceReport(outcomes)
         except (OutcomeEngineError, PublicDataError) as exc:
             return OutcomeCadenceReport((), _failure("OUTCOME", None, exc))
 
@@ -449,12 +614,15 @@ class MultiAssetProductionBootstrap:
         self.evidence.close()
 
     def _boundary_markets(
-        self, boundary_open_time_ms: int
+        self,
+        boundary_open_time_ms: int,
+        *,
+        readiness: RuntimeReadinessSnapshot | None = None,
     ) -> tuple[tuple[RegistryMarket, ...], bool]:
         active = self.registry.active()
         if active is None:
             raise BootstrapIntegrityError("active Registry is required")
-        readiness = self.runtime.readiness_snapshot()
+        readiness = readiness or self.runtime.readiness_snapshot()
         required = tuple(
             market for market in active.markets if market.lifecycle is MarketLifecycle.ACTIVE
         )
@@ -487,19 +655,71 @@ class MultiAssetProductionBootstrap:
             raise BootstrapIntegrityError("runtime is not ready for the requested boundary")
         return required, False
 
+    def _validate_live_context(
+        self,
+        captured: RuntimeReadinessSnapshot,
+        boundary_open_time_ms: int,
+        deadline_ms: int,
+    ) -> None:
+        current = self.runtime.readiness_snapshot()
+        if (
+            _clock_ms(self.clock) > deadline_ms
+            or captured.registry_version != current.registry_version
+            or captured.registry_content_hash != current.registry_content_hash
+            or captured.data_ready is not True
+            or current.data_ready is not True
+            or captured.ready_market_ids != current.ready_market_ids
+            or current.failed_market_ids
+            or captured.latest_closed_5m_open_time_ms != boundary_open_time_ms
+            or current.latest_closed_5m_open_time_ms != boundary_open_time_ms
+        ):
+            raise BootstrapIntegrityError("current-T causal context is no longer actionable")
+
     async def _scanner_snapshots(
-        self, markets: tuple[RegistryMarket, ...], boundary_open_time_ms: int
+        self,
+        markets: tuple[RegistryMarket, ...],
+        boundary_open_time_ms: int,
+        deadline_ms: int,
     ) -> dict[str, ScannerPublicSnapshot]:
         btc_returns = self._btc_returns(markets, boundary_open_time_ms)
-        snapshots: dict[str, ScannerPublicSnapshot] = {}
-        for market in markets:
-            snapshots[market.identity.market_id] = await asyncio.to_thread(
-                self.planning_data.fetch_scanner_snapshot,
-                market=market,
-                now_ms=_clock_ms(self.clock),
-                btc_returns=btc_returns,
+        semaphore = asyncio.Semaphore(4)
+
+        async def fetch(market: RegistryMarket) -> tuple[str, ScannerPublicSnapshot]:
+            try:
+                if not hasattr(self.planning_data, "fetch_raw_l2"):
+                    now_ms = _clock_ms(self.clock)
+                    return (
+                        market.identity.market_id,
+                        self.planning_data.fetch_scanner_snapshot(
+                            market=market, now_ms=now_ms, btc_returns=btc_returns
+                        ),
+                    )
+                async with semaphore:
+                    raw = await asyncio.to_thread(self.planning_data.fetch_raw_l2, market=market)
+                now_ms = _clock_ms(self.clock)
+                if now_ms > deadline_ms:
+                    raise PublicDataError("late Scanner worker result discarded")
+                self.planning_data.stage_raw_l2(market=market, response=raw, now_ms=now_ms)
+                return (
+                    market.identity.market_id,
+                    self.planning_data.scanner_snapshot_from_staged(
+                        market=market, now_ms=now_ms, btc_returns=btc_returns
+                    ),
+                )
+            except (PlanningError, PublicDataError) as exc:
+                raise ScannerMarketFailure(market, exc) from exc
+
+        remaining = (deadline_ms - _clock_ms(self.clock)) / 1_000
+        if remaining <= 0:
+            raise PublicDataError("Scanner absolute boundary deadline expired")
+        try:
+            values = await asyncio.wait_for(
+                asyncio.gather(*(fetch(market) for market in markets)),
+                timeout=remaining,
             )
-        return snapshots
+        except TimeoutError as exc:
+            raise PublicDataError("Scanner absolute boundary deadline expired") from exc
+        return dict(values)
 
     def _btc_returns(
         self, markets: tuple[RegistryMarket, ...], boundary_open_time_ms: int
@@ -511,7 +731,9 @@ class MultiAssetProductionBootstrap:
         )
         if len(btc) != 1:
             return (None, None, None)
-        bars = self.data_authority.store.bars(btc[0].identity.market_id)
+        bars = self.data_authority.store.tail_bars(
+            btc[0].identity.market_id, at_or_before_ms=boundary_open_time_ms, limit=13
+        )
         if not bars or bars[-1].open_time_ms != boundary_open_time_ms or len(bars) < 13:
             return (None, None, None)
         current = bars[-1].close
@@ -577,4 +799,15 @@ def _clock_ms(clock: Callable[[], datetime]) -> int:
 
 
 def _failure(stage: str, market_id: str | None, error: Exception) -> BoundaryFailure:
-    return BoundaryFailure(stage, market_id, type(error).__name__, str(error))
+    return BoundaryFailure(
+        stage,
+        market_id,
+        type(error).__name__,
+        str(error),
+        provider_coin=(
+            error.provider_coin if isinstance(error, ScannerMarketFailure) else None
+        ),
+        provider_provenance=(
+            error.provider_provenance if isinstance(error, ScannerMarketFailure) else None
+        ),
+    )

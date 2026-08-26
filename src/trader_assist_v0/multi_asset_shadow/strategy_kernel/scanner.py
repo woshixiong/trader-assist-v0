@@ -35,6 +35,20 @@ class ScannerMarketInput:
         None,
         None,
     )
+    history_count: int | None = None
+    exact_wilder_atr_5m: Decimal | None = None
+
+
+def _history_count(item: ScannerMarketInput) -> int:
+    return len(item.bars_5m) if item.history_count is None else item.history_count
+
+
+def _exact_atr(item: ScannerMarketInput) -> Decimal:
+    return (
+        wilder_atr14(item.bars_5m)
+        if item.exact_wilder_atr_5m is None
+        else item.exact_wilder_atr_5m
+    )
 
 
 @dataclass(frozen=True)
@@ -137,7 +151,7 @@ def _metrics(
     bars = item.bars_5m
     if len(bars) < 37:
         raise KernelInputError("scanner structure metrics require 37 closed bars")
-    atr = wilder_atr14(bars)
+    atr = _exact_atr(item)
     returns = _returns(bars)
     moves = tuple(
         abs(bars[-1].close - bars[-1 - offset].close) / atr for offset in (3, 6, 12)
@@ -228,7 +242,7 @@ def _breakout(
     item: ScannerMarketInput, metrics: ScannerMetrics, side: Side
 ) -> ScannerCandidate | None:
     current = item.bars_5m[-1]
-    atr = wilder_atr14(item.bars_5m)
+    atr = _exact_atr(item)
     buffer = max(
         Decimal("0.10") * atr,
         2 * item.current_spread_price,
@@ -282,7 +296,7 @@ def _breakout(
 
 def scan_cross_section(inputs: tuple[ScannerMarketInput, ...]) -> tuple[ScannerObservation, ...]:
     """Evaluate one closed-5m cadence without using any future universe data."""
-    usable = [item for item in inputs if len(item.bars_5m) >= 64 and item.liquidity_healthy]
+    usable = [item for item in inputs if _history_count(item) >= 64 and item.liquidity_healthy]
     return_maps: tuple[dict[str, Decimal], ...] = tuple(
         {
             item.market_id: _returns(item.bars_5m)[horizon]
@@ -299,10 +313,10 @@ def scan_cross_section(inputs: tuple[ScannerMarketInput, ...]) -> tuple[ScannerO
     observations: list[ScannerObservation] = []
     for item in sorted(inputs, key=lambda value: value.market_id):
         candidate: ScannerCandidate | None = None
-        if len(item.bars_5m) < 64 or not item.liquidity_healthy:
+        if _history_count(item) < 64 or not item.liquidity_healthy:
             observations.append(ScannerObservation(item.market_id, None, None))
             continue
-        if len(item.bars_5m) < 288:
+        if _history_count(item) < 288:
             current = item.bars_5m[-1]
             state = ScannerState.WATCH_NEW_MARKET
             candidate = ScannerCandidate(
@@ -369,7 +383,7 @@ def scan_cross_section(inputs: tuple[ScannerMarketInput, ...]) -> tuple[ScannerO
             )
         if candidate is None:
             current = item.bars_5m[-1]
-            atr = wilder_atr14(item.bars_5m)
+            atr = _exact_atr(item)
             long_near = min(
                 abs(current.close - metrics.prior_high_12),
                 abs(current.close - metrics.prior_high_36),
@@ -418,6 +432,7 @@ def advance_scanner_candidate(
     bars_5m: tuple[Bar, ...],
     current_spread_price: Decimal,
     liquidity_healthy: bool,
+    exact_wilder_atr_5m: Decimal | None = None,
 ) -> ScannerCandidate:
     """Advance only the Scanner path; Formal events are intentionally untouched."""
     if candidate.breakout_bar_open_time_ms is None or candidate.breakout_level is None:
@@ -428,13 +443,21 @@ def advance_scanner_candidate(
         item.open_time_ms: index for index, item in enumerate(bars_5m)
     }
     if candidate.breakout_bar_open_time_ms not in positions:
-        raise KernelInputError("scanner breakout bar is absent from history")
-    breakout_index = positions[candidate.breakout_bar_open_time_ms]
-    elapsed = len(bars_5m) - 1 - breakout_index
+        elapsed_ms = bars_5m[-1].open_time_ms - candidate.breakout_bar_open_time_ms
+        if elapsed_ms <= 12 * 300_000 or elapsed_ms % 300_000 != 0:
+            raise KernelInputError("scanner breakout bar is absent from history")
+        elapsed = elapsed_ms // 300_000
+    else:
+        breakout_index = positions[candidate.breakout_bar_open_time_ms]
+        elapsed = len(bars_5m) - 1 - breakout_index
     if elapsed <= 0:
         return candidate
     current = bars_5m[-1]
-    atr = wilder_atr14(bars_5m)
+    atr = (
+        wilder_atr14(bars_5m)
+        if exact_wilder_atr_5m is None
+        else exact_wilder_atr_5m
+    )
     level = candidate.breakout_level
     if candidate.side is None:
         raise KernelInputError("directionless WATCH cannot enter the breakout state machine")

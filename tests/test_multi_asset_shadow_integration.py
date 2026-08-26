@@ -250,12 +250,17 @@ class Route:
 
 
 def _bootstrap_for_route(
-    route: Route, *, planning: FakePlanningData | None = None
+    route: Route,
+    *,
+    planning: FakePlanningData | None = None,
+    clock: Callable[[], datetime] | None = None,
 ) -> MultiAssetProductionBootstrap:
     planning_data = planning or route.planning
 
-    def clock() -> datetime:
+    def default_clock() -> datetime:
         return datetime.fromtimestamp((route.latest.close_time_ms + 5_000) / 1000, UTC)
+
+    project_clock = clock or default_clock
 
     class ExternalClient:
         pass
@@ -264,7 +269,7 @@ def _bootstrap_for_route(
         registry=route.registry,
         authority=route.data,
         client=ExternalClient(),  # type: ignore[arg-type]
-        clock=clock,
+        clock=project_clock,
     )
     runtime.health.data_ready = True
     coordinator = MultiAssetShadowCoordinator(
@@ -278,6 +283,7 @@ def _bootstrap_for_route(
         cost_model=CostModel("cost-1", Decimal(), Decimal(), Decimal("2")),
         release_sha=RELEASE_SHA,
         runtime_readiness=runtime,
+        clock=project_clock,
     )
     return MultiAssetProductionBootstrap(
         registry=route.registry,
@@ -289,7 +295,7 @@ def _bootstrap_for_route(
         planning_data=planning_data,  # type: ignore[arg-type]
         coordinator=coordinator,
         runtime=runtime,
-        clock=clock,
+        clock=project_clock,
         sleep=lambda _: asyncio.sleep(0),
     )
 
@@ -481,6 +487,7 @@ def _compose_bootstrap(
         cost_model=CostModel("cost-1", Decimal(), Decimal(), Decimal("2")),
         release_sha=RELEASE_SHA,
         runtime_readiness=runtime,
+        clock=clock,
     )
     bootstrap = MultiAssetProductionBootstrap(
         registry=registry,
@@ -2593,9 +2600,22 @@ def test_stale_changed_and_foreign_evaluation_receipts_fail_closed(tmp_path: Pat
         received_at=datetime.fromtimestamp(((next_index + 1) * 300_000 + 1_000) / 1000, UTC),
     )
     route.readiness.latest_open_ms = next_index * 300_000
-    # A retained live decision remains processable at its frozen historical
-    # source prefix; it no longer has to remain the coordinator ledger head.
-    assert _formalize(route, receipt).shadow_order.payload["submission_status"] == "NOT_SUBMITTED"
+    # Formal authority is current-T only.  Once Runtime advances, the retained
+    # decision remains audit evidence but cannot create retrospective action.
+    with pytest.raises(IntegrationError, match="causal context changed"):
+        _formalize(route, receipt)
+    assert (
+        route.evidence._connection.execute(
+            """SELECT COUNT(*) FROM immutable_records
+           WHERE record_type IN ('formal_signal', 'plan_record', 'shadow_order',
+                                 'notification_outbox_reference')"""
+        ).fetchone()[0]
+        == 0
+    )
+    assert (
+        route.evidence._connection.execute("SELECT COUNT(*) FROM notification_outbox").fetchone()[0]
+        == 0
+    )
 
 
 def test_event_ledger_continuation_survives_evidence_reopen(tmp_path: Path) -> None:
@@ -2815,6 +2835,28 @@ def test_atomic_formal_publication_rolls_back_if_outbox_insert_fails(
     )
 
 
+def test_atomic_formal_publication_rolls_back_if_recovery_activation_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    route = _route(tmp_path)
+    evaluation = route.coordinator.evaluate_finalized_market(
+        market_id=route.market.identity.market_id,
+    )
+
+    def fail_activation(_shadow_order_id: str) -> None:
+        raise RuntimeError("injected recovery activation boundary")
+
+    monkeypatch.setattr(route.evidence, "_activate_outcome_recovery", fail_activation)
+    with pytest.raises(RuntimeError, match="activation boundary"):
+        _formalize(route, evaluation)
+    assert route.evidence._connection.execute(
+        "SELECT COUNT(*) FROM shadow_orders"
+    ).fetchone()[0] == 0
+    assert route.evidence._connection.execute(
+        "SELECT COUNT(*) FROM outcome_recovery_locator"
+    ).fetchone()[0] == 0
+
+
 def test_draining_blocks_new_activity_but_existing_outcome_completes_and_detaches(
     tmp_path: Path,
 ) -> None:
@@ -2882,7 +2924,7 @@ def test_draining_blocks_new_activity_but_existing_outcome_completes_and_detache
     restarted = reopened_adapter.restore_engine(
         now_ms=start + 120 * 60_000, provider=restarted_provider
     )
-    assert artifacts.shadow_order.record_id in restarted.attached_shadow_ids
+    assert artifacts.shadow_order.record_id not in restarted.attached_shadow_ids
     assert restarted.subscription_requirements == ()
     research = CorrelationResearchAdapter(reopened)
     assert len(research.completed_signals()) == 1
@@ -3101,11 +3143,244 @@ def test_normal_formal_outcome_uses_provider_bars_with_zero_transitions_and_rest
     provider = FakeOneMinuteProvider()
     adapter = EvidenceOutcomeAdapter(reopened)
     restored = adapter.restore_engine(now_ms=now_ms, provider=provider)
-    after = tuple(
-        restored.evaluate(identity, as_of_ms=now_ms)
-        for identity in restored.attached_shadow_ids
+    assert restored.attached_shadow_ids == ()
+    persisted = adapter.persisted_outcomes(artifacts.shadow_order.record_id)
+    assert adapter.canonical_outcome(persisted[-1]) == before[0]
+
+
+def test_terminal_outcome_and_recovery_removal_are_atomic_and_duplicate_formal_stays_complete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    route = _route(tmp_path)
+    evaluation = route.coordinator.evaluate_finalized_market(
+        market_id=route.market.identity.market_id
     )
-    assert after == before
+    artifacts = _formalize(route, evaluation)
+    assert isinstance(artifacts, FormalizationArtifacts)
+    start = int(artifacts.shadow_order.payload["outcome_start_ms"])
+    route.outcome_provider.inventory.extend(
+        OneMinuteBar.create(
+            market_id=route.market.identity.market_id,
+            open_time_ms=start + minute * 60_000,
+            open=Decimal("100"),
+            high=Decimal("101"),
+            low=Decimal("99"),
+            close=Decimal("100"),
+        )
+        for minute in range(120)
+    )
+    now_ms = start + 120 * 60_000
+    route.coordinator.recover_outcome_bars(now_ms=now_ms)
+    original_remove = route.evidence._remove_outcome_recovery
+
+    def fail_removal(_shadow_order_id: str) -> int:
+        raise RuntimeError("injected terminal recovery boundary")
+
+    monkeypatch.setattr(route.evidence, "_remove_outcome_recovery", fail_removal)
+    with pytest.raises(RuntimeError, match="terminal recovery boundary"):
+        route.outcome.tick(now_ms=now_ms)
+    assert route.evidence._connection.execute(
+        "SELECT COUNT(*) FROM outcome_envelopes"
+    ).fetchone()[0] == 0
+    assert route.evidence._connection.execute(
+        "SELECT COUNT(*) FROM outcome_recovery_locator"
+    ).fetchone()[0] == 1
+
+    monkeypatch.setattr(route.evidence, "_remove_outcome_recovery", original_remove)
+    completed = route.outcome.tick(now_ms=now_ms)
+    assert len(completed) == 1 and not completed[0].unresolved
+    assert route.evidence._connection.execute(
+        "SELECT COUNT(*) FROM outcome_envelopes"
+    ).fetchone()[0] == 1
+    assert route.evidence._connection.execute(
+        "SELECT COUNT(*) FROM outcome_recovery_locator"
+    ).fetchone()[0] == 0
+    assert route.outcome.attached_shadow_ids == ()
+
+    duplicate = _formalize(route, evaluation)
+    assert isinstance(duplicate, FormalizationArtifacts)
+    assert duplicate.outbox_receipt.coalesced
+    assert not duplicate.outcome_attached
+    assert route.outcome.attached_shadow_ids == ()
+    assert route.evidence._connection.execute(
+        "SELECT COUNT(*) FROM outcome_recovery_locator"
+    ).fetchone()[0] == 0
+
+
+def _insert_mature_outcome_history(
+    store: EvidenceStore, *, source_shadow: ShadowOrder, count: int, evaluated_at_ms: int
+) -> str:
+    first_shadow_id = ""
+    with store._controlled_transaction():
+        for index in range(count):
+            shadow = ShadowOrder.create(
+                identity={"mature-history-shadow": index},
+                **source_shadow.payload,
+            )
+            store._write_one(shadow)
+            outcome = OutcomeEnvelope.create(
+                identity={
+                    "shadow_order_id": shadow.record_id,
+                    "evaluated_at_ms": evaluated_at_ms,
+                },
+                signal_id=shadow.payload["signal_id"],
+                shadow_order_id=shadow.record_id,
+                observed_at=datetime.fromtimestamp(evaluated_at_ms / 1000, UTC)
+                .isoformat()
+                .replace("+00:00", "Z"),
+                evaluated_at_ms=evaluated_at_ms,
+                path_maturity_status="MATURE",
+                unresolved=False,
+                outcome_source="ON_DEMAND_PUBLIC_1M",
+                outcome_r=None,
+                outcome_mfe="0",
+                outcome_mae="0",
+                required_start_ms=source_shadow.payload["outcome_start_ms"],
+                original_deadline_ms=evaluated_at_ms,
+                required_end_ms=evaluated_at_ms,
+                failed_breakout=False,
+                projection={"history_fixture": True},
+            )
+            store._write_one(outcome)
+            if not first_shadow_id:
+                first_shadow_id = shadow.record_id
+    return first_shadow_id
+
+
+@pytest.mark.parametrize("mature_count", (10, 10_000))
+def test_persisted_restart_work_depends_on_active_windows_not_mature_lifetime(
+    tmp_path: Path, mature_count: int
+) -> None:
+    database = tmp_path / f"restart-{mature_count}.sqlite"
+    market_id = "restart-market"
+    start = 1_800_000_000_000
+    extraneous_bar_count = 10_000
+    required_bar_count = 120
+    store = EvidenceStore(database)
+    active = tuple(
+        _persist_breakout_shadow(
+            store,
+            market_id=market_id,
+            start_ms=start,
+            tag=f"active-{index}",
+            family="SWEEP_RECLAIM",
+        )
+        for index in range(2)
+    )
+    first_mature_id = _insert_mature_outcome_history(
+        store,
+        source_shadow=active[0],
+        count=mature_count,
+        evaluated_at_ms=start + 120 * 60_000,
+    )
+    extraneous_bars = tuple(
+        OneMinuteBar.create(
+            market_id=market_id,
+            open_time_ms=start - (extraneous_bar_count - minute) * 60_000,
+            open=Decimal("90"),
+            high=Decimal("91"),
+            low=Decimal("89"),
+            close=Decimal("90"),
+        )
+        for minute in range(extraneous_bar_count)
+    )
+    required_bars = tuple(
+        OneMinuteBar.create(
+            market_id=market_id,
+            open_time_ms=start + minute * 60_000,
+            open=Decimal("100"),
+            high=Decimal("101"),
+            low=Decimal("99"),
+            close=Decimal("100"),
+        )
+        for minute in range(required_bar_count)
+    )
+    EvidenceOutcomeAdapter(store)._persist_provider_bars(
+        (*extraneous_bars, *required_bars)
+    )
+    assert store._connection.execute(
+        "SELECT COUNT(*) FROM outcome_envelopes"
+    ).fetchone()[0] == mature_count
+    persisted_bar_count = store._connection.execute(
+        "SELECT COUNT(*) FROM outcome_bars"
+    ).fetchone()[0]
+    assert persisted_bar_count == extraneous_bar_count + required_bar_count
+    assert persisted_bar_count > required_bar_count * 80
+    store.close()
+
+    reopened = EvidenceStore(database)
+    adapter = EvidenceOutcomeAdapter(reopened)
+    assert reopened._connection.execute(
+        "SELECT COUNT(*) FROM outcome_bars"
+    ).fetchone()[0] == extraneous_bar_count + required_bar_count
+    assert len(adapter.persisted_outcomes(first_mature_id)) == 1
+    reopened.reset_query_counters()
+    traced: list[str] = []
+    reopened._connection.set_trace_callback(traced.append)
+    restored = adapter.restore_engine(now_ms=start + 60 * 60_000)
+    reopened._connection.set_trace_callback(None)
+
+    assert restored.attached_shadow_ids == tuple(sorted(item.record_id for item in active))
+    counters = reopened.query_counters
+    assert counters["outcome.restore.workset"].returned_rows == 2
+    assert counters["outcome.restore.workset"].decoded_records == 0
+    assert counters["outcome.restore.shadow_exact"].decoded_records == 2
+    assert counters["outcome.restore.bars_range"].returned_rows == required_bar_count
+    assert counters["outcome.restore.bars_range"].decoded_records == required_bar_count
+    assert (
+        counters["outcome.restore.bars_range"].decoded_records
+        < persisted_bar_count // 80
+    )
+    assert "outcome.persisted.shadow_exact" not in counters
+    normalized = tuple(" ".join(statement.lower().split()) for statement in traced)
+    assert not any("record_type = 'outcome_envelope'" in statement for statement in normalized)
+    assert not any(
+        "record_type = 'shadow_order'" in statement and "record_id =" not in statement
+        for statement in normalized
+    )
+    bar_queries = tuple(
+        statement for statement in normalized if "record_type = 'outcome_bar'" in statement
+    )
+    assert bar_queries and all(
+        "market_id') =" in statement
+        and "open_time_ms') >=" in statement
+        and "open_time_ms') <" in statement
+        for statement in bar_queries
+    )
+
+    workset_plan = reopened._connection.execute(
+        """EXPLAIN QUERY PLAN SELECT shadow_order_id FROM outcome_recovery_locator
+           WHERE active_partition = 1 ORDER BY shadow_order_id"""
+    ).fetchall()
+    assert any(
+        "SEARCH outcome_recovery_locator USING COVERING INDEX outcome_recovery_active"
+        in str(row[3])
+        for row in workset_plan
+    ), tuple(str(row[3]) for row in workset_plan)
+    bar_plan = reopened._connection.execute(
+        """EXPLAIN QUERY PLAN SELECT record_id FROM immutable_records
+           WHERE record_type = 'outcome_bar'
+             AND json_extract(payload_json, '$.market_id') = ?
+             AND json_extract(payload_json, '$.open_time_ms') >= ?
+             AND json_extract(payload_json, '$.open_time_ms') < ?""",
+        (market_id, start, start + 120 * 60_000),
+    ).fetchall()
+    assert any(
+        "SEARCH immutable_records USING INDEX immutable_outcome_bar_identity" in str(row[3])
+        for row in bar_plan
+    ), tuple(str(row[3]) for row in bar_plan)
+    persisted_plan = reopened._connection.execute(
+        """EXPLAIN QUERY PLAN SELECT i.record_id
+           FROM outcome_envelopes AS o
+           JOIN immutable_records AS i ON i.record_id = o.record_id
+           WHERE o.shadow_order_id = ?""",
+        (first_mature_id,),
+    ).fetchall()
+    assert any(
+        "SEARCH o USING COVERING INDEX outcome_envelopes_shadow_order" in str(row[3])
+        for row in persisted_plan
+    ), tuple(str(row[3]) for row in persisted_plan)
+    reopened.close()
 
 
 def test_provider_conflict_and_gap_reconstruct_deterministically(tmp_path: Path) -> None:

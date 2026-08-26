@@ -37,6 +37,13 @@ class DataRouteError(ValueError):
 
 
 @dataclass(frozen=True)
+class StoreAccessCounters:
+    queries: int = 0
+    returned_rows: int = 0
+    decoded_rows: int = 0
+
+
+@dataclass(frozen=True)
 class _ProviderCandidate:
     market_id: str
     coin: str
@@ -77,6 +84,26 @@ class ClosedBarStore:
             )"""
         )
         self.connection.commit()
+        self._access = StoreAccessCounters()
+
+    @property
+    def access_counters(self) -> StoreAccessCounters:
+        return self._access
+
+    def reset_access_counters(self) -> None:
+        self._access = StoreAccessCounters()
+
+    def _decode_rows(
+        self, rows: Sequence[sqlite3.Row | tuple[object, ...]]
+    ) -> tuple[ClosedBar, ...]:
+        self._access = StoreAccessCounters(
+            queries=self._access.queries + 1,
+            returned_rows=self._access.returned_rows + len(rows),
+            decoded_rows=self._access.decoded_rows + len(rows),
+        )
+        return tuple(
+            ClosedBar.model_validate_json(cast(str | bytes | bytearray, row[0])) for row in rows
+        )
 
     def put(
         self,
@@ -187,7 +214,24 @@ class ClosedBarStore:
             "ORDER BY open_time_ms DESC LIMIT ?",
             (market_id, interval, at_or_before_ms, limit),
         ).fetchall()
-        return tuple(ClosedBar.model_validate_json(row[0]) for row in reversed(rows))
+        return tuple(reversed(self._decode_rows(rows)))
+
+    def bars_between(
+        self,
+        market_id: str,
+        *,
+        after_open_time_ms: int,
+        at_or_before_ms: int,
+        interval: str = "5m",
+    ) -> tuple[ClosedBar, ...]:
+        """Decode only the actual causal gap ``after < open <= current``."""
+        rows = self.connection.execute(
+            "SELECT payload_json FROM closed_bars "
+            "WHERE market_id=? AND interval=? AND open_time_ms>? AND open_time_ms<=? "
+            "ORDER BY open_time_ms",
+            (market_id, interval, after_open_time_ms, at_or_before_ms),
+        ).fetchall()
+        return self._decode_rows(rows)
 
     def is_contiguous_5m(self, market_id: str) -> bool:
         """Exact continuity proof from SQL aggregates, not full deserialization.
@@ -210,7 +254,7 @@ class ClosedBarStore:
             "WHERE market_id=? AND interval=? ORDER BY open_time_ms",
             (market_id, interval),
         ).fetchall()
-        return tuple(ClosedBar.model_validate_json(row[0]) for row in rows)
+        return self._decode_rows(rows)
 
     def close(self) -> None:
         self.connection.close()

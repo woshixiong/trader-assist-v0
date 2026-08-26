@@ -241,7 +241,7 @@ class HyperliquidPublicPlanningAdapter:
             raise ValueError("public L2 maximum age must be non-negative")
 
     def fetch_bbo(self, *, market: RegistryMarket, now_ms: int) -> PublicBbo:
-        normalized = self._fresh_l2(market)
+        normalized = self._pending.get(market.identity.market_id) or self._fresh_l2(market)
         self._pending[normalized.market_id] = normalized
         return PublicBbo(
             best_bid=normalized.best_bid,
@@ -251,9 +251,7 @@ class HyperliquidPublicPlanningAdapter:
             coin=normalized.coin,
         )
 
-    def fetch_l2(
-        self, *, market: RegistryMarket, side: Side, bbo: PublicBbo
-    ) -> PublicL2Snapshot:
+    def fetch_l2(self, *, market: RegistryMarket, side: Side, bbo: PublicBbo) -> PublicL2Snapshot:
         from .integration import PublicL2Snapshot
 
         normalized = self._pending.pop(market.identity.market_id, None)
@@ -285,7 +283,7 @@ class HyperliquidPublicPlanningAdapter:
     ) -> ScannerPublicSnapshot:
         from .integration import ScannerPublicSnapshot
 
-        normalized = self._fresh_l2(market)
+        normalized = self._pending.pop(market.identity.market_id, None) or self._fresh_l2(market)
         assessments = tuple(
             assess_l2(
                 market_id=normalized.market_id,
@@ -299,16 +297,13 @@ class HyperliquidPublicPlanningAdapter:
             )
             for side in (Side.LONG, Side.SHORT)
         )
-        healthy = (
-            PublicBbo(normalized.best_bid, normalized.best_ask).spread_bps
-            <= HARD_MAX_SPREAD_BPS
-            and all(
-                item.sufficient_depth
-                and item.one_way_slippage_bps is not None
-                and item.one_way_slippage_bps
-                <= HARD_MAX_PRIMARY_ONE_WAY_SLIPPAGE_BPS
-                for item in assessments
-            )
+        healthy = PublicBbo(
+            normalized.best_bid, normalized.best_ask
+        ).spread_bps <= HARD_MAX_SPREAD_BPS and all(
+            item.sufficient_depth
+            and item.one_way_slippage_bps is not None
+            and item.one_way_slippage_bps <= HARD_MAX_PRIMARY_ONE_WAY_SLIPPAGE_BPS
+            for item in assessments
         )
         return ScannerPublicSnapshot(
             current_spread_price=normalized.best_ask - normalized.best_bid,
@@ -316,8 +311,54 @@ class HyperliquidPublicPlanningAdapter:
             btc_returns=btc_returns,
         )
 
+    def fetch_raw_l2(self, *, market: RegistryMarket) -> object:
+        """Worker-safe raw public read; no Registry, freshness, or state mutation."""
+        return self.client.l2_book(coin=market.identity.coin)
+
+    def stage_raw_l2(self, *, market: RegistryMarket, response: object, now_ms: int) -> None:
+        """Event-loop-owned normalization/freshness and immutable identity staging."""
+        normalized = _normalize_l2(
+            market_id=market.identity.market_id,
+            coin=market.identity.coin,
+            response=response,
+        )
+        if not 0 <= now_ms - normalized.observed_at_ms <= self.max_age_ms:
+            raise PublicDataError(
+                "public L2 response is stale or future-dated "
+                f"market_id={market.identity.market_id} coin={market.identity.coin} "
+                f"provenance={normalized.provenance_hash}"
+            )
+        self._pending[market.identity.market_id] = normalized
+
+    def scanner_snapshot_from_staged(
+        self,
+        *,
+        market: RegistryMarket,
+        now_ms: int,
+        btc_returns: tuple[Decimal | None, Decimal | None, Decimal | None],
+    ) -> ScannerPublicSnapshot:
+        normalized = self._pending.pop(market.identity.market_id, None)
+        if normalized is None:
+            raise PublicDataError(
+                "public L2 staging is absent "
+                f"market_id={market.identity.market_id} coin={market.identity.coin}"
+            )
+        if not 0 <= now_ms - normalized.observed_at_ms <= self.max_age_ms:
+            raise PublicDataError(
+                "public L2 response became stale at use "
+                f"market_id={market.identity.market_id} coin={market.identity.coin} "
+                f"provenance={normalized.provenance_hash}"
+            )
+        self._pending[market.identity.market_id] = normalized
+        try:
+            return self.fetch_scanner_snapshot(
+                market=market, now_ms=now_ms, btc_returns=btc_returns
+            )
+        finally:
+            self._pending.pop(market.identity.market_id, None)
+
     def _fresh_l2(self, market: RegistryMarket) -> _NormalizedL2:
-        response = self.client.l2_book(coin=market.identity.coin)
+        response = self.fetch_raw_l2(market=market)
         post_response_wall_ms = self.wall_clock_ms()
         normalized = _normalize_l2(
             market_id=market.identity.market_id,
@@ -344,9 +385,29 @@ class HyperliquidRestOneMinuteProvider:
     def unsubscribe_1m(self, *, market_id: str) -> None:
         self.subscribed_market_ids.discard(market_id)
 
+    def market_identity(self, market_id: str) -> RegistryMarket:
+        return self._market(market_id)
+
+    def raw_read_1m(self, *, market: RegistryMarket, start_ms: int, end_ms: int) -> object:
+        return self.client.closed_candles(
+            coin=market.identity.coin,
+            interval="1m",
+            start_ms=start_ms,
+            end_ms=end_ms,
+        )
+
     def backfill_1m(
         self, *, market_id: str, start_ms: int, end_ms: int
     ) -> tuple[OneMinuteBar, ...]:
+        market, response = self.fetch_raw_1m(market_id=market_id, start_ms=start_ms, end_ms=end_ms)
+        return self.normalize_raw_1m(
+            market=market, response=response, start_ms=start_ms, end_ms=end_ms
+        )
+
+    def fetch_raw_1m(
+        self, *, market_id: str, start_ms: int, end_ms: int
+    ) -> tuple[RegistryMarket, object]:
+        """Worker-safe raw candle read after immutable request identity capture."""
         market = self._market(market_id)
         if (
             isinstance(start_ms, bool)
@@ -359,12 +420,24 @@ class HyperliquidRestOneMinuteProvider:
             or end_ms % ONE_MINUTE_MS
         ):
             raise PublicDataError("public 1m request window is invalid")
-        response = self.client.closed_candles(
+        return market, self.client.closed_candles(
             coin=market.identity.coin,
             interval="1m",
             start_ms=start_ms,
             end_ms=end_ms,
         )
+
+    def normalize_raw_1m(
+        self,
+        *,
+        market: RegistryMarket,
+        response: object,
+        start_ms: int,
+        end_ms: int,
+    ) -> tuple[OneMinuteBar, ...]:
+        current = self._market(market.identity.market_id)
+        if current != market:
+            raise PublicDataError("public 1m Registry identity changed before use")
         if not isinstance(response, list):
             raise PublicDataError("candleSnapshot did not return a list")
         bars = tuple(

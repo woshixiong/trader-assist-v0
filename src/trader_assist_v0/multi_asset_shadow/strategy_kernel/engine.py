@@ -31,6 +31,7 @@ from .types import (
     DecisionKind,
     EventLedger,
     EventStatus,
+    HtfContext,
     HtfRelation,
     KernelInputError,
     KernelResult,
@@ -59,6 +60,10 @@ class StrategyEvaluationInput:
     zone_book: ZoneBook | None = None
     scanner_linkage: ScannerLinkage | None = None
     mandatory_data_valid: bool = True
+    a5_override: Decimal | None = None
+    m20_override: Decimal | None = None
+    a15_override: Decimal | None = None
+    htf_context_override: HtfContext | None = None
 
 
 def market_event_id(
@@ -87,9 +92,7 @@ def _decision(
         market_id=event.market_id,
         setup_family=event.setup_family,
         setup_mode=event.formal_mode,
-        retest_type=(
-            event.retest_type if event.formal_mode is SetupMode.STANDARD else None
-        ),
+        retest_type=(event.retest_type if event.formal_mode is SetupMode.STANDARD else None),
         side=event.side,
         decision=kind,
         reason=reason,
@@ -210,9 +213,7 @@ def _progress_sweep(event: MarketEvent, bar: Bar) -> tuple[MarketEvent, Strategy
         raise KernelInputError("sweep event is incomplete")
     a5 = event.a5_event
     is_new_extreme = (
-        bar.low < event.sweep_extreme
-        if event.side is Side.LONG
-        else bar.high > event.sweep_extreme
+        bar.low < event.sweep_extreme if event.side is Side.LONG else bar.high > event.sweep_extreme
     )
     if is_new_extreme and _sweep_candidate(bar, event.zone, event.side, a5):
         updated = event.evolve(
@@ -436,9 +437,7 @@ def _standard_terms(
     )
 
 
-def _qualify_retest(
-    event: MarketEvent, bar: Bar, pullback_extreme: Decimal
-) -> RetestType | None:
+def _qualify_retest(event: MarketEvent, bar: Bar, pullback_extreme: Decimal) -> RetestType | None:
     if event.impulse_extreme is None:
         raise KernelInputError("breakout impulse extreme is missing")
     a5 = event.a5_event
@@ -453,10 +452,9 @@ def _qualify_retest(
             if denominator > 0
             else Decimal("-1")
         )
-        shallow = (
-            pullback_extreme > event.zone.high + Decimal("0.25") * a5
-            and Decimal("0.25") <= ratio <= Decimal("0.60")
-        )
+        shallow = pullback_extreme > event.zone.high + Decimal("0.25") * a5 and Decimal(
+            "0.25"
+        ) <= ratio <= Decimal("0.60")
     else:
         deep = (
             bar.high >= event.zone.low - Decimal("0.25") * a5
@@ -468,10 +466,9 @@ def _qualify_retest(
             if denominator > 0
             else Decimal("-1")
         )
-        shallow = (
-            pullback_extreme < event.zone.low - Decimal("0.25") * a5
-            and Decimal("0.25") <= ratio <= Decimal("0.60")
-        )
+        shallow = pullback_extreme < event.zone.low - Decimal("0.25") * a5 and Decimal(
+            "0.25"
+        ) <= ratio <= Decimal("0.60")
     if deep:
         return RetestType.DEEP
     if shallow:
@@ -479,9 +476,7 @@ def _qualify_retest(
     return None
 
 
-def _progress_breakout(
-    event: MarketEvent, bar: Bar
-) -> tuple[MarketEvent, StrategyDecision | None]:
+def _progress_breakout(event: MarketEvent, bar: Bar) -> tuple[MarketEvent, StrategyDecision | None]:
     if event.previous_close is None or event.previous_high is None or event.previous_low is None:
         raise KernelInputError("breakout event previous-bar state is missing")
     if _accepted_reentry(event, bar):
@@ -516,9 +511,7 @@ def _progress_breakout(
                     pullback_started=True,
                     pullback_extreme=pullback_extreme,
                     retest_type=retest_type,
-                    retest_seen_bar_time_ms=(
-                        bar.open_time_ms if retest_type is not None else None
-                    ),
+                    retest_seen_bar_time_ms=(bar.open_time_ms if retest_type is not None else None),
                 ),
                 None,
             )
@@ -623,13 +616,17 @@ def _progress_breakout(
 
 
 def _range_valid(
-    *, support: ZoneSnapshot | None, resistance: ZoneSnapshot | None, bars_15m: tuple[Bar, ...]
+    *,
+    support: ZoneSnapshot | None,
+    resistance: ZoneSnapshot | None,
+    bars_15m: tuple[Bar, ...],
+    a15: Decimal | None = None,
 ) -> bool:
     if support is None or resistance is None or len(bars_15m) < 15:
         return False
     if not _eligible(support, ZoneType.LOW) or not _eligible(resistance, ZoneType.HIGH):
         return False
-    a15 = wilder_atr14(bars_15m)
+    a15 = wilder_atr14(bars_15m) if a15 is None else a15
     width = resistance.center - support.center
     if not Decimal("1.5") * a15 <= width <= Decimal("5.0") * a15:
         return False
@@ -640,9 +637,7 @@ def _range_valid(
     if abs(bars_15m[-1].close - bars_15m[-9].close) > a15:
         return False
     return all(
-        support.low - Decimal("0.10") * a15
-        <= item.close
-        <= resistance.high + Decimal("0.10") * a15
+        support.low - Decimal("0.10") * a15 <= item.close <= resistance.high + Decimal("0.10") * a15
         for item in bars_15m[-8:]
     )
 
@@ -766,12 +761,9 @@ def _active_zones(book: ZoneBook) -> tuple[ZoneSnapshot, ...]:
     )
 
 
-def _contains_event_id(
-    ledger: EventLedger, event_id: str, family: SetupFamily
-) -> bool:
+def _contains_event_id(ledger: EventLedger, event_id: str, family: SetupFamily) -> bool:
     return any(
-        item.market_event_id == event_id and item.setup_family is family
-        for item in ledger.events
+        item.market_event_id == event_id and item.setup_family is family for item in ledger.events
     )
 
 
@@ -810,7 +802,9 @@ def evaluate_strategy(
         bars_1h = inputs.bars_1h
         if bars_1h:
             validate_series(bars_1h, interval="1h")
-    context = htf_context(bars_1h)
+    context = (
+        htf_context(bars_1h) if inputs.htf_context_override is None else inputs.htf_context_override
+    )
     if inputs.zone_book is None:
         if not bars_15m:
             raise KernelInputError("strategy evaluation requires causal 15m history")
@@ -846,8 +840,12 @@ def evaluate_strategy(
             context,
         )
 
-    a5 = wilder_atr14(inputs.bars_5m)
-    m20 = median_previous_20_volume(inputs.bars_5m)
+    a5 = wilder_atr14(inputs.bars_5m) if inputs.a5_override is None else inputs.a5_override
+    m20 = (
+        median_previous_20_volume(inputs.bars_5m)
+        if inputs.m20_override is None
+        else inputs.m20_override
+    )
     accepted_reentries: dict[tuple[str, Side, str], BreakoutLinkage] = {}
     confirmed_events: list[MarketEvent] = []
     creation_blocked: set[tuple[SetupFamily, Side]] = set()
@@ -878,12 +876,10 @@ def evaluate_strategy(
                     updated.side.opposite,
                     updated.market_id,
                 )
-                accepted_reentries[reentry_key] = (
-                    BreakoutLinkage(
-                        updated.breakout_linkage.underlying_breakout_event_id,
-                        updated.breakout_linkage.initial_breakout_candle_id,
-                        updated.market_event_id,
-                    )
+                accepted_reentries[reentry_key] = BreakoutLinkage(
+                    updated.breakout_linkage.underlying_breakout_event_id,
+                    updated.breakout_linkage.initial_breakout_candle_id,
+                    updated.market_event_id,
                 )
 
     # Candidate creation uses the current Event-zone winners, while every
@@ -922,9 +918,7 @@ def evaluate_strategy(
                 scanner_linkage=inputs.scanner_linkage,
                 breakout_linkage=linkage,
             )
-            if _contains_event_id(
-                current_ledger, event.market_event_id, event.setup_family
-            ):
+            if _contains_event_id(current_ledger, event.market_event_id, event.setup_family):
                 continue
             current_ledger = current_ledger.append(event)
             decisions.append(
@@ -970,9 +964,7 @@ def evaluate_strategy(
                 scanner_linkage=inputs.scanner_linkage,
                 zones=all_active_zones,
             )
-            if _contains_event_id(
-                current_ledger, event.market_event_id, event.setup_family
-            ):
+            if _contains_event_id(current_ledger, event.market_event_id, event.setup_family):
                 continue
             current_ledger = current_ledger.append(event)
             decisions.append(
@@ -984,11 +976,15 @@ def evaluate_strategy(
                 )
             )
 
-    if _range_valid(
-        support=book.active_support,
-        resistance=book.active_resistance,
-        bars_15m=bars_15m,
-    ) and len(inputs.bars_5m) >= 2:
+    if (
+        _range_valid(
+            support=book.active_support,
+            resistance=book.active_resistance,
+            bars_15m=bars_15m,
+            a15=inputs.a15_override,
+        )
+        and len(inputs.bars_5m) >= 2
+    ):
         range_specs = (
             (Side.LONG, book.active_support, book.active_resistance),
             (Side.SHORT, book.active_resistance, book.active_support),
@@ -1014,9 +1010,7 @@ def evaluate_strategy(
                     relation=htf_relation(context, side),
                     scanner_linkage=inputs.scanner_linkage,
                 )
-                if _contains_event_id(
-                    current_ledger, event.market_event_id, event.setup_family
-                ):
+                if _contains_event_id(current_ledger, event.market_event_id, event.setup_family):
                     continue
                 current_ledger = current_ledger.append(event)
                 confirmed_events.append(event)
@@ -1025,9 +1019,7 @@ def evaluate_strategy(
                         event,
                         kind=DecisionKind.FORMAL_SETUP_CONFIRMED,
                         reason=(
-                            "RANGE_LONG_CONFIRMED"
-                            if side is Side.LONG
-                            else "RANGE_SHORT_CONFIRMED"
+                            "RANGE_LONG_CONFIRMED" if side is Side.LONG else "RANGE_SHORT_CONFIRMED"
                         ),
                         transition=event.transition,
                     )

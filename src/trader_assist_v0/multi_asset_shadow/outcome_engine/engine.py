@@ -245,6 +245,25 @@ class OutcomeEngine:
         self._validate_now(now_ms)
         if self.provider is None:
             return ()
+        requests = self.recovery_requests(now_ms=now_ms, shadow_order_ids=shadow_order_ids)
+        for market_id, start_ms, end_ms in requests:
+            recovered = self.provider.backfill_1m(
+                market_id=market_id, start_ms=start_ms, end_ms=end_ms
+            )
+            for bar in recovered:
+                if bar.market_id != market_id or not start_ms <= bar.open_time_ms < end_ms:
+                    raise OutcomeEngineError("backfill returned a bar outside its request")
+                self.admit_bar(bar)
+        return requests
+
+    def recovery_requests(
+        self,
+        *,
+        now_ms: int,
+        shadow_order_ids: tuple[str, ...] | None = None,
+    ) -> tuple[tuple[str, int, int], ...]:
+        """Derive bounded missing windows without performing public I/O."""
+        self._validate_now(now_ms)
         selected = (
             tuple(self._states.values())
             if shadow_order_ids is None
@@ -277,13 +296,6 @@ class OutcomeEngine:
                 block = [item[1] for item in grouped]
                 start_ms, end_ms = block[0], block[-1] + ONE_MINUTE_MS
                 requests.append((market_id, start_ms, end_ms))
-                recovered = self.provider.backfill_1m(
-                    market_id=market_id, start_ms=start_ms, end_ms=end_ms
-                )
-                for bar in recovered:
-                    if bar.market_id != market_id or not start_ms <= bar.open_time_ms < end_ms:
-                        raise OutcomeEngineError("backfill returned a bar outside its request")
-                    self.admit_bar(bar)
         return tuple(requests)
 
     def evaluate(self, shadow_order_id: str, *, as_of_ms: int) -> FormalShadowOutcome:
@@ -344,10 +356,11 @@ class OutcomeEngine:
             conflicts=self._state_conflicts(state),
         )
 
-    def tick(self, *, now_ms: int) -> tuple[FormalShadowOutcome, ...]:
+    def tick(self, *, now_ms: int, recover: bool = True) -> tuple[FormalShadowOutcome, ...]:
         """Recover gaps, emit changed snapshots, and detach completed streams."""
         self._validate_now(now_ms)
-        self.recover(now_ms=now_ms)
+        if recover:
+            self.recover(now_ms=now_ms)
         outcomes = tuple(
             self.evaluate(identity, as_of_ms=now_ms) for identity in sorted(self._states)
         )
@@ -356,8 +369,40 @@ class OutcomeEngine:
                 if self._last_saved.get(outcome.shadow_order_id) != outcome:
                     self.sink.save_outcome(outcome)
                     self._last_saved[outcome.shadow_order_id] = outcome
+        completed = tuple(
+            outcome.shadow_order_id
+            for outcome in outcomes
+            if not outcome.unresolved and now_ms >= outcome.required_end_ms
+        )
+        for shadow_order_id in completed:
+            self._states.pop(shadow_order_id, None)
+            self._last_saved.pop(shadow_order_id, None)
+        if completed:
+            self._prune_inactive_bars()
         self._synchronize_subscriptions(now_ms)
         return outcomes
+
+    def _prune_inactive_bars(self) -> None:
+        """Keep only 1m evidence still required by the live working set."""
+        required: dict[str, list[tuple[int, int]]] = {}
+        for state in self._states.values():
+            required.setdefault(state.view.market_id, []).append(
+                (state.view.outcome_start_ms, self._required_end(state))
+            )
+        self._bars = {
+            market_id: {
+                open_time_ms: bar
+                for open_time_ms, bar in bars.items()
+                if any(start <= open_time_ms < end for start, end in required.get(market_id, ()))
+            }
+            for market_id, bars in self._bars.items()
+            if market_id in required
+        }
+        self._conflicts = {
+            key: hashes
+            for key, hashes in self._conflicts.items()
+            if any(start <= key[1] < end for start, end in required.get(key[0], ()))
+        }
 
     @classmethod
     def reconstruct(
