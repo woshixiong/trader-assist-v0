@@ -124,6 +124,8 @@ They provide progressive on-demand procedural context. Existing `.dsh/skills` re
 
 Unified Engineering Governance remains the general engineering constitution. Durable requirements include mature/provider-native solutions first; simplicity by total burden; stable narrow interfaces; root-cause/global authority before repeated repairs; one complete Task Packet per coherent stage; exact artifact/exact-head CI/independent review; one normal + at most one exceptional repair then holistic convergence; and do not use the user as the routine Writer/CI/Reviewer message bus when safe exact automation can carry evidence.
 
+An active bounded task remains owned by the current control/orchestration role until an explicit task-level terminal disposition or an explicit acknowledged handoff. Intermediate CI, independent review, publication/activation authorization, Mark Ready and similar gates are not completion by themselves. At such a gate, execute all currently authorized/capability-available next actions, prepare the minimum blocked next step, and stop only the specific unauthorized/external action while retaining task ownership.
+
 ## 10. Historical / superseded tooling
 
 - `ENGINEERING_EXECUTOR_SELECTION_AND_TOOL_PROFILE_ROUTING_V1_2026-08-20.md` becomes historical/salvage after Router V2 acceptance.

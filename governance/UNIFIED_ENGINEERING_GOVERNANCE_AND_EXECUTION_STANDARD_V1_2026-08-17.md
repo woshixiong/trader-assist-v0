@@ -501,6 +501,29 @@ IDENTITY / WORKTREE PREFLIGHT
 
 Do not use the user as a routine message bus between Engineering, Writer, CI and Reviewer when the workflow can carry exact evidence directly.
 
+### Active task ownership until terminal disposition
+
+For every bounded project task, the current control/orchestration role retains responsibility for proactively advancing the task until either the task reaches an explicit terminal disposition or ownership is explicitly handed off and acknowledged by another responsible role.
+
+```text
+ACTIVE_TASK_OWNERSHIP_UNTIL_TERMINAL_DISPOSITION=REQUIRED
+INTERMEDIATE_GATE_IS_TASK_COMPLETION=NO
+OWNERSHIP_TRANSFER_REQUIRES_EXPLICIT_ACKNOWLEDGED_HANDOFF=YES
+BLOCKED_ACTION_DOES_NOT_RELEASE_TASK_OWNERSHIP=YES
+```
+
+Intermediate gates such as local validation, artifact freeze, exact-head CI, independent review, publication/activation authorization, Mark Ready or other approval boundaries do not by themselves end task ownership. At each intermediate gate, the current owner must:
+
+1. execute every next action that is currently authorized and capability-available;
+2. prepare the next blocked step as far as possible without crossing its authority boundary;
+3. minimize user relay and avoid making the user rediscover or re-sequence obvious unfinished work;
+4. stop only the specific action that requires an external independent actor, a new user-retained authority, or an L1/SAFE_STOP decision;
+5. retain task ownership while that blocked action is pending unless an explicit acknowledged handoff transfers it.
+
+A task-level terminal disposition must be explicit in the active task contract or control decision. `MERGED`, `DEFERRED`, `REPLAN`, `SAFE_STOP` and `CANCELLED` are terminal when they disposition the bounded task. `PASS`, `SHIP_CANDIDATE` or similar stage results are terminal only when the active task contract explicitly defines them as the final disposition; an intermediate Reviewer PASS or CI PASS is not automatically terminal.
+
+When work is blocked by an external independent Reviewer, a user-retained authority gate or another required actor, the current owner should complete all safe preparatory/race-check/evidence work first and surface only the minimum irreducible action needed from that actor. This rule does not weaken any user-retained authority or Reviewer-independence boundary.
+
 Stop when the task reaches a materially new boundary, including:
 
 - new root cause;
@@ -513,6 +536,8 @@ Stop when the task reaches a materially new boundary, including:
 - merge;
 - deployment/runtime/cloud mutation;
 - credentials/private API/signing/exchange write/trading action.
+
+Stopping at such a boundary means not crossing the specific unauthorized or unresolved action; it does not by itself release ownership of the unfinished bounded task.
 
 ---
 
@@ -951,6 +976,10 @@ GLOBAL_ROOT_CAUSE_BEFORE_LOCAL_PATCH_LOOPS=YES
 REAL_EXTERNAL_CONTRACT_EVIDENCE=MANDATORY_WHEN_APPLICABLE
 CAPABILITY_MATCH=MANDATORY
 USER_AS_ROUTINE_MESSAGE_BUS=PROHIBITED
+ACTIVE_TASK_OWNERSHIP_UNTIL_TERMINAL_DISPOSITION=REQUIRED
+INTERMEDIATE_GATE_IS_TASK_COMPLETION=NO
+OWNERSHIP_TRANSFER_REQUIRES_EXPLICIT_ACKNOWLEDGED_HANDOFF=YES
+BLOCKED_ACTION_DOES_NOT_RELEASE_TASK_OWNERSHIP=YES
 ONE_PRIMARY_WRITER_PER_SHARED_AUTHORITY_STAGE=YES
 PARALLEL_READ_ONLY_OR_DISJOINT_WORK=ENCOURAGED_WHEN_SAFE
 WRITER_REPORT_NOT_INDEPENDENT_ACCEPTANCE=YES
