@@ -138,10 +138,25 @@ Before custom commodity tooling/orchestration development, that rule also requir
 - One normal repair + at most one exceptional repair; otherwise enter `HOLISTIC_CONVERGENCE_GATE`.
 - Completion evidence lists exact changed files, observed tests/checks, exact artifact/head, residual risks and retained gates.
 
-## 9. User-retained gates
+## 9. Target-host deployment / FinalShell
+
+For any target-host deployment, redeployment, release installation or real-host qualification where the user operates the Linux host through FinalShell, read `governance/FINALSHELL_TARGET_HOST_DEPLOYMENT_WORKFLOW_V1_2026-08-26.md` in addition to the current Operations authority/runbook.
+
+Default operator flow:
+
+```text
+MACOS TERMINAL GENERATES ONE EXACT-RELEASE FOLDER
+-> FINALSHELL FILE MANAGER / SFTP UPLOADS THAT ONE FOLDER
+-> ONE CONTIGUOUS BLOCK RUNS IN THE ALREADY-CONNECTED FINALSHELL SERVER TERMINAL
+-> EVIDENCE RETURNS TO THE CONTROL WINDOW
+```
+
+Do not require a second Mac-direct SSH route merely because shell automation is possible. FinalShell is the current operator surface over standard SSH/SFTP, not deployment authority; exact GitHub identity, hashes, current user-retained deployment/runtime authority, secret boundaries and fail-closed host checks remain mandatory. No silent deployment-transport substitution.
+
+## 10. User-retained gates
 
 No Task Packet, Writer, operator, CI result or review implicitly grants Mark Ready, merge, branch deletion, production deploy/runtime/cloud mutation, service start/restart/enable/reboot, credentials/private API, wallet/signing/nonce, exchange write, order submission/cancellation or autonomous trading. These require explicit current user authority.
 
-## 10. Stale/special files
+## 11. Stale/special files
 
 `CODEX.md` is historical stale task state and is not a Codex instruction authority. Do not add it to instruction fallback discovery. Current rules are this map + `PROJECT_RULES_INDEX.md` + the selected profile + the frozen Task Packet.
