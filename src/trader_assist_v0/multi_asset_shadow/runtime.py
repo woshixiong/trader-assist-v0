@@ -23,7 +23,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Final, cast
 
-from websockets.asyncio.client import connect
+from websockets.asyncio.client import connect, process_exception
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
 from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
@@ -46,6 +46,8 @@ _FIVE_MINUTES_MS = FIVE_MINUTES_MS
 _ACK_TIMEOUT_SECONDS = 8.0
 _MAX_CONFIRMATIONS = 4
 _MAX_CALLBACK_FAILURES = 100
+_HEARTBEAT_INTERVAL_SECONDS = 50.0
+_CONNECTION_ATTEMPT_SPACING_SECONDS = 5.0
 
 # First-Launch cold-start tuning values.  They bound runtime-local behavior
 # only and are deliberately explicit rather than scattered literals.
@@ -79,9 +81,20 @@ class BoundaryMode(StrEnum):
 @dataclass
 class RuntimeHealth:
     connection_count: int = 0
+    connections: int = 0
+    disconnects: int = 0
     subscriptions: int = 0
     reconnects: int = 0
     acknowledgements: set[str] = field(default_factory=set)
+    expected_acknowledgements: int = 0
+    ws_phase: str = "STOPPED"
+    ready_transitions: int = 0
+    heartbeat_sent: int = 0
+    heartbeat_pongs: int = 0
+    heartbeat_failures: int = 0
+    greeting_count: int = 0
+    last_disconnect_error: str | None = None
+    last_close_code: int | None = None
     failed_markets: set[str] = field(default_factory=set)
     nonrecoverable_markets: set[str] = field(default_factory=set)
     callback_failures: list[FinalizedCallbackFailure] = field(default_factory=list)
@@ -168,6 +181,22 @@ class RuntimeReadinessSnapshot:
 
 class ReconnectRequired(RuntimeError):
     """An expected transport/readiness incident, not an authority failure."""
+
+
+@dataclass
+class _ConnectionSession:
+    """Ephemeral control state bound to exactly one provider connection."""
+
+    websocket: Any
+    expected_acks: frozenset[str]
+    subscription_identity: tuple[str, str, tuple[str, ...]]
+    stop: asyncio.Event = field(default_factory=asyncio.Event)
+    acknowledgement_changed: asyncio.Event = field(default_factory=asyncio.Event)
+    fatal: asyncio.Event = field(default_factory=asyncio.Event)
+    fatal_error: Exception | None = None
+    receiver_task: asyncio.Task[None] | None = None
+    heartbeat_task: asyncio.Task[None] | None = None
+    live: bool = True
 
 
 @dataclass(frozen=True)
@@ -266,8 +295,15 @@ class MultiAssetPublicRuntime:
         on_reconnect: Callable[[int], object | None] | None = None,
         confirmation_concurrency: int = _MAX_CONFIRMATIONS,
         acknowledgement_timeout_seconds: float = _ACK_TIMEOUT_SECONDS,
+        heartbeat_interval_seconds: float = _HEARTBEAT_INTERVAL_SECONDS,
+        connection_attempt_spacing_seconds: float = _CONNECTION_ATTEMPT_SPACING_SECONDS,
     ) -> None:
-        if confirmation_concurrency < 1 or acknowledgement_timeout_seconds <= 0:
+        if (
+            confirmation_concurrency < 1
+            or acknowledgement_timeout_seconds <= 0
+            or heartbeat_interval_seconds <= 0
+            or connection_attempt_spacing_seconds <= 0
+        ):
             raise ValueError("runtime bounds must be positive")
         self.registry = registry
         self.authority = authority
@@ -278,7 +314,10 @@ class MultiAssetPublicRuntime:
         self.sleep = sleep
         self.on_finalized_5m = on_finalized_5m
         self.on_reconnect = on_reconnect
+        self.on_session_event: Callable[[str, dict[str, object]], object | None] | None = None
         self.acknowledgement_timeout_seconds = acknowledgement_timeout_seconds
+        self.heartbeat_interval_seconds = heartbeat_interval_seconds
+        self.connection_attempt_spacing_seconds = connection_attempt_spacing_seconds
         self.health = RuntimeHealth()
         # Evidence-derived maintenance lane invoked by the barrier whether or
         # not the boundary produced new action (packet section 20).
@@ -298,6 +337,7 @@ class MultiAssetPublicRuntime:
         self._rest_cooldown_until: float | None = None
         self._integrity_failed = False
         self._expected_acks: set[str] = set()
+        self._active_session: _ConnectionSession | None = None
 
     def acquisition_registry(self) -> RegistryVersion:
         """Active markets plus the strictly bounded initial bootstrap exception."""
@@ -1118,38 +1158,124 @@ class MultiAssetPublicRuntime:
         try:
             reconnecting = False
             consecutive_incomplete_recoveries = 0
+            last_attempt_at: float | None = None
             while True:
                 if shutdown.is_set():
                     return
                 websocket: Any | None = None
+                session: _ConnectionSession | None = None
                 recovery_complete = False
+                failure: Exception | None = None
                 try:
+                    if last_attempt_at is not None:
+                        spacing = self.connection_attempt_spacing_seconds - (
+                            self.monotonic() - last_attempt_at
+                        )
+                        if spacing > 0:
+                            self.health.ws_phase = "RECONNECT_WAIT"
+                            await self.sleep(spacing)
+                            if shutdown.is_set():
+                                return
+                    self.health.ws_phase = "CONNECTING"
+                    last_attempt_at = self.monotonic()
                     websocket = await self.websocket_factory(WS_URL)
                     self.health.connection_count = 1
+                    self.health.connections += 1
+                    requests, identity = self._bound_subscriptions()
+                    expected_acks = frozenset(
+                        cast(str, cast(dict[str, object], request["subscription"])["coin"])
+                        for request in requests
+                    )
+                    session = _ConnectionSession(
+                        websocket=websocket,
+                        expected_acks=expected_acks,
+                        subscription_identity=identity,
+                    )
+                    self._active_session = session
+                    self._expected_acks = set(expected_acks)
+                    self.health.expected_acknowledgements = len(expected_acks)
+                    self.health.ws_phase = "CONNECTED"
+                    self._emit_session_event("CONNECTION", connection_count=self.health.connections)
+                    session.receiver_task = asyncio.create_task(
+                        self._receive_session(session), name="hyperliquid-ws-receiver"
+                    )
+                    session.heartbeat_task = asyncio.create_task(
+                        self._heartbeat_session(session, shutdown),
+                        name="hyperliquid-ws-heartbeat",
+                    )
                     if reconnecting:
                         await self._warmup_all(recovery=True, shutdown=shutdown)
                         if shutdown.is_set():
                             return
-                    await self._subscribe(websocket)
-                    await self._await_acknowledgements(websocket, shutdown)
-                    self.health.data_ready = True
+                        if session.fatal.is_set():
+                            assert session.fatal_error is not None
+                            raise session.fatal_error
+                    await self._subscribe(session, requests)
+                    if not await self._await_acknowledgements(session, shutdown):
+                        return
+                    if self._current_subscription_identity() != session.subscription_identity:
+                        raise ReconnectRequired("Registry subscription identity changed")
+                    if shutdown.is_set() or session.fatal.is_set() or not session.live:
+                        if session.fatal_error is not None:
+                            raise session.fatal_error
+                        return
+                    self._set_data_ready(True)
+                    self.health.ws_phase = "READY"
+                    self._emit_session_event(
+                        "READY",
+                        acknowledged=len(self.health.acknowledgements),
+                        expected=len(session.expected_acks),
+                    )
                     recovery_complete = True
                     consecutive_incomplete_recoveries = 0
-                    await self._receive_loop(websocket, shutdown)
+                    await self._wait_for_session_end(session, shutdown)
                     return
-                except (
-                    ConnectionClosedOK,
-                    ConnectionClosedError,
-                    OSError,
-                    TimeoutError,
-                    ReconnectRequired,
-                ):
-                    self.health.connection_count = 0
-                    self.health.data_ready = False
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    if shutdown.is_set():
+                        return
+                    if session is not None and session.expected_acks.issubset(
+                        self.health.acknowledgements
+                    ):
+                        # ACK convergence is enough to replenish the incomplete-
+                        # recovery budget, but never enough to enter READY after
+                        # an immediate close. Attempt pacing prevents churn.
+                        recovery_complete = True
+                        consecutive_incomplete_recoveries = 0
+                    connect_failure = websocket is None
+                    if connect_failure:
+                        classified = process_exception(exc)
+                        if classified is not None:
+                            self.health.ws_phase = "FAILED"
+                            if classified is exc:
+                                raise
+                            raise classified from exc
+                    elif not isinstance(
+                        exc,
+                        ConnectionClosedOK
+                        | ConnectionClosedError
+                        | OSError
+                        | TimeoutError
+                        | DataRouteError
+                        | ReconnectRequired,
+                    ):
+                        self.health.ws_phase = "FAILED"
+                        raise
+                    failure = exc
+                finally:
+                    await self._teardown_connection(
+                        websocket=websocket,
+                        session=session,
+                        shutdown=shutdown,
+                        failure=failure,
+                    )
+                if failure is not None:
                     if reconnecting and not recovery_complete:
                         consecutive_incomplete_recoveries += 1
                         if consecutive_incomplete_recoveries >= _MAX_RECONNECTS:
-                            return
+                            self.health.ws_phase = "FAILED"
+                            raise ReconnectRequired("reconnect attempts exhausted") from failure
                     self.health.reconnects += 1
                     if self.on_reconnect is not None:
                         try:
@@ -1157,12 +1283,14 @@ class MultiAssetPublicRuntime:
                         except Exception:
                             # Observability must not create a second runtime authority.
                             pass
-                    await self.sleep(min(2**consecutive_incomplete_recoveries, 4))
                     reconnecting = True
-                finally:
-                    if websocket is not None:
-                        await self._close_socket(websocket)
         finally:
+            self._set_data_ready(False)
+            self.health.connection_count = 0
+            if shutdown.is_set():
+                self.health.ws_phase = "SHUTDOWN"
+            elif self.health.ws_phase != "FAILED":
+                self.health.ws_phase = "STOPPED"
             ticker.cancel()
             await asyncio.gather(ticker, return_exceptions=True)
 
@@ -1208,45 +1336,230 @@ class MultiAssetPublicRuntime:
             if hasattr(result, "__await__"):
                 await result
 
-    async def _subscribe(self, websocket: Any) -> None:
-        requests = self.subscriptions()
-        self._expected_acks = {request["subscription"]["coin"] for request in requests}  # type: ignore[index]
-        self.health.acknowledgements.clear()
-        for request in requests:
-            await websocket.send(json.dumps(request, separators=(",", ":")))
-        self.health.subscriptions = len(requests)
+    def _bound_subscriptions(
+        self,
+    ) -> tuple[tuple[dict[str, object], ...], tuple[str, str, tuple[str, ...]]]:
+        registry = self.acquisition_registry()
+        markets = tuple(
+            market
+            for market in registry.markets
+            if market.lifecycle not in {MarketLifecycle.DISABLED, MarketLifecycle.OUTCOMES_COMPLETE}
+        )
+        requests: tuple[dict[str, object], ...] = tuple(
+            {
+                "method": "subscribe",
+                "subscription": {
+                    "type": "candle",
+                    "coin": market.identity.coin,
+                    "interval": "5m",
+                },
+            }
+            for market in markets
+        )
+        return requests, (
+            registry.version,
+            registry.content_hash,
+            tuple(market.identity.coin for market in markets),
+        )
 
-    async def _await_acknowledgements(self, websocket: Any, shutdown: asyncio.Event) -> None:
+    def _current_subscription_identity(self) -> tuple[str, str, tuple[str, ...]]:
+        _, identity = self._bound_subscriptions()
+        return identity
+
+    async def _subscribe(
+        self, session: _ConnectionSession, requests: tuple[dict[str, object], ...]
+    ) -> None:
+        self.health.acknowledgements.clear()
+        self.health.ws_phase = "SUBSCRIBING"
+        for request in requests:
+            if session.fatal.is_set():
+                assert session.fatal_error is not None
+                raise session.fatal_error
+            await session.websocket.send(json.dumps(request, separators=(",", ":")))
+        self.health.subscriptions = len(requests)
+        self.health.ws_phase = "ACK_WAIT"
+
+    async def _await_acknowledgements(
+        self, session: _ConnectionSession, shutdown: asyncio.Event
+    ) -> bool:
         deadline = self.monotonic() + self.acknowledgement_timeout_seconds
-        while not self._expected_acks.issubset(self.health.acknowledgements):
+        while not session.expected_acks.issubset(self.health.acknowledgements):
             if shutdown.is_set():
-                return
+                return False
+            if session.fatal.is_set():
+                assert session.fatal_error is not None
+                raise session.fatal_error
             remaining = deadline - self.monotonic()
             if remaining <= 0:
                 raise ReconnectRequired("subscription acknowledgement timeout")
+            ack_changed = asyncio.create_task(session.acknowledgement_changed.wait())
+            fatal = asyncio.create_task(session.fatal.wait())
+            stopped = asyncio.create_task(shutdown.wait())
+            waits = (ack_changed, fatal, stopped)
+            done: set[asyncio.Task[bool]] = set()
             try:
-                raw = await asyncio.wait_for(websocket.recv(), timeout=remaining)
-            except TimeoutError as exc:
-                raise ReconnectRequired("subscription acknowledgement timeout") from exc
-            await self.handle_message(raw)
+                done, _ = await asyncio.wait(
+                    waits, timeout=remaining, return_when=asyncio.FIRST_COMPLETED
+                )
+            finally:
+                for task in waits:
+                    if task not in done:
+                        task.cancel()
+                await asyncio.gather(*waits, return_exceptions=True)
+            if not done:
+                raise ReconnectRequired("subscription acknowledgement timeout")
+            session.acknowledgement_changed.clear()
+        if shutdown.is_set():
+            return False
+        if session.fatal.is_set():
+            assert session.fatal_error is not None
+            raise session.fatal_error
+        return True
 
-    async def _receive_loop(self, websocket: Any, shutdown: asyncio.Event) -> None:
-        recv = asyncio.create_task(websocket.recv())
+    async def _receive_session(self, session: _ConnectionSession) -> None:
+        """The sole recv owner from connection creation through teardown."""
+        try:
+            while not session.stop.is_set():
+                raw = await session.websocket.recv()
+                await self.handle_message(raw, session=session)
+                # Real transports suspend in recv(); this yield also preserves
+                # fair teardown under deterministic immediately-returning fakes.
+                await asyncio.sleep(0)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._fail_session(session, exc)
+
+    async def _heartbeat_session(
+        self, session: _ConnectionSession, shutdown: asyncio.Event
+    ) -> None:
+        """One provider application-heartbeat producer for this connection."""
+        try:
+            while not session.stop.is_set() and not shutdown.is_set():
+                delay = asyncio.create_task(asyncio.sleep(self.heartbeat_interval_seconds))
+                stopped = asyncio.create_task(session.stop.wait())
+                shutting_down = asyncio.create_task(shutdown.wait())
+                waits = (delay, stopped, shutting_down)
+                done: set[asyncio.Task[object]] = set()
+                try:
+                    done, _ = await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
+                finally:
+                    for task in waits:
+                        if task not in done:
+                            task.cancel()
+                    await asyncio.gather(*waits, return_exceptions=True)
+                if stopped in done or shutting_down in done:
+                    return
+                if self._current_subscription_identity() != session.subscription_identity:
+                    raise ReconnectRequired("Registry subscription identity changed")
+                await session.websocket.send('{"method":"ping"}')
+                self.health.heartbeat_sent += 1
+                self._emit_session_event(
+                    "HEARTBEAT_SENT", heartbeat_sent=self.health.heartbeat_sent
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.health.heartbeat_failures += 1
+            self._emit_session_event("HEARTBEAT_FAILURE", error_type=type(exc).__name__)
+            self._fail_session(
+                session,
+                exc
+                if isinstance(exc, ReconnectRequired)
+                else ReconnectRequired("application heartbeat failed"),
+            )
+
+    async def _wait_for_session_end(
+        self, session: _ConnectionSession, shutdown: asyncio.Event
+    ) -> None:
+        fatal = asyncio.create_task(session.fatal.wait())
         stopped = asyncio.create_task(shutdown.wait())
         try:
-            while True:
-                done, _ = await asyncio.wait({recv, stopped}, return_when=asyncio.FIRST_COMPLETED)
-                if stopped in done:
-                    return
-                raw = recv.result()
-                await self.handle_message(raw)
-                recv = asyncio.create_task(websocket.recv())
+            done, _ = await asyncio.wait((fatal, stopped), return_when=asyncio.FIRST_COMPLETED)
+            if fatal in done:
+                assert session.fatal_error is not None
+                raise session.fatal_error
         finally:
-            for task in (recv, stopped):
+            for task in (fatal, stopped):
                 task.cancel()
-            await asyncio.gather(recv, stopped, return_exceptions=True)
+            await asyncio.gather(fatal, stopped, return_exceptions=True)
 
-    def _acknowledge(self, message: dict[str, object]) -> None:
+    def _fail_session(self, session: _ConnectionSession, exc: Exception) -> None:
+        if session.fatal.is_set():
+            return
+        session.live = False
+        session.fatal_error = exc
+        self._set_data_ready(False)
+        session.fatal.set()
+        session.stop.set()
+
+    async def _teardown_connection(
+        self,
+        *,
+        websocket: Any | None,
+        session: _ConnectionSession | None,
+        shutdown: asyncio.Event,
+        failure: Exception | None,
+    ) -> None:
+        """Converge every connection exit through one no-orphan cleanup path."""
+        self.health.ws_phase = "TEARDOWN"
+        self._set_data_ready(False)
+        self.health.connection_count = 0
+        self.health.acknowledgements.clear()
+        self.health.expected_acknowledgements = 0
+        self._expected_acks.clear()
+        if session is not None:
+            session.live = False
+            session.stop.set()
+        if websocket is not None:
+            try:
+                await self._close_socket(websocket)
+            except Exception as close_error:
+                if failure is None:
+                    failure = close_error
+            self.health.disconnects += 1
+        tasks = () if session is None else (session.receiver_task, session.heartbeat_task)
+        live_tasks = tuple(task for task in tasks if task is not None)
+        for task in live_tasks:
+            if not task.done():
+                task.cancel()
+        if live_tasks:
+            await asyncio.gather(*live_tasks, return_exceptions=True)
+        self._active_session = None
+        current_error = type(failure).__name__ if failure is not None else None
+        if failure is not None:
+            self.health.last_disconnect_error = current_error
+            received_close = getattr(failure, "rcvd", None)
+            code = getattr(received_close, "code", None)
+            self.health.last_close_code = code if isinstance(code, int) else None
+        self.health.ws_phase = "SHUTDOWN" if shutdown.is_set() else "DISCONNECTED"
+        if websocket is not None:
+            self._emit_session_event(
+                "DISCONNECT",
+                disconnect_count=self.health.disconnects,
+                error_type=current_error,
+                close_code=self.health.last_close_code,
+            )
+
+    def _set_data_ready(self, ready: bool) -> None:
+        if self.health.data_ready == ready:
+            return
+        self.health.data_ready = ready
+        self.health.ready_transitions += 1
+
+    def _emit_session_event(self, event: str, **fields: object) -> None:
+        callback = self.on_session_event
+        if callback is None:
+            return
+        try:
+            callback(event, fields)
+        except Exception:
+            # Observability remains non-authoritative and cannot fail a session.
+            pass
+
+    def _acknowledge(
+        self, message: dict[str, object], session: _ConnectionSession | None = None
+    ) -> None:
         data = message.get("data")
         if not isinstance(data, dict) or data.get("method") != "subscribe":
             raise ReconnectRequired("subscription acknowledgement is invalid")
@@ -1260,30 +1573,48 @@ class MultiAssetPublicRuntime:
         ):
             raise ReconnectRequired("subscription acknowledgement is invalid")
         coin = subscription["coin"]
-        if coin not in self._expected_acks:
+        expected = self._expected_acks if session is None else session.expected_acks
+        if coin not in expected:
             raise ReconnectRequired("subscription acknowledgement is unknown")
+        before = len(self.health.acknowledgements)
         self.health.acknowledgements.add(coin)
+        if session is not None:
+            session.acknowledgement_changed.set()
+        if len(self.health.acknowledgements) != before:
+            self._emit_session_event(
+                "ACK_PROGRESS",
+                acknowledged=len(self.health.acknowledgements),
+                expected=len(expected),
+            )
 
-    async def handle_message(self, raw: str) -> None:
+    async def handle_message(self, raw: str, *, session: _ConnectionSession | None = None) -> None:
         """Observations and candidates only: no staging, no wake, no Registry."""
+        if raw == "Websocket connection established.":
+            self.health.greeting_count += 1
+            self._emit_session_event("GREETING", greeting_count=self.health.greeting_count)
+            return
         try:
             message = json.loads(raw)
         except (TypeError, json.JSONDecodeError) as exc:
             raise DataRouteError("websocket message is invalid") from exc
         if not isinstance(message, dict):
             raise DataRouteError("websocket message is invalid")
+        if message == {"channel": "pong"}:
+            self.health.heartbeat_pongs += 1
+            self._emit_session_event("HEARTBEAT_PONG", heartbeat_pongs=self.health.heartbeat_pongs)
+            return
         if message.get("channel") == "subscriptionResponse":
-            self._acknowledge(message)
+            self._acknowledge(message, session=session)
             return
         if message.get("channel") != "candle" or not isinstance(message.get("data"), dict):
-            return
+            raise ReconnectRequired("websocket provider frame is unknown")
         payload = message["data"]
         market = next(
             (item for item in self.selected_markets() if item.identity.coin == payload.get("s")),
             None,
         )
         if market is None:
-            return
+            raise ReconnectRequired("websocket candle identity is unknown")
         try:
             self.authority.offer_ws_candidate(
                 market=market, payload=payload, received_at=self.clock()

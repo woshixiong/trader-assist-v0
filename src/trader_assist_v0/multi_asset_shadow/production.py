@@ -175,6 +175,7 @@ class ThreeSetupProductionApplication:
         self.logger = logger or logging.getLogger("trader_assist_v0.three_setup")
         self.bootstrap.runtime.on_finalized_5m = self._on_finalized_5m
         self.bootstrap.runtime.on_reconnect = self._on_reconnect
+        self.bootstrap.runtime.on_session_event = self._on_session_event
 
     async def run(self, shutdown: asyncio.Event) -> None:
         active = self.bootstrap.registry.active() or self.bootstrap.registry.pending_version()
@@ -199,17 +200,50 @@ class ThreeSetupProductionApplication:
             done, _ = await asyncio.wait(
                 (runtime_task, dispatcher_task), return_when=asyncio.FIRST_COMPLETED
             )
-            if dispatcher_task in done:
-                dispatcher_exception = dispatcher_task.exception()
-                if dispatcher_exception is not None:
-                    shutdown.set()
-                    if not runtime_task.done():
-                        runtime_task.cancel()
-                    await asyncio.gather(runtime_task, return_exceptions=True)
-                    raise dispatcher_exception
-            await runtime_task
-            shutdown.set()
-            await dispatcher_task
+            if not shutdown.is_set():
+                failed_children = tuple(
+                    task
+                    for task in (runtime_task, dispatcher_task)
+                    if task in done and not task.cancelled() and task.exception() is not None
+                )
+                child = (
+                    failed_children[0]
+                    if failed_children
+                    else (runtime_task if runtime_task in done else dispatcher_task)
+                )
+                component = "runtime" if child is runtime_task else "dispatcher"
+                if child.cancelled():
+                    error: BaseException = ThreeSetupProductionError(
+                        f"PRODUCTION_CHILD_EXIT_UNEXPECTED: {component} was cancelled"
+                    )
+                else:
+                    error = child.exception() or ThreeSetupProductionError(
+                        f"PRODUCTION_CHILD_EXIT_UNEXPECTED: {component} returned normally"
+                    )
+                _journal(
+                    self.logger,
+                    "PRODUCTION_CHILD_EXIT_UNEXPECTED",
+                    component=component,
+                    error_type=type(error).__name__,
+                )
+                shutdown.set()
+                sibling = dispatcher_task if child is runtime_task else runtime_task
+                if not sibling.done():
+                    sibling.cancel()
+                await asyncio.gather(sibling, return_exceptions=True)
+                raise error
+            results = await asyncio.gather(runtime_task, dispatcher_task, return_exceptions=True)
+            for component, result in zip(("runtime", "dispatcher"), results, strict=True):
+                if isinstance(result, BaseException) and not isinstance(
+                    result, asyncio.CancelledError
+                ):
+                    _journal(
+                        self.logger,
+                        "PRODUCTION_CHILD_EXIT_UNEXPECTED",
+                        component=component,
+                        error_type=type(result).__name__,
+                    )
+                    raise result
         finally:
             shutdown.set()
             for task in (runtime_task, dispatcher_task):
@@ -267,6 +301,9 @@ class ThreeSetupProductionApplication:
     def _on_reconnect(self, count: int) -> None:
         _journal(self.logger, "RECONNECT", reconnect_count=count)
 
+    def _on_session_event(self, event: str, fields: dict[str, object]) -> None:
+        _journal(self.logger, f"WS_{event}", **fields)
+
     async def _dispatch_loop(self, shutdown: asyncio.Event) -> None:
         try:
             while not shutdown.is_set():
@@ -290,7 +327,6 @@ class ThreeSetupProductionApplication:
             raise
         except Exception as exc:
             _journal(self.logger, "NOTIFICATION_FAILURE", error_type=type(exc).__name__)
-            shutdown.set()
             raise
 
     async def _close_dispatcher(self) -> None:

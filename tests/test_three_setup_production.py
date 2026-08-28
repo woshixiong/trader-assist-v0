@@ -9,6 +9,7 @@ import sqlite3
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -559,3 +560,110 @@ def test_dispatcher_authority_failure_is_fatal_and_closes_all_stores(
         bootstrap.evidence._connection.execute("SELECT 1")
     with pytest.raises(sqlite3.ProgrammingError):
         bootstrap.data_authority.store.connection.execute("SELECT 1")
+
+
+class SupervisorCloser:
+    def __init__(self) -> None:
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class SupervisorRuntime:
+    def __init__(self, outcome: str) -> None:
+        self.outcome = outcome
+        self.on_finalized_5m = None
+        self.on_reconnect = None
+        self.on_session_event = None
+
+    async def run(self, shutdown: asyncio.Event) -> None:
+        if self.outcome == "normal":
+            return
+        if self.outcome == "exception":
+            raise RuntimeError("runtime child failed")
+        await shutdown.wait()
+
+
+class SupervisorDispatcher(SupervisorCloser):
+    def dispatch_due(self, *, now: datetime) -> tuple[object, ...]:
+        del now
+        return ()
+
+
+def supervisor_application(runtime_outcome: str = "wait") -> tuple[object, object, object]:
+    evidence = SupervisorCloser()
+    closed_store = SupervisorCloser()
+    bootstrap_closed = SupervisorCloser()
+    runtime = SupervisorRuntime(runtime_outcome)
+    active = SimpleNamespace(version="v1", content_hash="hash")
+    bootstrap = SimpleNamespace(
+        runtime=runtime,
+        registry=SimpleNamespace(active=lambda: active, pending_version=lambda: None),
+        coordinator=SimpleNamespace(_release_sha=SHA),
+        evidence=evidence,
+        data_authority=SimpleNamespace(store=closed_store),
+        close=bootstrap_closed.close,
+    )
+    dispatcher = SupervisorDispatcher()
+    application = production.ThreeSetupProductionApplication(
+        bootstrap=bootstrap,  # type: ignore[arg-type]
+        dispatcher=dispatcher,  # type: ignore[arg-type]
+        clock=Clock().now,
+        notification_poll_seconds=1,
+    )
+    return application, dispatcher, closed_store
+
+
+@pytest.mark.parametrize("outcome", ["normal", "exception"])
+def test_runtime_child_exit_before_operator_shutdown_is_fatal(
+    outcome: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    application, dispatcher, store = supervisor_application(outcome)
+    expected = (
+        "PRODUCTION_CHILD_EXIT_UNEXPECTED" if outcome == "normal" else "runtime child failed"
+    )
+    with caplog.at_level(logging.INFO, logger="trader_assist_v0.three_setup"):
+        with pytest.raises(Exception, match=expected):
+            asyncio.run(application.run(asyncio.Event()))  # type: ignore[attr-defined]
+    child_event = next(
+        json.loads(record.message)
+        for record in caplog.records
+        if json.loads(record.message)["event"] == "PRODUCTION_CHILD_EXIT_UNEXPECTED"
+    )
+    assert child_event["component"] == "runtime"
+    assert dispatcher.closed and store.closed  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize("outcome", ["normal", "exception"])
+def test_dispatcher_child_exit_before_operator_shutdown_is_fatal(
+    outcome: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    application, dispatcher, store = supervisor_application()
+
+    async def dispatcher_exit(_: asyncio.Event) -> None:
+        if outcome == "exception":
+            raise RuntimeError("dispatcher child failed")
+
+    application._dispatch_loop = dispatcher_exit  # type: ignore[attr-defined,method-assign]
+    expected = (
+        "PRODUCTION_CHILD_EXIT_UNEXPECTED" if outcome == "normal" else "dispatcher child failed"
+    )
+    with caplog.at_level(logging.INFO, logger="trader_assist_v0.three_setup"):
+        with pytest.raises(Exception, match=expected):
+            asyncio.run(application.run(asyncio.Event()))  # type: ignore[attr-defined]
+    child_event = next(
+        json.loads(record.message)
+        for record in caplog.records
+        if json.loads(record.message)["event"] == "PRODUCTION_CHILD_EXIT_UNEXPECTED"
+    )
+    assert child_event["component"] == "dispatcher"
+    assert dispatcher.closed and store.closed  # type: ignore[attr-defined]
+
+
+def test_explicit_operator_shutdown_is_clean() -> None:
+    application, dispatcher, store = supervisor_application()
+    shutdown = asyncio.Event()
+    shutdown.set()
+    asyncio.run(application.run(shutdown))  # type: ignore[attr-defined]
+    assert dispatcher.closed and store.closed  # type: ignore[attr-defined]
