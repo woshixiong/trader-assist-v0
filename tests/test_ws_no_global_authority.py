@@ -194,6 +194,38 @@ async def test_acknowledgement_path_performs_no_lifecycle_staging(tmp_path: Path
 
 
 @async_test
+async def test_all_session_control_state_is_readiness_only(tmp_path: Path) -> None:
+    runtime, authority, item, client, wakes = setup(tmp_path)
+    authority.admit_rest_history(
+        market=item, snapshot=[candle("BTC", 0)], received_at=datetime(2026, 8, 12, tzinfo=UTC)
+    )
+    active_before = runtime.registry.active()
+    assert active_before is not None
+    pointer_before = (tmp_path / "registry" / "current.json").read_bytes()
+    bars_before = authority.store.bars(item.identity.market_id)
+    runtime._expected_acks = {"BTC"}
+    await runtime.handle_message("Websocket connection established.")
+    await runtime.handle_message(json.dumps({"channel": "pong"}))
+    await runtime.handle_message(ack())
+    runtime.health.ws_phase = "READY"
+    runtime._emit_session_event("READY", acknowledged=1, expected=1)
+    runtime.health.reconnects += 1
+
+    active_after = runtime.registry.active()
+    assert active_after is not None
+    assert (active_after.version, active_after.content_hash) == (
+        active_before.version,
+        active_before.content_hash,
+    )
+    assert active_after.markets[0].lifecycle is MarketLifecycle.WARMING
+    assert (tmp_path / "registry" / "current.json").read_bytes() == pointer_before
+    assert authority.store.bars(item.identity.market_id) == bars_before
+    assert registry_pending_is_none(tmp_path)
+    assert client.calls == []
+    assert wakes == []
+
+
+@async_test
 async def test_reconnect_recovery_never_wakes_application(tmp_path: Path) -> None:
     runtime, authority, item, _, wakes = setup(tmp_path)
     authority.admit_rest_history(
@@ -215,6 +247,28 @@ def test_runtime_exposes_no_ws_finality_authority_or_flag() -> None:
     }
     assert "_finality" not in runtime_attributes
     assert "_confirm_generation" not in runtime_attributes
+    control_sources = "\n".join(
+        inspect.getsource(getattr(MultiAssetPublicRuntime, name))
+        for name in (
+            "_heartbeat_session",
+            "_acknowledge",
+            "_fail_session",
+            "_teardown_connection",
+            "_emit_session_event",
+        )
+    )
+    for forbidden in (
+        "registry.stage",
+        "registry.request_apply",
+        "process_cohort_boundary",
+        "on_finalized_5m",
+        "offer_ws_candidate",
+        "formal",
+        "outcome",
+        "scanner",
+        "strategy",
+    ):
+        assert forbidden not in control_sources.lower()
 
 
 def registry_pending_is_none(tmp_path: Path) -> bool:

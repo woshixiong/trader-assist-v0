@@ -11,6 +11,7 @@ ACTIVE market routes to context recovery without a whole-cohort re-burst.
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
@@ -83,7 +84,10 @@ class BudgetClient:
 
 
 def compose(
-    tmp_path: Path, *, items: tuple[object, ...] | None = None
+    tmp_path: Path,
+    *,
+    items: tuple[object, ...] | None = None,
+    mark_ready: bool = True,
 ) -> tuple[
     MultiAssetPublicRuntime, MultiAssetDataAuthority, BudgetClient, list, tuple[object, ...]
 ]:
@@ -112,7 +116,8 @@ def compose(
         sleep=lambda _: asyncio.sleep(0),
         on_finalized_5m=on_finalized,
     )
-    runtime.health.data_ready = True
+    if mark_ready:
+        runtime.health.data_ready = True
     return runtime, authority, client, wakes, items
 
 
@@ -128,6 +133,79 @@ def seed_history(
             ],
             received_at=datetime.fromtimestamp((through + FIVE_MINUTES_MS + 4_000) / 1000, UTC),
         )
+
+
+class SessionCohortSocket:
+    def __init__(self) -> None:
+        self.frames: asyncio.Queue[str] = asyncio.Queue()
+        self.sent: list[str] = []
+        self.closed = False
+
+    async def send(self, raw: str) -> None:
+        self.sent.append(raw)
+
+    async def recv(self) -> str:
+        return await self.frames.get()
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+@async_test
+async def test_exact_first_launch_20_uses_real_session_seam_for_ack_and_ready(
+    tmp_path: Path,
+) -> None:
+    runtime, authority, _, wakes, items = compose(tmp_path, mark_ready=False)
+    seed_history(authority, items, T)
+    shutdown = asyncio.Event()
+    socket = SessionCohortSocket()
+
+    async def factory(_: str) -> SessionCohortSocket:
+        return socket
+
+    async def ticker(stop: asyncio.Event) -> None:
+        await stop.wait()
+
+    runtime.websocket_factory = factory
+    runtime._barrier_ticker = ticker  # type: ignore[method-assign]
+    task = asyncio.create_task(runtime.run(shutdown))
+    async with asyncio.timeout(2):
+        while len(socket.sent) != 20:
+            await asyncio.sleep(0.001)
+        socket.frames.put_nowait("Websocket connection established.")
+        for item in items:
+            socket.frames.put_nowait(
+                json.dumps(
+                    {
+                        "channel": "subscriptionResponse",
+                        "data": {
+                            "method": "subscribe",
+                            "subscription": {
+                                "type": "candle",
+                                "coin": item.identity.coin,  # type: ignore[attr-defined]
+                                "interval": "5m",
+                            },
+                        },
+                    }
+                )
+            )
+        while not runtime.health.data_ready:
+            await asyncio.sleep(0.001)
+    assert runtime.health.subscriptions == 20
+    assert runtime.health.acknowledgements == {
+        item.identity.coin for item in items  # type: ignore[attr-defined]
+    }
+    assert {item.display for item in items} >= {"SKHX", "WTIOIL"}  # type: ignore[attr-defined]
+    subscribed_coins = {
+        json.loads(raw)["subscription"]["coin"] for raw in socket.sent
+    }
+    assert {"xyz:SKHX", "xyz:CL"} <= subscribed_coins
+    assert wakes == []
+    shutdown.set()
+    await task
+    assert socket.closed
+    assert runtime.health.data_ready is False
+    assert runtime.health.acknowledgements == set()
 
 
 @async_test

@@ -31,6 +31,7 @@ from trader_assist_v0.multi_asset_shadow.runtime import (
     MultiAssetPublicRuntime,
     ReconnectRequired,
     RuntimeReadinessSnapshot,
+    _ConnectionSession,
 )
 
 
@@ -243,7 +244,9 @@ async def test_startup_warmup_ack_policy_and_shutdown_are_runtime_owned(tmp_path
     await runtime.run(shutdown)
     assert client.calls  # run(), not an external caller, warmed history.
     assert authority.store.last_open(item.identity.market_id) == 300_000
-    assert runtime.health.acknowledgements == {"BTC"}
+    assert runtime.health.acknowledgements == set()
+    assert runtime.health.data_ready is False
+    assert runtime.health.connection_count == 0
     assert socket.closed
     # Startup warmup owns no application wake: only the cohort barrier may
     # wake global LIVE_ACTIONABLE authority.
@@ -282,8 +285,14 @@ async def test_ack_unknown_duplicate_timeout_and_reconnect_close_paths(tmp_path:
 
     runtime.acknowledgement_timeout_seconds = 0.001
     runtime.health.acknowledgements.clear()
+    never = Never([])
+    session = _ConnectionSession(
+        websocket=never,
+        expected_acks=frozenset({"BTC"}),
+        subscription_identity=("seed", "hash", ("BTC",)),
+    )
     with pytest.raises(ReconnectRequired, match="timeout"):
-        await runtime._await_acknowledgements(Never([]), asyncio.Event())
+        await runtime._await_acknowledgements(session, asyncio.Event())
 
     clock = Clock(seconds=600)
     recovery, _, _, _, _ = setup(
@@ -328,7 +337,15 @@ async def test_repeated_completed_reconnects_replenish_budget(tmp_path: Path) ->
     assert len(created) == 6
     assert wakes == []
     assert runtime.health.reconnects == 5
-    assert runtime.health.data_ready is True
+    assert runtime.health.data_ready is False
+    assert runtime.health.acknowledgements == set()
+    assert runtime.health.connection_count == 0
+    attempt_waits = [
+        value
+        for value in clock.sleep_seconds
+        if value == runtime.connection_attempt_spacing_seconds
+    ]
+    assert len(attempt_waits) >= 5
     assert all(socket.closed for socket in created)
 
 
@@ -349,18 +366,23 @@ async def test_consecutive_incomplete_recoveries_exhaust_budget_fail_closed(
         return socket
 
     runtime.websocket_factory = factory
-    await runtime.run(asyncio.Event())
+    with pytest.raises(ReconnectRequired, match="reconnect attempts exhausted"):
+        await runtime.run(asyncio.Event())
 
     # The initial startup failure is free. Three later incomplete recoveries
     # consume the bounded budget without any READY/application-wake reset.  The
-    # reconnect backoff sequence is isolated from the barrier ticker's pacing
-    # sleeps (5s each) observed on the same injected clock.
+    # Connection attempts are spaced deterministically even when every ACK is
+    # provider-invalid and the socket fails immediately.
     assert len(created) == 4
     assert runtime.health.reconnects == 3
     assert runtime.health.connection_count == 0
     assert runtime.health.data_ready is False
-    backoffs = [value for value in clock.sleep_seconds if value in (1.0, 2.0, 4.0)]
-    assert backoffs == [1.0, 2.0, 4.0]
+    pacing = [
+        value
+        for value in clock.sleep_seconds
+        if value == runtime.connection_attempt_spacing_seconds
+    ]
+    assert len(pacing) >= 3
     assert all(socket.closed for socket in created)
 
 
@@ -656,7 +678,11 @@ async def test_all_market_barrier_holds_websocket_until_full_cohort(
         )
         return socket
 
+    async def ticker(stop: asyncio.Event) -> None:
+        await stop.wait()
+
     runtime.websocket_factory = factory
+    runtime._barrier_ticker = ticker  # type: ignore[method-assign]
     await runtime.run(shutdown)
 
     assert len(factory_states) == 1
@@ -665,7 +691,8 @@ async def test_all_market_barrier_holds_websocket_until_full_cohort(
     assert failed == ()
     assert runtime.health.subscriptions == len(coins)
     assert len(socket.sent) == len(coins)
-    assert runtime.health.acknowledgements == set(coins)
+    assert runtime.health.acknowledgements == set()
+    assert runtime.health.data_ready is False
     assert socket.closed is True
     active = runtime.registry.active()
     assert active is not None and active.version == "seed"
@@ -908,7 +935,8 @@ async def test_run_regression_startup_warmup_and_shutdown_paths_stay_green(
     runtime.websocket_factory = factory
     runtime.on_finalized_5m = lambda bar, mode: callbacks.append((bar.open_time_ms, mode))
     await runtime.run(shutdown)
-    assert runtime.health.acknowledgements == {"BTC"}
+    assert runtime.health.acknowledgements == set()
+    assert runtime.health.data_ready is False
     assert socket.closed
     assert callbacks == []
 
