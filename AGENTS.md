@@ -15,7 +15,7 @@ Before material research, routing, architecture or Writer dispatch, Engineering 
 
 Material route decisions use independent analysis -> external/mature evidence -> synthesis. No material Writer dispatch without `PROJECT_ENGINEERING_RULESET_PREFLIGHT=PASS` and `ENGINEERING_PREFLIGHT_GATE=PASS`.
 
-Before presenting any nontrivial human-executed Terminal/shell/launcher command, apply the generated-command reliability rule even when the underlying task is otherwise mechanical. The user must not become the repeated validator of avoidable platform, shell, transport, or evidence-egress mistakes.
+Before presenting any nontrivial human-executed Terminal/shell/launcher command, apply the generated-command reliability rule even when the underlying task is otherwise mechanical. The user must not become the repeated validator of avoidable platform, shell, transport, validation-environment, or evidence-egress mistakes. When local macOS is an unsuitable validation environment, route the proof to the narrowest safe validated Linux surface defined by that rule rather than repeatedly patching around the local mismatch.
 
 ## 2. Task-level execution routing
 
