@@ -119,7 +119,7 @@ class IncrementalStrategyState:
         self.bars_5m.append(bar)
         self.bars_5m = self.bars_5m[-21:]
 
-        if (bar.open_time_ms // 300_000 + 1) % 3 == 0:
+        if self.total_5m >= 3 and (bar.open_time_ms // 300_000 + 1) % 3 == 0:
             derived_15m = aggregate_closed_5m_causally(self.bars_5m[-3:], minutes=15)
             if len(derived_15m) != 1:
                 raise ValueError("15m continuation aggregation is incomplete")
@@ -131,7 +131,7 @@ class IncrementalStrategyState:
             self.bars_15m = self.bars_15m[-98:]
             self.atr_15m_values = self.atr_15m_values[-98:]
 
-        if (bar.open_time_ms // 300_000 + 1) % 12 == 0:
+        if self.total_5m >= 12 and (bar.open_time_ms // 300_000 + 1) % 12 == 0:
             derived_1h = aggregate_closed_5m_causally(self.bars_5m[-12:], minutes=60)
             if len(derived_1h) != 1:
                 raise ValueError("1h continuation aggregation is incomplete")
