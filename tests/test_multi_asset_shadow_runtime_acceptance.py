@@ -25,6 +25,7 @@ from trader_assist_v0.multi_asset_shadow.models import (
 )
 from trader_assist_v0.multi_asset_shadow.registry import MarketRegistryManager
 from trader_assist_v0.multi_asset_shadow.runtime import (
+    STARTUP_REST_COOLDOWN_SECONDS,
     WARMUP_ADMISSION_CHUNK_BARS,
     WARMUP_CATCHUP_ROUNDS_MAX,
     BoundaryMode,
@@ -470,6 +471,34 @@ class WindowClient:
         return [candle(coin, open_ms) for open_ms in range(max(0, start_ms), end_ms, 300_000)]
 
 
+class ScheduledLatestOmissionClient(WindowClient):
+    """Omit scheduled latest targets while serving every other requested bar."""
+
+    def __init__(
+        self,
+        coins: tuple[str, ...],
+        clock: Clock,
+        *,
+        omissions: dict[tuple[str, int], int],
+    ) -> None:
+        super().__init__(coins, clock)
+        self.omissions = dict(omissions)
+
+    def closed_candles(
+        self, *, coin: str, interval: str, start_ms: int, end_ms: int
+    ) -> object:
+        result = super().closed_candles(
+            coin=coin, interval=interval, start_ms=start_ms, end_ms=end_ms
+        )
+        assert isinstance(result, list)
+        key = (coin, end_ms)
+        remaining = self.omissions.get(key, 0)
+        if remaining > 0:
+            self.omissions[key] = remaining - 1
+            return result[:-1]
+        return result
+
+
 class RecordingAuthority(MultiAssetDataAuthority):
     """Spy over the unchanged public Data seam admitting in bounded chunks."""
 
@@ -556,6 +585,247 @@ def cohort_setup(
         sleep=clock.sleep,
     )
     return runtime, authority, markets, clock, selected_client
+
+
+@async_test
+async def test_transient_latest_target_omission_recovers_once_for_target20(
+    tmp_path: Path,
+) -> None:
+    """One lagging Target-20 market retries after cooldown before any WS."""
+    coins = tuple(f"C{index}" for index in range(20))
+    clock = Clock(seconds=600)
+    client = ScheduledLatestOmissionClient(
+        coins, clock, omissions={(coins[-1], 600_000): 1}
+    )
+    runtime, authority, markets, _, _ = cohort_setup(
+        tmp_path, coins, clock, client=client
+    )
+    shutdown = asyncio.Event()
+    socket = CohortSocket(coins, shutdown)
+    ws_states: list[tuple[int | None, ...]] = []
+
+    async def factory(_: str) -> CohortSocket:
+        ws_states.append(
+            tuple(authority.store.last_open(item.identity.market_id) for item in markets)
+        )
+        return socket
+
+    async def ticker(stop: asyncio.Event) -> None:
+        await stop.wait()
+
+    runtime.websocket_factory = factory
+    runtime._barrier_ticker = ticker  # type: ignore[method-assign]
+    callbacks: list[tuple[int, BoundaryMode]] = []
+    runtime.on_finalized_5m = lambda bar, mode: callbacks.append((bar.open_time_ms, mode))
+
+    await runtime.run(shutdown)
+
+    wide_start = 600_000 - 2_304 * 300_000
+    lag_calls = [call for call in client.calls if call[0] == coins[-1]]
+    assert lag_calls == [
+        (coins[-1], wide_start, 600_000),
+        (coins[-1], 300_000, 600_000),
+    ]
+    for coin in coins[:-1]:
+        assert [call for call in client.calls if call[0] == coin] == [
+            (coin, wide_start, 600_000)
+        ]
+    assert clock.sleep_seconds.count(STARTUP_REST_COOLDOWN_SECONDS) == 1
+    assert ws_states == [(300_000,) * len(coins)]
+    assert authority.store.last_open(markets[-1].identity.market_id) == 300_000
+    assert all(
+        authority.store.last_open(item.identity.market_id) == 300_000
+        for item in markets
+    )
+    assert runtime.health.failed_markets == set()
+    assert runtime.health.nonrecoverable_markets == set()
+    assert callbacks == []
+    active = runtime.registry.active()
+    assert active is not None
+    active_count = sum(
+        item.lifecycle is MarketLifecycle.ACTIVE for item in active.markets
+    )
+    assert active_count in {0, len(coins)}
+
+
+@async_test
+async def test_same_target_recovery_stays_pinned_then_catches_up_advanced_clock(
+    tmp_path: Path,
+) -> None:
+    coins = ("BTC", "ETH", "SOL")
+    clock = Clock(seconds=899)
+    client = ScheduledLatestOmissionClient(
+        coins, clock, omissions={("SOL", 600_000): 1}
+    )
+    runtime, authority, markets, _, _ = cohort_setup(
+        tmp_path, coins, clock, client=client
+    )
+
+    assert await runtime._startup_warmup_barrier(asyncio.Event()) is True
+
+    wide_start = 600_000 - 2_304 * 300_000
+    assert [call for call in client.calls if call[0] == "SOL"] == [
+        ("SOL", wide_start, 600_000),
+        ("SOL", 300_000, 600_000),
+        ("SOL", 600_000, 900_000),
+    ]
+    for coin in coins[:-1]:
+        assert [call for call in client.calls if call[0] == coin] == [
+            (coin, wide_start, 600_000),
+            (coin, 600_000, 900_000),
+        ]
+    assert clock.sleep_seconds.count(STARTUP_REST_COOLDOWN_SECONDS) == 1
+    assert all(
+        authority.store.last_open(item.identity.market_id) == 600_000
+        for item in markets
+    )
+
+
+@async_test
+async def test_missing_target_after_single_recovery_fails_without_third_request_or_ws(
+    tmp_path: Path,
+) -> None:
+    coins = ("BTC", "ETH", "SOL")
+    clock = Clock(seconds=600)
+    client = ScheduledLatestOmissionClient(
+        coins, clock, omissions={("SOL", 600_000): 2}
+    )
+    runtime, _, markets, _, _ = cohort_setup(tmp_path, coins, clock, client=client)
+    factory_calls: list[str] = []
+    callbacks: list[tuple[int, BoundaryMode]] = []
+
+    async def factory(url: str) -> object:
+        factory_calls.append(url)
+        raise AssertionError("websocket must not open after exhausted startup recovery")
+
+    runtime.websocket_factory = factory
+    runtime.on_finalized_5m = lambda bar, mode: callbacks.append((bar.open_time_ms, mode))
+    await runtime.run(asyncio.Event())
+
+    assert len([call for call in client.calls if call[0] == "SOL"]) == 2
+    assert clock.sleep_seconds.count(STARTUP_REST_COOLDOWN_SECONDS) == 1
+    assert factory_calls == []
+    assert callbacks == []
+    assert runtime.health.subscriptions == 0
+    assert runtime.health.failed_markets == {markets[-1].identity.market_id}
+
+
+@async_test
+async def test_internal_gap_data_failure_is_not_latest_target_retryable(
+    tmp_path: Path,
+) -> None:
+    clock = Clock(seconds=900)
+    client = Client([[candle("BTC", 0), candle("BTC", 600_000)]])
+    runtime, authority, markets, _, _ = cohort_setup(
+        tmp_path, ("BTC",), clock, client=client
+    )
+
+    assert await runtime._startup_warmup_barrier(asyncio.Event()) is False
+
+    market_id = markets[0].identity.market_id
+    assert authority.market_failed(market_id) is True
+    assert authority.store.last_open(market_id) == 0
+    assert len(client.calls) == 1
+    assert STARTUP_REST_COOLDOWN_SECONDS not in clock.sleep_seconds
+
+
+@async_test
+async def test_nonrecoverable_latest_target_miss_is_not_retried(tmp_path: Path) -> None:
+    clock = Clock(seconds=600)
+    client = ScheduledLatestOmissionClient(
+        ("BTC",), clock, omissions={("BTC", 600_000): 1}
+    )
+    runtime, _, markets, _, _ = cohort_setup(
+        tmp_path, ("BTC",), clock, client=client
+    )
+    runtime.health.nonrecoverable_markets.add(markets[0].identity.market_id)
+
+    assert await runtime._startup_warmup_barrier(asyncio.Event()) is False
+
+    assert len(client.calls) == 1
+    assert STARTUP_REST_COOLDOWN_SECONDS not in clock.sleep_seconds
+
+
+@async_test
+async def test_registry_identity_drift_during_cooldown_fails_before_retry(
+    tmp_path: Path,
+) -> None:
+    coins = ("BTC", "ETH")
+    clock = Clock(seconds=600)
+    client = ScheduledLatestOmissionClient(
+        coins, clock, omissions={("ETH", 600_000): 1}
+    )
+    runtime, _, _, _, _ = cohort_setup(tmp_path, coins, clock, client=client)
+    original_sleep = runtime.sleep
+
+    async def drift_during_sleep(seconds: float) -> None:
+        await original_sleep(seconds)
+        if seconds == STARTUP_REST_COOLDOWN_SECONDS:
+            successor = runtime.registry.add_new(
+                version="drift", now=clock.now(), market=market("DRIFT")
+            )
+            runtime.registry.request_apply(successor.version)
+
+    runtime.sleep = drift_during_sleep
+
+    assert await runtime._startup_warmup_barrier(asyncio.Event()) is False
+
+    assert len([call for call in client.calls if call[0] == "ETH"]) == 1
+    assert clock.sleep_seconds.count(STARTUP_REST_COOLDOWN_SECONDS) == 1
+
+
+@async_test
+async def test_shutdown_during_startup_cooldown_exits_without_retry_or_ws(
+    tmp_path: Path,
+) -> None:
+    coins = ("BTC", "ETH")
+    clock = Clock(seconds=600)
+    client = ScheduledLatestOmissionClient(
+        coins, clock, omissions={("ETH", 600_000): 1}
+    )
+    runtime, _, markets, _, _ = cohort_setup(tmp_path, coins, clock, client=client)
+    shutdown = asyncio.Event()
+    original_sleep = runtime.sleep
+    factory_calls: list[str] = []
+
+    async def shutdown_during_sleep(seconds: float) -> None:
+        await original_sleep(seconds)
+        if seconds == STARTUP_REST_COOLDOWN_SECONDS:
+            shutdown.set()
+
+    async def factory(url: str) -> object:
+        factory_calls.append(url)
+        raise AssertionError("websocket must not open during startup shutdown")
+
+    runtime.sleep = shutdown_during_sleep
+    runtime.websocket_factory = factory
+    await runtime.run(shutdown)
+
+    assert len([call for call in client.calls if call[0] == "ETH"]) == 1
+    assert factory_calls == []
+    assert runtime.health.nonrecoverable_markets == set()
+    assert runtime.health.failed_markets == {markets[-1].identity.market_id}
+
+
+@async_test
+async def test_one_anomaly_recovery_budget_is_global_across_catchup_rounds(
+    tmp_path: Path,
+) -> None:
+    coins = ("BTC", "ETH", "SOL")
+    clock = Clock(seconds=899)
+    client = ScheduledLatestOmissionClient(
+        coins,
+        clock,
+        omissions={("BTC", 600_000): 1, ("ETH", 900_000): 1},
+    )
+    runtime, _, _, _, _ = cohort_setup(tmp_path, coins, clock, client=client)
+
+    assert await runtime._startup_warmup_barrier(asyncio.Event()) is False
+
+    assert clock.sleep_seconds.count(STARTUP_REST_COOLDOWN_SECONDS) == 1
+    assert len([call for call in client.calls if call[0] == "BTC"]) == 3
+    assert len([call for call in client.calls if call[0] == "ETH"]) == 2
+    assert len([call for call in client.calls if call[0] == "SOL"]) == 2
 
 
 @async_test
@@ -722,6 +992,8 @@ async def test_single_provider_failure_keeps_partial_cohort_fail_closed(
     assert runtime.health.data_ready is False
     assert runtime.health.failed_markets == {markets[2].identity.market_id}
     assert authority.store.bars(markets[2].identity.market_id) == ()
+    assert len(client.calls) == len(coins)
+    assert STARTUP_REST_COOLDOWN_SECONDS not in clock.sleep_seconds
     for item in markets[:2]:
         assert authority.store.last_open(item.identity.market_id) == 300_000
     # The fail-closed return released the process-local barrier lock: no
