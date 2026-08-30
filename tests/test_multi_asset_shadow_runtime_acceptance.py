@@ -289,7 +289,7 @@ async def test_ack_unknown_duplicate_timeout_and_reconnect_close_paths(tmp_path:
     session = _ConnectionSession(
         websocket=never,
         expected_acks=frozenset({"BTC"}),
-        subscription_identity=("seed", "hash", ("BTC",)),
+        subscription_identity=(("candle", "BTC", "5m"),),
     )
     with pytest.raises(ReconnectRequired, match="timeout"):
         await runtime._await_acknowledgements(session, asyncio.Event())

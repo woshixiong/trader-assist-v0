@@ -27,7 +27,10 @@ from trader_assist_v0.multi_asset_shadow.models import (
     RegistryTier,
     RegistryVersion,
 )
-from trader_assist_v0.multi_asset_shadow.registry import MarketRegistryManager
+from trader_assist_v0.multi_asset_shadow.registry import (
+    MarketRegistryManager,
+    RegistryError,
+)
 from trader_assist_v0.multi_asset_shadow.runtime import (
     MultiAssetPublicRuntime,
     ReconnectRequired,
@@ -383,13 +386,41 @@ async def test_subscription_identity_drift_uses_heartbeat_reconnect_path(tmp_pat
     await wait_until(lambda: runtime.health.data_ready)
     original = runtime._current_subscription_identity
     identity = original()
+    events: list[tuple[str, dict[str, object]]] = []
+    runtime.on_session_event = lambda event, fields: events.append((event, fields))
     runtime._current_subscription_identity = lambda: (  # type: ignore[method-assign]
-        identity[0],
-        "drifted-content-hash",
-        identity[2],
+        *identity,
+        ("candle", "ETH", "5m"),
     )
     await wait_until(lambda: runtime.health.reconnects == 1)
     shutdown.set()
     await task
     assert runtime.health.data_ready is False
     assert runtime.health.last_disconnect_error == "ReconnectRequired"
+    assert runtime.health.heartbeat_failures == 0
+    assert any(
+        event == "SESSION_REFRESH"
+        and fields["reason"] == "PROVIDER_SUBSCRIPTION_PROJECTION_CHANGED"
+        for event, fields in events
+    )
+
+
+@async_test
+async def test_projection_registry_error_is_fatal_not_heartbeat(tmp_path: Path) -> None:
+    runtime, _ = compose(tmp_path)
+    socket = SessionSocket()
+    task = await start(runtime, socket, asyncio.Event())
+    socket.feed(acknowledgement())
+    await wait_until(lambda: runtime.health.data_ready)
+    injected = RegistryError("injected projection authority failure")
+
+    def fail_projection() -> tuple[tuple[str, str, str], ...]:
+        raise injected
+
+    runtime._current_subscription_identity = fail_projection  # type: ignore[method-assign]
+    with pytest.raises(RegistryError, match="injected projection") as exc_info:
+        await task
+    assert exc_info.value is injected
+    assert runtime.health.heartbeat_failures == 0
+    assert runtime.health.reconnects == 0
+    assert runtime.health.last_disconnect_error == "RegistryError"
