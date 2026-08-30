@@ -10,9 +10,12 @@ Before material research, routing, architecture or Writer dispatch, Engineering 
 2. `governance/UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V1_2026-08-17.md`
 3. `governance/MANDATORY_ENGINEERING_PREFLIGHT_AND_CONVERGENCE_GATE_V1_2026-08-17.md`
 4. `governance/PROJECT_RESEARCH_EVIDENCE_DECISION_METHOD_V1_2026-08-16.md`
-5. current product/strategy/operations/security authority and live GitHub/CI state.
+5. `governance/GENERATED_COMMAND_RELIABILITY_AND_OPERATOR_EFFICIENCY_RULE_V1_2026-08-30.md`
+6. current product/strategy/operations/security authority and live GitHub/CI state.
 
 Material route decisions use independent analysis -> external/mature evidence -> synthesis. No material Writer dispatch without `PROJECT_ENGINEERING_RULESET_PREFLIGHT=PASS` and `ENGINEERING_PREFLIGHT_GATE=PASS`.
+
+Before presenting any nontrivial human-executed Terminal/shell/launcher command, apply the generated-command reliability rule even when the underlying task is otherwise mechanical. The user must not become the repeated validator of avoidable platform, shell, transport, validation-environment, or evidence-egress mistakes. When local macOS is an unsuitable validation environment, route the proof to the narrowest safe validated Linux surface defined by that rule rather than repeatedly patching around the local mismatch.
 
 ## 2. Task-level execution routing
 

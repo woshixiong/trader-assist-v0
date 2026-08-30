@@ -11,12 +11,15 @@ Before material project work, Engineering Control reads:
 3. `governance/UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V1_2026-08-17.md`
 4. `governance/MANDATORY_ENGINEERING_PREFLIGHT_AND_CONVERGENCE_GATE_V1_2026-08-17.md`
 5. `governance/PROJECT_RESEARCH_EVIDENCE_DECISION_METHOD_V1_2026-08-16.md`
-6. `governance/PROJECT_STATE.json`
-7. `governance/V0_FAST_LAUNCH_PROGRAM.json`
-8. current accepted Product / Strategy / Operations / Security authority for the bounded task
-9. current live GitHub main/issue/PR/exact-head/CI state.
+6. `governance/GENERATED_COMMAND_RELIABILITY_AND_OPERATOR_EFFICIENCY_RULE_V1_2026-08-30.md`
+7. `governance/PROJECT_STATE.json`
+8. `governance/V0_FAST_LAUNCH_PROGRAM.json`
+9. current accepted Product / Strategy / Operations / Security authority for the bounded task
+10. current live GitHub main/issue/PR/exact-head/CI state.
 
 For material Writer work require `PROJECT_ENGINEERING_RULESET_PREFLIGHT=PASS` and `ENGINEERING_PREFLIGHT_GATE=PASS`. Research/route decisions use independent analysis -> external/mature evidence -> synthesis/decision.
+
+For every nontrivial human-executed Terminal/shell/launcher command, including otherwise mechanical work, also require the generated-command reliability rule. Local environment incompatibility, Linux validation fallback, file-backed execution, command repair budget, one-shot boundaries, and evidence-egress proof are governed there.
 
 ## 2. Tooling / model Router
 
@@ -141,7 +144,26 @@ No governance file, Agent, Task Packet, implementation result, CI result or revi
 
 Issue #115 is the canonical non-release-blocking tooling backlog for first-real-task Codex/Router telemetry, the first naturally occurring Local Task Runner observation after Router selects an OpenCode-compatible task, Hermes follow-up and future DSH/alternative-executor evidence. Issue #121 was completed by PR #122 and is not the remaining Runner-observation authority.
 
-## 13. Target-host deployment / FinalShell workflow
+## 13. Generated command reliability / operator efficiency
+
+`governance/GENERATED_COMMAND_RELIABILITY_AND_OPERATOR_EFFICIENCY_RULE_V1_2026-08-30.md` is the mandatory authority for project-generated human-executed commands and launchers.
+
+It requires:
+
+- target OS/shell/tool/deployment environment as evidence, not assumption;
+- Linux validation fallback when local macOS is unsuitable, using the narrowest safe surface: existing GitHub Actions Ubuntu where fit, then an isolated authorized Lightsail Linux environment where host-like behavior is required; the current production Lightsail host is not a generic development sandbox;
+- file-backed execution by default for long, critical or one-shot scripts;
+- target-shell syntax checking and mature ShellCheck/static analysis when applicable and available;
+- every `SAFE_STOP` gate to map to a real authority/safety/state invariant;
+- all side-effect-free preflight before one-shot semantic consumption;
+- exact checkpoint/resume rather than redoing completed expensive work;
+- generated-command repair budget: one bounded correction, then holistic regeneration instead of CONT patch chains;
+- evidence egress as a two-sided contract: server-side file/hash/readability proof plus actual FinalShell/SFTP client visibility/download before acceptance where evidence return is required;
+- human relay/waiting as engineering cost.
+
+This rule does not grant cloud/deployment/runtime authority. Creating, stopping or deleting a Lightsail validation instance, mutating the production target host, or beginning any production qualification still requires the applicable current explicit user authority.
+
+## 14. Target-host deployment / FinalShell workflow
 
 For any target-host deployment, redeployment, real-host qualification or release-installation task where the user operates the Linux host through FinalShell, also read:
 
