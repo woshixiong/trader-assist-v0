@@ -17,6 +17,7 @@ The purpose is to reduce avoidable engineering delay caused by:
 - repeated CONT1/CONT2/CONT3 patch chains instead of convergence;
 - one-shot qualification attempts being consumed by wrapper/deployment defects before the intended semantic action starts;
 - rebuilding or rerunning already-completed expensive work after a downstream wrapper/evidence failure;
+- incomplete release rebinding or duplicated release-sensitive constants across generated artifacts;
 - evidence being generated successfully but not retrievable through the operator's actual transfer surface;
 - requiring the user to diagnose raw launcher state or repeatedly relay command fragments.
 
@@ -41,11 +42,11 @@ The 2026-08-30 Issue #131 exact-release requalification workflow exposed several
 | Local package verification required literal `G12_FULL_RUN_COUNT=1` in source | `SAFE_STOP: SINGLE_FULL_RUN_PROOF_MISSING` | false static proof / over-constrained validator | runtime-result fields must not be required as literal source text when accepted control-flow/artifact evidence proves the intended invariant |
 | macOS continuation required `sha256sum` | `SAFE_STOP: LOCAL_TOOL_MISSING:sha256sum` | unverified platform/tool assumption | target OS/shell/tool capability must be proven before delivery; cross-platform primitives should prefer standard-library implementations or verified native tools |
 | target-host wrapper required `/opt/trader-assist-v0/.git` | `SAFE_STOP: CURRENT_DEPLOYMENT_NOT_GIT_CHECKOUT` | deployment-model assumption contradicted by canonical artifact/SFTP workflow | identity proof must match the actual deployment transport; an exact artifact manifest is valid authority when the canonical route does not require a host Git checkout |
-| new-release one-shot `run_g12.sh` invocation exited before its inner result contract | `RUN_G12_RC=1`, all `INNER_*` result fields missing, old release/config remained installed | real harness/deployment-stage early failure; application lifecycle result not established | wrapper/deployment mechanics and semantic qualification must have distinct checkpoints and attempt boundaries; do not misclassify an early harness failure as an application/lifecycle failure |
+| new-release `run_g12.sh` retained a stale hard-coded source-manifest entry count of `287` while the new exact release manifest/identity contained `288` files | `SAFE_STOP: SOURCE_MANIFEST_ENTRY_COUNT_MISMATCH`; deployment was not reached; warmup/full G12 were not reached; `G12_FULL_RUN_COUNT=0` | incomplete release rebinding / duplicated release-sensitive constant / cross-artifact semantic inconsistency | release-sensitive values require one source of truth; mechanical template equality does not prove semantic rebinding completeness; cross-artifact semantic consistency and stale-literal scanning must pass before target-host one-shot execution |
 | diagnostic collection paste appeared “stuck” at the heredoc terminator | FinalShell remained at continuation prompt until one final Enter | interactive heredoc/operator-UX fragility | long critical scripts should be file-backed; if a heredoc is unavoidable, termination/newline behavior must be explicit and the user must be told what a continuation prompt means |
 | diagnostic archive was created with readable mode but could not be seen/downloaded immediately through the user's FinalShell file-manager view | evidence existed but client visibility/download was not established | evidence-egress path/client-state not proven | evidence delivery is part of workflow acceptance; server-side existence alone is insufficient, and a stale file-manager view must be refreshed before absence is inferred |
 
-The first three failures were avoidable command/wrapper defects rather than Trader Assist application failures. The fourth is a genuine execution-stage failure requiring forensic evidence. The last two are operator-transport/UX defects. This distinction is mandatory for future triage.
+The first four failures were avoidable generated-command/wrapper defects rather than Trader Assist application failures. The fourth specifically proves that the new Issue #131 lifecycle repair was **not yet exercised on the target host**; an early wrapper failure must not be misclassified as a lifecycle/runtime failure. The last two are operator-transport/UX defects. This distinction is mandatory for future triage.
 
 ---
 
@@ -72,17 +73,25 @@ SCRIPT_TRANSPORT=FILE_BACKED|SHORT_INLINE|HEREDOC_EXCEPTION
 SYNTAX_CHECK=PASS|FAIL|NOT_AVAILABLE
 STATIC_ANALYSIS=PASS|FAIL|NOT_AVAILABLE
 SAFE_STOP_GATES_BOUND_TO_CANONICAL_INVARIANTS=YES|NO
+RELEASE_SENSITIVE_SINGLE_SOURCE_OF_TRUTH=PASS|FAIL|NOT_APPLICABLE
+CROSS_ARTIFACT_SEMANTIC_CONSISTENCY=PASS|FAIL|NOT_APPLICABLE
+STALE_RELEASE_LITERAL_SCAN=PASS|FAIL|NOT_APPLICABLE
 ONE_SHOT_SEMANTIC_BOUNDARY=
 SIDE_EFFECT_FREE_PREFLIGHT_COMPLETE_BEFORE_ONE_SHOT=YES|NO|NOT_APPLICABLE
 CHECKPOINT_RESUME_PLAN=
 EVIDENCE_EGRESS_PATH=
-EVIDENCE_EGRESS_SERVER_PROOF=PASS|FAIL|NOT_APPLICABLE
-EVIDENCE_EGRESS_CLIENT_VISIBILITY=PASS|FAIL|NOT_APPLICABLE
+EVIDENCE_EGRESS_PLAN=PASS|FAIL|NOT_APPLICABLE
+EVIDENCE_EGRESS_PREFLIGHT=PASS|FAIL|NOT_APPLICABLE
+EVIDENCE_EGRESS_CANARY_OR_DIRECTORY_PROOF=PASS|FAIL|NOT_APPLICABLE
+EVIDENCE_EGRESS_SERVER_PROOF=PENDING_POST_RUN|NOT_APPLICABLE
+EVIDENCE_EGRESS_CLIENT_VISIBILITY=PENDING_POST_RUN|NOT_APPLICABLE
 EXPECTED_IRREDUCIBLE_USER_INTERACTIONS=
 COMMAND_REPAIR_STAGE=INITIAL|BOUNDED_CORRECTION|HOLISTIC_REGENERATION
 ```
 
 A nontrivial generated command must not be delivered with `GENERATED_COMMAND_RELIABILITY_GATE=FAIL`.
+
+Pre-delivery egress fields prove the **route and capability to return future evidence**, not the existence of an evidence artifact that has not yet been generated. `EVIDENCE_EGRESS_SERVER_PROOF` and `EVIDENCE_EGRESS_CLIENT_VISIBILITY` are final post-execution proofs; before execution they must be `PENDING_POST_RUN` when evidence return is required, or `NOT_APPLICABLE` when it is not.
 
 A task that begins as mechanical command generation but exposes a new architecture, authority, deployment model, persistence, retry, recovery or semantic design decision becomes MATERIAL and must return to the full Engineering Preflight Gate.
 
@@ -216,6 +225,8 @@ Preferred shape:
 GENERATE OR PACKAGE SCRIPT AS A FILE
 -> CLOSE ALL HEREDOC/INPUT TRANSPORT
 -> HASH / MANIFEST THE SCRIPT
+-> RESOLVE RELEASE-SENSITIVE VALUES FROM ONE CANONICAL SOURCE
+-> CROSS-CHECK GENERATED ARTIFACT SEMANTICS / STALE RELEASE LITERALS
 -> SYNTAX / STATIC VALIDATE THE FILE
 -> WHEN LINUX-TARGETED, REHEARSE ON THE SELECTED SAFE LINUX VALIDATION SURFACE WHEN PRACTICAL
 -> TRANSFER FILE THROUGH THE ACCEPTED TRANSPORT
@@ -274,6 +285,52 @@ Prohibited false-gate patterns include:
 
 The goal is not fewer `SAFE_STOP`s. The goal is that each `SAFE_STOP` protects a real boundary and therefore saves time rather than wasting it.
 
+### 8.1 Release-sensitive values require one source of truth and semantic rebinding proof
+
+Release-specific values must not be copied into multiple generated artifacts as independent hard-coded truths when one canonical source can be parsed or derived.
+
+Release-sensitive values include, where applicable:
+
+```text
+release SHA / tree
+source manifest hash / entry count
+package / artifact identity
+CI run/head identity
+Registry version / content hash
+provider/market identity assertions
+other exact-release constants that change between accepted releases
+```
+
+Required invariants:
+
+```text
+RELEASE_SENSITIVE_SINGLE_SOURCE_OF_TRUTH=PASS
+CROSS_ARTIFACT_SEMANTIC_CONSISTENCY=PASS
+STALE_RELEASE_LITERAL_SCAN=PASS
+MECHANICAL_REBIND_EQUALS_SEMANTIC_REBIND_PROOF=NO
+```
+
+Preferred implementation:
+
+- derive counts/hashes/identities from a hash-protected manifest or release-identity file instead of duplicating literal values;
+- if a generated script must contain a release-sensitive literal, generate it from the same canonical metadata and verify it against that metadata before execution;
+- scan the final generated artifact set for stale old-release SHA/tree/hash/count/package/version literals where those literals are expected to disappear;
+- compare semantic cross-artifact invariants, not only byte equality between a generated script and its template/heredoc.
+
+For a source-manifest-backed release, at minimum prove when applicable:
+
+```text
+ACTUAL_MANIFEST_ENTRY_COUNT
+== RELEASE_IDENTITY_SOURCE_FILE_COUNT
+== GENERATED_DEPLOY_OR_RUN_SCRIPT_EXPECTATION_OR_DERIVED_VALUE
+```
+
+The preferred route eliminates the third independent value entirely by making the deploy/run script derive the count from the manifest or release identity.
+
+`RUN_SCRIPT_EQUALS_GENERATOR_HEREDOC=PASS` proves generation fidelity only. It does **not** prove that every release-sensitive constant inside the generator was rebound correctly.
+
+For production-facing one-shot execution, release-sensitive consistency checks must be exercised on the selected safe Linux validation surface before target-host execution when practical. A wrapper that cannot pass its release-sensitive preflight off-production is not eligible to consume a production semantic attempt.
+
 ---
 
 ## 9. Side-effect-free preflight must finish before a one-shot attempt is consumed
@@ -308,6 +365,8 @@ POST_ACTION_EVIDENCE_OR_CLEANUP_FAILURE
 ```
 
 Do not collapse all of these into a single exit code or generic `SAFE_STOP` label.
+
+A wrapper-level sentinel may record that an operator execution was attempted, but it must not be conflated with semantic-attempt consumption. Semantic attempt accounting begins only at the declared semantic boundary after all applicable preflight/deployment/rehearsal gates have passed.
 
 ---
 
@@ -360,7 +419,11 @@ Repeated command-generation defects across tasks trigger Tooling Control / holis
 
 ## 12. Evidence egress is part of acceptance, not an afterthought
 
-Before an expensive target-host run, freeze the evidence-return route:
+Evidence egress has two distinct proof phases. Do not require a final evidence artifact to exist before the action that generates it.
+
+### Pre-delivery / pre-execution egress proof
+
+Before an expensive target-host run, freeze and validate the evidence-return route:
 
 ```text
 EVIDENCE_OUTPUT_PATH=
@@ -369,9 +432,16 @@ EVIDENCE_MODE=
 TRANSFER_SURFACE=
 EXPECTED_DOWNLOAD_OR_FETCH_ROUTE=
 FALLBACK_PATH=
-EVIDENCE_EGRESS_SERVER_PROOF=
-EVIDENCE_EGRESS_CLIENT_VISIBILITY=
+EVIDENCE_EGRESS_PLAN=PASS|NOT_APPLICABLE
+EVIDENCE_EGRESS_PREFLIGHT=PASS|NOT_APPLICABLE
+EVIDENCE_EGRESS_CANARY_OR_DIRECTORY_PROOF=PASS|NOT_APPLICABLE
+EVIDENCE_EGRESS_SERVER_PROOF=PENDING_POST_RUN|NOT_APPLICABLE
+EVIDENCE_EGRESS_CLIENT_VISIBILITY=PENDING_POST_RUN|NOT_APPLICABLE
 ```
+
+`EVIDENCE_EGRESS_PREFLIGHT=PASS` proves that the intended directory/ownership/permissions/transfer surface are suitable for a future evidence artifact. It does not claim that the final evidence file already exists.
+
+When evidence return is required and the transfer path is materially uncertain, prove the path before the semantic attempt with a tiny non-sensitive canary, a directory write/read/traverse proof, or an already-existing readable artifact when this can be done without materially increasing operator burden. The canary/directory proof is a capability proof, not final evidence proof.
 
 For the current FinalShell/SFTP workflow, prefer an operator-readable directory under the login user's home, for example:
 
@@ -383,9 +453,9 @@ over a root-owned or UI-inconvenient temporary location when the evidence is int
 
 `/tmp` may still be used for internal staging, but a final downloadable copy should be placed under the operator-readable evidence path before terminal success is declared.
 
-### Server-side proof
+### Post-execution server-side proof
 
-Before claiming evidence egress is prepared, verify at minimum:
+Only after the final evidence artifact exists may `EVIDENCE_EGRESS_SERVER_PROOF` become `PASS`. Verify at minimum:
 
 ```text
 EXACT_FILE_EXISTS=YES
@@ -399,7 +469,9 @@ PARENT_DIRECTORY_TRAVERSABLE=YES
 
 Do not infer success merely from a copy command returning zero.
 
-### Client-side visibility/download proof
+### Post-execution client-side visibility/download proof
+
+Only after the final evidence artifact exists may `EVIDENCE_EGRESS_CLIENT_VISIBILITY` become `PASS`.
 
 A FinalShell/SFTP file-manager view may be stale after files are created from the terminal. Therefore:
 
@@ -407,8 +479,6 @@ A FinalShell/SFTP file-manager view may be stale after files are created from th
 2. verify that the exact expected filename becomes visible in the intended directory;
 3. when an evidence return is required for independent review, successful client visibility/download is part of workflow completion rather than an optional postscript;
 4. if server-side proof passes but client visibility/download fails, classify `EVIDENCE_EGRESS_FAILURE` and repair only the transfer/client path.
-
-For a one-shot or expensive qualification where evidence return is mandatory, prefer proving the intended SFTP directory with a tiny non-sensitive canary or an already-existing readable artifact before consuming the semantic attempt when this can be done without materially increasing operator burden.
 
 The final result must print at least:
 
@@ -419,6 +489,7 @@ EVIDENCE_SIZE
 EVIDENCE_OWNER_MODE
 EVIDENCE_LOGIN_USER_READABLE
 EVIDENCE_EGRESS_SERVER_PROOF
+EVIDENCE_EGRESS_CLIENT_VISIBILITY
 ```
 
 If the evidence file is successfully generated but cannot be retrieved, do not rerun the underlying semantic action.
@@ -468,6 +539,7 @@ COMMAND_FAILURE_CLASS=
   SHELL_PORTABILITY_OR_SYNTAX
   FALSE_SAFE_STOP_GATE
   ARTIFACT_IDENTITY_FAILURE
+  RELEASE_REBIND_OR_CROSS_ARTIFACT_CONSISTENCY_FAILURE
   AUTHORITY_OR_SAFETY_BLOCK
   DEPLOYMENT_MECHANIC_FAILURE
   WRAPPER_OR_HARNESS_FAILURE
@@ -530,12 +602,18 @@ VALIDATION_ENVIRONMENT_ROUTE=DEFINED
 PORTABILITY_REVIEW=PASS
 CANONICAL_WORKFLOW_MATCH=PASS
 FALSE_GATE_REVIEW=PASS
+RELEASE_SENSITIVE_SINGLE_SOURCE_OF_TRUTH=PASS_OR_NA
+CROSS_ARTIFACT_SEMANTIC_CONSISTENCY=PASS_OR_NA
+STALE_RELEASE_LITERAL_SCAN=PASS_OR_NA
 SIDE_EFFECT_FREE_PREFLIGHT_BEFORE_ONE_SHOT=PASS_OR_NA
 CHECKPOINT_RESUME_PLAN=DEFINED
 EVIDENCE_EGRESS_PLAN=PASS_OR_NA
-EVIDENCE_EGRESS_SERVER_PROOF=PASS_OR_NA
+EVIDENCE_EGRESS_PREFLIGHT=PASS_OR_NA
+EVIDENCE_EGRESS_CANARY_OR_DIRECTORY_PROOF=PASS_OR_NA
+EVIDENCE_EGRESS_SERVER_PROOF=PENDING_POST_RUN_OR_NA
+EVIDENCE_EGRESS_CLIENT_VISIBILITY=PENDING_POST_RUN_OR_NA
 USER_INTERACTION_BUDGET=PASS
 COMMAND_REPAIR_BUDGET=AVAILABLE
 ```
 
-If these cannot be established, stop command generation and resolve the workflow/environment mismatch first.
+If these cannot be established, stop command generation and resolve the workflow/environment mismatch first. Final evidence proof is completed after execution and must not be required as a precondition for delivering the command that generates that evidence.
