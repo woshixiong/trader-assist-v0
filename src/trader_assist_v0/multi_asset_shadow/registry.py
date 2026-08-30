@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from trader_assist_v0.contracts.common import canonical_json_bytes
+from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
 
 from .models import MarketLifecycle, RegistryMarket, RegistryVersion
 
@@ -66,6 +66,8 @@ _LIFECYCLE_NEXT: dict[MarketLifecycle, frozenset[MarketLifecycle]] = {
     # Re-enabling never resurrects an ACTIVE market; it restarts readiness.
     MarketLifecycle.DISABLED: frozenset({MarketLifecycle.WARMING}),
 }
+
+_LIFECYCLE_SUCCESSOR_DOMAIN = "trader-assist-v0/registry-lifecycle-successor/v1"
 
 
 def _write_atomic(path: Path, content: bytes) -> None:
@@ -418,6 +420,64 @@ class MarketRegistryManager:
     def rollback_request(self, version: str) -> RegistryVersion:
         return self.request_apply(version)
 
+    def _create_version(
+        self,
+        *,
+        version: str,
+        created_at: datetime,
+        markets: tuple[RegistryMarket, ...],
+    ) -> RegistryVersion:
+        """Normalize manager-owned candidate construction into RegistryError."""
+        try:
+            return RegistryVersion.create(
+                version=version, created_at=created_at, markets=markets
+            )
+        except ValueError as exc:
+            raise RegistryError("registry candidate schema validation failed") from exc
+
+    def _lifecycle_target_markets(
+        self,
+        active: RegistryVersion,
+        updates: dict[str, MarketLifecycle],
+    ) -> tuple[RegistryMarket, ...]:
+        """Build one legal lifecycle-only target in active Registry order."""
+        unknown = set(updates)
+        markets: list[RegistryMarket] = []
+        for market in active.markets:
+            lifecycle = updates.get(market.identity.market_id)
+            if lifecycle is None:
+                markets.append(market)
+                continue
+            unknown.discard(market.identity.market_id)
+            if lifecycle not in _LIFECYCLE_NEXT[market.lifecycle]:
+                raise RegistryError(
+                    "illegal market lifecycle transition: "
+                    f"{market.lifecycle.value} -> {lifecycle.value}"
+                )
+            markets.append(market.model_copy(update={"lifecycle": lifecycle}))
+        if unknown:
+            raise RegistryError("market is not in active registry")
+        return tuple(markets)
+
+    def _automatic_lifecycle_version(
+        self,
+        *,
+        active: RegistryVersion,
+        target_markets: tuple[RegistryMarket, ...],
+    ) -> str:
+        transition_hash = sha256_hex(
+            canonical_json_bytes(
+                {
+                    "domain": _LIFECYCLE_SUCCESSOR_DOMAIN,
+                    "base_registry_content_hash": active.content_hash,
+                    "target_markets": [
+                        market.model_dump(mode="json") for market in target_markets
+                    ],
+                }
+            )
+        )
+        return f"lifecycle-{transition_hash}"
+
     def lifecycle_update(
         self, version: str, market_id: str, lifecycle: MarketLifecycle, *, now: datetime
     ) -> RegistryVersion:
@@ -442,7 +502,9 @@ class MarketRegistryManager:
                 markets.append(market)
         if not found:
             raise RegistryError("market is not in active registry")
-        candidate = RegistryVersion.create(version=version, created_at=now, markets=tuple(markets))
+        candidate = self._create_version(
+            version=version, created_at=now, markets=tuple(markets)
+        )
         self.stage(candidate)
         return candidate
 
@@ -463,23 +525,41 @@ class MarketRegistryManager:
             raise RegistryError("no active registry")
         if self.versions.joinpath(f"{version}.json").exists():
             raise RegistryError("new lifecycle version already exists")
-        unknown = set(updates)
-        markets: list[RegistryMarket] = []
-        for market in active.markets:
-            lifecycle = updates.get(market.identity.market_id)
-            if lifecycle is None:
-                markets.append(market)
-                continue
-            unknown.discard(market.identity.market_id)
-            if lifecycle not in _LIFECYCLE_NEXT[market.lifecycle]:
+        markets = self._lifecycle_target_markets(active, updates)
+        candidate = self._create_version(version=version, created_at=now, markets=markets)
+        self.stage(candidate)
+        return candidate
+
+    def ensure_lifecycle_successor(
+        self,
+        *,
+        updates: dict[str, MarketLifecycle],
+        now: datetime,
+    ) -> RegistryVersion:
+        """Ensure/reuse the bounded automatic successor for one semantic target."""
+        active = self.active()
+        if active is None:
+            raise RegistryError("no active registry")
+        markets = self._lifecycle_target_markets(active, updates)
+        version = self._automatic_lifecycle_version(
+            active=active, target_markets=markets
+        )
+        target = self.versions / f"{version}.json"
+        if target.exists():
+            candidate = self.load_version(version)
+            if candidate.version != version:
                 raise RegistryError(
-                    "illegal market lifecycle transition: "
-                    f"{market.lifecycle.value} -> {lifecycle.value}"
+                    "automatic lifecycle successor version does not match deterministic key"
                 )
-            markets.append(market.model_copy(update={"lifecycle": lifecycle}))
-        if unknown:
-            raise RegistryError("market is not in active registry")
-        candidate = RegistryVersion.create(version=version, created_at=now, markets=tuple(markets))
+            if candidate.schema_version != "1" or candidate.markets != markets:
+                raise RegistryError(
+                    "automatic lifecycle successor conflicts with expected target semantics"
+                )
+            # Re-validating the existing immutable candidate safely restores
+            # evidence lost by a crash between stage writes.
+            self.stage(candidate)
+            return candidate
+        candidate = self._create_version(version=version, created_at=now, markets=markets)
         self.stage(candidate)
         return candidate
 
@@ -523,6 +603,8 @@ class MarketRegistryManager:
                 markets.append(update_market)
             else:
                 markets[existing] = update_market
-        candidate = RegistryVersion.create(version=version, created_at=now, markets=tuple(markets))
+        candidate = self._create_version(
+            version=version, created_at=now, markets=tuple(markets)
+        )
         self.stage(candidate)
         return candidate
