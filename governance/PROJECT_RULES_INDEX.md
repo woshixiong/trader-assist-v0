@@ -11,12 +11,15 @@ Before material project work, Engineering Control reads:
 3. `governance/UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V1_2026-08-17.md`
 4. `governance/MANDATORY_ENGINEERING_PREFLIGHT_AND_CONVERGENCE_GATE_V1_2026-08-17.md`
 5. `governance/PROJECT_RESEARCH_EVIDENCE_DECISION_METHOD_V1_2026-08-16.md`
-6. `governance/PROJECT_STATE.json`
-7. `governance/V0_FAST_LAUNCH_PROGRAM.json`
-8. current accepted Product / Strategy / Operations / Security authority for the bounded task
-9. current live GitHub main/issue/PR/exact-head/CI state.
+6. `governance/GENERATED_COMMAND_RELIABILITY_AND_OPERATOR_EFFICIENCY_RULE_V1_2026-08-30.md`
+7. `governance/PROJECT_STATE.json`
+8. `governance/V0_FAST_LAUNCH_PROGRAM.json`
+9. current accepted Product / Strategy / Operations / Security authority for the bounded task
+10. current live GitHub main/issue/PR/exact-head/CI state.
 
 For material Writer work require `PROJECT_ENGINEERING_RULESET_PREFLIGHT=PASS` and `ENGINEERING_PREFLIGHT_GATE=PASS`. Research/route decisions use independent analysis -> external/mature evidence -> synthesis/decision.
+
+For any nontrivial human-executed Terminal/shell/launcher command, the generated-command reliability rule applies even when the underlying task is otherwise mechanical. Command generation must not rely on unverified target-OS/shell/tool/deployment assumptions or use the user as the repeated validator of avoidable wrapper defects.
 
 ## 2. Tooling / model Router
 
@@ -54,7 +57,7 @@ For a Router-selected local OpenCode stage compatible with the accepted Local Ta
 
 Engineering Control owns the complete Runner lifecycle visible to the user: generate one complete Terminal paste block; create/hash the frozen Runner Task Packet; verify exact runner/Git/OpenCode identity; call `validate`; call `run` exactly once; collect result/evidence/telemetry; then, after the user pastes the complete Terminal output once back into the same Engineering window, review **both** the normal code/task outcome and Runner workflow health. The user does not manually author Runner JSON/hashes, search the Terminal transcript for Runner status fields, classify red flags, or compose tooling escalation reports.
 
-Normal application-code/test/task/model-provider issues stay with Engineering Control/Router. If Engineering Control identifies a genuine Runner identity/schema/state/evidence/policy/preflight/retry/substitution defect, it must explicitly tell the user that tooling control is required, prohibit automatic rerun, and generate one complete ready-to-copy `TOOLING_CONTROL_ESCALATION_PROMPT_BEGIN ... END` prompt in a fenced code block using exact evidence. For the first real Runner project task only, Engineering Control must also generate the one-time `LOCAL_TASK_RUNNER_OBSERVATION_PACKET` prompt regardless of PASS/FAIL so tooling control can validate the live workflow once.
+Normal application-code/test/task/model-provider issues stay with Engineering Control/Router. If Engineering Control identifies a genuine Runner identity/schema/result/policy/workflow defect, it must explicitly tell the user that tooling control is required, prohibit automatic rerun, and generate one complete ready-to-copy `TOOLING_CONTROL_ESCALATION_PROMPT_BEGIN ... END` prompt in a fenced code block using exact evidence. For the first real Runner project task only, Engineering Control must also generate the one-time `LOCAL_TASK_RUNNER_OBSERVATION_PACKET` prompt regardless of PASS/FAIL so tooling control can validate the live workflow once.
 
 Do not manufacture a synthetic first-real-task benchmark or force OpenCode merely to exercise the Runner.
 
@@ -159,3 +162,25 @@ ONE MACOS LOCAL EXACT-ARTIFACT GENERATION BLOCK
 ```
 
 FinalShell is the current default operator surface over standard SSH/SFTP. It does not grant deployment/runtime authority, does not replace exact GitHub release identity, and must not silently be substituted with a newly designed Mac-direct-SSH or deployment-framework workflow. Equivalent mature SSH/SFTP transport is allowed only through a visible route change that preserves the same exact-artifact/hash/authority/secret/evidence boundaries.
+
+## 14. Generated-command reliability / operator efficiency
+
+For every nontrivial project-generated Terminal/shell/launcher command, read and apply:
+
+- `governance/GENERATED_COMMAND_RELIABILITY_AND_OPERATOR_EFFICIENCY_RULE_V1_2026-08-30.md`.
+
+Permanent invariants include:
+
+```text
+TARGET_ENVIRONMENT_IS_EVIDENCE_NOT_ASSUMPTION
+LONG_CRITICAL_OR_ONE_SHOT_LOGIC_FILE_BACKED_BY_DEFAULT
+MATURE_SHELL_STATIC_ANALYSIS_PREFERRED_OVER_CUSTOM_PSEUDO_LINT
+FALSE_SAFE_STOP_GATES_PROHIBITED
+SIDE_EFFECT_FREE_PREFLIGHT_BEFORE_ONE_SHOT_CONSUMPTION
+EXACT_CHECKPOINT_RESUME_NO_HIDDEN_RERUN
+SECOND_AVOIDABLE_COMMAND_DEFECT_IN_SAME_STAGE_TRIGGERS_HOLISTIC_REGENERATION
+EVIDENCE_EGRESS_PROVEN_BEFORE_EXPENSIVE_TARGET_HOST_RUN
+HUMAN_RELAY_AND_WAITING_COUNT_AS_ENGINEERING_COST
+```
+
+This rule applies across local engineering, Coding Agent launchers, FinalShell target-host workflows, evidence collection and bounded continuation/repair commands. It does not weaken safety or authorization gates; it requires those gates to protect real canonical invariants rather than incidental wrapper assumptions.
