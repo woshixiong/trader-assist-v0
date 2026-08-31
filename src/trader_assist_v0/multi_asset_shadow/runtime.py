@@ -1089,10 +1089,13 @@ class MultiAssetPublicRuntime:
 
         Every selected market must converge onto one common authoritative
         closed-5m boundary, with a small explicit bound on whole-cohort
-        catch-up rounds.  A genuine market failure, a Registry identity
-        change mid-round, shutdown, or an outrun catch-up bound all fail
-        closed rather than opening a mixed-time cohort.
+        catch-up rounds.  One barrier-global provider-budget cooldown may
+        recover an otherwise healthy target-minus-5m prefix at the same
+        captured target.  A genuine market failure, a Registry identity
+        change mid-round, shutdown, or an outrun catch-up bound all fail closed
+        rather than opening a mixed-time cohort.
         """
+        anomaly_recovery_available = True
         for _round in range(1 + WARMUP_CATCHUP_ROUNDS_MAX):
             if shutdown.is_set():
                 return False
@@ -1103,13 +1106,47 @@ class MultiAssetPublicRuntime:
             if shutdown.is_set():
                 return False
             selected = self.selected_markets()
-            if len(results) != len(selected):
+            if self._cohort_identity() != cohort.identity:
                 return False
+            if len(results) != len(selected):
+                missing = tuple(
+                    item
+                    for item in selected
+                    if item.identity.market_id not in results
+                )
+                if (
+                    not anomaly_recovery_available
+                    or not missing
+                    or any(
+                        self.authority.store.last_open(item.identity.market_id)
+                        != cohort.target_open_ms - _FIVE_MINUTES_MS
+                        or self.authority.market_failed(item.identity.market_id)
+                        or item.identity.market_id in self.health.nonrecoverable_markets
+                        for item in missing
+                    )
+                ):
+                    return False
+                anomaly_recovery_available = False
+                if shutdown.is_set():
+                    return False
+                await self.sleep(STARTUP_REST_COOLDOWN_SECONDS)
+                if shutdown.is_set():
+                    return False
+                if self._cohort_identity() != cohort.identity:
+                    return False
+                results = await self._warmup_all(
+                    recovery=True, shutdown=shutdown, cohort=cohort
+                )
+                if shutdown.is_set():
+                    return False
+                selected = self.selected_markets()
+                if self._cohort_identity() != cohort.identity:
+                    return False
+                if len(results) != len(selected):
+                    return False
             if not all(
                 self._history_current_at(item, cohort.target_open_ms) for item in selected
             ):
-                return False
-            if self._cohort_identity() != cohort.identity:
                 return False
             if self._latest_completed_open() == cohort.target_open_ms:
                 return True
