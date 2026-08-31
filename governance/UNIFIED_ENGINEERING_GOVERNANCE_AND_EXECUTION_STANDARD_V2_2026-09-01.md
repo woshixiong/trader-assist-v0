@@ -413,6 +413,33 @@ At intermediate gates it must execute every safe authorized next action, prepare
 
 The user is not the routine Writer/CI/Reviewer information bus when exact evidence can be carried directly.
 
+### 10.4 Lossless authority-bearing handoff
+
+Authoritative handoffs must preserve exact meaning, authority and control fields.
+
+Do not use this as the execution-authority path when the transformation could change scope, permissions, acceptance criteria, stop conditions, route, executor or authority:
+
+```text
+AUTHORITATIVE TASK
+-> INTERMEDIARY SUMMARY / PARAPHRASE
+-> DOWNSTREAM EXECUTOR
+```
+
+Prefer a lossless propagation path:
+
+```text
+EXACT TASK PACKET OR EXACT IMMUTABLE POINTER
++ INTEGRITY IDENTITY (HASH / EXACT SHA WHEN APPLICABLE)
+-> DOWNSTREAM READS THE EXACT AUTHORITATIVE PAYLOAD
+-> IDENTITY / AUTHORITY ACKNOWLEDGEMENT
+-> EXECUTION
+-> RAW EVIDENCE RETURN
+```
+
+An intermediary summary may improve readability or navigation, but it is not a substitute downstream execution authority when any authoritative field could be changed, omitted or weakened. The exact packet, immutable pointer and raw evidence remain authoritative over intermediary summaries or paraphrases.
+
+Where a selected specialized operator/handoff contract is stricter, such as a lossless task-packet schema, the stricter contract additionally applies and may not weaken this project-wide rule.
+
 ---
 
 ## 11. Model/executor/tool routing — general rules
@@ -737,7 +764,7 @@ WHY_EXISTING_GATES_MISSED_IT
 LOWEST_DECISIVE_REPRODUCTION
 GENERALIZED_INVARIANT
 PREVENTIVE_TEST / PROCESS CHANGE
-OWNER / FOLLOW-UP
+OWNER / FOLLOW_UP
 ```
 
 Historical incidents are rationale and regression evidence, not competing active rules. Reusable lessons are absorbed into this constitution or a narrow procedure rather than relying on chat memory.
@@ -884,6 +911,9 @@ STABLE_NARROW_SEAMS_AND_CONTINUITY=REQUIRED
 PROVIDER_SCALE_FRESHNESS_GATE=WHEN_APPLICABLE
 ONE_PRIMARY_WRITER_PER_SHARED_AUTHORITY_STAGE=YES
 COMPLETE_TASK_PACKET_BEFORE_EXECUTION=YES
+LOSSLESS_HANDOFF=REQUIRED_FOR_AUTHORITY_BEARING_TASKS
+INTERMEDIARY_PARAPHRASE_AS_DOWNSTREAM_AUTHORITY=PROHIBITED
+RAW_EVIDENCE_OVERRIDES_INTERMEDIARY_SUMMARY=YES
 USER_AS_ROUTINE_MESSAGE_BUS=PROHIBITED
 ACTIVE_TASK_OWNERSHIP_UNTIL_TERMINAL_DISPOSITION=YES
 NO_SILENT_MODEL_EXECUTOR_FALLBACK=YES
