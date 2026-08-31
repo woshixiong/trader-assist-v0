@@ -248,7 +248,7 @@ REUSE_ACCEPTED_PROJECT_CAPABILITY
 -> STANDARD / OFFICIAL
 -> MATURE MAINTAINED EXTERNAL
 -> THIN PROJECT ADAPTER
--> SMALL PROJECT-SPECIFIC LOGIC
+-> SMALL PROJECT-SPECIFIC_LOGIC
 -> CUSTOM COMMODITY INFRASTRUCTURE LAST RESORT
 ```
 
@@ -764,7 +764,7 @@ WHY_EXISTING_GATES_MISSED_IT
 LOWEST_DECISIVE_REPRODUCTION
 GENERALIZED_INVARIANT
 PREVENTIVE_TEST / PROCESS CHANGE
-OWNER / FOLLOW_UP
+OWNER / FOLLOW-UP
 ```
 
 Historical incidents are rationale and regression evidence, not competing active rules. Reusable lessons are absorbed into this constitution or a narrow procedure rather than relying on chat memory.
