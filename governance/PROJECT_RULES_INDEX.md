@@ -25,6 +25,20 @@ ENGINEERING_PREFLIGHT_GATE=PASS
 
 The Unified V2 standard is the sole project-wide normative engineering constitution. Other files below are task-conditional procedures, executor/tool contracts, operational authority or history.
 
+### 1.1 User phrase “统一规则”
+
+When the user asks to **“往统一规则里增加内容”**, **“把这条加入统一规则”**, **“add this to the unified rules”**, or equivalent, route the request through the governance-maintenance rule in Unified V2 and the shorthand in `AGENTS.md`.
+
+Default destination:
+
+```text
+DURABLE_PROJECT_WIDE_ENGINEERING_INVARIANT -> UNIFIED V2
+```
+
+Do not mechanically append task-specific procedure, model/tool configuration, deployment mechanics or incident detail to V2. Keep narrow details in the applicable specialized procedure/contract and promote only the reusable project-wide invariant into V2 when needed.
+
+Do not create another project-wide governance authority by default. A genuinely new specialized procedure/contract must be narrow, independently maintainable, indexed here, explicitly subordinate to V2 and non-duplicative.
+
 ## 2. Direction-setting research
 
 When the task materially sets or changes research/product/strategy/engineering/architecture/tool/provider direction, use:
