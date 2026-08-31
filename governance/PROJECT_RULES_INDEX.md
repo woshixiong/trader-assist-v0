@@ -10,16 +10,19 @@ Before material project work, Engineering Control reads:
 2. this file
 3. `governance/UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V1_2026-08-17.md`
 4. `governance/MANDATORY_ENGINEERING_PREFLIGHT_AND_CONVERGENCE_GATE_V1_2026-08-17.md`
-5. `governance/PROJECT_RESEARCH_EVIDENCE_DECISION_METHOD_V1_2026-08-16.md`
-6. `governance/GENERATED_COMMAND_RELIABILITY_AND_OPERATOR_EFFICIENCY_RULE_V1_2026-08-30.md`
-7. `governance/PROJECT_STATE.json`
-8. `governance/V0_FAST_LAUNCH_PROGRAM.json`
-9. current accepted Product / Strategy / Operations / Security authority for the bounded task
-10. current live GitHub main/issue/PR/exact-head/CI state.
+5. `governance/HOLISTIC_ENGINEERING_VERIFICATION_CONTINUITY_AND_RELEASE_METHOD_V1_2026-08-31.md`
+6. `governance/PROJECT_RESEARCH_EVIDENCE_DECISION_METHOD_V1_2026-08-16.md`
+7. `governance/GENERATED_COMMAND_RELIABILITY_AND_OPERATOR_EFFICIENCY_RULE_V1_2026-08-30.md`
+8. `governance/PROJECT_STATE.json`
+9. `governance/V0_FAST_LAUNCH_PROGRAM.json`
+10. current accepted Product / Strategy / Operations / Security authority for the bounded task
+11. current live GitHub main/issue/PR/exact-head/CI state.
 
 For material Writer work require `PROJECT_ENGINEERING_RULESET_PREFLIGHT=PASS` and `ENGINEERING_PREFLIGHT_GATE=PASS`. Research/route decisions use independent analysis -> external/mature evidence -> synthesis/decision.
 
-For every nontrivial human-executed Terminal/shell/launcher command, including otherwise mechanical work, also require the generated-command reliability rule. Local environment incompatibility, Linux validation fallback, file-backed execution, command repair budget, one-shot boundaries, and evidence-egress proof are governed there.
+The holistic engineering verification method is the mandatory detailed authority for cross-layer contract closure, admitted-input totality, production-path fidelity, incident convergence, balanced verification topology, exact-release/staged-artifact verification, validation-environment fidelity and material code continuity.
+
+For every nontrivial human-executed Terminal/shell/launcher command, including otherwise mechanical work, also require the generated-command reliability rule. Local environment incompatibility, Linux validation fallback, file-backed execution, exact CLI invocation proof, canonical validation-command reuse, validation-platform fidelity, checkpoint/evidence preservation, command repair budget, one-shot boundaries, and evidence-egress proof are governed there.
 
 ## 2. Tooling / model Router
 
@@ -127,6 +130,8 @@ They provide progressive on-demand procedural context. Existing `.dsh/skills` re
 
 Unified Engineering Governance remains the general engineering constitution. Durable requirements include mature/provider-native solutions first; simplicity by total burden; stable narrow interfaces; root-cause/global authority before repeated repairs; one complete Task Packet per coherent stage; exact artifact/exact-head CI/independent review; one normal + at most one exceptional repair then holistic convergence; and do not use the user as the routine Writer/CI/Reviewer message bus when safe exact automation can carry evidence.
 
+The Holistic Engineering Verification, Continuity and Release Method adds the mandatory reusable invariants for cross-layer contract closure, admitted-input totality, production-path fidelity, incident-to-invariant convergence, balanced G0-G12 verification responsibilities, exact-release/staged-artifact proof, validation-environment fidelity and code-continuity classification.
+
 An active bounded task remains owned by the current control/orchestration role until an explicit task-level terminal disposition or an explicit acknowledged handoff. Intermediate CI, independent review, publication/activation authorization, Mark Ready and similar gates are not completion by themselves. At such a gate, execute all currently authorized/capability-available next actions, prepare the minimum blocked next step, and stop only the specific unauthorized/external action while retaining task ownership.
 
 ## 10. Historical / superseded tooling
@@ -151,6 +156,11 @@ Issue #115 is the canonical non-release-blocking tooling backlog for first-real-
 It requires:
 
 - target OS/shell/tool/deployment environment as evidence, not assumption;
+- exact CLI invocation-contract proof for versioned executor/operator CLIs when argument/input semantics matter;
+- canonical repository/CI validation-command reuse instead of ad-hoc stricter or narrower substitutes;
+- a validation-environment fidelity gate: platform-sensitive proof runs on the authoritative platform class, with known mismatches routed once to the correct Linux/host surface rather than repeatedly retried locally;
+- allowlist proof as `CHANGED_PATHS ⊆ ALLOWLIST`, not an invented requirement that every allowlisted file must change;
+- a post-Writer evidence checkpoint before non-decisive environment-sensitive validation tails;
 - Linux validation fallback when local macOS is unsuitable, using the narrowest safe surface: existing GitHub Actions Ubuntu where fit, then an isolated authorized Lightsail Linux environment where host-like behavior is required; the current production Lightsail host is not a generic development sandbox;
 - file-backed execution by default for long, critical or one-shot scripts;
 - target-shell syntax checking and mature ShellCheck/static analysis when applicable and available;
