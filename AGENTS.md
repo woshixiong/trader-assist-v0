@@ -22,7 +22,44 @@ PROJECT_ENGINEERING_RULESET_PREFLIGHT=PASS
 ENGINEERING_PREFLIGHT_GATE=PASS
 ```
 
-## 2. Load specialized procedures only when applicable
+## 2. User shorthand for unified-governance changes
+
+When the user says **“往统一规则里增加内容”**, **“把这条加入统一规则”**, **“add this to the unified rules”**, or an equivalent phrase, treat it as a request to start the Unified Engineering Governance change-routing process.
+
+Do **not** mechanically append all supplied text to Unified V2. Classify first:
+
+```text
+DURABLE_PROJECT_WIDE_CROSS_TASK_ENGINEERING_INVARIANT
+-> update Unified V2
+
+TASK_SPECIFIC_RESEARCH_PROCEDURE_OR_EXAMPLE
+-> research procedure/reference
+-> update V2 only if a reusable project-wide invariant is discovered
+
+HUMAN_EXECUTED_COMMAND_LAUNCHER_PROCEDURE_OR_INCIDENT_EXAMPLE
+-> Generated Command procedure/catalogue
+-> update V2 only if a reusable project-wide invariant is discovered
+
+EXECUTOR_MODEL_TOOL_DEPLOYMENT_SPECIFIC_DETAIL
+-> narrow applicable profile/contract
+-> update V2 only if a reusable project-wide invariant is discovered
+
+ONE_OFF_INCIDENT_OR_HISTORY
+-> Issue/incident history unless it yields a reusable invariant
+```
+
+Default rules:
+
+```text
+NEW_PROJECT_WIDE_GOVERNANCE_AUTHORITY=DISFAVORED
+UNIFIED_V2_REMAINS_SINGLE_PROJECT_WIDE_ENGINEERING_CONSTITUTION=YES
+```
+
+Create a new specialized procedure/contract only when the domain is genuinely narrow, its detail has a materially independent lifecycle, and putting the detail in V2 would create avoidable bloat. Any such document must be indexed, explicitly subordinate to V2 and non-duplicative.
+
+This shorthand does not itself authorize implementation, Mark Ready, merge, deployment, runtime/cloud mutation or any other user-retained gate.
+
+## 3. Load specialized procedures only when applicable
 
 Do **not** read every tool/profile file for every task.
 
@@ -36,7 +73,7 @@ Do **not** read every tool/profile file for every task.
 
 The Unified V2 standard owns project-wide engineering policy. Specialized files may be stricter in their narrow domain but are not competing constitutions.
 
-## 3. Universal execution invariants
+## 4. Universal execution invariants
 
 ```text
 GITHUB_CANONICAL_SOURCE=YES
@@ -60,7 +97,7 @@ CHECKPOINT_RESUME_INSTEAD_OF_REDO=YES
 EXACT_ARTIFACT_EXACT_HEAD_CI_INDEPENDENT_REVIEW=WHEN_APPLICABLE
 ```
 
-## 4. Repository and authority safety
+## 5. Repository and authority safety
 
 - no direct commit to `main` for normal engineering work;
 - no force-push/shared-history rewrite after review begins;
@@ -69,7 +106,7 @@ EXACT_ARTIFACT_EXACT_HEAD_CI_INDEPENDENT_REVIEW=WHEN_APPLICABLE
 - scope expansion, new material architecture/authority/provider/dependency decision or exhausted repair budget -> `SAFE_STOP` / `L1_DECISION_REQUIRED`;
 - Mark Ready, merge, deployment, runtime/cloud mutation, service start/restart/enable/reboot, credentials/private API, wallet/signing, exchange write/order submission/cancellation and autonomous trading always require separate current user authority.
 
-## 5. Review and task ownership
+## 6. Review and task ownership
 
 Final independent adjudication defaults to a **new ordinary ChatGPT review window using the strongest appropriate available model and highest appropriate reasoning**.
 
@@ -77,6 +114,6 @@ If GitHub evidence is sufficient, review exact GitHub head/diff + exact-head CI 
 
 The current control/orchestration role retains task ownership through intermediate CI/review/publication gates, executes every safe authorized next action, and stops only at the specific external or user-retained authority boundary.
 
-## 6. Stale / historical files
+## 7. Stale / historical files
 
 `CODEX.md` and superseded governance are historical evidence only. Do not use them as fallback instruction authority when current indexed governance exists.
