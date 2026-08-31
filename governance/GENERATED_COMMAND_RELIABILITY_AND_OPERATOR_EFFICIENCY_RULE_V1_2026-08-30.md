@@ -12,11 +12,16 @@ The purpose is to reduce avoidable engineering delay caused by:
 
 - platform or shell assumptions that were never verified;
 - forcing work through an unsuitable local macOS environment when a clean Linux validation surface is available;
+- versioned CLI argument/input semantics being guessed from flag names rather than proven from the installed/authoritative command surface;
+- ad-hoc validation commands that differ from repository/CI canonical validation topology;
+- platform-sensitive validation being run on a non-authoritative OS and misclassified as an application defect;
 - false `SAFE_STOP` gates that do not protect a real authority/safety invariant;
+- allowlist maximum scope being misread as a requirement that every allowlisted path must change;
 - long interactive heredocs that are fragile to copy/paste or terminal state;
 - repeated CONT1/CONT2/CONT3 patch chains instead of convergence;
 - one-shot qualification attempts being consumed by wrapper/deployment defects before the intended semantic action starts;
 - rebuilding or rerunning already-completed expensive work after a downstream wrapper/evidence failure;
+- failing to checkpoint a completed semantic Writer delta before non-decisive validation/evidence tails;
 - incomplete release rebinding or duplicated release-sensitive constants across generated artifacts;
 - evidence being generated successfully but not retrievable through the operator's actual transfer surface;
 - requiring the user to diagnose raw launcher state or repeatedly relay command fragments.
@@ -25,6 +30,7 @@ This rule strengthens, but does not replace:
 
 - `UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V1_2026-08-17.md`;
 - `MANDATORY_ENGINEERING_PREFLIGHT_AND_CONVERGENCE_GATE_V1_2026-08-17.md`;
+- `HOLISTIC_ENGINEERING_VERIFICATION_CONTINUITY_AND_RELEASE_METHOD_V1_2026-08-31.md`;
 - `ENGINEERING_TOOL_ONBOARDING_AND_CHANGE_ACCEPTANCE_RULE_V1_2026-08-23.md`;
 - `FINALSHELL_TARGET_HOST_DEPLOYMENT_WORKFLOW_V1_2026-08-26.md`;
 - current task-specific Product / Strategy / Operations / Security authority.
@@ -35,7 +41,7 @@ It grants no Mark Ready, merge, deployment, runtime/cloud, credential/private-AP
 
 ## 2. Incident evidence that motivated this rule
 
-The 2026-08-30 Issue #131 exact-release requalification workflow exposed several distinct command-generation failure classes. They must not be collapsed into one generic “script failed” label.
+The 2026-08-30 Issue #131 exact-release requalification workflow and the 2026-08-31 Issue #139 OpenCode/validation continuation exposed several distinct command-generation failure classes. They must not be collapsed into one generic “script failed” label.
 
 | Incident | Observed result | Failure class | Permanent lesson |
 | --- | --- | --- | --- |
@@ -45,8 +51,14 @@ The 2026-08-30 Issue #131 exact-release requalification workflow exposed several
 | new-release `run_g12.sh` retained a stale hard-coded source-manifest entry count of `287` while the new exact release manifest/identity contained `288` files | `SAFE_STOP: SOURCE_MANIFEST_ENTRY_COUNT_MISMATCH`; deployment was not reached; warmup/full G12 were not reached; `G12_FULL_RUN_COUNT=0` | incomplete release rebinding / duplicated release-sensitive constant / cross-artifact semantic inconsistency | release-sensitive values require one source of truth; mechanical template equality does not prove semantic rebinding completeness; cross-artifact semantic consistency and stale-literal scanning must pass before target-host one-shot execution |
 | diagnostic collection paste appeared “stuck” at the heredoc terminator | FinalShell remained at continuation prompt until one final Enter | interactive heredoc/operator-UX fragility | long critical scripts should be file-backed; if a heredoc is unavoidable, termination/newline behavior must be explicit and the user must be told what a continuation prompt means |
 | diagnostic archive was created with readable mode but could not be seen/downloaded immediately through the user's FinalShell file-manager view | evidence existed but client visibility/download was not established | evidence-egress path/client-state not proven | evidence delivery is part of workflow acceptance; server-side existence alone is insufficient, and a stale file-manager view must be refreshed before absence is inferred |
+| Issue #139 OpenCode launcher required local `git fetch origin main` even after Engineering Control had a fresh authoritative GitHub connector race-check | `SAFE_STOP: FETCH_ORIGIN_MAIN_FAILED` before semantic Writer start | redundant network dependency / false preflight gate | do not add a second less-reliable proof path when the authoritative control-plane identity is already fresh and the local exact HEAD/origin can be verified without network |
+| Issue #139 OpenCode launcher used `--file` while also passing a trailing natural-language argument | OpenCode 1.18.18 reported `File not found: Read the attached Task Packet...` before semantic Writer start | unproven CLI invocation/argument contract | prove the exact installed CLI invocation shape and input transport; a flag existing is not proof of its argument semantics |
+| Issue #139 validation used `mypy --strict scripts/verify_exact_release.py` rather than the repository/CI command | self-package imports were treated as untyped installed third-party modules | ad-hoc validation topology mismatch | use repository/CI canonical validation commands when they exist; do not invent a stricter/narrower local substitute and call its failure an application blocker |
+| Issue #139 then ran canonical `mypy src scripts` on macOS | `os.listxattr` platform typing failure in an unrelated Linux-oriented script | wrong authoritative validation environment | platform-sensitive validation must run on the authoritative platform class; macOS cannot substitute for Ubuntu/Linux CI when the proof depends on `sys.platform`/OS APIs |
+| Issue #139 validation tail required both repair-allowlisted files to change | `expected exactly two repair files changed` even though only the implementation file legitimately changed | false scope exactness | an allowlist proves `CHANGED_PATHS ⊆ ALLOWLIST`; it does not require every allowed path to change unless the semantic contract says so |
+| Issue #139 evidence file was generated only after multiple non-decisive validation tails | repeated tail failures prevented review TXT creation despite a completed bounded Writer delta | evidence checkpoint ordered too late | preserve exact semantic Writer delta/identity evidence immediately after scope proof and before environment-sensitive/non-decisive validation tails |
 
-The first four failures were avoidable generated-command/wrapper defects rather than Trader Assist application failures. The fourth specifically proves that the new Issue #131 lifecycle repair was **not yet exercised on the target host**; an early wrapper failure must not be misclassified as a lifecycle/runtime failure. The last two are operator-transport/UX defects. This distinction is mandatory for future triage.
+The early wrapper/preflight failures above are avoidable generated-command defects, not Trader Assist application failures. The OpenCode semantic repair completed only once the wrapper reached the declared semantic boundary. Later validation-environment failures must not be reclassified as Writer failures or used to rerun a completed semantic attempt when its exact delta remains provable.
 
 ---
 
@@ -65,20 +77,28 @@ PRIVILEGE_MODEL=
 CANONICAL_WORKFLOW=
 LOCAL_ENVIRONMENT_FIT=PASS|FAIL|NOT_APPLICABLE
 VALIDATION_ENVIRONMENT_ROUTE=
+VALIDATION_PLATFORM_CLASS=PLATFORM_NEUTRAL|MACOS|LINUX|TARGET_HOST_SPECIFIC|OTHER|NOT_APPLICABLE
+AUTHORITATIVE_VALIDATION_ENVIRONMENT=
+CANONICAL_VALIDATION_COMMANDS=
+KNOWN_ENVIRONMENT_MISMATCHES=
 LINUX_FALLBACK_REASON=
 REQUIRED_TOOLS=
 REQUIRED_TOOLS_PROVEN=YES|NO
+CLI_INVOCATION_CONTRACT_PROOF=PASS|FAIL|NOT_APPLICABLE
+CLI_INPUT_TRANSPORT=
 OS_SHELL_PORTABILITY_REVIEW=PASS|FAIL
 SCRIPT_TRANSPORT=FILE_BACKED|SHORT_INLINE|HEREDOC_EXCEPTION
 SYNTAX_CHECK=PASS|FAIL|NOT_AVAILABLE
 STATIC_ANALYSIS=PASS|FAIL|NOT_AVAILABLE
 SAFE_STOP_GATES_BOUND_TO_CANONICAL_INVARIANTS=YES|NO
+ALLOWLIST_SEMANTICS_PROOF=PASS|FAIL|NOT_APPLICABLE
 RELEASE_SENSITIVE_SINGLE_SOURCE_OF_TRUTH=PASS|FAIL|NOT_APPLICABLE
 CROSS_ARTIFACT_SEMANTIC_CONSISTENCY=PASS|FAIL|NOT_APPLICABLE
 STALE_RELEASE_LITERAL_SCAN=PASS|FAIL|NOT_APPLICABLE
 ONE_SHOT_SEMANTIC_BOUNDARY=
 SIDE_EFFECT_FREE_PREFLIGHT_COMPLETE_BEFORE_ONE_SHOT=YES|NO|NOT_APPLICABLE
 CHECKPOINT_RESUME_PLAN=
+POST_SEMANTIC_EVIDENCE_CHECKPOINT_PLAN=
 EVIDENCE_EGRESS_PATH=
 EVIDENCE_EGRESS_PLAN=PASS|FAIL|NOT_APPLICABLE
 EVIDENCE_EGRESS_PREFLIGHT=PASS|FAIL|NOT_APPLICABLE
@@ -125,12 +145,73 @@ Rules:
 4. When one implementation can avoid platform variance, prefer a stable standard-library primitive such as Python `hashlib` over branching on unverified external utilities.
 5. If a platform capability is unknown and decisive, issue the smallest read-only probe first rather than embedding an unverified assumption into a large mutation command.
 6. A known local-environment incompatibility is a routing input, not a reason to keep patching the same local command indefinitely.
+7. Do not require a local network check when a fresh authoritative control-plane GitHub identity already proves the live remote state and the current action only needs local exact-head/origin identity; redundant proof must have independent safety value to be a hard gate.
 
 The probe itself must be short, non-mutating and reusable as exact input to the next command generation step.
 
+### 4.1 Exact CLI invocation contract proof
+
+For a versioned CLI whose argument/input semantics affect a model launch, deployment, evidence collection or other material action, prove the exact invocation shape before delivery.
+
+Where applicable record:
+
+```text
+CLI_NAME=
+CLI_VERSION=
+CLI_SUBCOMMAND=
+POSITIONAL_ARGUMENT_SEMANTICS=
+FILE_ARGUMENT_SEMANTICS=
+STDIN_SEMANTICS=
+WORKING_DIRECTORY_SEMANTICS=
+MODEL_OR_PROVIDER_ID_SEMANTICS=
+OUTPUT_MODE_SEMANTICS=
+EXACT_INVOCATION_SHAPE=
+```
+
+Rules:
+
+- `--help` showing a flag exists is not enough when the flag may mean attachment/file input rather than prompt transport;
+- prefer provider-native documented invocation shapes and the installed version's actual help/schema;
+- statically inspect the final generated invocation for forbidden/ambiguous transport combinations where practical;
+- freeze the exact model/provider ID when the route requires no fallback;
+- do not silently change positional/file/stdin transport after route freeze.
+
+Permanent invariant:
+
+```text
+CLI_INVOCATION_CONTRACT_PROOF=REQUIRED_FOR_VERSIONED_MATERIAL_CLI_LAUNCHES
+```
+
 ---
 
-## 5. Linux validation fallback ladder when local macOS is unsuitable
+## 5. Validation environment fidelity and Linux fallback ladder
+
+Validation is authoritative only when both the command topology and environment match the contract being claimed.
+
+Before material validation:
+
+```text
+CANONICAL_VALIDATION_COMMANDS=
+VALIDATION_PLATFORM_CLASS=
+AUTHORITATIVE_VALIDATION_ENVIRONMENT=
+KNOWN_ENVIRONMENT_MISMATCHES=
+LOCAL_ENVIRONMENT_FIT=
+FALLBACK_VALIDATION_SURFACE=
+```
+
+Permanent invariants:
+
+```text
+CANONICAL_VALIDATION_COMMAND_REUSE=REQUIRED
+VALIDATION_ENVIRONMENT_FIDELITY_GATE=REQUIRED
+PLATFORM_SENSITIVE_VALIDATION_ON_NONAUTHORITATIVE_OS=PROHIBITED
+KNOWN_ENVIRONMENT_MISMATCH_REUSE=REQUIRED
+NO_LOCAL_RETRY_AFTER_PROVEN_PLATFORM_MISMATCH=REQUIRED
+```
+
+If repository configuration or CI already defines the canonical command, reuse it unless a narrower command is explicitly proven semantically equivalent for the exact claim. Do not invent an ad-hoc stricter/narrower command and elevate its failure into a new application blocker.
+
+When validation semantics depend on `sys.platform`, OS APIs, filesystem permissions, systemd, kernel behavior, Linux utilities or another platform-specific capability, run that proof on the authoritative platform class. A macOS result does not replace Ubuntu/Linux CI proof; Ubuntu hosted CI does not replace target-host-specific qualification.
 
 When the user's local macOS environment cannot faithfully or efficiently validate Linux-targeted commands because of OS, shell, utility, architecture, dependency or packaging differences, do not repeatedly patch around the incompatibility.
 
@@ -281,11 +362,30 @@ Prohibited false-gate patterns include:
 - treating one historical deployment example as the only legal deployment identity mechanism when current canonical governance permits an exact artifact manifest;
 - treating a missing convenience tool as a safety failure when an already-available standard/native primitive or approved Linux validation surface can provide the exact proof;
 - checking implementation formatting or incidental source shape instead of the actual authoritative artifact/state;
-- creating stricter ad-hoc proof requirements that are not derived from Product / Strategy / Security / Operations / Engineering authority.
+- creating stricter ad-hoc proof requirements that are not derived from Product / Strategy / Security / Operations / Engineering authority;
+- interpreting an allowlist as a requirement that every allowlisted path must change;
+- requiring a redundant local-network proof when fresh authoritative control-plane state plus local exact identity already proves the current invariant.
 
 The goal is not fewer `SAFE_STOP`s. The goal is that each `SAFE_STOP` protects a real boundary and therefore saves time rather than wasting it.
 
-### 8.1 Release-sensitive values require one source of truth and semantic rebinding proof
+### 8.1 Allowlist semantics are set membership, not exact change count
+
+Unless the active semantic contract explicitly requires named paths to change:
+
+```text
+ALLOWLIST_PROOF:
+CHANGED_PATHS ⊆ ALLOWLIST
+```
+
+A path being permitted to change does not mean it must change. A narrow repair may legitimately modify one of two allowlisted files while proving the other remained byte-identical.
+
+Permanent invariant:
+
+```text
+ALLOWLIST_PROOF_IS_SET_MEMBERSHIP_NOT_CHANGE_COUNT=REQUIRED
+```
+
+### 8.2 Release-sensitive values require one source of truth and semantic rebinding proof
 
 Release-specific values must not be copied into multiple generated artifacts as independent hard-coded truths when one canonical source can be parsed or derived.
 
@@ -370,7 +470,7 @@ A wrapper-level sentinel may record that an operator execution was attempted, bu
 
 ---
 
-## 10. Checkpoint and resume; never repeat completed expensive work by default
+## 10. Checkpoint, evidence preservation and resume
 
 Every multi-phase generated workflow must state the exact checkpoint after each expensive or authority-bearing phase.
 
@@ -383,6 +483,14 @@ Examples:
 - deployment completed + evidence packaging failed -> prove deployment identity, then resume evidence collection rather than redeploying;
 - one-shot semantic attempt completed + download failed -> repair only evidence egress; never repeat the semantic attempt merely to recreate a downloadable file;
 - macOS validation fails because of a platform mismatch -> reroute validation to the approved Linux surface; do not rewrite otherwise platform-correct production logic merely to satisfy macOS.
+
+For model-backed Writer work, once the semantic Writer has completed and exact mutation scope can be proven, create/preserve the minimum reviewable delta/identity evidence **before** running non-decisive platform-sensitive validation tails. Later environment/typing/lint/evidence failures must not make the semantic delta unrecoverable.
+
+Permanent invariant:
+
+```text
+POST_WRITER_EVIDENCE_CHECKPOINT_BEFORE_NONDECISIVE_TAIL=REQUIRED
+```
 
 Hidden retry, silent rerun and “start again because the wrapper failed” are prohibited unless the active authority explicitly permits another semantic attempt.
 
@@ -407,6 +515,8 @@ INITIAL_GENERATED_COMMAND
 - classify every prior command failure;
 - remove stale assumptions instead of adding more conditionals;
 - reconsider whether the validation environment itself is wrong;
+- prove the exact installed CLI invocation contract when a versioned CLI is involved;
+- reuse canonical validation commands and authoritative platform classes;
 - prefer a file-backed script / accepted project capability / mature tool / approved Linux validation surface;
 - regenerate one complete replacement rather than another append-only patch;
 - repeat the pre-delivery reliability gate.
@@ -536,6 +646,8 @@ Every failed generated command in a material workflow must be classified before 
 COMMAND_FAILURE_CLASS=
   ENVIRONMENT_CAPABILITY_MISMATCH
   WRONG_VALIDATION_ENVIRONMENT
+  CLI_INVOCATION_CONTRACT_MISMATCH
+  VALIDATION_COMMAND_TOPOLOGY_MISMATCH
   SHELL_PORTABILITY_OR_SYNTAX
   FALSE_SAFE_STOP_GATE
   ARTIFACT_IDENTITY_FAILURE
@@ -578,6 +690,8 @@ EXISTING_ACCEPTED_PROJECT_CAPABILITY
 
 Examples:
 
+- CLI contract: installed/provider-native `--help`, official command reference or machine-readable schema;
+- canonical validation: repository config and existing accepted CI workflow before ad-hoc local variants;
 - shell syntax: target shell native parser / `bash -n`;
 - shell static analysis: ShellCheck where applicable;
 - cross-platform hashing: Python standard library or verified platform-native utility;
@@ -599,14 +713,21 @@ GENERATED_COMMAND_RELIABILITY_GATE=PASS
 TARGET_ENVIRONMENT_PROVEN=YES
 LOCAL_ENVIRONMENT_FIT=PASS_OR_ROUTED_TO_VALIDATED_FALLBACK
 VALIDATION_ENVIRONMENT_ROUTE=DEFINED
+VALIDATION_PLATFORM_CLASS=DEFINED
+AUTHORITATIVE_VALIDATION_ENVIRONMENT=DEFINED
+CANONICAL_VALIDATION_COMMANDS=DEFINED
+KNOWN_ENVIRONMENT_MISMATCHES=RECORDED
+CLI_INVOCATION_CONTRACT_PROOF=PASS_OR_NA
 PORTABILITY_REVIEW=PASS
 CANONICAL_WORKFLOW_MATCH=PASS
 FALSE_GATE_REVIEW=PASS
+ALLOWLIST_SEMANTICS_PROOF=PASS_OR_NA
 RELEASE_SENSITIVE_SINGLE_SOURCE_OF_TRUTH=PASS_OR_NA
 CROSS_ARTIFACT_SEMANTIC_CONSISTENCY=PASS_OR_NA
 STALE_RELEASE_LITERAL_SCAN=PASS_OR_NA
 SIDE_EFFECT_FREE_PREFLIGHT_BEFORE_ONE_SHOT=PASS_OR_NA
 CHECKPOINT_RESUME_PLAN=DEFINED
+POST_SEMANTIC_EVIDENCE_CHECKPOINT_PLAN=DEFINED_OR_NA
 EVIDENCE_EGRESS_PLAN=PASS_OR_NA
 EVIDENCE_EGRESS_PREFLIGHT=PASS_OR_NA
 EVIDENCE_EGRESS_CANARY_OR_DIRECTORY_PROOF=PASS_OR_NA
