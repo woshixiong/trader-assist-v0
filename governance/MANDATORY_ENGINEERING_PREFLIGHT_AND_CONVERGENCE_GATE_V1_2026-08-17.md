@@ -8,7 +8,7 @@ Prevent locally reasonable engineering work from violating project-wide rules, c
 
 This rule is mandatory for every material engineering route, architecture decision, runtime/persistence/provider design, cross-layer repair, technical selection, Writer task package and final implementation prompt.
 
-It complements the mandatory research/evidence/decision method. It grants no merge, deployment, runtime, cloud, credential, account/private API, signing, wallet, exchange-write or order-submission authority.
+It complements the mandatory research/evidence/decision method and `HOLISTIC_ENGINEERING_VERIFICATION_CONTINUITY_AND_RELEASE_METHOD_V1_2026-08-31.md`. It grants no merge, deployment, runtime, cloud, credential, account/private API, signing, wallet, exchange-write or order-submission authority.
 
 ## 1. Why this rule exists
 
@@ -20,6 +20,7 @@ The permanent lesson is:
 - architecture invariants must be frozen before dispatching a Writer on a cross-layer problem;
 - current implementation and future continuation must be reviewed together;
 - realistic provider/scale/freshness constraints must be reviewed before implementation acceptance;
+- verification topology and validation environment must match the authority actually being claimed;
 - one repair loop must not become sunk-cost continuation;
 - a critical project rule must not exist only in chat memory or an obscure Issue comment.
 
@@ -27,16 +28,17 @@ The permanent lesson is:
 
 For every MATERIAL technical task, the engineering orchestrator must execute this order before producing any implementation prompt:
 
-1. **Load canonical rules** — `AGENTS.md`, `governance/PROJECT_RULES_INDEX.md`, this file, the research/evidence/decision method, the active bounded issue, current accepted architecture, and live GitHub/CI state.
+1. **Load canonical rules** — `AGENTS.md`, `governance/PROJECT_RULES_INDEX.md`, this file, `governance/HOLISTIC_ENGINEERING_VERIFICATION_CONTINUITY_AND_RELEASE_METHOD_V1_2026-08-31.md`, the research/evidence/decision method, the active bounded issue, current accepted architecture, and live GitHub/CI state.
 2. **Classify the task** — purely mechanical/exact-state work or material design work. Any new architecture, authority, provider, persistence, lifecycle, concurrency, recovery, scale, performance or cross-layer choice is material.
 3. **Independent analysis first** — identify the problem, root cause candidates, affected authorities, invariants and likely routes before reading external conclusions.
 4. **External mature-solution research** — for material route choices, check authoritative docs, mature frameworks/patterns, validated cases, competing approaches and disconfirming evidence.
 5. **Synthesis** — state what external evidence confirms, modifies, rejects or leaves uncertain.
 6. **Global Architecture Compatibility Gate** — verify current correctness, authority preservation, future continuity, replaceability, migration/lock-in risk and overengineering risk.
 7. **Scale / Provider / Freshness Gate** — calculate target-scale request/database workload and prove realistic-size behavior where production scale matters.
-8. **Attack matrix** — define the important normal, failure, restart/replay, boundary and mixed-state cases before implementation.
-9. **Repair budget and stop condition** — state whether this is initial implementation, normal repair or exceptional repair, and what event forces a holistic stop.
-10. **Only then dispatch Writer** — issue one complete self-contained task package. Do not append architecture-critical requirements later as an afterthought.
+8. **Holistic Verification / Validation-Environment Gate** — freeze applicable contract-closure, admitted-input-totality, production-path, incident-convergence, canonical validation-command, authoritative platform/environment, exact-release and evidence-checkpoint plans.
+9. **Attack matrix** — define the important normal, failure, restart/replay, boundary and mixed-state cases before implementation.
+10. **Repair budget and stop condition** — state whether this is initial implementation, normal repair or exceptional repair, and what event forces a holistic stop.
+11. **Only then dispatch Writer** — issue one complete self-contained task package. Do not append architecture-critical requirements later as an afterthought.
 
 If any mandatory step is unresolved, Writer dispatch is prohibited.
 
@@ -73,6 +75,20 @@ PROVIDER_SCALE_BUDGET=PASS/FAIL/NOT_APPLICABLE
 REALISTIC_SCALE_TEST_PLAN=
 FRESHNESS_OR_LATENCY_GATE=
 
+HOLISTIC_METHOD_APPLICABLE=YES/NO
+CROSS_LAYER_CONTRACT_CLOSURE_PLAN=
+ADMITTED_INPUT_TOTALITY_PLAN=
+PRODUCTION_PATH_FIDELITY_PLAN=
+INCIDENT_TO_INVARIANT_PLAN=
+CANONICAL_VALIDATION_COMMANDS=
+VALIDATION_PLATFORM_CLASS=PLATFORM_NEUTRAL/MACOS/LINUX/TARGET_HOST_SPECIFIC/OTHER/NOT_APPLICABLE
+AUTHORITATIVE_VALIDATION_ENVIRONMENT=
+KNOWN_ENVIRONMENT_MISMATCHES=
+FALLBACK_VALIDATION_SURFACE=
+EVIDENCE_CHECKPOINT_PLAN=
+EXACT_RELEASE_VERIFICATION_PLAN=
+CONTINUITY_CLASSIFICATION=
+
 ATTACK_MATRIX_FROZEN=YES/NO
 REPAIR_STAGE=INITIAL/NORMAL_REPAIR/EXCEPTIONAL_REPAIR/HOLISTIC_CONVERGENCE
 STOP_CONDITION=
@@ -82,7 +98,7 @@ PROHIBITED_SCOPE=
 ROLLBACK_OR_SAFE_STOP=
 ```
 
-`ENGINEERING_PREFLIGHT_GATE=PASS` is allowed only when every applicable mandatory field is resolved.
+`ENGINEERING_PREFLIGHT_GATE=PASS` is allowed only when every applicable mandatory field is resolved. Use `NOT_APPLICABLE` explicitly where a holistic field genuinely does not apply.
 
 For mechanical work, the record may be shortened, but if the work exposes a new material design choice it must immediately reclassify to MATERIAL and run the full gate.
 
@@ -241,7 +257,36 @@ The concise escalation must state:
 
 The user may then make the final route decision.
 
-## 12. Permanent engineering objective
+## 12. Holistic verification / validation-environment gate
+
+`HOLISTIC_ENGINEERING_VERIFICATION_CONTINUITY_AND_RELEASE_METHOD_V1_2026-08-31.md` is the mandatory detailed authority for the following decisions:
+
+```text
+CROSS_LAYER_CONTRACT_CLOSURE
+ADMITTED_INPUT_TOTALITY
+PRODUCTION_PATH_FIDELITY
+INCIDENT_TO_INVARIANT_CONVERGENCE
+BALANCED_G0_TO_G12_VERIFICATION_RESPONSIBILITIES
+EXACT_RELEASE_AND_STAGED_ARTIFACT_VERIFICATION
+VALIDATION_ENVIRONMENT_FIDELITY
+CODE_CONTINUITY_CLASSIFICATION
+```
+
+Before dispatching a Writer or accepting a material implementation, establish which repository/CI validation commands are canonical and which platform class makes each result authoritative.
+
+Permanent rules:
+
+```text
+CANONICAL_VALIDATION_COMMAND_REUSE=REQUIRED
+PLATFORM_SENSITIVE_VALIDATION_ON_NONAUTHORITATIVE_OS=PROHIBITED
+KNOWN_ENVIRONMENT_MISMATCH_REUSE=REQUIRED
+NO_LOCAL_RETRY_AFTER_PROVEN_PLATFORM_MISMATCH=REQUIRED
+POST_WRITER_EVIDENCE_CHECKPOINT_BEFORE_NONDECISIVE_TAIL=REQUIRED
+```
+
+Do not invent a stricter ad-hoc validation command and treat its environment-specific failure as a new application blocker. Do not erase or rerun a completed semantic Writer merely because a later platform-sensitive validation tail ran on the wrong OS when the exact Writer delta remains provable.
+
+## 13. Permanent engineering objective
 
 Optimize in this order:
 
