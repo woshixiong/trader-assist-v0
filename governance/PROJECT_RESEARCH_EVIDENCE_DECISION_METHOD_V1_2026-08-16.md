@@ -1,149 +1,119 @@
-# Project Research, Evidence, and Decision Method V1
+# Trader Assist / Trade OS — Research, Evidence and Decision Procedure V1
 
-Status: **MANDATORY PROJECT GOVERNANCE**
+**Status:** TASK-CONDITIONAL PROCEDURE CANDIDATE  
+**Effective date:** 2026-08-16  
+**Normative owner:** `UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V2_2026-09-01.md`
 
-Effective scope: Trader Assist / Trade OS project research, planning, strategy, product, engineering, architecture, technology selection, framework selection, and other material direction-setting work.
+This file is a reusable **procedure and output template** for material direction-setting research. It does not create a second project-wide engineering authority. Unified V2 governs if there is any conflict.
 
-## Purpose
+Use this procedure when a task materially sets or changes product, strategy, engineering route, architecture, provider, framework, tool, migration, optimization or other direction on which meaningful engineering time/risk will depend.
 
-Material project decisions must not be produced from either unsupported intuition or uncritical copying of external consensus. Every applicable task must separate independent reasoning from external evidence collection, then explicitly synthesize the two before a final recommendation is issued.
+Do not require it for purely mechanical execution of an already-frozen plan. If a mechanical task exposes a new material decision, apply this procedure to that decision.
 
-The required order is:
+---
 
-1. **Independent analysis first**
-2. **External research and evidence second**
-3. **Synthesis and final decision third**
+## 1. Mandatory three-stage sequence
 
-The order is mandatory. Do not reverse it, collapse it into one opaque step, or read external conclusions first and later present them as independent reasoning.
+```text
+PHASE 1 — INDEPENDENT ANALYSIS
+PHASE 2 — EXTERNAL / MATURE EVIDENCE
+PHASE 3 — SYNTHESIS / DECISION
+```
 
-## Applicability
+Do not reverse or collapse the order.
 
-Use this method for any task that materially determines or changes one or more of the following:
+### Phase 1 — Independent analysis
 
-- research agenda or research plan;
-- product direction, scope, prioritization, or launch route;
-- trading-strategy research direction or strategy-design choice;
-- engineering route, implementation approach, or build-vs-buy choice;
-- system architecture, data architecture, infrastructure, reliability, or security direction;
-- technology, library, framework, provider, protocol, model, Agent, or tooling selection;
-- operating workflow or governance design;
-- material optimization, replacement, migration, or deprecation decisions;
-- any other recommendation where the project would spend meaningful engineering time, money, operational risk, or research capacity based on the answer.
+Before consulting external conclusions, record a short pre-research position:
 
-This method is not required for purely mechanical execution of an already-authorized plan, exact state verification, routine file movement, formatting, or other tasks that do not create a new substantive judgment. If a task begins as execution but exposes a new material design choice, this method becomes required for that choice.
+```text
+PROBLEM=
+USER_OR_PROJECT_OBJECTIVE=
+KNOWN_FACTS=
+ASSUMPTIONS=
+UNKNOWNS=
+DECISION_CRITERIA=
+CAUSAL_OR_MECHANICAL_MODEL=
+CANDIDATE_ROUTES=
+EXPECTED_BENEFITS=
+EXPECTED_FAILURE_MODES=
+EVIDENCE_THAT_WOULD_CONFIRM_OR_FALSIFY=
+```
 
-## Phase 1 — Independent analysis
+Independent reasoning still uses live project facts and GitHub state; it simply forms the analytical position before external recommended solutions anchor it.
 
-Before seeking external conclusions, perform an independent pass using the known project facts, first principles, domain mechanics, constraints, and explicit user objectives.
+### Phase 2 — External evidence
 
-At minimum, establish:
+Prioritize:
 
-- the real problem being solved;
-- assumptions and unknowns;
-- decision criteria and constraints;
-- causal/mechanical reasoning;
-- candidate approaches or hypotheses;
-- expected advantages, failure modes, and trade-offs;
-- what evidence would confirm, weaken, or falsify the preliminary view.
-
-For material decisions, preserve a short **pre-research position** so later work can distinguish genuinely independent reasoning from conclusions adopted from outside sources.
-
-Independent analysis is not a license to ignore known project facts or live repository state. It means the analytical position is formed before consulting external opinions, frameworks, reports, or recommended solutions for the specific decision.
-
-## Phase 2 — External research and evidence
-
-After the independent pass, research the strongest available external evidence relevant to the decision.
-
-Research broadly enough to include, when applicable:
-
-- official documentation and specifications;
-- primary-source technical material;
-- academic papers and serious research reports;
-- mature industry frameworks and standard practices;
-- maintained open-source implementations;
-- benchmark results and reproducible evaluations;
-- production case studies and postmortems;
-- independently verified examples of successful use;
-- known failure cases, limitations, criticisms, and counterexamples;
-- competing approaches, not only evidence supporting the initial hypothesis.
-
-### Source priority
-
-Prefer sources in roughly this order when the category exists:
-
-1. official specifications, documentation, source repositories, and first-party technical material;
-2. primary research, peer-reviewed work, or directly inspectable datasets/benchmarks;
-3. mature maintained frameworks and credible production case studies;
+1. official specifications, provider docs and first-party source repositories;
+2. primary research, inspectable datasets and reproducible benchmarks;
+3. mature maintained frameworks and credible production cases/postmortems;
 4. high-quality independent technical analysis;
-5. community discussion or anecdotal reports only as supplementary evidence.
+5. community discussion only as supplementary evidence.
 
-For crypto/blockchain/transaction/arbitrage work, prefer English-language primary and technical sources unless another source is demonstrably more authoritative for the specific subject.
+Research competing approaches and disconfirming evidence, not only support for the preliminary view.
 
-### Evidence quality rules
+Check freshness where it matters. Distinguish measured evidence from marketing/opinion. Evaluate mature solutions against actual Trader Assist / Trade OS constraints rather than adopting them by popularity.
 
-- Check publication/update date where freshness matters.
-- Separate measured evidence from claims, marketing, and opinion.
-- Prefer reproducible or inspectable evidence over popularity.
-- Search for disconfirming evidence and failure reports, not only supporting evidence.
-- Do not treat a mature framework as automatically suitable for this project; evaluate fit against project constraints.
-- Do not recommend custom development before checking whether a maintained external solution already solves the problem adequately.
+Before recommending custom commodity engineering, explicitly check accepted project capability, provider-native, standard/official and mature maintained alternatives.
 
-## Phase 3 — Synthesis and final decision
+### Phase 3 — Synthesis / decision
 
-Only after Phases 1 and 2 are complete should the final report, route, or recommendation be produced.
+Record:
 
-The synthesis must explicitly compare the independent view with the external evidence and identify:
+```text
+WHAT_EXTERNAL_EVIDENCE_CONFIRMS=
+WHAT_IT_MODIFIES=
+WHAT_IT_REJECTS=
+RESIDUAL_UNCERTAINTY=
+REJECTED_ROUTES_AND_WHY=
+SELECTED_ROUTE=
+WHY_IT_FITS_PROJECT_CONSTRAINTS=
+VALIDATION_EXPERIMENT_OR_REHEARSAL_REQUIRED=
+```
 
-- what the external research confirms;
-- what it changes or refines;
-- what it contradicts or falsifies;
-- which uncertainties remain unresolved;
-- which candidate routes are rejected and why;
-- why the selected route best fits the actual Trader Assist / Trade OS constraints.
+Final route status should be one of:
 
-For a material decision, the final output should make clear whether the recommendation is:
+```text
+INDEPENDENTLY_DERIVED_EXTERNALLY_CONFIRMED
+INDEPENDENTLY_DERIVED_EXTERNALLY_MODIFIED
+PRELIMINARY_ROUTE_REJECTED_BY_EVIDENCE
+UNRESOLVED_REQUIRES_EXPERIMENT_OR_MORE_EVIDENCE
+```
 
-- **independently derived and externally confirmed**;
-- **independently derived but externally modified**;
-- **rejected after external evidence**; or
-- **still uncertain and requiring an experiment or additional evidence**.
+Research must converge. Do not keep searching indefinitely around the same failing design.
 
-Do not hide disagreement between first-principles reasoning and external evidence. A conflict is itself decision-relevant information.
+---
 
-## Required output standard
+## 2. Minimum deliverable
 
-For substantive research/route-setting work, the deliverable should contain enough structure for another project participant to audit the reasoning. At minimum include:
+A material research/route decision should be auditable from five compact sections:
 
-1. **Independent view** — initial reasoning, assumptions, candidate routes, and decision criteria.
-2. **External evidence** — the most relevant sources, frameworks, cases, counterexamples, and findings.
-3. **Synthesis** — where external evidence confirms, modifies, or rejects the independent view.
-4. **Decision / recommendation** — selected route and rationale tied to project constraints.
-5. **Residual uncertainty / validation plan** — what still needs testing, benchmarking, replay, shadow evidence, or operational validation.
+1. **Independent view** — problem, mechanics, assumptions, candidate routes;
+2. **External evidence** — strongest primary/mature sources plus counterexamples;
+3. **Synthesis** — confirmation/modification/rejection;
+4. **Decision** — selected route and rejected alternatives;
+5. **Residual uncertainty / validation plan**.
 
-The format may be compressed for time-critical work, but the three-stage sequence must still be preserved.
+The format may be compressed for time-critical work, but the three-stage sequence remains visible.
 
-## Anti-patterns prohibited
+---
 
-The following are not acceptable substitutes for this method:
+## 3. Anti-patterns
 
-- searching first and merely summarizing the most common external answer;
-- producing a preferred answer first and searching only for supporting evidence;
-- citing many sources without independent causal analysis;
-- claiming independent reasoning after external conclusions have already anchored the analysis;
-- selecting a fashionable or complex framework without comparing simpler or mature alternatives;
-- ignoring contrary evidence, negative case studies, or project-specific constraints;
-- presenting an external framework as validated for Trader Assist / Trade OS without checking fit.
+Do not:
 
-## Relationship to existing project rules
+- search first and later present the external consensus as independent reasoning;
+- select a preferred answer and search only for confirmation;
+- cite many sources without causal analysis;
+- adopt a fashionable/complex framework without comparing simpler mature routes;
+- ignore negative cases or project-specific constraints;
+- recommend custom commodity infrastructure before mature-solution comparison;
+- allow research itself to become an endless substitute for a decision or experiment.
 
-This method complements, rather than replaces, the existing efficiency-first and minimum-safe-boundary rules.
+---
 
-External research should actively look for mature solutions that reduce custom engineering. The final route should still prefer the smallest adequate, testable, reversible solution when it satisfies the real requirement.
+## 4. Authority boundary
 
-No research conclusion independently grants implementation, commit, push, Mark Ready, merge, deployment, runtime, cloud, credential, account, signing, or exchange-write authority. Existing authorization gates remain unchanged.
-
-## Successor-window requirement
-
-Every successor window or Agent that performs an applicable research or direction-setting task must follow this document without requiring the user to restate the method.
-
-If a task packet or prompt conflicts with this method without explicitly superseding it, this project governance document controls.
+Research conclusions do not independently authorize implementation, commit/push, Mark Ready, merge, deployment, runtime/cloud mutation, credential/private API, wallet/signing, exchange write/order submission or trading action. Those remain governed by Unified V2 and current user/domain authority.
