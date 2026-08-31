@@ -9,6 +9,8 @@ This document consolidates the durable engineering rules previously distributed 
 
 When this document conflicts with an older general engineering-process rule, this document governs for future engineering. More specific current product, strategy, security, operations or authority contracts still govern their own narrower domain when they are stricter or more specific.
 
+`HOLISTIC_ENGINEERING_VERIFICATION_CONTINUITY_AND_RELEASE_METHOD_V1_2026-08-31.md` is the mandatory detailed companion for project-wide contract closure, verification topology, incident convergence, release/staged-artifact proof, validation-environment fidelity and code-continuity methodology. `GENERATED_COMMAND_RELIABILITY_AND_OPERATOR_EFFICIENCY_RULE_V1_2026-08-30.md` remains the specialized detailed authority for human-executed commands and launchers.
+
 ---
 
 ## 1. Canonical operating principle
@@ -108,8 +110,8 @@ Use this order when rules appear to conflict:
 1. explicit current user authority and safety boundary;
 2. current accepted product/strategy/security/operations authority for the narrow domain;
 3. this unified engineering standard;
-4. mandatory preflight and research-method documents;
-5. specialized execution contracts such as Hermes when the relevant role is active;
+4. mandatory preflight, holistic verification method and research-method documents;
+5. specialized execution contracts such as Generated Command Reliability or Hermes when the relevant role is active;
 6. older merged workflow documents;
 7. Draft/historical governance and chat summaries as research inputs only.
 
@@ -481,6 +483,40 @@ Documentation-only governance changes may be performed through a GitHub connecto
 
 ---
 
+## 13A. Holistic verification, validation topology and environment fidelity
+
+For material implementation/review/release work, also apply `HOLISTIC_ENGINEERING_VERIFICATION_CONTINUITY_AND_RELEASE_METHOD_V1_2026-08-31.md`.
+
+Permanent project-wide invariants:
+
+```text
+CROSS_LAYER_CONTRACT_CLOSURE=REQUIRED
+ADMITTED_INPUT_TOTALITY=REQUIRED
+PRODUCTION_PATH_FIDELITY=REQUIRED
+VERIFICATION_TOPOLOGY_MUST_MATCH_AUTHORITY_TOPOLOGY=REQUIRED
+INCIDENT_TO_INVARIANT_CONVERGENCE=REQUIRED
+EXACT_RELEASE_VERIFICATION_BEFORE_TARGET_HOST=REQUIRED_WHEN_SAFE_AND_PRACTICAL
+CODE_CONTINUITY_REVIEW_FOR_MATERIAL_CHANGES=REQUIRED
+VALIDATION_ENVIRONMENT_FIDELITY=REQUIRED
+```
+
+Before accepting a material validation result, freeze the canonical validation command and the authoritative environment/platform class for the claim. Reuse repository/CI commands where they already define the accepted proof.
+
+```text
+CANONICAL_VALIDATION_COMMAND_REUSE=REQUIRED
+PLATFORM_SENSITIVE_VALIDATION_ON_NONAUTHORITATIVE_OS=PROHIBITED
+KNOWN_ENVIRONMENT_MISMATCH_REUSE=REQUIRED
+NO_LOCAL_RETRY_AFTER_PROVEN_PLATFORM_MISMATCH=REQUIRED
+```
+
+A macOS-only platform-sensitive failure does not override a Linux/Ubuntu CI contract merely because it is local. An Ubuntu hosted-runner result does not replace target-host-specific systemd/filesystem/network qualification. Route each proof to the narrowest authoritative environment.
+
+For generated-command scope gates, an allowlist means `CHANGED_PATHS ⊆ ALLOWLIST`; do not invent an exact-change-count requirement unless the semantic contract itself requires every listed path to change.
+
+After a semantic Writer completes and exact mutation identity is provable, preserve the Writer delta/evidence checkpoint before non-decisive environment-sensitive validation tails. A later wrapper, platform, lint/type invocation or evidence-packaging failure must not erase the semantic result or automatically rerun the Writer.
+
+---
+
 ## 14. Coherent stage execution and user-attention rule
 
 One engineering stage should represent one coherent objective, not one file, command, lint finding or Reviewer comment.
@@ -849,9 +885,11 @@ EXACT CI RUN FOR THAT HEAD
 
 CI from an older SHA is stale evidence.
 
-Before commit/push when local execution is part of the stage, run all applicable local gates. GitHub CI verifies exact remote content; it should not be used as the first avoidable downstream test.
+Before commit/push when local execution is part of the stage, run all applicable local gates on an authoritative validation environment for the claim. GitHub CI verifies exact remote content; it should not be used as the first avoidable downstream test, but it **is** the authoritative surface for CI-platform-sensitive proof that cannot be faithfully established on local macOS.
 
 After semantic acceptance, freeze exact content before release finalization. Commit content must match the accepted candidate when a pre-commit artifact-review workflow is used.
+
+For the current FinalShell/SFTP exact-artifact model, release-manifest creation may bind to a clean exact Git candidate, while verification of a staged artifact must not require the staged directory itself to contain `.git`. Retained canonical manifest + explicit expected release SHA + exact selected-path/hash/size verification is the correct staged-artifact identity shape.
 
 Mark Ready, merge, deployment and production activation remain separate authority gates.
 
@@ -927,12 +965,13 @@ Report only commands/results actually observed. Do not convert unrun checks into
 When a new durable engineering lesson is discovered:
 
 1. determine whether it is project-wide or task-specific;
-2. avoid creating another overlapping constitution if this document can be amended cleanly;
+2. avoid creating another overlapping constitution if this document or the existing holistic/generated-command specialized authority can be amended cleanly;
 3. apply the three-stage research method for material new policy;
 4. update this canonical file and `AGENTS.md` / `PROJECT_RULES_INDEX.md` when project-wide;
-5. explicitly disposition superseded Draft governance;
-6. preserve historical incidents as rationale, not as competing active authority;
-7. independently review governance changes before merge.
+5. update `HOLISTIC_ENGINEERING_VERIFICATION_CONTINUITY_AND_RELEASE_METHOD_V1_2026-08-31.md` for reusable verification/continuity/release methodology, or the generated-command rule for operator-command specifics;
+6. explicitly disposition superseded Draft governance;
+7. preserve historical incidents as rationale, not as competing active authority;
+8. independently review governance changes before merge.
 
 The governance system itself must follow simplicity-first: **one canonical engineering ruleset, small specialized contracts only where role/domain specificity requires them**.
 
@@ -944,6 +983,7 @@ This unified standard intentionally absorbs the durable principles from the foll
 
 - merged research/evidence/decision method — retained as a specialized detailed method and mandatory companion;
 - PR #107 mandatory preflight/convergence gate — retained as the detailed material-task preflight companion;
+- Issue #139 holistic verification/continuity/release method — retained as the detailed project-wide verification-method companion once independently accepted and merged;
 - Draft PR #101 continuity/scale-provider principles — absorbed;
 - Draft PR #96 one-paste Terminal delivery rule — absorbed, and its lower-user-burden one-paste semantics supersede the older mandatory user-facing Terminal/Codex classification;
 - Draft PR #86 Engineering Workflow V4 — durable workflow, Research-Before-Build, reuse, review, repair-stop and model-routing principles absorbed;
@@ -974,6 +1014,18 @@ CODE_CONTINUITY_AND_REPLACEABLE_SEAMS=MANDATORY
 PROVIDER_SCALE_FRESHNESS_BUDGET=MANDATORY_WHEN_APPLICABLE
 GLOBAL_ROOT_CAUSE_BEFORE_LOCAL_PATCH_LOOPS=YES
 REAL_EXTERNAL_CONTRACT_EVIDENCE=MANDATORY_WHEN_APPLICABLE
+CROSS_LAYER_CONTRACT_CLOSURE=REQUIRED_WHEN_APPLICABLE
+ADMITTED_INPUT_TOTALITY=REQUIRED_WHEN_APPLICABLE
+PRODUCTION_PATH_FIDELITY=REQUIRED_WHEN_APPLICABLE
+VERIFICATION_TOPOLOGY_MUST_MATCH_AUTHORITY_TOPOLOGY=YES
+INCIDENT_TO_INVARIANT_CONVERGENCE=REQUIRED
+EXACT_RELEASE_VERIFICATION_BEFORE_TARGET_HOST=REQUIRED_WHEN_SAFE_AND_PRACTICAL
+VALIDATION_ENVIRONMENT_FIDELITY=REQUIRED
+CANONICAL_VALIDATION_COMMAND_REUSE=REQUIRED
+PLATFORM_SENSITIVE_VALIDATION_ON_NONAUTHORITATIVE_OS=PROHIBITED
+KNOWN_ENVIRONMENT_MISMATCH_REUSE=REQUIRED
+ALLOWLIST_PROOF_IS_SET_MEMBERSHIP_NOT_CHANGE_COUNT=REQUIRED
+POST_WRITER_EVIDENCE_CHECKPOINT_BEFORE_NONDECISIVE_TAIL=REQUIRED
 CAPABILITY_MATCH=MANDATORY
 USER_AS_ROUTINE_MESSAGE_BUS=PROHIBITED
 ACTIVE_TASK_OWNERSHIP_UNTIL_TERMINAL_DISPOSITION=REQUIRED
