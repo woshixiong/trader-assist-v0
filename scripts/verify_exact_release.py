@@ -18,6 +18,7 @@ REQUIRED_FILES: Final = (
     "requirements-runtime.lock",
     "requirements-dev.lock",
     "scripts/run_three_setup_shadow_runtime.py",
+    "scripts/run_first_launch_public_runtime.py",
     "scripts/p4a/run_three_setup_shadow_runtime.sh",
     "deploy/p4a/config/three-setup-shadow.json.example",
     "deploy/p4a/systemd/trader-assist-v0-three-setup.env.example",
