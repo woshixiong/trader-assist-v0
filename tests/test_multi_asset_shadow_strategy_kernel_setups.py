@@ -476,6 +476,45 @@ def test_range_long_and_short_exact_wick_true_range_formulas(
     assert len(same_family) == 1
 
 
+@pytest.mark.parametrize(
+    ("side", "current", "previous"),
+    (
+        (
+            Side.LONG,
+            bar(20, open_="100", high="100", low="100", close="100"),
+            bar(19, open_="101", high="102", low="100", close="101"),
+        ),
+        (
+            Side.SHORT,
+            bar(20, open_="110", high="110", low="110", close="110"),
+            bar(19, open_="109", high="110", low="108", close="109"),
+        ),
+    ),
+)
+def test_issue138_zero_intrabar_range_gap_is_no_range_candidate(
+    side: Side, current: Bar, previous: Bar
+) -> None:
+    """A valid gap candle is causal data, but has no CLV/wick setup geometry."""
+    bars_5m = (*baseline(current)[:-2], previous, current)
+    result = evaluate_strategy(
+        StrategyEvaluationInput(
+            bars_5m,
+            Decimal("0.1"),
+            bars_15m=_range_bars(),
+            bars_1h=(),
+            zone_book=BOOK,
+        )
+    )
+    assert not any(
+        item.setup_family is SetupFamily.RANGE_EDGE_REJECTION and item.side is side
+        for item in result.ledger.events
+    )
+    assert not any(
+        item.reason in {"RANGE_LONG_CONFIRMED", "RANGE_SHORT_CONFIRMED"}
+        for item in result.decisions
+    )
+
+
 def test_same_event_dedup_new_deeper_sweep_supersession_and_no_timeout() -> None:
     first = bar(20, open_="100", high="101", low="99", close="100")
     created = evaluate(first)

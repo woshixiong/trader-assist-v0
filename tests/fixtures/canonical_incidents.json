@@ -1,0 +1,56 @@
+[
+  {
+    "INCIDENT_ID": "#119",
+    "OBSERVED_HIGH_LEVEL_FAILURE": "First-Launch-20 recovery and first LIVE execution were not proven at production history scale.",
+    "LOWEST_REPRODUCIBLE_CONTRACT": "Durable Strategy continuation must restore causally from 2304 closed 5m bars per market without unbounded reads.",
+    "GENERALIZED_INVARIANT": "PRODUCTION_PATH_FIDELITY",
+    "PRODUCTION_COMPOSITION_SCENARIO": "Target-20 x 2304 recovery, exact continuation restore, first LIVE cohort, Evidence and Scanner topology.",
+    "RELEASE_OR_HOST_RELEVANCE": "Core semantics must pass off-host before target-host qualification.",
+    "FIXED_REGRESSION_ID": "tests/test_issue119_real_20x2304.py::test_issue119_real_first_launch_20_x_2304_recovery_to_first_live"
+  },
+  {
+    "INCIDENT_ID": "#129",
+    "OBSERVED_HIGH_LEVEL_FAILURE": "WebSocket session control, acknowledgement, heartbeat, reconnect, and teardown owners diverged.",
+    "LOWEST_REPRODUCIBLE_CONTRACT": "One exact provider session owns control parsing, subscription identity, heartbeat, reconnect, and unified teardown.",
+    "GENERALIZED_INVARIANT": "VERIFICATION_TOPOLOGY_MUST_MATCH_AUTHORITY_TOPOLOGY",
+    "PRODUCTION_COMPOSITION_SCENARIO": "First-Launch-20 public session uses the production Runtime session seam and exact subscription projection.",
+    "RELEASE_OR_HOST_RELEVANCE": "Public-provider rehearsal must exercise the whole application, not raw transport alone.",
+    "FIXED_REGRESSION_ID": "tests/test_multi_asset_shadow_ws_session_contract.py::test_provider_control_contract_and_single_session_owners"
+  },
+  {
+    "INCIDENT_ID": "#131",
+    "OBSERVED_HIGH_LEVEL_FAILURE": "Recursive lifecycle successor identity and startup ownership could prevent the cohort reaching ACTIVE.",
+    "LOWEST_REPRODUCIBLE_CONTRACT": "Automatic lifecycle successor identity is bounded, deterministic, restart-reusable, and single-owner.",
+    "GENERALIZED_INVARIANT": "INCIDENT_TO_INVARIANT_CONVERGENCE",
+    "PRODUCTION_COMPOSITION_SCENARIO": "Real cold First-Launch-20 progresses WARMING to ACTIVE, then emits exactly one LIVE callback.",
+    "RELEASE_OR_HOST_RELEVANCE": "Lifecycle liveness is a pre-host application semantic, not a systemd qualification concern.",
+    "FIXED_REGRESSION_ID": "tests/test_issue131_lifecycle_liveness.py::test_real_cold_first_launch_20_run_reaches_active_then_one_live_callback"
+  },
+  {
+    "INCIDENT_ID": "#134",
+    "OBSERVED_HIGH_LEVEL_FAILURE": "Post-ACTIVE continuation failed for valid partial higher-timeframe prefix phases.",
+    "LOWEST_REPRODUCIBLE_CONTRACT": "Every UTC-aligned valid 5m prefix has causal 15m/1h aggregation and exact checkpoint continuation.",
+    "GENERALIZED_INVARIANT": "ADMITTED_INPUT_TOTALITY",
+    "PRODUCTION_COMPOSITION_SCENARIO": "First-Launch-20 crosses ACTIVE and completes a post-ACTIVE production boundary report.",
+    "RELEASE_OR_HOST_RELEVANCE": "Arbitrary launch phase must be proven before an exact release reaches a host.",
+    "FIXED_REGRESSION_ID": "tests/test_issue134_post_active_continuation.py::test_issue134_all_start_phases_match_causal_aggregation_at_every_prefix"
+  },
+  {
+    "INCIDENT_ID": "#136",
+    "OBSERVED_HIGH_LEVEL_FAILURE": "A transient latest-target provider omission aborted startup instead of using the bounded owner recovery.",
+    "LOWEST_REPRODUCIBLE_CONTRACT": "Exactly one owner-bounded same-target retry may recover a transient latest-bar omission without a third request.",
+    "GENERALIZED_INVARIANT": "CROSS_LAYER_CONTRACT_CLOSURE",
+    "PRODUCTION_COMPOSITION_SCENARIO": "Target-20 startup remains pinned to one target through cooldown/retry and fails closed when the budget is exhausted.",
+    "RELEASE_OR_HOST_RELEVANCE": "Provider delay behavior belongs in deterministic application gates and public rehearsal before host soak.",
+    "FIXED_REGRESSION_ID": "tests/test_multi_asset_shadow_runtime_acceptance.py::test_transient_latest_target_omission_recovers_once_for_target20"
+  },
+  {
+    "INCIDENT_ID": "#138",
+    "OBSERVED_HIGH_LEVEL_FAILURE": "A valid zero-intrabar-range gap candle reached strict CLV through RANGE_EDGE_REJECTION.",
+    "LOWEST_REPRODUCIBLE_CONTRACT": "RANGE_EDGE_REJECTION maps high == low to no candidate before CLV/wick geometry while Bar remains valid.",
+    "GENERALIZED_INVARIANT": "CROSS_LAYER_CONTRACT_CLOSURE",
+    "PRODUCTION_COMPOSITION_SCENARIO": "A zero-range member is admitted as causal history without a false Range Edge signal or partial cohort authority.",
+    "RELEASE_OR_HOST_RELEVANCE": "The exact release must prove this semantic off-host; target-host qualification is not the first regression run.",
+    "FIXED_REGRESSION_ID": "tests/test_multi_asset_shadow_strategy_kernel_setups.py::test_issue138_zero_intrabar_range_gap_is_no_range_candidate"
+  }
+]
