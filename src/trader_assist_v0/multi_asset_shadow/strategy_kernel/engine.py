@@ -645,6 +645,12 @@ def _range_valid(
 def _range_candidate(
     *, bar: Bar, previous_close: Decimal, zone: ZoneSnapshot, side: Side, a5: Decimal, m20: Decimal
 ) -> bool:
+    # A provider-authoritative zero-intrabar-range candle is valid causal data.
+    # A previous-close gap can make true range positive, but CLV/wick geometry
+    # remains undefined for this setup. Map the admitted state to NO CANDIDATE
+    # before calling the intentionally strict CLV helpers.
+    if bar.high == bar.low:
+        return False
     tr = true_range(bar, previous_close)
     if tr <= 0:
         return False

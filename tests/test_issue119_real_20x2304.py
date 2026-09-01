@@ -19,6 +19,7 @@ from trader_assist_v0.multi_asset_shadow.integration import (
 from trader_assist_v0.multi_asset_shadow.models import MarketLifecycle, RegistryVersion
 from trader_assist_v0.multi_asset_shadow.outcome_engine import OutcomeEngine
 from trader_assist_v0.multi_asset_shadow.planning import CostModel
+from trader_assist_v0.multi_asset_shadow.production import ThreeSetupProductionApplication
 from trader_assist_v0.multi_asset_shadow.registry import MarketRegistryManager
 from trader_assist_v0.multi_asset_shadow.runtime import BoundaryMode, MultiAssetPublicRuntime
 from trader_assist_v0.multi_asset_shadow.shadow_records import EvidenceStore
@@ -38,6 +39,55 @@ class MutableClock:
 
     def now(self) -> datetime:
         return datetime.fromtimestamp(self.value_ms / 1_000, tz=UTC)
+
+
+class ZeroRangeBudgetClient(BudgetClient):
+    """Public-provider seam with one valid gap candle at the selected boundary."""
+
+    def __init__(self, *, zero_coin: str) -> None:
+        super().__init__()
+        self.zero_coin = zero_coin
+        self.zero_boundary: int | None = None
+
+    def closed_candles(
+        self, *, coin: str, interval: str, start_ms: int, end_ms: int
+    ) -> object:
+        values = super().closed_candles(
+            coin=coin, interval=interval, start_ms=start_ms, end_ms=end_ms
+        )
+        if (
+            coin == self.zero_coin
+            and self.zero_boundary == start_ms
+            and end_ms - start_ms == FIVE_MINUTES_MS
+        ):
+            return [
+                {
+                    "i": "5m",
+                    "s": coin,
+                    "t": start_ms,
+                    "T": end_ms - 1,
+                    "o": "101.5",
+                    "h": "101.5",
+                    "l": "101.5",
+                    "c": "101.5",
+                    "v": "10",
+                }
+            ]
+        return values
+
+
+class NoNetworkDispatcher:
+    """RC notification seam; never performs external delivery."""
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    def dispatch_due(self, *, now: datetime) -> tuple[object, ...]:
+        del now
+        return ()
+
+    def close(self) -> None:
+        self.closed = True
 
 
 def test_issue119_real_first_launch_20_x_2304_recovery_to_first_live(tmp_path) -> None:
@@ -90,7 +140,7 @@ def test_issue119_real_first_launch_20_x_2304_recovery_to_first_live(tmp_path) -
     outbox = EvidenceOutbox(evidence)
     outcome_adapter = EvidenceOutcomeAdapter(evidence)
     outcome = OutcomeEngine(provider=FakeOneMinuteProvider(), sink=outcome_adapter)
-    provider = BudgetClient()
+    provider = ZeroRangeBudgetClient(zero_coin=markets[0].identity.coin)
     planning = FakePlanningData()
     runtime = MultiAssetPublicRuntime(
         registry=registry,
@@ -128,10 +178,17 @@ def test_issue119_real_first_launch_20_x_2304_recovery_to_first_live(tmp_path) -
         clock=clock.now,
         sleep=lambda _: asyncio.sleep(0),
     )
+    dispatcher = NoNetworkDispatcher()
+    application = ThreeSetupProductionApplication(
+        bootstrap=bootstrap,
+        dispatcher=dispatcher,  # type: ignore[arg-type]
+        clock=clock.now,
+        notification_poll_seconds=1,
+    )
     reports = []
 
     async def capture_report(bar, mode):  # type: ignore[no-untyped-def]
-        report = await bootstrap.on_finalized_5m(bar, mode)
+        report = await application._on_finalized_5m(bar, mode)
         reports.append(report)
         return report
 
@@ -211,6 +268,8 @@ def test_issue119_real_first_launch_20_x_2304_recovery_to_first_live(tmp_path) -
     assert evidence_db_bytes < strategy_count * 100_000
 
     # The final scale gate is a durable restart, not an in-memory continuation.
+    asyncio.run(application._close_dispatcher())
+    assert dispatcher.closed
     bootstrap.close()
     evidence = EvidenceStore(tmp_path / "evidence.sqlite")
     evidence.reset_query_counters()
@@ -254,7 +313,20 @@ def test_issue119_real_first_launch_20_x_2304_recovery_to_first_live(tmp_path) -
         clock=clock.now,
         sleep=lambda _: asyncio.sleep(0),
     )
-    runtime.on_finalized_5m = capture_report
+    dispatcher = NoNetworkDispatcher()
+    application = ThreeSetupProductionApplication(
+        bootstrap=bootstrap,
+        dispatcher=dispatcher,  # type: ignore[arg-type]
+        clock=clock.now,
+        notification_poll_seconds=1,
+    )
+
+    async def capture_reopened_report(bar, mode):  # type: ignore[no-untyped-def]
+        report = await application._on_finalized_5m(bar, mode)
+        reports.append(report)
+        return report
+
+    runtime.on_finalized_5m = capture_reopened_report
     runtime.on_maintenance_5m = bootstrap.on_maintenance_5m
     assert evidence.query_counters["strategy.latest"].returned_rows == MARKET_COUNT
     assert evidence.query_counters["strategy.checkpoint"].returned_rows == MARKET_COUNT
@@ -270,6 +342,7 @@ def test_issue119_real_first_launch_20_x_2304_recovery_to_first_live(tmp_path) -
     )
 
     live_boundary = START_OPEN_MS + HISTORY_5M * FIVE_MINUTES_MS
+    provider.zero_boundary = live_boundary
     clock.value_ms = live_boundary + FIVE_MINUTES_MS + 5_000
     planning.calls.clear()
     closed.reset_access_counters()
@@ -318,6 +391,35 @@ def test_issue119_real_first_launch_20_x_2304_recovery_to_first_live(tmp_path) -
     assert all(len(item["continuation"]["bars_5m"]) == 21 for item in latest_payloads)
     assert all(len(item["continuation"]["bars_15m"]) <= 98 for item in latest_payloads)
     assert all(len(item["continuation"]["bars_1h"]) <= 10 for item in latest_payloads)
+    zero_payload = next(
+        item for item in latest_payloads if item["market_id"] == markets[0].identity.market_id
+    )
+    assert not any(
+        decision["content"]["setup_family"] == "RANGE_EDGE_REJECTION"
+        for decision in zero_payload["decisions"]
+    )
+
+    # The same production composition continues through a positive-range
+    # neighboring boundary and the independent maintenance lane.
+    second_live_boundary = live_boundary + FIVE_MINUTES_MS
+    provider.zero_boundary = None
+    clock.value_ms = second_live_boundary + FIVE_MINUTES_MS + 5_000
+    asyncio.run(runtime.process_cohort_boundary(second_live_boundary))
+    assert len(reports) == 2
+    second = reports[-1]
+    assert second.failures == ()
+    assert set(second.evaluated_market_ids) == {
+        market.identity.market_id for market in markets
+    }
+    asyncio.run(bootstrap.on_maintenance_5m(second_live_boundary + FIVE_MINUTES_MS))
+    second_rows = evidence._connection.execute(
+        """SELECT COUNT(*) FROM immutable_records
+           WHERE record_type='strategy_evaluation'
+             AND json_extract(payload_json, '$.evaluation_mode')='LIVE_ACTIONABLE'
+             AND json_extract(payload_json, '$.source_open_time_ms')=?""",
+        (second_live_boundary,),
+    ).fetchone()[0]
+    assert second_rows == MARKET_COUNT
 
     print(
         "ISSUE119_20X2304_EVIDENCE="
@@ -340,5 +442,8 @@ def test_issue119_real_first_launch_20_x_2304_recovery_to_first_live(tmp_path) -
             sort_keys=True,
         )
     )
+    asyncio.run(application._close_dispatcher())
+    assert dispatcher.closed
+    print("RC_APPLICATION_HARNESS=THREE_SETUP_TARGET20_2304_TWO_BOUNDARIES_RESTART_MAINTENANCE")
     bootstrap.close()
     closed.close()

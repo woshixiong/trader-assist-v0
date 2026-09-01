@@ -69,6 +69,14 @@ def test_wilder_atr_seed_recursion_m20_clv_and_er8_are_exact() -> None:
     assert directional_efficiency_8(flat) == 0
 
 
+def test_clv_helpers_remain_strict_for_zero_intrabar_range() -> None:
+    zero_range = bar(0, open_="100", high="100", low="100", close="100")
+    with pytest.raises(KernelInputError, match="positive candle range"):
+        clv_long(zero_range)
+    with pytest.raises(KernelInputError, match="positive candle range"):
+        clv_short(zero_range)
+
+
 def test_local_15m_and_1h_aggregation_is_complete_utc_aligned_and_no_lookahead() -> None:
     bars = tuple(
         bar(
