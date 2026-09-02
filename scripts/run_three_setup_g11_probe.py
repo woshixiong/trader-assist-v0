@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from trader_assist_v0.multi_asset_shadow.bootstrap import BoundaryReport
-from trader_assist_v0.multi_asset_shadow.models import MarketLifecycle
+from trader_assist_v0.multi_asset_shadow.models import ClosedBar, MarketLifecycle
 from trader_assist_v0.multi_asset_shadow.notification_engine import (
     WebhookConfig,
     WebhookDeliveryAdapter,
@@ -94,7 +94,7 @@ async def qualify_application(
     if production_callback is None:
         raise ValueError("production finalized callback is not composed")
 
-    async def observing_callback(bar: object, mode: BoundaryMode) -> object:
+    async def observing_callback(bar: ClosedBar, mode: BoundaryMode) -> object:
         value = production_callback(bar, mode)
         report = await value if isinstance(value, Awaitable) else value
         if not isinstance(report, BoundaryReport):
@@ -103,7 +103,7 @@ async def qualify_application(
         report_changed.set()
         return report
 
-    runtime.on_finalized_5m = observing_callback  # type: ignore[assignment]
+    runtime.on_finalized_5m = observing_callback
     shutdown = asyncio.Event()
     application_task = asyncio.create_task(application.run(shutdown), name="g11-production")
     result: dict[str, object] | None = None
