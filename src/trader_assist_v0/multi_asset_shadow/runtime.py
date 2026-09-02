@@ -31,6 +31,7 @@ from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
 from .cohort_finality import (
     Closed5mCohortFinality,
     FinalityMarketRequest,
+    FinalityMarketResult,
     FinalityOutcome,
 )
 from .data import ClosedBarStore, DataRouteError, MultiAssetDataAuthority
@@ -46,6 +47,8 @@ _FIVE_MINUTES_MS = FIVE_MINUTES_MS
 _ACK_TIMEOUT_SECONDS = 8.0
 _MAX_CONFIRMATIONS = 4
 _MAX_CALLBACK_FAILURES = 100
+_MAX_BOUNDARY_DIAGNOSTICS = 20
+_MAX_WS_CANDIDATE_REJECTIONS = 100
 _HEARTBEAT_INTERVAL_SECONDS = 50.0
 _CONNECTION_ATTEMPT_SPACING_SECONDS = 5.0
 
@@ -78,6 +81,43 @@ class BoundaryMode(StrEnum):
     COLD_START_CONTEXT_ONLY = "COLD_START_CONTEXT_ONLY"
 
 
+class RuntimeFailureLifetime(StrEnum):
+    """Explicit lifetime for runtime-owned, non-durable failure observations."""
+
+    BOUNDARY_LOCAL = "BOUNDARY_LOCAL"
+    UNTIL_AUTHORITATIVE_RECOVERY = "UNTIL_AUTHORITATIVE_RECOVERY"
+    CURRENT_PROCESS_NONRECOVERABLE = "CURRENT_PROCESS_NONRECOVERABLE"
+
+
+@dataclass(frozen=True)
+class WsCandidateRejection:
+    market_id: str
+    open_time_ms: int | None
+    error_type: str
+
+
+@dataclass(frozen=True)
+class BoundaryDiagnostic:
+    """Bounded ephemeral observability; never processed-boundary authority."""
+
+    boundary_open_ms: int
+    absolute_deadline_ms: int
+    context_duration_ms: int
+    live_finality_duration_ms: int
+    per_market_finality_outcomes: tuple[tuple[str, str], ...]
+    request_count: int
+    request_latency_ms: tuple[tuple[str, int], ...]
+    finalized_count: int
+    recoverable_count: int
+    nonrecoverable_count: int
+    deadline_count: int
+    whole_cohort_actionable: bool
+    callback_wake: bool
+    runtime_recoverable_market_ids: tuple[str, ...]
+    runtime_failed_market_ids: tuple[str, ...]
+    nonrecoverable_market_ids: tuple[str, ...]
+
+
 @dataclass
 class RuntimeHealth:
     connection_count: int = 0
@@ -96,7 +136,10 @@ class RuntimeHealth:
     last_disconnect_error: str | None = None
     last_close_code: int | None = None
     failed_markets: set[str] = field(default_factory=set)
+    recoverable_markets: set[str] = field(default_factory=set)
     nonrecoverable_markets: set[str] = field(default_factory=set)
+    boundary_diagnostics: list[BoundaryDiagnostic] = field(default_factory=list)
+    ws_candidate_rejections: list[WsCandidateRejection] = field(default_factory=list)
     callback_failures: list[FinalizedCallbackFailure] = field(default_factory=list)
     data_ready: bool = False
 
@@ -495,6 +538,7 @@ class MultiAssetPublicRuntime:
             BOUNDARY_ACTION_DEADLINE_SECONDS * 1000
         )
         within_deadline = observed_ms <= deadline_ms
+        self._begin_boundary_failure_scope()
 
         classes: dict[str, RetainedBoundaryClass] = {}
         for market in selected:
@@ -532,16 +576,80 @@ class MultiAssetPublicRuntime:
                 market.identity.market_id for market in active_selected
             }
 
+        active_context_only = any(
+            classes[market.identity.market_id]
+            is RetainedBoundaryClass.MISSING_NEEDS_RECOVERY
+            for market in active_selected
+        )
         finalized_now: set[str] = set()
+        finality_results: tuple[FinalityMarketResult, ...] = ()
+        request_latencies: list[tuple[str, int]] = []
+        request_count = 0
+        context_started = self.monotonic()
         if within_deadline and not self._integrity_failed:
-            await self._run_recovery_context_lane(
-                boundary_open_ms, selected, classes, first_launch
-            )
-            finalized_now = await self._run_live_finality_lane(
+            if first_launch:
+                recovery = await self._run_recovery_context_lane(
+                    boundary_open_ms,
+                    tuple(
+                        market
+                        for market in selected
+                        if classes[market.identity.market_id]
+                        is RetainedBoundaryClass.MISSING_NEEDS_RECOVERY
+                    ),
+                    deadline_ms=deadline_ms,
+                    failure_lifetime=RuntimeFailureLifetime.UNTIL_AUTHORITATIVE_RECOVERY,
+                )
+                request_count += len(recovery)
+                request_latencies.extend(recovery)
+            elif active_context_only:
+                # One lagging ACTIVE member makes T context-only before any
+                # healthy-peer two-confirmation work is scheduled.
+                recovery = await self._run_recovery_context_lane(
+                    boundary_open_ms,
+                    tuple(
+                        market
+                        for market in active_selected
+                        if classes[market.identity.market_id]
+                        in {
+                            RetainedBoundaryClass.MISSING_NEEDS_RECOVERY,
+                            RetainedBoundaryClass.MISSING_LIVE_ELIGIBLE,
+                        }
+                    ),
+                    deadline_ms=deadline_ms,
+                    failure_lifetime=RuntimeFailureLifetime.BOUNDARY_LOCAL,
+                )
+                request_count += len(recovery)
+                request_latencies.extend(recovery)
+        context_duration_ms = max(0, int((self.monotonic() - context_started) * 1_000))
+
+        finality_started = self.monotonic()
+        if (
+            within_deadline
+            and not self._integrity_failed
+            and not active_context_only
+        ):
+            finalized_now, finality_results = await self._run_live_finality_lane(
                 boundary_open_ms, selected, classes, first_launch, deadline_ms
             )
+            request_count += sum(result.request_count for result in finality_results)
+            request_latencies.extend(
+                (result.market_id, latency)
+                for result in finality_results
+                for latency in result.request_latency_ms
+            )
+        live_finality_duration_ms = max(
+            0, int((self.monotonic() - finality_started) * 1_000)
+        )
 
-        if self._whole_cohort_actionable(active_selected, classes, finalized_now, deadline_ms):
+        whole_cohort_actionable = self._whole_cohort_actionable(
+            active_selected,
+            classes,
+            finalized_now,
+            deadline_ms,
+            context_only=active_context_only,
+        )
+        callback_wake = False
+        if whole_cohort_actionable:
             bars = self.authority.store.tail_bars(
                 active_selected[0].identity.market_id,
                 at_or_before_ms=boundary_open_ms,
@@ -549,7 +657,47 @@ class MultiAssetPublicRuntime:
             )
             if bars:
                 # The one and only global application wake, entirely under R.
+                callback_wake = self.on_finalized_5m is not None
                 await self._notify_finalized(bars[-1], BoundaryMode.LIVE_ACTIONABLE)
+
+        if within_deadline and not self._integrity_failed and active_selected:
+            # PRE_ACTIVE/hot-add acquisition follows the ACTIVE callback.  It
+            # can influence successor planning, but never delay an otherwise
+            # healthy ACTIVE cohort's current-T action.
+            pre_active = tuple(
+                market
+                for market in selected
+                if market.lifecycle in _PRE_ACTIVE_ORDER
+                and classes[market.identity.market_id]
+                in {
+                    RetainedBoundaryClass.MISSING_NEEDS_RECOVERY,
+                    RetainedBoundaryClass.MISSING_LIVE_ELIGIBLE,
+                }
+            )
+            pre_active_started = self.monotonic()
+            recovery = await self._run_recovery_context_lane(
+                boundary_open_ms,
+                pre_active,
+                deadline_ms=deadline_ms,
+                failure_lifetime=RuntimeFailureLifetime.UNTIL_AUTHORITATIVE_RECOVERY,
+            )
+            request_count += len(recovery)
+            request_latencies.extend(recovery)
+            context_duration_ms += max(
+                0, int((self.monotonic() - pre_active_started) * 1_000)
+            )
+
+        self._record_boundary_diagnostic(
+            boundary_open_ms=boundary_open_ms,
+            deadline_ms=deadline_ms,
+            context_duration_ms=context_duration_ms,
+            live_finality_duration_ms=live_finality_duration_ms,
+            finality_results=finality_results,
+            request_count=request_count,
+            request_latencies=request_latencies,
+            whole_cohort_actionable=whole_cohort_actionable,
+            callback_wake=callback_wake,
+        )
 
         await self._run_maintenance(boundary_open_ms)
 
@@ -565,10 +713,11 @@ class MultiAssetPublicRuntime:
     async def _run_recovery_context_lane(
         self,
         boundary_open_ms: int,
-        selected: tuple[RegistryMarket, ...],
-        classes: dict[str, RetainedBoundaryClass],
-        first_launch: bool,
-    ) -> None:
+        markets: tuple[RegistryMarket, ...],
+        *,
+        deadline_ms: int,
+        failure_lifetime: RuntimeFailureLifetime,
+    ) -> tuple[tuple[str, int], ...]:
         """Recovery/context lane: authoritative catch-up that never acts on T.
 
         A market that entered T behind T-1 recovers history as context only.
@@ -576,25 +725,63 @@ class MultiAssetPublicRuntime:
         Scanner/Strategy/Formal authority is created for T; live action may
         resume only at a later fresh boundary.
         """
-        for market in selected:
-            state = classes[market.identity.market_id]
-            needs_recovery = state is RetainedBoundaryClass.MISSING_NEEDS_RECOVERY or (
-                state is RetainedBoundaryClass.MISSING_LIVE_ELIGIBLE
-                and not first_launch
-                and market.lifecycle in _PRE_ACTIVE_ORDER
-            )
-            if not needs_recovery:
-                continue
+        if not markets:
+            return ()
+        remaining_ms = deadline_ms - int(self.clock().timestamp() * 1000)
+        if remaining_ms <= 0:
+            for market in markets:
+                self._record_runtime_failure(
+                    market.identity.market_id, RuntimeFailureLifetime.BOUNDARY_LOCAL
+                )
+            return ()
+        deadline_monotonic = self.monotonic() + remaining_ms / 1_000
+        slots = asyncio.Semaphore(_MAX_CONFIRMATIONS)
+        latencies: dict[str, int] = {}
+
+        async def recover(market: RegistryMarket) -> None:
+            started = self.monotonic()
             try:
                 await self._warmup_market(
-                    market, recovery=True, target_open_ms=boundary_open_ms
+                    market,
+                    recovery=True,
+                    target_open_ms=boundary_open_ms,
+                    deadline_monotonic=deadline_monotonic,
+                    transport_slots=slots,
+                    failure_lifetime=failure_lifetime,
                 )
             except asyncio.CancelledError:
                 raise
             except (DataRouteError, PublicDataError):
-                self.health.failed_markets.add(market.identity.market_id)
+                self._record_runtime_failure(market.identity.market_id, failure_lifetime)
             except Exception:
-                self.health.nonrecoverable_markets.add(market.identity.market_id)
+                self._record_runtime_failure(
+                    market.identity.market_id,
+                    RuntimeFailureLifetime.CURRENT_PROCESS_NONRECOVERABLE,
+                )
+            finally:
+                latencies[market.identity.market_id] = max(
+                    0, int((self.monotonic() - started) * 1_000)
+                )
+
+        try:
+            async with asyncio.timeout(remaining_ms / 1_000):
+                async with asyncio.TaskGroup() as group:
+                    for market in markets:
+                        group.create_task(
+                            recover(market),
+                            name=f"cohort-context-recovery:{market.identity.market_id}",
+                        )
+        except TimeoutError:
+            for market in markets:
+                if not self._history_current_at(market, boundary_open_ms):
+                    self._record_runtime_failure(
+                        market.identity.market_id, RuntimeFailureLifetime.BOUNDARY_LOCAL
+                    )
+        return tuple(
+            (market.identity.market_id, latencies[market.identity.market_id])
+            for market in markets
+            if market.identity.market_id in latencies
+        )
 
     async def _run_live_finality_lane(
         self,
@@ -603,7 +790,7 @@ class MultiAssetPublicRuntime:
         classes: dict[str, RetainedBoundaryClass],
         first_launch: bool,
         deadline_ms: int,
-    ) -> set[str]:
+    ) -> tuple[set[str], tuple[FinalityMarketResult, ...]]:
         """Live finality lane: only MISSING_LIVE_ELIGIBLE action-cohort markets."""
         targets = [
             market
@@ -612,10 +799,10 @@ class MultiAssetPublicRuntime:
             and (first_launch or market.lifecycle is MarketLifecycle.ACTIVE)
         ]
         if not targets:
-            return set()
+            return set(), ()
         remaining_ms = deadline_ms - int(self.clock().timestamp() * 1000)
         if remaining_ms <= 0:
-            return set()
+            return set(), ()
         results = await self._cohort_finality.prove_cohort(
             requests=tuple(
                 FinalityMarketRequest(market=market, boundary_open_ms=boundary_open_ms)
@@ -644,14 +831,23 @@ class MultiAssetPublicRuntime:
                         # Strict admission discarded the payload (for example a
                         # close time still ahead of the wall clock): the
                         # provider proof did not become durable evidence.
-                        self.health.failed_markets.add(market_id)
+                        self._record_runtime_failure(
+                            market_id, RuntimeFailureLifetime.BOUNDARY_LOCAL
+                        )
                 except (DataRouteError, PublicDataError):
-                    self.health.failed_markets.add(market_id)
+                    self._record_runtime_failure(
+                        market_id, RuntimeFailureLifetime.BOUNDARY_LOCAL
+                    )
             elif result.outcome is FinalityOutcome.NONRECOVERABLE_FAILURE:
-                self.health.nonrecoverable_markets.add(market_id)
+                self._record_runtime_failure(
+                    market_id,
+                    RuntimeFailureLifetime.CURRENT_PROCESS_NONRECOVERABLE,
+                )
             else:
-                self.health.failed_markets.add(market_id)
-        return finalized
+                self._record_runtime_failure(
+                    market_id, RuntimeFailureLifetime.BOUNDARY_LOCAL
+                )
+        return finalized, results
 
     def _durable_boundary_row(self, market_id: str, boundary_open_ms: int) -> bool:
         """Confirm one exact-T durable row exists under the captured epoch."""
@@ -668,9 +864,23 @@ class MultiAssetPublicRuntime:
         classes: dict[str, RetainedBoundaryClass],
         finalized_now: set[str],
         deadline_ms: int,
+        *,
+        context_only: bool,
     ) -> bool:
         """Whole-cohort actionability decision owned by the barrier alone."""
-        if self._integrity_failed or not self.health.data_ready or not active_selected:
+        if (
+            context_only
+            or self._integrity_failed
+            or not self.health.data_ready
+            or not active_selected
+        ):
+            return False
+        active_ids = {market.identity.market_id for market in active_selected}
+        # A CURRENT_EPOCH_FINALIZED row seen at barrier entry may be restart,
+        # duplicate, or recovery context.  It is never evidence that this
+        # process should retrospectively emit a callback.  One fresh global
+        # wake requires every ACTIVE member to have finalized in this attempt.
+        if finalized_now != active_ids:
             return False
         for market in active_selected:
             market_id = market.identity.market_id
@@ -680,12 +890,99 @@ class MultiAssetPublicRuntime:
                 or self.authority.market_failed(market_id)
             ):
                 return False
-            if market_id in finalized_now:
-                continue
-            if classes[market_id] is not RetainedBoundaryClass.CURRENT_EPOCH_FINALIZED:
+            if classes[market_id] is not RetainedBoundaryClass.MISSING_LIVE_ELIGIBLE:
                 return False
         # Hard freshness re-check immediately before the only global wake.
         return int(self.clock().timestamp() * 1000) <= deadline_ms
+
+    def _begin_boundary_failure_scope(self) -> None:
+        """Expire only observations whose declared lifetime is one boundary."""
+        self.health.recoverable_markets.clear()
+
+    def _record_runtime_failure(
+        self, market_id: str, lifetime: RuntimeFailureLifetime
+    ) -> None:
+        if lifetime is RuntimeFailureLifetime.BOUNDARY_LOCAL:
+            self.health.recoverable_markets.add(market_id)
+        elif lifetime is RuntimeFailureLifetime.UNTIL_AUTHORITATIVE_RECOVERY:
+            self.health.failed_markets.add(market_id)
+        else:
+            self.health.nonrecoverable_markets.add(market_id)
+
+    def _record_authoritative_recovery(self, market_id: str) -> None:
+        """Clear runtime-local recovery debt only after exact durable convergence.
+
+        MultiAssetDataAuthority's integrity-owned ``_failed`` set is neither
+        read-modified nor cleared here; its own contiguous-admission contract
+        remains the durable authority.
+        """
+        if not self.authority.market_failed(market_id):
+            self.health.failed_markets.discard(market_id)
+
+    def _record_boundary_diagnostic(
+        self,
+        *,
+        boundary_open_ms: int,
+        deadline_ms: int,
+        context_duration_ms: int,
+        live_finality_duration_ms: int,
+        finality_results: tuple[FinalityMarketResult, ...],
+        request_count: int,
+        request_latencies: list[tuple[str, int]],
+        whole_cohort_actionable: bool,
+        callback_wake: bool,
+    ) -> None:
+        outcomes = tuple(
+            (result.market_id, result.outcome.value) for result in finality_results
+        )
+        try:
+            diagnostic_markets = self.selected_markets()
+        except (DataRouteError, RegistryError):
+            diagnostic_markets = ()
+        authority_failed = {
+            market.identity.market_id
+            for market in diagnostic_markets
+            if self.authority.market_failed(market.identity.market_id)
+        }
+        diagnostic = BoundaryDiagnostic(
+            boundary_open_ms=boundary_open_ms,
+            absolute_deadline_ms=deadline_ms,
+            context_duration_ms=context_duration_ms,
+            live_finality_duration_ms=live_finality_duration_ms,
+            per_market_finality_outcomes=outcomes,
+            request_count=request_count,
+            request_latency_ms=tuple(request_latencies),
+            finalized_count=sum(
+                result.outcome is FinalityOutcome.FINALIZED
+                for result in finality_results
+            ),
+            recoverable_count=sum(
+                result.outcome is FinalityOutcome.RECOVERABLE_FAILURE
+                for result in finality_results
+            ),
+            nonrecoverable_count=sum(
+                result.outcome is FinalityOutcome.NONRECOVERABLE_FAILURE
+                for result in finality_results
+            ),
+            deadline_count=sum(
+                result.outcome is FinalityOutcome.DEADLINE_EXCEEDED
+                for result in finality_results
+            ),
+            whole_cohort_actionable=whole_cohort_actionable,
+            callback_wake=callback_wake,
+            runtime_recoverable_market_ids=tuple(
+                sorted(self.health.recoverable_markets)
+            ),
+            runtime_failed_market_ids=tuple(
+                sorted(self.health.failed_markets | authority_failed)
+            ),
+            nonrecoverable_market_ids=tuple(
+                sorted(self.health.nonrecoverable_markets)
+            ),
+        )
+        self.health.boundary_diagnostics.append(diagnostic)
+        if len(self.health.boundary_diagnostics) > _MAX_BOUNDARY_DIAGNOSTICS:
+            del self.health.boundary_diagnostics[:-_MAX_BOUNDARY_DIAGNOSTICS]
 
     async def _run_maintenance(self, boundary_open_ms: int) -> None:
         """Action deferral never defers maintenance (packet section 20)."""
@@ -1017,6 +1314,11 @@ class MultiAssetPublicRuntime:
         recovery: bool,
         target_open_ms: int,
         shutdown: asyncio.Event | None = None,
+        deadline_monotonic: float | None = None,
+        transport_slots: asyncio.Semaphore | None = None,
+        failure_lifetime: RuntimeFailureLifetime = (
+            RuntimeFailureLifetime.UNTIL_AUTHORITATIVE_RECOVERY
+        ),
     ) -> int:
         end_ms = target_open_ms + _FIVE_MINUTES_MS
         start_ms = end_ms - _WARMUP_5M_BARS * _FIVE_MINUTES_MS
@@ -1031,13 +1333,36 @@ class MultiAssetPublicRuntime:
             # urllib is synchronous; only transport runs in a worker.  SQLite
             # evidence admission remains serialized on the event-loop thread,
             # but is split into bounded chunks below.
-            snapshot = await asyncio.to_thread(
-                self.client.closed_candles,
-                coin=market.identity.coin,
-                interval="5m",
-                start_ms=start_ms,
-                end_ms=end_ms,
-            )
+            async def fetch() -> object:
+                remaining: float | None = None
+                if deadline_monotonic is not None:
+                    remaining = deadline_monotonic - self.monotonic()
+                    if remaining <= 0:
+                        raise PublicDataError("recovery absolute boundary deadline expired")
+                if isinstance(self.client, HyperliquidPublicClient):
+                    return await asyncio.to_thread(
+                        self.client.closed_candles,
+                        coin=market.identity.coin,
+                        interval="5m",
+                        start_ms=start_ms,
+                        end_ms=end_ms,
+                        timeout_seconds=remaining,
+                    )
+                return await asyncio.to_thread(
+                    self.client.closed_candles,
+                    coin=market.identity.coin,
+                    interval="5m",
+                    start_ms=start_ms,
+                    end_ms=end_ms,
+                )
+
+            if transport_slots is None:
+                snapshot = await fetch()
+            else:
+                async with transport_slots:
+                    snapshot = await fetch()
+            if deadline_monotonic is not None and self.monotonic() >= deadline_monotonic:
+                raise PublicDataError("recovery absolute boundary deadline expired")
             if not isinstance(snapshot, list):
                 raise PublicDataError("candleSnapshot did not return a list")
             # Canonical identity is bound to one provider observation: a single
@@ -1054,9 +1379,9 @@ class MultiAssetPublicRuntime:
             if not self._history_current_at(market, target_open_ms):
                 raise DataRouteError("warmup did not prove current contiguous 5m history")
         except (DataRouteError, PublicDataError):
-            self.health.failed_markets.add(market.identity.market_id)
+            self._record_runtime_failure(market.identity.market_id, failure_lifetime)
             raise
-        self.health.failed_markets.discard(market.identity.market_id)
+        self._record_authoritative_recovery(market.identity.market_id)
         return count
 
     async def _warmup_all(
@@ -1160,7 +1485,10 @@ class MultiAssetPublicRuntime:
             try:
                 results[market.identity.market_id] = self.warmup(market, start_ms=start, end_ms=end)
             except (DataRouteError, PublicDataError):
-                self.health.failed_markets.add(market.identity.market_id)
+                self._record_runtime_failure(
+                    market.identity.market_id,
+                    RuntimeFailureLifetime.UNTIL_AUTHORITATIVE_RECOVERY,
+                )
         return results
 
     def recover_gaps(self) -> dict[str, int]:
@@ -1179,9 +1507,12 @@ class MultiAssetPublicRuntime:
                     market, start_ms=start, end_ms=end
                 )
                 if self._history_current(market):
-                    self.health.failed_markets.discard(market.identity.market_id)
+                    self._record_authoritative_recovery(market.identity.market_id)
             except (DataRouteError, PublicDataError):
-                self.health.failed_markets.add(market.identity.market_id)
+                self._record_runtime_failure(
+                    market.identity.market_id,
+                    RuntimeFailureLifetime.UNTIL_AUTHORITATIVE_RECOVERY,
+                )
         return recovered
 
     async def run(self, shutdown: asyncio.Event) -> None:
@@ -1702,11 +2033,11 @@ class MultiAssetPublicRuntime:
         )
         if market is None:
             raise ReconnectRequired("websocket candle identity is unknown")
+        open_ms = payload.get("t")
         try:
             self.authority.offer_ws_candidate(
                 market=market, payload=payload, received_at=self.clock()
             )
-            open_ms = payload.get("t")
             last_open = self.authority.store.last_open(market.identity.market_id)
             if isinstance(open_ms, int) and last_open is not None and open_ms <= last_open:
                 # A candidate for an already provider-finalized boundary is
@@ -1715,8 +2046,20 @@ class MultiAssetPublicRuntime:
                 self.authority.discard_ws_candidate(
                     market_id=market.identity.market_id, open_time_ms=open_ms
                 )
-        except DataRouteError:
-            self.health.failed_markets.add(market.identity.market_id)
+        except DataRouteError as exc:
+            # WS is observation/candidate only.  Rejection is bounded
+            # diagnostics, never whole-cohort failure authority.
+            self.health.ws_candidate_rejections.append(
+                WsCandidateRejection(
+                    market_id=market.identity.market_id,
+                    open_time_ms=open_ms if isinstance(open_ms, int) else None,
+                    error_type=type(exc).__name__,
+                )
+            )
+            if len(self.health.ws_candidate_rejections) > _MAX_WS_CANDIDATE_REJECTIONS:
+                del self.health.ws_candidate_rejections[
+                    :-_MAX_WS_CANDIDATE_REJECTIONS
+                ]
 
     async def _notify_finalized(self, bar: ClosedBar, mode: BoundaryMode) -> object | None:
         callback = self.on_finalized_5m
@@ -1732,7 +2075,10 @@ class MultiAssetPublicRuntime:
         except Exception as exc:
             # Application callback authority failure is nonrecoverable within
             # this process (packet section 21).
-            self.health.nonrecoverable_markets.add(bar.market_id)
+            self._record_runtime_failure(
+                bar.market_id,
+                RuntimeFailureLifetime.CURRENT_PROCESS_NONRECOVERABLE,
+            )
             self.health.callback_failures.append(
                 FinalizedCallbackFailure(
                     market_id=bar.market_id,

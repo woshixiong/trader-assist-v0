@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Awaitable
 from datetime import UTC, datetime
 from decimal import Decimal
 from functools import wraps
@@ -14,12 +15,13 @@ import pytest
 from scripts.build_multi_asset_registry_seed import build_seed
 from scripts.verify_exact_release import build_release_manifest, exact_clean_head
 from trader_assist_v0.multi_asset_shadow import production
+from trader_assist_v0.multi_asset_shadow.bootstrap import BoundaryReport
 from trader_assist_v0.multi_asset_shadow.data import ClosedBarStore, MultiAssetDataAuthority
 from trader_assist_v0.multi_asset_shadow.hyperliquid_public import (
     HyperliquidPublicClient,
     OfficialMetadataValidator,
 )
-from trader_assist_v0.multi_asset_shadow.models import RegistryVersion
+from trader_assist_v0.multi_asset_shadow.models import MarketLifecycle, RegistryVersion
 from trader_assist_v0.multi_asset_shadow.notification_engine import (
     WebhookConfig,
     WebhookDeliveryAdapter,
@@ -28,7 +30,7 @@ from trader_assist_v0.multi_asset_shadow.notification_engine import (
 from trader_assist_v0.multi_asset_shadow.planning import CostModel
 from trader_assist_v0.multi_asset_shadow.registry import MarketRegistryManager
 from trader_assist_v0.multi_asset_shadow.resolution import resolve_first_launch_20
-from trader_assist_v0.multi_asset_shadow.runtime import MultiAssetPublicRuntime
+from trader_assist_v0.multi_asset_shadow.runtime import BoundaryMode, MultiAssetPublicRuntime
 
 
 def async_test(function):  # type: ignore[no-untyped-def]
@@ -201,10 +203,24 @@ async def test_public_provider_rehearsal_drives_full_three_setup_application(
         public_client=client,
     )
     assert notification_adapter._client is sink
+    reports: list[BoundaryReport] = []
+    real_callback = application.bootstrap.runtime.on_finalized_5m
+    assert real_callback is not None
+
+    async def observe_real_callback(bar: object, mode: BoundaryMode) -> object:
+        value = real_callback(bar, mode)  # type: ignore[arg-type]
+        report = await value if isinstance(value, Awaitable) else value
+        assert isinstance(report, BoundaryReport)
+        reports.append(report)
+        return report
+
+    application.bootstrap.runtime.on_finalized_5m = observe_real_callback  # type: ignore[assignment]
     shutdown = asyncio.Event()
     task = asyncio.create_task(application.run(shutdown))
     try:
-        async with asyncio.timeout(300):
+        # WARMING -> HISTORY_READY -> SNAPSHOT_READY -> ACTIVE, followed by a
+        # fresh natural 5m boundary, may span four provider boundaries.
+        async with asyncio.timeout(1_800):
             while not application.bootstrap.runtime.health.data_ready:
                 if task.done():
                     await task
@@ -216,6 +232,38 @@ async def test_public_provider_rehearsal_drives_full_three_setup_application(
             assert application.bootstrap.evidence._connection.execute(
                 "SELECT COUNT(*) FROM immutable_records"
             ).fetchone() is not None
+            while True:
+                if task.done():
+                    await task
+                    raise AssertionError("full application exited before LIVE_ACTIONABLE")
+                active = application.bootstrap.registry.active()
+                target_ids = (
+                    ()
+                    if active is None
+                    else tuple(
+                        market.identity.market_id
+                        for market in active.markets
+                        if market.lifecycle is MarketLifecycle.ACTIVE
+                    )
+                )
+                qualifying = [
+                    report
+                    for report in reports
+                    if report.evaluation_mode is BoundaryMode.LIVE_ACTIONABLE
+                    and report.scanner_run_count == 1
+                    and report.evaluated_market_ids == target_ids
+                    and len(target_ids) == 20
+                ]
+                if qualifying:
+                    report = qualifying[-1]
+                    assert report.failures == ()
+                    await asyncio.sleep(6)
+                    assert sum(
+                        item.boundary_open_time_ms == report.boundary_open_time_ms
+                        for item in reports
+                    ) == 1
+                    break
+                await asyncio.sleep(0.1)
     finally:
         shutdown.set()
         await task

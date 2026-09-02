@@ -8,6 +8,7 @@ wallet, signing, exchange, order, or mutation operation.
 from __future__ import annotations
 
 import json
+import math
 import ssl
 import time
 from collections.abc import Callable, Mapping
@@ -92,14 +93,36 @@ class HyperliquidPublicClient:
     post: HttpPost = _default_post
     timeout_seconds: float = 15.0
 
-    def request(self, payload: Mapping[str, object]) -> object:
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.timeout_seconds, bool)
+            or not math.isfinite(self.timeout_seconds)
+            or self.timeout_seconds <= 0
+        ):
+            raise ValueError("public client timeout must be positive")
+
+    def request(
+        self,
+        payload: Mapping[str, object],
+        *,
+        timeout_seconds: float | None = None,
+    ) -> object:
         request_type = payload.get("type")
         if request_type not in _ALLOWED_TYPES or not self._is_supported_shape(payload):
             raise PublicDataError("public request is outside the approved market-data surface")
+        effective_timeout = self.timeout_seconds
+        if timeout_seconds is not None:
+            if (
+                isinstance(timeout_seconds, bool)
+                or not math.isfinite(timeout_seconds)
+                or timeout_seconds <= 0
+            ):
+                raise ValueError("public request timeout override must be positive")
+            effective_timeout = min(effective_timeout, timeout_seconds)
         raw = self.post(
             INFO_URL,
             json.dumps(dict(payload), separators=(",", ":")).encode(),
-            self.timeout_seconds,
+            effective_timeout,
         )
         try:
             return json.loads(raw)
@@ -152,7 +175,15 @@ class HyperliquidPublicClient:
     def all_perp_metas(self) -> object:
         return self.request({"type": "allPerpMetas"})
 
-    def closed_candles(self, *, coin: str, interval: str, start_ms: int, end_ms: int) -> object:
+    def closed_candles(
+        self,
+        *,
+        coin: str,
+        interval: str,
+        start_ms: int,
+        end_ms: int,
+        timeout_seconds: float | None = None,
+    ) -> object:
         return self.request(
             {
                 "type": "candleSnapshot",
@@ -162,11 +193,14 @@ class HyperliquidPublicClient:
                     "startTime": start_ms,
                     "endTime": end_ms,
                 },
-            }
+            },
+            timeout_seconds=timeout_seconds,
         )
 
-    def l2_book(self, *, coin: str) -> object:
-        return self.request({"type": "l2Book", "coin": coin})
+    def l2_book(self, *, coin: str, timeout_seconds: float | None = None) -> object:
+        return self.request(
+            {"type": "l2Book", "coin": coin}, timeout_seconds=timeout_seconds
+        )
 
     def liquidity_assessment(
         self, *, market_id: str, coin: str, side: Side, response: object
@@ -311,8 +345,16 @@ class HyperliquidPublicPlanningAdapter:
             btc_returns=btc_returns,
         )
 
-    def fetch_raw_l2(self, *, market: RegistryMarket) -> object:
+    def fetch_raw_l2(
+        self, *, market: RegistryMarket, timeout_seconds: float | None = None
+    ) -> object:
         """Worker-safe raw public read; no Registry, freshness, or state mutation."""
+        if timeout_seconds is not None and isinstance(
+            self.client, HyperliquidPublicClient
+        ):
+            return self.client.l2_book(
+                coin=market.identity.coin, timeout_seconds=timeout_seconds
+            )
         return self.client.l2_book(coin=market.identity.coin)
 
     def stage_raw_l2(self, *, market: RegistryMarket, response: object, now_ms: int) -> None:
@@ -388,7 +430,24 @@ class HyperliquidRestOneMinuteProvider:
     def market_identity(self, market_id: str) -> RegistryMarket:
         return self._market(market_id)
 
-    def raw_read_1m(self, *, market: RegistryMarket, start_ms: int, end_ms: int) -> object:
+    def raw_read_1m(
+        self,
+        *,
+        market: RegistryMarket,
+        start_ms: int,
+        end_ms: int,
+        timeout_seconds: float | None = None,
+    ) -> object:
+        if timeout_seconds is not None and isinstance(
+            self.client, HyperliquidPublicClient
+        ):
+            return self.client.closed_candles(
+                coin=market.identity.coin,
+                interval="1m",
+                start_ms=start_ms,
+                end_ms=end_ms,
+                timeout_seconds=timeout_seconds,
+            )
         return self.client.closed_candles(
             coin=market.identity.coin,
             interval="1m",

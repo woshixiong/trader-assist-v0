@@ -491,7 +491,11 @@ class MultiAssetProductionBootstrap:
                 if hasattr(self.planning_data, "fetch_raw_l2"):
                     try:
                         raw = await asyncio.wait_for(
-                            asyncio.to_thread(self.planning_data.fetch_raw_l2, market=market),
+                            asyncio.to_thread(
+                                self._fetch_raw_l2_with_budget,
+                                market,
+                                remaining,
+                            ),
                             timeout=remaining,
                         )
                     except TimeoutError as exc:
@@ -695,7 +699,16 @@ class MultiAssetProductionBootstrap:
                         ),
                     )
                 async with semaphore:
-                    raw = await asyncio.to_thread(self.planning_data.fetch_raw_l2, market=market)
+                    remaining = (deadline_ms - _clock_ms(self.clock)) / 1_000
+                    if remaining <= 0:
+                        raise PublicDataError(
+                            "Scanner absolute boundary deadline expired"
+                        )
+                    raw = await asyncio.to_thread(
+                        self._fetch_raw_l2_with_budget,
+                        market,
+                        remaining,
+                    )
                 now_ms = _clock_ms(self.clock)
                 if now_ms > deadline_ms:
                     raise PublicDataError("late Scanner worker result discarded")
@@ -720,6 +733,22 @@ class MultiAssetProductionBootstrap:
         except TimeoutError as exc:
             raise PublicDataError("Scanner absolute boundary deadline expired") from exc
         return dict(values)
+
+    def _fetch_raw_l2_with_budget(
+        self, market: RegistryMarket, remaining_seconds: float
+    ) -> object:
+        """Pass the absolute-boundary remainder into production transport.
+
+        Existing narrow test doubles retain their historical method shape;
+        the real Hyperliquid adapter always takes the bounded branch.
+        """
+        if remaining_seconds <= 0:
+            raise PublicDataError("public L2 boundary budget expired")
+        if isinstance(self.planning_data, HyperliquidPublicPlanningAdapter):
+            return self.planning_data.fetch_raw_l2(
+                market=market, timeout_seconds=remaining_seconds
+            )
+        return self.planning_data.fetch_raw_l2(market=market)
 
     def _btc_returns(
         self, markets: tuple[RegistryMarket, ...], boundary_open_time_ms: int

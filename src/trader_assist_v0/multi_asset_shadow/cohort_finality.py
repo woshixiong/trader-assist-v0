@@ -3,16 +3,17 @@
 This module is deliberately NOT a global authority.  It receives only
 Barrier-classified MISSING_LIVE_ELIGIBLE markets, proves the exact boundary
 row through the current provider policy, and returns typed per-market
-results.  It keeps no processed-boundary state and no failure state: the
-Cohort Barrier owns current-process failure merging and whole-cohort
-actionability.
+results.  It keeps no processed-boundary or failure state: recoverable and
+deadline outcomes have exactly one boundary-attempt lifetime, while the
+Cohort Barrier alone promotes unknown/nonrecoverable outcomes to current-
+process failure authority.
 """
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from typing import Final
@@ -54,6 +55,14 @@ class FinalityMarketResult:
     stable_payload: dict[str, object] | None = None
     stage: str | None = None
     error_type: str | None = None
+    request_count: int = 0
+    request_latency_ms: tuple[int, ...] = ()
+
+
+@dataclass
+class _FinalityTrace:
+    request_count: int = 0
+    request_latency_ms: list[int] = field(default_factory=list)
 
 
 class _FinalityProofError(Exception):
@@ -112,14 +121,41 @@ class Closed5mCohortFinality:
         """Prove every requested market boundary; never raises ordinary errors."""
         results: dict[str, FinalityMarketResult] = {}
         slots = asyncio.Semaphore(self._confirmation_concurrency)
-        async with asyncio.TaskGroup() as group:
-            for request in requests:
-                group.create_task(
-                    self._prove_one(request, deadline_monotonic, slots, results),
-                    name=f"cohort-finality:{request.market.identity.market_id}",
+        remaining = deadline_monotonic - self._monotonic()
+        if remaining <= 0:
+            return tuple(
+                FinalityMarketResult(
+                    market_id=request.market.identity.market_id,
+                    boundary_open_ms=request.boundary_open_ms,
+                    outcome=FinalityOutcome.DEADLINE_EXCEEDED,
+                    stage="finality_deadline_exceeded",
                 )
+                for request in requests
+            )
+        try:
+            async with asyncio.timeout(remaining):
+                async with asyncio.TaskGroup() as group:
+                    for request in requests:
+                        group.create_task(
+                            self._prove_one(request, deadline_monotonic, slots, results),
+                            name=f"cohort-finality:{request.market.identity.market_id}",
+                        )
+        except TimeoutError:
+            # Defense in depth.  Production transport receives the same
+            # remaining budget, so an outer timeout does not intentionally
+            # strand a fixed-15-second socket in its worker thread.
+            pass
         return tuple(
-            results[request.market.identity.market_id] for request in requests
+            results.get(
+                request.market.identity.market_id,
+                FinalityMarketResult(
+                    market_id=request.market.identity.market_id,
+                    boundary_open_ms=request.boundary_open_ms,
+                    outcome=FinalityOutcome.DEADLINE_EXCEEDED,
+                    stage="finality_deadline_exceeded",
+                ),
+            )
+            for request in requests
         )
 
     async def _prove_one(
@@ -132,12 +168,14 @@ class Closed5mCohortFinality:
         market = request.market
         market_id = market.identity.market_id
         boundary = request.boundary_open_ms
+        trace = _FinalityTrace()
         try:
             payload = await self._confirm_boundary(
                 market=market,
                 boundary_open_ms=boundary,
                 deadline_monotonic=deadline_monotonic,
                 slots=slots,
+                trace=trace,
             )
             results[market_id] = FinalityMarketResult(
                 market_id=market_id,
@@ -145,6 +183,8 @@ class Closed5mCohortFinality:
                 outcome=FinalityOutcome.FINALIZED,
                 confirmed_payload=payload,
                 stable_payload=dict(payload),
+                request_count=trace.request_count,
+                request_latency_ms=tuple(trace.request_latency_ms),
             )
         except asyncio.CancelledError:
             raise
@@ -154,6 +194,8 @@ class Closed5mCohortFinality:
                 boundary_open_ms=boundary,
                 outcome=FinalityOutcome.DEADLINE_EXCEEDED,
                 stage="finality_deadline_exceeded",
+                request_count=trace.request_count,
+                request_latency_ms=tuple(trace.request_latency_ms),
             )
         except PublicDataError as exc:
             results[market_id] = FinalityMarketResult(
@@ -161,6 +203,8 @@ class Closed5mCohortFinality:
                 boundary_open_ms=boundary,
                 outcome=FinalityOutcome.RECOVERABLE_FAILURE,
                 error_type=type(exc).__name__,
+                request_count=trace.request_count,
+                request_latency_ms=tuple(trace.request_latency_ms),
             )
         except _FinalityProofError as exc:
             results[market_id] = FinalityMarketResult(
@@ -169,6 +213,8 @@ class Closed5mCohortFinality:
                 outcome=FinalityOutcome.RECOVERABLE_FAILURE,
                 stage="finality_proof_failed",
                 error_type=type(exc).__name__,
+                request_count=trace.request_count,
+                request_latency_ms=tuple(trace.request_latency_ms),
             )
         except Exception as exc:
             results[market_id] = FinalityMarketResult(
@@ -177,6 +223,8 @@ class Closed5mCohortFinality:
                 outcome=FinalityOutcome.NONRECOVERABLE_FAILURE,
                 stage="finality_unknown",
                 error_type=type(exc).__name__,
+                request_count=trace.request_count,
+                request_latency_ms=tuple(trace.request_latency_ms),
             )
 
     async def _confirm_boundary(
@@ -186,6 +234,7 @@ class Closed5mCohortFinality:
         boundary_open_ms: int,
         deadline_monotonic: float,
         slots: asyncio.Semaphore,
+        trace: _FinalityTrace,
     ) -> dict[str, object]:
         eligible_ms = boundary_open_ms + FIVE_MINUTES_MS + POST_CLOSE_HOLD_MS
         hold_seconds = (eligible_ms - int(self._clock().timestamp() * 1000)) / 1_000
@@ -200,15 +249,36 @@ class Closed5mCohortFinality:
             if self._monotonic() >= deadline_monotonic:
                 raise _DeadlineExceeded
             async with slots:
-                if self._monotonic() >= deadline_monotonic:
+                request_started = self._monotonic()
+                remaining = deadline_monotonic - request_started
+                if remaining <= 0:
                     raise _DeadlineExceeded
-                snapshot = await asyncio.to_thread(
-                    self._client.closed_candles,
-                    coin=market.identity.coin,
-                    interval="5m",
-                    start_ms=boundary_open_ms,
-                    end_ms=boundary_open_ms + FIVE_MINUTES_MS,
-                )
+                trace.request_count += 1
+                try:
+                    if isinstance(self._client, HyperliquidPublicClient):
+                        snapshot = await asyncio.to_thread(
+                            self._client.closed_candles,
+                            coin=market.identity.coin,
+                            interval="5m",
+                            start_ms=boundary_open_ms,
+                            end_ms=boundary_open_ms + FIVE_MINUTES_MS,
+                            timeout_seconds=remaining,
+                        )
+                    else:
+                        # Narrow test/provider doubles predate the optional
+                        # transport override.  Production always takes the
+                        # bounded HyperliquidPublicClient branch above.
+                        snapshot = await asyncio.to_thread(
+                            self._client.closed_candles,
+                            coin=market.identity.coin,
+                            interval="5m",
+                            start_ms=boundary_open_ms,
+                            end_ms=boundary_open_ms + FIVE_MINUTES_MS,
+                        )
+                finally:
+                    trace.request_latency_ms.append(
+                        max(0, int((self._monotonic() - request_started) * 1_000))
+                    )
                 if self._monotonic() >= deadline_monotonic:
                     raise _DeadlineExceeded
             observation = _exact_observation(snapshot, boundary_open_ms)

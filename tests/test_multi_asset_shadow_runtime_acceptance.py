@@ -270,6 +270,19 @@ async def test_ws_boundary_evidence_never_wakes_application_directly(tmp_path: P
 
 
 @async_test
+async def test_ws_candidate_rejection_is_bounded_diagnostic_not_cohort_poison(
+    tmp_path: Path,
+) -> None:
+    runtime, _, item, _, _ = setup(tmp_path, client_values=[[candle("BTC", 0)]])
+    invalid = candle("BTC", 0)
+    invalid["c"] = "not-a-number"
+    await runtime.handle_message(json.dumps({"channel": "candle", "data": invalid}))
+    assert runtime.health.failed_markets == set()
+    assert runtime.health.nonrecoverable_markets == set()
+    assert runtime.health.ws_candidate_rejections[-1].market_id == item.identity.market_id
+
+
+@async_test
 async def test_ack_unknown_duplicate_timeout_and_reconnect_close_paths(tmp_path: Path) -> None:
     runtime, _, _, _, _ = setup(tmp_path)
     runtime._expected_acks = {"BTC"}

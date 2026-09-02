@@ -16,7 +16,12 @@ from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
 
+from trader_assist_v0.multi_asset_shadow.cohort_finality import (
+    FinalityMarketResult,
+    FinalityOutcome,
+)
 from trader_assist_v0.multi_asset_shadow.data import ClosedBarStore, MultiAssetDataAuthority
+from trader_assist_v0.multi_asset_shadow.hyperliquid_public import PublicDataError
 from trader_assist_v0.multi_asset_shadow.models import (
     AssetClass,
     MarketIdentity,
@@ -259,6 +264,18 @@ async def test_concurrent_duplicate_boundary_is_serialized(tmp_path: Path) -> No
 
 
 @async_test
+async def test_active_duplicate_boundary_never_emits_second_callback(tmp_path: Path) -> None:
+    world = Composition(tmp_path, lifecycle=MarketLifecycle.ACTIVE)
+    world.seed_history(T - FIVE_MINUTES_MS)
+    await world.barrier(T)
+    calls = len(world.client.calls)
+    assert world.wakes == [(T, BoundaryMode.LIVE_ACTIONABLE)]
+    await world.barrier(T)
+    assert len(world.client.calls) == calls
+    assert world.wakes == [(T, BoundaryMode.LIVE_ACTIONABLE)]
+
+
+@async_test
 async def test_t_and_t_plus_one_concurrency_produces_no_mixed_epochs(tmp_path: Path) -> None:
     world = Composition(tmp_path)
     world.seed_history(T - FIVE_MINUTES_MS)
@@ -349,7 +366,7 @@ async def test_stale_lifecycle_pending_not_reproduced_by_planner_is_not_applied(
 async def test_lagging_market_routes_to_context_recovery_without_live_action(
     tmp_path: Path,
 ) -> None:
-    world = Composition(tmp_path)
+    world = Composition(tmp_path, lifecycle=MarketLifecycle.ACTIVE)
     # Two markets coherent through T-1, one stuck far behind.
     world.seed_history(T - FIVE_MINUTES_MS, coins=("BTC", "ETH"))
     world.seed_history(T - 10 * FIVE_MINUTES_MS, coins=("SOL",))
@@ -357,9 +374,15 @@ async def test_lagging_market_routes_to_context_recovery_without_live_action(
     await world.barrier(T)
     assert world.wakes == []
     assert T in world.maintenance
-    # The lagging market recovered context history; live peers were proven.
+    # Every missing exact-T ACTIVE row used one context catch-up request.  T
+    # was already context-only, so no peer spent two finality confirmations.
     sol_calls = [call for call in world.client.calls if call[0] == "SOL"]
     assert any(call[2] - call[1] > FIVE_MINUTES_MS for call in sol_calls)
+    assert {call[0] for call in world.client.calls} == {"BTC", "ETH", "SOL"}
+    assert len(world.client.calls) == len(world.items)
+    assert world.runtime.health.failed_markets == set()
+    await world.barrier(T + FIVE_MINUTES_MS)
+    assert world.wakes == [(T + FIVE_MINUTES_MS, BoundaryMode.LIVE_ACTIONABLE)]
 
 
 @async_test
@@ -494,6 +517,78 @@ async def test_maintenance_runs_when_one_peer_is_not_actionable(tmp_path: Path) 
     await world.barrier(T)
     assert world.wakes == []
     assert T in world.maintenance
+
+
+@async_test
+async def test_recoverable_finality_is_boundary_local_and_later_fresh_boundary_resumes(
+    tmp_path: Path,
+) -> None:
+    world = Composition(
+        tmp_path,
+        lifecycle=MarketLifecycle.ACTIVE,
+        client=ScriptedClient(errors={"SOL": PublicDataError("transient")}),
+    )
+    world.seed_history(T - FIVE_MINUTES_MS)
+    world.runtime.health.acknowledgements = {item.identity.coin for item in world.items}
+    await world.barrier(T)
+    sol_id = next(
+        item.identity.market_id for item in world.items if item.identity.coin == "SOL"
+    )
+    assert world.wakes == []
+    assert world.runtime.health.failed_markets == set()
+    assert world.runtime.health.recoverable_markets == {sol_id}
+
+    world.client.errors.clear()
+    calls_before_recovery = len(world.client.calls)
+    await world.barrier(T + FIVE_MINUTES_MS)
+    recovery_calls = world.client.calls[calls_before_recovery:]
+    assert {call[0] for call in recovery_calls} == {"BTC", "ETH", "SOL"}
+    assert len(recovery_calls) == len(world.items)
+    assert world.wakes == []
+
+    await world.barrier(T + 2 * FIVE_MINUTES_MS)
+    assert world.wakes == [
+        (T + 2 * FIVE_MINUTES_MS, BoundaryMode.LIVE_ACTIONABLE)
+    ]
+    diagnostic = world.runtime.health.boundary_diagnostics[-1]
+    assert diagnostic.whole_cohort_actionable
+    assert diagnostic.callback_wake
+    assert diagnostic.finalized_count == len(world.items)
+
+
+@async_test
+async def test_deadline_finality_is_boundary_local_and_never_retrospective(
+    tmp_path: Path,
+) -> None:
+    world = Composition(tmp_path, lifecycle=MarketLifecycle.ACTIVE)
+    world.seed_history(T - FIVE_MINUTES_MS)
+    original = world.runtime._cohort_finality.prove_cohort
+
+    async def deadline_results(*, requests, deadline_monotonic):  # type: ignore[no-untyped-def]
+        del deadline_monotonic
+        return tuple(
+            FinalityMarketResult(
+                market_id=request.market.identity.market_id,
+                boundary_open_ms=request.boundary_open_ms,
+                outcome=FinalityOutcome.DEADLINE_EXCEEDED,
+                stage="finality_deadline_exceeded",
+            )
+            for request in requests
+        )
+
+    world.runtime._cohort_finality.prove_cohort = deadline_results  # type: ignore[method-assign]
+    await world.barrier(T)
+    assert world.wakes == []
+    assert world.runtime.health.failed_markets == set()
+    assert world.runtime.health.boundary_diagnostics[-1].deadline_count == len(world.items)
+
+    world.runtime._cohort_finality.prove_cohort = original  # type: ignore[method-assign]
+    await world.barrier(T + FIVE_MINUTES_MS)
+    assert world.wakes == []
+    await world.barrier(T + 2 * FIVE_MINUTES_MS)
+    assert world.wakes == [
+        (T + 2 * FIVE_MINUTES_MS, BoundaryMode.LIVE_ACTIONABLE)
+    ]
 
 
 def test_barrier_does_not_hardcode_first_launch_twenty() -> None:

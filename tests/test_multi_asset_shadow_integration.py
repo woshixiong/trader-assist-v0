@@ -3685,7 +3685,7 @@ class _PostResponseClock:
 
 
 class _ScriptedPublicTransport:
-    """Deterministic official-public transport carrying only l2Book responses."""
+    """Deterministic official-public transport for finality and L2 responses."""
 
     def __init__(self, clock: _PostResponseClock) -> None:
         self.clock = clock
@@ -3695,9 +3695,23 @@ class _ScriptedPublicTransport:
     def __call__(self, _url: str, body: bytes, _timeout_seconds: float) -> bytes:
         request = json.loads(body)
         if request.get("type") == "candleSnapshot":
-            # The real one-minute provider may backfill closed 1m bars for an
-            # attached outcome stream; none are available yet in this window.
-            return json.dumps([]).encode()
+            candle_request = request["req"]
+            if candle_request["interval"] == "1m":
+                # The real one-minute provider may backfill closed 1m bars for
+                # an attached outcome stream; none exist in this test window.
+                return json.dumps([]).encode()
+            assert candle_request["interval"] == "5m"
+            open_ms = int(candle_request["startTime"])
+            assert candle_request["endTime"] == open_ms + 300_000
+            return json.dumps(
+                [
+                    _payload(
+                        open_ms // 300_000,
+                        final=False,
+                        coin=str(candle_request["coin"]),
+                    )
+                ]
+            ).encode()
         if request.get("type") != "l2Book":
             raise AssertionError(f"unexpected public request: {request!r}")
         self.l2_calls += 1
@@ -3729,12 +3743,13 @@ class _StageCComposition:
 
 
 def _stage_c_deferred_boundary_composition(tmp_path: Path) -> _StageCComposition:
-    """Real composition with R1 history, ACTIVE successor R2, and boundary T durable.
+    """Real composition with R1 history and ACTIVE successor R2 before fresh T.
 
     Bootstrap.compose wires the real runtime, bootstrap, coordinator, Registry,
-    Data authority, and EvidenceStore; the only scripted element is the public
-    HTTP transport, whose stale L2 makes the real Scanner public-data path fail
-    at T through the established freshness failure path.
+    Data authority, and EvidenceStore.  Exact T is deliberately absent at
+    entry so the real finality seam admits it through scripted public HTTP;
+    stale L2 then makes the real Scanner public-data path fail at T through the
+    established freshness failure path.
     """
     route = _route(tmp_path)
     market_id = route.market.identity.market_id
@@ -3749,11 +3764,6 @@ def _stage_c_deferred_boundary_composition(tmp_path: Path) -> _StageCComposition
         item for item in active.markets if item.identity.market_id == market_id
     )
     deferred_open_ms = route.latest.open_time_ms + 300_000
-    route.data.admit_rest_history(
-        market=current_market,
-        snapshot=[_payload(deferred_open_ms // 300_000, final=False)],
-        received_at=datetime.fromtimestamp((deferred_open_ms + 300_001) / 1_000, UTC),
-    )
     clock = _PostResponseClock(base_ms=deferred_open_ms + 305_000)
     transport = _ScriptedPublicTransport(clock)
     bootstrap = MultiAssetProductionBootstrap.compose(
@@ -3919,21 +3929,15 @@ def test_stage_c_next_fresh_live_exactly_once_and_duplicate_wake_idempotent(
     """Attacks B and C: fresh LIVE boundary exactly once; duplicate wake is a no-op.
 
     Continuing from the deferred-boundary composition, the scripted public
-    transport recovers, the next fresh closed-5m boundary is admitted under the
-    ACTIVE Registry, and the real runtime barrier processes it LIVE through the
-    real adapter: the provider L2 timestamp sits between the request start and
-    the post-response injected wall clock, Scanner runs exactly once for the
-    boundary, Strategy is evaluated exactly once for the current boundary (the
-    deferred predecessor reconciles as context in the same pass), and the
-    evaluation binds the current ACTIVE Registry with its exact evaluation-time
-    readiness hash.  A later duplicate wake for the same completed boundary --
-    under an advanced wall clock with a different readiness snapshot hash --
-    creates no second Scanner/Strategy/Formal/Shadow authority and no Bootstrap
-    failure: durable retained authority, not the changed snapshot, decides the
-    work is already done.  The real Bootstrap BoundaryReport returned through
-    the Runtime application callback is captured for both wakes by an
-    observer-only wrapper, so a failure Bootstrap swallows into
-    BoundaryReport.failures cannot false-pass as clean idempotency.
+    transport recovers, and the real runtime barrier proves and admits the next
+    fresh closed-5m boundary under the ACTIVE Registry through
+    Closed5mCohortFinality.  The provider L2 timestamp sits between request
+    start and the post-response injected wall clock, Scanner runs exactly once,
+    Strategy is evaluated exactly once for the current boundary (the deferred
+    predecessor reconciles as context in the same pass), and the evaluation
+    binds exact Registry/readiness identity.  A later duplicate barrier call
+    creates neither a second runtime callback nor new Scanner/Strategy/Formal/
+    Shadow authority.
     """
     composition = _stage_c_deferred_boundary_composition(tmp_path)
     bootstrap = composition.bootstrap
@@ -3975,15 +3979,12 @@ def test_stage_c_next_fresh_live_exactly_once_and_duplicate_wake_idempotent(
     bootstrap.runtime.on_finalized_5m = observing_finalized_5m
 
     # B1: advance to the next valid fresh closed-5m boundary under the ACTIVE
-    # Registry, with the public data path recovered.
+    # Registry, with the public data path recovered.  Exact T+1 remains absent:
+    # the real Runtime/Closed5mCohortFinality path must prove and admit it.
     next_open_ms = deferred_open_ms + 300_000
     composition.transport.stale = False
-    route.data.admit_rest_history(
-        market=composition.current_market,
-        snapshot=[_payload(next_open_ms // 300_000, final=False)],
-        received_at=datetime.fromtimestamp((next_open_ms + 300_001) / 1_000, UTC),
-    )
     composition.clock.base_ms = next_open_ms + 305_000
+    assert route.closed_store.last_open(market_id) == deferred_open_ms
 
     # B2/B3: the real barrier processes the fresh boundary LIVE through the real
     # HyperliquidPublicPlanningAdapter (provider time between request start and
@@ -4074,19 +4075,9 @@ def test_stage_c_next_fresh_live_exactly_once_and_duplicate_wake_idempotent(
     # C3: duplicate wake for the same already-completed boundary.
     asyncio.run(bootstrap.runtime.process_cohort_boundary(next_open_ms))
 
-    # C3-report: exactly one ADDITIONAL captured report for the duplicate wake.
-    # The real Bootstrap genuinely re-processed the same boundary, and its
-    # actual BoundaryReport must be clean: no failure was swallowed into
-    # BoundaryReport.failures (a silently-caught Strategy authority conflict
-    # would land exactly there, invisible to durable counts and Runtime health),
-    # and no Scanner was re-run for the already-retained boundary.
-    assert len(captured_reports) == 2
-    duplicate_report = captured_reports[1]
-    assert isinstance(duplicate_report, BoundaryReport)
-    assert duplicate_report.boundary_open_time_ms == next_open_ms
-    assert duplicate_report.evaluation_mode == BoundaryMode.LIVE_ACTIONABLE
-    assert duplicate_report.failures == ()
-    assert duplicate_report.scanner_run_count == 0
+    # C3-report: retained current-T evidence is context on duplicate/restart,
+    # never authority for a retrospective second runtime callback.
+    assert len(captured_reports) == 1
 
     # C4: durable-state-derived idempotency -- no new Scanner/Strategy/Formal/
     # Shadow authority, no conflict, no Bootstrap failure.  Still-pending Formal
