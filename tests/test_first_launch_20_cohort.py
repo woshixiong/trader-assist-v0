@@ -242,10 +242,10 @@ async def test_exact_twenty_duplicate_boundary_uses_zero_finality_rest(tmp_path:
 async def test_nineteen_durable_one_missing_proves_only_the_missing_market(
     tmp_path: Path,
 ) -> None:
-    # Packet section 22: when 19 ACTIVE markets already hold authoritative
-    # exact-T rows and exactly one legitimately needs current finality, the
-    # barrier operates on the missing market alone — two targeted
-    # confirmations, never a repeated whole-cohort 40-call burst.
+    # Nineteen exact-T rows retained before barrier entry are context, not
+    # evidence for a new whole-cohort callback. The barrier proves only the
+    # one genuinely missing current-live-eligible market (two calls) and does
+    # not retrospectively combine it with retained rows into LIVE authority.
     active_items = tuple(
         item.model_copy(update={"lifecycle": MarketLifecycle.ACTIVE})  # type: ignore[attr-defined]
         for item in exact_first_launch_20()
@@ -258,4 +258,5 @@ async def test_nineteen_durable_one_missing_proves_only_the_missing_market(
     missing_coin = items[19].identity.coin  # type: ignore[attr-defined]
     assert {call[0] for call in client.calls} == {missing_coin}
     assert len(client.calls) == 2
-    assert wakes == [(T, BoundaryMode.LIVE_ACTIONABLE)]
+    assert authority.store.last_open(items[19].identity.market_id) == T  # type: ignore[attr-defined]
+    assert wakes == []

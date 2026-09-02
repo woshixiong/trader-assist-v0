@@ -344,7 +344,12 @@ async def test_stable_confirmation_pair_finalizes_and_unstable_pair_fails_closed
     assert [
         bar.open_time_ms for bar in rejected_authority.store.bars(rejected_item.identity.market_id)
     ] == [0]
-    assert rejected_item.identity.market_id in rejected.health.failed_markets
+    rejected_id = rejected_item.identity.market_id
+    assert rejected_id in rejected.health.recoverable_markets
+    assert rejected_id not in rejected.health.failed_markets
+    assert rejected_id not in rejected.health.nonrecoverable_markets
+    diagnostic = rejected.health.boundary_diagnostics[-1]
+    assert diagnostic.recoverable_count == 1
     assert rejected_wakes == []
 
 
@@ -497,10 +502,13 @@ async def test_reconnect_recovery_persists_evidence_but_only_barrier_acts(
         boundary,
     ]
     assert wakes == []
-    # Global LIVE_ACTIONABLE authority still belongs to the barrier alone.
+    # Reconnect recovery persisted current-T as context. Observing that same
+    # retained T at the barrier cannot retrospectively create LIVE authority.
     runtime.health.data_ready = True
+    calls_before = len(client.calls)
     await runtime.process_cohort_boundary(boundary)
-    assert wakes == [(boundary, BoundaryMode.LIVE_ACTIONABLE)]
+    assert len(client.calls) == calls_before
+    assert wakes == []
 
 
 @async_test
