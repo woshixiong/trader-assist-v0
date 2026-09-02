@@ -95,7 +95,7 @@ async def qualify_application(
         raise ValueError("production finalized callback is not composed")
 
     async def observing_callback(bar: object, mode: BoundaryMode) -> object:
-        value = production_callback(bar, mode)  # type: ignore[arg-type]
+        value = production_callback(bar, mode)
         report = await value if isinstance(value, Awaitable) else value
         if not isinstance(report, BoundaryReport):
             raise TypeError("production finalized callback did not return BoundaryReport")
@@ -112,17 +112,16 @@ async def qualify_application(
             async with asyncio.timeout(qualification_timeout_seconds):
                 while result is None:
                     changed = asyncio.create_task(report_changed.wait())
-                    done = set()
                     try:
-                        done, _ = await asyncio.wait(
+                        await asyncio.wait(
                             (changed, application_task),
                             return_when=asyncio.FIRST_COMPLETED,
                         )
                     finally:
-                        if changed not in done:
+                        if not changed.done():
                             changed.cancel()
                             await asyncio.gather(changed, return_exceptions=True)
-                    if application_task in done:
+                    if application_task.done():
                         await application_task
                         raise RuntimeError("production application exited before G11 proof")
                     report_changed.clear()
