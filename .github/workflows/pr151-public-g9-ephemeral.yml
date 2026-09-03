@@ -1,4 +1,4 @@
-name: PR151 exact-head public G9 diagnostic
+name: PR151 exact-head public G9 boundary trace
 
 on:
   push:
@@ -9,9 +9,9 @@ permissions:
   contents: read
 
 jobs:
-  public-g9-diagnostic:
+  public-g9-boundary-trace:
     runs-on: ubuntu-latest
-    timeout-minutes: 24
+    timeout-minutes: 27
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -31,22 +31,22 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "16d967c7d27f21dcc95c146f45d2873b3e496752"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
-          echo "PUBLIC_G9_DIAGNOSTIC_EXACT_HEAD=$(git rev-parse HEAD)"
-          echo "PUBLIC_G9_DIAGNOSTIC_TREE=$(git rev-parse HEAD^{tree})"
+          echo "G9_TRACE_EXACT_HEAD=$(git rev-parse HEAD)"
+          echo "G9_TRACE_TREE=$(git rev-parse HEAD^{tree})"
 
       - name: Hashed locked install
         run: |
-          python -m venv /tmp/trader-assist-v0-g9diag-venv
-          /tmp/trader-assist-v0-g9diag-venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
-          /tmp/trader-assist-v0-g9diag-venv/bin/python -m pip install -e . --no-deps --no-build-isolation
-          /tmp/trader-assist-v0-g9diag-venv/bin/python scripts/check_dependency_lock.py --verify-installed
-          /tmp/trader-assist-v0-g9diag-venv/bin/python -m pip check
+          python -m venv /tmp/trader-assist-v0-g9trace-venv
+          /tmp/trader-assist-v0-g9trace-venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
+          /tmp/trader-assist-v0-g9trace-venv/bin/python -m pip install -e . --no-deps --no-build-isolation
+          /tmp/trader-assist-v0-g9trace-venv/bin/python scripts/check_dependency_lock.py --verify-installed
+          /tmp/trader-assist-v0-g9trace-venv/bin/python -m pip check
 
-      - name: Structured public G9 diagnostic
+      - name: Trace first post-ACTIVE boundary
         env:
           PYTHONUNBUFFERED: "1"
         run: |
-          /tmp/trader-assist-v0-g9diag-venv/bin/python - <<'PY'
+          /tmp/trader-assist-v0-g9trace-venv/bin/python - <<'PY'
           import asyncio
           import json
           import tempfile
@@ -66,74 +66,17 @@ jobs:
           from trader_assist_v0.multi_asset_shadow.notification_engine import WebhookConfig, WebhookDeliveryAdapter, WebhookResponse
           from trader_assist_v0.multi_asset_shadow.planning import CostModel
           from trader_assist_v0.multi_asset_shadow.registry import MarketRegistryManager
-          from trader_assist_v0.multi_asset_shadow.runtime import BoundaryMode
+          from trader_assist_v0.multi_asset_shadow.runtime import BoundaryMode, classify_retained_boundary
 
           CANDIDATE = "16d967c7d27f21dcc95c146f45d2873b3e496752"
-          MAX_SECONDS = 1200.0
-          SAMPLE_SECONDS = 30.0
+          MAX_SECONDS = 1500.0
 
           class NoNetworkNotificationClient:
-              def __init__(self):
-                  self.calls = 0
               def post(self, **_):
-                  self.calls += 1
                   return WebhookResponse(204)
 
-          def snapshot(application, reports, started):
-              runtime = application.bootstrap.runtime
-              active = application.bootstrap.registry.active()
-              pending = application.bootstrap.registry.pending_version()
-              view = active or pending
-              lifecycles = Counter()
-              market_ids = []
-              last_opens = {}
-              authority_failed = []
-              if view is not None:
-                  for market in view.markets:
-                      lifecycles[market.lifecycle.value] += 1
-                      market_ids.append(market.identity.market_id)
-                      last_opens[market.identity.market_id] = application.bootstrap.data_authority.store.last_open(market.identity.market_id)
-                      if application.bootstrap.data_authority.market_failed(market.identity.market_id):
-                          authority_failed.append(market.identity.market_id)
-              values = [v for v in last_opens.values() if v is not None]
-              diagnostics = runtime.health.boundary_diagnostics
-              latest_diag = asdict(diagnostics[-1]) if diagnostics else None
-              return {
-                  "elapsed_seconds": round(time.monotonic() - started, 1),
-                  "data_ready": runtime.health.data_ready,
-                  "ws_phase": runtime.health.ws_phase,
-                  "subscriptions": runtime.health.subscriptions,
-                  "ack_count": len(runtime.health.acknowledgements),
-                  "expected_ack_count": runtime.health.expected_acknowledgements,
-                  "connections": runtime.health.connections,
-                  "disconnects": runtime.health.disconnects,
-                  "reconnects": runtime.health.reconnects,
-                  "heartbeat_sent": runtime.health.heartbeat_sent,
-                  "heartbeat_pongs": runtime.health.heartbeat_pongs,
-                  "heartbeat_failures": runtime.health.heartbeat_failures,
-                  "lifecycle_counts": dict(sorted(lifecycles.items())),
-                  "market_count": len(market_ids),
-                  "last_open_min": min(values) if values else None,
-                  "last_open_max": max(values) if values else None,
-                  "failed_markets": sorted(runtime.health.failed_markets),
-                  "recoverable_markets": sorted(runtime.health.recoverable_markets),
-                  "nonrecoverable_markets": sorted(runtime.health.nonrecoverable_markets),
-                  "authority_failed_markets": sorted(authority_failed),
-                  "callback_report_count": len(reports),
-                  "live_report_count": sum(r.evaluation_mode is BoundaryMode.LIVE_ACTIONABLE for r in reports),
-                  "latest_report": None if not reports else {
-                      "boundary_open_time_ms": reports[-1].boundary_open_time_ms,
-                      "evaluation_mode": reports[-1].evaluation_mode.value,
-                      "scanner_run_count": reports[-1].scanner_run_count,
-                      "strategy_market_count": len(reports[-1].evaluated_market_ids),
-                      "failure_count": len(reports[-1].failures),
-                  },
-                  "boundary_diagnostic_count": len(diagnostics),
-                  "latest_boundary_diagnostic": latest_diag,
-              }
-
           async def main():
-              with tempfile.TemporaryDirectory(prefix="trade-os-g9diag-") as td:
+              with tempfile.TemporaryDirectory(prefix="trade-os-g9trace-") as td:
                   state = Path(td) / "state"
                   production.THREE_SETUP_STATE_ROOT = state
                   production.THREE_SETUP_EVIDENCE_STORE_PATH = state / "evidence.sqlite"
@@ -141,71 +84,163 @@ jobs:
                   production.THREE_SETUP_CLOSED_BAR_STORE_PATH = state / "closed-bars.sqlite"
 
                   client = HyperliquidPublicClient()
-                  observed_at = datetime.now(UTC)
-                  seed = build_seed(version=f"g9diag-{CANDIDATE[:12]}", observed_at=observed_at, client=client)
+                  seed = build_seed(
+                      version=f"g9trace-{CANDIDATE[:12]}",
+                      observed_at=datetime.now(UTC),
+                      client=client,
+                  )
                   assert len(seed.markets) == 20
-                  registry = MarketRegistryManager(production.THREE_SETUP_REGISTRY_ROOT, metadata_validator=OfficialMetadataValidator(client))
+                  registry = MarketRegistryManager(
+                      production.THREE_SETUP_REGISTRY_ROOT,
+                      metadata_validator=OfficialMetadataValidator(client),
+                  )
                   registry.stage(seed)
                   registry.request_apply(seed.version)
-                  sink = NoNetworkNotificationClient()
+                  adapter = WebhookDeliveryAdapter(
+                      client=NoNetworkNotificationClient(),
+                      config=WebhookConfig(url="https://example.invalid/no-network"),
+                  )
                   config = production.ThreeSetupProductionConfig(
                       release_sha=CANDIDATE,
                       evidence_store_path=production.THREE_SETUP_EVIDENCE_STORE_PATH,
                       registry_root=production.THREE_SETUP_REGISTRY_ROOT,
                       closed_bar_store_path=production.THREE_SETUP_CLOSED_BAR_STORE_PATH,
-                      cost_model=CostModel("g9diag", Decimal(), Decimal(), Decimal("2")),
+                      cost_model=CostModel("g9trace", Decimal(), Decimal(), Decimal("2")),
                       acknowledgement_timeout_seconds=30,
                       notification_poll_seconds=1,
                   )
-                  adapter = WebhookDeliveryAdapter(client=sink, config=WebhookConfig(url="https://example.invalid/no-network"))
-                  application = production.compose_three_setup_application(config=config, notification_adapter=adapter, public_client=client)
+                  application = production.compose_three_setup_application(
+                      config=config,
+                      notification_adapter=adapter,
+                      public_client=client,
+                  )
+                  runtime = application.bootstrap.runtime
                   reports = []
-                  real_callback = application.bootstrap.runtime.on_finalized_5m
+                  real_callback = runtime.on_finalized_5m
+                  real_process = runtime.process_cohort_boundary
                   assert real_callback is not None
+                  post_active_boundary = asyncio.Event()
+                  trace_records = []
 
                   async def observe(bar, mode):
                       value = real_callback(bar, mode)
                       report = await value if isinstance(value, Awaitable) else value
                       assert isinstance(report, BoundaryReport)
                       reports.append(report)
-                      print("G9_DIAGNOSTIC_CALLBACK=" + json.dumps({
-                          "boundary_open_time_ms": report.boundary_open_time_ms,
-                          "evaluation_mode": report.evaluation_mode.value,
-                          "scanner_run_count": report.scanner_run_count,
-                          "strategy_market_count": len(report.evaluated_market_ids),
-                          "failure_count": len(report.failures),
+                      print("G9_CALLBACK=" + json.dumps({
+                          "boundary": report.boundary_open_time_ms,
+                          "mode": report.evaluation_mode.value,
+                          "scanner": report.scanner_run_count,
+                          "strategy_markets": len(report.evaluated_market_ids),
+                          "failures": [asdict(item) for item in report.failures],
                       }, sort_keys=True, separators=(",", ":")), flush=True)
                       return report
 
-                  application.bootstrap.runtime.on_finalized_5m = observe
+                  async def traced_process(boundary):
+                      active = registry.active()
+                      selected = runtime.selected_markets()
+                      lifecycle = Counter(m.lifecycle.value for m in selected)
+                      classes = Counter()
+                      last_opens = {}
+                      if active is not None:
+                          for market in selected:
+                              last_opens[market.identity.market_id] = application.bootstrap.data_authority.store.last_open(market.identity.market_id)
+                              classes[classify_retained_boundary(
+                                  store=application.bootstrap.data_authority.store,
+                                  registry=registry,
+                                  market_id=market.identity.market_id,
+                                  boundary_open_ms=boundary,
+                                  captured_version=active.version,
+                                  captured_hash=active.content_hash,
+                              ).value] += 1
+                      pre = {
+                          "boundary": boundary,
+                          "lifecycle": dict(sorted(lifecycle.items())),
+                          "classes": dict(sorted(classes.items())),
+                          "data_ready": runtime.health.data_ready,
+                          "ack": len(runtime.health.acknowledgements),
+                          "last_open_min": min((v for v in last_opens.values() if v is not None), default=None),
+                          "last_open_max": max((v for v in last_opens.values() if v is not None), default=None),
+                      }
+                      print("G9_BARRIER_PRE=" + json.dumps(pre, sort_keys=True, separators=(",", ":")), flush=True)
+                      error = None
+                      try:
+                          await real_process(boundary)
+                      except Exception as exc:
+                          error = type(exc).__name__ + ":" + str(exc)
+                          raise
+                      finally:
+                          diag = None
+                          if runtime.health.boundary_diagnostics and runtime.health.boundary_diagnostics[-1].boundary_open_ms == boundary:
+                              diag = asdict(runtime.health.boundary_diagnostics[-1])
+                          post = {
+                              "boundary": boundary,
+                              "pre": pre,
+                              "diagnostic": diag,
+                              "callback_failures": [asdict(item) for item in runtime.health.callback_failures[-5:]],
+                              "report_count": len(reports),
+                              "error": error,
+                          }
+                          trace_records.append(post)
+                          print("G9_BARRIER_POST=" + json.dumps(post, sort_keys=True, separators=(",", ":")), flush=True)
+                          if lifecycle.get(MarketLifecycle.ACTIVE.value, 0) == 20:
+                              post_active_boundary.set()
+
+                  runtime.on_finalized_5m = observe
+                  runtime.process_cohort_boundary = traced_process
                   shutdown = asyncio.Event()
                   task = asyncio.create_task(application.run(shutdown))
                   started = time.monotonic()
-                  final_reason = "MAX_DIAGNOSTIC_WINDOW"
-                  active_diag_seen = 0
+                  final = None
                   try:
                       while time.monotonic() - started < MAX_SECONDS:
                           if task.done():
                               try:
                                   await task
-                                  final_reason = "APPLICATION_EXITED_NORMALLY"
+                                  reason = "APPLICATION_EXITED_NORMALLY"
                               except Exception as exc:
-                                  final_reason = "APPLICATION_EXITED:" + type(exc).__name__ + ":" + str(exc)
+                                  reason = "APPLICATION_EXITED:" + type(exc).__name__ + ":" + str(exc)
+                              final = {"reason": reason}
                               break
-                          snap = snapshot(application, reports, started)
-                          print("G9_DIAGNOSTIC_SAMPLE=" + json.dumps(snap, sort_keys=True, separators=(",", ":")), flush=True)
-                          if snap["nonrecoverable_markets"] or snap["authority_failed_markets"]:
-                              final_reason = "NONRECOVERABLE_OR_AUTHORITY_FAILURE"
+                          try:
+                              await asyncio.wait_for(post_active_boundary.wait(), timeout=30)
+                              final = {
+                                  "reason": "FIRST_POST_ACTIVE_BOUNDARY_OBSERVED",
+                                  "elapsed_seconds": round(time.monotonic() - started, 1),
+                                  "trace": trace_records[-1] if trace_records else None,
+                                  "reports": [{
+                                      "boundary": r.boundary_open_time_ms,
+                                      "mode": r.evaluation_mode.value,
+                                      "scanner": r.scanner_run_count,
+                                      "strategy_markets": len(r.evaluated_market_ids),
+                                      "failure_count": len(r.failures),
+                                  } for r in reports[-3:]],
+                                  "failed_markets": sorted(runtime.health.failed_markets),
+                                  "recoverable_markets": sorted(runtime.health.recoverable_markets),
+                                  "nonrecoverable_markets": sorted(runtime.health.nonrecoverable_markets),
+                                  "ws_candidate_rejections": len(runtime.health.ws_candidate_rejections),
+                                  "public_data_only": True,
+                                  "notification_network_disabled": True,
+                                  "shadow_order_submitted": False,
+                              }
                               break
-                          if snap["live_report_count"]:
-                              final_reason = "LIVE_REPORT_OBSERVED"
-                              break
-                          if snap["lifecycle_counts"].get(MarketLifecycle.ACTIVE.value, 0) == 20 and snap["boundary_diagnostic_count"]:
-                              active_diag_seen += 1
-                              if active_diag_seen >= 3:
-                                  final_reason = "THREE_ACTIVE_COHORT_DIAGNOSTIC_SAMPLES_WITHOUT_LIVE"
-                                  break
-                          await asyncio.sleep(SAMPLE_SECONDS)
+                          except TimeoutError:
+                              print("G9_PROGRESS=" + json.dumps({
+                                  "elapsed_seconds": round(time.monotonic() - started, 1),
+                                  "data_ready": runtime.health.data_ready,
+                                  "ws_phase": runtime.health.ws_phase,
+                                  "ack": len(runtime.health.acknowledgements),
+                                  "diagnostic_count": len(runtime.health.boundary_diagnostics),
+                                  "report_count": len(reports),
+                              }, sort_keys=True, separators=(",", ":")), flush=True)
+                      if final is None:
+                          final = {
+                              "reason": "MAX_TRACE_WINDOW",
+                              "elapsed_seconds": round(time.monotonic() - started, 1),
+                              "trace_count": len(trace_records),
+                              "report_count": len(reports),
+                          }
+                      print("G9_TRACE_FINAL=" + json.dumps(final, sort_keys=True, separators=(",", ":")), flush=True)
                   finally:
                       shutdown.set()
                       try:
@@ -213,12 +248,6 @@ jobs:
                       except Exception:
                           task.cancel()
                           await asyncio.gather(task, return_exceptions=True)
-                  final = snapshot(application, reports, started)
-                  final["reason"] = final_reason
-                  final["public_data_only"] = True
-                  final["notification_network_disabled"] = True
-                  final["shadow_order_submitted"] = False
-                  print("G9_DIAGNOSTIC_FINAL=" + json.dumps(final, sort_keys=True, separators=(",", ":")), flush=True)
 
           asyncio.run(main())
           PY
@@ -227,6 +256,6 @@ jobs:
         if: always()
         run: |
           test "$(git rev-parse HEAD)" = "16d967c7d27f21dcc95c146f45d2873b3e496752"
-          echo "PUBLIC_G9_DIAGNOSTIC_FINAL_HEAD=$(git rev-parse HEAD)"
-          echo "PUBLIC_G9_DIAGNOSTIC_FINAL_TREE=$(git rev-parse HEAD^{tree})"
+          echo "G9_TRACE_FINAL_HEAD=$(git rev-parse HEAD)"
+          echo "G9_TRACE_FINAL_TREE=$(git rev-parse HEAD^{tree})"
           git status --short
