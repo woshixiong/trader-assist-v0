@@ -42,7 +42,7 @@ jobs:
           /tmp/trader-assist-v0-public-diag-venv/bin/python scripts/check_dependency_lock.py --verify-installed
           /tmp/trader-assist-v0-public-diag-venv/bin/python -m pip check
 
-      - name: Isolate ACTIVE Target-20 finality and barrier liveness
+      - name: Observe first real post-cooldown ACTIVE Target-20 boundary
         env:
           PYTHONUNBUFFERED: "1"
         run: |
@@ -68,8 +68,6 @@ jobs:
           from trader_assist_v0.multi_asset_shadow.registry import MarketRegistryManager
 
           CANDIDATE = "23f48c64448bd2089ceece0cd1b3038b9b6e6ff1"
-          FIVE = 300_000
-          POST_CLOSE_DIAG_MS = 4_000
           transport_lock = threading.Lock()
           transport_rows = []
 
@@ -82,7 +80,7 @@ jobs:
                   parsed = json.loads(body)
                   request_type = str(parsed.get("type"))
                   req = parsed.get("req") if isinstance(parsed.get("req"), dict) else {}
-                  coin = req.get("coin")
+                  coin = req.get("coin") or parsed.get("coin")
                   interval = req.get("interval")
               except Exception:
                   pass
@@ -93,13 +91,12 @@ jobs:
                   outcome = type(exc).__name__
                   raise
               finally:
-                  elapsed_ms = max(0, int((time.monotonic() - started) * 1000))
                   with transport_lock:
                       transport_rows.append({
                           "type": request_type,
                           "coin": coin,
                           "interval": interval,
-                          "elapsed_ms": elapsed_ms,
+                          "elapsed_ms": max(0, int((time.monotonic() - started) * 1000)),
                           "outcome": outcome,
                       })
 
@@ -107,13 +104,19 @@ jobs:
               def post(self, **_):
                   return WebhookResponse(204)
 
-          async def wait_until_ms(target_ms: int) -> None:
-              while True:
-                  now_ms = int(datetime.now(UTC).timestamp() * 1000)
-                  remaining = target_ms - now_ms
-                  if remaining <= 0:
-                      return
-                  await asyncio.sleep(min(1.0, remaining / 1000))
+          def latency_summary(rows):
+              values = sorted(int(row["elapsed_ms"]) for row in rows)
+              if not values:
+                  return {"count": 0, "success": 0, "fail": 0, "min_ms": None, "p50_ms": None, "p95_ms": None, "max_ms": None}
+              return {
+                  "count": len(rows),
+                  "success": sum(row["outcome"] == "SUCCESS" for row in rows),
+                  "fail": sum(row["outcome"] != "SUCCESS" for row in rows),
+                  "min_ms": values[0],
+                  "p50_ms": values[len(values)//2],
+                  "p95_ms": values[min(len(values)-1, int(len(values)*0.95))],
+                  "max_ms": values[-1],
+              }
 
           async def main() -> None:
               with tempfile.TemporaryDirectory(prefix="trade-os-active-finality-diag-") as td:
@@ -125,31 +128,18 @@ jobs:
 
                   client = HyperliquidPublicClient(post=timed_post)
                   observed_at = datetime.now(UTC)
-                  seed = build_seed(
-                      version=f"diag-source-{CANDIDATE[:12]}",
-                      observed_at=observed_at,
-                      client=client,
-                  )
+                  seed = build_seed(version=f"diag-source-{CANDIDATE[:12]}", observed_at=observed_at, client=client)
                   assert len(seed.markets) == 20
                   active_seed = RegistryVersion.create(
                       version=f"diag-active-{CANDIDATE[:12]}",
                       created_at=observed_at,
-                      markets=tuple(
-                          market.model_copy(update={"lifecycle": MarketLifecycle.ACTIVE})
-                          for market in seed.markets
-                      ),
+                      markets=tuple(m.model_copy(update={"lifecycle": MarketLifecycle.ACTIVE}) for m in seed.markets),
                   )
-                  registry = MarketRegistryManager(
-                      production.THREE_SETUP_REGISTRY_ROOT,
-                      metadata_validator=OfficialMetadataValidator(client),
-                  )
+                  registry = MarketRegistryManager(production.THREE_SETUP_REGISTRY_ROOT, metadata_validator=OfficialMetadataValidator(client))
                   registry.stage(active_seed)
                   registry.request_apply(active_seed.version)
                   sink = NoNetworkNotificationClient()
-                  adapter = WebhookDeliveryAdapter(
-                      client=sink,
-                      config=WebhookConfig(url="https://example.invalid/no-network"),
-                  )
+                  adapter = WebhookDeliveryAdapter(client=sink, config=WebhookConfig(url="https://example.invalid/no-network"))
                   config = production.ThreeSetupProductionConfig(
                       release_sha=CANDIDATE,
                       evidence_store_path=production.THREE_SETUP_EVIDENCE_STORE_PATH,
@@ -159,11 +149,7 @@ jobs:
                       acknowledgement_timeout_seconds=30,
                       notification_poll_seconds=1,
                   )
-                  application = production.compose_three_setup_application(
-                      config=config,
-                      notification_adapter=adapter,
-                      public_client=client,
-                  )
+                  application = production.compose_three_setup_application(config=config, notification_adapter=adapter, public_client=client)
                   runtime = application.bootstrap.runtime
                   reports: list[BoundaryReport] = []
                   real_callback = runtime.on_finalized_5m
@@ -180,7 +166,7 @@ jobs:
                   shutdown = asyncio.Event()
                   task = asyncio.create_task(application.run(shutdown))
                   try:
-                      async with asyncio.timeout(420):
+                      async with asyncio.timeout(540):
                           while not runtime.health.data_ready:
                               if task.done():
                                   await task
@@ -191,58 +177,47 @@ jobs:
                           lifecycle_counts = {}
                           for market in active.markets:
                               lifecycle_counts[market.lifecycle.value] = lifecycle_counts.get(market.lifecycle.value, 0) + 1
-                          last_opens = {
-                              market.identity.market_id: application.bootstrap.data_authority.store.last_open(market.identity.market_id)
-                              for market in active.markets
-                          }
-                          opens = sorted(value for value in last_opens.values() if value is not None)
-                          assert len(opens) == 20
-                          startup_target = opens[-1]
+                          last_opens = [application.bootstrap.data_authority.store.last_open(m.identity.market_id) for m in active.markets]
+                          assert all(value is not None for value in last_opens)
+                          startup_target = max(int(value) for value in last_opens if value is not None)
+                          transport_start = len(transport_rows)
                           print("ACTIVE_DIAG_READY=" + json.dumps({
                               "lifecycle_counts": lifecycle_counts,
                               "subscriptions": runtime.health.subscriptions,
                               "acks": len(runtime.health.acknowledgements),
-                              "startup_min_last_open": opens[0],
-                              "startup_max_last_open": opens[-1],
-                              "startup_common_target": opens[0] == opens[-1],
+                              "startup_common_target": len(set(last_opens)) == 1,
+                              "startup_target": startup_target,
+                              "cooldown_remaining_ms": None if runtime._rest_cooldown_until is None else max(0, int((runtime._rest_cooldown_until - runtime.monotonic()) * 1000)),
                           }, sort_keys=True), flush=True)
 
-                          boundary = startup_target + FIVE
-                          await wait_until_ms(boundary + FIVE + POST_CLOSE_DIAG_MS)
-                          transport_start = len(transport_rows)
-                          started = time.monotonic()
-                          await runtime.process_cohort_boundary(boundary)
-                          barrier_ms = max(0, int((time.monotonic() - started) * 1000))
+                          while not runtime.health.boundary_diagnostics:
+                              if task.done():
+                                  await task
+                                  raise RuntimeError("application exited before first post-cooldown boundary diagnostic")
+                              await asyncio.sleep(0.1)
+
+                          diag = runtime.health.boundary_diagnostics[-1]
                           rows = transport_rows[transport_start:]
-                          candle_rows = [r for r in rows if r["type"] == "candleSnapshot"]
-                          latencies = sorted(int(r["elapsed_ms"]) for r in candle_rows)
-                          summary = {
-                              "boundary_open_ms": boundary,
-                              "barrier_elapsed_ms": barrier_ms,
-                              "transport_calls": len(rows),
-                              "candle_calls": len(candle_rows),
-                              "candle_success": sum(r["outcome"] == "SUCCESS" for r in candle_rows),
-                              "candle_fail": sum(r["outcome"] != "SUCCESS" for r in candle_rows),
-                              "candle_latency_min_ms": latencies[0] if latencies else None,
-                              "candle_latency_p50_ms": latencies[len(latencies)//2] if latencies else None,
-                              "candle_latency_p95_ms": latencies[min(len(latencies)-1, int(len(latencies)*0.95))] if latencies else None,
-                              "candle_latency_max_ms": latencies[-1] if latencies else None,
-                          }
-                          print("ACTIVE_DIAG_TRANSPORT=" + json.dumps(summary, sort_keys=True), flush=True)
-                          print("ACTIVE_DIAG_CANDLE_CALLS=" + json.dumps(candle_rows, sort_keys=True), flush=True)
-                          print("ACTIVE_DIAG_BOUNDARIES=" + json.dumps([
-                              asdict(item) for item in runtime.health.boundary_diagnostics[-5:]
-                          ], sort_keys=True), flush=True)
+                          candles = [r for r in rows if r["type"] == "candleSnapshot"]
+                          l2 = [r for r in rows if r["type"] == "l2Book"]
+                          print("ACTIVE_DIAG_TRANSPORT=" + json.dumps({
+                              "candle": latency_summary(candles),
+                              "l2": latency_summary(l2),
+                              "all_post_count": len(rows),
+                          }, sort_keys=True), flush=True)
+                          print("ACTIVE_DIAG_CANDLE_CALLS=" + json.dumps(candles, sort_keys=True), flush=True)
+                          print("ACTIVE_DIAG_BOUNDARY=" + json.dumps(asdict(diag), sort_keys=True), flush=True)
                           print("ACTIVE_DIAG_REPORTS=" + json.dumps([
                               {
-                                  "boundary_open_time_ms": report.boundary_open_time_ms,
-                                  "evaluation_mode": report.evaluation_mode.value,
-                                  "disposition": report.disposition.value,
-                                  "scanner_run_count": report.scanner_run_count,
-                                  "evaluated_market_count": len(report.evaluated_market_ids),
-                                  "failure_count": len(report.failures),
+                                  "boundary_open_time_ms": r.boundary_open_time_ms,
+                                  "evaluation_mode": r.evaluation_mode.value,
+                                  "disposition": r.disposition.value,
+                                  "scanner_run_count": r.scanner_run_count,
+                                  "evaluated_market_count": len(r.evaluated_market_ids),
+                                  "failure_count": len(r.failures),
+                                  "failure_reasons": [f"{f.stage}:{f.error_type}:{f.reason}" for f in r.failures],
                               }
-                              for report in reports[-5:]
+                              for r in reports[-5:]
                           ], sort_keys=True), flush=True)
                           print("ACTIVE_DIAG_HEALTH=" + json.dumps({
                               "recoverable": sorted(runtime.health.recoverable_markets),
