@@ -191,7 +191,7 @@ class HyperliquidPublicClient:
                     "coin": coin,
                     "interval": interval,
                     "startTime": start_ms,
-                    "endTime": end_ms,
+                    "endTime": end_ms - 1,
                 },
             },
             timeout_seconds=timeout_seconds,
