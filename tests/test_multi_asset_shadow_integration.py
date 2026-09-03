@@ -3702,7 +3702,7 @@ class _ScriptedPublicTransport:
                 return json.dumps([]).encode()
             assert candle_request["interval"] == "5m"
             open_ms = int(candle_request["startTime"])
-            assert candle_request["endTime"] == open_ms + 300_000
+            assert candle_request["endTime"] == open_ms + 299_999
             return json.dumps(
                 [
                     _payload(
