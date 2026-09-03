@@ -1,4 +1,4 @@
-name: PR151 exact-head public G9 full-application rehearsal
+name: PR151 exact-head public active-cohort finality diagnostic
 
 on:
   push:
@@ -9,9 +9,9 @@ permissions:
   contents: read
 
 jobs:
-  public-g9-full-application:
+  active-cohort-finality-diagnostic:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -31,30 +31,241 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "23f48c64448bd2089ceece0cd1b3038b9b6e6ff1"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
-          echo "PUBLIC_G9_EXACT_HEAD=$(git rev-parse HEAD)"
-          echo "PUBLIC_G9_TREE=$(git rev-parse HEAD^{tree})"
+          echo "DIAG_EXACT_HEAD=$(git rev-parse HEAD)"
+          echo "DIAG_TREE=$(git rev-parse HEAD^{tree})"
 
       - name: Hashed locked install
         run: |
-          python -m venv /tmp/trader-assist-v0-public-g9-venv
-          /tmp/trader-assist-v0-public-g9-venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
-          /tmp/trader-assist-v0-public-g9-venv/bin/python -m pip install -e . --no-deps --no-build-isolation
-          /tmp/trader-assist-v0-public-g9-venv/bin/python scripts/check_dependency_lock.py --verify-installed
-          /tmp/trader-assist-v0-public-g9-venv/bin/python -m pip check
+          python -m venv /tmp/trader-assist-v0-public-diag-venv
+          /tmp/trader-assist-v0-public-diag-venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
+          /tmp/trader-assist-v0-public-diag-venv/bin/python -m pip install -e . --no-deps --no-build-isolation
+          /tmp/trader-assist-v0-public-diag-venv/bin/python scripts/check_dependency_lock.py --verify-installed
+          /tmp/trader-assist-v0-public-diag-venv/bin/python -m pip check
 
-      - name: Full application public rehearsal
+      - name: Isolate ACTIVE Target-20 finality and barrier liveness
         env:
-          TRADE_OS_RUN_HYPERLIQUID_FULL_APPLICATION: "1"
-          TRADE_OS_PUBLIC_REHEARSAL_RELEASE_SHA: "23f48c64448bd2089ceece0cd1b3038b9b6e6ff1"
           PYTHONUNBUFFERED: "1"
         run: |
-          /tmp/trader-assist-v0-public-g9-venv/bin/python -m pytest -q -s \
-            tests/test_multi_asset_shadow_hyperliquid_live_ws_contract.py::test_public_provider_rehearsal_drives_full_three_setup_application
+          /tmp/trader-assist-v0-public-diag-venv/bin/python - <<'PY'
+          import asyncio
+          import json
+          import tempfile
+          import threading
+          import time
+          from dataclasses import asdict
+          from datetime import UTC, datetime
+          from decimal import Decimal
+          from pathlib import Path
+
+          from scripts.build_multi_asset_registry_seed import build_seed
+          from trader_assist_v0.multi_asset_shadow import hyperliquid_public as hp
+          from trader_assist_v0.multi_asset_shadow import production
+          from trader_assist_v0.multi_asset_shadow.bootstrap import BoundaryReport
+          from trader_assist_v0.multi_asset_shadow.hyperliquid_public import HyperliquidPublicClient, OfficialMetadataValidator
+          from trader_assist_v0.multi_asset_shadow.models import MarketLifecycle, RegistryVersion
+          from trader_assist_v0.multi_asset_shadow.notification_engine import WebhookConfig, WebhookDeliveryAdapter, WebhookResponse
+          from trader_assist_v0.multi_asset_shadow.planning import CostModel
+          from trader_assist_v0.multi_asset_shadow.registry import MarketRegistryManager
+
+          CANDIDATE = "23f48c64448bd2089ceece0cd1b3038b9b6e6ff1"
+          FIVE = 300_000
+          POST_CLOSE_DIAG_MS = 4_000
+          transport_lock = threading.Lock()
+          transport_rows = []
+
+          def timed_post(url: str, body: bytes, timeout_seconds: float) -> bytes:
+              started = time.monotonic()
+              request_type = "UNKNOWN"
+              coin = None
+              interval = None
+              try:
+                  parsed = json.loads(body)
+                  request_type = str(parsed.get("type"))
+                  req = parsed.get("req") if isinstance(parsed.get("req"), dict) else {}
+                  coin = req.get("coin")
+                  interval = req.get("interval")
+              except Exception:
+                  pass
+              outcome = "SUCCESS"
+              try:
+                  return hp._default_post(url, body, timeout_seconds)
+              except Exception as exc:
+                  outcome = type(exc).__name__
+                  raise
+              finally:
+                  elapsed_ms = max(0, int((time.monotonic() - started) * 1000))
+                  with transport_lock:
+                      transport_rows.append({
+                          "type": request_type,
+                          "coin": coin,
+                          "interval": interval,
+                          "elapsed_ms": elapsed_ms,
+                          "outcome": outcome,
+                      })
+
+          class NoNetworkNotificationClient:
+              def post(self, **_):
+                  return WebhookResponse(204)
+
+          async def wait_until_ms(target_ms: int) -> None:
+              while True:
+                  now_ms = int(datetime.now(UTC).timestamp() * 1000)
+                  remaining = target_ms - now_ms
+                  if remaining <= 0:
+                      return
+                  await asyncio.sleep(min(1.0, remaining / 1000))
+
+          async def main() -> None:
+              with tempfile.TemporaryDirectory(prefix="trade-os-active-finality-diag-") as td:
+                  state = Path(td) / "state"
+                  production.THREE_SETUP_STATE_ROOT = state
+                  production.THREE_SETUP_EVIDENCE_STORE_PATH = state / "evidence.sqlite"
+                  production.THREE_SETUP_REGISTRY_ROOT = state / "registry"
+                  production.THREE_SETUP_CLOSED_BAR_STORE_PATH = state / "closed-bars.sqlite"
+
+                  client = HyperliquidPublicClient(post=timed_post)
+                  observed_at = datetime.now(UTC)
+                  seed = build_seed(
+                      version=f"diag-source-{CANDIDATE[:12]}",
+                      observed_at=observed_at,
+                      client=client,
+                  )
+                  assert len(seed.markets) == 20
+                  active_seed = RegistryVersion.create(
+                      version=f"diag-active-{CANDIDATE[:12]}",
+                      created_at=observed_at,
+                      markets=tuple(
+                          market.model_copy(update={"lifecycle": MarketLifecycle.ACTIVE})
+                          for market in seed.markets
+                      ),
+                  )
+                  registry = MarketRegistryManager(
+                      production.THREE_SETUP_REGISTRY_ROOT,
+                      metadata_validator=OfficialMetadataValidator(client),
+                  )
+                  registry.stage(active_seed)
+                  registry.request_apply(active_seed.version)
+                  sink = NoNetworkNotificationClient()
+                  adapter = WebhookDeliveryAdapter(
+                      client=sink,
+                      config=WebhookConfig(url="https://example.invalid/no-network"),
+                  )
+                  config = production.ThreeSetupProductionConfig(
+                      release_sha=CANDIDATE,
+                      evidence_store_path=production.THREE_SETUP_EVIDENCE_STORE_PATH,
+                      registry_root=production.THREE_SETUP_REGISTRY_ROOT,
+                      closed_bar_store_path=production.THREE_SETUP_CLOSED_BAR_STORE_PATH,
+                      cost_model=CostModel("active-finality-diag", Decimal(), Decimal(), Decimal("2")),
+                      acknowledgement_timeout_seconds=30,
+                      notification_poll_seconds=1,
+                  )
+                  application = production.compose_three_setup_application(
+                      config=config,
+                      notification_adapter=adapter,
+                      public_client=client,
+                  )
+                  runtime = application.bootstrap.runtime
+                  reports: list[BoundaryReport] = []
+                  real_callback = runtime.on_finalized_5m
+                  assert real_callback is not None
+
+                  async def observe(bar, mode):
+                      value = real_callback(bar, mode)
+                      report = await value if hasattr(value, "__await__") else value
+                      assert isinstance(report, BoundaryReport)
+                      reports.append(report)
+                      return report
+
+                  runtime.on_finalized_5m = observe
+                  shutdown = asyncio.Event()
+                  task = asyncio.create_task(application.run(shutdown))
+                  try:
+                      async with asyncio.timeout(420):
+                          while not runtime.health.data_ready:
+                              if task.done():
+                                  await task
+                                  raise RuntimeError("application exited before READY")
+                              await asyncio.sleep(0.1)
+                          active = registry.active()
+                          assert active is not None
+                          lifecycle_counts = {}
+                          for market in active.markets:
+                              lifecycle_counts[market.lifecycle.value] = lifecycle_counts.get(market.lifecycle.value, 0) + 1
+                          last_opens = {
+                              market.identity.market_id: application.bootstrap.data_authority.store.last_open(market.identity.market_id)
+                              for market in active.markets
+                          }
+                          opens = sorted(value for value in last_opens.values() if value is not None)
+                          assert len(opens) == 20
+                          startup_target = opens[-1]
+                          print("ACTIVE_DIAG_READY=" + json.dumps({
+                              "lifecycle_counts": lifecycle_counts,
+                              "subscriptions": runtime.health.subscriptions,
+                              "acks": len(runtime.health.acknowledgements),
+                              "startup_min_last_open": opens[0],
+                              "startup_max_last_open": opens[-1],
+                              "startup_common_target": opens[0] == opens[-1],
+                          }, sort_keys=True), flush=True)
+
+                          boundary = startup_target + FIVE
+                          await wait_until_ms(boundary + FIVE + POST_CLOSE_DIAG_MS)
+                          transport_start = len(transport_rows)
+                          started = time.monotonic()
+                          await runtime.process_cohort_boundary(boundary)
+                          barrier_ms = max(0, int((time.monotonic() - started) * 1000))
+                          rows = transport_rows[transport_start:]
+                          candle_rows = [r for r in rows if r["type"] == "candleSnapshot"]
+                          latencies = sorted(int(r["elapsed_ms"]) for r in candle_rows)
+                          summary = {
+                              "boundary_open_ms": boundary,
+                              "barrier_elapsed_ms": barrier_ms,
+                              "transport_calls": len(rows),
+                              "candle_calls": len(candle_rows),
+                              "candle_success": sum(r["outcome"] == "SUCCESS" for r in candle_rows),
+                              "candle_fail": sum(r["outcome"] != "SUCCESS" for r in candle_rows),
+                              "candle_latency_min_ms": latencies[0] if latencies else None,
+                              "candle_latency_p50_ms": latencies[len(latencies)//2] if latencies else None,
+                              "candle_latency_p95_ms": latencies[min(len(latencies)-1, int(len(latencies)*0.95))] if latencies else None,
+                              "candle_latency_max_ms": latencies[-1] if latencies else None,
+                          }
+                          print("ACTIVE_DIAG_TRANSPORT=" + json.dumps(summary, sort_keys=True), flush=True)
+                          print("ACTIVE_DIAG_CANDLE_CALLS=" + json.dumps(candle_rows, sort_keys=True), flush=True)
+                          print("ACTIVE_DIAG_BOUNDARIES=" + json.dumps([
+                              asdict(item) for item in runtime.health.boundary_diagnostics[-5:]
+                          ], sort_keys=True), flush=True)
+                          print("ACTIVE_DIAG_REPORTS=" + json.dumps([
+                              {
+                                  "boundary_open_time_ms": report.boundary_open_time_ms,
+                                  "evaluation_mode": report.evaluation_mode.value,
+                                  "disposition": report.disposition.value,
+                                  "scanner_run_count": report.scanner_run_count,
+                                  "evaluated_market_count": len(report.evaluated_market_ids),
+                                  "failure_count": len(report.failures),
+                              }
+                              for report in reports[-5:]
+                          ], sort_keys=True), flush=True)
+                          print("ACTIVE_DIAG_HEALTH=" + json.dumps({
+                              "recoverable": sorted(runtime.health.recoverable_markets),
+                              "failed": sorted(runtime.health.failed_markets),
+                              "nonrecoverable": sorted(runtime.health.nonrecoverable_markets),
+                              "callback_failures": [asdict(item) for item in runtime.health.callback_failures[-10:]],
+                              "ws_candidate_rejections": [asdict(item) for item in runtime.health.ws_candidate_rejections[-10:]],
+                          }, sort_keys=True), flush=True)
+                  finally:
+                      shutdown.set()
+                      try:
+                          await asyncio.wait_for(task, timeout=20)
+                      except Exception:
+                          task.cancel()
+                          await asyncio.gather(task, return_exceptions=True)
+
+          asyncio.run(main())
+          PY
 
       - name: Final exact identity
         if: always()
         run: |
           test "$(git rev-parse HEAD)" = "23f48c64448bd2089ceece0cd1b3038b9b6e6ff1"
-          echo "PUBLIC_G9_FINAL_HEAD=$(git rev-parse HEAD)"
-          echo "PUBLIC_G9_FINAL_TREE=$(git rev-parse HEAD^{tree})"
+          echo "DIAG_FINAL_HEAD=$(git rev-parse HEAD)"
+          echo "DIAG_FINAL_TREE=$(git rev-parse HEAD^{tree})"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
