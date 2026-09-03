@@ -1,4 +1,4 @@
-name: PR151 exact-head public G9 fast barrier isolation
+name: PR151 exact-head public G9 warmup response isolation
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  public-g9-fast-barrier-isolation:
+  public-g9-warmup-response-isolation:
     runs-on: ubuntu-latest
     timeout-minutes: 9
     steps:
@@ -31,75 +31,109 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "16d967c7d27f21dcc95c146f45d2873b3e496752"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
-          echo "FAST_TRACE_EXACT_HEAD=$(git rev-parse HEAD)"
-          echo "FAST_TRACE_TREE=$(git rev-parse HEAD^{tree})"
+          echo "WARMUP_TRACE_EXACT_HEAD=$(git rev-parse HEAD)"
+          echo "WARMUP_TRACE_TREE=$(git rev-parse HEAD^{tree})"
 
       - name: Hashed locked install
         run: |
-          python -m venv /tmp/trader-assist-v0-g9fast-venv
-          /tmp/trader-assist-v0-g9fast-venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
-          /tmp/trader-assist-v0-g9fast-venv/bin/python -m pip install -e . --no-deps --no-build-isolation
-          /tmp/trader-assist-v0-g9fast-venv/bin/python scripts/check_dependency_lock.py --verify-installed
-          /tmp/trader-assist-v0-g9fast-venv/bin/python -m pip check
+          python -m venv /tmp/trader-assist-v0-g9warmup-venv
+          /tmp/trader-assist-v0-g9warmup-venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
+          /tmp/trader-assist-v0-g9warmup-venv/bin/python -m pip install -e . --no-deps --no-build-isolation
+          /tmp/trader-assist-v0-g9warmup-venv/bin/python scripts/check_dependency_lock.py --verify-installed
+          /tmp/trader-assist-v0-g9warmup-venv/bin/python -m pip check
 
-      - name: Direct ACTIVE exact-T stage isolation
+      - name: Exact provider warmup response trace
         env:
           PYTHONUNBUFFERED: "1"
         run: |
-          /tmp/trader-assist-v0-g9fast-venv/bin/python - <<'PY'
+          /tmp/trader-assist-v0-g9warmup-venv/bin/python - <<'PY'
           import asyncio
-          import inspect
+          import hashlib
           import json
-          import os
           import tempfile
-          import threading
-          import time
-          from collections import Counter
           from datetime import UTC, datetime
           from decimal import Decimal
           from pathlib import Path
 
           from scripts.build_multi_asset_registry_seed import build_seed
+          from trader_assist_v0.multi_asset_shadow import hyperliquid_public as hp
           from trader_assist_v0.multi_asset_shadow import production
           from trader_assist_v0.multi_asset_shadow.hyperliquid_public import HyperliquidPublicClient, OfficialMetadataValidator
           from trader_assist_v0.multi_asset_shadow.models import MarketLifecycle, RegistryVersion
           from trader_assist_v0.multi_asset_shadow.notification_engine import WebhookConfig, WebhookDeliveryAdapter, WebhookResponse
           from trader_assist_v0.multi_asset_shadow.planning import CostModel
           from trader_assist_v0.multi_asset_shadow.registry import MarketRegistryManager
-          from trader_assist_v0.multi_asset_shadow.runtime import classify_retained_boundary
 
           CANDIDATE = "16d967c7d27f21dcc95c146f45d2873b3e496752"
           FIVE = 300_000
-          WATCHDOG_SECONDS = 90.0
+          WARMUP_BARS = 2_304
+
+          def trace_post(url: str, body: bytes, timeout_seconds: float) -> bytes:
+              raw = hp._default_post(url, body, timeout_seconds)
+              try:
+                  request = json.loads(body)
+              except Exception:
+                  return raw
+              if request.get("type") != "candleSnapshot":
+                  return raw
+              req = request.get("req") if isinstance(request.get("req"), dict) else {}
+              try:
+                  response = json.loads(raw)
+              except Exception:
+                  response = None
+              if isinstance(response, list):
+                  times = [item.get("t") for item in response if isinstance(item, dict) and isinstance(item.get("t"), int)]
+                  closes = [item.get("T") for item in response if isinstance(item, dict) and isinstance(item.get("T"), int)]
+                  summary = {
+                      "coin": req.get("coin"),
+                      "interval": req.get("interval"),
+                      "start_ms": req.get("startTime"),
+                      "end_ms": req.get("endTime"),
+                      "count": len(response),
+                      "first_t": min(times) if times else None,
+                      "last_t": max(times) if times else None,
+                      "last_T": max(closes) if closes else None,
+                      "response_sha256": hashlib.sha256(raw).hexdigest(),
+                  }
+              else:
+                  summary = {
+                      "coin": req.get("coin"),
+                      "interval": req.get("interval"),
+                      "start_ms": req.get("startTime"),
+                      "end_ms": req.get("endTime"),
+                      "response_type": type(response).__name__,
+                      "response_sha256": hashlib.sha256(raw).hexdigest(),
+                  }
+              print("WARMUP_RAW_RESPONSE=" + json.dumps(summary, sort_keys=True, separators=(",", ":")), flush=True)
+              return raw
 
           class NoNetworkNotificationClient:
               def post(self, **_):
                   return WebhookResponse(204)
 
-          async def main():
-              with tempfile.TemporaryDirectory(prefix="trade-os-g9fast-") as td:
+          async def main() -> None:
+              with tempfile.TemporaryDirectory(prefix="trade-os-g9warmup-") as td:
                   state = Path(td) / "state"
                   production.THREE_SETUP_STATE_ROOT = state
                   production.THREE_SETUP_EVIDENCE_STORE_PATH = state / "evidence.sqlite"
                   production.THREE_SETUP_REGISTRY_ROOT = state / "registry"
                   production.THREE_SETUP_CLOSED_BAR_STORE_PATH = state / "closed-bars.sqlite"
 
-                  client = HyperliquidPublicClient()
+                  client = HyperliquidPublicClient(post=trace_post)
                   observed_at = datetime.now(UTC)
                   seed = build_seed(
-                      version=f"g9fast-source-{CANDIDATE[:12]}",
+                      version=f"g9warmup-source-{CANDIDATE[:12]}",
                       observed_at=observed_at,
                       client=client,
                   )
                   active_seed = RegistryVersion.create(
-                      version=f"g9fast-active-{CANDIDATE[:12]}",
+                      version=f"g9warmup-active-{CANDIDATE[:12]}",
                       created_at=observed_at,
                       markets=tuple(
                           market.model_copy(update={"lifecycle": MarketLifecycle.ACTIVE})
                           for market in seed.markets
                       ),
                   )
-                  assert len(active_seed.markets) == 20
                   registry = MarketRegistryManager(
                       production.THREE_SETUP_REGISTRY_ROOT,
                       metadata_validator=OfficialMetadataValidator(client),
@@ -115,7 +149,7 @@ jobs:
                       evidence_store_path=production.THREE_SETUP_EVIDENCE_STORE_PATH,
                       registry_root=production.THREE_SETUP_REGISTRY_ROOT,
                       closed_bar_store_path=production.THREE_SETUP_CLOSED_BAR_STORE_PATH,
-                      cost_model=CostModel("g9fast", Decimal(), Decimal(), Decimal("2")),
+                      cost_model=CostModel("g9warmup", Decimal(), Decimal(), Decimal("2")),
                       acknowledgement_timeout_seconds=30,
                       notification_poll_seconds=1,
                   )
@@ -124,181 +158,46 @@ jobs:
                       notification_adapter=adapter,
                       public_client=client,
                   )
-                  bootstrap = application.bootstrap
-                  runtime = bootstrap.runtime
-                  coordinator = bootstrap.coordinator
-                  outcome = bootstrap.outcome_engine
-                  provider = outcome.provider
-
+                  runtime = application.bootstrap.runtime
+                  market = runtime.selected_markets()[0]
                   initial_boundary = runtime._latest_completed_open()
-                  prefix_target = initial_boundary - FIVE
-                  print("FAST_WARMUP_START=" + json.dumps({"initial_boundary": initial_boundary, "prefix_target": prefix_target}, sort_keys=True), flush=True)
-                  started = time.monotonic()
-                  for index, market in enumerate(runtime.selected_markets(), start=1):
-                      await runtime._warmup_market(
+                  target = initial_boundary - FIVE
+                  expected_start = target + FIVE - WARMUP_BARS * FIVE
+                  print("WARMUP_TRACE_REQUEST=" + json.dumps({
+                      "display": market.display,
+                      "coin": market.identity.coin,
+                      "initial_boundary": initial_boundary,
+                      "target": target,
+                      "expected_start": expected_start,
+                      "expected_end": target + FIVE,
+                      "observed_at_ms": int(datetime.now(UTC).timestamp() * 1000),
+                  }, sort_keys=True, separators=(",", ":")), flush=True)
+                  try:
+                      admitted = await runtime._warmup_market(
                           market,
                           recovery=True,
-                          target_open_ms=prefix_target,
+                          target_open_ms=target,
                       )
-                      print("FAST_WARMUP_PROGRESS=" + json.dumps({"market": index, "elapsed": round(time.monotonic() - started, 1)}, sort_keys=True), flush=True)
-
-                  active = registry.active()
-                  assert active is not None
-                  assert len(active.markets) == 20
-                  assert all(m.lifecycle is MarketLifecycle.ACTIVE for m in active.markets)
-
-                  # Converge every market only through T-1. If wall-clock crossed
-                  # a 5m edge during the heavy history load, catch up the prefix
-                  # and recapture T. Never admit T itself before the barrier.
-                  for _ in range(3):
-                      boundary = runtime._latest_completed_open()
-                      required_prefix = boundary - FIVE
-                      for market in active.markets:
-                          last = bootstrap.data_authority.store.last_open(market.identity.market_id)
-                          if last is None or last < required_prefix:
-                              await runtime._warmup_market(
-                                  market,
-                                  recovery=True,
-                                  target_open_ms=required_prefix,
-                              )
-                          elif last > required_prefix:
-                              raise RuntimeError("FAST_PREFIX_OVERSHOT_CURRENT_T")
-                      if runtime._latest_completed_open() == boundary:
-                          break
-                  else:
-                      raise RuntimeError("FAST_PREFIX_COULD_NOT_STABILIZE")
-
-                  runtime.health.data_ready = True
-                  runtime.health.acknowledgements = {m.identity.coin for m in active.markets}
-                  classes = Counter(
-                      classify_retained_boundary(
-                          store=bootstrap.data_authority.store,
-                          registry=registry,
-                          market_id=market.identity.market_id,
-                          boundary_open_ms=boundary,
-                          captured_version=active.version,
-                          captured_hash=active.content_hash,
-                      ).value
-                      for market in active.markets
-                  )
-                  close_age_ms = int(datetime.now(UTC).timestamp() * 1000) - (boundary + FIVE)
-                  print("FAST_BARRIER_PRE=" + json.dumps({
-                      "boundary": boundary,
-                      "classes": dict(sorted(classes.items())),
-                      "close_age_ms": close_age_ms,
-                      "data_ready": runtime.health.data_ready,
-                      "active": sum(m.lifecycle is MarketLifecycle.ACTIVE for m in active.markets),
-                  }, sort_keys=True, separators=(",", ":")), flush=True)
-                  assert classes == Counter({"MISSING_LIVE_ELIGIBLE": 20})
-
-                  trace_enabled = True
-                  def emit(kind, name, **fields):
-                      if not trace_enabled:
-                          return
-                      print("FAST_STAGE=" + json.dumps({
-                          "kind": kind,
-                          "stage": name,
-                          "mono": round(time.monotonic(), 3),
-                          **fields,
+                  except Exception as exc:
+                      print("WARMUP_TRACE_FAILURE=" + json.dumps({
+                          "error_type": type(exc).__name__,
+                          "reason": str(exc),
+                          "store_last_open": application.bootstrap.data_authority.store.last_open(market.identity.market_id),
+                          "authority_market_failed": application.bootstrap.data_authority.market_failed(market.identity.market_id),
+                          "runtime_failed": market.identity.market_id in runtime.health.failed_markets,
+                          "runtime_recoverable": market.identity.market_id in runtime.health.recoverable_markets,
+                          "runtime_nonrecoverable": market.identity.market_id in runtime.health.nonrecoverable_markets,
                       }, sort_keys=True, separators=(",", ":")), flush=True)
-
-                  def wrap_sync(obj, name):
-                      if obj is None or not hasattr(obj, name):
-                          return
-                      original = getattr(obj, name)
-                      if inspect.iscoroutinefunction(original):
-                          raise RuntimeError(f"expected sync method: {name}")
-                      def wrapped(*args, **kwargs):
-                          emit("ENTER", name)
-                          stage_started = time.monotonic()
-                          try:
-                              value = original(*args, **kwargs)
-                              emit("EXIT", name, elapsed_ms=int((time.monotonic() - stage_started) * 1000))
-                              return value
-                          except BaseException as exc:
-                              emit("ERROR", name, elapsed_ms=int((time.monotonic() - stage_started) * 1000), error_type=type(exc).__name__, reason=str(exc)[:300])
-                              raise
-                      setattr(obj, name, wrapped)
-
-                  def wrap_async(obj, name):
-                      if obj is None or not hasattr(obj, name):
-                          return
-                      original = getattr(obj, name)
-                      if not inspect.iscoroutinefunction(original):
-                          raise RuntimeError(f"expected async method: {name}")
-                      async def wrapped(*args, **kwargs):
-                          emit("ENTER", name)
-                          stage_started = time.monotonic()
-                          try:
-                              value = await original(*args, **kwargs)
-                              emit("EXIT", name, elapsed_ms=int((time.monotonic() - stage_started) * 1000))
-                              return value
-                          except BaseException as exc:
-                              emit("ERROR", name, elapsed_ms=int((time.monotonic() - stage_started) * 1000), error_type=type(exc).__name__, reason=str(exc)[:300])
-                              raise
-                      setattr(obj, name, wrapped)
-
-                  for obj, name in (
-                      (runtime, "_run_live_finality_lane"),
-                      (runtime, "_notify_finalized"),
-                      (runtime, "_run_maintenance"),
-                      (runtime, "_reconcile_successor"),
-                      (bootstrap, "_scanner_snapshots"),
-                      (bootstrap, "_process_pending"),
-                      (bootstrap, "advance_outcomes_async"),
-                  ):
-                      wrap_async(obj, name)
-
-                  for obj, name in (
-                      (runtime, "_whole_cohort_actionable"),
-                      (coordinator, "retained_scanner_run"),
-                      (coordinator, "scan_finalized"),
-                      (coordinator, "compose_scanner_market"),
-                      (coordinator, "strategy_recovery_boundaries"),
-                      (coordinator, "prepare_finalized_market"),
-                      (coordinator, "evaluate_finalized_market"),
-                      (coordinator, "commit_evaluation_cohort"),
-                      (coordinator, "pending_formal_decisions"),
-                      (coordinator, "process_retained_formal_decision"),
-                      (outcome, "recovery_requests"),
-                      (outcome, "tick"),
-                      (provider, "raw_read_1m"),
-                  ):
-                      wrap_sync(obj, name)
-
-                  def watchdog_fire():
-                      emit("WATCHDOG", "DIRECT_ACTIVE_BOUNDARY", elapsed_seconds=WATCHDOG_SECONDS)
-                      os._exit(72)
-
-                  watchdog = threading.Timer(WATCHDOG_SECONDS, watchdog_fire)
-                  watchdog.daemon = True
-                  watchdog.start()
-                  barrier_started = time.monotonic()
-                  try:
-                      await runtime.process_cohort_boundary(boundary)
+                      raise
+                  else:
+                      print("WARMUP_TRACE_SUCCESS=" + json.dumps({
+                          "admitted": admitted,
+                          "store_last_open": application.bootstrap.data_authority.store.last_open(market.identity.market_id),
+                          "target": target,
+                      }, sort_keys=True, separators=(",", ":")), flush=True)
                   finally:
-                      watchdog.cancel()
-                  diag = runtime.health.boundary_diagnostics[-1] if runtime.health.boundary_diagnostics else None
-                  print("FAST_BARRIER_FINAL=" + json.dumps({
-                      "elapsed_seconds": round(time.monotonic() - barrier_started, 3),
-                      "diagnostic": None if diag is None else {
-                          "finalized_count": diag.finalized_count,
-                          "recoverable_count": diag.recoverable_count,
-                          "nonrecoverable_count": diag.nonrecoverable_count,
-                          "deadline_count": diag.deadline_count,
-                          "whole_cohort_actionable": diag.whole_cohort_actionable,
-                          "callback_wake": diag.callback_wake,
-                          "request_count": diag.request_count,
-                          "live_finality_duration_ms": diag.live_finality_duration_ms,
-                      },
-                      "callback_failures": [item.error_type for item in runtime.health.callback_failures],
-                      "public_data_only": True,
-                      "notification_network_disabled": True,
-                      "shadow_order_submitted": False,
-                  }, sort_keys=True, separators=(",", ":")), flush=True)
-
-                  bootstrap.close()
-                  bootstrap.data_authority.store.close()
+                      application.bootstrap.close()
+                      application.bootstrap.data_authority.store.close()
 
           asyncio.run(main())
           PY
@@ -307,6 +206,6 @@ jobs:
         if: always()
         run: |
           test "$(git rev-parse HEAD)" = "16d967c7d27f21dcc95c146f45d2873b3e496752"
-          echo "FAST_TRACE_FINAL_HEAD=$(git rev-parse HEAD)"
-          echo "FAST_TRACE_FINAL_TREE=$(git rev-parse HEAD^{tree})"
+          echo "WARMUP_TRACE_FINAL_HEAD=$(git rev-parse HEAD)"
+          echo "WARMUP_TRACE_FINAL_TREE=$(git rev-parse HEAD^{tree})"
           git status --short
