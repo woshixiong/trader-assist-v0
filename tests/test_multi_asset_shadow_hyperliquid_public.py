@@ -50,6 +50,15 @@ def test_only_public_info_market_data_request_shapes_are_issued() -> None:
         "l2Book",
     ]
     assert "dex" not in seen[1][1]
+    assert seen[3][1] == {
+        "type": "candleSnapshot",
+        "req": {
+            "coin": "xyz:XYZ100",
+            "interval": "5m",
+            "startTime": 0,
+            "endTime": 299_999,
+        },
+    }
 
 
 @pytest.mark.parametrize(
@@ -254,7 +263,15 @@ def test_public_one_minute_provider_accepts_only_closed_provider_bars(tmp_path: 
 
     def post(_url: str, body: bytes, _timeout: float) -> bytes:
         request = json.loads(body)
-        assert request["type"] == "candleSnapshot"
+        assert request == {
+            "type": "candleSnapshot",
+            "req": {
+                "coin": "BTC",
+                "interval": "1m",
+                "startTime": 0,
+                "endTime": 59_999,
+            },
+        }
         return json.dumps(
             [
                 {
