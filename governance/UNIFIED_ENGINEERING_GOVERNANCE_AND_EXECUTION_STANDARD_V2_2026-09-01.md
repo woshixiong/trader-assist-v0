@@ -111,9 +111,10 @@ LOAD LIVE STATE + CANONICAL RULES
 -> INDEPENDENT ANALYSIS
 -> EXTERNAL / MATURE-SOLUTION EVIDENCE WHEN DIRECTION-SETTING
 -> SYNTHESIS / ROUTE DECISION
+-> CHEAP SAFE DECISIVE PRE-WRITER GO/NO-GO EXPERIMENT WHEN APPLICABLE
 -> GLOBAL ARCHITECTURE + CONTRACT + CONTINUITY PREFLIGHT
 -> SCALE / PROVIDER / FRESHNESS PREFLIGHT WHEN APPLICABLE
--> VERIFICATION + VALIDATION-ENVIRONMENT PLAN
+-> STAGE CLAIM LADDER + VERIFICATION + VALIDATION-ENVIRONMENT PLAN
 -> FREEZE ATTACK MATRIX / REPAIR BUDGET / TASK PACKET
 -> ONE COHERENT WRITER STAGE
 -> CHEAPEST DECISIVE VALIDATION OUTWARD
@@ -170,6 +171,10 @@ AFFECTED_AUTHORITIES
 FROZEN_INVARIANTS
 CURRENT_ROUTE
 MATURE_ALTERNATIVES
+STAGE_CLAIM_LADDER / AUTHORITATIVE_PROOF_SURFACE_FOR_EACH_STAGE
+MINIMUM_REPRESENTATIVE_TOPOLOGY / COMPLEXITY_ESCALATION_ORDER
+PRE_WRITER_GO_NO_GO_EXPERIMENT
+DETERMINISTIC_BRANCH_PROOF_PLAN / REAL_EXTERNAL_BOUNDARY_PROOF_PLAN
 CURRENT_NEED / NEXT_EXPECTED_STAGE
 STABLE_INTERFACES / STABLE_AUTHORITIES
 REPLACEABLE_IMPLEMENTATION_SEAMS
@@ -235,6 +240,16 @@ VALIDATION_OR_EXPERIMENT_REQUIRED
 ```
 
 Research must converge to a decision. Endless research around the same failed design is prohibited.
+
+### Pre-Writer GO/NO-GO feasibility experiment
+
+```text
+PRE_WRITER_GO_NO_GO_EXPERIMENT=WHEN_CHEAP_SAFE_AND_DECISIVE
+```
+
+When a material route depends on unresolved feasibility and a cheap, safe, read-only/non-authoritative experiment can decisively validate or falsify it, run that experiment before the semantic Writer or full implementation. A failed feasibility experiment requires `REPLAN` or `REPLACE`; do not consume the application repair budget patching an implementation for a route that was not proven feasible.
+
+Do not require an experiment when the route is already sufficiently established or the experiment would add more burden or risk than decisive evidence.
 
 ---
 
@@ -570,6 +585,23 @@ INCIDENT
 
 The incident corpus is evidence/history, not a second architecture authority.
 
+### 12.5 Claim-based progressive verification
+
+```text
+CLAIM_BASED_STAGE_SUCCESS=REQUIRED
+PROGRESSIVE_REPRESENTATIVE_PROOF=REQUIRED
+ONE_MATERIAL_COMPLEXITY_DIMENSION_AT_A_TIME_WHEN_PRACTICAL=YES
+DETERMINISTIC_AND_REAL_EXTERNAL_PROOF_COMPLEMENT=WHEN_APPLICABLE
+```
+
+Every material stage must define the exact claim it is trying to prove and the authoritative proof surface for that claim. Implementation complete, Writer PASS, local tests, CI and review are checkpoints or evidence; none is stage success unless it actually proves the frozen stage claim. For release/runtime stages, implementation completion alone never proves production-path readiness. A failed earlier claim blocks promotion to a later complexity stage.
+
+Before adding material complexity, prove the cheapest/smallest topology that is semantically representative and useful for the current claim. When practical, increase complexity progressively and preserve failure attribution by changing one material dimension at a time, such as provider class, entity/cohort size, concurrency/scale, persistence/restart or platform/host. Do not introduce a smaller stage when it cannot provide semantically useful evidence or would create artificial delay.
+
+A smaller topology must never claim semantics it cannot express. In particular, single-entity proof cannot prove cohort, cross-sectional, ranking or scale semantics. Promotion requires explicit PASS of the preceding claim; failure requires stopping and replanning at the failed responsibility boundary rather than continuing outward.
+
+For externally driven or nondeterministic systems, deterministic production-composition scenarios and real external/provider rehearsals are orthogonal proofs when both claims apply. Deterministic scenarios must force required and rare semantic branches so correctness does not depend on natural occurrence. Real external/provider rehearsal proves wire, boundary, transport, freshness and provider semantics. Neither proof substitutes for the other when both claims apply.
+
 ---
 
 ## 13. Verification topology and validation-environment fidelity
@@ -902,6 +934,7 @@ MATERIAL_WRITER_REQUIRES_ENGINEERING_PREFLIGHT_PASS=YES
 INDEPENDENT_ANALYSIS_BEFORE_EXTERNAL_CONCLUSIONS=YES
 EXTERNAL_MATURE_EVIDENCE_FOR_MATERIAL_DIRECTION_SETTING=YES
 SYNTHESIS_BEFORE_ROUTE_FREEZE=YES
+PRE_WRITER_GO_NO_GO_EXPERIMENT=WHEN_CHEAP_SAFE_AND_DECISIVE
 MATURE_SOLUTION_FIRST=YES
 SIMPLICITY_BY_TOTAL_ENGINEERING_BURDEN=YES
 GLOBAL_ROOT_CAUSE_BEFORE_LOCAL_PATCH_LOOPS=YES
@@ -918,6 +951,10 @@ USER_AS_ROUTINE_MESSAGE_BUS=PROHIBITED
 ACTIVE_TASK_OWNERSHIP_UNTIL_TERMINAL_DISPOSITION=YES
 NO_SILENT_MODEL_EXECUTOR_FALLBACK=YES
 WRITER_PASS_NE_INDEPENDENT_ACCEPTANCE=YES
+CLAIM_BASED_STAGE_SUCCESS=REQUIRED
+PROGRESSIVE_REPRESENTATIVE_PROOF=REQUIRED
+ONE_MATERIAL_COMPLEXITY_DIMENSION_AT_A_TIME_WHEN_PRACTICAL=YES
+DETERMINISTIC_AND_REAL_EXTERNAL_PROOF_COMPLEMENT=WHEN_APPLICABLE
 PRODUCTION_PATH_FIDELITY=REQUIRED
 BALANCED_G0_TO_G12_VERIFICATION=REQUIRED_WHEN_APPLICABLE
 INCIDENT_TO_INVARIANT_CONVERGENCE=REQUIRED

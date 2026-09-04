@@ -54,6 +54,7 @@ WHAT_EVIDENCE_REJECTS=
 RESIDUAL_UNCERTAINTY=
 SELECTED_ROUTE=
 REJECTED_ROUTES=
+PRE_WRITER_GO_NO_GO_EXPERIMENT=
 ```
 
 If the task is not direction-setting, use `NOT_REQUIRED` rather than manufacturing research.
@@ -122,6 +123,12 @@ Use `NOT_APPLICABLE` only when the change is genuinely scale-neutral.
 
 ```text
 PRODUCTION_PATH_FIDELITY_PLAN=
+STAGE_CLAIM_LADDER=
+AUTHORITATIVE_PROOF_SURFACE_FOR_EACH_STAGE=
+MINIMUM_REPRESENTATIVE_TOPOLOGY=
+COMPLEXITY_ESCALATION_ORDER=
+DETERMINISTIC_BRANCH_PROOF_PLAN=
+REAL_EXTERNAL_BOUNDARY_PROOF_PLAN=
 APPLICABLE_G0_TO_G12_GATES=
 PROPERTY_BASED_TEST_PLAN=
 STATEFUL_TEST_PLAN=
@@ -189,7 +196,7 @@ No routine Repair 3/4/5. A new root cause or authority/layer expansion triggers 
 
 ## 9. Pre-dispatch decision
 
-`ENGINEERING_PREFLIGHT_GATE=PASS` only when every applicable field above is resolved and the selected Writer/executor has the capabilities required to perform the frozen task and its mandatory gates.
+`ENGINEERING_PREFLIGHT_GATE=PASS` only when every applicable field above is resolved and the selected Writer/executor has the capabilities required to perform the frozen task and its mandatory gates. This includes `STAGE_CLAIM_LADDER`, `AUTHORITATIVE_PROOF_SURFACE_FOR_EACH_STAGE`, `MINIMUM_REPRESENTATIVE_TOPOLOGY`, `COMPLEXITY_ESCALATION_ORDER`, `PRE_WRITER_GO_NO_GO_EXPERIMENT`, `DETERMINISTIC_BRANCH_PROOF_PLAN` and `REAL_EXTERNAL_BOUNDARY_PROOF_PLAN` when applicable.
 
 If any applicable architecture, authority, validation-environment, scope, repair-budget or user-authority field is unresolved:
 
