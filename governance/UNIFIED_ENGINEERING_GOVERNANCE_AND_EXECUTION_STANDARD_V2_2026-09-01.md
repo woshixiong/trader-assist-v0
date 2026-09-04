@@ -600,7 +600,37 @@ Before adding material complexity, prove the cheapest/smallest topology that is 
 
 A smaller topology must never claim semantics it cannot express. In particular, single-entity proof cannot prove cohort, cross-sectional, ranking or scale semantics. Promotion requires explicit PASS of the preceding claim; failure requires stopping and replanning at the failed responsibility boundary rather than continuing outward.
 
-For externally driven or nondeterministic systems, deterministic production-composition scenarios and real external/provider rehearsals are orthogonal proofs when both claims apply. Deterministic scenarios must force required and rare semantic branches so correctness does not depend on natural occurrence. Real external/provider rehearsal proves wire, boundary, transport, freshness and provider semantics. Neither proof substitutes for the other when both claims apply.
+For externally driven or nondeterministic systems, deterministic production-composition scenarios and real replacel/provider rehearsals are orthogonal proofs when both claims apply. Deterministic scenarios must force required and rare semantic branches so correctness does not depend on natural occurrence. Real external/provider rehearsal proves wire, boundary, transport, freshness and provider semantics. Neither proof substitutes for the other when both claims apply.
+
+Stage failure handling is claim-scoped:
+
+```text
+FREEZE CLAIM
+-> RUN MINIMUM REPRESENTATIVE PROOF
+-> IF FAIL: STOP OUTWARD PROMOTION
+-> CLASSIFY FAILED RESPONSIBILITY BOUNDARY
+-> REPRODUCE AT LOWEST DECISIVE LAYER
+-> REPRODUCE AT RELEVANT PRODUCTION-COMPOSITION LAYER WHEN APPLICABLE
+-> REPAIR ONLY THE PROVEN BOUNDARY OR REPLAN / REPLACE
+-> RE-RUN THE SAME FAILED CLAIM
+-> ONLY AFTER CLAIM PASS PROMOTE TO THE NEXT COMPLEXITY STAGE
+```
+
+Do not infer that a higher-scale failure proves a scale problem while cheaper lower-complexity claims that can isolate provider, semantic, lifecycle, persistence or environment responsibility remain unproven. Conversely, a lower-stage PASS proves only its frozen claim and does not imply unexpressed cohort, ranking, scale, provider or host semantics.
+
+For every material post-stage report, record when applicable:
+
+```text
+IMPLEMENTATION_CHECKPOINT
+CLAIM_UNDER_TEST
+AUTHORITATIVE_PROOF_SURFACE
+CLAIM_RESULT=PASS|FAIL|UNPROVEN
+NEXT_PROMOTION_ALLOWED=YES|NO
+FAILED_RESPONSIBILITY_BOUNDARY
+RESIDUAL_UNPROVEN_CLAIMS
+```
+
+Broad `PASS`, `DONE`, `READY`, or equivalent wording must not overstate a higher-level claim that has not been proven on its authoritative proof surface. Unrun or non-representative proof remains `UNPROVEN`, never implicit PASS.
 
 ---
 
@@ -955,6 +985,8 @@ CLAIM_BASED_STAGE_SUCCESS=REQUIRED
 PROGRESSIVE_REPRESENTATIVE_PROOF=REQUIRED
 ONE_MATERIAL_COMPLEXITY_DIMENSION_AT_A_TIME_WHEN_PRACTICAL=YES
 DETERMINISTIC_AND_REAL_EXTERNAL_PROOF_COMPLEMENT=WHEN_APPLICABLE
+FAILED_STAGE_CLAIM_MUST_BE_RERUN_BEFORE_PROMOTION=YES
+BROAD_PASS_CANNOT_OVERSTATE_UNPROVEN_CLAIMS=YES
 PRODUCTION_PATH_FIDELITY=REQUIRED
 BALANCED_G0_TO_G12_VERIFICATION=REQUIRED_WHEN_APPLICABLE
 INCIDENT_TO_INVARIANT_CONVERGENCE=REQUIRED

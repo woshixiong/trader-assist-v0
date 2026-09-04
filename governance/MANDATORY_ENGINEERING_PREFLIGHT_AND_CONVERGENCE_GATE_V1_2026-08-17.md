@@ -219,6 +219,13 @@ ENGINEERING_PREFLIGHT_GATE=
 EXACT_BASE=
 FINAL_HEAD_OR_ARTIFACT=
 CHANGED_PATHS=
+IMPLEMENTATION_CHECKPOINT=
+CLAIM_UNDER_TEST=
+AUTHORITATIVE_PROOF_SURFACE=
+CLAIM_RESULT=PASS|FAIL|UNPROVEN
+NEXT_PROMOTION_ALLOWED=YES|NO
+FAILED_RESPONSIBILITY_BOUNDARY=
+RESIDUAL_UNPROVEN_CLAIMS=
 IMPLEMENTATION_RESULT=
 FOCUSED_TESTS=
 PROPERTY_STATEFUL_OR_COMPOSITION_TESTS=
@@ -242,3 +249,5 @@ ACCOUNT_OR_EXCHANGE_WRITE_EXECUTED=YES|NO
 ```
 
 Unrun checks are never reported as PASS.
+
+For material work, broad `PASS`, `DONE`, `READY`, or equivalent wording may describe only the frozen claim actually proven on its authoritative proof surface. Applicable higher-level claims that were not run or were not representatively tested remain `UNPROVEN` and must appear in `RESIDUAL_UNPROVEN_CLAIMS`.
