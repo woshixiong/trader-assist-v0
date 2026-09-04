@@ -600,7 +600,7 @@ Before adding material complexity, prove the cheapest/smallest topology that is 
 
 A smaller topology must never claim semantics it cannot express. In particular, single-entity proof cannot prove cohort, cross-sectional, ranking or scale semantics. Promotion requires explicit PASS of the preceding claim; failure requires stopping and replanning at the failed responsibility boundary rather than continuing outward.
 
-For externally driven or nondeterministic systems, deterministic production-composition scenarios and real replacel/provider rehearsals are orthogonal proofs when both claims apply. Deterministic scenarios must force required and rare semantic branches so correctness does not depend on natural occurrence. Real external/provider rehearsal proves wire, boundary, transport, freshness and provider semantics. Neither proof substitutes for the other when both claims apply.
+For externally driven or nondeterministic systems, deterministic production-composition scenarios and real external/provider rehearsals are orthogonal proofs when both claims apply. Deterministic scenarios must force required and rare semantic branches so correctness does not depend on natural occurrence. Real external/provider rehearsal proves wire, boundary, transport, freshness and provider semantics. Neither proof substitutes for the other when both claims apply.
 
 Stage failure handling is claim-scoped:
 
