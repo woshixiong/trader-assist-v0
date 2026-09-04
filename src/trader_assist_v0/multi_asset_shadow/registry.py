@@ -210,8 +210,8 @@ class MarketRegistryManager:
         if evidence != {"version": candidate.version, "content_hash": candidate.content_hash}:
             raise RegistryError("registry validation evidence does not bind version contents")
 
-    def stage(self, candidate: RegistryVersion) -> Path:
-        self.validate(candidate)
+    def _stage_validated_candidate(self, candidate: RegistryVersion) -> Path:
+        """Persist a candidate only after its caller has completed validation."""
         target = self.versions / f"{candidate.version}.json"
         encoded = canonical_json_bytes(candidate.model_dump(mode="json"))
         if target.exists() and target.read_bytes() != encoded:
@@ -225,6 +225,10 @@ class MarketRegistryManager:
             ),
         )
         return target
+
+    def stage(self, candidate: RegistryVersion) -> Path:
+        self.validate(candidate)
+        return self._stage_validated_candidate(candidate)
 
     def request_apply(self, version: str) -> RegistryVersion:
         """Validate a staged version without manufacturing a time boundary."""
@@ -449,6 +453,8 @@ class MarketRegistryManager:
                 markets.append(market)
                 continue
             unknown.discard(market.identity.market_id)
+            if not isinstance(lifecycle, MarketLifecycle):
+                raise RegistryError("invalid market lifecycle target")
             if lifecycle not in _LIFECYCLE_NEXT[market.lifecycle]:
                 raise RegistryError(
                     "illegal market lifecycle transition: "
@@ -477,6 +483,85 @@ class MarketRegistryManager:
             )
         )
         return f"lifecycle-{transition_hash}"
+
+    def _stage_parent_derived_lifecycle_successor(
+        self,
+        *,
+        active: RegistryVersion,
+        candidate: RegistryVersion,
+        updates: dict[str, MarketLifecycle],
+        target_markets: tuple[RegistryMarket, ...],
+    ) -> Path:
+        """Validate and stage one automatic successor from its active parent.
+
+        The active Registry's durable validation evidence is the provider
+        authority for fields that are copied unchanged.  This seam therefore
+        admits only the deterministic lifecycle projection of that exact
+        current parent; every general candidate still goes through
+        :meth:`stage` and fresh provider validation.
+        """
+        current = self.active()
+        if current is None or current != active:
+            raise RegistryError("active registry changed while deriving lifecycle successor")
+        self._assert_prior_validation(active)
+
+        if candidate.schema_version != "1":
+            raise RegistryError("unsupported registry schema")
+        if candidate.content_hash != RegistryVersion.hash_payload(
+            version=candidate.version,
+            created_at=candidate.created_at,
+            markets=candidate.markets,
+        ):
+            raise RegistryError("registry content_hash does not bind version contents")
+
+        active_ids = tuple(market.identity.market_id for market in active.markets)
+        candidate_ids = tuple(market.identity.market_id for market in candidate.markets)
+        if candidate_ids != active_ids:
+            raise RegistryError(
+                "automatic lifecycle successor changes market membership or ordering"
+            )
+        if set(updates) - set(active_ids):
+            raise RegistryError("market is not in active registry")
+
+        for parent_market, candidate_market in zip(
+            active.markets, candidate.markets, strict=True
+        ):
+            if candidate_market.identity != parent_market.identity:
+                raise RegistryError("automatic lifecycle successor changes market identity")
+            if candidate_market.model_dump(
+                mode="python", exclude={"lifecycle"}
+            ) != parent_market.model_dump(mode="python", exclude={"lifecycle"}):
+                raise RegistryError(
+                    "automatic lifecycle successor changes non-lifecycle metadata"
+                )
+            requested = updates.get(parent_market.identity.market_id)
+            expected = parent_market.lifecycle if requested is None else requested
+            if not isinstance(expected, MarketLifecycle):
+                raise RegistryError("invalid market lifecycle target")
+            if candidate_market.lifecycle != expected:
+                raise RegistryError(
+                    "automatic lifecycle successor conflicts with requested target"
+                )
+            if requested is not None and expected not in _LIFECYCLE_NEXT[
+                parent_market.lifecycle
+            ]:
+                raise RegistryError(
+                    "illegal market lifecycle transition: "
+                    f"{parent_market.lifecycle.value} -> {expected.value}"
+                )
+
+        if candidate.markets != target_markets:
+            raise RegistryError(
+                "automatic lifecycle successor conflicts with expected target semantics"
+            )
+        expected_version = self._automatic_lifecycle_version(
+            active=active, target_markets=target_markets
+        )
+        if candidate.version != expected_version:
+            raise RegistryError(
+                "automatic lifecycle successor version does not match deterministic key"
+            )
+        return self._stage_validated_candidate(candidate)
 
     def lifecycle_update(
         self, version: str, market_id: str, lifecycle: MarketLifecycle, *, now: datetime
@@ -547,20 +632,22 @@ class MarketRegistryManager:
         target = self.versions / f"{version}.json"
         if target.exists():
             candidate = self.load_version(version)
-            if candidate.version != version:
-                raise RegistryError(
-                    "automatic lifecycle successor version does not match deterministic key"
-                )
-            if candidate.schema_version != "1" or candidate.markets != markets:
-                raise RegistryError(
-                    "automatic lifecycle successor conflicts with expected target semantics"
-                )
-            # Re-validating the existing immutable candidate safely restores
-            # evidence lost by a crash between stage writes.
-            self.stage(candidate)
+            # Parent-derived validation safely restores evidence lost by a
+            # crash between immutable candidate and validation-evidence writes.
+            self._stage_parent_derived_lifecycle_successor(
+                active=active,
+                candidate=candidate,
+                updates=updates,
+                target_markets=markets,
+            )
             return candidate
         candidate = self._create_version(version=version, created_at=now, markets=markets)
-        self.stage(candidate)
+        self._stage_parent_derived_lifecycle_successor(
+            active=active,
+            candidate=candidate,
+            updates=updates,
+            target_markets=markets,
+        )
         return candidate
 
     def add_new(self, *, version: str, now: datetime, market: RegistryMarket) -> RegistryVersion:
