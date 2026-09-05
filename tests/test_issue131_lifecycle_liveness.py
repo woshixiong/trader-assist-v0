@@ -133,6 +133,34 @@ def test_bounded_automatic_key_breaks_recursive_parent_growth(tmp_path: Path) ->
         authority.store.close()
 
 
+def test_automatic_successor_identity_ignores_caller_now(tmp_path: Path) -> None:
+    first_registry, first_authority, first_active = active_one(
+        tmp_path / "first", version="base"
+    )
+    second_registry, second_authority, second_active = active_one(
+        tmp_path / "second", version="base"
+    )
+    first_updates = {
+        first_active.markets[0].identity.market_id: MarketLifecycle.HISTORY_READY
+    }
+    second_updates = {
+        second_active.markets[0].identity.market_id: MarketLifecycle.HISTORY_READY
+    }
+
+    first = first_registry.ensure_lifecycle_successor(
+        updates=first_updates, now=NOW + timedelta(hours=1)
+    )
+    second = second_registry.ensure_lifecycle_successor(
+        updates=second_updates, now=NOW + timedelta(days=1)
+    )
+
+    assert first == second
+    assert first.created_at == first_active.created_at
+    assert first.content_hash == second.content_hash
+    first_authority.store.close()
+    second_authority.store.close()
+
+
 def test_automatic_candidate_reuse_after_restart_preserves_identity(
     tmp_path: Path,
 ) -> None:
@@ -140,7 +168,13 @@ def test_automatic_candidate_reuse_after_restart_preserves_identity(
     updates = {active.markets[0].identity.market_id: MarketLifecycle.HISTORY_READY}
     first = registry.ensure_lifecycle_successor(updates=updates, now=NOW)
     registry._validation_path(first.version).unlink()
-    restarted = MarketRegistryManager(registry.root, metadata_validator=lambda _: True)
+
+    def unavailable_metadata(_: RegistryMarket) -> bool:
+        raise ConnectionError("metadata provider unavailable")
+
+    restarted = MarketRegistryManager(
+        registry.root, metadata_validator=unavailable_metadata
+    )
     reused = restarted.ensure_lifecycle_successor(
         updates=updates, now=NOW + timedelta(days=1)
     )
@@ -148,6 +182,81 @@ def test_automatic_candidate_reuse_after_restart_preserves_identity(
     assert reused.created_at == first.created_at
     assert reused.content_hash == first.content_hash
     restarted._assert_prior_validation(reused)
+    authority.store.close()
+
+
+def test_automatic_lifecycle_successor_uses_validated_active_parent_offline(
+    tmp_path: Path,
+) -> None:
+    provider_available = True
+    provider_calls = 0
+
+    def metadata_validator(_: RegistryMarket) -> bool:
+        nonlocal provider_calls
+        provider_calls += 1
+        if not provider_available:
+            raise ConnectionError("metadata provider unavailable")
+        return True
+
+    registry = MarketRegistryManager(
+        tmp_path / "registry", metadata_validator=metadata_validator
+    )
+    initial = RegistryVersion.create(
+        version="base", created_at=NOW, markets=(market(),)
+    )
+    registry.stage(initial)
+    registry.request_apply(initial.version)
+    authority = MultiAssetDataAuthority(
+        store=ClosedBarStore(tmp_path / "closed.sqlite"), registry=registry
+    )
+    authority.admit_rest_history(
+        market=initial.markets[0],
+        snapshot=[candle("BTC", 0)],
+        received_at=datetime.fromtimestamp(303, UTC),
+    )
+    active = registry.active()
+    assert active is not None
+    initial_provider_calls = provider_calls
+    provider_available = False
+
+    successor = registry.ensure_lifecycle_successor(
+        updates={
+            active.markets[0].identity.market_id: MarketLifecycle.HISTORY_READY
+        },
+        now=NOW,
+    )
+
+    assert successor.markets[0].lifecycle is MarketLifecycle.HISTORY_READY
+    assert provider_calls == initial_provider_calls
+    assert json.loads(
+        registry._validation_path(successor.version).read_text(encoding="utf-8")
+    ) == {"version": successor.version, "content_hash": successor.content_hash}
+    authority.store.close()
+
+
+def test_automatic_lifecycle_successor_rejects_illegal_or_unknown_offline(
+    tmp_path: Path,
+) -> None:
+    registry, authority, active = active_one(tmp_path, version="base")
+
+    def unavailable_metadata(_: RegistryMarket) -> bool:
+        raise ConnectionError("metadata provider unavailable")
+
+    offline = MarketRegistryManager(
+        registry.root, metadata_validator=unavailable_metadata
+    )
+    with pytest.raises(RegistryError, match="illegal market lifecycle transition"):
+        offline.ensure_lifecycle_successor(
+            updates={active.markets[0].identity.market_id: MarketLifecycle.ACTIVE},
+            now=NOW,
+        )
+    with pytest.raises(RegistryError, match="market is not in active registry"):
+        offline.ensure_lifecycle_successor(
+            updates={"0" * 64: MarketLifecycle.HISTORY_READY},
+            now=NOW,
+        )
+    assert {path.stem for path in offline.versions.glob("*.json")} == {"base"}
+    assert not offline.pending.exists()
     authority.store.close()
 
 
@@ -170,6 +279,76 @@ def test_same_key_malformed_or_conflicting_candidate_fails_closed(
         target.write_bytes(canonical_json_bytes(conflicting.model_dump(mode="json")))
     with pytest.raises(RegistryError):
         registry.ensure_lifecycle_successor(updates=updates, now=NOW + timedelta(days=1))
+    authority.store.close()
+
+
+def test_same_key_non_lifecycle_tampering_fails_closed_offline(tmp_path: Path) -> None:
+    registry, authority, active = active_one(tmp_path, version="base")
+    updates = {active.markets[0].identity.market_id: MarketLifecycle.HISTORY_READY}
+    target_markets = registry._lifecycle_target_markets(active, updates)
+    deterministic_version = registry._automatic_lifecycle_version(
+        active=active, target_markets=target_markets
+    )
+    tampered_market = target_markets[0].model_copy(
+        update={"metadata_hash": "0" * 64}
+    )
+    tampered = RegistryVersion.create(
+        version=deterministic_version,
+        created_at=NOW,
+        markets=(tampered_market,),
+    )
+    target = registry.versions / f"{deterministic_version}.json"
+    target.write_bytes(canonical_json_bytes(tampered.model_dump(mode="json")))
+
+    def unavailable_metadata(_: RegistryMarket) -> bool:
+        raise ConnectionError("metadata provider unavailable")
+
+    restarted = MarketRegistryManager(
+        registry.root, metadata_validator=unavailable_metadata
+    )
+    with pytest.raises(RegistryError, match="non-lifecycle metadata"):
+        restarted.ensure_lifecycle_successor(
+            updates=updates, now=NOW + timedelta(days=1)
+        )
+    assert not restarted._validation_path(deterministic_version).exists()
+    assert not restarted.pending.exists()
+    assert restarted.active() == active
+    authority.store.close()
+
+
+def test_same_key_recomputed_hash_with_changed_created_at_fails_closed(
+    tmp_path: Path,
+) -> None:
+    registry, authority, active = active_one(tmp_path, version="base")
+    updates = {active.markets[0].identity.market_id: MarketLifecycle.HISTORY_READY}
+    target_markets = registry._lifecycle_target_markets(active, updates)
+    deterministic_version = registry._automatic_lifecycle_version(
+        active=active, target_markets=target_markets
+    )
+    altered = RegistryVersion.create(
+        version=deterministic_version,
+        created_at=active.created_at + timedelta(seconds=1),
+        markets=target_markets,
+    )
+    target = registry.versions / f"{deterministic_version}.json"
+    target.write_bytes(canonical_json_bytes(altered.model_dump(mode="json")))
+    current_before = registry.pointer.read_bytes()
+
+    def unavailable_metadata(_: RegistryMarket) -> bool:
+        raise ConnectionError("metadata provider unavailable")
+
+    restarted = MarketRegistryManager(
+        registry.root, metadata_validator=unavailable_metadata
+    )
+    with pytest.raises(RegistryError, match="created_at does not match active parent"):
+        restarted.ensure_lifecycle_successor(
+            updates=updates, now=NOW + timedelta(days=1)
+        )
+
+    assert not restarted._validation_path(deterministic_version).exists()
+    assert not restarted.pending.exists()
+    assert restarted.pointer.read_bytes() == current_before
+    assert restarted.active() == active
     authority.store.close()
 
 
@@ -450,12 +629,26 @@ async def test_real_cold_first_launch_20_run_reaches_active_then_one_live_callba
     markets = _first_launch_markets()
     assert len(markets) == 20
     assert all(item.lifecycle is MarketLifecycle.WARMING for item in markets)
-    registry = MarketRegistryManager(tmp_path / "registry", metadata_validator=lambda _: True)
+    metadata_available = True
+    metadata_calls = 0
+
+    def metadata_validator(_: RegistryMarket) -> bool:
+        nonlocal metadata_calls
+        metadata_calls += 1
+        if not metadata_available:
+            raise ConnectionError("metadata provider unavailable")
+        return True
+
+    registry = MarketRegistryManager(
+        tmp_path / "registry", metadata_validator=metadata_validator
+    )
     seed = RegistryVersion.create(
         version="first-launch-20-cold", created_at=NOW, markets=markets
     )
     registry.stage(seed)
     registry.request_apply(seed.version)
+    initial_metadata_calls = metadata_calls
+    metadata_available = False
     authority = MultiAssetDataAuthority(
         store=ClosedBarStore(tmp_path / "closed.sqlite"), registry=registry
     )
@@ -529,6 +722,7 @@ async def test_real_cold_first_launch_20_run_reaches_active_then_one_live_callba
         len(version) == 74 and re.fullmatch(r"lifecycle-[0-9a-f]{64}", version)
         for version in automatic_versions
     )
+    assert metadata_calls == initial_metadata_calls
     shutdown.set()
     await task
     assert socket.closed

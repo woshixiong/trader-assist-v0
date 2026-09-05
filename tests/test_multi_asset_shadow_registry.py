@@ -120,6 +120,23 @@ def test_identity_duplicate_and_metadata_validation_fail_closed(tmp_path: Path) 
         subject.stage(registry("one", market()))
 
 
+def test_generic_stage_maps_provider_exception_and_writes_nothing(tmp_path: Path) -> None:
+    calls = 0
+
+    def unavailable(_: RegistryMarket) -> bool:
+        nonlocal calls
+        calls += 1
+        raise ConnectionError("metadata provider unavailable")
+
+    subject = MarketRegistryManager(tmp_path, metadata_validator=unavailable)
+    candidate = registry("one", market())
+    with pytest.raises(RegistryError, match="REGISTRY_METADATA_VALIDATION_UNAVAILABLE"):
+        subject.stage(candidate)
+    assert calls == 1
+    assert not (subject.versions / "one.json").exists()
+    assert not subject._validation_path("one").exists()
+
+
 def test_lifecycle_update_is_immutable_and_does_not_change_event_expiry(tmp_path: Path) -> None:
     subject = manager(tmp_path)
     initial = registry("one", market(lifecycle=MarketLifecycle.ACTIVE))
