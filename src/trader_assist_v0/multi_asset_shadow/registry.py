@@ -561,6 +561,10 @@ class MarketRegistryManager:
             raise RegistryError(
                 "automatic lifecycle successor version does not match deterministic key"
             )
+        if candidate.created_at != active.created_at:
+            raise RegistryError(
+                "automatic lifecycle successor created_at does not match active parent"
+            )
         return self._stage_validated_candidate(candidate)
 
     def lifecycle_update(
@@ -641,7 +645,9 @@ class MarketRegistryManager:
                 target_markets=markets,
             )
             return candidate
-        candidate = self._create_version(version=version, created_at=now, markets=markets)
+        candidate = self._create_version(
+            version=version, created_at=active.created_at, markets=markets
+        )
         self._stage_parent_derived_lifecycle_successor(
             active=active,
             candidate=candidate,

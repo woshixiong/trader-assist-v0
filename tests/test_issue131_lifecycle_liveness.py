@@ -133,6 +133,34 @@ def test_bounded_automatic_key_breaks_recursive_parent_growth(tmp_path: Path) ->
         authority.store.close()
 
 
+def test_automatic_successor_identity_ignores_caller_now(tmp_path: Path) -> None:
+    first_registry, first_authority, first_active = active_one(
+        tmp_path / "first", version="base"
+    )
+    second_registry, second_authority, second_active = active_one(
+        tmp_path / "second", version="base"
+    )
+    first_updates = {
+        first_active.markets[0].identity.market_id: MarketLifecycle.HISTORY_READY
+    }
+    second_updates = {
+        second_active.markets[0].identity.market_id: MarketLifecycle.HISTORY_READY
+    }
+
+    first = first_registry.ensure_lifecycle_successor(
+        updates=first_updates, now=NOW + timedelta(hours=1)
+    )
+    second = second_registry.ensure_lifecycle_successor(
+        updates=second_updates, now=NOW + timedelta(days=1)
+    )
+
+    assert first == second
+    assert first.created_at == first_active.created_at
+    assert first.content_hash == second.content_hash
+    first_authority.store.close()
+    second_authority.store.close()
+
+
 def test_automatic_candidate_reuse_after_restart_preserves_identity(
     tmp_path: Path,
 ) -> None:
@@ -284,6 +312,42 @@ def test_same_key_non_lifecycle_tampering_fails_closed_offline(tmp_path: Path) -
         )
     assert not restarted._validation_path(deterministic_version).exists()
     assert not restarted.pending.exists()
+    assert restarted.active() == active
+    authority.store.close()
+
+
+def test_same_key_recomputed_hash_with_changed_created_at_fails_closed(
+    tmp_path: Path,
+) -> None:
+    registry, authority, active = active_one(tmp_path, version="base")
+    updates = {active.markets[0].identity.market_id: MarketLifecycle.HISTORY_READY}
+    target_markets = registry._lifecycle_target_markets(active, updates)
+    deterministic_version = registry._automatic_lifecycle_version(
+        active=active, target_markets=target_markets
+    )
+    altered = RegistryVersion.create(
+        version=deterministic_version,
+        created_at=active.created_at + timedelta(seconds=1),
+        markets=target_markets,
+    )
+    target = registry.versions / f"{deterministic_version}.json"
+    target.write_bytes(canonical_json_bytes(altered.model_dump(mode="json")))
+    current_before = registry.pointer.read_bytes()
+
+    def unavailable_metadata(_: RegistryMarket) -> bool:
+        raise ConnectionError("metadata provider unavailable")
+
+    restarted = MarketRegistryManager(
+        registry.root, metadata_validator=unavailable_metadata
+    )
+    with pytest.raises(RegistryError, match="created_at does not match active parent"):
+        restarted.ensure_lifecycle_successor(
+            updates=updates, now=NOW + timedelta(days=1)
+        )
+
+    assert not restarted._validation_path(deterministic_version).exists()
+    assert not restarted.pending.exists()
+    assert restarted.pointer.read_bytes() == current_before
     assert restarted.active() == active
     authority.store.close()
 
