@@ -40,10 +40,16 @@ LOCAL_ENVIRONMENT_FIT=PASS|FAIL|NOT_APPLICABLE
 FALLBACK_VALIDATION_SURFACE=
 
 SCRIPT_TRANSPORT=FILE_BACKED|SHORT_INLINE|HEREDOC_EXCEPTION
+KNOWN_INCIDENT_CLASSES_REVIEWED=YES|NO
+KNOWN_INCIDENT_NONREGRESSION_GATE=PASS|FAIL
+INTERACTIVE_SHELL_PARSE_MODE_PROVEN=PASS|FAIL|NOT_APPLICABLE
+TRANSPORT_MONOTONICITY=PASS|FAIL
 SYNTAX_CHECK=PASS|FAIL|NOT_AVAILABLE
 STATIC_ANALYSIS=PASS|FAIL|NOT_AVAILABLE
 SAFE_STOP_GATES_BOUND_TO_REAL_INVARIANTS=YES|NO
 ALLOWLIST_SEMANTICS_PROOF=PASS|FAIL|NOT_APPLICABLE
+HARNESS_BOUNDARY_CONTRACT_PROOF=PASS|FAIL|NOT_APPLICABLE
+PERSISTED_STATE_COPY_SEMANTICS_PROOF=PASS|FAIL|NOT_APPLICABLE
 
 ONE_SHOT_SEMANTIC_BOUNDARY=
 SIDE_EFFECT_FREE_PREFLIGHT_COMPLETE_BEFORE_ONE_SHOT=YES|NO|NOT_APPLICABLE
@@ -57,6 +63,13 @@ COMMAND_REPAIR_STAGE=INITIAL|BOUNDED_CORRECTION|HOLISTIC_REGENERATION
 ```
 
 Do not deliver a nontrivial command with `GENERATED_COMMAND_RELIABILITY_GATE=FAIL`.
+
+A known prior failure class is a regression test, not merely history. If the planned command or harness recreates a catalogued failure shape without a specific preventive control, then:
+
+```text
+KNOWN_INCIDENT_NONREGRESSION_GATE=FAIL
+GENERATED_COMMAND_RELIABILITY_GATE=FAIL
+```
 
 ---
 
@@ -89,6 +102,8 @@ OUTPUT_MODE_SEMANTICS
 
 Model-backed executors must never inherit the same stdin stream that contains the running shell/heredoc program. Use file-backed phase separation and an explicit executor stdin source.
 
+Shell parsing behavior is also environment evidence. Interactive commands must not depend on an unset or unproven startup option, alias, comment mode, history mode, quoting mode or shell-emulation mode when that behavior can change parsing or execution. In particular, an ordinary interactive zsh paste must not assume `#` is a comment unless `INTERACTIVE_COMMENTS` has been explicitly established; the simpler default is to omit interactive comment lines entirely.
+
 ---
 
 ## 3. One-paste and file-backed execution
@@ -114,6 +129,27 @@ GENERATE FILE-BACKED SCRIPT / TASK PACKET
 ```
 
 Use an interactive heredoc only when short/low-risk or genuinely required by the environment.
+
+### 3.1 Transport monotonicity
+
+`FILE_BACKED` describes a reduction in operator-input complexity, not a filename at the end of an equally fragile transport.
+
+A route does **not** satisfy the file-backed requirement merely by embedding the complete long script or packet inside the same interactive paste as:
+
+- a giant Base64/hex/escaped literal;
+- a giant quoted `shell -c` string;
+- a long nested heredoc/subshell whose full parse must survive interactive paste;
+- another representation whose operator-visible payload is comparable to or more fragile than the original script.
+
+Required invariant:
+
+```text
+OPERATOR_VISIBLE_BOOTSTRAP
+  MUST_BE_MATERIALLY_SIMPLER_THAN_PAYLOAD
+  AND PARSE_COMPLETE_ON_ITS_OWN
+```
+
+If this cannot be achieved on the current surface, prefer a robust file/artifact transfer surface, an accepted repository-owned launcher, or an explicitly safe phase split over another encoding layer. Hash verification detects corruption after transport; it does not make an overlong transport reliable.
 
 ---
 
@@ -158,7 +194,8 @@ Prohibited patterns:
 - requiring redundant lower-reliability network proof after fresh authoritative control-plane GitHub identity when it adds no safety value;
 - treating a missing convenience tool as safety failure when a proven native/standard alternative gives the same proof;
 - requiring a target artifact to be a Git checkout when the canonical deployment is exact-artifact/SFTP;
-- interpreting an allowlist as a requirement that every allowed path must change.
+- interpreting an allowlist as a requirement that every allowed path must change;
+- embedding a self-generated expected identity that has not itself been computed or independently checked from the exact object it gates.
 
 Unless the semantic contract explicitly requires named files to change:
 
@@ -232,6 +269,23 @@ Examples:
 
 Hidden reruns/retries are prohibited.
 
+### 7.1 Harness and persisted-state boundary proof
+
+A rehearsal harness, fake, adapter wrapper or test double that remains on the production path must satisfy the exact seam contract it replaces or decorates. Before an external/provider or one-shot proof, verify as applicable:
+
+```text
+CALL_SIGNATURE
+INPUT_TYPES
+OUTPUT_TYPES
+ENCODING / SERIALIZATION OWNERSHIP
+ERROR / EXCEPTION CONTRACT
+STATE / RESOURCE OWNERSHIP
+```
+
+A harness that double-decodes, double-encodes, changes bytes into objects, changes exception ownership or otherwise violates the seam invalidates the higher-level proof even when the provider itself behaved correctly.
+
+Persisted-state copy and evidence identity must follow the owning component's durability model rather than filename heuristics. For SQLite WAL mode, the main database and any extant `-wal` file form part of the database's persistent state; `-shm` has different cache/index semantics. Do not blanket-delete or blanket-exclude `-wal` from a checkpoint copy. Prefer an engine-supported consistent snapshot/backup or a controlled quiescent copy that preserves the required durability set.
+
 ---
 
 ## 8. Command repair budget
@@ -247,6 +301,7 @@ Holistic regeneration requires:
 
 - re-read actual environment and canonical workflow;
 - classify every prior command failure;
+- compare the replacement against the incident catalogue and prove non-regression controls;
 - remove stale assumptions rather than append conditionals;
 - reconsider the validation environment;
 - prefer existing accepted capability / provider-native / mature tools;
@@ -304,6 +359,7 @@ COMMAND_FAILURE_CLASS=
   WRAPPER_OR_HARNESS_FAILURE
   APPLICATION_OR_STRATEGY_FAILURE
   EVIDENCE_PACKAGING_OR_EGRESS_FAILURE
+  PERSISTED_STATE_COPY_OR_IDENTITY_FAILURE
   UNKNOWN
 
 SEMANTIC_ACTION_STARTED=YES|NO
@@ -335,8 +391,16 @@ These incidents are retained as rationale/examples; the normative lessons live i
 | canonical repo Mypy then ran on macOS and hit `os.listxattr` | wrong validation environment | platform-sensitive proof runs on authoritative OS |
 | repair allowlist required both files to change | false exactness | allowlist means changed-path subset unless semantic minimum says otherwise |
 | evidence file generated only after fragile validation tails | checkpoint ordered too late | preserve semantic delta/evidence before non-decisive tails |
+| S1 resume launcher hard-coded an incorrect self-generated expected SHA and false-stopped before execution | false SAFE_STOP / duplicated identity | an expected identity must be derived or independently checked from the exact object it gates; do not invent duplicate exactness |
+| S1 bounded correction pasted comment lines into ordinary interactive zsh without proving `INTERACTIVE_COMMENTS` | shell parse-mode assumption | interactive command syntax must not depend on unproven shell startup options; omit comments or establish parse mode |
+| S1 holistic regeneration re-embedded a long file-backed script as one giant Base64 literal and the paste arrived with invalid padding | operator transport fragility | file-backed transport must actually reduce operator-input complexity; giant encoded payloads do not satisfy the rule |
+| S1 next regeneration used one giant quoted `zsh -fc` string and the paste truncated inside an unterminated quote | operator transport fragility | a large one-line command is not a safe substitute for a long heredoc; bootstrap must be materially simpler and parse-complete |
+| S1 public-provider harness returned an already-decoded list where the production `HttpPost` seam required raw bytes | wrapper/harness contract mismatch | prove exact seam input/output/encoding ownership before external rehearsal |
+| S1 checkpoint evidence logic treated SQLite WAL/SHM by filename suffix and a follow-up copy excluded `-wal` | persisted-state copy/identity failure | durable-state manifests/copies follow engine semantics; SQLite WAL may contain committed state and cannot be blanket-excluded |
 
 A reusable new lesson should update Unified V2 or this narrow procedure rather than relying on chat memory.
+
+When a newly observed incident matches an existing row or durable class, explicitly mark it as a **known-class recurrence**. Recurrence is evidence that the preventive gate was not operationally enforced; do not mislabel it as a novel edge case merely because the exact command text differs.
 
 ---
 
