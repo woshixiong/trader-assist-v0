@@ -18,7 +18,7 @@ import json
 import os
 import sqlite3
 import stat
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
@@ -565,7 +565,7 @@ def main(argv: tuple[str, ...] | None = None) -> int:
         source_sha=args.source_sha,
         timeout_seconds=args.timeout_seconds,
     )
-    print(f"PROJECT_ENGINEERING_RULESET_PREFLIGHT=PASS")
+    print("PROJECT_ENGINEERING_RULESET_PREFLIGHT=PASS")
     print(f"CLAIM_UNDER_TEST={CLAIM}")
     print(f"CLAIM_RESULT={result['claim_result']}")
     print(f"NEXT_PROMOTION_ALLOWED={'YES' if result['claim_result'] == 'PASS' else 'NO'}")
