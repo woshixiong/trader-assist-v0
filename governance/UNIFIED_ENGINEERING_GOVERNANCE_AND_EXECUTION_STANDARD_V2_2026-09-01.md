@@ -412,7 +412,7 @@ ATTACK_MATRIX
 CANONICAL_TEST / LINT / TYPE / COMPILE COMMANDS
 VALIDATION_ENVIRONMENT
 COMMIT / PUSH AUTHORITY
-REVIEW REQUIREMENT
+REVIEW_REQUIREMENT
 REPAIR_STAGE / SAFE_STOP CONDITIONS
 OUTPUT CONTRACT
 FINAL_USER_AUTHORITY_BOUNDARY
@@ -519,7 +519,9 @@ Testing is not a downstream ceremony. The implementation route and verification 
 
 A test may claim production-path coverage only when it drives the real application composition and authority seams relevant to the claim. A fake substitute that bypasses the boundary under test does not prove that boundary.
 
-A harness, fake, adapter wrapper or test double that remains on the claimed production path must satisfy the exact seam contract it replaces or decorates, including input/output types, encoding/serialization ownership, error/exception semantics and state/resource ownership. Before expensive external/provider or one-shot proof, establish that boundary fidelity at a cheaper deterministic layer when practical. A harness-caused contract mismatch invalidates the higher-level proof; it must not be promoted into an application/provider failure.
+A harness, fake, adapter wrapper or test double that remains on the claimed production path must satisfy the exact seam contract it replaces or decorates, including input/output types, encoding/serialization ownership, error/exception semantics, state/resource ownership, observation phase/lifecycle state and temporal state validity. Before expensive external/provider or one-shot proof, establish that boundary fidelity at a cheaper deterministic layer when practical. A harness-caused contract mismatch invalidates the higher-level proof; it must not be promoted into an application/provider failure.
+
+For transient or ephemeral state, evidence must be captured at the authoritative observation phase. If shutdown, teardown, reconnect cleanup or another reset legitimately clears or normalizes the state under test, preserve the proof before reset using a pre-reset immutable snapshot, monotonic event/counter, durable log/record or equivalent teardown-surviving evidence. Post-teardown normalized state must not be used to retroactively deny a pre-teardown readiness or state transition already proven unless the governing contract explicitly defines that semantics.
 
 ### 12.2 Balanced verification portfolio
 
