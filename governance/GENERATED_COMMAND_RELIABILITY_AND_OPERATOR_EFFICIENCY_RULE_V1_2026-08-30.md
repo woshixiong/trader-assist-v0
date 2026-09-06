@@ -49,6 +49,8 @@ STATIC_ANALYSIS=PASS|FAIL|NOT_AVAILABLE
 SAFE_STOP_GATES_BOUND_TO_REAL_INVARIANTS=YES|NO
 ALLOWLIST_SEMANTICS_PROOF=PASS|FAIL|NOT_APPLICABLE
 HARNESS_BOUNDARY_CONTRACT_PROOF=PASS|FAIL|NOT_APPLICABLE
+HARNESS_OBSERVATION_PHASE_FIDELITY=PASS|FAIL|NOT_APPLICABLE
+TEARDOWN_SURVIVING_EVIDENCE_PROOF=PASS|FAIL|NOT_APPLICABLE
 PERSISTED_STATE_COPY_SEMANTICS_PROOF=PASS|FAIL|NOT_APPLICABLE
 
 ONE_SHOT_SEMANTIC_BOUNDARY=
@@ -280,9 +282,15 @@ OUTPUT_TYPES
 ENCODING / SERIALIZATION OWNERSHIP
 ERROR / EXCEPTION CONTRACT
 STATE / RESOURCE OWNERSHIP
+OBSERVATION_PHASE / LIFECYCLE_STATE
+TEMPORAL_STATE_VALIDITY
+TEARDOWN / RESET SEMANTICS
+TEARDOWN_SURVIVING_EVIDENCE
 ```
 
-A harness that double-decodes, double-encodes, changes bytes into objects, changes exception ownership or otherwise violates the seam invalidates the higher-level proof even when the provider itself behaved correctly.
+A harness that double-decodes, double-encodes, changes bytes into objects, changes exception ownership, observes a transient state outside its authoritative lifecycle phase or otherwise violates the seam invalidates the higher-level proof even when the provider/application itself behaved correctly.
+
+Ephemeral live-state evidence must be captured during the authoritative observation phase. If graceful shutdown, teardown, reconnect cleanup or another reset legitimately clears or normalizes the state under test, preserve proof before that reset using a pre-reset immutable snapshot, monotonic event/counter, durable log/record or equivalent teardown-surviving evidence. Post-teardown normalized state must not be used to retroactively deny a pre-teardown readiness/transition already proven unless the governing contract explicitly defines that semantics.
 
 Persisted-state copy and evidence identity must follow the owning component's durability model rather than filename heuristics. For SQLite WAL mode, the main database and any extant `-wal` file form part of the database's persistent state; `-shm` has different cache/index semantics. Do not blanket-delete or blanket-exclude `-wal` from a checkpoint copy. Prefer an engine-supported consistent snapshot/backup or a controlled quiescent copy that preserves the required durability set.
 
@@ -397,6 +405,7 @@ These incidents are retained as rationale/examples; the normative lessons live i
 | S1 next regeneration used one giant quoted `zsh -fc` string and the paste truncated inside an unterminated quote | operator transport fragility | a large one-line command is not a safe substitute for a long heredoc; bootstrap must be materially simpler and parse-complete |
 | S1 public-provider harness returned an already-decoded list where the production `HttpPost` seam required raw bytes | wrapper/harness contract mismatch | prove exact seam input/output/encoding ownership before external rehearsal |
 | S1 checkpoint evidence logic treated SQLite WAL/SHM by filename suffix and a follow-up copy excluded `-wal` | persisted-state copy/identity failure | durable-state manifests/copies follow engine semantics; SQLite WAL may contain committed state and cannot be blanket-excluded |
+| S1 attempt #2 sampled `RuntimeHealth` only after graceful teardown had cleared connection/ACK/data-ready state and treated normalized `SHUTDOWN` values as evidence live readiness never occurred | wrapper/harness observation-phase mismatch | ephemeral state evidence must be captured in the authoritative lifecycle phase or preserved by teardown-surviving monotonic evidence; post-teardown normalization cannot negate prior readiness |
 
 A reusable new lesson should update Unified V2 or this narrow procedure rather than relying on chat memory.
 
