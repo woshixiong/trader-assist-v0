@@ -412,7 +412,7 @@ ATTACK_MATRIX
 CANONICAL_TEST / LINT / TYPE / COMPILE COMMANDS
 VALIDATION_ENVIRONMENT
 COMMIT / PUSH AUTHORITY
-REVIEW REQUIREMENT
+REVIEW_REQUIREMENT
 REPAIR_STAGE / SAFE_STOP CONDITIONS
 OUTPUT CONTRACT
 FINAL_USER_AUTHORITY_BOUNDARY
@@ -518,6 +518,10 @@ Testing is not a downstream ceremony. The implementation route and verification 
 ### 12.1 Production-path fidelity
 
 A test may claim production-path coverage only when it drives the real application composition and authority seams relevant to the claim. A fake substitute that bypasses the boundary under test does not prove that boundary.
+
+A harness, fake, adapter wrapper or test double that remains on the claimed production path must satisfy the exact seam contract it replaces or decorates, including input/output types, encoding/serialization ownership, error/exception semantics, state/resource ownership, observation phase/lifecycle state and temporal state validity. Before expensive external/provider or one-shot proof, establish that boundary fidelity at a cheaper deterministic layer when practical. A harness-caused contract mismatch invalidates the higher-level proof; it must not be promoted into an application/provider failure.
+
+For transient or ephemeral state, evidence must be captured at the authoritative observation phase. If shutdown, teardown, reconnect cleanup or another reset legitimately clears or normalizes the state under test, preserve the proof before reset using a pre-reset immutable snapshot, monotonic event/counter, durable log/record or equivalent teardown-surviving evidence. Post-teardown normalized state must not be used to retroactively deny a pre-teardown readiness or state transition already proven unless the governing contract explicitly defines that semantics.
 
 ### 12.2 Balanced verification portfolio
 
@@ -715,6 +719,8 @@ MISSING_OR_MUTATED_SELECTED_CONTENT=FAIL_CLOSED
 
 Do not infer release identity from a non-Git staged filesystem and do not turn the verifier into a second deployment/package authority.
 
+Persisted-state snapshots, checkpoint copies and manifests must follow the owning component's durability semantics. Filename suffixes, temporary-file appearance or convenience heuristics do not define canonical state. If an engine splits committed state across multiple files, the snapshot/copy contract must preserve that durability set or use an engine-supported consistent snapshot. Never blanket-exclude a persistence file merely because its name appears auxiliary.
+
 ---
 
 ## 15. Generated commands and operator efficiency
@@ -728,6 +734,21 @@ For user-operated macOS engineering work, default to one contiguous ordinary-Ter
 An extra human step is allowed only when technically unavoidable or required by a real authority/security boundary.
 
 Long/critical/model-launch/one-shot workflows default to file-backed scripts with a short hash-verify/execute launcher rather than fragile giant interactive heredocs.
+
+### 15.1A Known-incident non-regression and transport monotonicity
+
+Before delivering any nontrivial human-executed command or harness, compare its planned failure surface against the canonical generated-command incident catalogue and relevant prior incidents.
+
+```text
+KNOWN_COMMAND_INCIDENT_CLASSES_REVIEWED=YES
+KNOWN_INCIDENT_NONREGRESSION_GATE=PASS
+```
+
+A known avoidable failure class may not be reintroduced merely because the exact command text, encoding or wrapper differs. Repeating a known class without a specific preventive control is a pre-delivery reliability failure.
+
+File-backed execution must **reduce** operator-input complexity. It is not sufficient to place a long script into a file by embedding the same payload as a giant Base64/hex/escaped literal, giant quoted `shell -c` string, long nested heredoc/subshell or equivalent fragile representation in the same interactive paste. The operator-visible bootstrap must be materially simpler than the payload and parse-complete on its own. If the current surface cannot satisfy that, use a robust transfer/artifact surface, an accepted repository-owned launcher, or an explicitly safe phase split.
+
+Interactive shell behavior that affects parsing cannot be assumed from user startup state. Comments, aliases, shell options, history expansion and emulation modes must either be explicitly established or avoided. A command that parses correctly only under an unproven interactive option does not pass the reliability gate.
 
 ### 15.2 Target environment is evidence
 
@@ -763,7 +784,8 @@ Prohibited false exactness includes:
 - implementation-shape checks unrelated to the real invariant;
 - redundant less-reliable network proof after fresh authoritative control-plane identity already exists without added safety value;
 - treating missing convenience tooling as safety failure when a validated alternative provides the same proof;
-- interpreting an allowlist as requiring every permitted path to change.
+- interpreting an allowlist as requiring every permitted path to change;
+- self-generated expected hashes/identities that were not themselves derived or independently verified from the exact object they gate.
 
 Unless the semantic contract explicitly requires specific paths to change:
 
@@ -788,7 +810,7 @@ INITIAL_GENERATED_COMMAND
    => COMMAND_RELIABILITY_HOLISTIC_REGENERATION
 ```
 
-Holistic regeneration re-reads the actual environment, canonical workflow and prior failure classes, removes stale assumptions and regenerates one complete route. Do not build CONT1/CONT2/CONT3 patch chains.
+Holistic regeneration re-reads the actual environment, canonical workflow and prior failure classes, proves non-regression against the incident catalogue, removes stale assumptions and regenerates one complete route. Do not build CONT1/CONT2/CONT3 patch chains.
 
 ### 15.7 Evidence egress
 
@@ -813,7 +835,7 @@ RESUME_FROM=
 RERUN_SEMANTIC_ACTION=YES|NO
 ```
 
-Useful failure classes include environment-capability mismatch, wrong validation environment, CLI/shell transport defect, false gate, artifact identity failure, deployment mechanic failure, wrapper/harness failure, application/strategy failure, evidence packaging/egress failure and authority/safety block.
+Useful failure classes include environment-capability mismatch, wrong validation environment, CLI/shell transport defect, false gate, artifact identity failure, deployment mechanic failure, wrapper/harness failure, persisted-state copy/identity failure, application/strategy failure, evidence packaging/egress failure and authority/safety block.
 
 Resume from the latest exact accepted checkpoint. Hidden retries and silent reruns are prohibited.
 
@@ -830,6 +852,8 @@ OWNER / FOLLOW-UP
 ```
 
 Historical incidents are rationale and regression evidence, not competing active rules. Reusable lessons are absorbed into this constitution or a narrow procedure rather than relying on chat memory.
+
+When a new incident matches an existing durable failure class, record it as a **known-class recurrence** and treat the recurrence as evidence that the preventive gate was not operationally enforced. Do not relabel a repeated class as a novel edge case merely because its wrapper, encoding or exact command differs.
 
 ---
 
@@ -988,6 +1012,7 @@ DETERMINISTIC_AND_REAL_EXTERNAL_PROOF_COMPLEMENT=WHEN_APPLICABLE
 FAILED_STAGE_CLAIM_MUST_BE_RERUN_BEFORE_PROMOTION=YES
 BROAD_PASS_CANNOT_OVERSTATE_UNPROVEN_CLAIMS=YES
 PRODUCTION_PATH_FIDELITY=REQUIRED
+HARNESS_BOUNDARY_CONTRACT_FIDELITY=REQUIRED
 BALANCED_G0_TO_G12_VERIFICATION=REQUIRED_WHEN_APPLICABLE
 INCIDENT_TO_INVARIANT_CONVERGENCE=REQUIRED
 VERIFICATION_TOPOLOGY_MUST_MATCH_AUTHORITY_TOPOLOGY=REQUIRED
@@ -996,7 +1021,11 @@ VALIDATION_ENVIRONMENT_FIDELITY=REQUIRED
 PLATFORM_SENSITIVE_VALIDATION_ON_WRONG_OS=PROHIBITED
 KNOWN_ENVIRONMENT_MISMATCH_REUSE=REQUIRED
 EXACT_RELEASE_STAGED_ARTIFACT_SEPARATION=REQUIRED
+PERSISTED_STATE_COPY_MUST_FOLLOW_COMPONENT_DURABILITY_SEMANTICS=YES
 MACOS_OPERATOR_ONE_PASTE_DEFAULT=YES
+KNOWN_COMMAND_INCIDENT_NONREGRESSION_GATE=REQUIRED
+OPERATOR_TRANSPORT_MUST_REDUCE_COMPLEXITY_NOT_REENCODE_IT=YES
+INTERACTIVE_SHELL_PARSE_ASSUMPTIONS_MUST_BE_PROVEN_OR_AVOIDED=YES
 CLI_INVOCATION_CONTRACT_PROOF=REQUIRED_FOR_MATERIAL_VERSIONED_CLI
 MODEL_EXECUTOR_AND_OUTER_LAUNCHER_STDIN_SHARING=PROHIBITED
 FALSE_SAFE_STOP_GATE=PROHIBITED
