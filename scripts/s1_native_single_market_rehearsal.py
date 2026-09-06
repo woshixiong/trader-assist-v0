@@ -474,6 +474,14 @@ def run_rehearsal(
     except S1HarnessError as exc:
         harness_error = type(exc).__name__
 
+    live_actionable_finalized_count = application_observation[
+        "live_actionable_finalized_count"
+    ]
+    if not isinstance(live_actionable_finalized_count, int) or isinstance(
+        live_actionable_finalized_count, bool
+    ):
+        raise S1HarnessError("live-actionable finalized count is not an integer")
+
     inputs = ClaimInputs(
         application_error=(
             str(application_observation["application_error"])
@@ -486,9 +494,7 @@ def run_rehearsal(
         connection_proven=witness.connection_proven,
         acknowledgement_proven=witness.acknowledgement_proven,
         ready_proven=witness.ready_proven,
-        live_actionable_finalized_count=int(
-            application_observation["live_actionable_finalized_count"]
-        ),
+        live_actionable_finalized_count=live_actionable_finalized_count,
         final_lifecycle=(
             str(application_observation["final_lifecycle"])
             if application_observation["final_lifecycle"] is not None
