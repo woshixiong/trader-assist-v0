@@ -55,6 +55,14 @@ INDEPENDENT ANALYSIS
 
 It is a procedure/reference; Unified V2 owns the normative rule.
 
+### 2.1 Recurring discretionary trading behavior / edge review
+
+For weekly or periodic review of the user's manual/discretionary trading behavior, edge, session/regime dependence, execution errors, fees, MAE/MFE, and week-over-week behavioral improvement, use:
+
+- `governance/TRADING_BEHAVIOR_AND_EDGE_REVIEW_PROCEDURE_V1_2026-09-06.md`
+
+This is a narrow task-conditional research/review procedure, not project-wide engineering governance and not trading authority. It standardizes UTC+08:00 time normalization, flat-to-flat episode reconstruction, Korea/US opening-regime analysis, Macro × US Open interaction analysis, stop-discipline/rapid-reentry diagnostics, fee/friction analysis, MAE/MFE integration, evidence labels, deduplicated counterfactuals, and week-over-week comparison. Raw private/account trade data remains outside Git history.
+
 ## 3. Human-executed commands / launchers
 
 For every nontrivial human-executed Terminal/shell/launcher command use:
