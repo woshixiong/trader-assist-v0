@@ -122,7 +122,9 @@ Official export semantics must be checked before fee arithmetic. Never double-su
 
 ### 4.1 Canonical accounting basis
 
-Unless a provider-specific exception is explicitly documented in the review, all edge and behavior metrics use **episode-level after-fee PnL**.
+All recurring canonical edge and behavior metrics in this procedure **always use episode-level after-fee PnL**. Provider-specific source semantics may change only how that after-fee episode PnL is reconstructed from source fields; they may not change the canonical accounting basis within an individual review.
+
+If verified source semantics are insufficient to reconstruct after-fee `EPISODE_NET_PNL` without fee omission or double counting, the affected canonical accounting metrics must be reported as `UNKNOWN` or `NOT_APPLICABLE` as appropriate. A different recurring accounting basis requires a versioned procedure change; it cannot be introduced by a one-off review note or provider-specific exception.
 
 Canonical definitions:
 
@@ -136,7 +138,9 @@ EPISODE_FEES
 
 GROSS_PRICE_PNL
 = EPISODE_NET_PNL + EPISODE_FEES
-  only when verified provider semantics establish that EPISODE_NET_PNL already includes fees
+  only when both components are verified and this arithmetic exactly reverses
+  the fee deduction used to produce EPISODE_NET_PNL;
+  otherwise UNKNOWN or NOT_APPLICABLE
 
 REALIZED_LOSS
 = max(-EPISODE_NET_PNL, 0)
@@ -155,7 +159,7 @@ Do not silently introduce a PnL zero-tolerance or rounding band. If the source e
 
 `net_pnl_bps` is calculated from `EPISODE_NET_PNL / entry_notional × 10,000` when `entry_notional > 0`; otherwise it is `NOT_APPLICABLE` rather than guessed.
 
-All dollar loss thresholds in this procedure, including `>$0.25`, `>$0.50`, and `>$1.00`, refer to `REALIZED_LOSS` on the after-fee episode basis unless a section explicitly states otherwise.
+All dollar loss thresholds in this procedure, including `>$0.25`, `>$0.50`, and `>$1.00`, always refer to `REALIZED_LOSS` on this canonical after-fee episode basis.
 
 ---
 
@@ -209,7 +213,20 @@ BREAK_EVEN_WIN_RATE
 = abs(AVG_LOSS) / (AVG_WIN + abs(AVG_LOSS))
 ```
 
-If there are no losses, `PROFIT_FACTOR` is reported as `INF/NO_LOSSES`; if there are no wins, `PROFIT_FACTOR=0`. `PAYOFF_RATIO` and `BREAK_EVEN_WIN_RATE` are `NOT_APPLICABLE` when their required winner/loss populations do not exist. Scratch episodes remain in the denominator of `WIN_RATE` and complete-episode expectancy; they are not silently reclassified as wins or losses.
+Profit Factor edge cases use this deterministic precedence:
+
+```text
+IF count(WIN) == 0 AND count(LOSS) == 0:
+    PROFIT_FACTOR = NOT_APPLICABLE/NO_WIN_OR_LOSS_POPULATION
+ELSE IF count(WIN) >= 1 AND count(LOSS) == 0:
+    PROFIT_FACTOR = INF/NO_LOSSES
+ELSE IF count(WIN) == 0 AND count(LOSS) >= 1:
+    PROFIT_FACTOR = 0/NO_WINS
+ELSE:
+    PROFIT_FACTOR = canonical formula above
+```
+
+For `WIN_RATE`, zero complete episodes yields `NOT_APPLICABLE/NO_EPISODES`; an all-scratch non-empty subgroup has `WIN_RATE=0`. `AVG_WIN` and `AVG_LOSS` are `NOT_APPLICABLE` when their respective populations do not exist. `EXPECTANCY_PER_EPISODE` is `NOT_APPLICABLE` for zero complete episodes and equals `0` for an all-scratch non-empty subgroup. `PAYOFF_RATIO` and `BREAK_EVEN_WIN_RATE` are `NOT_APPLICABLE` when their required winner/loss populations do not exist. Scratch episodes remain in the denominator of `WIN_RATE` and complete-episode expectancy; they are not silently reclassified as wins or losses.
 
 Gross/pre-fee metrics may be reported as secondary friction diagnostics, but must not replace the after-fee canonical edge metrics.
 
