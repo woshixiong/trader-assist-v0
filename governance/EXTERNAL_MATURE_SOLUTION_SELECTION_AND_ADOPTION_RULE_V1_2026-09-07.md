@@ -698,7 +698,13 @@ If reasonable weight or scenario changes repeatedly change the winner:
 ```text
 DECISION_STABILITY=LOW
 DISPOSITION=UNRESOLVED_TRADEOFF
+SELECT_MATURE_ROUTE=PROHIBITED
+SELECT_MODULAR_COMPOSITION=PROHIBITED
+ADOPTION=PROHIBITED
+PRODUCT_WRITER_DISPATCH=PROHIBITED
 ```
+
+`DECISION_STABILITY=LOW` is fail-closed for promotion. It may proceed only to a qualifying `ONE_BLOCKER_FEASIBILITY_SPIKE` when exactly one material P0 uncertainty remains and every §16 eligibility/budget gate passes. Otherwise the decision remains `UNRESOLVED_TRADEOFF` and must be resolved by more evidence, a bounded re-analysis, rejection, deferral or `SAFE_STOP`; it cannot be promoted into selection or product implementation.
 
 Do not fabricate certainty from an unstable score.
 
@@ -723,10 +729,13 @@ Stage 0 ends with one of:
 SELECT_MATURE_ROUTE
 SELECT_MODULAR_COMPOSITION
 ONE_BLOCKER_FEASIBILITY_SPIKE
+UNRESOLVED_TRADEOFF
 REJECT_CANDIDATE
 NO_FITTING_MATURE_ROUTE
 SAFE_STOP
 ```
+
+`UNRESOLVED_TRADEOFF` is non-promotable. It is not an alias for `SELECT_MATURE_ROUTE`, `SELECT_MODULAR_COMPOSITION`, adoption, or Writer dispatch.
 
 It must not end with an implicit custom build merely because no favorite was selected.
 
@@ -757,16 +766,18 @@ MAX_SCOPE
 MAX_FILES
 MAX_LOC
 MAX_WRITER_STAGE
+SPIKE_BUDGET_OVERRIDE=NO|BOUNDED_WITH_RATIONALE
+SPIKE_BUDGET_OVERRIDE_RATIONALE=
 EVIDENCE_OUTPUT
 CLEANUP_PLAN
 ```
 
-Default budget:
+The following semantic constraints are non-overridable for a Tiny Spike:
 
 ```text
-ONE_CANDIDATE
-ONE_UNRESOLVED_P0_QUESTION
-ONE_WRITER_STAGE
+ONE_CANDIDATE=YES
+ONE_UNRESOLVED_P0_QUESTION=YES
+ONE_WRITER_STAGE=YES
 PRODUCT_IMPLEMENTATION=NO
 NEW_DATABASE=NO
 NEW_RUNTIME=NO
@@ -775,9 +786,35 @@ NEW_GENERAL_HARNESS_FRAMEWORK=NO
 PRODUCTION_DEPLOYMENT=NO
 PRIVATE_ACCOUNT_API=NO
 EXCHANGE_WRITE=NO
+NEW_COMMODITY_SUBSYSTEM=NO
+```
+
+Default numeric/mechanical budget:
+
+```text
 TARGET_PROJECT_OWNED_ADAPTER_LOC<=250
 TARGET_CHANGED_FILES<=4
 AT_MOST_ONE_SMALL_MECHANICAL_CORRECTION
+```
+
+LOC/file limits are stop signals rather than architecture definitions. A bounded upward numeric override is allowed only when all of the following are recorded before dispatch:
+
+```text
+SPIKE_BUDGET_OVERRIDE=BOUNDED_WITH_RATIONALE
+NON_OVERRIDABLE_SPIKE_CONSTRAINTS=PASS
+ONE_QUESTION_DECISIVENESS_UNCHANGED=YES
+CHEAP_SAFE_NONAUTHORITATIVE_CHARACTER_UNCHANGED=YES
+NO_PRODUCT_OR_COMMODITY_AUTHORITY_EXPANSION=YES
+EXACT_NUMERIC_OVERRIDE_AND_REASON=
+ENGINEERING_CONTROL_OVERRIDE_GATE=PASS
+```
+
+An override may adjust numeric/mechanical limits only. It may not relax any non-overridable semantic/safety constraint above. If the proposed override makes the work materially implementation-like, introduces a second uncertainty/authority, or cannot remain cheap and decisive:
+
+```text
+SPIKE_BUDGET_OVERRIDE=FAIL
+ENGINEERING_PREFLIGHT_GATE=FAIL
+TINY_SPIKE_WRITER_DISPATCH=PROHIBITED
 ```
 
 Spike result:
@@ -788,7 +825,7 @@ FAIL
 NONDECISIVE
 ```
 
-If a second semantic uncertainty appears, a new commodity subsystem is needed, or the budget is exceeded:
+If a second semantic uncertainty appears, a new commodity subsystem is needed, a non-overridable constraint would be violated, or the frozen budget is exceeded:
 
 ```text
 STOP
@@ -1060,6 +1097,7 @@ SELECTED_ROUTE
 REJECTED_ROUTES_AND_EXACT_REASONS
 RESIDUAL_RISKS
 SPIKE_RESULT_IF_ANY
+SPIKE_BUDGET_OVERRIDE_IF_ANY
 ADOPTION_REQUIREMENTS
 EXIT_PLAN
 RE_EVALUATION_TRIGGERS
@@ -1088,10 +1126,12 @@ Independent review of a material mature-solution decision must check at least:
 - total burden includes transition plus recurring maintenance, upgrade, security, incident and exit burden;
 - false numeric precision was not used to manufacture certainty;
 - decision stability was tested rather than inferred from one scorecard;
+- `DECISION_STABILITY=LOW` did not promote selection, adoption or product Writer dispatch;
 - modular composition has one authority owner per responsibility;
 - non-authoritative projections are mechanically non-authoritative and rebuildable;
 - customization remains thin and does not recreate commodity ownership;
 - a Tiny Spike answered only its frozen blocker and stayed within budget;
+- any Tiny Spike numeric/mechanical budget override preserved every non-overridable constraint and passed the explicit bounded override gate before dispatch;
 - selection and adoption were not collapsed;
 - migration does not create overlapping write authority without a separate validated contract;
 - custom commodity work, if proposed, has explicit current user authority;
@@ -1159,7 +1199,11 @@ EVIDENCE_CONFLICT_REMAINS_UNKNOWN_UNTIL_RESOLVED=YES
 FOUNDATIONAL_EXIT_AND_PORTABILITY_P0=REQUIRED
 SCORECARD_AFTER_P0_ONLY=YES
 DECISION_STABILITY_AND_SCENARIO_CHECK=REQUIRED
+DECISION_STABILITY_LOW_BLOCKS_SELECTION_ADOPTION_AND_PRODUCT_WRITER=YES
+UNRESOLVED_TRADEOFF_IS_NONPROMOTABLE=YES
 TINY_SPIKE_ONE_BLOCKER_ONLY=YES
+TINY_SPIKE_NONOVERRIDABLE_SEMANTIC_SAFETY_CONSTRAINTS=YES
+TINY_SPIKE_NUMERIC_OVERRIDE_REQUIRES_BOUNDED_PRE_DISPATCH_GATE=YES
 ONE_AUTHORITATIVE_OWNER_PER_RESPONSIBILITY=REQUIRED
 NONAUTHORITATIVE_PROJECTION_MUST_BE_REBUILDABLE_AND_NONWRITING=YES
 THIN_INTEGRATION_RECLASSIFY_IF_COMMODITY_AUTHORITY_EMERGES=YES
