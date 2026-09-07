@@ -120,6 +120,43 @@ Do not assume one open row plus one close row equals one complete trade.
 
 Official export semantics must be checked before fee arithmetic. Never double-subtract fees when the provider's `closedPnl` field already includes them.
 
+### 4.1 Canonical accounting basis
+
+Unless a provider-specific exception is explicitly documented in the review, all edge and behavior metrics use **episode-level after-fee PnL**.
+
+Canonical definitions:
+
+```text
+EPISODE_NET_PNL
+= realized flat-to-flat episode PnL after fees,
+  with fees deducted exactly once according to verified provider semantics
+
+EPISODE_FEES
+= fees attributable to the complete flat-to-flat episode
+
+GROSS_PRICE_PNL
+= EPISODE_NET_PNL + EPISODE_FEES
+  only when verified provider semantics establish that EPISODE_NET_PNL already includes fees
+
+REALIZED_LOSS
+= max(-EPISODE_NET_PNL, 0)
+
+WIN
+= EPISODE_NET_PNL > 0
+
+LOSS
+= EPISODE_NET_PNL < 0
+
+SCRATCH
+= EPISODE_NET_PNL == 0
+```
+
+Do not silently introduce a PnL zero-tolerance or rounding band. If the source export requires a non-zero scratch tolerance because of documented quantization/rounding behavior, that tolerance must be stated explicitly in the review and requires a versioned procedure change before it becomes a recurring canonical definition.
+
+`net_pnl_bps` is calculated from `EPISODE_NET_PNL / entry_notional × 10,000` when `entry_notional > 0`; otherwise it is `NOT_APPLICABLE` rather than guessed.
+
+All dollar loss thresholds in this procedure, including `>$0.25`, `>$0.50`, and `>$1.00`, refer to `REALIZED_LOSS` on the after-fee episode basis unless a section explicitly states otherwise.
+
 ---
 
 ## 5. Mandatory weekly scorecard
@@ -145,6 +182,36 @@ Every complete weekly review must report, for the full week and relevant subgrou
 - average loser;
 - payoff ratio;
 - break-even win rate implied by current payoff.
+
+Canonical metric formulas use the after-fee episode basis from §4.1:
+
+```text
+WIN_RATE
+= count(WIN) / count(complete episodes)
+
+AVG_WIN
+= mean(EPISODE_NET_PNL for WIN episodes)
+
+AVG_LOSS
+= mean(EPISODE_NET_PNL for LOSS episodes)
+
+PROFIT_FACTOR
+= sum(positive EPISODE_NET_PNL)
+  / abs(sum(negative EPISODE_NET_PNL))
+
+PAYOFF_RATIO
+= AVG_WIN / abs(AVG_LOSS)
+
+EXPECTANCY_PER_EPISODE
+= mean(EPISODE_NET_PNL)
+
+BREAK_EVEN_WIN_RATE
+= abs(AVG_LOSS) / (AVG_WIN + abs(AVG_LOSS))
+```
+
+If there are no losses, `PROFIT_FACTOR` is reported as `INF/NO_LOSSES`; if there are no wins, `PROFIT_FACTOR=0`. `PAYOFF_RATIO` and `BREAK_EVEN_WIN_RATE` are `NOT_APPLICABLE` when their required winner/loss populations do not exist. Scratch episodes remain in the denominator of `WIN_RATE` and complete-episode expectancy; they are not silently reclassified as wins or losses.
+
+Gross/pre-fee metrics may be reported as secondary friction diagnostics, but must not replace the after-fee canonical edge metrics.
 
 ### Distribution / tail risk
 
@@ -174,15 +241,44 @@ MARKET × SESSION × SIDE × EVENT_REGIME
 
 The user's current behavior is session-dependent: SKHYNIX is primarily traded during the Asia/Korea daytime session; MU is more heavily traded during US hours. Raw market-level PnL therefore contains session confounding.
 
+### 6.0 Deterministic episode assignment and boundaries
+
+For recurring subgroup statistics, each flat-to-flat episode has one primary timestamp:
+
+```text
+PRIMARY_ASSIGNMENT_TIME = entry_time
+```
+
+`entry_time` is the timestamp at which the position first departs from flat; `exit_time` is the timestamp at which that episode finally returns to flat.
+
+All recurring session/event windows use **half-open intervals**:
+
+```text
+[start_time, end_time)
+```
+
+The exact start belongs to the window; the exact end belongs to the following window. This rule prevents boundary double counting.
+
+An episode that begins in one window and exits in another remains assigned to the window containing `entry_time` for the primary scorecard. If exposure across a later boundary is analytically material, it may also receive a separate `SPAN_EVENT_EXPOSURE=YES` or `SPAN_SESSION_BOUNDARY=YES` annotation, but that exposure flag must not duplicate the episode in primary subgroup totals.
+
+Intersections and unions must operate on stable episode IDs under these same predicates. A deduplicated union counts each episode once.
+
 ### 6.1 Korea Opening Regime
 
-Define relative to the actual KRX open:
+Define relative to the actual KRX cash-equity open for that date:
 
 ```text
 KOREA_OPEN_0_15M
+= [KRX_OPEN, KRX_OPEN + 15m)
+
 KOREA_OPEN_15_60M
+= [KRX_OPEN + 15m, KRX_OPEN + 60m)
+
 KOREA_POST_OPEN
+= [KRX_OPEN + 60m, ACTUAL_KRX_CASH_CLOSE)
 ```
+
+Entries outside the actual KRX cash session are not silently assigned to `KOREA_POST_OPEN`.
 
 At minimum report:
 
@@ -199,13 +295,20 @@ The current working hypothesis is that the Korea open has fast two-way volatilit
 
 ### 6.2 US Opening Regime
 
-Define relative to the actual US cash-equity open:
+Define relative to the actual US cash-equity open and close for that date:
 
 ```text
 US_OPEN_0_15M
+= [US_CASH_OPEN, US_CASH_OPEN + 15m)
+
 US_OPEN_15_60M
+= [US_CASH_OPEN + 15m, US_CASH_OPEN + 60m)
+
 US_POST_OPEN
+= [US_CASH_OPEN + 60m, ACTUAL_US_CASH_CLOSE)
 ```
+
+Entries outside the actual US cash session are not silently assigned to `US_POST_OPEN`.
 
 The first 15 minutes must always be reported separately from the rest of the first hour.
 
@@ -213,14 +316,26 @@ The first 15 minutes must always be reported separately from the rest of the fir
 
 Macro events are regimes, not directional signals.
 
-For each Tier-1 event, preserve at least:
+For each Tier-1 event, resolve the exact official release timestamp `T0` in UTC+08:00 and use these canonical analytical windows unless a future version explicitly changes them:
 
 ```text
 EVENT_RELEASE
+= [T0, T0 + 15m)
+
 POST_RELEASE_PRE_OPEN
+= [T0 + 15m, US_CASH_OPEN)
+  only when T0 < US_CASH_OPEN and the interval is non-empty
+
 MACRO_US_OPEN
+= [US_CASH_OPEN, US_CASH_OPEN + 60m)
+  on a trading day classified as a material macro-event day
+
 INTRASESSION_RELEASE
+= descriptive event flag when T0 occurs inside the active US cash session;
+  the release-local entry window remains EVENT_RELEASE
 ```
+
+The 15-minute `EVENT_RELEASE` interval is a reproducible analytical bucket, not a claim that the market effect ends after 15 minutes. `MACRO_US_OPEN` is intentionally separate because the user's behavior often shifts at the later cash open even when the release itself occurred earlier.
 
 Examples include employment/NFP, CPI, PCE, FOMC, GDP, JOLTS, ISM, and other events the current strategy/review authority classifies as material.
 
@@ -238,7 +353,7 @@ because the user's current behavior is usually to avoid the exact release moment
 
 Session and event regimes overlap. Never add their standalone losses as if they were independent.
 
-Every counterfactual removing multiple error classes must use the **deduplicated union** of affected episodes.
+Every counterfactual removing multiple error classes must use the **deduplicated union** of affected episode IDs under the canonical `entry_time` assignment rules in §6.0.
 
 Always report:
 
@@ -249,6 +364,8 @@ union result
 ```
 
 when material overlap exists.
+
+If an episode was entered before a release/open and merely remained open across it, report that separately as span exposure rather than silently reclassifying its entry into the later event/session subgroup.
 
 ---
 
@@ -263,6 +380,8 @@ HOLD_LOSS_PROXY =
 realized_loss > $0.50
 AND episode_duration >= 5 minutes
 ```
+
+`realized_loss` means the after-fee `REALIZED_LOSS` defined in §4.1.
 
 Track:
 
@@ -334,7 +453,11 @@ However, the weekly review must quantify the cost of small losers (for example `
 
 ## 8. Winner quality / MAE-MFE
 
-Do not infer from fills alone that a profitable exit was too early.
+Do not infer from fills alone that a profitable exit was too early. Without post-entry market-path evidence, any material conclusion that a winner was exited too early must be labelled:
+
+```text
+NEEDS_MARKET_PATH_DATA
+```
 
 Once market-path capture is available, calculate at minimum:
 
@@ -356,7 +479,15 @@ EXECUTABLE_MAE_MFE
 
 For long executable exit use best bid; for short executable exit use best ask.
 
-One-minute fallback must be explicitly labelled approximate/boundary-uncertain where entry or exit occurs inside the minute.
+Canonical evidence boundary:
+
+```text
+CANDLE_HIGH_LOW != EXECUTABLE_MAE_MFE
+```
+
+Candle high/low may support only approximate market-path excursion estimates. They must never be labelled executable MAE/MFE. If BBO/quote evidence is absent, `EXECUTABLE_MAE_MFE=UNKNOWN` rather than inferred from candle prices or interpolated.
+
+One-minute fallback must be labelled `ONE_MINUTE_APPROX`; where entry or exit occurs inside a minute, the affected boundary minute must additionally be labelled `BOUNDARY_MINUTE_UNCERTAIN`. Do not interpolate missing tick/BBO observations and call the result exact.
 
 The strategy should preserve right-tail winners. Do not recommend a small fixed take-profit merely to raise win rate without testing the impact on expectancy and winner concentration.
 
@@ -453,9 +584,15 @@ Do not change definitions mid-series without versioning the procedure and restat
 
 ## 13. Current active behavioral experiment baseline — week beginning 2026-09-07
 
-These are user-directed behavioral targets for the next validation week. They are **not** permanent mathematical strategy parameters and may be revised by explicit user authority after review.
+Evidence label for every rule/threshold in this section:
 
-### Target A — stop discipline
+```text
+PROVISIONAL_RULE
+```
+
+These are user-directed behavioral targets for the next validation week. They are **not** permanent mathematical strategy parameters and may be revised by explicit user authority after review. Numeric values in this section, including approximately `$0.20`, `$0.50`, `10 minutes`, and `15 minutes`, are prospective behavioral experiment parameters rather than proven optimal trading parameters.
+
+### Target A — stop discipline — `PROVISIONAL_RULE`
 
 ```text
 NO_HOLDING_LOSERS=TARGET
@@ -465,7 +602,7 @@ ADVERSE_DIRECTION_ADD = ZERO
 
 A normal manual exit can contain execution/fee noise; the weekly review must distinguish intended behavior from exact after-fee cents where possible.
 
-### Target B — entry selectivity / lower frequency
+### Target B — entry selectivity / lower frequency — `PROVISIONAL_RULE`
 
 ```text
 REDUCE_LOW_INFORMATION_ENTRIES=YES
@@ -475,7 +612,7 @@ EACH_ENTRY_REQUIRES_EXPLICIT_SETUP_REASON=YES
 
 Do not treat a cheap stop as permission to enter casually.
 
-### Target C — macro neutrality
+### Target C — macro neutrality — `PROVISIONAL_RULE`
 
 ```text
 MACRO_RELEASE_OR_SURPRISE_IS_NOT_A_DIRECTIONAL_SIGNAL
@@ -484,7 +621,7 @@ PRICE_ACTION_HAS_PRIORITY
 
 Do not enter merely because a release is theoretically bullish/bearish.
 
-### Target D — post-violation cooling period
+### Target D — post-violation cooling period — `PROVISIONAL_RULE`
 
 ```text
 IF realized_loss > $0.50:
@@ -494,7 +631,7 @@ IF realized_loss > $0.50:
 
 The review must measure compliance and subsequent-trade performance.
 
-### Target E — opening protection
+### Target E — opening protection — `PROVISIONAL_RULE`
 
 For both Korea and US cash-market opens:
 
