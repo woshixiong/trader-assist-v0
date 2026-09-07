@@ -55,7 +55,17 @@ INDEPENDENT ANALYSIS
 
 It is a procedure/reference; Unified V2 owns the normative rule.
 
-### 2.1 Recurring discretionary trading behavior / edge review
+### 2.1 External mature solution selection / adoption
+
+Whenever a material task selects, rejects, composes, customizes, adopts, upgrades or re-evaluates a provider-native, standard/official or mature maintained external framework, library, SDK, platform, service or infrastructure component, or proposes project-owned commodity infrastructure, also use:
+
+- `governance/EXTERNAL_MATURE_SOLUTION_SELECTION_AND_ADOPTION_RULE_V1_2026-09-07.md`
+
+This specialized procedure operationalizes the Unified V2 `MATURE_CAPABILITY_NO_REBUILD_GATE`. It standardizes capability classification, Stage 0 no-product-code audit, candidate discovery/authentication, P0 hard gates, evidence confidence, quality/total-burden comparison, decision-stability checks, One-Blocker Tiny Spike, modular composition, bounded customization, adoption controls, re-evaluation and the explicit-user-authority gate for any custom commodity exception.
+
+It is subordinate to Unified V2 and does not choose a specific framework by itself.
+
+### 2.2 Recurring discretionary trading behavior / edge review
 
 For weekly or periodic review of the user's manual/discretionary trading behavior, edge, session/regime dependence, execution errors, fees, MAE/MFE, and week-over-week behavioral improvement, use:
 
@@ -139,7 +149,7 @@ For a new engineering executor/operator/orchestrator or a material configuration
 
 A tool requires exact identity, representative capability/safety evidence, independent acceptance and separate user activation before first project use. Material tool changes require re-acceptance.
 
-The mature-solution/build-vs-buy gate in Unified V2 applies before custom commodity tooling.
+The mature-solution/build-vs-buy gate in Unified V2 and the external mature-solution selection procedure apply before custom commodity tooling.
 
 ## 7. Hermes
 
