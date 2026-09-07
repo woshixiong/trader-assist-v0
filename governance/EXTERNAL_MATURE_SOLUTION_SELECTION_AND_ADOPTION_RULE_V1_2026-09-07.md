@@ -3,7 +3,7 @@
 **Status:** TASK-CONDITIONAL PROCEDURE CANDIDATE  
 **Effective date:** 2026-09-07  
 **Normative owner:** `UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V2_2026-09-01.md`  
-**Scope:** selection, rejection, composition, bounded customization, adoption, upgrade and re-evaluation of provider-native, standard/official, mature maintained external frameworks, libraries, SDKs, platforms, services and infrastructure components.
+**Scope:** selection, rejection, composition, bounded customization, adoption, migration, upgrade and re-evaluation of provider-native, standard/official, mature maintained external frameworks, libraries, SDKs, platforms, services and infrastructure components.
 
 This procedure operationalizes the project-wide mature-solution invariants in Unified V2. It is not a second engineering constitution. Unified V2 governs if there is any conflict.
 
@@ -21,15 +21,27 @@ VALIDATED PRODUCT VALUE
 TOTAL LIFECYCLE ENGINEERING BURDEN
 ```
 
-The project differentiates through trading strategy, research and decision logic. It must not spend scarce engineering effort rebuilding commodity infrastructure that a fitting mature solution can own more safely and economically.
+Trader Assist / Trade OS differentiates through trading strategy, research, decision logic and project-specific policy. Commodity trading infrastructure should be owned by the best-fitting mature owner whenever one exists.
 
-Selection must be reproducible and auditable. A future Engineering Control or Writer must not choose a framework because it is fashionable, familiar, popular, easy to start, already partially used, or subjectively described as “better”.
+Selection must be reproducible, evidence-backed and auditable. No framework, SDK, platform or library may be selected because it is fashionable, familiar, popular, easy to start, already partly used or subjectively described as “better”.
+
+The rule is neither `EXTERNAL_FRAMEWORK_FIRST` nor `CUSTOM_FIRST`. The target is:
+
+```text
+PROJECT_DIFFERENTIATION_OWNED_BY_US
++
+COMMODITY_INFRASTRUCTURE_OWNED_BY_BEST_FITTING_MATURE_OWNER
++
+THIN_REPLACEABLE_BOUNDARIES
++
+ONE_AUTHORITY_PER_RESPONSIBILITY
+```
 
 ---
 
 ## 2. Mandatory capability classification
 
-Before candidate search or Writer dispatch, classify the responsibility being considered:
+Before candidate search or Writer dispatch, classify the responsibility:
 
 ```text
 CAPABILITY_CLASS=
@@ -38,48 +50,74 @@ STRATEGY_DIFFERENTIATOR
 | THIN_INTEGRATION
 ```
 
+Classification follows responsibility semantics, not file, module or class names.
+
+If one current module contains both project-specific strategy and generic infrastructure, record `MIXED_BOUNDARY` as an observed condition and separate the responsibilities analytically before selection. A mixed file is not a fourth permanent capability class and must not be used to disguise commodity responsibility as strategy IP.
+
 ### 2.1 Strategy Decision Engine — project-owned core IP
 
 `STRATEGY_DECISION_ENGINE` means project-specific trading intelligence and policy, including as applicable:
 
-- Setup / signal semantics;
+- Setup and signal semantics;
 - Scanner, ranking and opportunity selection;
-- Thesis / Attempt semantics;
+- Thesis / Attempt semantics where actually defined by current project authority;
 - entry, exit, re-entry and winner-management policy;
 - strategy-specific sizing and risk policy;
-- strategy-specific features, research and evidence semantics;
-- strategy-specific regime logic and economic decisions.
+- strategy-specific features, regime logic, research and evidence semantics;
+- economic decisions specific to the project.
 
-A mature framework may host or execute these decisions, but the project may preserve and develop their semantics independently.
+A mature framework may host, call or execute these decisions, but project-specific strategy semantics should remain independently understandable, testable and replaceable where practical.
 
 ### 2.2 Trading Infrastructure Engine — commodity by default
 
-`TRADING_INFRASTRUCTURE_ENGINE` means generic infrastructure commonly needed by trading systems, including as applicable:
+`TRADING_INFRASTRUCTURE_ENGINE` means generic trading/runtime infrastructure, including as applicable:
 
 - REST / WebSocket transport and session management;
-- subscriptions, heartbeats, reconnect, backoff and resubscription;
+- subscriptions, acknowledgements, heartbeats, reconnect, backoff and resubscription;
 - generic market-data ingestion and normalization;
 - generic clocks, scheduling and orchestration;
-- order management and order lifecycle;
-- exchange adapters, signing transport and venue mechanics;
+- generic order management and order lifecycle;
+- venue adapters, signing transport and venue mechanics;
 - fill, order, position and account reconciliation;
 - generic portfolio/account state;
 - generic pre-trade limits, kill switches and non-strategy risk enforcement;
 - generic persistence, restart, recovery and replay plumbing;
-- generic backtest / sandbox / live runtime mechanics;
+- generic backtest / sandbox / shadow / live runtime mechanics;
 - deployment, observability and workflow plumbing.
 
-These examples are not exhaustive. Classification follows responsibility semantics, not file or class names.
+These examples are not exhaustive.
 
 ### 2.3 Thin integration
 
-`THIN_INTEGRATION` is project-owned code whose purpose is only to translate between a mature owner and a stable project contract. It must not silently become a second runtime, second OMS, second portfolio, second reconnect manager, second persistence authority or competing risk authority.
+`THIN_INTEGRATION` is project-owned code whose only purpose is to translate between a mature owner and a stable project contract.
+
+A thin integration must satisfy all applicable conditions:
+
+```text
+USES_OFFICIAL_OR_STABLE_EXTENSION_SEAM=YES
+OWNS_GENERIC_RECONNECT=NO
+OWNS_GENERIC_OMS=NO
+OWNS_GENERIC_PORTFOLIO=NO
+OWNS_GENERIC_RISK=NO
+OWNS_GENERIC_DURABLE_RECOVERY=NO
+OWNS_SECOND_AUTHORITATIVE_STATE=NO
+REPLACEABLE_WITHOUT_CORE_STRATEGY_REWRITE=YES
+```
+
+LOC and file count are warning signals, not the semantic definition.
+
+If integration code starts owning generic reconnect, OMS, portfolio, generic risk, durable recovery or a second authoritative truth, then:
+
+```text
+THIN_INTEGRATION -> COMMODITY_INFRASTRUCTURE
+MATURE_SOLUTION_GATE_REOPEN=MANDATORY
+```
 
 ---
 
 ## 3. Mature capability no-rebuild gate
 
-Permanent decision rule:
+Permanent rule:
 
 ```text
 COMMODITY_INFRASTRUCTURE
@@ -91,25 +129,24 @@ CUSTOM_FROM_SCRATCH_IMPLEMENTATION=PROHIBITED
 SECOND_PROJECT_OWNED_IMPLEMENTATION=PROHIBITED
 ```
 
-Allowed project integration order:
+Allowed integration order:
 
 ```text
 CONFIGURATION
--> OFFICIAL EXTENSION / PLUGIN
+-> OFFICIAL CONFIG / EXTENSION / PLUGIN
 -> THIN ADAPTER
 -> UPSTREAM CONTRIBUTION
 -> BOUNDED CUSTOMIZATION ONLY WHEN THIS PROCEDURE ALLOWS IT
+-> CUSTOM COMMODITY IMPLEMENTATION ONLY UNDER EXPLICIT EXCEPTION
 ```
 
-A fitting mature route may not be rejected merely because the project already has custom code or because migration is inconvenient.
-
-A long-lived invasive fork of a mature framework core is prohibited by default. A proposal that requires maintaining a material private fork is treated as a new custom commodity implementation and must pass the custom-exception gate.
+A long-lived invasive private fork of mature framework core is prohibited by default. A material private fork is treated as project-owned commodity infrastructure and must pass the custom-exception gate.
 
 ---
 
 ## 4. Prohibited mature-route rejection reasons
 
-None of the following is sufficient to reject a fitting mature solution:
+None of the following is sufficient by itself to reject a fitting mature route:
 
 ```text
 SUNK_COST
@@ -130,32 +167,86 @@ Also:
 NO_NEW_DEPENDENCY != SIMPLICITY_PASS
 ```
 
-A dependency can reduce total complexity when it replaces a larger project-owned responsibility. Total lifecycle burden, not dependency count, is the governing metric.
+A dependency may reduce total complexity when it replaces a larger project-owned responsibility. Total lifecycle burden, not dependency count or current LOC, is the governing metric.
 
 ---
 
-## 5. Standard selection workflow
+## 5. Formal definitions: Mature and Fitting
 
-For every material external-solution decision use:
+### 5.1 Mature Qualification Gate
+
+An external route may be described as `MATURE_MAINTAINED_SOLUTION` only after an applicability-scaled qualification checks:
+
+```text
+CANONICAL_SOURCE_VERIFIED
+EXACT_PROJECT_OR_VENDOR_VERIFIED
+OFFICIAL_REPOSITORY_OR_DISTRIBUTION_VERIFIED
+CURRENT_MAINTENANCE_STATUS
+RELEASE_HEALTH
+SECURITY_DISCLOSURE_PATH
+LICENSE_CLARITY
+DOCUMENTATION_QUALITY
+API_OR_VERSION_POLICY
+TEST_OR_CI_PRACTICE
+DEPENDENCY_HEALTH
+PRODUCTION_OR_REAL_USAGE_EVIDENCE_WHEN_RELEVANT
+END_OF_LIFE_STATUS
+```
+
+For provider-native or official-standard capability, broad community adoption is not required merely to establish authority. Authenticity, support status, security, license, version and operational fit still require evidence.
+
+For a third-party framework/component, an abandoned project, unclear fork, experimental toy or marketing-only package does not qualify as mature merely because it has historical popularity.
+
+### 5.2 Fitting Mature Solution
+
+`MATURE` does not mean `FITTING`.
+
+A candidate is a fitting mature solution only when:
+
+```text
+AUTHENTICATED=YES
+MATURE_QUALIFICATION=PASS
+ALL_APPLICABLE_P0=PASS
+STRATEGY_CONTINUITY=PASS
+AUTHORITY_OWNERSHIP=PASS
+INTEGRATION_BURDEN=BOUNDED
+SECURITY_AND_LICENSE=PASS
+CURRENT_AND_NEXT_STAGE_FIT=PASS
+```
+
+Therefore:
+
+```text
+FITTING_MATURE_SOLUTION=YES
+=> CUSTOM_COMMODITY_BUILD=BLOCKED
+```
+
+A high comparative score cannot make a non-fitting candidate fitting.
+
+---
+
+## 6. Standard S0-S9 selection lifecycle
+
+For every material external-solution decision:
 
 ```text
 S0 REQUIREMENT + RESPONSIBILITY FREEZE
 -> S1 CANDIDATE DISCOVERY
--> S2 SOURCE / IDENTITY AUTHENTICATION
+-> S2 SOURCE / IDENTITY / MATURITY AUTHENTICATION
 -> S3 P0 HARD-GATE SCREEN
 -> S4 EVIDENCE CONFIDENCE CHECK
--> S5 QUALITY / TOTAL-BURDEN COMPARISON
+-> S5 QUALITY / TOTAL-LIFECYCLE-BURDEN COMPARISON
 -> S6 DECISION-STABILITY CHECK
 -> S7 SELECT / COMPOSE / ONE-BLOCKER-SPIKE / REJECT
--> S8 ADOPTION CONTROLS
+-> S8 ADOPTION / MIGRATION CONTROLS
 -> S9 PERIODIC / TRIGGERED RE-EVALUATION
 ```
 
-Do not start product implementation before the applicable stages above are complete.
+Do not start product implementation before the applicable stages are complete.
 
 ---
 
-## 6. S0 — Stage 0 no-product-code audit
+## 7. S0 — Stage 0 no-product-code audit
 
 Stage 0 is the default first step for a new commodity capability or a reopened legacy custom capability.
 
@@ -163,57 +254,78 @@ Stage 0 is the default first step for a new commodity capability or a reopened l
 STAGE_0_PRODUCT_CODE=PROHIBITED
 ```
 
-Freeze before searching:
+Before candidate scoring or preference formation, freeze:
 
 ```text
+DECISION_SCOPE=FOUNDATIONAL_INFRASTRUCTURE|MATERIAL_COMPONENT|BOUNDED_COMPONENT
 CURRENT_BOUNDED_NEED
 NEXT_EXPECTED_PRODUCT_STAGE
 RESPONSIBILITY_BOUNDARY
 CAPABILITY_CLASS
+MUST_HAVE_REQUIREMENTS
+SHOULD_HAVE_REQUIREMENTS
+OPTIONAL_REQUIREMENTS
 P0_REQUIREMENTS
 IMPORTANT_QUALITY_ATTRIBUTES
 AUTHORITY_AND_SAFETY_BOUNDARIES
 EXPECTED_SCALE / LATENCY / FRESHNESS
 DEPLOYMENT / PLATFORM CONSTRAINTS
+PERSISTENCE / RECOVERY / REPLAY REQUIREMENTS
+TESTABILITY / OBSERVABILITY REQUIREMENTS
 STRATEGY_CONTINUITY_REQUIREMENTS
 ACCEPTABLE_EXTENSION_SEAMS
-EXIT / REPLACEMENT_REQUIREMENT
+EXIT / REPLACEMENT / DATA_PORTABILITY_REQUIREMENT
 ```
 
-Stage 0 uses documentation, first-party source, security/provenance evidence, existing project facts and inspectable examples. It does not build three competing product prototypes.
+All `MUST_HAVE_REQUIREMENTS` become P0 unless explicitly shown to be non-applicable.
+
+Candidate results must not be used to relax a frozen P0 requirement. If the business requirement itself materially changes, reopen S0 and record the reason before rescoring.
+
+Stage 0 uses project facts, documentation, first-party source, security/provenance evidence and inspectable examples. It does not build multiple competing product prototypes.
 
 If strong evidence already decides the route, stop Stage 0 and select/reject. Do not create a spike merely to feel more certain.
 
 ---
 
-## 7. S1 — candidate discovery
+## 8. S1 — candidate discovery
 
-Search broadly enough to avoid anchoring on one familiar option. At minimum consider, when applicable:
+Search broadly enough to avoid anchoring. Consider when applicable:
 
 ```text
 REUSE_ACCEPTED_PROJECT_CAPABILITY
 PROVIDER_NATIVE
 STANDARD / OFFICIAL
-MATURE MAINTAINED FULL FRAMEWORK
-MATURE MAINTAINED MODULAR COMPONENT
-CREDIBLE COMPOSITION OF MATURE COMPONENTS
+MATURE_MAINTAINED_FULL_FRAMEWORK
+MATURE_MAINTAINED_MODULAR_COMPONENT
+CREDIBLE_COMPOSITION_OF_MATURE_COMPONENTS
 ```
 
-`REUSE_ACCEPTED_PROJECT_CAPABILITY` means it must still pass current requirements. Historical acceptance and sunk cost do not create a permanent preference.
+`REUSE_ACCEPTED_PROJECT_CAPABILITY` must still pass current requirements. Historical acceptance and sunk cost create no permanent preference.
 
-Candidate discovery must search for competing approaches and negative evidence, not only evidence supporting the current favorite.
+Candidate discovery must search for:
 
-Candidate count is not a target. Stop expanding the longlist when credible category coverage is complete and new candidates do not add materially different capability or risk profiles.
+```text
+COMPETING_ROUTES
+NEGATIVE_EVIDENCE
+KNOWN_FAILURES
+LIMITATIONS
+MIGRATION_PROBLEMS
+SECURITY_HISTORY
+BREAKING_CHANGE_HISTORY
+```
+
+Candidate count is not a target. Stop expanding the longlist when credible category coverage is complete and new candidates add no materially different capability, ownership or risk profile.
 
 ---
 
-## 8. S2 — source and identity authentication
+## 9. S2 — source, identity and maturity authentication
 
 For every shortlisted candidate record as applicable:
 
 ```text
 CANONICAL_PROJECT / VENDOR
 OFFICIAL_REPOSITORY_OR_DISTRIBUTION
+OFFICIAL_PACKAGE / IMAGE / ARTIFACT
 EXACT_VERSION / RELEASE / COMMIT
 RELEASE_DATE
 LICENSE
@@ -222,17 +334,35 @@ SUPPORTED_LANGUAGE / RUNTIME / PLATFORM
 PACKAGE_OR_ARTIFACT_ORIGIN
 SECURITY_POLICY / VULNERABILITY_REPORTING
 PROVENANCE / SIGNATURE / SBOM / SLSA SIGNALS WHEN AVAILABLE
+MATURE_QUALIFICATION_RESULT
 ```
 
 Do not evaluate an unofficial fork, stale mirror or ambiguous package as though it were the canonical project.
 
+Framework evaluation must bind claims to an exact relevant version whenever the behavior may differ materially by version.
+
 ---
 
-## 9. S3 — P0 hard gates
+## 10. S3 — P0 hard gates
 
-A candidate cannot be selected when a mandatory P0 field is `FAIL`. `UNKNOWN` is not PASS.
+Each P0 is exactly one of:
 
-Default P0 gates, tailored only by explicit `NOT_APPLICABLE` with rationale:
+```text
+PASS
+FAIL
+UNKNOWN
+NOT_APPLICABLE
+```
+
+Rules:
+
+```text
+FAIL => CANDIDATE_CANNOT_BE_SELECTED
+UNKNOWN != PASS
+NOT_APPLICABLE => EXPLICIT_RATIONALE_REQUIRED
+```
+
+Default P0 gates:
 
 ```text
 P0_CURRENT_FUNCTIONAL_FIT
@@ -251,17 +381,180 @@ P0_API_VERSION_STABILITY
 P0_TESTABILITY_AND_OBSERVABILITY
 P0_SINGLE_AUTHORITY_OWNERSHIP_FIT
 P0_BOUNDED_INTEGRATION_BURDEN
+P0_EXIT_AND_PORTABILITY
 ```
 
-For a trading-system foundation, `P0_NEXT_STAGE / V0_ROADMAP_FIT` must explicitly consider the known path toward automated order submission, automated execution behavior, position/account reconciliation, risk enforcement, replay/backtest/shadow/live continuity and the market/provider scope relevant to the roadmap. A framework need not implement project-specific strategy semantics.
+### 10.1 Current functional fit
 
-Do not downgrade a P0 requirement merely to preserve a preferred candidate.
+For each material current requirement record:
+
+```text
+REQUIREMENT -> CANDIDATE_CAPABILITY -> EVIDENCE -> P0_RESULT
+```
+
+“May support later” or “can probably be customized” is not a PASS.
+
+### 10.2 Next-stage / V0 roadmap fit
+
+For foundational trading infrastructure, explicitly consider roadmap-relevant capability such as:
+
+```text
+PUBLIC_MARKET_DATA
+AUTOMATED_ORDER_SUBMISSION
+ORDER_LIFECYCLE
+PARTIAL_FILL
+CANCEL / REPLACE
+TRIGGER / STOP ORDERS
+REDUCE_ONLY
+TIME_IN_FORCE
+POSITION_RECONCILIATION
+ACCOUNT_RECONCILIATION
+GENERIC_RISK
+KILL_SWITCH
+PERSISTENCE
+RESTART
+RECOVERY
+REPLAY
+BACKTEST
+SHADOW
+LIVE
+MULTI_MARKET
+MULTI_PROVIDER_WHEN_ROADMAP_RELEVANT
+```
+
+The candidate need not implement project-specific strategy semantics. The selection must not obviously block the next expected product stage.
+
+### 10.3 Strategy continuity fit
+
+The project must be able to preserve relevant Strategy Decision Engine semantics behind a stable boundary. A candidate that requires core project strategy logic to become deeply inseparable from framework internals, untestable independently and impractical to migrate has a material strategy-continuity blocker.
+
+### 10.4 Safety and authority isolation
+
+Publish an ownership map for every applicable authoritative responsibility. Two components must not both own the same durable truth.
+
+### 10.5 Data / time / execution semantic fidelity
+
+Market-data evaluation should include, as applicable:
+
+```text
+TIMESTAMP_SEMANTICS
+EVENT_ORDERING
+BAR_CLOSE / FINALITY
+GAP_HANDLING
+DUPLICATE_HANDLING
+HISTORICAL_LIVE_CONSISTENCY
+RECONNECT_SEMANTICS
+```
+
+Execution-capable foundation evaluation should include, as applicable:
+
+```text
+ORDER_IDENTITY
+CLIENT_ORDER_IDENTITY
+PARTIAL_FILL
+CANCEL
+REPLACE
+TRIGGER
+REDUCE_ONLY
+TIME_IN_FORCE
+RETRY / IDEMPOTENCY
+DISCONNECT
+RECONCILIATION
+RESTART_RECOVERY
+```
+
+If the candidate is intended eventually to own automated execution, these are foundation-selection questions, not deferred implementation trivia.
+
+### 10.6 Restart / recovery / reconciliation
+
+Evaluate as applicable:
+
+```text
+PROCESS_CRASH
+NETWORK_LOSS
+RESTART
+STATE_REOPEN
+ORDER_RECONCILIATION
+POSITION_RECONCILIATION
+DUPLICATE_EVENT
+MISSED_EVENT
+STALE_STATE
+REPLAY
+```
+
+Normal-operation success alone is not infrastructure suitability.
+
+### 10.7 Stable official extension seam
+
+State where project-specific extension belongs:
+
+```text
+CONFIG
+PLUGIN
+HOOK
+STRATEGY_API
+ADAPTER
+EVENT_HANDLER
+CUSTOM_COMPONENT
+```
+
+A route requiring a long-lived material patch of framework core normally fails this P0 or enters the custom-exception gate.
+
+### 10.8 Deployment and operator fit
+
+Check supported OS/runtime, deployment model, configuration, logs, metrics, health, restart, upgrade, rollback, resource footprint and operator complexity.
+
+### 10.9 Scale / latency / freshness
+
+Evaluate against the relevant Trade OS topology, not marketing benchmarks. Record expected market count/event rate/history/order/reconciliation/state load plus documented/measured behavior and headroom.
+
+### 10.10 Maintenance / security / supply chain
+
+Check active maintenance, release health, security policy, critical vulnerability status, dependency health, package authenticity, provenance signals, maintainer concentration and EOL risk.
+
+Missing SBOM/SLSA/signing alone does not automatically fail a candidate; unverifiable origin or materially unknowable security status cannot silently PASS.
+
+### 10.11 License / legal
+
+Record applicable commercial-use, modification, distribution, notice and service/network restrictions.
+
+### 10.12 API stability
+
+Check versioning policy, breaking-change history, deprecation policy and upgrade path.
+
+### 10.13 Testability / observability
+
+The route must support appropriate independent strategy tests, adapter tests, critical recovery tests and representative composition proof, plus observable health/failure/reconnect/order/reconciliation/latency signals where applicable.
+
+### 10.14 Single authority ownership
+
+```text
+ONE_AUTHORITATIVE_OWNER_PER_RESPONSIBILITY=REQUIRED
+```
+
+### 10.15 Bounded integration burden
+
+If adopting a “mature” route still requires the project to recreate generic reconnect, OMS, portfolio, persistence, recovery or generic risk that the candidate is supposed to own, the route fails bounded-integration fit unless those responsibilities are intentionally assigned elsewhere under a clean composition.
+
+### 10.16 Exit and portability
+
+For foundational infrastructure record:
+
+```text
+PROJECT_STRATEGY_SEMANTICS_PORTABLE
+PROJECT_OWNED_DATA_EXPORTABLE
+PROJECT_EVIDENCE_REMAINS_USABLE
+ADAPTER_BOUNDARY_REPLACEABLE
+CORE_STRATEGY_REWRITE_NOT_REQUIRED_FOR_REASONABLE_REPLACEMENT
+```
+
+This is a realistic replacement-seam requirement, not a blanket prohibition on lock-in.
 
 ---
 
-## 10. Concrete P0 blockers
+## 11. Concrete P0 blockers
 
-A mature candidate may be rejected only for a documented blocker in one or more of these classes:
+A mature candidate may be rejected only for a documented blocker, including:
 
 ```text
 FUNCTIONAL_BLOCKER
@@ -275,13 +568,14 @@ LICENSE_OR_LEGAL_BLOCKER
 EXTENSIBILITY_OR_STRATEGY_CONTINUITY_BLOCKER
 INTEGRATION_BURDEN_BLOCKER
 OVERLAPPING_AUTHORITY_BLOCKER
+EXIT_OR_PORTABILITY_BLOCKER
 ```
 
 The record must state the exact requirement, exact evidence and why configuration, official extension, thin adapter, modular composition or upstream contribution does not resolve it economically.
 
 ---
 
-## 11. S4 — evidence confidence
+## 12. S4 — evidence confidence
 
 Every material P0 judgment and major comparison score records an evidence grade:
 
@@ -296,32 +590,35 @@ E0 = CLAIM / MARKETING / UNVERIFIED
 
 Rules:
 
-- `E0` cannot make a P0 gate PASS.
-- Important safety, authority, execution or persistence P0 claims should normally require E3+ and use E4/E5 when documentation is ambiguous.
+- `E0` cannot make a P0 PASS.
+- Important safety, authority, execution, persistence, recovery and security P0 claims should normally require E3+ and use E4/E5 when official documentation is ambiguous.
 - Community evidence is valuable for discovering failure modes but does not overrule current primary evidence without reproduction or corroboration.
-- Conflicting evidence remains `UNKNOWN` until resolved or explicitly accepted as residual risk under the governing authority.
+- Evidence records should bind `EVIDENCE_DATE`, `EVIDENCE_VERSION` and `CANDIDATE_VERSION` where version drift matters.
+- Evidence for an old major version does not automatically prove current-version behavior.
+- Conflicting official documentation, source and measured behavior remains `UNKNOWN` until resolved or explicitly accepted as residual risk by the governing authority.
+- Resolve material conflicts with exact-version source inspection, reproduction or a qualifying Tiny Spike rather than choosing the evidence that supports a favorite.
 
 ---
 
-## 12. S5 — quality and total-burden comparison
+## 13. S5 — quality and total-lifecycle-burden comparison
 
-Only candidates that pass all applicable P0 hard gates enter the comparative scorecard.
+Only candidates that pass all applicable P0 gates enter the comparative scorecard.
 
 Default weighted dimensions:
 
 ```text
-CURRENT_FUNCTIONAL_FIT                 20
+CURRENT_FUNCTIONAL_FIT                  20
 FUTURE_V0_AND_ROADMAP_CONTINUITY       15
-RELIABILITY_RECOVERY_EXECUTION          15
-INTEGRATION_EXTENSIBILITY_BURDEN        15
-SECURITY_SUPPLY_CHAIN_LICENSE           10
-MAINTENANCE_MATURITY                     10
-OPERATIONS_OBSERVABILITY_PERFORMANCE    10
-REPLACEABILITY_API_STABILITY_LOCKIN       5
-TOTAL                                   100
+RELIABILITY_RECOVERY_EXECUTION         15
+INTEGRATION_EXTENSIBILITY_BURDEN       15
+SECURITY_SUPPLY_CHAIN_LICENSE          10
+MAINTENANCE_MATURITY                   10
+OPERATIONS_OBSERVABILITY_PERFORMANCE   10
+REPLACEABILITY_API_STABILITY_LOCKIN     5
+TOTAL                                 100
 ```
 
-Score each dimension from `0` to `4` using stated evidence:
+Score each dimension:
 
 ```text
 0 = materially inadequate
@@ -331,43 +628,72 @@ Score each dimension from `0` to `4` using stated evidence:
 4 = excellent for project requirements
 ```
 
-The scorecard is a decision aid, not an authority override. A P0 FAIL cannot be compensated by a high weighted score.
+The scorecard is a decision aid, not an authority override. A P0 FAIL cannot be compensated by a high score.
 
-### 12.1 Weight discipline
+### 13.1 Weight discipline
 
-The default weights are reused unless the bounded task has a genuine different business driver. Any weight change must be frozen **before candidate results are scored**, with rationale and a total of 100.
+Default weights are reused unless the bounded task has a genuine different business driver. Any weight change must be frozen before candidate results are scored, with rationale and a total of 100.
 
-Changing weights after seeing candidate scores to manufacture a preferred winner is prohibited.
+Changing weights after seeing results to manufacture a preferred winner is prohibited.
 
-### 12.2 Total burden
+### 13.2 Total burden
 
-Comparison must include, over the expected lifecycle:
+Separate at least:
 
 ```text
-ADOPTION / MIGRATION
-ADAPTER / EXTENSION CODE
-TESTS / VERIFICATION
-CI / RELEASE
-OPERATOR / DEPLOYMENT
-DEPENDENCY MANAGEMENT
-UPGRADES / API BREAKS
-SECURITY RESPONSE
-DEBUGGING / EVIDENCE
-RECOVERY / INCIDENT RESPONSE
-CUSTOM FORK MAINTENANCE IF ANY
-EXIT / REPLACEMENT COST
-EXPECTED FUTURE CHANGE AMPLIFICATION
+ONE_TIME_TRANSITION_BURDEN
+- migration
+- adapter / extension work
+- data / test / deployment migration
+- operator learning
+- old-owner decommissioning
+
+RECURRING_OWNERSHIP_BURDEN
+- maintenance
+- dependency management
+- upgrades / breaking changes
+- security response
+- debugging / evidence
+- incident response / recovery
+- CI / release / operations
+- future-feature change amplification
+- custom-fork maintenance if any
+- exit / replacement
 ```
 
-Do not compare only initial LOC or initial setup time.
+Do not compare only initial LOC or setup time.
+
+### 13.3 No false numeric precision
+
+When reliable dollars, engineer-days or measured rates are unavailable, use evidence-backed ordinal estimates such as:
+
+```text
+LOW
+MEDIUM
+HIGH
+VERY_HIGH
+UNKNOWN
+```
+
+Do not fabricate precise lifecycle-cost numbers from weak evidence.
 
 ---
 
-## 13. S6 — decision-stability check
+## 14. S6 — decision-stability check
 
-A narrow numeric winner is not automatically a stable architecture decision.
+A narrow numeric winner is not automatically stable.
 
-For the leading P0-pass candidates, vary the non-P0 comparison weights within a predeclared bounded range, normally `±20% relative` per dimension while re-normalizing to 100. If reasonable weight changes repeatedly change the winner, record:
+For leading P0-pass candidates, vary non-P0 comparison weights within a predeclared bounded range, normally `±20% relative` per dimension while re-normalizing to 100.
+
+Also evaluate, when relevant:
+
+```text
+SCENARIO_A=CURRENT_PRODUCT_PRIORITY
+SCENARIO_B=FUTURE_AUTOMATION_PRIORITY
+SCENARIO_C=RELIABILITY_SECURITY_OPERATIONS_PRIORITY
+```
+
+If reasonable weight or scenario changes repeatedly change the winner:
 
 ```text
 DECISION_STABILITY=LOW
@@ -376,19 +702,20 @@ DISPOSITION=UNRESOLVED_TRADEOFF
 
 Do not fabricate certainty from an unstable score.
 
-When two candidates remain effectively tied, prefer in this order when requirements remain satisfied:
+When candidates remain effectively tied, prefer:
 
 ```text
 LOWER_TOTAL_LIFECYCLE_BURDEN
 -> THINNER_PROJECT_SEAM
 -> FEWER_AUTHORITATIVE_OWNERS
 -> LOWER_LOCKIN / EASIER_REPLACEMENT
+-> STRONGER_EXIT / DATA_PORTABILITY
 -> STRONGER_PRIMARY_EVIDENCE
 ```
 
 ---
 
-## 14. S7 — allowed Stage 0 dispositions
+## 15. S7 — allowed Stage 0 dispositions
 
 Stage 0 ends with one of:
 
@@ -401,22 +728,38 @@ NO_FITTING_MATURE_ROUTE
 SAFE_STOP
 ```
 
-It must not end with an implicit “custom build” merely because no favorite was selected.
+It must not end with an implicit custom build merely because no favorite was selected.
 
 ---
 
-## 15. One-Blocker Tiny Spike
+## 16. One-Blocker Tiny Spike
 
-A Tiny Spike is allowed only when all are true:
+A Tiny Spike is allowed only when:
 
 ```text
 EXACTLY_ONE_MATERIAL_P0_UNCERTAINTY_REMAINS=YES
 CHEAP_SAFE_NONAUTHORITATIVE_TEST_CAN_DECIDE_IT=YES
-DOCUMENTATION / SOURCE REVIEW_CANNOT_DECIDE_IT_EFFICIENTLY=YES
+DOCUMENTATION_OR_SOURCE_REVIEW_CANNOT_DECIDE_IT_EFFICIENTLY=YES
 SPIKE_DOES_NOT_REQUIRE_PRODUCT_ARCHITECTURE=YES
 ```
 
-Its purpose is to answer one question, not to start implementation.
+Before dispatch freeze:
+
+```text
+CANDIDATE
+EXACT_P0_QUESTION
+HYPOTHESIS
+PASS_CONDITION
+FAIL_CONDITION
+NONDECISIVE_CONDITION
+TEST_ENVIRONMENT
+MAX_SCOPE
+MAX_FILES
+MAX_LOC
+MAX_WRITER_STAGE
+EVIDENCE_OUTPUT
+CLEANUP_PLAN
+```
 
 Default budget:
 
@@ -437,13 +780,19 @@ TARGET_CHANGED_FILES<=4
 AT_MOST_ONE_SMALL_MECHANICAL_CORRECTION
 ```
 
-The LOC/file targets are stop signals for a feasibility experiment, not universal production architecture limits. Any task-specific override must be frozen before the spike, with a concrete reason why the experiment remains cheap and decisive.
-
-If the spike reveals a second semantic uncertainty, requires a new commodity subsystem, or exceeds its frozen budget:
+Spike result:
 
 ```text
-SPIKE_RESULT=TOO_EXPENSIVE_OR_NONDECISIVE
+PASS
+FAIL
+NONDECISIVE
+```
+
+If a second semantic uncertainty appears, a new commodity subsystem is needed, or the budget is exceeded:
+
+```text
 STOP
+SPIKE_RESULT=NONDECISIVE_OR_TOO_EXPENSIVE
 REASSESS_CANDIDATE_OR_NEXT_MATURE_ROUTE
 ```
 
@@ -451,9 +800,9 @@ Do not convert the spike into Repair 2/3 product development.
 
 ---
 
-## 16. Modular composition
+## 17. Modular composition
 
-Using multiple mature solutions is allowed when it reduces total burden and preserves authority clarity.
+Multiple mature solutions may be composed when total burden falls and authority remains clear.
 
 Permanent rule:
 
@@ -463,42 +812,53 @@ ONE_AUTHORITATIVE_OWNER_PER_RESPONSIBILITY=REQUIRED
 OVERLAPPING_DURABLE_STATE_OMS_POSITION_RISK_AUTHORITY=PROHIBITED
 ```
 
-Before accepting a composition, publish an ownership map for at least:
+Before accepting a composition, publish an ownership matrix for at least:
 
 ```text
 MARKET_DATA
-CLOCK / EVENT LOOP
+CLOCK
+EVENT_LOOP
 ORDERS / OMS
 FILLS
 POSITIONS
-PORTFOLIO / ACCOUNT STATE
-GENERIC RISK
-STRATEGY RISK POLICY
-PERSISTENCE / RECOVERY
-BACKTEST / REPLAY
-LIVE EXECUTION
+ACCOUNT
+PORTFOLIO
+GENERIC_RISK
+STRATEGY_RISK_POLICY
+PERSISTENCE
+RECOVERY
+REPLAY
+BACKTEST
+LIVE_EXECUTION
 ```
 
-`NOT_APPLICABLE` is allowed where a component does not own the responsibility.
+A composition requiring two competing authorities to synchronize the same durable truth fails the gate.
 
-A composition that requires synchronization between two competing authorities for the same durable truth fails the gate unless one is explicitly non-authoritative/read-only and that status is mechanically preserved.
+A non-authoritative projection/cache is allowed only when:
+
+```text
+CACHE_OR_PROJECTION_REBUILDABLE=YES
+CANNOT_WRITE_AUTHORITY=YES
+LOSS_DOES_NOT_LOSE_CANONICAL_TRUTH=YES
+NONAUTHORITATIVE_STATUS_MECHANICALLY_PRESERVED=YES
+```
+
+Composition evaluation must also cover data flow, failure propagation, restart ordering, version/upgrade compatibility and recovery ownership.
 
 ---
 
-## 17. Bounded customization
-
-Small customization is allowed when it preserves the mature component as the clear owner.
+## 18. Bounded customization
 
 Prefer:
 
 ```text
 CONFIGURATION
-OFFICIAL PLUGIN / EXTENSION
-THIN ADAPTER
-UPSTREAM CONTRIBUTION
+OFFICIAL_PLUGIN_OR_EXTENSION
+THIN_ADAPTER
+UPSTREAM_CONTRIBUTION
 ```
 
-Custom integration must state:
+Custom integration must record:
 
 ```text
 CUSTOM_SCOPE
@@ -506,19 +866,19 @@ WHY_IT_IS_PROJECT_SPECIFIC_OR_THIN
 UPSTREAM_SEAM_USED
 STATE_OWNED_BY_CUSTOM_CODE
 AUTHORITY_OWNED_BY_CUSTOM_CODE
-MIGRATION / EXIT SEAM
+MIGRATION / EXIT_SEAM
 EXPECTED_MAINTENANCE_BURDEN
 ```
 
-If custom code starts owning generic reconnect, OMS, portfolio, generic risk, durable recovery or another commodity responsibility already owned by the mature platform, reclassify it as `COMMODITY_INFRASTRUCTURE` and reopen this procedure.
+If it ceases to satisfy the Thin Integration gate in §2.3, reclassify it as commodity infrastructure and reopen selection.
 
 ---
 
-## 18. Custom commodity exception
+## 19. Custom commodity exception
 
-If every credible mature route has a proven P0 blocker, Engineering Control or a Writer may recommend a custom commodity implementation but **may not authorize or begin it**.
+If every credible mature route has a proven P0 blocker, Engineering Control or a Writer may recommend a custom commodity implementation but may not authorize or begin it.
 
-Required exception packet:
+Required packet:
 
 ```text
 CANDIDATES_EVALUATED
@@ -551,44 +911,74 @@ ENGINEERING_PREFLIGHT_GATE=FAIL
 CUSTOM_WRITER_DISPATCH=PROHIBITED
 ```
 
-Writer self-PASS, Engineering Control preference, prior custom code, schedule pressure or sunk cost cannot substitute for this authority.
+Approval is not permanent permission. Any accepted custom commodity route must start with a stable replacement seam, frozen repair budget and exit plan.
 
 ---
 
-## 19. Adoption controls
+## 20. S8 — selection is not adoption
 
-Before an external solution becomes accepted project infrastructure, record as applicable:
+`SELECT_MATURE_ROUTE` does not mean `ACCEPTED_PROJECT_INFRASTRUCTURE`.
+
+Before adoption record as applicable:
 
 ```text
 CANONICAL_SOURCE
 EXACT_ACCEPTED_VERSION / COMMIT / ARTIFACT
 PACKAGE_OR_IMAGE_ORIGIN
-LOCK / PIN POLICY
+LOCK / PIN_POLICY
 LICENSE
 SECURITY_POLICY
 KNOWN_CRITICAL_VULNERABILITIES / RESPONSE
-PROVENANCE / SIGNATURE / SBOM / SLSA EVIDENCE WHEN AVAILABLE
+PROVENANCE / SIGNATURE / SBOM / SLSA_EVIDENCE_WHEN_AVAILABLE
 DIRECT_AND_MATERIAL_TRANSITIVE_DEPENDENCY_RISK
 OFFICIAL_EXTENSION_SEAM
 PROJECT_ADAPTER_CONTRACT
 AUTHORITY_OWNERSHIP_MAP
-ROLLBACK / DISABLE PLAN
-EXIT / REPLACEMENT SEAM
-UPGRADE_POLICY
-OBSERVABILITY / HEALTH SIGNALS
 REPRESENTATIVE_ACCEPTANCE_PROOF
+OBSERVABILITY / HEALTH_SIGNALS
+ROLLBACK / DISABLE_PLAN
+UPGRADE_POLICY
+EXIT / REPLACEMENT_SEAM
 INDEPENDENT_REVIEW_REQUIREMENT
 ```
 
-Do not convert an evaluation spike into accepted infrastructure without a separate adoption decision and the normal publication/activation gates.
+Adoption disposition:
+
+```text
+ACCEPT
+PILOT_ONLY
+REJECT
+```
+
+Do not convert an evaluation spike into accepted infrastructure without a separate adoption decision and normal publication/activation gates.
+
+### 20.1 Migration and cutover
+
+When replacing an existing owner, record:
+
+```text
+OLD_AUTHORITATIVE_OWNER
+NEW_AUTHORITATIVE_OWNER
+CUTOVER_POINT
+OLD_OWNER_DECOMMISSION_PLAN
+ROLLBACK_POINT
+```
+
+Shadow/read-only comparison may be used where safe.
+
+```text
+DUAL_WRITE_AUTHORITY=PROHIBITED_BY_DEFAULT
+```
+
+Any temporary migration mechanism that can mutate overlapping authoritative state requires a separately designed and validated migration contract.
 
 ---
 
-## 20. Re-evaluation and decision expiry
+## 21. S9 — re-evaluation and decision expiry
 
 External-solution decisions are versioned decisions, not permanent truths.
 
-Reopen this procedure when any of the following becomes material:
+Reopen full S0-S9 when material:
 
 ```text
 CRITICAL_SECURITY_OR_SUPPLY_CHAIN_EVENT
@@ -603,9 +993,23 @@ NEW_MATURE_ROUTE_WITH_MATERIAL_REPLACEMENT_VALUE
 AUTHORITY_OR_SAFETY_MODEL_CHANGE
 ```
 
-### 20.1 Legacy custom-code expiry trigger
+For `FOUNDATIONAL_INFRASTRUCTURE`, default to a lightweight delta review at least every 180 days unless a stricter domain cadence applies:
 
-For project-owned commodity infrastructure, any prior `KEEP_CUSTOM`, `DEFER_MIGRATION`, `NO_FRAMEWORK_CHANGE` or equivalent decision expires before another semantic repair when any occurs:
+```text
+VERSION / RELEASE_HEALTH
+MAINTENANCE
+SECURITY
+LICENSE
+ROADMAP_FIT
+NEW_MATERIAL_ALTERNATIVES
+ACTUAL_VS_ASSUMED_BURDEN
+```
+
+The 180-day control is not a mandatory full re-selection. No material change means the prior decision can remain active with a recorded delta review. A material trigger reopens full S0-S9.
+
+### 21.1 Legacy custom-code expiry trigger
+
+For project-owned commodity infrastructure, prior `KEEP_CUSTOM`, `DEFER_MIGRATION`, `NO_FRAMEWORK_CHANGE` or equivalent decisions expire before another semantic repair when any occurs:
 
 ```text
 MATERIAL_DEFECT_IN_COMMODITY_BOUNDARY
@@ -615,35 +1019,40 @@ VERIFICATION_BURDEN_BECOMES_MATERIAL_OR_COMPARABLE_TO_IMPLEMENTATION
 REPAIR_BUDGET_EXHAUSTED
 ```
 
-Required consequence:
+Then:
 
 ```text
 DIRECT_PATCH_AUTHORITY=STOP
+PRESERVE_EVIDENCE
 MATURE_SOLUTION_GATE_REOPEN=MANDATORY
 ```
 
-This does not force migration after every bug. It forces re-evaluation before more custom commodity investment.
+This does not force migration after every bug. It prevents stale build-vs-buy decisions from authorizing endless custom investment.
 
 ---
 
-## 21. Selection decision record
+## 22. Selection decision record
 
 Every material selection produces a durable record containing:
 
 ```text
 DECISION_ID / DATE
 CURRENT_LIVE_PROJECT_IDENTITY
+TASK / ISSUE
 RESPONSIBILITY_BOUNDARY
 CAPABILITY_CLASS
+DECISION_SCOPE
 CURRENT_NEED
 NEXT_EXPECTED_STAGE
-P0_REQUIREMENTS
+S0_REQUIREMENTS
 CANDIDATE_LONGLIST
 AUTHENTICATED_SHORTLIST
+MATURE_QUALIFICATION_RESULTS
 P0_MATRIX
-EVIDENCE_GRADES
+EVIDENCE_GRADES / VERSION / DATE
 WEIGHTS_AND_RATIONALE
 SCORECARD
+SCENARIO_ANALYSIS
 DECISION_STABILITY_RESULT
 TOTAL_BURDEN_COMPARISON
 AUTHORITY_OWNERSHIP_MAP
@@ -651,60 +1060,76 @@ SELECTED_ROUTE
 REJECTED_ROUTES_AND_EXACT_REASONS
 RESIDUAL_RISKS
 SPIKE_RESULT_IF_ANY
-ADOPTION_CONTROLS
+ADOPTION_REQUIREMENTS
+EXIT_PLAN
 RE_EVALUATION_TRIGGERS
 CUSTOM_EXCEPTION_AUTHORITY_IF_ANY
 ```
 
-The record may live in the active GitHub Issue/ADR-like history. Do not create a new competing project-wide rulebook for every selection.
+The record may live in the active GitHub Issue/ADR-like history. Do not create a competing project-wide rulebook for every selection.
 
 ---
 
-## 22. Review anti-gaming checks
+## 23. Independent review anti-gaming checks
 
-Independent review of a material external-solution decision must check at least:
+Independent review of a material mature-solution decision must check at least:
 
-- capability classification was not manipulated to call commodity code “strategy”;
+- capability classification was not manipulated to call commodity code strategy;
 - P0 requirements were frozen before scoring;
 - no P0 FAIL was hidden by weighted scoring;
-- no important P0 PASS relies only on marketing/popularity;
-- candidate discovery included credible competing categories;
+- no `UNKNOWN` was silently reported as PASS;
+- maturity and fitting were evaluated separately;
+- candidate discovery covered credible provider-native, official, full-framework, modular and composition routes where applicable;
 - negative evidence and project-specific limitations were searched;
+- material evidence is current enough and version-bound where required;
+- important P0 PASS does not rely only on marketing, popularity or star count;
+- evidence conflicts were resolved or remained `UNKNOWN`;
 - weights were not changed after seeing results;
-- total burden includes maintenance/upgrades/exit, not only first implementation;
+- total burden includes transition plus recurring maintenance, upgrade, security, incident and exit burden;
+- false numeric precision was not used to manufacture certainty;
+- decision stability was tested rather than inferred from one scorecard;
 - modular composition has one authority owner per responsibility;
+- non-authoritative projections are mechanically non-authoritative and rebuildable;
 - customization remains thin and does not recreate commodity ownership;
 - a Tiny Spike answered only its frozen blocker and stayed within budget;
+- selection and adoption were not collapsed;
+- migration does not create overlapping write authority without a separate validated contract;
 - custom commodity work, if proposed, has explicit current user authority;
-- the decision considers the known next product stage, not only the current ticket.
+- the decision considers the known next product stage, not only the current ticket;
+- exit/replacement and strategy/data portability were assessed for foundational infrastructure.
 
-A failure of these checks is a route-decision defect, not a Writer coding defect.
+A material failure is a route-decision defect, not a Writer coding defect:
+
+```text
+DISPOSITION=REPAIR_SELECTION_RECORD | REPLAN | SAFE_STOP
+```
 
 ---
 
-## 23. Evidence basis
+## 24. Evidence basis
 
 This procedure is informed by mature external methods and primary guidance, including:
 
-- NIST SSDF / SP 800-218 — third-party component criteria, verification and secure software practices;
-- NIST SP 1326 — supplier/product due diligence including provenance, resilience and foundational cyber practices;
-- OpenSSF Concise Guide for Evaluating Open Source Software — candidate identification, authenticity, activity, security, API stability, tests, dependency and license checks;
+- NIST SSDF / SP 800-218 — third-party component verification, lifecycle maintenance, secure software practices and supplier/acquirer communication;
+- NIST SP 1326 — supplier/product due diligence including provenance, resilience, foundational cyber practices and supply-chain tiers;
+- OpenSSF Concise Guide for Evaluating Open Source Software — necessity, candidate authenticity, activity, release health, security, dependencies, licensing, adoption, suitability and practical testing;
 - OpenSSF Scorecard / OSPS Baseline / Best Practices — security and project-practice signals;
-- SLSA provenance — verifiable artifact/source/build provenance;
-- Semantic Versioning — explicit public API/version compatibility expectations;
-- CMU SEI ATAM — structured evaluation of interacting architecture quality attributes and trade-offs;
-- ISO/IEC 25010 quality-model vocabulary — consistent software quality evaluation categories;
-- AWS Well-Architected — measure overall efficiency and avoid spending project engineering effort on undifferentiated heavy lifting.
+- SLSA provenance — verifiable source/build/artifact provenance;
+- Semantic Versioning and explicit project version policies — compatibility and upgrade expectations;
+- CMU SEI ATAM — evaluation of interacting quality attributes, scenarios, risks, sensitivities and trade-offs;
+- ISO/IEC 25010 quality-model vocabulary — consistent software-quality dimensions;
+- AWS Well-Architected and comparable mature operational guidance — total operational burden and avoiding undifferentiated heavy lifting.
 
-These sources provide evaluation principles. They do not choose a Trader Assist framework automatically; project P0 fit and total burden remain decisive.
+These sources provide evaluation methods and evidence vocabulary. They do not select a Trader Assist framework automatically. Project P0 fit, authority clarity and total lifecycle burden remain decisive.
 
 ---
 
-## 24. Authority boundary
+## 25. Authority boundary
 
 This procedure does not authorize:
 
 ```text
+IMPLEMENTATION_BEFORE_APPLICABLE_SELECTION_GATES
 MARK_READY
 MERGE
 BRANCH_DELETION
@@ -719,3 +1144,28 @@ AUTONOMOUS_TRADING
 ```
 
 Those remain governed by Unified V2 and explicit current user authority.
+
+---
+
+## 26. Frozen concise invariants
+
+```text
+MATURE_DOES_NOT_EQUAL_FITTING=YES
+FITTING_REQUIRES_ALL_APPLICABLE_P0_PASS=YES
+P0_FAIL_CANNOT_BE_OFFSET_BY_SCORE=YES
+P0_UNKNOWN_IS_NOT_PASS=YES
+EVIDENCE_VERSION_BINDING_WHEN_MATERIAL=REQUIRED
+EVIDENCE_CONFLICT_REMAINS_UNKNOWN_UNTIL_RESOLVED=YES
+FOUNDATIONAL_EXIT_AND_PORTABILITY_P0=REQUIRED
+SCORECARD_AFTER_P0_ONLY=YES
+DECISION_STABILITY_AND_SCENARIO_CHECK=REQUIRED
+TINY_SPIKE_ONE_BLOCKER_ONLY=YES
+ONE_AUTHORITATIVE_OWNER_PER_RESPONSIBILITY=REQUIRED
+NONAUTHORITATIVE_PROJECTION_MUST_BE_REBUILDABLE_AND_NONWRITING=YES
+THIN_INTEGRATION_RECLASSIFY_IF_COMMODITY_AUTHORITY_EMERGES=YES
+SELECTION_NE_ADOPTION=YES
+DUAL_WRITE_AUTHORITY_DURING_MIGRATION=PROHIBITED_BY_DEFAULT
+CUSTOM_COMMODITY_EXCEPTION_USER_AUTHORITY=REQUIRED
+FOUNDATIONAL_INFRA_DELTA_REVIEW_DEFAULT_MAX_DAYS=180
+LEGACY_KEEP_CUSTOM_EXPIRY_TRIGGERS=REQUIRED
+```
