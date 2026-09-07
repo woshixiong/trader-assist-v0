@@ -59,6 +59,10 @@ PRE_WRITER_GO_NO_GO_EXPERIMENT=
 
 If the task is not direction-setting, use `NOT_REQUIRED` rather than manufacturing research.
 
+When a material decision selects/rejects/composes/customizes/adopts an external mature solution, or proposes project-owned commodity infrastructure, also load and complete the applicable record from:
+
+- `governance/EXTERNAL_MATURE_SOLUTION_SELECTION_AND_ADOPTION_RULE_V1_2026-09-07.md`
+
 ---
 
 ## 3. Architecture / authority / continuity
@@ -90,17 +94,55 @@ If the route predictably forces a near-term rewrite of stable authority or inter
 
 ## 4. Mature-solution / total-burden check
 
+First classify the capability:
+
 ```text
+CAPABILITY_CLASS=STRATEGY_DIFFERENTIATOR|COMMODITY_INFRASTRUCTURE|THIN_INTEGRATION
+STRATEGY_DECISION_ENGINE_RESPONSIBILITY=
+TRADING_INFRASTRUCTURE_ENGINE_RESPONSIBILITY=
+```
+
+For commodity capability or a reopened legacy custom responsibility:
+
+```text
+EXTERNAL_MATURE_SELECTION_RULE_LOADED=YES|NO|NOT_APPLICABLE
+STAGE_0_NO_PRODUCT_CODE_AUDIT=PASS|FAIL|NOT_APPLICABLE
+P0_REQUIREMENTS_FROZEN=YES|NO|NOT_APPLICABLE
 EXISTING_PROJECT_CAPABILITY_CHECKED=YES|NO|NOT_APPLICABLE
 PROVIDER_NATIVE_CHECKED=YES|NO|NOT_APPLICABLE
 STANDARD_OFFICIAL_CHECKED=YES|NO|NOT_APPLICABLE
-MATURE_EXTERNAL_CHECKED=YES|NO|NOT_APPLICABLE
+MATURE_EXTERNAL_FULL_FRAMEWORK_CHECKED=YES|NO|NOT_APPLICABLE
+MATURE_EXTERNAL_MODULAR_COMPONENT_CHECKED=YES|NO|NOT_APPLICABLE
+MATURE_COMPOSITION_CHECKED=YES|NO|NOT_APPLICABLE
 THIN_ADAPTER_CHECKED=YES|NO|NOT_APPLICABLE
-CUSTOM_COMMODITY_BUILD_JUSTIFICATION=PASS|FAIL|NOT_APPLICABLE
-TOTAL_BURDEN_COMPARISON=PASS|FAIL
+CANDIDATE_AUTHENTICITY_AND_IDENTITY_CHECKED=YES|NO|NOT_APPLICABLE
+P0_HARD_GATE_MATRIX=PASS|FAIL|UNRESOLVED|NOT_APPLICABLE
+EVIDENCE_CONFIDENCE_RECORDED=YES|NO|NOT_APPLICABLE
+TOTAL_BURDEN_COMPARISON=PASS|FAIL|UNRESOLVED|NOT_APPLICABLE
+DECISION_STABILITY_CHECK=PASS|LOW|NOT_APPLICABLE
+ONE_AUTHORITATIVE_OWNER_PER_RESPONSIBILITY=PASS|FAIL|NOT_APPLICABLE
+ONE_BLOCKER_TINY_SPIKE=PASS|FAIL|NOT_REQUIRED|NOT_APPLICABLE
+LEGACY_KEEP_CUSTOM_DECISION_EXPIRY_CHECK=PASS|FAIL|NOT_APPLICABLE
+CUSTOM_COMMODITY_EXCEPTION_USER_AUTHORITY=YES|NO|NOT_APPLICABLE
 ```
 
-A fitting mature route blocks unnecessary custom commodity infrastructure.
+Hard pre-dispatch consequences:
+
+```text
+FITTING_MATURE_SOLUTION_EXISTS
+=> CUSTOM_FROM_SCRATCH_IMPLEMENTATION=PROHIBITED
+=> SECOND_PROJECT_OWNED_IMPLEMENTATION=PROHIBITED
+
+NO_FITTING_MATURE_ROUTE
+AND CUSTOM_COMMODITY_IMPLEMENTATION_PROPOSED
+AND CUSTOM_COMMODITY_EXCEPTION_USER_AUTHORITY != YES
+=> ENGINEERING_PREFLIGHT_GATE=FAIL
+=> WRITER_DISPATCH=PROHIBITED
+```
+
+A fitting mature route blocks unnecessary custom commodity infrastructure. Sunk cost, existing code, migration inconvenience alone, a preference for no new dependency, launch proximity, architecture familiarity or belief that one more repair may work are not valid blockers.
+
+`NO_NEW_DEPENDENCY` is not a simplicity proof. Total lifecycle engineering burden is the metric.
 
 ---
 
@@ -177,6 +219,7 @@ The Task Packet must be complete before execution. Architecture-critical addenda
 REPAIR_STAGE=INITIAL|NORMAL_REPAIR|EXCEPTIONAL_REPAIR|HOLISTIC_CONVERGENCE
 APPLICATION_REPAIR_BUDGET_REMAINING=
 GENERATED_COMMAND_REPAIR_STAGE=INITIAL|BOUNDED_CORRECTION|HOLISTIC_REGENERATION|NOT_APPLICABLE
+LEGACY_MATURE_SOLUTION_REOPEN_TRIGGER=YES|NO|NOT_APPLICABLE
 STOP_CONDITION=
 SAFE_STOP_OR_REPLAN_TRIGGER=
 ROLLBACK_OR_RECOVERY_PLAN=
@@ -192,20 +235,24 @@ INITIAL
 
 No routine Repair 3/4/5. A new root cause or authority/layer expansion triggers holistic convergence.
 
+For legacy project-owned commodity infrastructure, a material defect, clean-replacement requirement, repeated provider/qualification failure, material verification burden or exhausted repair budget expires prior `KEEP_CUSTOM` / `DEFER_MIGRATION` decisions before another semantic repair. Reopen the mature-solution gate first.
+
 ---
 
 ## 9. Pre-dispatch decision
 
 `ENGINEERING_PREFLIGHT_GATE=PASS` only when every applicable field above is resolved and the selected Writer/executor has the capabilities required to perform the frozen task and its mandatory gates. This includes `STAGE_CLAIM_LADDER`, `AUTHORITATIVE_PROOF_SURFACE_FOR_EACH_STAGE`, `MINIMUM_REPRESENTATIVE_TOPOLOGY`, `COMPLEXITY_ESCALATION_ORDER`, `PRE_WRITER_GO_NO_GO_EXPERIMENT`, `DETERMINISTIC_BRANCH_PROOF_PLAN` and `REAL_EXTERNAL_BOUNDARY_PROOF_PLAN` when applicable.
 
-If any applicable architecture, authority, validation-environment, scope, repair-budget or user-authority field is unresolved:
+For any applicable commodity-capability decision, `ENGINEERING_PREFLIGHT_GATE=PASS` additionally requires the external mature-solution selection rule to have reached a typed disposition. A Writer cannot self-authorize custom commodity infrastructure.
+
+If any applicable architecture, authority, validation-environment, scope, repair-budget, mature-solution or user-authority field is unresolved:
 
 ```text
 ENGINEERING_PREFLIGHT_GATE=FAIL
 WRITER_DISPATCH=PROHIBITED
 ```
 
-The control role must then `REPLAN`, `DEFER`, `REASSIGN`, or `SAFE_STOP` at the actual unresolved boundary.
+The control role must then `REPLAN`, `DEFER`, `REASSIGN`, `REPLACE`, or `SAFE_STOP` at the actual unresolved boundary.
 
 ---
 
@@ -241,6 +288,8 @@ INDEPENDENT_REVIEW=
 REPAIR_STAGE=
 RESIDUAL_RISKS=
 DEFERRED_WORK=
+MATURE_SOLUTION_SELECTION_RESULT=
+CUSTOM_COMMODITY_EXCEPTION_AUTHORITY=
 MARK_READY_EXECUTED=YES|NO
 MERGE_EXECUTED=YES|NO
 DEPLOYMENT_EXECUTED=YES|NO
