@@ -120,8 +120,12 @@ P0_HARD_GATE_MATRIX=PASS|FAIL|UNRESOLVED|NOT_APPLICABLE
 EVIDENCE_CONFIDENCE_RECORDED=YES|NO|NOT_APPLICABLE
 TOTAL_BURDEN_COMPARISON=PASS|FAIL|UNRESOLVED|NOT_APPLICABLE
 DECISION_STABILITY_CHECK=PASS|LOW|NOT_APPLICABLE
+STAGE_0_DISPOSITION=SELECT_MATURE_ROUTE|SELECT_MODULAR_COMPOSITION|ONE_BLOCKER_FEASIBILITY_SPIKE|UNRESOLVED_TRADEOFF|REJECT_CANDIDATE|NO_FITTING_MATURE_ROUTE|SAFE_STOP|NOT_APPLICABLE
 ONE_AUTHORITATIVE_OWNER_PER_RESPONSIBILITY=PASS|FAIL|NOT_APPLICABLE
 ONE_BLOCKER_TINY_SPIKE=PASS|FAIL|NOT_REQUIRED|NOT_APPLICABLE
+TINY_SPIKE_NON_OVERRIDABLE_CONSTRAINTS=PASS|FAIL|NOT_APPLICABLE
+TINY_SPIKE_BUDGET_OVERRIDE=NO|BOUNDED_WITH_RATIONALE|FAIL|NOT_APPLICABLE
+TINY_SPIKE_OVERRIDE_GATE=PASS|FAIL|NOT_APPLICABLE
 LEGACY_KEEP_CUSTOM_DECISION_EXPIRY_CHECK=PASS|FAIL|NOT_APPLICABLE
 CUSTOM_COMMODITY_EXCEPTION_USER_AUTHORITY=YES|NO|NOT_APPLICABLE
 ```
@@ -138,6 +142,32 @@ AND CUSTOM_COMMODITY_IMPLEMENTATION_PROPOSED
 AND CUSTOM_COMMODITY_EXCEPTION_USER_AUTHORITY != YES
 => ENGINEERING_PREFLIGHT_GATE=FAIL
 => WRITER_DISPATCH=PROHIBITED
+
+DECISION_STABILITY_CHECK=LOW
+=> STAGE_0_DISPOSITION=UNRESOLVED_TRADEOFF
+=> SELECT_MATURE_ROUTE=PROHIBITED
+=> SELECT_MODULAR_COMPOSITION=PROHIBITED
+=> ADOPTION=PROHIBITED
+=> PRODUCT_WRITER_DISPATCH=PROHIBITED
+```
+
+`DECISION_STABILITY_CHECK=LOW` is a resolved diagnostic result but a non-promotable route state. It may transition only to `ONE_BLOCKER_FEASIBILITY_SPIKE` when the specialized rule proves exactly one material P0 uncertainty remains and every applicable Tiny Spike eligibility and budget gate passes. It never authorizes product Writer dispatch.
+
+For a Tiny Spike Writer dispatch, all applicable conditions must be resolved before `ENGINEERING_PREFLIGHT_GATE=PASS`:
+
+```text
+STAGE_0_DISPOSITION=ONE_BLOCKER_FEASIBILITY_SPIKE
+ONE_BLOCKER_TINY_SPIKE=PASS
+TINY_SPIKE_NON_OVERRIDABLE_CONSTRAINTS=PASS
+TINY_SPIKE_BUDGET_OVERRIDE=NO|BOUNDED_WITH_RATIONALE
+TINY_SPIKE_OVERRIDE_GATE=PASS|NOT_APPLICABLE
+```
+
+If `TINY_SPIKE_BUDGET_OVERRIDE=BOUNDED_WITH_RATIONALE`, then `TINY_SPIKE_OVERRIDE_GATE=PASS` is mandatory. If any non-overridable constraint fails, the override is `FAIL`, or a second material uncertainty/commodity authority appears:
+
+```text
+ENGINEERING_PREFLIGHT_GATE=FAIL
+TINY_SPIKE_WRITER_DISPATCH=PROHIBITED
 ```
 
 A fitting mature route blocks unnecessary custom commodity infrastructure. Sunk cost, existing code, migration inconvenience alone, a preference for no new dependency, launch proximity, architecture familiarity or belief that one more repair may work are not valid blockers.
@@ -245,7 +275,9 @@ For legacy project-owned commodity infrastructure, a material defect, clean-repl
 
 For any applicable commodity-capability decision, `ENGINEERING_PREFLIGHT_GATE=PASS` additionally requires the external mature-solution selection rule to have reached a typed disposition. A Writer cannot self-authorize custom commodity infrastructure.
 
-If any applicable architecture, authority, validation-environment, scope, repair-budget, mature-solution or user-authority field is unresolved:
+`UNRESOLVED_TRADEOFF` and `DECISION_STABILITY_CHECK=LOW` are not promotable states for selection, adoption or product Writer dispatch. A Tiny Spike is the only Writer exception, and only when the strictly bounded Tiny Spike fields above all pass.
+
+If any applicable architecture, authority, validation-environment, scope, repair-budget, mature-solution, Tiny Spike, or user-authority field is unresolved or fails its required promotion gate:
 
 ```text
 ENGINEERING_PREFLIGHT_GATE=FAIL
@@ -289,6 +321,9 @@ REPAIR_STAGE=
 RESIDUAL_RISKS=
 DEFERRED_WORK=
 MATURE_SOLUTION_SELECTION_RESULT=
+DECISION_STABILITY_RESULT=
+STAGE_0_DISPOSITION=
+TINY_SPIKE_BUDGET_OVERRIDE=
 CUSTOM_COMMODITY_EXCEPTION_AUTHORITY=
 MARK_READY_EXECUTED=YES|NO
 MERGE_EXECUTED=YES|NO
