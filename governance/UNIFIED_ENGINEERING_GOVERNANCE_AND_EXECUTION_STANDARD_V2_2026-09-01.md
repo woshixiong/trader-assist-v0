@@ -35,6 +35,9 @@ MANDATORY_ENGINEERING_PREFLIGHT_AND_CONVERGENCE_GATE_V1_2026-08-17.md
 PROJECT_RESEARCH_EVIDENCE_DECISION_METHOD_V1_2026-08-16.md
 = task-conditional research procedure / examples; no competing authority
 
+EXTERNAL_MATURE_SOLUTION_SELECTION_AND_ADOPTION_RULE_V1_2026-09-07.md
+= task-conditional mature-solution selection/adoption procedure; no competing authority
+
 GENERATED_COMMAND_RELIABILITY_AND_OPERATOR_EFFICIENCY_RULE_V1_2026-08-30.md
 = task-conditional operator-command procedure / incident catalogue; no competing authority
 
@@ -99,6 +102,8 @@ Free, cheap, fashionable or technically interesting solutions never override cor
 
 Total engineering burden includes implementation, tests, independent review, CI/release, operator actions, model/token cost, debugging/evidence, maintenance, recovery, migration and future replacement cost.
 
+`NO_NEW_DEPENDENCY` is not a simplicity proof. A mature dependency may reduce total burden when it replaces a larger project-owned responsibility. Dependency count, LOC count and current familiarity are inputs, never substitutes for total lifecycle burden.
+
 ---
 
 ## 3. Mandatory end-to-end workflow
@@ -109,9 +114,12 @@ For material engineering work use this sequence:
 LOAD LIVE STATE + CANONICAL RULES
 -> CLASSIFY TASK / AUTHORITY / CAPABILITY
 -> INDEPENDENT ANALYSIS
+-> IF MATURE-SOLUTION / COMMODITY DECISION APPLIES:
+     STAGE 0 REQUIREMENT + P0 FREEZE
+     + EXTERNAL MATURE-SOLUTION SELECTION PROCEDURE
 -> EXTERNAL / MATURE-SOLUTION EVIDENCE WHEN DIRECTION-SETTING
 -> SYNTHESIS / ROUTE DECISION
--> CHEAP SAFE DECISIVE PRE-WRITER GO/NO-GO EXPERIMENT WHEN APPLICABLE
+-> ONE-BLOCKER / CHEAP SAFE DECISIVE PRE-WRITER GO/NO-GO EXPERIMENT WHEN APPLICABLE
 -> GLOBAL ARCHITECTURE + CONTRACT + CONTINUITY PREFLIGHT
 -> SCALE / PROVIDER / FRESHNESS PREFLIGHT WHEN APPLICABLE
 -> STAGE CLAIM LADDER + VERIFICATION + VALIDATION-ENVIRONMENT PLAN
@@ -125,6 +133,8 @@ LOAD LIVE STATE + CANONICAL RULES
 -> SEPARATE USER PUBLICATION / DEPLOYMENT / RUNTIME GATES
 -> INCIDENT / LESSON CAPTURE
 ```
+
+The specialized mature-solution procedure must preserve the project research ordering: independent analysis first, external evidence second, synthesis/decision third.
 
 Every bounded task ends in an explicit disposition:
 
@@ -170,7 +180,10 @@ ROOT_CAUSE_LEVEL
 AFFECTED_AUTHORITIES
 FROZEN_INVARIANTS
 CURRENT_ROUTE
+CAPABILITY_CLASS
 MATURE_ALTERNATIVES
+MATURE_SOLUTION_SELECTION_DISPOSITION
+CUSTOM_COMMODITY_EXCEPTION_USER_AUTHORITY
 STAGE_CLAIM_LADDER / AUTHORITATIVE_PROOF_SURFACE_FOR_EACH_STAGE
 MINIMUM_REPRESENTATIVE_TOPOLOGY / COMPLEXITY_ESCALATION_ORDER
 PRE_WRITER_GO_NO_GO_EXPERIMENT
@@ -213,6 +226,8 @@ Before reading external conclusions, establish from project facts and first prin
 
 Preserve a short pre-research position for material decisions.
 
+For a framework/provider/platform/tool selection, freeze the responsibility boundary, capability class, current bounded need, next expected product stage and hard P0 requirements before candidate scoring.
+
 ### Phase 2 — external evidence and mature solutions
 
 Then consult the strongest relevant evidence, prioritizing:
@@ -224,6 +239,8 @@ Then consult the strongest relevant evidence, prioritizing:
 5. community anecdotes only as supplemental evidence.
 
 Search for competing approaches, limitations, negative cases and disconfirming evidence. Check freshness when it matters.
+
+When a material decision selects, rejects, composes, customizes, adopts, upgrades or re-evaluates an external mature solution, or proposes project-owned commodity infrastructure, the task must load `EXTERNAL_MATURE_SOLUTION_SELECTION_AND_ADOPTION_RULE_V1_2026-09-07.md`. Its candidate authentication, P0, evidence-confidence, total-burden, decision-stability, Stage 0, Tiny Spike, adoption and re-evaluation requirements are mandatory procedure under this constitution.
 
 ### Phase 3 — synthesis and route freeze
 
@@ -241,6 +258,8 @@ VALIDATION_OR_EXPERIMENT_REQUIRED
 
 Research must converge to a decision. Endless research around the same failed design is prohibited.
 
+For a mature-solution decision, preserve the typed selection disposition rather than paraphrasing an unresolved comparison into a Writer instruction.
+
 ### Pre-Writer GO/NO-GO feasibility experiment
 
 ```text
@@ -251,27 +270,178 @@ When a material route depends on unresolved feasibility and a cheap, safe, read-
 
 Do not require an experiment when the route is already sufficiently established or the experiment would add more burden or risk than decisive evidence.
 
+For external mature-solution selection, a feasibility experiment is specifically a **One-Blocker Tiny Spike**: one candidate, one unresolved decisive P0 question, one bounded Writer stage. It must not become product implementation, a generalized test harness or a repair chain.
+
 ---
 
-## 6. Mature-solution-first, simplicity and build-vs-buy
+## 6. Mature capability no-rebuild, simplicity and build-vs-buy
+
+### 6.1 Capability classification and terminology
+
+Every material capability decision classifies the responsibility as:
+
+```text
+CAPABILITY_CLASS=
+STRATEGY_DIFFERENTIATOR
+| COMMODITY_INFRASTRUCTURE
+| THIN_INTEGRATION
+```
+
+Use these terms consistently:
+
+```text
+STRATEGY_DECISION_ENGINE
+= project-owned differentiated trading intelligence and policy
+
+TRADING_INFRASTRUCTURE_ENGINE
+= commodity trading/runtime infrastructure owned by mature external capability by default
+```
+
+`STRATEGY_DECISION_ENGINE` includes project-specific Setup/signal semantics, Scanner/ranking, Thesis/Attempt, entry/exit/re-entry/winner-management policy, strategy-specific sizing/risk policy, project-specific features, research and evidence semantics.
+
+`TRADING_INFRASTRUCTURE_ENGINE` includes generic transport/session management, subscriptions/reconnect/heartbeat, generic market-data plumbing, generic OMS/order lifecycle, fill/order/position/account reconciliation, generic portfolio/account state, generic pre-trade limits/kill switches, generic persistence/recovery/replay, generic backtest/sandbox/live runtime mechanics, deployment, observability and workflow plumbing.
+
+Names do not control classification; responsibility semantics do.
+
+### 6.2 Mandatory ownership order
 
 For nontrivial commodity capability use this order:
 
 ```text
-REUSE_ACCEPTED_PROJECT_CAPABILITY
+REUSE_ACCEPTED_PROJECT_CAPABILITY  # must still pass current requirements; sunk cost creates no preference
 -> PROVIDER_NATIVE
 -> STANDARD / OFFICIAL
--> MATURE MAINTAINED EXTERNAL
+-> MATURE MAINTAINED EXTERNAL FULL FRAMEWORK
+-> MATURE MAINTAINED EXTERNAL MODULAR COMPONENT / COMPOSITION
+-> CONFIGURATION / OFFICIAL EXTENSION
 -> THIN PROJECT ADAPTER
--> SMALL PROJECT-SPECIFIC LOGIC
--> CUSTOM COMMODITY INFRASTRUCTURE LAST RESORT
+-> UPSTREAM CONTRIBUTION
+-> CUSTOM COMMODITY INFRASTRUCTURE ONLY UNDER EXPLICIT EXCEPTION
 ```
 
-Commodity infrastructure includes generic orchestration, scheduling, transport, deployment, observability, persistence tooling and workflow plumbing. Project-specific trading/domain semantics remain valid project-owned engineering value.
+Permanent rule:
 
-A fitting mature solution prohibits an unnecessary custom build. Custom infrastructure requires concrete blocking fit gaps and a positive total-value case. Sunk cost is never justification.
+```text
+COMMODITY_INFRASTRUCTURE
++
+FITTING_PROVIDER_NATIVE_OR_STANDARD_OR_MATURE_MAINTAINED_SOLUTION_EXISTS
+=
+MATURE_EXTERNAL_OWNER_REQUIRED
+CUSTOM_FROM_SCRATCH_IMPLEMENTATION=PROHIBITED
+SECOND_PROJECT_OWNED_IMPLEMENTATION=PROHIBITED
+```
 
-Prefer the simplest route that preserves safety, authority, correctness, recovery and continuity. Do not build institution-grade infrastructure for a rare bounded task.
+A fitting mature solution therefore blocks unnecessary custom commodity engineering. Project-specific strategy semantics and genuinely thin integration remain valid project-owned work.
+
+### 6.3 Engineering Control / Writer constraint
+
+Engineering Control and Writers may discover candidates, perform the governed analysis, recommend selection, recommend rejection and recommend a custom exception. They **may not self-authorize** a custom commodity build.
+
+If every credible mature route has a proven P0 blocker and custom commodity infrastructure is proposed:
+
+```text
+CUSTOM_COMMODITY_EXCEPTION_USER_AUTHORITY=REQUIRED
+```
+
+Without explicit current user authority:
+
+```text
+ENGINEERING_PREFLIGHT_GATE=FAIL
+CUSTOM_WRITER_DISPATCH=PROHIBITED
+```
+
+### 6.4 Invalid mature-route rejection reasons
+
+None of the following is a valid blocker by itself:
+
+```text
+SUNK_COST
+EXISTING_CUSTOM_CODE
+MIGRATION_INCONVENIENCE_ALONE
+NO_NEW_DEPENDENCY_PREFERENCE
+LAUNCH_PROXIMITY
+ARCHITECTURAL_FAMILIARITY
+NOT_100_PERCENT_IDENTICAL_TO_CURRENT_INTERNAL_API
+PREFERENCE_TO_CONTROL_EVERY_IMPLEMENTATION_DETAIL
+BELIEF_THAT_ONE_MORE_REPAIR_MAY_WORK
+WRITER_FAMILIARITY_WITH_THE_CUSTOM_ROUTE
+```
+
+A mature route may be rejected only for a concrete P0 blocker such as functional fit, safety/authority, data/execution semantics, reliability/recovery, scale/performance, platform/operations, security/supply-chain, license/legal, extensibility/strategy continuity, integration burden or overlapping authority.
+
+### 6.5 Stage 0 — no-product-code selection audit
+
+Before product Writer work on a commodity capability, run a Stage 0 audit under the specialized selection rule:
+
+```text
+STAGE_0_PRODUCT_CODE=PROHIBITED
+```
+
+Stage 0 freezes current/next need, responsibility boundary, P0 requirements, safety/authority, quality attributes, strategy continuity, scale/latency and acceptable extension/exit seams; then authenticates and screens credible mature alternatives.
+
+If strong documentation/source/evidence already decides the route, select/reject without a spike. Do not build multiple full prototypes to compare mature solutions.
+
+### 6.6 One-Blocker Tiny Spike
+
+A Tiny Spike is allowed only when exactly one material P0 uncertainty remains and a cheap, safe, non-authoritative experiment can decide it more efficiently than additional source/document review.
+
+Default rule:
+
+```text
+ONE_CANDIDATE
+ONE_UNRESOLVED_P0_QUESTION
+ONE_WRITER_STAGE
+NO_PRODUCT_IMPLEMENTATION
+NO_NEW_DATABASE_RUNTIME_PERSISTENCE_OR_GENERAL_HARNESS
+NO_PRODUCTION_DEPLOYMENT_PRIVATE_API_OR_EXCHANGE_WRITE
+AT_MOST_ONE_SMALL_MECHANICAL_CORRECTION
+SECOND_SEMANTIC_PROBLEM => STOP / REASSESS / NEXT_MATURE_ROUTE
+```
+
+The specialized selection procedure owns the default LOC/file budget and allowed pre-frozen override semantics. A Tiny Spike may not silently become Repair 2/3 implementation.
+
+### 6.7 Modular composition and customization
+
+Mature solutions may be composed when the composition lowers total burden and preserves authority clarity:
+
+```text
+MODULAR_COMPOSITION=ALLOWED
+ONE_AUTHORITATIVE_OWNER_PER_RESPONSIBILITY=REQUIRED
+OVERLAPPING_DURABLE_STATE_OMS_POSITION_RISK_AUTHORITY=PROHIBITED
+```
+
+Prefer configuration, official plugin/extension, thin adapter and upstream contribution. A long-lived invasive fork of mature framework internals is prohibited by default and is treated as custom commodity infrastructure for this gate.
+
+If project integration code begins owning generic reconnect, OMS, portfolio, generic risk, durable recovery or another mature platform responsibility, reclassify the code as `COMMODITY_INFRASTRUCTURE` and reopen this gate.
+
+### 6.8 Legacy custom decisions expire
+
+For project-owned commodity infrastructure, prior `KEEP_CUSTOM`, `DEFER_MIGRATION`, `NO_FRAMEWORK_CHANGE` or equivalent decisions expire before another semantic repair when any occurs:
+
+```text
+MATERIAL_DEFECT_IN_COMMODITY_BOUNDARY
+CLEAN_REPLACEMENT_REQUIRED
+REPEATED_PROVIDER_OR_QUALIFICATION_FAILURE
+VERIFICATION_BURDEN_BECOMES_MATERIAL_OR_COMPARABLE_TO_IMPLEMENTATION
+REPAIR_BUDGET_EXHAUSTED
+```
+
+Required consequence:
+
+```text
+DIRECT_PATCH_AUTHORITY=STOP
+MATURE_SOLUTION_GATE_REOPEN=MANDATORY
+```
+
+This does not automatically force migration after every bug. It prevents stale build-vs-buy decisions from authorizing more custom commodity investment without fresh evidence.
+
+### 6.9 External-solution decision quality
+
+Selection must use hard P0 gates first and comparative scoring only among P0-pass candidates. Popularity, stars, marketing or familiarity alone cannot make a P0 gate pass. Score/weight choices must be frozen before candidate results are known, and unstable winners must be reported as unresolved trade-offs rather than false certainty.
+
+The specialized selection procedure defines exact evidence grades, default quality/burden dimensions, decision-stability checks, adoption controls, re-evaluation triggers and the custom-exception packet.
+
+Prefer the simplest route that preserves safety, authority, correctness, recovery, strategy continuity, future V0 fit and replaceability. Do not build institution-grade infrastructure for a rare bounded task.
 
 ---
 
@@ -285,6 +455,7 @@ Repeated adjacent-layer fixes, growing special cases, mixed-state failures, dupl
 STOP LOCAL PATCHING
 -> MODEL GLOBAL STATE / AUTHORITY / CONTRACT
 -> RE-RUN RESEARCH + SIMPLICITY + CONTINUITY GATES
+-> REOPEN MATURE-SOLUTION GATE WHEN THE FAILED RESPONSIBILITY IS COMMODITY
 -> REPLAN OR REPLACE THE FAILED RESPONSIBILITY BOUNDARY
 ```
 
@@ -329,6 +500,8 @@ For material cross-layer work freeze:
 - supersession/epoch semantics;
 - unauthorized/malformed input behavior.
 
+External mature-solution composition does not relax this rule. Each authoritative responsibility must have one owner; read-only observers/adapters must remain mechanically non-authoritative.
+
 ---
 
 ## 8. Continuity-first development
@@ -362,6 +535,8 @@ Avoid both throwaway shortcuts that force near-term rewrites and speculative gen
 Do not split modules merely because they are large. A large integration hotspot triggers seam-extraction review when a new unrelated responsibility would otherwise increase change amplification.
 
 Preserve backward-readable/versioned durable state when practical. Migrate incrementally behind stable seams rather than big-bang replacement.
+
+For a mature external owner, preserve a narrow project contract and explicit exit/replacement seam where practical. Continuity means preserving project value and stable semantics; it does not mean preserving a custom commodity implementation merely because it already exists.
 
 ---
 
@@ -405,6 +580,8 @@ ROLE / MODE / TASK_ID
 REPOSITORY / BASE / HEAD / BRANCH / WORKTREE
 OBJECTIVE / ROOT_CAUSE
 CURRENT_AUTHORITIES / FROZEN_INVARIANTS
+CAPABILITY_CLASS / MATURE_SOLUTION_SELECTION_DISPOSITION
+CUSTOM_COMMODITY_EXCEPTION_USER_AUTHORITY
 ALLOWED_FILES / PROHIBITED_SCOPE
 REQUIRED_BEHAVIOR / MUST_REMAIN_BEHAVIOR
 CONTINUITY / SCALE REQUIREMENTS
@@ -414,11 +591,11 @@ VALIDATION_ENVIRONMENT
 COMMIT / PUSH AUTHORITY
 REVIEW_REQUIREMENT
 REPAIR_STAGE / SAFE_STOP CONDITIONS
-OUTPUT CONTRACT
+OUTPUT_CONTRACT
 FINAL_USER_AUTHORITY_BOUNDARY
 ```
 
-If a new architecture invariant, provider constraint, authority boundary or major attack case is discovered before execution, regenerate one complete replacement packet. Architecture-critical prompt addenda assembled by the user are prohibited.
+If a new architecture invariant, provider constraint, authority boundary, mature-solution P0 blocker or major attack case is discovered before execution, regenerate one complete replacement packet. Architecture-critical prompt addenda assembled by the user are prohibited.
 
 ### 10.3 Active task ownership
 
@@ -508,6 +685,8 @@ BOUNDED_CANDIDATE
 ```
 
 Installed/free/popular does not equal accepted infrastructure. Multi-step automation must be checkpointed and human-recoverable; hidden semantic retries are prohibited.
+
+The mature-capability no-rebuild gate and external mature-solution selection procedure apply to custom commodity tooling as well as trading infrastructure.
 
 ---
 
@@ -887,6 +1066,8 @@ INITIAL IMPLEMENTATION
 
 No routine Repair 3/4/5. New root cause, expanded authority/layer boundary or exhausted budget triggers `HOLISTIC_CONVERGENCE_GATE` and route-level reanalysis. Sunk cost never authorizes another patch.
 
+If the failed responsibility boundary is project-owned commodity infrastructure, reopening the mature-solution selection gate precedes another semantic repair whenever the expiry triggers in §6.8 apply.
+
 ---
 
 ## 18. Repository, CI and publication discipline
@@ -951,6 +1132,8 @@ Do not make every participant read every tool profile.
 
 After the universal preflight, load only the narrow contract required by the selected route, for example:
 
+- `PROJECT_RESEARCH_EVIDENCE_DECISION_METHOD_V1_2026-08-16.md` for material direction-setting research;
+- `EXTERNAL_MATURE_SOLUTION_SELECTION_AND_ADOPTION_RULE_V1_2026-09-07.md` for material external-solution selection/adoption/re-evaluation or a proposed custom commodity implementation;
 - `ENGINEERING_EXECUTOR_ROUTER_V2_2026-08-23.md` for model-backed routing;
 - Codex/OpenCode/Trae/DeepSeek profiles only when that executor/model is selected;
 - `ENGINEERING_TOOL_ONBOARDING_AND_CHANGE_ACCEPTANCE_RULE_V1_2026-08-23.md` for new/materially changed tools;
@@ -959,7 +1142,7 @@ After the universal preflight, load only the narrow contract required by the sel
 - FinalShell target-host workflow only for target-host deployment/qualification;
 - current Product / Strategy / Operations / Security authority for the bounded task.
 
-Specialized files contain implementation details and fast-changing profiles. Their general engineering principles are owned here so model/tool churn does not force a new project constitution.
+Specialized files contain implementation details and fast-changing profiles. Their general engineering principles are owned here so model/tool/framework churn does not force a new project constitution.
 
 ---
 
@@ -976,6 +1159,8 @@ When a new durable lesson appears:
 
 A decision record should preserve context, decision and consequences. Accepted historical decisions remain useful as history even when superseded, but successor windows begin from the current canonical rule, not the entire history stack.
 
+External mature-solution decisions are versioned decisions. The specialized selection rule defines security, maintenance, license, product-stage, integration-burden and stronger-alternative triggers that reopen selection rather than letting stale framework decisions become permanent architecture authority.
+
 ---
 
 ## 22. Frozen concise invariants
@@ -990,6 +1175,22 @@ EXTERNAL_MATURE_EVIDENCE_FOR_MATERIAL_DIRECTION_SETTING=YES
 SYNTHESIS_BEFORE_ROUTE_FREEZE=YES
 PRE_WRITER_GO_NO_GO_EXPERIMENT=WHEN_CHEAP_SAFE_AND_DECISIVE
 MATURE_SOLUTION_FIRST=YES
+MATURE_CAPABILITY_NO_REBUILD_GATE=REQUIRED
+CAPABILITY_CLASSIFICATION_BEFORE_COMMODITY_WRITER=REQUIRED
+STRATEGY_DECISION_ENGINE_PROJECT_OWNED=YES
+TRADING_INFRASTRUCTURE_ENGINE_MATURE_EXTERNAL_OWNER_BY_DEFAULT=YES
+FITTING_MATURE_COMMODITY_CAPABILITY_BLOCKS_CUSTOM_REBUILD=YES
+SECOND_PROJECT_OWNED_COMMODITY_IMPLEMENTATION=PROHIBITED_WHEN_FITTING_MATURE_OWNER_EXISTS
+ENGINEERING_CONTROL_OR_WRITER_SELF_AUTHORIZED_CUSTOM_COMMODITY_BUILD=PROHIBITED
+CUSTOM_COMMODITY_EXCEPTION_REQUIRES_EXPLICIT_CURRENT_USER_AUTHORITY=YES
+STAGE_0_NO_PRODUCT_CODE_MATURE_SOLUTION_AUDIT=REQUIRED_WHEN_APPLICABLE
+ONE_BLOCKER_TINY_SPIKE_ONLY=YES_WHEN_EXTERNAL_FEASIBILITY_REMAINS_UNRESOLVED
+MULTIPLE_FULL_PROTOTYPES_FOR_MATURE_SELECTION=DISFAVORED
+INVASIVE_MATURE_FRAMEWORK_FORK=PROHIBITED_BY_DEFAULT
+MODULAR_MATURE_COMPOSITION=ALLOWED_WITH_ONE_AUTHORITY_OWNER_PER_RESPONSIBILITY
+OVERLAPPING_DURABLE_STATE_OMS_POSITION_RISK_AUTHORITY=PROHIBITED
+LEGACY_KEEP_CUSTOM_DECISION_EXPIRY_TRIGGERS=REQUIRED
+NO_NEW_DEPENDENCY_IS_NOT_SIMPLICITY_PASS=YES
 SIMPLICITY_BY_TOTAL_ENGINEERING_BURDEN=YES
 GLOBAL_ROOT_CAUSE_BEFORE_LOCAL_PATCH_LOOPS=YES
 CROSS_LAYER_CONTRACT_CLOSURE=REQUIRED
@@ -1049,6 +1250,7 @@ On independent acceptance and merge of this V2 standard:
 
 - `UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V1_2026-08-17.md` becomes historical/superseded;
 - the project-wide normative portions of `PROJECT_RESEARCH_EVIDENCE_DECISION_METHOD_V1_2026-08-16.md` are incorporated here; that file remains only a task-conditional research procedure/reference;
+- `EXTERNAL_MATURE_SOLUTION_SELECTION_AND_ADOPTION_RULE_V1_2026-09-07.md` remains a task-conditional procedure implementing the mature-solution rules owned here, not a second project-wide constitution;
 - the project-wide normative portions of `GENERATED_COMMAND_RELIABILITY_AND_OPERATOR_EFFICIENCY_RULE_V1_2026-08-30.md` are incorporated here; that file remains only a task-conditional operator procedure/incident catalogue;
 - the Issue #139 holistic verification methodology is incorporated here and does not require a separate competing governance constitution;
 - `MANDATORY_ENGINEERING_PREFLIGHT_AND_CONVERGENCE_GATE_V1_2026-08-17.md` remains a compact executable checklist derived from V2, not a separate source of engineering policy.
