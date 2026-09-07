@@ -94,7 +94,7 @@ UNRESOLVED_REQUIRES_EXPERIMENT_OR_MORE_EVIDENCE
 
 Research must converge. Do not keep searching indefinitely around the same failing design.
 
-When the external-solution rule applies, Phase 3 must preserve its typed Stage 0 disposition (`SELECT_MATURE_ROUTE`, `SELECT_MODULAR_COMPOSITION`, `ONE_BLOCKER_FEASIBILITY_SPIKE`, `REJECT_CANDIDATE`, `NO_FITTING_MATURE_ROUTE`, or `SAFE_STOP`) rather than paraphrasing an unresolved comparison into an implementation recommendation.
+When the external-solution rule applies, Phase 3 must preserve its typed Stage 0 disposition (`SELECT_MATURE_ROUTE`, `SELECT_MODULAR_COMPOSITION`, `ONE_BLOCKER_FEASIBILITY_SPIKE`, `UNRESOLVED_TRADEOFF`, `REJECT_CANDIDATE`, `NO_FITTING_MATURE_ROUTE`, or `SAFE_STOP`) rather than paraphrasing an unresolved comparison into an implementation recommendation.
 
 ---
 
