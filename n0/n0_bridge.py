@@ -33,6 +33,11 @@ class N0ClosedBarEvent:
     ts_event: int
     ts_init: int
 
+    @staticmethod
+    def type_name_static() -> str:
+        """Return the stable Nautilus custom-data type name for this projection."""
+        return _TYPE_NAME
+
 
 @dataclass(frozen=True)
 class DispatchResult:
@@ -101,13 +106,12 @@ def dispatch_offline(
     """
     # Imports are deliberately local: this semantic artifact is never to load
     # Nautilus on an unsupported writer host.
-    from nautilus_trader.backtest.engine import BacktestEngine
-    from nautilus_trader.config import BacktestEngineConfig, StrategyConfig
-    from nautilus_trader.model.data import CustomData, DataType
-    from nautilus_trader.trading.strategy import Strategy
+    from nautilus_trader.backtest import BacktestEngine, BacktestEngineConfig
+    from nautilus_trader.model import CustomData, DataType
+    from nautilus_trader.trading import Strategy, StrategyConfig
 
     data_type = DataType(
-        N0ClosedBarEvent,
+        _TYPE_NAME,
         metadata={"projection": "trade-os-closed-bar-v1"},
         identifier=_TYPE_IDENTIFIER,
     )
