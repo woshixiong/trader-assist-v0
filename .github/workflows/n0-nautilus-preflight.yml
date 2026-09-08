@@ -1,0 +1,167 @@
+name: N0 Nautilus Linux proof
+
+on:
+  push:
+    branches:
+      - issue139/n0-github-actions-spike-20260908
+
+permissions:
+  contents: read
+
+concurrency:
+  group: n0-nautilus-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  n0-linux-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+
+      - name: Prove Linux runner identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p n0_evidence
+          {
+            printf 'GITHUB_SHA=%s\n' "$GITHUB_SHA"
+            printf 'RUNNER_OS=%s\n' "$RUNNER_OS"
+            printf 'RUNNER_ARCH=%s\n' "$RUNNER_ARCH"
+            uname -a
+            cat /etc/os-release
+            getconf GNU_LIBC_VERSION
+            python --version
+            python - <<'PY'
+          import platform
+          import sys
+          assert sys.platform.startswith("linux"), sys.platform
+          assert platform.machine() == "x86_64", platform.machine()
+          assert sys.version_info[:2] == (3, 12), sys.version
+          print("VALIDATION_PLATFORM=LINUX_X86_64_PY312_PASS")
+          PY
+          } | tee n0_evidence/environment.txt
+          grep -Eq '^VERSION_ID="?24\.04"?$' /etc/os-release
+
+      - name: Acquire exact binary dependency set
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv /tmp/trade-os-n0-venv
+          mkdir -p /tmp/trade-os-n0-wheelhouse n0_evidence
+          /tmp/trade-os-n0-venv/bin/python -m pip download \
+            --only-binary=:all: \
+            --dest /tmp/trade-os-n0-wheelhouse \
+            "nautilus_trader==2.0.0rc4" \
+            "pytest==8.4.1" \
+            "pydantic==2.13.4" \
+            "websockets==16.1" \
+            2>&1 | tee n0_evidence/pip-download.log
+          (
+            cd /tmp/trade-os-n0-wheelhouse
+            sha256sum * | LC_ALL=C sort
+          ) | tee "$GITHUB_WORKSPACE/n0_evidence/wheelhouse-sha256.txt"
+          wheel="/tmp/trade-os-n0-wheelhouse/nautilus_trader-2.0.0rc4-cp312-cp312-manylinux_2_34_x86_64.whl"
+          test -f "$wheel"
+          actual="$(sha256sum "$wheel" | awk '{print $1}')"
+          expected="8d3591aa4d86c7133be2115b1037ffadafb36449214d9973d496bdc80e21ad93"
+          printf 'NAUTILUS_WHEEL=%s\n' "$(basename "$wheel")" | tee n0_evidence/nautilus-wheel.txt
+          printf 'NAUTILUS_WHEEL_SHA256=%s\n' "$actual" | tee -a n0_evidence/nautilus-wheel.txt
+          test "$actual" = "$expected"
+
+      - name: Offline install exact dependency set
+        shell: bash
+        run: |
+          set -euo pipefail
+          /tmp/trade-os-n0-venv/bin/python -m pip install \
+            --no-index \
+            --find-links /tmp/trade-os-n0-wheelhouse \
+            "nautilus_trader==2.0.0rc4" \
+            "pytest==8.4.1" \
+            "pydantic==2.13.4" \
+            "websockets==16.1" \
+            2>&1 | tee n0_evidence/pip-install.log
+          /tmp/trade-os-n0-venv/bin/python -m pip check | tee n0_evidence/pip-check.txt
+          /tmp/trade-os-n0-venv/bin/python - <<'PY' | tee n0_evidence/installed-identity.txt
+          import importlib.metadata
+          version = importlib.metadata.version("nautilus_trader")
+          assert version == "2.0.0rc4", version
+          print(f"NAUTILUS_VERSION={version}")
+          PY
+
+      - name: Pre-Writer official event-path smoke and API witness
+        shell: bash
+        run: |
+          set -euo pipefail
+          /tmp/trade-os-n0-venv/bin/python \
+            scripts/n0_nautilus_preflight.py \
+            --output n0_evidence/preflight-witness.json \
+            2>&1 | tee n0_evidence/preflight-smoke.log
+
+      - name: Detect semantic artifacts
+        id: semantic
+        shell: bash
+        run: |
+          set -euo pipefail
+          if test -f n0/n0_bridge.py && test -f n0/test_n0_bridge.py; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            printf 'SEMANTIC_ARTIFACTS_PRESENT=YES\n' | tee n0_evidence/semantic-artifact-state.txt
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            printf 'SEMANTIC_ARTIFACTS_PRESENT=NO\n' | tee n0_evidence/semantic-artifact-state.txt
+          fi
+
+      - name: Authoritative Linux focused N0 test
+        if: ${{ steps.semantic.outputs.present == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 \
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+          PYTHONPATH="$GITHUB_WORKSPACE/src:$GITHUB_WORKSPACE/n0" \
+            /tmp/trade-os-n0-venv/bin/python -m pytest \
+              -q -p no:cacheprovider n0/test_n0_bridge.py \
+              2>&1 | tee n0_evidence/focused-test.log
+
+      - name: Exact changed-path checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git diff --name-only 3bf7f4e1c1a852b780da599147e39b109392385c...HEAD \
+            | LC_ALL=C sort \
+            | tee n0_evidence/changed-paths.txt
+          python - <<'PY'
+          from pathlib import Path
+          allowed = {
+              ".github/workflows/n0-nautilus-preflight.yml",
+              "scripts/n0_nautilus_preflight.py",
+              "n0/n0_bridge.py",
+              "n0/test_n0_bridge.py",
+              "n0/spike_result.json",
+          }
+          changed = {
+              line.strip()
+              for line in Path("n0_evidence/changed-paths.txt").read_text().splitlines()
+              if line.strip()
+          }
+          unexpected = sorted(changed - allowed)
+          assert not unexpected, f"unexpected changed paths: {unexpected}"
+          print("N0_CHANGED_PATH_ALLOWLIST=PASS")
+          PY
+
+      - name: Upload N0 evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: n0-nautilus-${{ github.sha }}
+          path: n0_evidence
+          if-no-files-found: error
+          retention-days: 30
