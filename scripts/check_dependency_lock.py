@@ -7,6 +7,8 @@ from importlib.metadata import distributions
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+PILOT_REQUIREMENT = "nautilus-trader==2.0.0rc4"
+PILOT_WHEEL_SHA256 = "8d3591aa4d86c7133be2115b1037ffadafb36449214d9973d496bdc80e21ad93"
 PIN_RE = re.compile(r"^[A-Za-z0-9_.-]+==[A-Za-z0-9_.!+-]+$")
 LOCK_RE = re.compile(
     r"^(?P<name>[A-Za-z0-9_.-]+)==(?P<version>[A-Za-z0-9_.!+-]+) "
@@ -49,12 +51,14 @@ def _read_lock(name: str) -> dict[str, tuple[str, str]]:
 def _verify_direct_pins(
     runtime: dict[str, tuple[str, str]],
     dev: dict[str, tuple[str, str]],
+    pilot: dict[str, tuple[str, str]],
 ) -> None:
     data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     project = tuple(data["project"]["dependencies"])
     optional_dev = tuple(data["project"]["optional-dependencies"]["dev"])
+    optional_pilot = tuple(data["project"]["optional-dependencies"]["nautilus-pilot"])
     build = tuple(data["build-system"]["requires"])
-    for requirement in (*project, *optional_dev, *build):
+    for requirement in (*project, *optional_dev, *optional_pilot, *build):
         if not PIN_RE.fullmatch(requirement):
             raise SystemExit(f"pyproject dependency is not exactly pinned: {requirement}")
     missing_runtime = [
@@ -71,6 +75,11 @@ def _verify_direct_pins(
         raise SystemExit("runtime lock mismatch: " + ", ".join(missing_runtime))
     if missing_dev:
         raise SystemExit("dev lock mismatch: " + ", ".join(missing_dev))
+    if optional_pilot != (PILOT_REQUIREMENT,):
+        raise SystemExit("nautilus-pilot optional dependency must contain only the exact rc4 pin")
+    expected_pilot = {_pin(PILOT_REQUIREMENT)[0]: (_pin(PILOT_REQUIREMENT)[1], PILOT_WHEEL_SHA256)}
+    if pilot != expected_pilot:
+        raise SystemExit("pilot lock must contain only the exact authorized rc4 Linux wheel")
 
 
 def _verify_runtime_subset(
@@ -88,19 +97,23 @@ def _verify_runtime_subset(
         )
 
 
-def _verify_installed(dev: dict[str, tuple[str, str]]) -> None:
+def _verify_installed(
+    dev: dict[str, tuple[str, str]],
+    pilot: dict[str, tuple[str, str]] | None = None,
+) -> None:
     installed: dict[str, str] = {}
     for distribution in distributions():
         name = distribution.metadata.get("Name")
         if name:
             installed[_normalized_name(name)] = distribution.version
-    expected_names = set(dev) | {"trader-assist-v0"}
+    expected = dev if pilot is None else {**dev, **pilot}
+    expected_names = set(expected) | {"trader-assist-v0"}
     actual_names = set(installed)
     missing = sorted(expected_names - actual_names)
     extra = sorted(actual_names - expected_names)
     wrong_versions = sorted(
         name
-        for name, (version, _digest) in dev.items()
+        for name, (version, _digest) in expected.items()
         if installed.get(name) is not None and installed[name] != version
     )
     failures: list[str] = []
@@ -116,17 +129,22 @@ def _verify_installed(dev: dict[str, tuple[str, str]]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--verify-installed", action="store_true")
+    installed_mode = parser.add_mutually_exclusive_group()
+    installed_mode.add_argument("--verify-installed", action="store_true")
+    installed_mode.add_argument("--verify-pilot-installed", action="store_true")
     args = parser.parse_args()
     runtime = _read_lock("requirements-runtime.lock")
     dev = _read_lock("requirements-dev.lock")
-    _verify_direct_pins(runtime, dev)
+    pilot = _read_lock("requirements-nautilus-pilot.lock")
+    _verify_direct_pins(runtime, dev, pilot)
     _verify_runtime_subset(runtime, dev)
     if args.verify_installed:
         _verify_installed(dev)
+    if args.verify_pilot_installed:
+        _verify_installed(dev, pilot)
     print(
         "dependency locks: complete, hashed, and consistent "
-        f"({len(runtime)} runtime, {len(dev)} CI/dev)"
+        f"({len(runtime)} runtime, {len(dev)} CI/dev, {len(pilot)} pilot)"
     )
     return 0
 
