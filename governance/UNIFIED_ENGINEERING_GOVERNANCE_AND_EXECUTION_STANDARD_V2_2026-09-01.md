@@ -232,7 +232,7 @@ For a framework/provider/platform/tool selection, freeze the responsibility boun
 
 Then consult the strongest relevant evidence, prioritizing:
 
-1. official specifications, provider docs, first-party source repositories;
+1. official specifications, provider docs and first-party source repositories;
 2. primary research, inspectable data and reproducible benchmarks;
 3. mature maintained frameworks and validated production cases/postmortems;
 4. high-quality independent technical analysis;
@@ -410,7 +410,7 @@ ONE_AUTHORITATIVE_OWNER_PER_RESPONSIBILITY=REQUIRED
 OVERLAPPING_DURABLE_STATE_OMS_POSITION_RISK_AUTHORITY=PROHIBITED
 ```
 
-Prefer configuration, official plugin/extension, thin adapter and upstream contribution. A long-lived invasive fork of mature framework internals is prohibited by default and is treated as custom commodity infrastructure for this gate.
+Prefer configuration, official plugin/extension, thin adapter and upstream contribution. A long-lived invasive private fork of mature framework internals is prohibited by default and is treated as custom commodity infrastructure for this gate.
 
 If project integration code begins owning generic reconnect, OMS, portfolio, generic risk, durable recovery or another mature platform responsibility, reclassify the code as `COMMODITY_INFRASTRUCTURE` and reopen this gate.
 
@@ -858,7 +858,30 @@ LOCAL_PLATFORM_WHEN_FIT
 -> CURRENT_TARGET_HOST_ONLY_FOR_TARGET_HOST_SPECIFIC_PROOF_UNDER_CURRENT_AUTHORITY
 ```
 
-The production host is not a generic development sandbox.
+The production target host is not a generic development sandbox.
+
+### 13.1 Authoritative remote/provider-native execution preference
+
+The fallback ordering above is a fidelity ladder, not a rule that the user's workstation must be tried first. When an accepted GitHub/provider-native remote surface can execute the bounded task or proof with **equal or higher claim fidelity**, exact source/head identity, reproducible evidence and lower human relay/rework, prefer that remote surface over user-operated local emulation.
+
+```text
+AUTHORITATIVE_REMOTE_EXECUTION_SURFACE_PREFERRED_WHEN_EQUAL_OR_HIGHER_FIDELITY=YES
+USER_LOCAL_WORKSTATION_NOT_DEFAULT_FOR_CI_OR_LINUX_PROOF=YES
+REMOTE_EXECUTION_MUST_PRESERVE_FROZEN_EXECUTOR_MODEL_TOOL_AND_AUTHORITY=YES
+REMOTE_EXECUTION_CREDENTIAL_OR_PRIVATE_API_AUTHORITY_MUST_BE_EXPLICIT=YES
+```
+
+Apply this claim-by-claim:
+
+- Linux/CI-specific proof should normally run on the accepted exact-head GitHub Actions/Linux surface rather than on macOS or a user-maintained local Linux emulation.
+- Deterministic GitHub control-plane work such as exact branch/PR/head/CI/artifact state should be carried directly through GitHub when the connector/workflow already has the required authority, rather than requiring the user to relay or reproduce it locally.
+- A cheap faithful local unit/contract check may still run before CI when it is already available and reduces total burden without meaningful user relay; remote-first does not mean replacing every deterministic unit test with CI.
+- Local execution remains appropriate when the claim is irreducibly local, depends on an already-authorized local authenticated session/tool, requires local-only files/hardware, or when no accepted remote surface can preserve the frozen executor/capability contract.
+- Target-host-specific claims still require the target host; GitHub does not become a substitute for a different authoritative environment merely because it is remote.
+
+Remote preference never grants new secrets or permissions. If the remote path requires a provider API key, GitHub secret, private API, credential, signing capability or broader token permission not already authorized for the bounded stage, stop at that exact authority boundary. Do not silently create, transfer, infer or reuse credential authority merely to avoid a local step.
+
+A canonical exact GitHub ref/head already proven through the control plane must not be redundantly transformed into a requirement that the user's local repository already contains the same Git object. If a genuinely local Writer is still required, acquire and verify the exact canonical remote ref in an isolated workspace through the already-authorized Git transport; local object preexistence is not a substitute safety invariant.
 
 ---
 
@@ -908,7 +931,9 @@ Human-operated engineering commands are part of the engineering system and must 
 
 ### 15.1 One-paste default
 
-For user-operated macOS engineering work, default to one contiguous ordinary-Terminal paste when safe. Do not require the user to manually reconstruct paths, prompts, hashes or stage routing when they can be encoded deterministically.
+When user-operated macOS engineering work is genuinely required by the selected authoritative route, default to one contiguous ordinary-Terminal paste when safe. Do not require the user to manually reconstruct paths, prompts, hashes or stage routing when they can be encoded deterministically.
+
+Do not route work to the user's workstation merely because a local command can be generated. Apply §13.1 first: an accepted remote/provider-native surface with equal or higher fidelity and lower relay is preferred when it does not require unauthorized credentials or weaken the frozen executor/claim contract.
 
 An extra human step is allowed only when technically unavoidable or required by a real authority/security boundary.
 
@@ -1082,7 +1107,7 @@ Repository safety:
 
 Acceptance/release identity uses exact base/head/changed paths/artifact/CI run where applicable. CI from another SHA is stale evidence.
 
-GitHub CI verifies exact remote content and the CI platform. It should not be used as the first avoidable downstream test when a faithful cheaper local gate exists, but it **is** the correct authority for environment-specific proof assigned to CI.
+GitHub CI verifies exact remote content and the CI platform. It should not replace a faithful cheap deterministic unit/contract gate that is already available with negligible relay, but it **is** preferred over user-operated local emulation for Linux/CI-specific proof when GitHub is the authoritative environment. Do not make the user's workstation reproduce canonical GitHub identity or Linux-specific evidence merely to satisfy a redundant preflight.
 
 Publication order:
 
@@ -1221,9 +1246,14 @@ CANONICAL_VALIDATION_COMMAND_REUSE=REQUIRED
 VALIDATION_ENVIRONMENT_FIDELITY=REQUIRED
 PLATFORM_SENSITIVE_VALIDATION_ON_WRONG_OS=PROHIBITED
 KNOWN_ENVIRONMENT_MISMATCH_REUSE=REQUIRED
+AUTHORITATIVE_REMOTE_EXECUTION_PREFERRED_WHEN_EQUAL_OR_HIGHER_FIDELITY=YES
+USER_LOCAL_WORKSTATION_NOT_DEFAULT_FOR_CI_OR_LINUX_PROOF=YES
+REMOTE_EXECUTION_PRESERVES_FROZEN_EXECUTOR_MODEL_TOOL_AUTHORITY=REQUIRED
+REMOTE_EXECUTION_CREDENTIAL_AUTHORITY_MUST_BE_EXPLICIT=YES
+CANONICAL_REMOTE_REF_MUST_NOT_REQUIRE_REDUNDANT_LOCAL_OBJECT_PREEXISTENCE=YES
 EXACT_RELEASE_STAGED_ARTIFACT_SEPARATION=REQUIRED
 PERSISTED_STATE_COPY_MUST_FOLLOW_COMPONENT_DURABILITY_SEMANTICS=YES
-MACOS_OPERATOR_ONE_PASTE_DEFAULT=YES
+MACOS_OPERATOR_ONE_PASTE_DEFAULT=YES_WHEN_LOCAL_OPERATOR_ROUTE_IS_GENUINELY_REQUIRED
 KNOWN_COMMAND_INCIDENT_NONREGRESSION_GATE=REQUIRED
 OPERATOR_TRANSPORT_MUST_REDUCE_COMPLEXITY_NOT_REENCODE_IT=YES
 INTERACTIVE_SHELL_PARSE_ASSUMPTIONS_MUST_BE_PROVEN_OR_AVOIDED=YES
