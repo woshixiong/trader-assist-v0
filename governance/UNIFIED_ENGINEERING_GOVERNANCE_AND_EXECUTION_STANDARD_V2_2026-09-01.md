@@ -232,7 +232,7 @@ For a framework/provider/platform/tool selection, freeze the responsibility boun
 
 Then consult the strongest relevant evidence, prioritizing:
 
-1. official specifications, provider docs and first-party source repositories;
+1. official specifications, provider docs, first-party source repositories;
 2. primary research, inspectable data and reproducible benchmarks;
 3. mature maintained frameworks and validated production cases/postmortems;
 4. high-quality independent technical analysis;
@@ -410,7 +410,7 @@ ONE_AUTHORITATIVE_OWNER_PER_RESPONSIBILITY=REQUIRED
 OVERLAPPING_DURABLE_STATE_OMS_POSITION_RISK_AUTHORITY=PROHIBITED
 ```
 
-Prefer configuration, official plugin/extension, thin adapter and upstream contribution. A long-lived invasive private fork of mature framework internals is prohibited by default and is treated as custom commodity infrastructure for this gate.
+Prefer configuration, official plugin/extension, thin adapter and upstream contribution. A long-lived invasive fork of mature framework internals is prohibited by default and is treated as custom commodity infrastructure for this gate.
 
 If project integration code begins owning generic reconnect, OMS, portfolio, generic risk, durable recovery or another mature platform responsibility, reclassify the code as `COMMODITY_INFRASTRUCTURE` and reopen this gate.
 
@@ -858,7 +858,7 @@ LOCAL_PLATFORM_WHEN_FIT
 -> CURRENT_TARGET_HOST_ONLY_FOR_TARGET_HOST_SPECIFIC_PROOF_UNDER_CURRENT_AUTHORITY
 ```
 
-The production target host is not a generic development sandbox.
+The production host is not a generic development sandbox.
 
 ### 13.1 Authoritative remote/provider-native execution preference
 
