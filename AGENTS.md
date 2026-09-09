@@ -107,6 +107,9 @@ NO_HIDDEN_SEMANTIC_RETRY=YES
 FALSE_SAFE_STOP_GATE=PROHIBITED
 CHECKPOINT_RESUME_INSTEAD_OF_REDO=YES
 EXACT_ARTIFACT_EXACT_HEAD_CI_INDEPENDENT_REVIEW=WHEN_APPLICABLE
+AUTHORITATIVE_REMOTE_EXECUTION_PREFERRED_WHEN_EQUAL_OR_HIGHER_FIDELITY=YES
+USER_LOCAL_WORKSTATION_NOT_DEFAULT_FOR_CI_OR_LINUX_PROOF=YES
+REMOTE_EXECUTION_CREDENTIAL_AUTHORITY_MUST_BE_EXPLICIT=YES
 ```
 
 ## 5. Repository and authority safety
@@ -123,6 +126,8 @@ EXACT_ARTIFACT_EXACT_HEAD_CI_INDEPENDENT_REVIEW=WHEN_APPLICABLE
 Final independent adjudication defaults to a **new ordinary ChatGPT review window using the strongest appropriate available model and highest appropriate reasoning**.
 
 If GitHub evidence is sufficient, review exact GitHub head/diff + exact-head CI directly. If local evidence is needed, prefer deterministic hash-manifested evidence/review bundles rather than downgrading the final Reviewer to a weaker local coding model.
+
+For execution/validation, prefer an authoritative GitHub/provider-native remote surface over user-operated local emulation when it provides equal or higher claim fidelity, exact identity/evidence, and lower human relay. This preference never creates credential/private-API authority and never overrides a genuinely local or target-host-specific claim boundary.
 
 The current control/orchestration role retains task ownership through intermediate CI/review/publication gates, executes every safe authorized next action, and stops only at the specific external or user-retained authority boundary.
 
