@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Self
 
 from trader_assist_v0.contracts.common import decimal_to_canonical_string
 
 from .contracts import (
+    E3_CONTRACT_SCHEMA_VERSION,
     PilotEvaluationEnvelope,
     StrategyInputEvent,
     revalidate_strategy_input_event,
@@ -18,13 +19,23 @@ from .strategy_package import (
     select_strategy_package,
 )
 
+_PROJECT_DATA_TYPE_NAME = "TradeOsStrategyInputEventV1"
+_PROJECT_DATA_TYPE_IDENTIFIER = "TRADE-OS.E3-STRATEGY-INPUT"
+
 if TYPE_CHECKING:
 
     class StrategyConfig:
-        def __init_subclass__(cls, **kwargs: object) -> None: ...
+        def __new__(cls, *args: object, **kwargs: object) -> Self: ...
+
+        def __init__(self, *args: object, **kwargs: object) -> None: ...
 
     class DataType:
-        def __init__(self, data_cls: type[object]) -> None: ...
+        def __init__(
+            self,
+            type_name: str,
+            metadata: dict[str, str] | None = None,
+            identifier: str | None = None,
+        ) -> None: ...
 
     class CustomData:
         data_type: DataType
@@ -32,19 +43,18 @@ if TYPE_CHECKING:
         ts_event: int
         ts_init: int
 
-        def __init__(self, *, data_type: DataType, data: object) -> None: ...
+        def __init__(self, data_type: DataType, data: object) -> None: ...
 
     class ImportableStrategyConfig:
         def __init__(
             self,
-            *,
             strategy_path: str,
             config_path: str,
             config: dict[str, object],
         ) -> None: ...
 
     class Strategy:
-        def __init__(self, *, config: StrategyConfig) -> None: ...
+        def __init__(self, config: StrategyConfig | None = None) -> None: ...
 
         def subscribe_data(self, data_type: DataType) -> None: ...
 
@@ -53,8 +63,20 @@ else:
     from nautilus_trader.trading import ImportableStrategyConfig, Strategy, StrategyConfig
 
 
-class NautilusPilotStrategyConfig(StrategyConfig, frozen=True):
+class NautilusPilotStrategyConfig(StrategyConfig):
     """Serializable identity/configuration only; no callbacks or runtime objects."""
+
+    _CUSTOM_FIELDS = (
+        "package_version",
+        "strategy_version",
+        "parameter_version",
+        "scanner_version",
+        "kernel_schema_version",
+        "trade_os_release_sha",
+        "manifest_hash",
+        "market_id",
+        "minimum_tick",
+    )
 
     package_version: str
     strategy_version: str
@@ -65,6 +87,35 @@ class NautilusPilotStrategyConfig(StrategyConfig, frozen=True):
     manifest_hash: str
     market_id: str
     minimum_tick: str
+
+    def __new__(cls, *args: object, **kwargs: object) -> Self:
+        for key in cls._CUSTOM_FIELDS:
+            kwargs.pop(key, None)
+        return super().__new__(cls, *args, **kwargs)
+
+    def __init__(
+        self,
+        package_version: str,
+        strategy_version: str,
+        parameter_version: str,
+        scanner_version: str,
+        kernel_schema_version: str,
+        trade_os_release_sha: str,
+        manifest_hash: str,
+        market_id: str,
+        minimum_tick: str,
+        **_kwargs: object,
+    ) -> None:
+        super().__init__()
+        self.package_version = package_version
+        self.strategy_version = strategy_version
+        self.parameter_version = parameter_version
+        self.scanner_version = scanner_version
+        self.kernel_schema_version = kernel_schema_version
+        self.trade_os_release_sha = trade_os_release_sha
+        self.manifest_hash = manifest_hash
+        self.market_id = market_id
+        self.minimum_tick = minimum_tick
 
 
 def _minimum_tick(value: str) -> Decimal:
@@ -93,10 +144,18 @@ def _validate_market_id(value: str) -> str:
     return value
 
 
+def _project_data_type() -> DataType:
+    return DataType(
+        _PROJECT_DATA_TYPE_NAME,
+        metadata={"schema_version": E3_CONTRACT_SCHEMA_VERSION},
+        identifier=_PROJECT_DATA_TYPE_IDENTIFIER,
+    )
+
+
 def build_custom_data(event: StrategyInputEvent) -> CustomData:
     """Wrap an exact project input event in the public rc4 custom-data type."""
     validated = revalidate_strategy_input_event(event)
-    return CustomData(data_type=DataType(StrategyInputEvent), data=validated)
+    return CustomData(_project_data_type(), validated)
 
 
 def build_importable_strategy_config(
@@ -140,7 +199,7 @@ class NautilusPilotStrategy(Strategy):
     """Nautilus lifecycle shell around the project-owned pure evaluator."""
 
     def __init__(self, config: NautilusPilotStrategyConfig) -> None:
-        super().__init__(config=config)
+        super().__init__(config)
         manifest = select_strategy_package(
             package_version=config.package_version,
             strategy_version=config.strategy_version,
@@ -151,7 +210,7 @@ class NautilusPilotStrategy(Strategy):
             manifest_hash=config.manifest_hash,
         )
         market_id = _validate_market_id(config.market_id)
-        self._project_data_type = DataType(StrategyInputEvent)
+        self._project_data_type = _project_data_type()
         self._evaluator = PilotStrategyEvaluator(
             manifest=manifest,
             market_id=market_id,

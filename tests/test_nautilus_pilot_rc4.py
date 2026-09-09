@@ -16,8 +16,7 @@ if importlib.util.find_spec("nautilus_trader") is None:
         raise AssertionError("authoritative E3 CI requires the exact Nautilus pilot distribution")
     pytest.skip("optional nautilus-pilot dependency is absent", allow_module_level=True)
 
-from nautilus_trader.backtest.engine import BacktestEngine
-from nautilus_trader.backtest.node import BacktestNode
+from nautilus_trader.backtest import BacktestEngine, BacktestEngineConfig, BacktestNode
 
 from trader_assist_v0.contracts.common import sha256_hex
 from trader_assist_v0.multi_asset_shadow.models import ClosedBar
@@ -82,7 +81,9 @@ def _config() -> NautilusPilotStrategyConfig:
 
 def test_exact_rc4_and_public_importable_strategy_config_surface() -> None:
     assert version("nautilus-trader") == "2.0.0rc4"
+    config = _config()
     manifest = _manifest()
+    assert config.manifest_hash == manifest.manifest_hash
     importable = build_importable_strategy_config(
         manifest=manifest,
         market_id=MARKET,
@@ -109,12 +110,18 @@ def test_official_backtest_custom_data_dispatch_matches_direct_project_evaluator
         output for event in events if (output := direct_evaluator.evaluate(event))
     )
 
+    custom_data = [build_custom_data(event) for event in events]
+    assert tuple((item.ts_event, item.ts_init) for item in custom_data) == tuple(
+        (event.ts_event, event.ts_init) for event in events
+    )
+
     strategy = NautilusPilotStrategy(_config())
-    engine = BacktestEngine()
+    engine = BacktestEngine(BacktestEngineConfig(bypass_logging=True, run_analysis=False))
     try:
-        engine.add_data([build_custom_data(event) for event in events])
         engine.add_strategy(strategy)
+        engine.add_data(custom_data, validate=True, sort=True)
         engine.run()
+        engine.get_result()
     finally:
         engine.dispose()
 
