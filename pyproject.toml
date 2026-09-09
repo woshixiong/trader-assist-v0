@@ -21,6 +21,9 @@ dev = [
   "ruff==0.12.2",
   "pip-audit==2.9.0",
 ]
+nautilus-pilot = [
+  "nautilus-trader==2.0.0rc4",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/trader_assist_v0"]
