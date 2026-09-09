@@ -76,10 +76,13 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          : > /tmp/e3-focused-tests.txt
           /tmp/trader-assist-e3-venv/bin/pytest -q \
             tests/test_nautilus_pilot_contracts.py \
+            | tee -a /tmp/e3-focused-tests.txt
+          /tmp/trader-assist-e3-venv/bin/pytest -q \
             tests/test_nautilus_pilot_rc4.py \
-            | tee /tmp/e3-focused-tests.txt
+            | tee -a /tmp/e3-focused-tests.txt
           {
             echo "FOCUSED_TEST_RESULT=PASS"
             echo "CANONICAL_CLOSEDBAR_REVALIDATED=YES"
