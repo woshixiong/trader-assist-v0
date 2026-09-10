@@ -2,6 +2,7 @@
 
 **Status:** CANONICAL GOVERNANCE CANDIDATE  
 **Effective date:** 2026-09-01  
+**Last material amendment candidate:** 2026-09-10  
 **Repository:** `woshixiong/trader-assist-v0`  
 **Authority intent:** on independent acceptance and merge, this file becomes the **single project-wide normative engineering ruleset**. Task-specific Product / Strategy / Operations / Security authority and narrow executor/tool/deployment contracts may be stricter in their own domain, but they must not become competing engineering constitutions.
 
@@ -39,7 +40,7 @@ EXTERNAL_MATURE_SOLUTION_SELECTION_AND_ADOPTION_RULE_V1_2026-09-07.md
 = task-conditional mature-solution selection/adoption procedure; no competing authority
 
 GENERATED_COMMAND_RELIABILITY_AND_OPERATOR_EFFICIENCY_RULE_V1_2026-08-30.md
-= task-conditional operator-command procedure / incident catalogue; no competing authority
+= task-conditional operator-command procedure / incident catalogue
 
 executor / model / tool / FinalShell / Hermes profiles
 = narrow task-conditional contracts after route selection
@@ -119,6 +120,7 @@ LOAD LIVE STATE + CANONICAL RULES
      + EXTERNAL MATURE-SOLUTION SELECTION PROCEDURE
 -> EXTERNAL / MATURE-SOLUTION EVIDENCE WHEN DIRECTION-SETTING
 -> SYNTHESIS / ROUTE DECISION
+-> RESEARCH-INVESTMENT / EVIDENCE-CONVERGENCE GATE WHEN A MATERIAL RESEARCH FRONTIER IS REACHED
 -> ONE-BLOCKER / CHEAP SAFE DECISIVE PRE-WRITER GO/NO-GO EXPERIMENT WHEN APPLICABLE
 -> GLOBAL ARCHITECTURE + CONTRACT + CONTINUITY PREFLIGHT
 -> SCALE / PROVIDER / FRESHNESS PREFLIGHT WHEN APPLICABLE
@@ -184,6 +186,7 @@ CAPABILITY_CLASS
 MATURE_ALTERNATIVES
 MATURE_SOLUTION_SELECTION_DISPOSITION
 CUSTOM_COMMODITY_EXCEPTION_USER_AUTHORITY
+RESEARCH_FRONTIER / RESEARCH_INVESTMENT_DISPOSITION WHEN APPLICABLE
 STAGE_CLAIM_LADDER / AUTHORITATIVE_PROOF_SURFACE_FOR_EACH_STAGE
 MINIMUM_REPRESENTATIVE_TOPOLOGY / COMPLEXITY_ESCALATION_ORDER
 PRE_WRITER_GO_NO_GO_EXPERIMENT
@@ -259,6 +262,119 @@ VALIDATION_OR_EXPERIMENT_REQUIRED
 Research must converge to a decision. Endless research around the same failed design is prohibited.
 
 For a mature-solution decision, preserve the typed selection disposition rather than paraphrasing an unresolved comparison into a Writer instruction.
+
+### Research-investment, complexity and evidence-convergence gate
+
+A material research frontier is reached when the current evidence has been used as far as it can support a defensible decision and further progress would require one or more of:
+
+- materially new data or a new data-retention surface;
+- new provider/infrastructure work;
+- a materially larger experiment;
+- additional model/rule/parameter search on substantially the same historical evidence;
+- a new source of independent OOS/Forward evidence.
+
+Reaching that frontier **does not** automatically authorize more research, more data engineering or a new infrastructure project. The next step must be selected by comparing the expected decision value of additional information with its total burden and with the value of proceeding to the next safe evidence stage.
+
+Record, at an applicability-scaled level:
+
+```text
+RESEARCH_FRONTIER_REACHED=YES|NO
+MISSING_EVIDENCE_OR_DATA=
+DECISION_CRITICALITY=HARD_BLOCKER|MATERIAL_OPTIMIZATION|OPTIONAL
+EXPECTED_DECISION_IMPACT=LOW|MEDIUM|HIGH|BOUNDED_ESTIMATE
+EXPECTED_UNCERTAINTY_REDUCTION=LOW|MEDIUM|HIGH|BOUNDED_ESTIMATE
+TOTAL_RESEARCH_BURDEN=
+DELAY_OPPORTUNITY_COST=
+COMPLEXITY_OVERFIT_COST=
+DATA_PERISHABILITY_OR_RECONSTRUCTABILITY=
+NEXT_STAGE_REVERSIBILITY_AND_RISK=
+FORWARD_OR_INDEPENDENT_EVIDENCE_VALUE=
+RESEARCH_INVESTMENT_DISPOSITION=
+```
+
+The conceptual decision rule is:
+
+```text
+EXPECTED_NET_RESEARCH_VALUE
+≈ EXPECTED_DECISION_VALUE_OF_INFORMATION
+  - TOTAL_RESEARCH_BURDEN
+  - DELAY_OPPORTUNITY_COST
+  - COMPLEXITY / OVERFIT COST
+```
+
+This is a decision aid, not a demand for false numerical precision. Qualitative evidence or bounded estimates are acceptable when exact monetization is not defensible.
+
+A safety, authority, correctness, data-integrity, causal-validity or next-stage-claim blocker is a hard gate and may not be traded away merely because research is expensive. Otherwise, uncertainty alone is not sufficient reason to continue research.
+
+Every material frontier must end in exactly one of these research-investment dispositions:
+
+```text
+ACQUIRE_BEFORE_NEXT_GATE
+CAPTURE_CHEAP_OPTIONALITY
+PROCEED_WITH_CURRENT_BEST_AND_DEFER
+PARK_OR_REJECT
+```
+
+#### `ACQUIRE_BEFORE_NEXT_GATE`
+
+Use when the missing evidence is required for safety/correctness/causal validity or for the authoritative next-stage claim, or when the expected decision impact is materially high relative to total burden. Acquire only the cheapest decisive evidence needed for the unresolved decision. Provider-native, accepted or mature capability remains preferred for commodity data/infrastructure.
+
+#### `CAPTURE_CHEAP_OPTIONALITY`
+
+Use when the data is not required for the current decision but is ephemeral or difficult to reconstruct later, has credible future research value, and can be captured with low total lifecycle burden without creating a second authority or speculative platform. Capture is non-authoritative research evidence by default; collecting a field does not authorize using it in the current Strategy/policy or promotion claim. If capture itself becomes material infrastructure, this disposition no longer applies and the requirement must be re-gated.
+
+#### `PROCEED_WITH_CURRENT_BEST_AND_DEFER`
+
+Use when the current candidate is coherent, deterministic, versioned where applicable, causally defined, testable and safe/correct for the next authorized stage; the missing information is optimization-level rather than a hard blocker; and the expected value of independent OOS/Forward/real-environment evidence is at least as valuable as another historical/data-engineering cycle. Freeze known unknowns and deferred hypotheses explicitly. This disposition never bypasses a required promotion, Shadow, Testnet, safety, deployment or real-capital gate.
+
+#### `PARK_OR_REJECT`
+
+Use when expected decision impact is low, the requirement is stale/obsolete, counterevidence is strong, or total burden/complexity is disproportionate to plausible value. Record a concrete re-open trigger when one exists; do not retain zombie TODOs that silently consume planning attention.
+
+#### Simplicity, adaptive research and strategy overfitting control
+
+For trading Strategy research, the target is **not the most optimized historical strategy**. The target is the simplest strategy that is sufficiently effective and robust for the next evidence stage, after realistic costs and under current evidence.
+
+Permanent Strategy research principles:
+
+```text
+EFFECTIVENESS_BEFORE_SIMPLICITY=YES
+SIMPLEST_AMONG_MATERIALLY_COMPARABLE_VALIDATED_CANDIDATES=YES
+MINIMUM_NECESSARY_PARAMETERS_FEATURES_STATES_DATA_DEPENDENCIES=TARGET
+COMPLEXITY_REQUIRES_INCREMENTAL_VALUE=YES
+HISTORICAL_IN_SAMPLE_GAIN_ALONE_DOES_NOT_JUSTIFY_COMPLEXITY=YES
+OOS_OR_FORWARD_INCREMENTAL_VALUE_REQUIRED_FOR_MATERIAL_COMPLEXITY_PROMOTION=YES
+TRIAL_AND_ADAPTIVITY_LEDGER=REQUIRED
+```
+
+Do not impose a universal numeric parameter-count cap: an arbitrary cap can underfit a real mechanism. Instead, every material new parameter, feature, state, conditional branch or data dependency needs a pre-specified causal hypothesis and an incremental-value test against a simpler baseline. When simpler and more complex candidates are materially comparable on independent/OOS/Forward evidence, prefer the simpler candidate because it reduces estimation error, overfit surface, maintenance and future change amplification.
+
+Repeatedly trying rules, parameters, feature definitions or data interpretations on the same history increases selection bias and backtest overfitting risk. OOS data also loses independence when it is repeatedly inspected and used adaptively to redesign the candidate. Therefore track the effective search/trial history and do not treat a repeatedly consulted holdout as pristine evidence.
+
+After substantial historical adaptivity, a frozen version tested on genuinely later/independent Forward evidence can have higher decision value than another round of historical optimization. Forward evidence is not an excuse to skip cheap decisive correctness tests; it is the preferred next information source when the remaining uncertainty is optimization-level and the next stage is authorized and sufficiently reversible/non-authoritative.
+
+For Strategy candidates entering Forward Shadow or equivalent prospective evaluation:
+
+```text
+FREEZE_VERSION_BEFORE_FORWARD_EVIDENCE=YES
+MATERIAL_RULE_OR_PARAMETER_CHANGE=>NEW_IMMUTABLE_VERSION
+NO_RETROACTIVE_FORWARD_EVIDENCE_CREDIT=YES
+```
+
+#### Recursion and convergence guard
+
+`DATA_BLOCKED_FRONTIER` or equivalent is not automatic data-engineering authority.
+
+```text
+RESEARCH_FRONTIER
+-> RESEARCH_INVESTMENT_GATE
+-> EXACTLY_ONE_RESEARCH_INVESTMENT_DISPOSITION
+-> ONLY_THEN_NEXT_ACTION
+```
+
+A repeated pre-Forward acquisition/research cycle for the same strategy/problem family is presumptively disfavored once marginal information value is declining. Each new cycle must identify a **new material decision** and pass this gate again. “Another potentially useful enhancement exists” is not by itself a new material decision and should normally resolve to `PROCEED_WITH_CURRENT_BEST_AND_DEFER` or `PARK_OR_REJECT` unless a real safety/correctness/causal blocker has emerged.
+
+Do not set an arbitrary maximum number of research cycles; a genuinely new high-value blocker may justify another cycle. The stop rule is declining expected decision value relative to total burden and the availability of a better independent evidence stage, not calendar impatience or a fixed iteration count.
 
 ### Pre-Writer GO/NO-GO feasibility experiment
 
@@ -1198,6 +1314,17 @@ MATERIAL_WRITER_REQUIRES_ENGINEERING_PREFLIGHT_PASS=YES
 INDEPENDENT_ANALYSIS_BEFORE_EXTERNAL_CONCLUSIONS=YES
 EXTERNAL_MATURE_EVIDENCE_FOR_MATERIAL_DIRECTION_SETTING=YES
 SYNTHESIS_BEFORE_ROUTE_FREEZE=YES
+RESEARCH_FRONTIER_REQUIRES_INVESTMENT_DISPOSITION=YES
+DATA_BLOCKED_FRONTIER_DOES_NOT_AUTO_AUTHORIZE_ENGINEERING=YES
+RESEARCH_INVESTMENT_BY_EXPECTED_DECISION_VALUE_MINUS_TOTAL_BURDEN=YES
+SAFETY_CORRECTNESS_CAUSAL_BLOCKERS_OVERRIDE_RESEARCH_ROI_DEFER=YES
+RESEARCH_INVESTMENT_DISPOSITIONS=ACQUIRE_BEFORE_NEXT_GATE|CAPTURE_CHEAP_OPTIONALITY|PROCEED_WITH_CURRENT_BEST_AND_DEFER|PARK_OR_REJECT
+SIMPLEST_EFFECTIVE_VALIDATED_STRATEGY_PREFERRED=YES
+STRATEGY_COMPLEXITY_REQUIRES_MATERIAL_INCREMENTAL_OOS_OR_FORWARD_VALUE=YES
+HISTORICAL_ADAPTIVITY_AND_TRIAL_COUNT_MUST_BE_RECORDED=YES
+REPEATED_PRE_FORWARD_RESEARCH_EXPANSION_REQUIRES_FRESH_INVESTMENT_GATE=YES
+FREEZE_STRATEGY_VERSION_BEFORE_FORWARD_EVIDENCE=YES
+NO_RETROACTIVE_FORWARD_EVIDENCE_CREDIT_AFTER_MATERIAL_VERSION_CHANGE=YES
 PRE_WRITER_GO_NO_GO_EXPERIMENT=WHEN_CHEAP_SAFE_AND_DECISIVE
 MATURE_SOLUTION_FIRST=YES
 MATURE_CAPABILITY_NO_REBUILD_GATE=REQUIRED
