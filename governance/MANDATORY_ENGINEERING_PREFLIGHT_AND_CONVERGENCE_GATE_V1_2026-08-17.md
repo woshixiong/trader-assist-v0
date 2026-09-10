@@ -2,6 +2,7 @@
 
 **Status:** ACTIVE CHECKLIST CANDIDATE  
 **Effective date:** 2026-08-17  
+**Last material amendment candidate:** 2026-09-10  
 **Normative owner:** `UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V2_2026-09-01.md`
 
 This file is an **execution checklist and record schema**, not a second engineering constitution. If this checklist and Unified V2 conflict, Unified V2 governs.
@@ -62,6 +63,90 @@ If the task is not direction-setting, use `NOT_REQUIRED` rather than manufacturi
 When a material decision selects/rejects/composes/customizes/adopts an external mature solution, or proposes project-owned commodity infrastructure, also load and complete the applicable record from:
 
 - `governance/EXTERNAL_MATURE_SOLUTION_SELECTION_AND_ADOPTION_RULE_V1_2026-09-07.md`
+
+### 2A. Research frontier / investment / complexity gate
+
+Complete this block whenever current evidence is exhausted and the next proposed step requires material new data, data retention, provider/infrastructure work, a larger experiment, further adaptive search on substantially the same historical evidence, or new independent OOS/Forward evidence.
+
+```text
+RESEARCH_FRONTIER_REACHED=YES|NO|NOT_APPLICABLE
+CURRENT_BEST_CANDIDATE=
+CURRENT_CANDIDATE_READINESS=
+MISSING_EVIDENCE_OR_DATA=
+DECISION_THAT_NEW_INFORMATION_COULD_CHANGE=
+DECISION_CRITICALITY=HARD_BLOCKER|MATERIAL_OPTIMIZATION|OPTIONAL|NOT_APPLICABLE
+EXPECTED_DECISION_IMPACT=LOW|MEDIUM|HIGH|BOUNDED_ESTIMATE|NOT_APPLICABLE
+EXPECTED_UNCERTAINTY_REDUCTION=LOW|MEDIUM|HIGH|BOUNDED_ESTIMATE|NOT_APPLICABLE
+TOTAL_RESEARCH_BURDEN=
+DIRECT_DATA_OR_PROVIDER_COST=
+DELAY_OPPORTUNITY_COST=
+COMPLEXITY_OVERFIT_COST=
+DATA_PERISHABILITY_OR_RECONSTRUCTABILITY=
+NEXT_STAGE_REVERSIBILITY_AND_RISK=
+FORWARD_OR_INDEPENDENT_EVIDENCE_VALUE=
+FRONTIER_DECOMPOSITION=PASS|NOT_REQUIRED|FAIL|NOT_APPLICABLE
+TRIAL_AND_ADAPTIVITY_LEDGER_STATUS=PASS|LEGACY_INCOMPLETE_CONSERVATIVE|FAIL|NOT_APPLICABLE
+SIMPLE_BASELINE_AND_INCREMENTAL_VALUE_TEST=PASS|FAIL|NOT_APPLICABLE
+RESEARCH_INVESTMENT_DISPOSITION=ACQUIRE_BEFORE_NEXT_GATE|CAPTURE_CHEAP_OPTIONALITY|PROCEED_WITH_CURRENT_BEST_AND_DEFER|PARK_OR_REJECT|NOT_APPLICABLE
+REOPEN_TRIGGER_IF_DEFERRED_OR_PARKED=
+```
+
+Hard rules:
+
+```text
+DATA_BLOCKED_FRONTIER != AUTO_DATA_ENGINEERING
+
+MULTI_DECISION_FRONTIER
+=> FRONTIER_DECOMPOSITION=PASS
+=> EACH_MATERIAL_FRONTIER_ITEM_HAS_EXACTLY_ONE_DISPOSITION=YES
+=> OPTIONAL_ITEM_MUST_NOT_FORCE_ACQUISITION_OF_HARD_BLOCKER_SCOPE=YES
+=> HARD_BLOCKER_MUST_NOT_BE_HIDDEN_INSIDE_DEFERRED_OR_OPTIONAL_ITEM=YES
+
+HARD_BLOCKER
+=> PROCEED_WITH_CURRENT_BEST_AND_DEFER=PROHIBITED_FOR_THE_BLOCKED_CLAIM
+=> PARK_OR_REJECT=PROHIBITED_UNLESS_THE_BLOCKED_CLAIM/ROUTE_ITSELF_IS_ABANDONED
+
+ACQUIRE_BEFORE_NEXT_GATE
+=> NEW_RESEARCH_OR_DATA_SCOPE_MUST_MAP_TO_EXACT_UNRESOLVED_DECISION
+=> CHEAPEST_DECISIVE_EVIDENCE_ROUTE_REQUIRED
+
+CAPTURE_CHEAP_OPTIONALITY
+=> CURRENT_POLICY_USE_FROM_CAPTURE=NO
+=> CAPTURED_DATA_NONAUTHORITATIVE_BY_DEFAULT
+=> MATERIAL_INFRASTRUCTURE_EXPANSION_PROHIBITED_UNDER_THIS_DISPOSITION
+
+PROCEED_WITH_CURRENT_BEST_AND_DEFER
+=> CURRENT_CANDIDATE_MUST_PASS_APPLICABLE_NEXT_STAGE_SAFETY_CORRECTNESS_AUTHORITY_GATES
+=> KNOWN_UNKNOWNS_AND_DEFERRED_HYPOTHESES_RECORDED=YES
+
+PARK_OR_REJECT
+=> ZOMBIE_TODO_WITHOUT_REOPEN_TRIGGER_OR_EXPLICIT_REJECTION=PROHIBITED
+
+TRIAL_AND_ADAPTIVITY_LEDGER_STATUS=LEGACY_INCOMPLETE_CONSERVATIVE
+=> EXACT_LEGACY_TRIAL_COUNT_MUST_NOT_BE_FABRICATED
+=> BEST_KNOWN_LOWER_BOUND_OR_UNKNOWN_LEGACY_INCOMPLETE_REQUIRED=YES
+=> HISTORICAL_AND_REPEATED_OOS_INDEPENDENCE_STRENGTH_MUST_BE_DOWNGRADED=YES
+=> LEGACY_INCOMPLETENESS_ALONE_IS_NOT_FORWARD_SHADOW_BLOCK=YES
+=> PROSPECTIVE_MATERIAL_VARIANT_LOGGING_REQUIRED=YES
+
+NEW_UNLOGGED_MATERIAL_STRATEGY_VARIANT
+=> TRIAL_AND_ADAPTIVITY_LEDGER_STATUS=FAIL
+=> AFFECTED_ADAPTIVITY_OR_INDEPENDENCE_CLAIM=FAIL
+```
+
+For trading Strategy work where material discretionary economic complexity is proposed, additionally require:
+
+```text
+PRESPECIFIED_CAUSAL_HYPOTHESIS=YES|NO|NOT_APPLICABLE
+SIMPLE_BASELINE_DEFINED=YES|NO|NOT_APPLICABLE
+MATERIAL_INCREMENTAL_OOS_OR_FORWARD_VALUE_REQUIRED_FOR_PROMOTION=YES|NO|NOT_APPLICABLE
+MATERIAL_VARIANT_COUNT_OR_SEARCH_HISTORY_RECORDED=YES|LEGACY_LOWER_BOUND_OR_UNKNOWN|NO|NOT_APPLICABLE
+FORWARD_VERSION_FREEZE_PLAN=PASS|FAIL|NOT_APPLICABLE
+```
+
+Complexity independently required for safety, correctness, authority or causal validity remains governed by those hard gates and does not require an economic-uplift experiment merely to exist.
+
+Do not require fake numerical precision. Qualitative evidence is acceptable; unresolved applicable fields are not.
 
 ---
 
@@ -273,11 +358,32 @@ For legacy project-owned commodity infrastructure, a material defect, clean-repl
 
 `ENGINEERING_PREFLIGHT_GATE=PASS` only when every applicable field above is resolved and the selected Writer/executor has the capabilities required to perform the frozen task and its mandatory gates. This includes `STAGE_CLAIM_LADDER`, `AUTHORITATIVE_PROOF_SURFACE_FOR_EACH_STAGE`, `MINIMUM_REPRESENTATIVE_TOPOLOGY`, `COMPLEXITY_ESCALATION_ORDER`, `PRE_WRITER_GO_NO_GO_EXPERIMENT`, `DETERMINISTIC_BRANCH_PROOF_PLAN` and `REAL_EXTERNAL_BOUNDARY_PROOF_PLAN` when applicable.
 
+For a material research/data task triggered by a research frontier, `ENGINEERING_PREFLIGHT_GATE=PASS` additionally requires an explicit disposition for each material frontier item after decomposition where needed. No data/research Writer may infer `ACQUIRE_BEFORE_NEXT_GATE` from `DATA_BLOCKED_FRONTIER` alone.
+
+Disposition scope is binding:
+
+```text
+ACQUIRE_BEFORE_NEXT_GATE
+=> ONLY_THE_CHEAPEST_DECISIVE_APPROVED_EVIDENCE_SCOPE_MAY_DISPATCH
+
+CAPTURE_CHEAP_OPTIONALITY
+=> CAPTURE_ONLY_NONAUTHORITATIVE_SCOPE
+=> CURRENT_STRATEGY_OR_POLICY_CHANGE_FROM_CAPTURE=PROHIBITED
+
+PROCEED_WITH_CURRENT_BEST_AND_DEFER
+=> NEW_DATA_ENGINEERING_FOR_THE_DEFERRED_REQUIREMENT=PROHIBITED
+
+PARK_OR_REJECT
+=> NEW_DATA_ENGINEERING_FOR_THE_PARKED_REQUIREMENT=PROHIBITED_UNTIL_REOPEN_TRIGGER
+```
+
+`LEGACY_INCOMPLETE_CONSERVATIVE` is a resolved transitional evidence state, not an automatic research or Forward-Shadow blocker. It requires conservative evidence-strength labeling and prospective material-variant logging. `FAIL` for a new knowingly unlogged material variant blocks reliance on the affected adaptivity/independence claim until the missing trial identity is recovered.
+
 For any applicable commodity-capability decision, `ENGINEERING_PREFLIGHT_GATE=PASS` additionally requires the external mature-solution selection rule to have reached a typed disposition. A Writer cannot self-authorize custom commodity infrastructure.
 
 `UNRESOLVED_TRADEOFF` and `DECISION_STABILITY_CHECK=LOW` are not promotable states for selection, adoption or product Writer dispatch. A Tiny Spike is the only Writer exception, and only when the strictly bounded Tiny Spike fields above all pass.
 
-If any applicable architecture, authority, validation-environment, scope, repair-budget, mature-solution, Tiny Spike, or user-authority field is unresolved or fails its required promotion gate:
+If any applicable architecture, authority, validation-environment, scope, repair-budget, research-investment, mature-solution, Tiny Spike, or user-authority field is unresolved or fails its required promotion gate:
 
 ```text
 ENGINEERING_PREFLIGHT_GATE=FAIL
@@ -320,6 +426,10 @@ INDEPENDENT_REVIEW=
 REPAIR_STAGE=
 RESIDUAL_RISKS=
 DEFERRED_WORK=
+RESEARCH_FRONTIER_REACHED=
+RESEARCH_INVESTMENT_DISPOSITION=
+FRONTIER_DECOMPOSITION=
+TRIAL_AND_ADAPTIVITY_LEDGER_STATUS=
 MATURE_SOLUTION_SELECTION_RESULT=
 DECISION_STABILITY_RESULT=
 STAGE_0_DISPOSITION=
