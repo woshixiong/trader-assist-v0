@@ -798,10 +798,10 @@ A new engineering executor/operator/orchestrator or material tool-configuration 
 ```text
 BOUNDED_CANDIDATE
 -> EXACT CONFIG / ARTIFACT IDENTITY
--> REPRESENTATIVE_CAPABILITY_AND_SAFETY_EVIDENCE
--> SEPARATE_INDEPENDENT_REVIEW
--> USER_ACTIVATION_OR_PUBLICATION_AUTHORITY
--> FIRST_REAL_TASK
+-> REPRESENTATIVE CAPABILITY + SAFETY EVIDENCE
+-> SEPARATE INDEPENDENT REVIEW
+-> USER ACTIVATION / PUBLICATION AUTHORITY
+-> FIRST REAL TASK
 ```
 
 Installed/free/popular does not equal accepted infrastructure. Multi-step automation must be checkpointed and human-recoverable; hidden semantic retries are prohibited.
@@ -1129,8 +1129,8 @@ A later wrapper, network, platform or evidence failure does not erase a complete
 
 ```text
 INITIAL_GENERATED_COMMAND
--> AT MOST ONE BOUNDED_CORRECTION
--> SECOND_AVOIDABLE_COMMAND_OR_WRAPPER_DEFECT_IN_SAME_STAGE
+-> AT MOST ONE BOUNDED CORRECTION
+-> SECOND AVOIDABLE COMMAND/WRAPPER DEFECT IN SAME STAGE
    => COMMAND_RELIABILITY_HOLISTIC_REGENERATION
 ```
 
@@ -1172,7 +1172,7 @@ WHY_EXISTING_GATES_MISSED_IT
 LOWEST_DECISIVE_REPRODUCTION
 GENERALIZED_INVARIANT
 PREVENTIVE_TEST / PROCESS CHANGE
-OWNER / FOLLOW_UP
+OWNER / FOLLOW-UP
 ```
 
 Historical incidents are rationale and regression evidence, not competing active rules. Reusable lessons are absorbed into this constitution or a narrow procedure rather than relying on chat memory.
@@ -1196,7 +1196,7 @@ Once a baseline is independently accepted, default to delta review:
 ```text
 ACCEPTED_BASELINE
 + EXACT_NEW_DELTA
-+ TARGETED_REGRESSION / BYPASS_CHECKS
++ TARGETED_REGRESSION / BYPASS CHECKS
 ```
 
 Do not repeatedly rereview unchanged accepted thousands of lines without a concrete dependency/regression reason.
