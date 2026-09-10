@@ -341,13 +341,15 @@ Permanent Strategy research principles:
 EFFECTIVENESS_BEFORE_SIMPLICITY=YES
 SIMPLEST_AMONG_MATERIALLY_COMPARABLE_VALIDATED_CANDIDATES=YES
 MINIMUM_NECESSARY_PARAMETERS_FEATURES_STATES_DATA_DEPENDENCIES=TARGET
-COMPLEXITY_REQUIRES_INCREMENTAL_VALUE=YES
+DISCRETIONARY_ECONOMIC_COMPLEXITY_REQUIRES_INCREMENTAL_VALUE=YES
 HISTORICAL_IN_SAMPLE_GAIN_ALONE_DOES_NOT_JUSTIFY_COMPLEXITY=YES
-OOS_OR_FORWARD_INCREMENTAL_VALUE_REQUIRED_FOR_MATERIAL_COMPLEXITY_PROMOTION=YES
+OOS_OR_FORWARD_INCREMENTAL_VALUE_REQUIRED_FOR_MATERIAL_DISCRETIONARY_ECONOMIC_COMPLEXITY_PROMOTION=YES
 TRIAL_AND_ADAPTIVITY_LEDGER=REQUIRED
 ```
 
-Do not impose a universal numeric parameter-count cap: an arbitrary cap can underfit a real mechanism. Instead, every material new parameter, feature, state, conditional branch or data dependency needs a pre-specified causal hypothesis and an incremental-value test against a simpler baseline. When simpler and more complex candidates are materially comparable on independent/OOS/Forward evidence, prefer the simpler candidate because it reduces estimation error, overfit surface, maintenance and future change amplification.
+Do not impose a universal numeric parameter-count cap: an arbitrary cap can underfit a real mechanism. Instead, every material discretionary economic parameter, feature, state, conditional branch or data dependency needs a pre-specified causal hypothesis and an incremental-value test against a simpler baseline. When simpler and more complex candidates are materially comparable on independent/OOS/Forward evidence, prefer the simpler candidate because it reduces estimation error, overfit surface, maintenance and future change amplification.
+
+Complexity independently required for safety, correctness, authority, data integrity or causal validity is governed by those hard gates and is not conditioned on an economic-uplift experiment. Such required complexity must still be validated for the actual safety/correctness/authority/data-integrity/causal claim it exists to satisfy.
 
 Repeatedly trying rules, parameters, feature definitions or data interpretations on the same history increases selection bias and backtest overfitting risk. OOS data also loses independence when it is repeatedly inspected and used adaptively to redesign the candidate. Therefore track the effective search/trial history and do not treat a repeatedly consulted holdout as pristine evidence.
 
@@ -357,7 +359,9 @@ For Strategy candidates entering Forward Shadow or equivalent prospective evalua
 
 ```text
 FREEZE_VERSION_BEFORE_FORWARD_EVIDENCE=YES
-MATERIAL_RULE_OR_PARAMETER_CHANGE=>NEW_IMMUTABLE_VERSION
+ANY_MATERIAL_STRATEGY_SEMANTIC_OR_EVIDENCE_AFFECTING_CHANGE=>NEW_IMMUTABLE_VERSION
+MATERIAL_CHANGE_INCLUDES=RULE|PARAMETER|FEATURE|FEATURE_OR_DATA_DEFINITION|STATE|CONDITIONAL_BRANCH|DATA_DEPENDENCY
+FORWARD_EVIDENCE_CLOCK_STARTS_AT_NEW_VERSION_ACTIVATION=YES
 NO_RETROACTIVE_FORWARD_EVIDENCE_CREDIT=YES
 ```
 
@@ -907,7 +911,7 @@ Stage failure handling is claim-scoped:
 FREEZE CLAIM
 -> RUN MINIMUM REPRESENTATIVE PROOF
 -> IF FAIL: STOP OUTWARD PROMOTION
--> CLASSIFY FAILED RESPONSIBILITY BOUNDARY
+-> CLASSIFY FAILED_RESPONSIBILITY_BOUNDARY
 -> REPRODUCE AT LOWEST DECISIVE LAYER
 -> REPRODUCE AT RELEVANT PRODUCTION-COMPOSITION LAYER WHEN APPLICABLE
 -> REPAIR ONLY THE PROVEN BOUNDARY OR REPLAN / REPLACE
@@ -1202,7 +1206,7 @@ Default application/design repair budget:
 ```text
 INITIAL IMPLEMENTATION
 + AT MOST ONE NORMAL CONSOLIDATED REPAIR
-+ AT MOST ONE EXPLICITLY AUTHORIZED EXCEPTIONAL NARROW REPAIR
++ AT MOST ONE EXPLICITLY_AUTHORIZED_EXCEPTIONAL_NARROW_REPAIR
 ```
 
 No routine Repair 3/4/5. New root cause, expanded authority/layer boundary or exhausted budget triggers `HOLISTIC_CONVERGENCE_GATE` and route-level reanalysis. Sunk cost never authorizes another patch.
@@ -1320,10 +1324,11 @@ RESEARCH_INVESTMENT_BY_EXPECTED_DECISION_VALUE_MINUS_TOTAL_BURDEN=YES
 SAFETY_CORRECTNESS_CAUSAL_BLOCKERS_OVERRIDE_RESEARCH_ROI_DEFER=YES
 RESEARCH_INVESTMENT_DISPOSITIONS=ACQUIRE_BEFORE_NEXT_GATE|CAPTURE_CHEAP_OPTIONALITY|PROCEED_WITH_CURRENT_BEST_AND_DEFER|PARK_OR_REJECT
 SIMPLEST_EFFECTIVE_VALIDATED_STRATEGY_PREFERRED=YES
-STRATEGY_COMPLEXITY_REQUIRES_MATERIAL_INCREMENTAL_OOS_OR_FORWARD_VALUE=YES
+STRATEGY_DISCRETIONARY_ECONOMIC_COMPLEXITY_REQUIRES_MATERIAL_INCREMENTAL_OOS_OR_FORWARD_VALUE=YES
 HISTORICAL_ADAPTIVITY_AND_TRIAL_COUNT_MUST_BE_RECORDED=YES
 REPEATED_PRE_FORWARD_RESEARCH_EXPANSION_REQUIRES_FRESH_INVESTMENT_GATE=YES
 FREEZE_STRATEGY_VERSION_BEFORE_FORWARD_EVIDENCE=YES
+ANY_MATERIAL_STRATEGY_SEMANTIC_OR_EVIDENCE_AFFECTING_CHANGE_RESETS_FORWARD_EVIDENCE_CLOCK=YES
 NO_RETROACTIVE_FORWARD_EVIDENCE_CREDIT_AFTER_MATERIAL_VERSION_CHANGE=YES
 PRE_WRITER_GO_NO_GO_EXPERIMENT=WHEN_CHEAP_SAFE_AND_DECISIVE
 MATURE_SOLUTION_FIRST=YES
