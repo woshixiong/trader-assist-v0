@@ -165,7 +165,7 @@ Safety, authority, correctness, data-integrity, causal-validity and authoritativ
 
 ### 1A.3 Exactly four research-investment dispositions
 
-Every material frontier resolves to exactly one:
+Every material frontier item resolves to exactly one:
 
 ```text
 ACQUIRE_BEFORE_NEXT_GATE
@@ -173,6 +173,8 @@ CAPTURE_CHEAP_OPTIONALITY
 PROCEED_WITH_CURRENT_BEST_AND_DEFER
 PARK_OR_REJECT
 ```
+
+If one nominal frontier contains multiple separable missing-evidence items that could change different material decisions, decompose them before assigning dispositions. Each material item gets exactly one disposition. Do not blend an optional item with a hard blocker to force acquisition of everything, and do not hide a hard blocker inside a broader deferred item.
 
 #### A. `ACQUIRE_BEFORE_NEXT_GATE`
 
@@ -271,7 +273,7 @@ Simplicity includes fewer or narrower:
 - model classes and tuning dimensions;
 - required provider/storage/operational surfaces.
 
-Do not impose an arbitrary universal parameter-count cap. A genuine mechanism can require complexity, and a rigid small-number rule can underfit. Instead every **material** new feature, parameter, state, branch or data dependency must have:
+Do not impose an arbitrary universal parameter-count cap. A genuine mechanism can require complexity, and a rigid small-number rule can underfit. Instead every **material discretionary economic** feature, parameter, state, branch or data dependency must have:
 
 ```text
 PRESPECIFIED_CAUSAL_HYPOTHESIS=YES
@@ -281,7 +283,7 @@ TRIAL_LEDGER_UPDATED=YES
 MATERIAL_OOS_OR_FORWARD_ADVANTAGE_REQUIRED_FOR_PROMOTION=YES
 ```
 
-Historical/in-sample improvement alone does not earn permanent complexity.
+Historical/in-sample improvement alone does not earn permanent discretionary economic complexity. Complexity required independently for safety, correctness, authority or causal validity remains governed by those hard gates and is not rejected merely because it lacks an economic uplift experiment.
 
 ### 1A.5 Adaptive-search / holdout contamination control
 
@@ -297,6 +299,10 @@ WHICH_EVIDENCE_REMAINS_GENUINELY_LATER_OR_INDEPENDENT=
 ```
 
 Do not label a repeatedly consulted OOS set as pristine independent evidence.
+
+For material variants tried before this prospective ledger rule was adopted, do not invent an exact historical trial count. Record the best-known lower bound or `UNKNOWN_LEGACY_INCOMPLETE`, identify known adaptations where practical, and conservatively downgrade the independence/strength of historical and repeatedly consulted OOS evidence. Legacy incompleteness alone is not a safety/correctness blocker and must not create an endless historical reconstruction project merely to make the ledger look complete. If the candidate is otherwise safe/correct for a reversible non-authoritative next stage, legacy incompleteness increases the value of freezing the version and obtaining genuinely later Forward evidence.
+
+From adoption of this rule forward, every new material Strategy variant or material discretionary economic rule/parameter change must be logged prospectively. A knowingly unlogged new material variant makes the affected adaptivity/evidence claim `FAIL` until the missing trial identity is recovered; it is not silently treated as pristine evidence.
 
 When substantial adaptive historical search has already occurred and the current candidate is safe/correct for a reversible non-authoritative next stage, freezing the candidate and obtaining genuinely later Forward evidence should normally be preferred to opening another optimization cycle unless the research-investment gate finds a new high-value blocker.
 
@@ -316,7 +322,7 @@ A research frontier may recur, but it may not become an automatic loop.
 ```text
 RESEARCH_FRONTIER
 -> RESEARCH_INVESTMENT_GATE
--> EXACTLY_ONE_DISPOSITION
+-> EXACTLY_ONE_DISPOSITION_PER_MATERIAL_FRONTIER_ITEM
 -> EXECUTE_ONLY_THAT_DISPOSITION
 ```
 
@@ -346,7 +352,7 @@ A material research/route decision should be auditable from five compact section
 
 When a material research frontier is reached, add a sixth section:
 
-6. **Research-investment disposition** — current candidate, unresolved decision, missing information, expected value/burden, one of the four dispositions, and re-open trigger where applicable.
+6. **Research-investment disposition** — current candidate, unresolved decision, missing information, expected value/burden, one of the four dispositions, and re-open trigger where applicable. If the frontier contains multiple separable material decisions, list the decomposed frontier items and one disposition for each.
 
 The format may be compressed for time-critical work, but the three-stage sequence remains visible.
 
@@ -374,6 +380,8 @@ Do not:
 - add parameters/features/states merely because they improve the same historical sample;
 - reuse a holdout adaptively and continue calling it pristine OOS evidence;
 - maximize backtest score without recording search/trial history;
+- fabricate a precise legacy trial count when the historical search record is incomplete;
+- make legacy ledger incompleteness itself the reason for an endless reconstruction/research cycle;
 - reject a materially stronger robust candidate merely because it is more complex;
 - keep researching because perfection remains theoretically possible after the current candidate is good enough for a safer, more independent evidence stage.
 
