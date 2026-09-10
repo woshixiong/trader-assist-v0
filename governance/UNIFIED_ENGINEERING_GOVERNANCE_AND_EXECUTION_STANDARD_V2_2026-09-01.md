@@ -907,7 +907,7 @@ Stage failure handling is claim-scoped:
 FREEZE CLAIM
 -> RUN MINIMUM REPRESENTATIVE PROOF
 -> IF FAIL: STOP OUTWARD PROMOTION
--> CLASSIFY FAILED_RESPONSIBILITY_BOUNDARY
+-> CLASSIFY FAILED RESPONSIBILITY BOUNDARY
 -> REPRODUCE AT LOWEST DECISIVE LAYER
 -> REPRODUCE AT RELEVANT PRODUCTION-COMPOSITION LAYER WHEN APPLICABLE
 -> REPAIR ONLY THE PROVEN BOUNDARY OR REPLAN / REPLACE
@@ -1167,8 +1167,8 @@ ROOT_CAUSE / CONTRIBUTING_CAUSES
 WHY_EXISTING_GATES_MISSED_IT
 LOWEST_DECISIVE_REPRODUCTION
 GENERALIZED_INVARIANT
-PREVENTIVE_TEST / PROCESS_CHANGE
-OWNER / FOLLOW_UP
+PREVENTIVE_TEST / PROCESS CHANGE
+OWNER / FOLLOW-UP
 ```
 
 Historical incidents are rationale and regression evidence, not competing active rules. Reusable lessons are absorbed into this constitution or a narrow procedure rather than relying on chat memory.
@@ -1192,7 +1192,7 @@ Once a baseline is independently accepted, default to delta review:
 ```text
 ACCEPTED_BASELINE
 + EXACT_NEW_DELTA
-+ TARGETED_REGRESSION / BYPASS_CHECKS
++ TARGETED_REGRESSION / BYPASS CHECKS
 ```
 
 Do not repeatedly rereview unchanged accepted thousands of lines without a concrete dependency/regression reason.
@@ -1202,7 +1202,7 @@ Default application/design repair budget:
 ```text
 INITIAL IMPLEMENTATION
 + AT MOST ONE NORMAL CONSOLIDATED REPAIR
-+ AT MOST ONE EXPLICITLY_AUTHORIZED_EXCEPTIONAL_NARROW_REPAIR
++ AT MOST ONE EXPLICITLY AUTHORIZED EXCEPTIONAL NARROW REPAIR
 ```
 
 No routine Repair 3/4/5. New root cause, expanded authority/layer boundary or exhausted budget triggers `HOLISTIC_CONVERGENCE_GATE` and route-level reanalysis. Sunk cost never authorizes another patch.
