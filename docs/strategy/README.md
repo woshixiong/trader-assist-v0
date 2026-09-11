@@ -17,6 +17,15 @@ It grants no production Strategy change, Mark Ready, merge, deployment, credenti
 - `TA_VNEXT_RESEARCH_DATA_CONTRACT_V1_2026-09-11.md` — causal market/decision/order/outcome evidence required to make the Strategy testable and improvable.
 - `TA_VNEXT_OPEN_QUESTIONS_AND_HYPOTHESIS_LEDGER_V1_2026-09-11.md` — every unresolved material Strategy question, its evidence need, test method and research-investment disposition.
 - `TA_VNEXT_ENGINEERING19_PRE_E4_HANDOFF_2026-09-11.md` — self-contained Strategy -> Engineering requirements, including the prior Q1-Q16 answers plus the new validation/data loop.
+- `TA_VNEXT_PRE_E4_REPAIR1_CONTRACT_ADDENDUM_2026-09-11.md` — mandatory bounded repair after independent third-party review. **Read this file before using the four files above; it overrides only their conflicting clauses on BBO validity, pre-decision capture, order-active fill semantics, U21/U23/U25 dispositions, timestamp terminology and E5 multi-Challenger selection.**
+
+Current handoff status after Repair 1:
+
+```text
+STRATEGY_PRE_E4_HANDOFF=REPAIR_APPLIED_PENDING_DELTA_REVIEW
+ENGINEERING19_HANDOFF_ALLOWED=NO_PENDING_DELTA_REVIEW
+E4_HARD_HOLD=ACTIVE
+```
 
 Historical/superseded Strategy decisions are indexed under:
 
