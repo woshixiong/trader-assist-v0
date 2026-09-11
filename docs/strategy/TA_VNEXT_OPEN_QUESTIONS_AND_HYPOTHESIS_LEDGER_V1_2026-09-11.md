@@ -230,10 +230,10 @@ Disposition: capture required timing now; optimize later.
 
 Question: how often effective friction changes enough to alter participation decisions?
 
-Evidence: versioned fee profile/state at every Opportunity and later observed actual fee.
+Evidence: versioned research fee profile at every Opportunity, combined with public/provider market fee state such as Growth Mode/deployer-fee configuration where available; later compare with actual authoritative user fee/fill evidence only when that private/account evidence is separately authorized and available.
 
 Criticality: HARD correctness requirement for after-cost claims.
-Disposition: ACQUIRE_BEFORE_NEXT_GATE through current provider/account-configured fee-state evidence; no asset-class hardcode.
+Disposition: ACQUIRE_BEFORE_NEXT_GATE through versioned configured research fee profiles plus public/provider fee-state evidence; no asset-class hardcode and no private/account API requirement is created for E4.
 
 ## U25 — right-tail concentration
 
@@ -296,7 +296,7 @@ DATA_BLOCKED_FRONTIER_ITEMS=NONE_FOR_FIRST_E4_SHADOW
 E4_CORE_BARS_BBO_TRADES_REFERENCE_COST_IDENTITY=ACQUIRE_BEFORE_NEXT_GATE
 LOW_RATE_OI_FUNDING_CONTEXT=CAPTURE_CHEAP_OPTIONALITY
 ARBITRARY_HISTORICAL_BBO_L2_OI_DEEP_TRADES=PROCEED_WITH_CURRENT_BEST_AND_DEFER
-FULL_L2_L3_L4_RICH_ID_ML=Park_or_reject until exact reopen trigger
+FULL_L2_L3_L4_RICH_ID_ML=PARK_OR_REJECT_UNTIL_EXACT_REOPEN_TRIGGER
 FINAL_NUMERIC_EA_AP_WC_X_PARAMETERS=PROCEED_WITH_CURRENT_BEST_AND_DEFER_TO_E4_E5
 ```
 
