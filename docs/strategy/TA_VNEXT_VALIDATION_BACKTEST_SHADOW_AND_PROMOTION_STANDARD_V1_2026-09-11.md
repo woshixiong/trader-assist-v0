@@ -177,6 +177,12 @@ Primary path is superiority to the Champion/reference on paired same-Opportunity
 
 A future risk-improvement/non-inferiority path may be added only with a pre-registered non-inferiority margin before opening the evidence. No post-hoc margin is allowed.
 
+#### Promotion-standard freeze rule
+
+The sample floors, confidence thresholds, clustering rule, concentration warnings and stress bands in this V1 document are project-specific prespecified research controls, not universal statistical laws. They may be changed only by a new reviewed validation-standard version **before** opening the Forward evidence set to which the new gate will apply.
+
+If a threshold/gate is changed after inspecting the current candidate's Forward results, the already-inspected evidence cannot be treated as pristine evidence for the modified gate. The modified standard must use a later untouched Forward segment or a new immutable Forward evidence clock as applicable.
+
 ### G6 — zero-write approval / Testnet execution qualification
 
 These stages validate operational execution semantics, not alpha.
