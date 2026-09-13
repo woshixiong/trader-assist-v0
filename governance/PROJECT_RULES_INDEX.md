@@ -70,14 +70,17 @@ It is subordinate to Unified V2 and does not choose a specific framework by itse
 For weekly or periodic review of the user's manual/discretionary trading behavior, edge, session/regime dependence, execution errors, fees, MAE/MFE, and week-over-week behavioral improvement, use:
 
 - `governance/TRADING_BEHAVIOR_AND_EDGE_REVIEW_PROCEDURE_V1_2026-09-06.md`
+- `governance/TRADING_BEHAVIOR_REVIEW_AND_EXPERIMENT_LIFECYCLE_V1_2026-09-13.md`
 
-Current user-directed prospective behavior baseline:
+Short-horizon weekly/stage targets are tracked in one lightweight GitHub record:
 
-- `governance/TRADING_BEHAVIOR_ACTIVE_EXPERIMENT_BASELINE_2026-09-14.md`
+- Issue #171 — `Trading Behavior — Weekly Optimization Log`
 
-The dated baseline is subordinate to the recurring review procedure and defines the current week's `PROVISIONAL_RULE` execution/compliance targets. When multiple dated baselines exist, use the latest applicable baseline for current-week compliance while retaining earlier baselines as historical comparison evidence.
+The lifecycle rule separates durable repository principles from tunable weekly experiments. Routine weekly targets are appended as dated comments to Issue #171 and do **not** require a new governance file / branch / PR / independent review / merge by default. A weekly item moves into repository authority only after the lifecycle promotion gate is satisfied.
 
-This is a narrow task-conditional research/review procedure, not project-wide engineering governance and not trading authority. It standardizes UTC+08:00 time normalization, flat-to-flat episode reconstruction, Korea/US opening-regime analysis, Macro × US Open interaction analysis, stop-discipline/rapid-reentry diagnostics, fee/friction analysis, MAE/MFE integration, evidence labels, deduplicated counterfactuals, and week-over-week comparison. Raw private/account trade data remains outside Git history.
+The dated week-beginning-2026-09-07 baseline embedded in §13 of the parent procedure is historical experiment evidence after 2026-09-14; it is not the current active weekly target set. Current weekly targets come from the latest applicable Issue #171 comment.
+
+These are narrow task-conditional research/review procedures, not project-wide engineering governance and not trading authority. The parent procedure standardizes UTC+08:00 time normalization, flat-to-flat episode reconstruction, Korea/US opening-regime analysis, Macro × US Open interaction analysis, stop-discipline/rapid-reentry diagnostics, fee/friction analysis, MAE/MFE integration, evidence labels, deduplicated counterfactuals, and week-over-week comparison. Raw private/account trade data remains outside Git history.
 
 ## 3. Human-executed commands / launchers
 
