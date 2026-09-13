@@ -82,6 +82,29 @@ The dated week-beginning-2026-09-07 baseline embedded in §13 of the parent proc
 
 These are narrow task-conditional research/review procedures, not project-wide engineering governance and not trading authority. The parent procedure standardizes UTC+08:00 time normalization, flat-to-flat episode reconstruction, Korea/US opening-regime analysis, Macro × US Open interaction analysis, stop-discipline/rapid-reentry diagnostics, fee/friction analysis, MAE/MFE integration, evidence labels, deduplicated counterfactuals, and week-over-week comparison. Raw private/account trade data remains outside Git history.
 
+### 2.3 Market / instrument and venue selection
+
+For recurring selection of **what to trade, where to trade it, and whether the exact route is suitable for Human or Quant use**, use:
+
+- `governance/MARKET_AND_VENUE_SELECTION_FRAMEWORK_V1_2026-09-13.md`
+
+This narrow specialized method is subordinate to Unified V2. It governs global market discovery, non-authoritative candidate-underlying shortlists, venue-expression qualification, execution/stop/fee/margin/liquidation/capital economics, Human/Quant fit, final Universe/route construction, switching hysteresis and recurring reselection.
+
+Important ownership boundaries:
+
+```text
+STRATEGY_RESEARCH
+-> owns Strategy Demand Profile + Strategy economics/evidence
+
+MARKET_AND_VENUE_SELECTION
+-> owns recurring underlying/expression qualification + Human/Quant Universe + route map
+
+ENGINEERING
+-> owns approved Registry/runtime implementation + provider/history/Trading-Freshness/realistic-scale/adapter qualification
+```
+
+Economic qualification never bypasses Issue #102 provider-budget, history/replay, Trading-Freshness or realistic-scale gates. The MVSF method grants no production Universe change, venue migration, account/capital action or exchange-write authority.
+
 ## 3. Human-executed commands / launchers
 
 For every nontrivial human-executed Terminal/shell/launcher command use:
