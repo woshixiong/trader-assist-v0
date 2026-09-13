@@ -7,7 +7,7 @@
 
 This file is a narrow lifecycle companion to the parent Trading Behavior and Edge Review Procedure. It does not create project-wide governance, strategy authority, sizing authority, exchange-write authority, order-submission authority, or autonomous-trading authority.
 
-Its purpose is to prevent weekly training goals from being promoted prematurely into permanent repository authority.
+Its purpose is to prevent weekly training goals from being promoted prematurely into permanent repository authority and to let any successor trading-behavior analysis window reproduce the same review process from live GitHub without relying on chat memory.
 
 ---
 
@@ -148,27 +148,75 @@ When a promotion is material, use the normal GitHub PR / independent review / me
 
 ---
 
-## 5. Weekly review workflow
+## 5. Successor-window bootstrap and authority resolution
+
+Any new or replacement trading-behavior analysis window must reconstruct its working context from live GitHub rather than requiring the user to manually restate prior rules or relying on ChatGPT memory.
+
+Mandatory bootstrap order:
+
+```text
+1. FRESH-CHECK live repository / main / relevant open PRs and Issues
+2. READ AGENTS.md
+3. READ governance/PROJECT_RULES_INDEX.md
+4. READ governance/TRADING_BEHAVIOR_AND_EDGE_REVIEW_PROCEDURE_V1_2026-09-06.md
+5. READ this lifecycle rule
+6. READ current applicable Strategy authority for Thesis / Attempt / entry / re-entry / winner semantics, especially Issue #161 when still current
+7. READ Issue #171 body and its latest applicable weekly/stage comment
+8. RESOLVE the active review target set before analyzing new trade data
+```
+
+For trading-behavior review, resolve authority in this order:
+
+```text
+CURRENT EXPLICIT USER INSTRUCTION / SAFETY BOUNDARY
+-> CURRENT ACCEPTED STRATEGY / RISK AUTHORITY
+-> CANONICAL PARENT REVIEW PROCEDURE
+-> THIS LIFECYCLE RULE
+-> LATEST APPLICABLE Issue #171 WEEKLY/STAGE TARGET
+-> HISTORICAL WEEKLY COMMENTS / OLD CHAT / OLD PR NARRATIVE AS CONTEXT ONLY
+```
+
+The latest Weekly Log comment may select or tune a temporary experiment, but it may not silently override a durable principle, current Strategy authority, privacy boundary, or retained user authority gate.
+
+If no unambiguous active weekly/stage target exists in Issue #171:
+
+```text
+DO NOT INVENT OR INFER ONE FROM CHAT MEMORY
+APPLY THE DURABLE REVIEW METHOD
+REPORT ACTIVE_WEEKLY_TARGET=UNKNOWN_OR_NOT_SET
+ASK FOR OR RECORD A NEW WEEKLY TARGET ONLY WHEN NEEDED
+```
+
+If live GitHub and remembered/chat state conflict, live GitHub wins. If an older weekly comment conflicts with a newer applicable comment, the newer applicable comment governs for that experiment period while the older comment remains historical evidence.
+
+A successor window must not ask the user to retransmit a prior weekly target, review procedure, or durable principle when those items are available in live GitHub.
+
+---
+
+## 6. Weekly review workflow
 
 At each review cycle:
 
 ```text
-1. READ canonical parent review procedure
-2. READ this lifecycle rule
-3. READ latest applicable Issue #171 weekly/stage comment
-4. ANALYZE official fills/orders + approved path/context evidence
+1. COMPLETE the successor-window/bootstrap authority resolution above
+2. READ the latest applicable Issue #171 weekly/stage target
+3. LOAD official fills/orders and any approved market-path/context evidence
+4. RECONSTRUCT and score using the canonical parent procedure
 5. SCORE each active focus item: PASS / PARTIAL / FAIL / UNKNOWN
-6. PRODUCE no more than 3-5 next-week priorities
-7. APPEND one new dated Issue #171 comment
-8. IDENTIFY promotion candidates, if any
-9. OPEN a PR only for true durable-method/principle changes
+6. SEPARATE behavior improvement, strategy/entry-edge improvement, regime effect, friction, variance, and insufficient evidence
+7. PRODUCE no more than 3-5 next-week priorities
+8. APPEND one new dated Issue #171 comment containing the completed review status and next active targets
+9. IDENTIFY promotion candidates, if any
+10. OPEN a PR only for true durable-method/principle/lifecycle changes
 ```
+
+The review should preserve the parent's required accounting, evidence labels, session/regime analysis, counterfactual limits, MAE/MFE boundaries, and weekly comparison rules. Weekly target evaluation supplements that canonical scorecard; it does not replace it.
 
 Do not create a new repository file merely because a new week begins.
 
 ---
 
-## 6. Current classification for week beginning 2026-09-14
+## 7. Current classification for week beginning 2026-09-14
 
 ### Durable / repository layer
 
@@ -199,7 +247,7 @@ The split above is a lifecycle classification, not evidence that every durable b
 
 ---
 
-## 7. Privacy and authority boundary
+## 8. Privacy and authority boundary
 
 Do not store in this lifecycle file or Weekly Log:
 
