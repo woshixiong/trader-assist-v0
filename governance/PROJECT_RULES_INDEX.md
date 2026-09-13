@@ -71,6 +71,12 @@ For weekly or periodic review of the user's manual/discretionary trading behavio
 
 - `governance/TRADING_BEHAVIOR_AND_EDGE_REVIEW_PROCEDURE_V1_2026-09-06.md`
 
+Current user-directed prospective behavior baseline:
+
+- `governance/TRADING_BEHAVIOR_ACTIVE_EXPERIMENT_BASELINE_2026-09-14.md`
+
+The dated baseline is subordinate to the recurring review procedure and defines the current week's `PROVISIONAL_RULE` execution/compliance targets. When multiple dated baselines exist, use the latest applicable baseline for current-week compliance while retaining earlier baselines as historical comparison evidence.
+
 This is a narrow task-conditional research/review procedure, not project-wide engineering governance and not trading authority. It standardizes UTC+08:00 time normalization, flat-to-flat episode reconstruction, Korea/US opening-regime analysis, Macro × US Open interaction analysis, stop-discipline/rapid-reentry diagnostics, fee/friction analysis, MAE/MFE integration, evidence labels, deduplicated counterfactuals, and week-over-week comparison. Raw private/account trade data remains outside Git history.
 
 ## 3. Human-executed commands / launchers
