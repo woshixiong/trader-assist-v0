@@ -50,6 +50,115 @@ jobs:
           assert platform.machine() == "x86_64", platform.machine()
           assert version("nautilus-trader") == "2.0.0rc4"
           PY
+      - name: Installed rc4 E4 consumed-contract qualification
+        run: |
+          /tmp/trader-assist-e4-venv/bin/python - <<'PY'
+          import importlib
+          import inspect
+          from importlib.metadata import version
+
+          from nautilus_trader.adapters.hyperliquid import (
+              HYPERLIQUID_CLIENT_ID,
+              HyperliquidDataClientConfig,
+              HyperliquidDataClientFactory,
+              HyperliquidEnvironment,
+          )
+          from nautilus_trader.common import Environment
+          from nautilus_trader.live import LiveNode
+          from nautilus_trader.model import (
+              AggregationSource,
+              AggressorSide,
+              Bar,
+              BarAggregation,
+              BarSpecification,
+              BarType,
+              InstrumentId,
+              Price,
+              PriceType,
+              Quantity,
+              QuoteTick,
+              TradeId,
+              TradeTick,
+              TraderId,
+          )
+          from nautilus_trader.trading import Strategy, StrategyConfig
+
+          assert version("nautilus-trader") == "2.0.0rc4"
+          consumed_model_symbols = (
+              AggregationSource,
+              AggressorSide,
+              Bar,
+              BarAggregation,
+              BarSpecification,
+              BarType,
+              InstrumentId,
+              Price,
+              PriceType,
+              Quantity,
+              QuoteTick,
+              TradeId,
+              TradeTick,
+              TraderId,
+          )
+          assert all(symbol is not None for symbol in consumed_model_symbols)
+          assert AggressorSide.BUY is not None
+          assert AggregationSource.EXTERNAL is not None
+          assert BarAggregation.MINUTE is not None
+          assert PriceType.LAST is not None
+
+          assert inspect.isclass(StrategyConfig)
+          assert callable(StrategyConfig.__new__)
+          assert callable(StrategyConfig.__init__)
+          consumed_strategy_methods = (
+              Strategy.subscribe_bars,
+              Strategy.subscribe_quotes,
+              Strategy.subscribe_trades,
+              Strategy.subscribe_socket_state,
+              Strategy.on_bar,
+              Strategy.on_quote,
+              Strategy.on_trade,
+              Strategy.on_socket_state,
+          )
+          assert all(callable(method) for method in consumed_strategy_methods)
+          strategy_init = inspect.signature(Strategy.__init__)
+          socket_subscribe = inspect.signature(Strategy.subscribe_socket_state)
+          socket_callback = inspect.signature(Strategy.on_socket_state)
+          assert "config" in strategy_init.parameters
+          assert "client_id" not in socket_subscribe.parameters
+          assert "priority" in socket_subscribe.parameters
+          assert "event" in socket_callback.parameters
+
+          assert inspect.isclass(LiveNode)
+          assert callable(LiveNode.builder)
+          builder = LiveNode.builder(
+              "TRADEOS-E4-RC4-QUALIFICATION",
+              TraderId("TRADEOS-E4-RC4-QUALIFICATION"),
+              Environment.LIVE,
+          )
+          assert type(builder).__name__ == "LiveNodeBuilder", type(builder)
+          assert callable(builder.add_data_client)
+          assert callable(builder.build)
+
+          assert inspect.isclass(HyperliquidDataClientConfig)
+          assert inspect.isclass(HyperliquidDataClientFactory)
+          assert HyperliquidEnvironment.MAINNET is not None
+          assert HYPERLIQUID_CLIENT_ID is not None
+
+          host = importlib.import_module("trader_assist_v0.nautilus_e4.host")
+          probe = importlib.import_module("scripts.e4_nautilus_public_data_probe")
+          assert issubclass(host.NautilusE4CaptureStrategyConfig, StrategyConfig)
+          assert callable(probe._external_minute_bar_type)
+          node = host.build_public_data_node()
+          try:
+              assert type(node).__name__ == "LiveNode", type(node)
+              assert callable(node.add_strategy)
+              assert callable(node.run)
+              handle = node.handle()
+              assert type(handle).__name__ == "LiveNodeHandle", type(handle)
+              assert callable(handle.stop)
+          finally:
+              node.dispose()
+          PY
       - name: Focused E4 Capture gates
         run: |
           /tmp/trader-assist-e4-venv/bin/python -m pytest -q \
@@ -59,6 +168,20 @@ jobs:
           /tmp/trader-assist-e4-venv/bin/python -m pytest -q \
             tests/test_nautilus_pilot_contracts.py \
             tests/test_nautilus_pilot_rc4.py
+      - name: Static gates
+        run: |
+          /tmp/trader-assist-e4-venv/bin/python -m ruff check \
+            src/trader_assist_v0/nautilus_e4 \
+            scripts/e4_nautilus_public_data_probe.py \
+            tests/test_nautilus_e4_*.py
+          /tmp/trader-assist-e4-venv/bin/python -m mypy \
+            src/trader_assist_v0/nautilus_e4 \
+            scripts/e4_nautilus_public_data_probe.py
+          /tmp/trader-assist-e4-venv/bin/python -m compileall -q \
+            src/trader_assist_v0/nautilus_e4 \
+            scripts/e4_nautilus_public_data_probe.py \
+            tests/test_nautilus_e4_*.py
+          git diff --check
       - name: Bounded zero-credential Hyperliquid public-provider probe
         id: public_provider_probe
         continue-on-error: true
@@ -83,7 +206,7 @@ jobs:
             "${RUNNER_TEMP}/e4-public-provider-result.json"
           exit "${probe_exit}"
       - name: Preserve public-provider probe evidence
-        if: always()
+        if: ${{ always() && steps.public_provider_probe.outcome != 'skipped' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: e4-public-provider-result-${{ github.run_id }}-${{ github.run_attempt }}
@@ -91,21 +214,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Assert authoritative public-provider observation
-        if: always()
+        if: ${{ always() && steps.public_provider_probe.outcome != 'skipped' }}
         run: |
           /tmp/trader-assist-e4-venv/bin/python -c \
             'import json, os, pathlib; result=json.loads((pathlib.Path(os.environ["RUNNER_TEMP"])/"e4-public-provider-result.json").read_text()); assert result["status"] == "PASS", result'
-      - name: Static gates
-        run: |
-          /tmp/trader-assist-e4-venv/bin/python -m ruff check \
-            src/trader_assist_v0/nautilus_e4 \
-            scripts/e4_nautilus_public_data_probe.py \
-            tests/test_nautilus_e4_*.py
-          /tmp/trader-assist-e4-venv/bin/python -m mypy \
-            src/trader_assist_v0/nautilus_e4 \
-            scripts/e4_nautilus_public_data_probe.py
-          /tmp/trader-assist-e4-venv/bin/python -m compileall -q \
-            src/trader_assist_v0/nautilus_e4 \
-            scripts/e4_nautilus_public_data_probe.py \
-            tests/test_nautilus_e4_*.py
-          git diff --check

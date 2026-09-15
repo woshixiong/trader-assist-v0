@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import importlib.util
 import inspect
 import os
@@ -21,15 +22,22 @@ from nautilus_trader.adapters.hyperliquid import (
 )
 from nautilus_trader.common import Environment
 from nautilus_trader.live import LiveNode
-from nautilus_trader.model.data import Bar, BarSpecification, BarType, QuoteTick, TradeTick
-from nautilus_trader.model.enums import (
+from nautilus_trader.model import (
     AggregationSource,
     AggressorSide,
+    Bar,
     BarAggregation,
+    BarSpecification,
+    BarType,
+    InstrumentId,
+    Price,
     PriceType,
+    Quantity,
+    QuoteTick,
+    TradeId,
+    TraderId,
+    TradeTick,
 )
-from nautilus_trader.model.identifiers import InstrumentId, TradeId, TraderId
-from nautilus_trader.model.objects import Price, Quantity
 from nautilus_trader.trading import Strategy
 
 from scripts.e4_nautilus_public_data_probe import _external_minute_bar_type
@@ -107,7 +115,7 @@ def _real_rc4_events() -> tuple[QuoteTick, TradeTick, Bar]:
         instrument_id=instrument_id,
         price=Price.from_str("2000.00"),
         size=Quantity.from_str("1.0"),
-        aggressor_side=AggressorSide.BUYER,
+        aggressor_side=AggressorSide.BUY,
         trade_id=TradeId("exact-rc4-trade"),
         ts_event=1_000_000_002,
         ts_init=1_000_000_003,
@@ -161,6 +169,33 @@ def test_exact_host_composes_public_data_factory_only() -> None:
     assert "TradingNode" not in source
     assert "ExecClient" not in source
     assert all(name not in source for name in ("submit_order(", "cancel_order(", "modify_order("))
+
+
+def test_e4_provider_boundary_uses_only_supported_root_model_imports() -> None:
+    root = Path(__file__).resolve().parents[1]
+    provider_files = (
+        root / "src/trader_assist_v0/nautilus_e4/host.py",
+        root / "scripts/e4_nautilus_public_data_probe.py",
+        Path(__file__),
+    )
+    model_root = "nautilus_trader.model"
+    forbidden = {
+        f"{model_root}.{leaf}"
+        for leaf in ("data", "enums", "identifiers", "objects")
+    }
+    offenders: list[str] = []
+    for path in provider_files:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            modules: tuple[str, ...] = ()
+            if isinstance(node, ast.ImportFrom) and node.module is not None:
+                modules = (node.module,)
+            elif isinstance(node, ast.Import):
+                modules = tuple(alias.name for alias in node.names)
+            for module in modules:
+                if any(module == item or module.startswith(item + ".") for item in forbidden):
+                    offenders.append(f"{path.relative_to(root)}:{node.lineno}:{module}")
+    assert not offenders, "legacy Nautilus model imports: " + ", ".join(offenders)
 
 
 def test_exact_rc4_strategy_market_data_and_socket_state_contract() -> None:

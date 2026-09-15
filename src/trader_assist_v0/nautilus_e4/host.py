@@ -30,7 +30,7 @@ from .safety import assert_public_only
 from .storage import EvidenceStore
 
 if TYPE_CHECKING:
-    from nautilus_trader.model.data import Bar, QuoteTick, TradeTick
+    from nautilus_trader.model import Bar, QuoteTick, TradeTick
 
     class StrategyConfig:
         def __new__(cls, *args: object, **kwargs: object) -> Self: ...
@@ -51,7 +51,7 @@ if TYPE_CHECKING:
         def subscribe_socket_state(self, priority: int | None = None) -> None: ...
 
 else:
-    from nautilus_trader.model.data import Bar, QuoteTick, TradeTick
+    from nautilus_trader.model import Bar, QuoteTick, TradeTick
     from nautilus_trader.trading import Strategy, StrategyConfig
 
 
@@ -251,8 +251,7 @@ class NautilusE4CaptureStrategy(Strategy):
         }
 
     def on_start(self) -> None:
-        from nautilus_trader.model.data import BarType
-        from nautilus_trader.model.identifiers import InstrumentId
+        from nautilus_trader.model import BarType, InstrumentId
 
         by_market = {item.market_id: item for item in self._expressions.values()}
         self.subscribe_socket_state()
@@ -383,7 +382,7 @@ def build_public_data_node() -> LiveNodeLike:
     )
     from nautilus_trader.common import Environment
     from nautilus_trader.live import LiveNode
-    from nautilus_trader.model.identifiers import TraderId
+    from nautilus_trader.model import TraderId
 
     builder = LiveNode.builder(
         "TRADEOS-E4-CAPTURE",

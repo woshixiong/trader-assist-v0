@@ -32,9 +32,14 @@ APPLICATION_FAILURE = 3
 
 def _external_minute_bar_type(instrument_id: str) -> str:
     """Build the shortest provider-supported external BarType via rc4 public APIs."""
-    from nautilus_trader.model.data import BarSpecification, BarType
-    from nautilus_trader.model.enums import AggregationSource, BarAggregation, PriceType
-    from nautilus_trader.model.identifiers import InstrumentId
+    from nautilus_trader.model import (
+        AggregationSource,
+        BarAggregation,
+        BarSpecification,
+        BarType,
+        InstrumentId,
+        PriceType,
+    )
 
     return str(
         BarType(
