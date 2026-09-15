@@ -2,7 +2,7 @@
 
 **Status:** ACTIVE CHECKLIST CANDIDATE  
 **Effective date:** 2026-08-17  
-**Last material amendment candidate:** 2026-09-10  
+**Last material amendment candidate:** 2026-09-15  
 **Normative owner:** `UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V2_2026-09-01.md`
 
 This file is an **execution checklist and record schema**, not a second engineering constitution. If this checklist and Unified V2 conflict, Unified V2 governs.
@@ -35,6 +35,51 @@ USER_AUTHORITY_REQUIRED_NOW=YES|NO
 ```
 
 Fresh GitHub/code/exact artifacts control over stale chat or old prompt state.
+
+### 1A. Human-executed command pre-delivery hard gate
+
+Whenever the bounded task will deliver a nontrivial human-executed Terminal/shell/launcher command, the specialized procedure in:
+
+- `governance/GENERATED_COMMAND_RELIABILITY_AND_OPERATOR_EFFICIENCY_RULE_V1_2026-08-30.md`
+
+is applicable **before the command is shown to the user**.
+
+Record at minimum:
+
+```text
+GENERATED_COMMAND_RELIABILITY_GATE=PASS|FAIL|NOT_APPLICABLE
+KNOWN_COMMAND_INCIDENT_CLASSES_REVIEWED=YES|NO|NOT_APPLICABLE
+KNOWN_INCIDENT_NONREGRESSION_GATE=PASS|FAIL|NOT_APPLICABLE
+SCRIPT_TRANSPORT=FILE_BACKED|SHORT_INLINE|HEREDOC_EXCEPTION|NOT_APPLICABLE
+CLI_INVOCATION_CONTRACT_PROOF=PASS|FAIL|NOT_APPLICABLE
+SAFE_STOP_GATES_BOUND_TO_REAL_INVARIANTS=YES|NO|NOT_APPLICABLE
+SIDE_EFFECT_FREE_PREFLIGHT_COMPLETE_BEFORE_ONE_SHOT=YES|NO|NOT_APPLICABLE
+COMMAND_REPAIR_STAGE=INITIAL|BOUNDED_CORRECTION|HOLISTIC_REGENERATION|NOT_APPLICABLE
+```
+
+Hard enforcement:
+
+```text
+ENGINEERING_PREFLIGHT_GATE=PASS
+!=
+GENERATED_COMMAND_RELIABILITY_GATE=PASS
+
+NONTRIVIAL_HUMAN_EXECUTED_COMMAND_APPLICABLE
+AND GENERATED_COMMAND_RELIABILITY_GATE != PASS
+=> COMMAND_DELIVERY=PROHIBITED
+
+NONTRIVIAL_HUMAN_EXECUTED_COMMAND_APPLICABLE
+AND KNOWN_INCIDENT_NONREGRESSION_GATE != PASS
+=> COMMAND_DELIVERY=PROHIBITED
+
+COMMAND_IS_WRITER_LAUNCH_PATH
+AND COMMAND_DELIVERY=PROHIBITED
+=> WRITER_DISPATCH=PROHIBITED
+```
+
+A command may not recreate a known avoidable incident class merely by changing wrapper language, encoding, transport or exact text. Fresh authoritative GitHub/control-plane identity must not be converted into redundant lower-reliability local proof unless the additional proof protects a distinct real invariant.
+
+After any command failure, complete the Generated Command failure classification/checkpoint fields and repair-stage disposition before another command is issued. A pre-semantic command failure does not consume the application semantic repair budget, but it does consume the applicable command-repair progression.
 
 ---
 
@@ -333,7 +378,7 @@ The Task Packet must be complete before execution. Architecture-critical addenda
 ```text
 REPAIR_STAGE=INITIAL|NORMAL_REPAIR|EXCEPTIONAL_REPAIR|HOLISTIC_CONVERGENCE
 APPLICATION_REPAIR_BUDGET_REMAINING=
-GENERATED_COMMAND_REPAIR_STAGE=INITIAL|BOUNDED_CORRECTION|HOLISTIC_REGENERATION|NOT_APPLICABLE
+COMMAND_REPAIR_STAGE=INITIAL|BOUNDED_CORRECTION|HOLISTIC_REGENERATION|NOT_APPLICABLE
 LEGACY_MATURE_SOLUTION_REOPEN_TRIGGER=YES|NO|NOT_APPLICABLE
 STOP_CONDITION=
 SAFE_STOP_OR_REPLAN_TRIGGER=
