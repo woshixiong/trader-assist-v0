@@ -391,7 +391,7 @@ Default application/design route budget:
 ```text
 INITIAL
 + ONE NORMAL REPAIR
-+ AT MOST ONE EXPLICITLY_AUTHORIZED_EXCEPTIONAL_NARROW_REPAIR
++ AT MOST ONE EXPLICITLY AUTHORIZED EXCEPTIONAL NARROW REPAIR
 ```
 
 No routine Repair 3/4/5. A new root cause or authority/layer expansion triggers holistic convergence.
