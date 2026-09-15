@@ -1,0 +1,253 @@
+from __future__ import annotations
+
+import importlib.util
+import inspect
+import os
+from importlib.metadata import version
+from pathlib import Path
+
+import pytest
+
+if importlib.util.find_spec("nautilus_trader") is None:
+    if os.environ.get("NAUTILUS_E4_REQUIRED") == "1":
+        raise AssertionError("authoritative E4 CI requires exact Nautilus rc4")
+    pytest.skip("optional Nautilus rc4 distribution is absent", allow_module_level=True)
+
+from nautilus_trader.adapters.hyperliquid import (
+    HYPERLIQUID_CLIENT_ID,
+    HyperliquidDataClientConfig,
+    HyperliquidDataClientFactory,
+    HyperliquidEnvironment,
+)
+from nautilus_trader.common import Environment
+from nautilus_trader.live import LiveNode
+from nautilus_trader.model.data import Bar, BarSpecification, BarType, QuoteTick, TradeTick
+from nautilus_trader.model.enums import (
+    AggregationSource,
+    AggressorSide,
+    BarAggregation,
+    PriceType,
+)
+from nautilus_trader.model.identifiers import InstrumentId, TradeId, TraderId
+from nautilus_trader.model.objects import Price, Quantity
+from nautilus_trader.trading import Strategy
+
+from scripts.e4_nautilus_public_data_probe import _external_minute_bar_type
+from trader_assist_v0.contracts.common import sha256_hex
+from trader_assist_v0.nautilus_e4.capture import SubscriptionPolicy
+from trader_assist_v0.nautilus_e4.contracts import (
+    DataKind,
+    MarketExpression,
+    PitUniverseSnapshot,
+    RunManifest,
+)
+from trader_assist_v0.nautilus_e4.host import (
+    NautilusE4CaptureStrategy,
+    build_capture_strategy,
+    build_public_data_node,
+)
+from trader_assist_v0.nautilus_e4.storage import EvidenceStore
+
+INSTRUMENT_ID = "ETH-USD-PERP.HYPERLIQUID"
+MARKET_ID = sha256_hex(b"HYPERLIQUID|MAIN|ETH")
+
+
+def _capture_strategy(root: Path) -> NautilusE4CaptureStrategy:
+    expression = MarketExpression(
+        market_id=MARKET_ID,
+        dex="MAIN",
+        provider_coin="ETH",
+        instrument_id=INSTRUMENT_ID,
+        expression_id="exact-rc4-real-bar",
+        instrument_metadata_version="EXACT_RC4_CONSTRUCTIVE_TEST_V1",
+        instrument_metadata_hash=sha256_hex(b"EXACT_RC4_CONSTRUCTIVE_TEST_V1"),
+    )
+    snapshot = PitUniverseSnapshot.create(observed_at_ns=1, expressions=(expression,))
+    manifest = RunManifest.create(
+        run_id="exact-rc4-real-bar",
+        git_sha="2" * 40,
+        git_tree="3" * 40,
+        snapshot=snapshot,
+        process_epoch="process-real-bar",
+        continuity_epoch="continuity-real-bar",
+        admission_epoch="admission-real-bar",
+        capture_configuration={"expressions": [expression.model_dump(mode="json")]},
+        subscription_policy={
+            "discovery": [MARKET_ID],
+            "watch": [MARKET_ID],
+            "actionable": [],
+        },
+        trial_ledger_id="exact-rc4-real-bar-v1",
+    )
+    return build_capture_strategy(
+        manifest=manifest,
+        snapshot=snapshot,
+        policy=SubscriptionPolicy(
+            discovery=frozenset({MARKET_ID}),
+            watch=frozenset({MARKET_ID}),
+            actionable=frozenset(),
+        ),
+        bar_types=(_external_minute_bar_type(INSTRUMENT_ID),),
+        evidence_root=root,
+    )
+
+
+def _real_rc4_events() -> tuple[QuoteTick, TradeTick, Bar]:
+    instrument_id = InstrumentId.from_str(INSTRUMENT_ID)
+    quote = QuoteTick(
+        instrument_id=instrument_id,
+        bid_price=Price.from_str("1999.00"),
+        ask_price=Price.from_str("2001.00"),
+        bid_size=Quantity.from_str("2.0"),
+        ask_size=Quantity.from_str("3.0"),
+        ts_event=1_000_000_000,
+        ts_init=1_000_000_001,
+    )
+    trade = TradeTick(
+        instrument_id=instrument_id,
+        price=Price.from_str("2000.00"),
+        size=Quantity.from_str("1.0"),
+        aggressor_side=AggressorSide.BUYER,
+        trade_id=TradeId("exact-rc4-trade"),
+        ts_event=1_000_000_002,
+        ts_init=1_000_000_003,
+    )
+    bar_type = BarType(
+        instrument_id,
+        BarSpecification(1, BarAggregation.MINUTE, PriceType.LAST),
+        AggregationSource.EXTERNAL,
+    )
+    bar = Bar(
+        bar_type=bar_type,
+        open=Price.from_str("1998.00"),
+        high=Price.from_str("2002.00"),
+        low=Price.from_str("1997.00"),
+        close=Price.from_str("2000.00"),
+        volume=Quantity.from_str("12.0"),
+        ts_event=1_000_000_004,
+        ts_init=1_000_000_005,
+    )
+    return quote, trade, bar
+
+
+def test_exact_rc4_public_data_live_node_surfaces() -> None:
+    assert version("nautilus-trader") == "2.0.0rc4"
+    assert inspect.isclass(HyperliquidDataClientConfig)
+    assert inspect.isclass(HyperliquidDataClientFactory)
+    assert HyperliquidEnvironment.MAINNET is not None
+    assert Environment.LIVE is not None
+    assert HYPERLIQUID_CLIENT_ID is not None
+    assert callable(TraderId)
+    assert callable(LiveNode.builder)
+    node = build_public_data_node()
+    try:
+        assert node is not None
+        assert callable(node.add_strategy)
+        assert callable(node.handle().stop)
+    finally:
+        node.dispose()
+
+
+def test_exact_host_composes_public_data_factory_only() -> None:
+    from trader_assist_v0.nautilus_e4 import host
+
+    source = Path(inspect.getfile(host)).read_text(encoding="utf-8")
+    assert "LiveNode.builder(" in source
+    assert "builder.add_data_client(" in source
+    assert "HyperliquidDataClientFactory()" in source
+    assert "HyperliquidEnvironment.MAINNET" in source
+    assert "Environment.LIVE" in source
+    assert "StreamingConfig" not in source
+    assert "TradingNode" not in source
+    assert "ExecClient" not in source
+    assert all(name not in source for name in ("submit_order(", "cancel_order(", "modify_order("))
+
+
+def test_exact_rc4_strategy_market_data_and_socket_state_contract() -> None:
+    assert callable(Strategy.subscribe_quotes)
+    assert callable(Strategy.subscribe_trades)
+    assert callable(Strategy.subscribe_bars)
+    assert callable(Strategy.on_quote)
+    assert callable(Strategy.on_trade)
+    assert callable(Strategy.on_bar)
+    subscribe = inspect.signature(Strategy.subscribe_socket_state)
+    callback = inspect.signature(Strategy.on_socket_state)
+    assert "client_id" not in subscribe.parameters
+    assert "priority" in subscribe.parameters
+    assert "event" in callback.parameters
+    assert "SocketStateChanged" in str(callback.parameters["event"].annotation)
+
+    from trader_assist_v0.nautilus_e4 import host
+
+    source = Path(inspect.getfile(host)).read_text(encoding="utf-8")
+    assert "self.subscribe_socket_state()" in source
+    assert "self.subscribe_quotes(instrument_id)" in source
+    assert "self.subscribe_trades(instrument_id)" in source
+    assert "def on_quote(" in source
+    assert "def on_trade(" in source
+    assert "tick: QuoteTick" in source
+    assert "tick: TradeTick" in source
+    assert "bar: Bar" in source
+    assert "def on_socket_state(" in source
+    for obsolete in (
+        "subscribe_quote_ticks",
+        "subscribe_trade_ticks",
+        "def on_quote_tick(",
+        "def on_trade_tick(",
+    ):
+        assert obsolete not in source
+
+
+def test_constructive_exact_rc4_objects_drive_typed_identity_and_real_bar_callback(
+    tmp_path: Path,
+) -> None:
+    quote, trade, bar = _real_rc4_events()
+    strategy = _capture_strategy(tmp_path)
+    node = build_public_data_node()
+    try:
+        node.add_strategy(strategy)
+        assert quote.instrument_id == trade.instrument_id == bar.bar_type.instrument_id
+        assert not hasattr(bar, "instrument_id")
+        assert strategy._expression_for(quote).market_id == MARKET_ID
+        assert strategy._expression_for(trade).market_id == MARKET_ID
+        assert strategy._expression_for(bar).market_id == MARKET_ID
+        with pytest.raises(TypeError, match="unsupported provider event type"):
+            strategy._expression_for(object())  # type: ignore[arg-type]
+
+        strategy.on_quote(quote)
+        strategy.on_trade(trade)
+        strategy.on_bar(bar)
+    finally:
+        node.dispose()
+
+    stored = EvidenceStore(tmp_path).load_admissions()
+    assert len(stored) == 1
+    finalized = stored[0].source
+    assert finalized.market_id == MARKET_ID
+    assert finalized.instrument_id == INSTRUMENT_ID
+    assert finalized.data_kind is DataKind.BAR
+    assert finalized.ts_event == bar.ts_event
+    assert finalized.ts_init == bar.ts_init
+    assert finalized.payload["finalized"] is True
+
+
+def test_exact_rc4_external_minute_bar_type_round_trips_through_public_parser() -> None:
+    raw = _external_minute_bar_type(INSTRUMENT_ID)
+    parsed = BarType.from_str(raw)
+    assert str(parsed.instrument_id) == INSTRUMENT_ID
+    assert parsed.spec.step == 1
+    assert parsed.spec.aggregation is BarAggregation.MINUTE
+    assert parsed.spec.price_type is PriceType.LAST
+    assert parsed.aggregation_source is AggregationSource.EXTERNAL
+
+
+def test_probe_uses_live_node_strategy_and_handle_surfaces() -> None:
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "scripts/e4_nautilus_public_data_probe.py").read_text(
+        encoding="utf-8"
+    )
+    assert "node.add_strategy(strategy)" in source
+    assert "handle = node.handle()" in source
+    assert "threading.Timer(args.run_seconds, handle.stop)" in source
+    assert "node.trader" not in source
+    assert "node.stop" not in source
