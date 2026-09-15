@@ -4,7 +4,7 @@ import ast
 import importlib.util
 import inspect
 import os
-from importlib.metadata import version
+from importlib.metadata import distribution, version
 from pathlib import Path
 
 import pytest
@@ -21,7 +21,7 @@ from nautilus_trader.adapters.hyperliquid import (
     HyperliquidEnvironment,
 )
 from nautilus_trader.common import Environment
-from nautilus_trader.live import LiveNode
+from nautilus_trader.live import LiveNode, LiveNodeBuilder, LiveNodeHandle
 from nautilus_trader.model import (
     AggregationSource,
     AggressorSide,
@@ -38,7 +38,7 @@ from nautilus_trader.model import (
     TraderId,
     TradeTick,
 )
-from nautilus_trader.trading import Strategy
+from nautilus_trader.trading import Strategy, StrategyConfig
 
 from scripts.e4_nautilus_public_data_probe import _external_minute_bar_type
 from trader_assist_v0.contracts.common import sha256_hex
@@ -58,6 +58,81 @@ from trader_assist_v0.nautilus_e4.storage import EvidenceStore
 
 INSTRUMENT_ID = "ETH-USD-PERP.HYPERLIQUID"
 MARKET_ID = sha256_hex(b"HYPERLIQUID|MAIN|ETH")
+
+
+def _installed_strategy_stub_methods() -> tuple[
+    Path,
+    dict[str, ast.FunctionDef | ast.AsyncFunctionDef],
+]:
+    dist = distribution("nautilus-trader")
+    assert dist.version == "2.0.0rc4"
+    stub_entries = sorted(
+        (entry for entry in (dist.files or ()) if entry.suffix == ".pyi"),
+        key=str,
+    )
+    assert stub_entries, "installed Nautilus distribution has no public .pyi files"
+    matches: list[
+        tuple[Path, dict[str, ast.FunctionDef | ast.AsyncFunctionDef]]
+    ] = []
+    required = {"__init__", "subscribe_socket_state", "on_socket_state"}
+    for entry in stub_entries:
+        path = Path(dist.locate_file(entry))
+        try:
+            source = path.read_text(encoding="utf-8")
+            tree = ast.parse(source, filename=str(path))
+        except (OSError, UnicodeError, SyntaxError) as exc:
+            raise AssertionError(
+                f"cannot read/parse installed public stub {path}"
+            ) from exc
+        for declaration in tree.body:
+            if not isinstance(declaration, ast.ClassDef) or declaration.name != "Strategy":
+                continue
+            methods = {
+                node.name: node
+                for node in declaration.body
+                if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+            }
+            if required <= methods.keys():
+                matches.append((path, methods))
+    assert len(matches) == 1, (
+        "expected one installed public Strategy stub, found "
+        f"{[str(path) for path, _ in matches]}"
+    )
+    return matches[0]
+
+
+def _parameter_names(method: ast.FunctionDef | ast.AsyncFunctionDef) -> tuple[str, ...]:
+    names = [
+        argument.arg
+        for argument in (
+            *method.args.posonlyargs,
+            *method.args.args,
+            *method.args.kwonlyargs,
+        )
+    ]
+    if method.args.vararg is not None:
+        names.append(method.args.vararg.arg)
+    if method.args.kwarg is not None:
+        names.append(method.args.kwarg.arg)
+    return tuple(names)
+
+
+def _annotation_parts(annotation: ast.expr) -> tuple[str, ...]:
+    if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
+        try:
+            annotation = ast.parse(annotation.value, mode="eval").body
+        except SyntaxError as exc:
+            raise AssertionError(
+                f"unparseable installed stub annotation: {annotation.value!r}"
+            ) from exc
+    if isinstance(annotation, ast.Name):
+        return (annotation.id,)
+    if isinstance(annotation, ast.Attribute):
+        return (*_annotation_parts(annotation.value), annotation.attr)
+    raise AssertionError(
+        "installed on_socket_state event annotation is not a qualified public name: "
+        f"{ast.dump(annotation)}"
+    )
 
 
 def _capture_strategy(root: Path) -> NautilusE4CaptureStrategy:
@@ -142,16 +217,32 @@ def test_exact_rc4_public_data_live_node_surfaces() -> None:
     assert version("nautilus-trader") == "2.0.0rc4"
     assert inspect.isclass(HyperliquidDataClientConfig)
     assert inspect.isclass(HyperliquidDataClientFactory)
+    assert inspect.isclass(StrategyConfig)
+    assert callable(StrategyConfig.__new__)
+    assert callable(StrategyConfig.__init__)
+    assert inspect.isclass(LiveNode)
+    assert inspect.isclass(LiveNodeBuilder)
+    assert inspect.isclass(LiveNodeHandle)
     assert HyperliquidEnvironment.MAINNET is not None
     assert Environment.LIVE is not None
     assert HYPERLIQUID_CLIENT_ID is not None
     assert callable(TraderId)
     assert callable(LiveNode.builder)
+    builder = LiveNode.builder(
+        "TRADEOS-E4-RC4-TEST",
+        TraderId("TRADEOS-E4-RC4-TEST"),
+        Environment.LIVE,
+    )
+    assert isinstance(builder, LiveNodeBuilder)
+    assert callable(builder.add_data_client)
+    assert callable(builder.build)
     node = build_public_data_node()
     try:
-        assert node is not None
+        assert isinstance(node, LiveNode)
         assert callable(node.add_strategy)
-        assert callable(node.handle().stop)
+        handle = node.handle()
+        assert isinstance(handle, LiveNodeHandle)
+        assert callable(handle.stop)
     finally:
         node.dispose()
 
@@ -205,12 +296,37 @@ def test_exact_rc4_strategy_market_data_and_socket_state_contract() -> None:
     assert callable(Strategy.on_quote)
     assert callable(Strategy.on_trade)
     assert callable(Strategy.on_bar)
-    subscribe = inspect.signature(Strategy.subscribe_socket_state)
-    callback = inspect.signature(Strategy.on_socket_state)
-    assert "client_id" not in subscribe.parameters
-    assert "priority" in subscribe.parameters
-    assert "event" in callback.parameters
-    assert "SocketStateChanged" in str(callback.parameters["event"].annotation)
+    assert callable(Strategy.subscribe_socket_state)
+    assert callable(Strategy.on_socket_state)
+    strategy_stub_path, strategy_stub = _installed_strategy_stub_methods()
+    assert strategy_stub_path.is_file()
+    init_positional = tuple(
+        argument.arg
+        for argument in (
+            *strategy_stub["__init__"].args.posonlyargs,
+            *strategy_stub["__init__"].args.args,
+        )
+    )
+    assert init_positional[:2] == ("self", "config")
+    subscribe_names = _parameter_names(strategy_stub["subscribe_socket_state"])
+    callback_names = _parameter_names(strategy_stub["on_socket_state"])
+    assert "client_id" not in subscribe_names
+    assert "priority" in subscribe_names
+    assert "event" in callback_names
+    event_argument = next(
+        argument
+        for argument in (
+            *strategy_stub["on_socket_state"].args.posonlyargs,
+            *strategy_stub["on_socket_state"].args.args,
+            *strategy_stub["on_socket_state"].args.kwonlyargs,
+        )
+        if argument.arg == "event"
+    )
+    assert event_argument.annotation is not None
+    assert _annotation_parts(event_argument.annotation) in {
+        ("SocketStateChanged",),
+        ("common", "SocketStateChanged"),
+    }
 
     from trader_assist_v0.nautilus_e4 import host
 

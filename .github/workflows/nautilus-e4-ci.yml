@@ -53,9 +53,11 @@ jobs:
       - name: Installed rc4 E4 consumed-contract qualification
         run: |
           /tmp/trader-assist-e4-venv/bin/python - <<'PY'
+          import ast
           import importlib
           import inspect
-          from importlib.metadata import version
+          from importlib.metadata import distribution, version
+          from pathlib import Path
 
           from nautilus_trader.adapters.hyperliquid import (
               HYPERLIQUID_CLIENT_ID,
@@ -64,7 +66,7 @@ jobs:
               HyperliquidEnvironment,
           )
           from nautilus_trader.common import Environment
-          from nautilus_trader.live import LiveNode
+          from nautilus_trader.live import LiveNode, LiveNodeBuilder, LiveNodeHandle
           from nautilus_trader.model import (
               AggregationSource,
               AggressorSide,
@@ -82,6 +84,75 @@ jobs:
               TraderId,
           )
           from nautilus_trader.trading import Strategy, StrategyConfig
+
+          def installed_strategy_stub_methods():
+              dist = distribution("nautilus-trader")
+              assert dist.version == "2.0.0rc4", dist.version
+              stub_entries = sorted(
+                  (entry for entry in (dist.files or ()) if entry.suffix == ".pyi"),
+                  key=str,
+              )
+              assert stub_entries, "installed Nautilus distribution has no public .pyi files"
+              matches = []
+              required = {
+                  "__init__",
+                  "subscribe_socket_state",
+                  "on_socket_state",
+              }
+              for entry in stub_entries:
+                  path = Path(dist.locate_file(entry))
+                  try:
+                      source = path.read_text(encoding="utf-8")
+                      tree = ast.parse(source, filename=str(path))
+                  except (OSError, UnicodeError, SyntaxError) as exc:
+                      raise AssertionError(f"cannot read/parse installed public stub {path}") from exc
+                  for declaration in tree.body:
+                      if not isinstance(declaration, ast.ClassDef) or declaration.name != "Strategy":
+                          continue
+                      methods = {
+                          node.name: node
+                          for node in declaration.body
+                          if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+                      }
+                      if required <= methods.keys():
+                          matches.append((path, methods))
+              assert len(matches) == 1, (
+                  "expected one installed public Strategy stub, found "
+                  f"{[str(path) for path, _ in matches]}"
+              )
+              return matches[0]
+
+          def parameter_names(method):
+              names = [
+                  argument.arg
+                  for argument in (
+                      *method.args.posonlyargs,
+                      *method.args.args,
+                      *method.args.kwonlyargs,
+                  )
+              ]
+              if method.args.vararg is not None:
+                  names.append(method.args.vararg.arg)
+              if method.args.kwarg is not None:
+                  names.append(method.args.kwarg.arg)
+              return tuple(names)
+
+          def annotation_parts(annotation):
+              if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
+                  try:
+                      annotation = ast.parse(annotation.value, mode="eval").body
+                  except SyntaxError as exc:
+                      raise AssertionError(
+                          f"unparseable installed stub annotation: {annotation.value!r}"
+                      ) from exc
+              if isinstance(annotation, ast.Name):
+                  return (annotation.id,)
+              if isinstance(annotation, ast.Attribute):
+                  return (*annotation_parts(annotation.value), annotation.attr)
+              raise AssertionError(
+                  "installed on_socket_state event annotation is not a qualified public name: "
+                  f"{ast.dump(annotation)}"
+              )
 
           assert version("nautilus-trader") == "2.0.0rc4"
           consumed_model_symbols = (
@@ -120,22 +191,48 @@ jobs:
               Strategy.on_socket_state,
           )
           assert all(callable(method) for method in consumed_strategy_methods)
-          strategy_init = inspect.signature(Strategy.__init__)
-          socket_subscribe = inspect.signature(Strategy.subscribe_socket_state)
-          socket_callback = inspect.signature(Strategy.on_socket_state)
-          assert "config" in strategy_init.parameters
-          assert "client_id" not in socket_subscribe.parameters
-          assert "priority" in socket_subscribe.parameters
-          assert "event" in socket_callback.parameters
+          strategy_stub_path, strategy_stub = installed_strategy_stub_methods()
+          assert strategy_stub_path.is_file(), strategy_stub_path
+          init_positional = tuple(
+              argument.arg
+              for argument in (
+                  *strategy_stub["__init__"].args.posonlyargs,
+                  *strategy_stub["__init__"].args.args,
+              )
+          )
+          assert init_positional[:2] == ("self", "config"), init_positional
+          socket_subscribe_names = parameter_names(
+              strategy_stub["subscribe_socket_state"]
+          )
+          socket_callback_names = parameter_names(strategy_stub["on_socket_state"])
+          assert "priority" in socket_subscribe_names, socket_subscribe_names
+          assert "client_id" not in socket_subscribe_names, socket_subscribe_names
+          assert "event" in socket_callback_names, socket_callback_names
+          event_argument = next(
+              argument
+              for argument in (
+                  *strategy_stub["on_socket_state"].args.posonlyargs,
+                  *strategy_stub["on_socket_state"].args.args,
+                  *strategy_stub["on_socket_state"].args.kwonlyargs,
+              )
+              if argument.arg == "event"
+          )
+          assert event_argument.annotation is not None
+          assert annotation_parts(event_argument.annotation) in {
+              ("SocketStateChanged",),
+              ("common", "SocketStateChanged"),
+          }
 
           assert inspect.isclass(LiveNode)
+          assert inspect.isclass(LiveNodeBuilder)
+          assert inspect.isclass(LiveNodeHandle)
           assert callable(LiveNode.builder)
           builder = LiveNode.builder(
               "TRADEOS-E4-RC4-QUALIFICATION",
               TraderId("TRADEOS-E4-RC4-QUALIFICATION"),
               Environment.LIVE,
           )
-          assert type(builder).__name__ == "LiveNodeBuilder", type(builder)
+          assert isinstance(builder, LiveNodeBuilder), type(builder)
           assert callable(builder.add_data_client)
           assert callable(builder.build)
 
@@ -150,11 +247,11 @@ jobs:
           assert callable(probe._external_minute_bar_type)
           node = host.build_public_data_node()
           try:
-              assert type(node).__name__ == "LiveNode", type(node)
+              assert isinstance(node, LiveNode), type(node)
               assert callable(node.add_strategy)
               assert callable(node.run)
               handle = node.handle()
-              assert type(handle).__name__ == "LiveNodeHandle", type(handle)
+              assert isinstance(handle, LiveNodeHandle), type(handle)
               assert callable(handle.stop)
           finally:
               node.dispose()
