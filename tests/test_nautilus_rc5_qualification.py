@@ -1,37 +1,13 @@
 from __future__ import annotations
 
 import ast
+import importlib.util
 from datetime import UTC, datetime
 from decimal import Decimal
 from importlib.metadata import distribution, version
 from pathlib import Path
 
-from nautilus_trader.adapters.hyperliquid import (
-    HYPERLIQUID_CLIENT_ID,
-    HyperliquidDataClientConfig,
-    HyperliquidDataClientFactory,
-    HyperliquidEnvironment,
-)
-from nautilus_trader.backtest import BacktestEngine, BacktestEngineConfig, BacktestNode
-from nautilus_trader.common import Environment
-from nautilus_trader.live import LiveNode, LiveNodeBuilder, LiveNodeHandle
-from nautilus_trader.model import (
-    AggregationSource,
-    AggressorSide,
-    Bar,
-    BarAggregation,
-    BarSpecification,
-    BarType,
-    InstrumentId,
-    Price,
-    PriceType,
-    Quantity,
-    QuoteTick,
-    TradeId,
-    TraderId,
-    TradeTick,
-)
-from nautilus_trader.trading import Strategy, StrategyConfig
+import pytest
 
 from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
 from trader_assist_v0.multi_asset_shadow.models import ClosedBar
@@ -43,15 +19,46 @@ from trader_assist_v0.nautilus_e4.contracts import (
 )
 from trader_assist_v0.nautilus_e4.storage import EvidenceStore
 from trader_assist_v0.nautilus_pilot.contracts import StrategyInputEvent
-from trader_assist_v0.nautilus_pilot.host import (
-    NautilusPilotStrategy,
-    NautilusPilotStrategyConfig,
-    build_custom_data,
-)
 from trader_assist_v0.nautilus_pilot.strategy_package import (
     PilotStrategyEvaluator,
     StrategyPackageManifest,
 )
+
+if importlib.util.find_spec("nautilus_trader") is None:
+    pytestmark = pytest.mark.skip(reason="Nautilus qualification requires optional nautilus-pilot")
+else:
+    from nautilus_trader.adapters.hyperliquid import (
+        HYPERLIQUID_CLIENT_ID,
+        HyperliquidDataClientConfig,
+        HyperliquidDataClientFactory,
+        HyperliquidEnvironment,
+    )
+    from nautilus_trader.backtest import BacktestEngine, BacktestEngineConfig, BacktestNode
+    from nautilus_trader.common import Environment
+    from nautilus_trader.live import LiveNode, LiveNodeBuilder, LiveNodeHandle
+    from nautilus_trader.model import (
+        AggregationSource,
+        AggressorSide,
+        Bar,
+        BarAggregation,
+        BarSpecification,
+        BarType,
+        InstrumentId,
+        Price,
+        PriceType,
+        Quantity,
+        QuoteTick,
+        TradeId,
+        TraderId,
+        TradeTick,
+    )
+    from nautilus_trader.trading import Strategy, StrategyConfig
+
+    from trader_assist_v0.nautilus_pilot.host import (
+        NautilusPilotStrategy,
+        NautilusPilotStrategyConfig,
+        build_custom_data,
+    )
 
 RC5_VERSION = "2.0.0rc5"
 BASE_SHA = "b0b13cb179c4f9d54ce568443fe404c2cd2ae2de"
@@ -352,6 +359,23 @@ def test_q4_q5_rc5_provider_objects_round_trip_current_project_evidence(tmp_path
     assert loaded[1].source.native_trade_id == "rc5-qualification-trade"
     assert loaded[1].source.provider_aggressor_side == str(trade.aggressor_side)
     assert loaded[2].source.payload["finalized"] is True
+
+
+def test_q6_rc5_strategy_config_construction_regression(tmp_path: Path) -> None:
+    from scripts.nautilus_rc5_public_data_probe import (
+        Rc5QualificationStrategy,
+        Rc5QualificationStrategyConfig,
+    )
+
+    evidence_root = tmp_path / "rc5-construction"
+    config = Rc5QualificationStrategyConfig(
+        evidence_root=str(evidence_root),
+        instrument_id=INSTRUMENT_ID,
+    )
+    strategy = Rc5QualificationStrategy(config)
+    assert config.evidence_root == str(evidence_root)
+    assert config.instrument_id == INSTRUMENT_ID
+    assert isinstance(strategy, Strategy)
 
 
 def test_q7_qualification_probe_has_no_execution_or_write_surface() -> None:
