@@ -24,7 +24,7 @@ jobs:
           cache-dependency-path: |
             requirements-dev.lock
             requirements-nautilus-pilot.lock
-      - name: Exact hashed rc4 environment
+      - name: Exact hashed rc5 environment
         run: |
           python -m venv /tmp/trader-assist-e4-venv
           /tmp/trader-assist-e4-venv/bin/python -m pip install \
@@ -48,9 +48,9 @@ jobs:
 
           assert sys.version_info[:2] == (3, 12), sys.version
           assert platform.machine() == "x86_64", platform.machine()
-          assert version("nautilus-trader") == "2.0.0rc4"
+          assert version("nautilus-trader") == "2.0.0rc5"
           PY
-      - name: Installed rc4 E4 consumed-contract qualification
+      - name: Installed rc5 E4 consumed-contract qualification
         run: |
           /tmp/trader-assist-e4-venv/bin/python - <<'PY'
           import ast
@@ -87,7 +87,7 @@ jobs:
 
           def installed_strategy_stub_methods():
               dist = distribution("nautilus-trader")
-              assert dist.version == "2.0.0rc4", dist.version
+              assert dist.version == "2.0.0rc5", dist.version
               stub_entries = sorted(
                   (entry for entry in (dist.files or ()) if entry.suffix == ".pyi"),
                   key=str,
@@ -154,7 +154,7 @@ jobs:
                   f"{ast.dump(annotation)}"
               )
 
-          assert version("nautilus-trader") == "2.0.0rc4"
+          assert version("nautilus-trader") == "2.0.0rc5"
           consumed_model_symbols = (
               AggregationSource,
               AggressorSide,
@@ -201,12 +201,13 @@ jobs:
               )
           )
           assert init_positional[:2] == ("self", "config"), init_positional
-          socket_subscribe_names = parameter_names(
-              strategy_stub["subscribe_socket_state"]
-          )
+          socket_subscribe = strategy_stub["subscribe_socket_state"]
+          socket_subscribe_names = parameter_names(socket_subscribe)
           socket_callback_names = parameter_names(strategy_stub["on_socket_state"])
-          assert "priority" in socket_subscribe_names, socket_subscribe_names
-          assert "client_id" not in socket_subscribe_names, socket_subscribe_names
+          assert {"client_id", "endpoint", "priority"} <= set(socket_subscribe_names)
+          positional = (*socket_subscribe.args.posonlyargs, *socket_subscribe.args.args)
+          optional_positional = max(0, len(positional) - 1)
+          assert len(socket_subscribe.args.defaults) >= optional_positional
           assert "event" in socket_callback_names, socket_callback_names
           event_argument = next(
               argument
@@ -228,8 +229,8 @@ jobs:
           assert inspect.isclass(LiveNodeHandle)
           assert callable(LiveNode.builder)
           builder = LiveNode.builder(
-              "TRADEOS-E4-RC4-QUALIFICATION",
-              TraderId("TRADEOS-E4-RC4-QUALIFICATION"),
+              "TRADEOS-E4-RC5-QUALIFICATION",
+              TraderId("TRADEOS-E4-RC5-QUALIFICATION"),
               Environment.LIVE,
           )
           assert isinstance(builder, LiveNodeBuilder), type(builder)
@@ -244,6 +245,7 @@ jobs:
           host = importlib.import_module("trader_assist_v0.nautilus_e4.host")
           probe = importlib.import_module("scripts.e4_nautilus_public_data_probe")
           assert issubclass(host.NautilusE4CaptureStrategyConfig, StrategyConfig)
+          assert callable(host.assert_exact_nautilus_version)
           assert callable(probe._external_minute_bar_type)
           node = host.build_public_data_node()
           try:
@@ -265,7 +267,7 @@ jobs:
           /tmp/trader-assist-e4-venv/bin/python -m pytest -q \
             tests/test_nautilus_pilot_contracts.py
           /tmp/trader-assist-e4-venv/bin/python -m pytest -q \
-            tests/test_nautilus_pilot_rc4.py
+            tests/test_nautilus_pilot_version_contract.py
       - name: Static gates
         run: |
           /tmp/trader-assist-e4-venv/bin/python -m ruff check \
@@ -314,5 +316,24 @@ jobs:
       - name: Assert authoritative public-provider observation
         if: ${{ always() && steps.public_provider_probe.outcome != 'skipped' }}
         run: |
-          /tmp/trader-assist-e4-venv/bin/python -c \
-            'import json, os, pathlib; result=json.loads((pathlib.Path(os.environ["RUNNER_TEMP"])/"e4-public-provider-result.json").read_text()); assert result["status"] == "PASS", result'
+          /tmp/trader-assist-e4-venv/bin/python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          result = json.loads(
+              (Path(os.environ["RUNNER_TEMP"]) / "e4-public-provider-result.json").read_text()
+          )
+          assert result["status"] == "PASS", result
+          assert result["nautilus_version"] == "2.0.0rc5", result
+          assert result["public_data_only"] is True, result
+          assert result["zero_credentials"] is True, result
+          assert result["zero_execution_client"] is True, result
+          assert result["zero_signing"] is True, result
+          assert result["zero_exchange_write"] is True, result
+          observation = result["observation"]
+          assert observation["quote_observed"] is True, observation
+          assert observation["trade_observed"] is True, observation
+          assert observation["finalized_bar_callback_observed"] is True, observation
+          assert observation["finalized_bar_evidence_persisted"] is True, observation
+          PY
