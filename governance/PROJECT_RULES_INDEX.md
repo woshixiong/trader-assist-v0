@@ -115,6 +115,16 @@ It operationalizes V2 command rules: environment evidence, exact CLI invocation 
 
 It is a specialized procedure/incident catalogue; Unified V2 owns the project-wide invariant.
 
+### 3.1 GitHub local transport / reviewed-PR closeout
+
+For user-local Git transport for this repository, generated local Git publication commands, or the terminal disposition of an independently reviewed Pull Request, use:
+
+- `governance/GITHUB_LOCAL_TRANSPORT_AND_REVIEWED_PR_CLOSEOUT_PROCEDURE_V1_2026-09-16.md`
+
+This narrow procedure is subordinate to Unified V2. It canonizes the accepted project-local HTTPS + GitHub CLI + system credential-store route, deprecates SSH-over-443 as the default local Git path for this project, and operationalizes the existing V2 requirement that reviewed work reach an explicit terminal disposition.
+
+It does not create credential-scope, Mark Ready, merge, deployment/runtime/cloud, exchange-write or trading authority. A reviewed PR that is accepted after final PASS still requires current retained user authority for Mark Ready and merge; a REPLAN / REJECT / SUPERSEDED PR must be explicitly closed or superseded rather than left indefinitely open/draft.
+
 ## 4. Model-backed routing
 
 For any model-backed project invocation read:
