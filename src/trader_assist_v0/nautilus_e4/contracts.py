@@ -35,7 +35,12 @@ DERIVATION_VERSION: Final[Literal["TA_MICROSTRUCTURE_DERIV_V0_1"]] = (
 DATA_VERSION: Final[
     Literal["TA_VNEXT_RESEARCH_DATA_CONTRACT_V1_2026-09-11_REPAIR1"]
 ] = "TA_VNEXT_RESEARCH_DATA_CONTRACT_V1_2026-09-11_REPAIR1"
-NAUTILUS_VERSION: Final[Literal["2.0.0rc4"]] = "2.0.0rc4"
+LEGACY_NAUTILUS_VERSION: Final[Literal["2.0.0rc4"]] = "2.0.0rc4"
+NAUTILUS_VERSION: Final[Literal["2.0.0rc5"]] = "2.0.0rc5"
+SUPPORTED_EVIDENCE_NAUTILUS_VERSIONS: Final[tuple[str, ...]] = (
+    LEGACY_NAUTILUS_VERSION,
+    NAUTILUS_VERSION,
+)
 EXECUTION_MODEL_VERSION: Final[Literal["E4_PHASE_A_MARKETABLE_L1_V1"]] = (
     "E4_PHASE_A_MARKETABLE_L1_V1"
 )
@@ -228,7 +233,7 @@ class RunManifest(BaseModel):
     data_version: Literal[
         "TA_VNEXT_RESEARCH_DATA_CONTRACT_V1_2026-09-11_REPAIR1"
     ] = DATA_VERSION
-    nautilus_version: Literal["2.0.0rc4"] = NAUTILUS_VERSION
+    nautilus_version: Literal["2.0.0rc4", "2.0.0rc5"] = NAUTILUS_VERSION
     runtime_python: str
     runtime_platform: str
     pit_snapshot_id: Sha256Hex
@@ -262,6 +267,8 @@ class RunManifest(BaseModel):
 
     @model_validator(mode="after")
     def validate_manifest(self) -> RunManifest:
+        if self.nautilus_version not in SUPPORTED_EVIDENCE_NAUTILUS_VERSIONS:
+            raise ValueError("unsupported Nautilus evidence version")
         if tuple(sorted(self.provider_instrument_ids)) != self.provider_instrument_ids:
             raise ValueError("provider instrument identities must be sorted")
         if self.random_seed is None and self.stochastic_config_hash is not None:
