@@ -13,7 +13,7 @@ import threading
 import time
 from importlib.metadata import version
 from pathlib import Path
-from typing import Any, Self, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Self
 
 from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
 from trader_assist_v0.nautilus_e4.contracts import (
