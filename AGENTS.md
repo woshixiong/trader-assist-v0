@@ -66,6 +66,7 @@ Do **not** read every tool/profile file for every task.
 - material direction-setting research -> `PROJECT_RESEARCH_EVIDENCE_DECISION_METHOD_V1_2026-08-16.md`
 - material external mature-solution selection/adoption or reopened build-vs-buy -> `EXTERNAL_MATURE_SOLUTION_SELECTION_AND_ADOPTION_RULE_V1_2026-09-07.md`
 - nontrivial human-executed command/launcher -> `GENERATED_COMMAND_RELIABILITY_AND_OPERATOR_EFFICIENCY_RULE_V1_2026-08-30.md`
+- user-local Git transport or independently reviewed PR publication/closeout -> `GITHUB_LOCAL_TRANSPORT_AND_REVIEWED_PR_CLOSEOUT_PROCEDURE_V1_2026-09-16.md`
 - model-backed executor selection -> `ENGINEERING_EXECUTOR_ROUTER_V2_2026-08-23.md` + only the selected executor/model profile
 - new/materially changed engineering tool -> `ENGINEERING_TOOL_ONBOARDING_AND_CHANGE_ACCEPTANCE_RULE_V1_2026-08-23.md`
 - Local Task Runner -> its accepted Runner profile/skill only when selected and compatible
@@ -102,6 +103,7 @@ COMPLETE_TASK_PACKET_BEFORE_EXECUTION=YES
 WRITER_PASS_NE_INDEPENDENT_ACCEPTANCE=YES
 USER_AS_ROUTINE_MESSAGE_BUS=PROHIBITED
 ACTIVE_TASK_OWNERSHIP_UNTIL_TERMINAL_DISPOSITION=YES
+REVIEWED_PR_TERMINAL_DISPOSITION_REQUIRED=YES
 NO_SILENT_MODEL_EXECUTOR_FALLBACK=YES
 NO_HIDDEN_SEMANTIC_RETRY=YES
 FALSE_SAFE_STOP_GATE=PROHIBITED
@@ -130,6 +132,8 @@ If GitHub evidence is sufficient, review exact GitHub head/diff + exact-head CI 
 For execution/validation, prefer an authoritative GitHub/provider-native remote surface over user-operated local emulation when it provides equal or higher claim fidelity, exact identity/evidence, and lower human relay. This preference never creates credential/private-API authority and never overrides a genuinely local or target-host-specific claim boundary.
 
 The current control/orchestration role retains task ownership through intermediate CI/review/publication gates, executes every safe authorized next action, and stops only at the specific external or user-retained authority boundary.
+
+An independently reviewed PR must reach an explicit terminal disposition under `GITHUB_LOCAL_TRANSPORT_AND_REVIEWED_PR_CLOSEOUT_PROCEDURE_V1_2026-09-16.md`: accepted PASS work proceeds through retained Mark Ready / merge authority and live-main verification; REPLAN / REJECT / SUPERSEDED work is explicitly closed or superseded. Do not leave reviewed PRs indefinitely open/draft without an exact recorded blocker.
 
 ## 7. Stale / historical files
 
