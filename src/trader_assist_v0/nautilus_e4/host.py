@@ -1,9 +1,9 @@
 # mypy: disable-error-code="import-not-found"
-"""Thin exact-rc4 public-data LiveNode composition for E4 Capture.
+"""Thin exact-version public-data LiveNode composition for E4 Capture.
 
-Nautilus owns transport, subscriptions, parsing and reconnect.  Trade OS
+Nautilus owns transport, subscriptions, parsing and reconnect. Trade OS
 receives normalized public objects only to add causal and Strategy evidence
-semantics through its existing EvidenceStore.  No execution client or order API
+semantics through its existing EvidenceStore. No execution client or order API
 is present.
 """
 
@@ -48,7 +48,12 @@ if TYPE_CHECKING:
 
         def subscribe_trades(self, instrument_id: object) -> None: ...
 
-        def subscribe_socket_state(self, priority: int | None = None) -> None: ...
+        def subscribe_socket_state(
+            self,
+            client_id: object | None = None,
+            endpoint: str | None = None,
+            priority: int | None = None,
+        ) -> None: ...
 
 else:
     from nautilus_trader.model import Bar, QuoteTick, TradeTick
@@ -76,10 +81,12 @@ class LiveNodeLike(Protocol):
     def dispose(self) -> None: ...
 
 
-def assert_exact_rc4() -> None:
+def assert_exact_nautilus_version() -> str:
+    """Fail closed unless the installed runtime is the selected exact baseline."""
     actual = version("nautilus-trader")
     if actual != NAUTILUS_VERSION:
         raise RuntimeError(f"exact Nautilus {NAUTILUS_VERSION} required; found {actual}")
+    return actual
 
 
 class NautilusE4CaptureStrategyConfig(StrategyConfig):
@@ -138,11 +145,17 @@ class NautilusE4CaptureStrategy(Strategy):
 
     def __init__(self, config: NautilusE4CaptureStrategyConfig) -> None:
         super().__init__(config)
-        assert_exact_rc4()
+        actual_nautilus_version = assert_exact_nautilus_version()
         assert_public_only(env=os.environ)
         from pydantic import TypeAdapter
 
         self._manifest = RunManifest.model_validate_json(config.manifest_json)
+        if self._manifest.nautilus_version != actual_nautilus_version:
+            raise RuntimeError(
+                "active Capture manifest/runtime Nautilus version mismatch: "
+                f"manifest={self._manifest.nautilus_version} "
+                f"runtime={actual_nautilus_version}"
+            )
         self._snapshot = PitUniverseSnapshot.model_validate_json(config.snapshot_json)
         if self._manifest.pit_snapshot_hash != self._snapshot.snapshot_hash:
             raise ValueError("run manifest and PIT snapshot conflict")
@@ -372,9 +385,9 @@ class NautilusE4CaptureStrategy(Strategy):
 
 
 def build_public_data_node() -> LiveNodeLike:
-    """Build, but do not run, the exact rc4 public-data-only LiveNode."""
+    """Build, but do not run, the current exact public-data-only LiveNode."""
     assert_public_only(env=os.environ)
-    assert_exact_rc4()
+    assert_exact_nautilus_version()
     from nautilus_trader.adapters.hyperliquid import (
         HyperliquidDataClientConfig,
         HyperliquidDataClientFactory,
