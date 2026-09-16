@@ -45,7 +45,7 @@ jobs:
           /tmp/trader-assist-e3-venv/bin/pip-audit --strict -r requirements-runtime.lock
           /tmp/trader-assist-e3-venv/bin/pip-audit --strict \
             -r requirements-nautilus-pilot.lock
-      - name: Exact environment and rc4 identity
+      - name: Exact environment and rc5 identity
         run: |
           test "$(uname -s)" = "Linux"
           test "$(uname -m)" = "x86_64"
@@ -56,7 +56,7 @@ jobs:
 
           assert sys.version_info[:2] == (3, 12), sys.version
           assert platform.machine() == "x86_64", platform.machine()
-          assert version("nautilus-trader") == "2.0.0rc4"
+          assert version("nautilus-trader") == "2.0.0rc5"
           print(f"OS={platform.system()} ARCH={platform.machine()} PYTHON={platform.python_version()}")
           print(f"NAUTILUS_TRADER={version('nautilus-trader')}")
           PY
@@ -66,13 +66,13 @@ jobs:
             src/trader_assist_v0/nautilus_pilot \
             scripts/check_dependency_lock.py \
             tests/test_nautilus_pilot_contracts.py \
-            tests/test_nautilus_pilot_rc4.py
+            tests/test_nautilus_pilot_version_contract.py
       - name: Mypy
         run: |
           /tmp/trader-assist-e3-venv/bin/mypy \
             src/trader_assist_v0/nautilus_pilot \
             scripts/check_dependency_lock.py
-      - name: Focused E3 contracts and exact-rc4 integration
+      - name: Focused E3 contracts and exact-version integration
         shell: bash
         run: |
           set -o pipefail
@@ -81,7 +81,7 @@ jobs:
             tests/test_nautilus_pilot_contracts.py \
             | tee -a /tmp/e3-focused-tests.txt
           /tmp/trader-assist-e3-venv/bin/pytest -q \
-            tests/test_nautilus_pilot_rc4.py \
+            tests/test_nautilus_pilot_version_contract.py \
             | tee -a /tmp/e3-focused-tests.txt
           {
             echo "FOCUSED_TEST_RESULT=PASS"
