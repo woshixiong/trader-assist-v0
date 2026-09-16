@@ -1,0 +1,318 @@
+name: Nautilus E4 Capture CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e4-capture:
+    runs-on: ubuntu-24.04
+    env:
+      NAUTILUS_E4_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-dev.lock
+            requirements-nautilus-pilot.lock
+      - name: Exact hashed rc4 environment
+        run: |
+          python -m venv /tmp/trader-assist-e4-venv
+          /tmp/trader-assist-e4-venv/bin/python -m pip install \
+            --require-hashes -r requirements-dev.lock
+          /tmp/trader-assist-e4-venv/bin/python -m pip install \
+            --require-hashes --no-deps --only-binary=:all: \
+            -r requirements-nautilus-pilot.lock
+          /tmp/trader-assist-e4-venv/bin/python -m pip install \
+            -e . --no-deps --no-build-isolation
+      - name: Dependency and platform identity
+        run: |
+          /tmp/trader-assist-e4-venv/bin/python scripts/check_dependency_lock.py \
+            --verify-pilot-installed
+          /tmp/trader-assist-e4-venv/bin/python -m pip check
+          test "$(uname -s)" = "Linux"
+          test "$(uname -m)" = "x86_64"
+          /tmp/trader-assist-e4-venv/bin/python - <<'PY'
+          import platform
+          import sys
+          from importlib.metadata import version
+
+          assert sys.version_info[:2] == (3, 12), sys.version
+          assert platform.machine() == "x86_64", platform.machine()
+          assert version("nautilus-trader") == "2.0.0rc4"
+          PY
+      - name: Installed rc4 E4 consumed-contract qualification
+        run: |
+          /tmp/trader-assist-e4-venv/bin/python - <<'PY'
+          import ast
+          import importlib
+          import inspect
+          from importlib.metadata import distribution, version
+          from pathlib import Path
+
+          from nautilus_trader.adapters.hyperliquid import (
+              HYPERLIQUID_CLIENT_ID,
+              HyperliquidDataClientConfig,
+              HyperliquidDataClientFactory,
+              HyperliquidEnvironment,
+          )
+          from nautilus_trader.common import Environment
+          from nautilus_trader.live import LiveNode, LiveNodeBuilder, LiveNodeHandle
+          from nautilus_trader.model import (
+              AggregationSource,
+              AggressorSide,
+              Bar,
+              BarAggregation,
+              BarSpecification,
+              BarType,
+              InstrumentId,
+              Price,
+              PriceType,
+              Quantity,
+              QuoteTick,
+              TradeId,
+              TradeTick,
+              TraderId,
+          )
+          from nautilus_trader.trading import Strategy, StrategyConfig
+
+          def installed_strategy_stub_methods():
+              dist = distribution("nautilus-trader")
+              assert dist.version == "2.0.0rc4", dist.version
+              stub_entries = sorted(
+                  (entry for entry in (dist.files or ()) if entry.suffix == ".pyi"),
+                  key=str,
+              )
+              assert stub_entries, "installed Nautilus distribution has no public .pyi files"
+              matches = []
+              required = {
+                  "__init__",
+                  "subscribe_socket_state",
+                  "on_socket_state",
+              }
+              for entry in stub_entries:
+                  path = Path(dist.locate_file(entry))
+                  try:
+                      source = path.read_text(encoding="utf-8")
+                      tree = ast.parse(source, filename=str(path))
+                  except (OSError, UnicodeError, SyntaxError) as exc:
+                      raise AssertionError(f"cannot read/parse installed public stub {path}") from exc
+                  for declaration in tree.body:
+                      if not isinstance(declaration, ast.ClassDef) or declaration.name != "Strategy":
+                          continue
+                      methods = {
+                          node.name: node
+                          for node in declaration.body
+                          if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+                      }
+                      if required <= methods.keys():
+                          matches.append((path, methods))
+              assert len(matches) == 1, (
+                  "expected one installed public Strategy stub, found "
+                  f"{[str(path) for path, _ in matches]}"
+              )
+              return matches[0]
+
+          def parameter_names(method):
+              names = [
+                  argument.arg
+                  for argument in (
+                      *method.args.posonlyargs,
+                      *method.args.args,
+                      *method.args.kwonlyargs,
+                  )
+              ]
+              if method.args.vararg is not None:
+                  names.append(method.args.vararg.arg)
+              if method.args.kwarg is not None:
+                  names.append(method.args.kwarg.arg)
+              return tuple(names)
+
+          def annotation_parts(annotation):
+              if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
+                  try:
+                      annotation = ast.parse(annotation.value, mode="eval").body
+                  except SyntaxError as exc:
+                      raise AssertionError(
+                          f"unparseable installed stub annotation: {annotation.value!r}"
+                      ) from exc
+              if isinstance(annotation, ast.Name):
+                  return (annotation.id,)
+              if isinstance(annotation, ast.Attribute):
+                  return (*annotation_parts(annotation.value), annotation.attr)
+              raise AssertionError(
+                  "installed on_socket_state event annotation is not a qualified public name: "
+                  f"{ast.dump(annotation)}"
+              )
+
+          assert version("nautilus-trader") == "2.0.0rc4"
+          consumed_model_symbols = (
+              AggregationSource,
+              AggressorSide,
+              Bar,
+              BarAggregation,
+              BarSpecification,
+              BarType,
+              InstrumentId,
+              Price,
+              PriceType,
+              Quantity,
+              QuoteTick,
+              TradeId,
+              TradeTick,
+              TraderId,
+          )
+          assert all(symbol is not None for symbol in consumed_model_symbols)
+          assert AggressorSide.BUY is not None
+          assert AggregationSource.EXTERNAL is not None
+          assert BarAggregation.MINUTE is not None
+          assert PriceType.LAST is not None
+
+          assert inspect.isclass(StrategyConfig)
+          assert callable(StrategyConfig.__new__)
+          assert callable(StrategyConfig.__init__)
+          consumed_strategy_methods = (
+              Strategy.subscribe_bars,
+              Strategy.subscribe_quotes,
+              Strategy.subscribe_trades,
+              Strategy.subscribe_socket_state,
+              Strategy.on_bar,
+              Strategy.on_quote,
+              Strategy.on_trade,
+              Strategy.on_socket_state,
+          )
+          assert all(callable(method) for method in consumed_strategy_methods)
+          strategy_stub_path, strategy_stub = installed_strategy_stub_methods()
+          assert strategy_stub_path.is_file(), strategy_stub_path
+          init_positional = tuple(
+              argument.arg
+              for argument in (
+                  *strategy_stub["__init__"].args.posonlyargs,
+                  *strategy_stub["__init__"].args.args,
+              )
+          )
+          assert init_positional[:2] == ("self", "config"), init_positional
+          socket_subscribe_names = parameter_names(
+              strategy_stub["subscribe_socket_state"]
+          )
+          socket_callback_names = parameter_names(strategy_stub["on_socket_state"])
+          assert "priority" in socket_subscribe_names, socket_subscribe_names
+          assert "client_id" not in socket_subscribe_names, socket_subscribe_names
+          assert "event" in socket_callback_names, socket_callback_names
+          event_argument = next(
+              argument
+              for argument in (
+                  *strategy_stub["on_socket_state"].args.posonlyargs,
+                  *strategy_stub["on_socket_state"].args.args,
+                  *strategy_stub["on_socket_state"].args.kwonlyargs,
+              )
+              if argument.arg == "event"
+          )
+          assert event_argument.annotation is not None
+          assert annotation_parts(event_argument.annotation) in {
+              ("SocketStateChanged",),
+              ("common", "SocketStateChanged"),
+          }
+
+          assert inspect.isclass(LiveNode)
+          assert inspect.isclass(LiveNodeBuilder)
+          assert inspect.isclass(LiveNodeHandle)
+          assert callable(LiveNode.builder)
+          builder = LiveNode.builder(
+              "TRADEOS-E4-RC4-QUALIFICATION",
+              TraderId("TRADEOS-E4-RC4-QUALIFICATION"),
+              Environment.LIVE,
+          )
+          assert isinstance(builder, LiveNodeBuilder), type(builder)
+          assert callable(builder.add_data_client)
+          assert callable(builder.build)
+
+          assert inspect.isclass(HyperliquidDataClientConfig)
+          assert inspect.isclass(HyperliquidDataClientFactory)
+          assert HyperliquidEnvironment.MAINNET is not None
+          assert HYPERLIQUID_CLIENT_ID is not None
+
+          host = importlib.import_module("trader_assist_v0.nautilus_e4.host")
+          probe = importlib.import_module("scripts.e4_nautilus_public_data_probe")
+          assert issubclass(host.NautilusE4CaptureStrategyConfig, StrategyConfig)
+          assert callable(probe._external_minute_bar_type)
+          node = host.build_public_data_node()
+          try:
+              assert isinstance(node, LiveNode), type(node)
+              assert callable(node.add_strategy)
+              assert callable(node.run)
+              handle = node.handle()
+              assert isinstance(handle, LiveNodeHandle), type(handle)
+              assert callable(handle.stop)
+          finally:
+              node.dispose()
+          PY
+      - name: Focused E4 Capture gates
+        run: |
+          /tmp/trader-assist-e4-venv/bin/python -m pytest -q \
+            tests/test_nautilus_e4_*.py
+      - name: E3 reference regressions
+        run: |
+          /tmp/trader-assist-e4-venv/bin/python -m pytest -q \
+            tests/test_nautilus_pilot_contracts.py
+          /tmp/trader-assist-e4-venv/bin/python -m pytest -q \
+            tests/test_nautilus_pilot_rc4.py
+      - name: Static gates
+        run: |
+          /tmp/trader-assist-e4-venv/bin/python -m ruff check \
+            src/trader_assist_v0/nautilus_e4 \
+            scripts/e4_nautilus_public_data_probe.py \
+            tests/test_nautilus_e4_*.py
+          /tmp/trader-assist-e4-venv/bin/python -m mypy \
+            src/trader_assist_v0/nautilus_e4 \
+            scripts/e4_nautilus_public_data_probe.py
+          /tmp/trader-assist-e4-venv/bin/python -m compileall -q \
+            src/trader_assist_v0/nautilus_e4 \
+            scripts/e4_nautilus_public_data_probe.py \
+            tests/test_nautilus_e4_*.py
+          git diff --check
+      - name: Bounded zero-credential Hyperliquid public-provider probe
+        id: public_provider_probe
+        continue-on-error: true
+        run: |
+          set +e
+          E4_EXACT_HEAD="$(git rev-parse HEAD)" \
+          E4_EXACT_TREE="$(git rev-parse 'HEAD^{tree}')" \
+          timeout 150s /tmp/trader-assist-e4-venv/bin/python \
+            scripts/e4_nautilus_public_data_probe.py \
+            --evidence-path "${RUNNER_TEMP}/e4-public-evidence" \
+            --result-path "${RUNNER_TEMP}/e4-public-provider-result.json" \
+            --ci-instrument-id ETH-USD-PERP.HYPERLIQUID \
+            --provider-coin ETH \
+            --run-seconds 90
+          probe_exit=$?
+          set -e
+          if [ ! -s "${RUNNER_TEMP}/e4-public-provider-result.json" ]; then
+            printf '{"schema_version":"E4_PUBLIC_PROVIDER_PROBE_RESULT_V1","status":"HARNESS_INFRASTRUCTURE_FAILURE","failure_class":"HARNESS_OR_INFRASTRUCTURE_FAILURE","probe_exit_code":%s}\n' \
+              "${probe_exit}" > "${RUNNER_TEMP}/e4-public-provider-result.json"
+          fi
+          /tmp/trader-assist-e4-venv/bin/python -m json.tool \
+            "${RUNNER_TEMP}/e4-public-provider-result.json"
+          exit "${probe_exit}"
+      - name: Preserve public-provider probe evidence
+        if: ${{ always() && steps.public_provider_probe.outcome != 'skipped' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: e4-public-provider-result-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/e4-public-provider-result.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Assert authoritative public-provider observation
+        if: ${{ always() && steps.public_provider_probe.outcome != 'skipped' }}
+        run: |
+          /tmp/trader-assist-e4-venv/bin/python -c \
+            'import json, os, pathlib; result=json.loads((pathlib.Path(os.environ["RUNNER_TEMP"])/"e4-public-provider-result.json").read_text()); assert result["status"] == "PASS", result'
