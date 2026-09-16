@@ -1,5 +1,5 @@
 # mypy: disable-error-code="import-not-found"
-"""Bounded exact-rc4 public-data-only E4 probe; never configures execution."""
+"""Bounded exact-version public-data-only E4 probe; never configures execution."""
 
 from __future__ import annotations
 
@@ -13,13 +13,14 @@ from typing import Any
 from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
 from trader_assist_v0.nautilus_e4.capture import SubscriptionPolicy
 from trader_assist_v0.nautilus_e4.contracts import (
+    NAUTILUS_VERSION,
     MarketExpression,
     PitUniverseSnapshot,
     RunManifest,
 )
 from trader_assist_v0.nautilus_e4.host import (
     NautilusE4CaptureStrategy,
-    assert_exact_rc4,
+    assert_exact_nautilus_version,
     build_capture_strategy,
     build_public_data_node,
 )
@@ -31,7 +32,7 @@ APPLICATION_FAILURE = 3
 
 
 def _external_minute_bar_type(instrument_id: str) -> str:
-    """Build the shortest provider-supported external BarType via rc4 public APIs."""
+    """Build the shortest provider-supported external BarType via public APIs."""
     from nautilus_trader.model import (
         AggregationSource,
         BarAggregation,
@@ -160,11 +161,13 @@ def _run_live(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             "failure_class": None if passed else "PROVIDER_OR_DATA_INCOMPLETENESS",
             "claim": "FRESH_PUBLIC_DATA_OBSERVED_FOR_EVERY_REQUESTED_SUBSCRIPTION_KIND",
             "bounded_run_seconds": args.run_seconds,
-            "nautilus_version": "2.0.0rc4",
+            "nautilus_version": NAUTILUS_VERSION,
             "exact_head": manifest.git_sha,
             "exact_tree": manifest.git_tree,
             "public_data_only": True,
             "zero_credentials": True,
+            "zero_execution_client": True,
+            "zero_signing": True,
             "zero_exchange_write": True,
             "PUBLIC_HYPERLIQUID_DATA_ONLY": True,
             "QUOTE_OBSERVED": observation["quote_observed"],
@@ -200,7 +203,7 @@ def main() -> int:
     if args.run_seconds < 0 or args.run_seconds > 300:
         raise SystemExit("--run-seconds must be between 0 and 300")
     proof = assert_public_only(env=os.environ)
-    assert_exact_rc4()
+    assert_exact_nautilus_version()
     if args.run_seconds == 0:
         _write_result(
             args.result_path,
@@ -226,6 +229,8 @@ def main() -> int:
                 "bounded_run_seconds": args.run_seconds,
                 "public_data_only": True,
                 "zero_credentials": True,
+                "zero_execution_client": True,
+                "zero_signing": True,
                 "zero_exchange_write": True,
             },
         )

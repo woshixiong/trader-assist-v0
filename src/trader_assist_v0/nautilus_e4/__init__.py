@@ -1,14 +1,16 @@
-"""Public, zero-write E4 Capture semantics with an optional Nautilus rc4 host."""
+"""Public, zero-write E4 Capture semantics with an exact-version Nautilus host."""
 
 from .capture import CaptureSession, SubscriptionPolicy
 from .contracts import (
     CAPTURE_SCHEMA_VERSION,
     DATA_VERSION,
     DERIVATION_VERSION,
+    LEGACY_NAUTILUS_VERSION,
     NAUTILUS_VERSION,
     PARAMETER_VERSION,
     POLICY_VERSION,
     STRATEGY_VERSION,
+    SUPPORTED_EVIDENCE_NAUTILUS_VERSIONS,
     AdmittedEvent,
     ApprovalProvenance,
     ApprovalTimingMode,
@@ -39,10 +41,12 @@ __all__ = [
     "CAPTURE_SCHEMA_VERSION",
     "DATA_VERSION",
     "DERIVATION_VERSION",
+    "LEGACY_NAUTILUS_VERSION",
     "NAUTILUS_VERSION",
     "PARAMETER_VERSION",
     "POLICY_VERSION",
     "STRATEGY_VERSION",
+    "SUPPORTED_EVIDENCE_NAUTILUS_VERSIONS",
     "AdmittedEvent",
     "ApprovalProvenance",
     "ApprovalTimingMode",

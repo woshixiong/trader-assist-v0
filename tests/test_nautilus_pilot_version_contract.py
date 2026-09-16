@@ -32,6 +32,7 @@ from trader_assist_v0.nautilus_pilot.strategy_package import (
     StrategyPackageManifest,
 )
 
+EXPECTED_NAUTILUS_VERSION = "2.0.0rc5"
 BASE_SHA = "3bf7f4e1c1a852b780da599147e39b109392385c"
 MARKET = "2" * 64
 FIVE_MINUTES_MS = 300_000
@@ -79,8 +80,8 @@ def _config() -> NautilusPilotStrategyConfig:
     )
 
 
-def test_exact_rc4_and_public_importable_strategy_config_surface() -> None:
-    assert version("nautilus-trader") == "2.0.0rc4"
+def test_exact_current_nautilus_and_public_importable_strategy_config_surface() -> None:
+    assert version("nautilus-trader") == EXPECTED_NAUTILUS_VERSION
     config = _config()
     manifest = _manifest()
     assert config.manifest_hash == manifest.manifest_hash

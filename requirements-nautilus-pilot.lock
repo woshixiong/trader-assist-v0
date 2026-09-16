@@ -1,3 +1,3 @@
 # Platform lock: CPython 3.12 / Linux x86_64
-# Exact E3 pilot wheel only; upstream rc4 declares no required dependencies.
-nautilus-trader==2.0.0rc4 --hash=sha256:8d3591aa4d86c7133be2115b1037ffadafb36449214d9973d496bdc80e21ad93
+# Exact E3/E4 development-shadow wheel only; qualified upstream rc5 artifact.
+nautilus-trader==2.0.0rc5 --hash=sha256:eab45fafd2312deda1236554c49a9798bfc76bc8465af864878e2f70189ebebe

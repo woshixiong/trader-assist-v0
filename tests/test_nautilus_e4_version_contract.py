@@ -11,8 +11,8 @@ import pytest
 
 if importlib.util.find_spec("nautilus_trader") is None:
     if os.environ.get("NAUTILUS_E4_REQUIRED") == "1":
-        raise AssertionError("authoritative E4 CI requires exact Nautilus rc4")
-    pytest.skip("optional Nautilus rc4 distribution is absent", allow_module_level=True)
+        raise AssertionError("authoritative E4 CI requires the exact Nautilus distribution")
+    pytest.skip("optional Nautilus distribution is absent", allow_module_level=True)
 
 from nautilus_trader.adapters.hyperliquid import (
     HYPERLIQUID_CLIENT_ID,
@@ -41,9 +41,11 @@ from nautilus_trader.model import (
 from nautilus_trader.trading import Strategy, StrategyConfig
 
 from scripts.e4_nautilus_public_data_probe import _external_minute_bar_type
-from trader_assist_v0.contracts.common import sha256_hex
+from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
 from trader_assist_v0.nautilus_e4.capture import SubscriptionPolicy
 from trader_assist_v0.nautilus_e4.contracts import (
+    LEGACY_NAUTILUS_VERSION,
+    NAUTILUS_VERSION,
     DataKind,
     MarketExpression,
     PitUniverseSnapshot,
@@ -58,6 +60,7 @@ from trader_assist_v0.nautilus_e4.storage import EvidenceStore
 
 INSTRUMENT_ID = "ETH-USD-PERP.HYPERLIQUID"
 MARKET_ID = sha256_hex(b"HYPERLIQUID|MAIN|ETH")
+_MANIFEST_DOMAIN = b"trader-assist-v0/e4/run-manifest/v1\0"
 
 
 def _installed_strategy_stub_methods() -> tuple[
@@ -65,7 +68,7 @@ def _installed_strategy_stub_methods() -> tuple[
     dict[str, ast.FunctionDef | ast.AsyncFunctionDef],
 ]:
     dist = distribution("nautilus-trader")
-    assert dist.version == "2.0.0rc4"
+    assert dist.version == NAUTILUS_VERSION
     stub_entries = sorted(
         (entry for entry in (dist.files or ()) if entry.suffix == ".pyi"),
         key=str,
@@ -135,19 +138,19 @@ def _annotation_parts(annotation: ast.expr) -> tuple[str, ...]:
     )
 
 
-def _capture_strategy(root: Path) -> NautilusE4CaptureStrategy:
+def _capture_identity() -> tuple[MarketExpression, PitUniverseSnapshot, RunManifest]:
     expression = MarketExpression(
         market_id=MARKET_ID,
         dex="MAIN",
         provider_coin="ETH",
         instrument_id=INSTRUMENT_ID,
-        expression_id="exact-rc4-real-bar",
-        instrument_metadata_version="EXACT_RC4_CONSTRUCTIVE_TEST_V1",
-        instrument_metadata_hash=sha256_hex(b"EXACT_RC4_CONSTRUCTIVE_TEST_V1"),
+        expression_id="exact-current-real-bar",
+        instrument_metadata_version="EXACT_CURRENT_CONSTRUCTIVE_TEST_V1",
+        instrument_metadata_hash=sha256_hex(b"EXACT_CURRENT_CONSTRUCTIVE_TEST_V1"),
     )
     snapshot = PitUniverseSnapshot.create(observed_at_ns=1, expressions=(expression,))
     manifest = RunManifest.create(
-        run_id="exact-rc4-real-bar",
+        run_id="exact-current-real-bar",
         git_sha="2" * 40,
         git_tree="3" * 40,
         snapshot=snapshot,
@@ -160,8 +163,21 @@ def _capture_strategy(root: Path) -> NautilusE4CaptureStrategy:
             "watch": [MARKET_ID],
             "actionable": [],
         },
-        trial_ledger_id="exact-rc4-real-bar-v1",
+        trial_ledger_id="exact-current-real-bar-v1",
     )
+    return expression, snapshot, manifest
+
+
+def _legacy_rc4_manifest(manifest: RunManifest) -> RunManifest:
+    raw = manifest.model_dump(mode="json")
+    raw["nautilus_version"] = LEGACY_NAUTILUS_VERSION
+    identity = {key: value for key, value in raw.items() if key != "manifest_hash"}
+    raw["manifest_hash"] = sha256_hex(_MANIFEST_DOMAIN + canonical_json_bytes(identity))
+    return RunManifest.model_validate(raw)
+
+
+def _capture_strategy(root: Path) -> NautilusE4CaptureStrategy:
+    _expression, snapshot, manifest = _capture_identity()
     return build_capture_strategy(
         manifest=manifest,
         snapshot=snapshot,
@@ -175,7 +191,7 @@ def _capture_strategy(root: Path) -> NautilusE4CaptureStrategy:
     )
 
 
-def _real_rc4_events() -> tuple[QuoteTick, TradeTick, Bar]:
+def _real_nautilus_events() -> tuple[QuoteTick, TradeTick, Bar]:
     instrument_id = InstrumentId.from_str(INSTRUMENT_ID)
     quote = QuoteTick(
         instrument_id=instrument_id,
@@ -191,7 +207,7 @@ def _real_rc4_events() -> tuple[QuoteTick, TradeTick, Bar]:
         price=Price.from_str("2000.00"),
         size=Quantity.from_str("1.0"),
         aggressor_side=AggressorSide.BUY,
-        trade_id=TradeId("exact-rc4-trade"),
+        trade_id=TradeId("exact-current-trade"),
         ts_event=1_000_000_002,
         ts_init=1_000_000_003,
     )
@@ -213,8 +229,8 @@ def _real_rc4_events() -> tuple[QuoteTick, TradeTick, Bar]:
     return quote, trade, bar
 
 
-def test_exact_rc4_public_data_live_node_surfaces() -> None:
-    assert version("nautilus-trader") == "2.0.0rc4"
+def test_exact_current_public_data_live_node_surfaces() -> None:
+    assert version("nautilus-trader") == NAUTILUS_VERSION
     assert inspect.isclass(HyperliquidDataClientConfig)
     assert inspect.isclass(HyperliquidDataClientFactory)
     assert inspect.isclass(StrategyConfig)
@@ -229,8 +245,8 @@ def test_exact_rc4_public_data_live_node_surfaces() -> None:
     assert callable(TraderId)
     assert callable(LiveNode.builder)
     builder = LiveNode.builder(
-        "TRADEOS-E4-RC4-TEST",
-        TraderId("TRADEOS-E4-RC4-TEST"),
+        "TRADEOS-E4-CURRENT-TEST",
+        TraderId("TRADEOS-E4-CURRENT-TEST"),
         Environment.LIVE,
     )
     assert isinstance(builder, LiveNodeBuilder)
@@ -289,7 +305,7 @@ def test_e4_provider_boundary_uses_only_supported_root_model_imports() -> None:
     assert not offenders, "legacy Nautilus model imports: " + ", ".join(offenders)
 
 
-def test_exact_rc4_strategy_market_data_and_socket_state_contract() -> None:
+def test_exact_current_strategy_market_data_and_socket_state_contract() -> None:
     assert callable(Strategy.subscribe_quotes)
     assert callable(Strategy.subscribe_trades)
     assert callable(Strategy.subscribe_bars)
@@ -308,10 +324,13 @@ def test_exact_rc4_strategy_market_data_and_socket_state_contract() -> None:
         )
     )
     assert init_positional[:2] == ("self", "config")
-    subscribe_names = _parameter_names(strategy_stub["subscribe_socket_state"])
+    subscribe = strategy_stub["subscribe_socket_state"]
+    subscribe_names = _parameter_names(subscribe)
     callback_names = _parameter_names(strategy_stub["on_socket_state"])
-    assert "client_id" not in subscribe_names
-    assert "priority" in subscribe_names
+    assert {"client_id", "endpoint", "priority"} <= set(subscribe_names)
+    positional = (*subscribe.args.posonlyargs, *subscribe.args.args)
+    optional_positional = max(0, len(positional) - 1)
+    assert len(subscribe.args.defaults) >= optional_positional
     assert "event" in callback_names
     event_argument = next(
         argument
@@ -349,10 +368,10 @@ def test_exact_rc4_strategy_market_data_and_socket_state_contract() -> None:
         assert obsolete not in source
 
 
-def test_constructive_exact_rc4_objects_drive_typed_identity_and_real_bar_callback(
+def test_constructive_exact_current_objects_drive_typed_identity_and_real_bar_callback(
     tmp_path: Path,
 ) -> None:
-    quote, trade, bar = _real_rc4_events()
+    quote, trade, bar = _real_nautilus_events()
     strategy = _capture_strategy(tmp_path)
     node = build_public_data_node()
     try:
@@ -382,7 +401,28 @@ def test_constructive_exact_rc4_objects_drive_typed_identity_and_real_bar_callba
     assert finalized.payload["finalized"] is True
 
 
-def test_exact_rc4_external_minute_bar_type_round_trips_through_public_parser() -> None:
+def test_legacy_rc4_manifest_is_readable_but_active_rc5_runtime_fails_closed(
+    tmp_path: Path,
+) -> None:
+    _expression, snapshot, current_manifest = _capture_identity()
+    legacy_manifest = _legacy_rc4_manifest(current_manifest)
+    assert legacy_manifest.nautilus_version == LEGACY_NAUTILUS_VERSION
+    assert RunManifest.model_validate_json(legacy_manifest.model_dump_json()) == legacy_manifest
+    with pytest.raises(RuntimeError, match="manifest/runtime Nautilus version mismatch"):
+        build_capture_strategy(
+            manifest=legacy_manifest,
+            snapshot=snapshot,
+            policy=SubscriptionPolicy(
+                discovery=frozenset({MARKET_ID}),
+                watch=frozenset({MARKET_ID}),
+                actionable=frozenset(),
+            ),
+            bar_types=(_external_minute_bar_type(INSTRUMENT_ID),),
+            evidence_root=tmp_path / "legacy-runtime-mismatch",
+        )
+
+
+def test_exact_current_external_minute_bar_type_round_trips_through_public_parser() -> None:
     raw = _external_minute_bar_type(INSTRUMENT_ID)
     parsed = BarType.from_str(raw)
     assert str(parsed.instrument_id) == INSTRUMENT_ID

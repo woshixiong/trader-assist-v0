@@ -1,4 +1,4 @@
-"""Thin public-surface Nautilus 2.0.0rc4 host for the E3 pilot."""
+"""Thin public-surface Nautilus host for the current exact E3 pilot baseline."""
 
 from __future__ import annotations
 
@@ -153,7 +153,7 @@ def _project_data_type() -> DataType:
 
 
 def build_custom_data(event: StrategyInputEvent) -> CustomData:
-    """Wrap an exact project input event in the public rc4 custom-data type."""
+    """Wrap an exact project input event in the current public custom-data type."""
     validated = revalidate_strategy_input_event(event)
     return CustomData(_project_data_type(), validated)
 
@@ -164,7 +164,7 @@ def build_importable_strategy_config(
     market_id: str,
     minimum_tick: Decimal,
 ) -> ImportableStrategyConfig:
-    """Construct the exact public rc4 importable Strategy boundary."""
+    """Construct the current exact public importable Strategy boundary."""
     selected = select_strategy_package(
         package_version=manifest.package_version,
         strategy_version=manifest.strategy_version,
