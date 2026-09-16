@@ -1,0 +1,161 @@
+name: Nautilus rc5 Qualification CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rc5-qualification:
+    runs-on: ubuntu-24.04
+    env:
+      RC5_EXPECTED_VERSION: "2.0.0rc5"
+      RC5_EXPECTED_WHEEL_SHA256: "eab45fafd2312deda1236554c49a9798bfc76bc8465af864878e2f70189ebebe"
+      FROZEN_BASE_SHA: "b0b13cb179c4f9d54ce568443fe404c2cd2ae2de"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.lock
+
+      - name: Build isolated exact rc5 qualification environment
+        run: |
+          python -m venv /tmp/trader-assist-rc5-qualification-venv
+          PY=/tmp/trader-assist-rc5-qualification-venv/bin/python
+          "$PY" -m pip install --require-hashes -r requirements-dev.lock
+          mkdir -p "${RUNNER_TEMP}/rc5-wheel"
+          "$PY" -m pip download \
+            --no-deps \
+            --only-binary=:all: \
+            --dest "${RUNNER_TEMP}/rc5-wheel" \
+            "nautilus-trader==${RC5_EXPECTED_VERSION}"
+          "$PY" - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          wheel_dir = Path(os.environ["RUNNER_TEMP"]) / "rc5-wheel"
+          wheels = tuple(wheel_dir.glob("*.whl"))
+          assert len(wheels) == 1, wheels
+          digest = hashlib.sha256(wheels[0].read_bytes()).hexdigest()
+          expected = os.environ["RC5_EXPECTED_WHEEL_SHA256"]
+          assert digest == expected, (wheels[0].name, digest, expected)
+          print(f"RC5_WHEEL={wheels[0].name}")
+          print(f"RC5_WHEEL_SHA256={digest}")
+          PY
+          "$PY" -m pip install --no-deps "${RUNNER_TEMP}"/rc5-wheel/*.whl
+          "$PY" -m pip install -e . --no-deps --no-build-isolation
+
+      - name: Q1 exact artifact, platform, and installed identity
+        run: |
+          PY=/tmp/trader-assist-rc5-qualification-venv/bin/python
+          test "$(uname -s)" = "Linux"
+          test "$(uname -m)" = "x86_64"
+          "$PY" - <<'PY'
+          import platform
+          import sys
+          from importlib.metadata import version
+
+          assert sys.version_info[:2] == (3, 12), sys.version
+          assert platform.machine() == "x86_64", platform.machine()
+          assert version("nautilus-trader") == "2.0.0rc5"
+          PY
+
+      - name: Q8 frozen-base and qualification-only scope proof
+        run: |
+          git cat-file -e "${FROZEN_BASE_SHA}^{commit}"
+          git diff --name-only "${FROZEN_BASE_SHA}"...HEAD > "${RUNNER_TEMP}/rc5-changed-paths.txt"
+          cat "${RUNNER_TEMP}/rc5-changed-paths.txt"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          actual = {
+              line.strip()
+              for line in (Path(os.environ["RUNNER_TEMP"]) / "rc5-changed-paths.txt")
+              .read_text(encoding="utf-8")
+              .splitlines()
+              if line.strip()
+          }
+          expected = {
+              ".github/workflows/nautilus-rc5-qualification-ci.yml",
+              "scripts/nautilus_rc5_public_data_probe.py",
+              "tests/test_nautilus_rc5_qualification.py",
+          }
+          assert actual == expected, {"actual": sorted(actual), "expected": sorted(expected)}
+          PY
+
+      - name: Q2-Q5 and Q7 deterministic qualification
+        run: |
+          PY=/tmp/trader-assist-rc5-qualification-venv/bin/python
+          "$PY" -m pytest -q tests/test_nautilus_rc5_qualification.py
+
+      - name: Qualification static gates
+        run: |
+          PY=/tmp/trader-assist-rc5-qualification-venv/bin/python
+          "$PY" -m ruff check \
+            scripts/nautilus_rc5_public_data_probe.py \
+            tests/test_nautilus_rc5_qualification.py
+          "$PY" -m compileall -q \
+            scripts/nautilus_rc5_public_data_probe.py \
+            tests/test_nautilus_rc5_qualification.py
+          git diff --check "${FROZEN_BASE_SHA}"...HEAD
+
+      - name: Q6-Q7 bounded zero-credential Hyperliquid public-provider proof
+        id: public_provider_probe
+        continue-on-error: true
+        run: |
+          set +e
+          timeout 150s /tmp/trader-assist-rc5-qualification-venv/bin/python \
+            scripts/nautilus_rc5_public_data_probe.py \
+            --evidence-path "${RUNNER_TEMP}/rc5-public-evidence" \
+            --result-path "${RUNNER_TEMP}/rc5-qualification-result.json" \
+            --instrument-id ETH-USD-PERP.HYPERLIQUID \
+            --provider-coin ETH \
+            --run-seconds 120
+          probe_exit=$?
+          set -e
+          if [ ! -s "${RUNNER_TEMP}/rc5-qualification-result.json" ]; then
+            printf '{"schema_version":"RC5_ONE_BLOCKER_QUALIFICATION_RESULT_V1","status":"HARNESS_INFRASTRUCTURE_FAILURE","failure_class":"HARNESS_OR_INFRASTRUCTURE_FAILURE","probe_exit_code":%s}\n' \
+              "${probe_exit}" > "${RUNNER_TEMP}/rc5-qualification-result.json"
+          fi
+          /tmp/trader-assist-rc5-qualification-venv/bin/python -m json.tool \
+            "${RUNNER_TEMP}/rc5-qualification-result.json"
+          exit "${probe_exit}"
+
+      - name: Preserve rc5 qualification evidence
+        if: ${{ always() && steps.public_provider_probe.outcome != 'skipped' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rc5-one-blocker-qualification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rc5-qualification-result.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Assert authoritative rc5 provider observation
+        if: ${{ always() && steps.public_provider_probe.outcome != 'skipped' }}
+        run: |
+          /tmp/trader-assist-rc5-qualification-venv/bin/python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          result = json.loads(
+              (Path(os.environ["RUNNER_TEMP"]) / "rc5-qualification-result.json")
+              .read_text(encoding="utf-8")
+          )
+          assert result["status"] == "PASS", result
+          assert result["nautilus_version"] == "2.0.0rc5", result
+          assert result["public_hyperliquid_data_only"] is True, result
+          assert result["zero_credentials"] is True, result
+          assert result["execution_client_registered"] is False, result
+          assert result["zero_exchange_write"] is True, result
+          PY
