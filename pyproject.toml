@@ -22,7 +22,7 @@ dev = [
   "pip-audit==2.9.0",
 ]
 nautilus-pilot = [
-  "nautilus-trader==2.0.0rc4",
+  "nautilus-trader==2.0.0rc5",
 ]
 
 [tool.hatch.build.targets.wheel]
