@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import ast
-import inspect
 from datetime import UTC, datetime
 from decimal import Decimal
 from importlib.metadata import distribution, version
@@ -34,7 +33,6 @@ from nautilus_trader.model import (
 )
 from nautilus_trader.trading import Strategy, StrategyConfig
 
-from scripts.nautilus_rc5_public_data_probe import _external_minute_bar_type
 from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
 from trader_assist_v0.multi_asset_shadow.models import ClosedBar
 from trader_assist_v0.nautilus_e4.contracts import (
@@ -330,6 +328,7 @@ def test_q4_q5_rc5_provider_objects_round_trip_current_project_evidence(tmp_path
     store = EvidenceStore(tmp_path / "rc5-evidence")
     admissions = tuple(
         AdmittedEvent.create(
+            schema_version="E4_CAPTURE_V1",
             process_epoch="rc5-qualification-process",
             continuity_epoch="rc5-qualification-continuity",
             admission_epoch="rc5-qualification-admission",
