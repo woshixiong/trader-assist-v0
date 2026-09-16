@@ -8,7 +8,6 @@ signing, or exchange writes.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import threading
 import time
@@ -109,6 +108,7 @@ class Rc5QualificationStrategy(Strategy):
     def _persist(self, source: SourceEvent) -> None:
         self._ordinal += 1
         admitted = AdmittedEvent.create(
+            schema_version="E4_CAPTURE_V1",
             process_epoch="rc5-qualification-process",
             continuity_epoch="rc5-qualification-continuity",
             admission_epoch="rc5-qualification-admission",
