@@ -7,10 +7,11 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from trader_assist_v0.contracts.common import sha256_hex
+from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
 from trader_assist_v0.nautilus_e4.contracts import (
     DATA_VERSION,
     EXECUTION_MODEL_VERSION,
+    LEGACY_NAUTILUS_VERSION,
     NAUTILUS_VERSION,
     WARMUP_5M_BARS,
     ApprovalProvenance,
@@ -36,6 +37,7 @@ BASE_SHA = "2" * 40
 TREE = "3" * 40
 MARKET = sha256_hex(b"HYPERLIQUID|MAIN|ETH")
 STATE = "4" * 64
+_MANIFEST_DOMAIN = b"trader-assist-v0/e4/run-manifest/v1\0"
 
 
 def expression(*, market_id: str = MARKET, coin: str = "ETH") -> MarketExpression:
@@ -106,11 +108,22 @@ def test_pit_and_manifest_bind_exact_versions_current_state_and_zero_write() -> 
     assert pit.expressions[0].listing_state is None
     assert historical_pit_claim_state(pit) is EvidenceState.NOT_EVALUABLE
     assert run.pit_snapshot_hash == pit.snapshot_hash
-    assert run.nautilus_version == NAUTILUS_VERSION == "2.0.0rc4"
+    assert run.nautilus_version == NAUTILUS_VERSION == "2.0.0rc5"
     assert run.data_version == DATA_VERSION
     assert run.execution_model_version == EXECUTION_MODEL_VERSION
     assert run.execution_model_limited is True
     assert run.private_api is run.exchange_write is run.real_exec_client_registered is False
+
+
+def test_legacy_rc4_manifest_identity_remains_hash_verified_and_readable() -> None:
+    raw = manifest().model_dump(mode="json")
+    raw["nautilus_version"] = LEGACY_NAUTILUS_VERSION
+    identity = {key: value for key, value in raw.items() if key != "manifest_hash"}
+    raw["manifest_hash"] = sha256_hex(_MANIFEST_DOMAIN + canonical_json_bytes(identity))
+
+    legacy = RunManifest.model_validate(raw)
+    assert legacy.nautilus_version == "2.0.0rc4"
+    assert RunManifest.model_validate_json(legacy.model_dump_json()) == legacy
 
 
 def test_pit_tamper_and_incompatible_versions_fail_closed() -> None:
@@ -408,11 +421,13 @@ def test_public_provider_workflow_is_bounded_and_requires_observed_data() -> Non
         assert required_proof in probe
 
 
-def test_host_uses_explicit_exact_rc4_identity_surfaces_and_durable_bar_flush() -> None:
+def test_host_uses_explicit_exact_version_identity_surfaces_and_durable_bar_flush() -> None:
     root = Path(__file__).resolve().parents[1]
     source = (root / "src/trader_assist_v0/nautilus_e4/host.py").read_text(
         encoding="utf-8"
     )
+    assert "assert_exact_nautilus_version" in source
+    assert "manifest/runtime Nautilus version mismatch" in source
     start = source.index("    def _expression_for(")
     end = source.index("\n\n\ndef build_public_data_node", start)
     mapping = source[start:end]
