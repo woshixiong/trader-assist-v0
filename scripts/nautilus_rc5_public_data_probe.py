@@ -31,8 +31,8 @@ from nautilus_trader.model import (
     InstrumentId,
     PriceType,
     QuoteTick,
-    TradeTick,
     TraderId,
+    TradeTick,
 )
 from nautilus_trader.trading import Strategy, StrategyConfig
 
