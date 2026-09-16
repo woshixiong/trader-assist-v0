@@ -2,6 +2,7 @@
 
 **Status:** TASK-CONDITIONAL PROCEDURE CANDIDATE  
 **Effective date:** 2026-08-30  
+**Last material amendment candidate:** 2026-09-16  
 **Normative owner:** `UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V2_2026-09-01.md`
 
 This file operationalizes the Unified V2 rules for project-generated commands, launchers, one-paste Terminal blocks, local automation, target-host execution and evidence-return workflows. It is also the compact incident catalogue for command-generation failures.
@@ -152,6 +153,36 @@ OPERATOR_VISIBLE_BOOTSTRAP
 ```
 
 If this cannot be achieved on the current surface, prefer a robust file/artifact transfer surface, an accepted repository-owned launcher, or an explicitly safe phase split over another encoding layer. Hash verification detects corruption after transport; it does not make an overlong transport reliable.
+
+### 3.2 Project-local GitHub transport
+
+For user-local Git operations against `woshixiong/trader-assist-v0`, generated project commands use the independently reviewed provider-native HTTPS route rather than the previously unreliable SSH-over-443 route:
+
+```text
+LOCAL_PROJECT_GIT_TRANSPORT=https
+AUTH_SURFACE=GitHub CLI browser OAuth
+CREDENTIAL_HELPER=gh auth setup-git --hostname github.com
+SYSTEM_CREDENTIAL_STORE_REQUIRED=YES
+PLAINTEXT_FALLBACK_ALLOWED=NO
+MANUAL_PAT_IN_SCRIPTS=NO
+GLOBAL_URL_REWRITE_REQUIRED=NO
+SSH_OVER_443_FOR_USER_LOCAL_GIT=DEPRECATED
+FUTURE_GENERATED_PROJECT_LOCAL_GIT_COMMANDS_USE_HTTPS=YES
+```
+
+Operational requirements:
+
+- prefer the repository remote `https://github.com/woshixiong/trader-assist-v0.git` for user-local fetch/pull/push workflows;
+- authenticate through GitHub CLI browser OAuth when an interactive login is required;
+- configure GitHub CLI as the `github.com` Git credential helper with `gh auth setup-git --hostname github.com`;
+- require the OS/system credential store; if GitHub CLI falls back to plaintext credential storage, fail closed rather than accepting the downgrade;
+- never embed a PAT, password or OAuth token in generated scripts, command blocks, repository files or logs;
+- do not use `--insecure-storage`;
+- do not introduce a global `insteadOf`/URL rewrite merely to force this project route;
+- environment token overrides such as `GH_TOKEN` / `GITHUB_TOKEN` must not silently replace the reviewed stored-credential route when the command's authority depends on the user's accepted local session;
+- broader OAuth scopes are a separate credential-authority change; do not silently expand them to make a push succeed.
+
+This is a project-local operator transport rule. It does not change GitHub connector/app authority, repository branch protections, CI semantics, private API authority, deployment authority or trading authority. If HTTPS itself is unavailable or a materially different Git host/auth model becomes necessary, re-evaluate the transport rather than silently falling back to SSH-over-443.
 
 ---
 
@@ -406,6 +437,7 @@ These incidents are retained as rationale/examples; the normative lessons live i
 | S1 public-provider harness returned an already-decoded list where the production `HttpPost` seam required raw bytes | wrapper/harness contract mismatch | prove exact seam input/output/encoding ownership before external rehearsal |
 | S1 checkpoint evidence logic treated SQLite WAL/SHM by filename suffix and a follow-up copy excluded `-wal` | persisted-state copy/identity failure | durable-state manifests/copies follow engine semantics; SQLite WAL may contain committed state and cannot be blanket-excluded |
 | S1 attempt #2 sampled `RuntimeHealth` only after graceful teardown had cleared connection/ACK/data-ready state and treated normalized `SHUTDOWN` values as evidence live readiness never occurred | wrapper/harness observation-phase mismatch | ephemeral state evidence must be captured in the authoritative lifecycle phase or preserved by teardown-surviving monotonic evidence; post-teardown normalization cannot negate prior readiness |
+| PR #177 recovery/publish path repeatedly failed through `ssh.github.com:443` under a proxy/TUN/fake-IP route while HTTPS + GitHub CLI/Keychain succeeded | local Git transport / proxy interference | project-local generated Git commands use the reviewed HTTPS + GitHub CLI credential-helper route; do not silently fall back to SSH-over-443 |
 
 A reusable new lesson should update Unified V2 or this narrow procedure rather than relying on chat memory.
 
