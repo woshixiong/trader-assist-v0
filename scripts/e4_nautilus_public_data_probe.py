@@ -166,6 +166,8 @@ def _run_live(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             "exact_tree": manifest.git_tree,
             "public_data_only": True,
             "zero_credentials": True,
+            "zero_execution_client": True,
+            "zero_signing": True,
             "zero_exchange_write": True,
             "PUBLIC_HYPERLIQUID_DATA_ONLY": True,
             "QUOTE_OBSERVED": observation["quote_observed"],
@@ -227,6 +229,8 @@ def main() -> int:
                 "bounded_run_seconds": args.run_seconds,
                 "public_data_only": True,
                 "zero_credentials": True,
+                "zero_execution_client": True,
+                "zero_signing": True,
                 "zero_exchange_write": True,
             },
         )
