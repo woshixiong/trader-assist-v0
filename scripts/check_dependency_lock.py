@@ -7,8 +7,8 @@ from importlib.metadata import distributions
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PILOT_REQUIREMENT = "nautilus-trader==2.0.0rc4"
-PILOT_WHEEL_SHA256 = "8d3591aa4d86c7133be2115b1037ffadafb36449214d9973d496bdc80e21ad93"
+PILOT_REQUIREMENT = "nautilus-trader==2.0.0rc5"
+PILOT_WHEEL_SHA256 = "eab45fafd2312deda1236554c49a9798bfc76bc8465af864878e2f70189ebebe"
 PIN_RE = re.compile(r"^[A-Za-z0-9_.-]+==[A-Za-z0-9_.!+-]+$")
 LOCK_RE = re.compile(
     r"^(?P<name>[A-Za-z0-9_.-]+)==(?P<version>[A-Za-z0-9_.!+-]+) "
@@ -76,10 +76,10 @@ def _verify_direct_pins(
     if missing_dev:
         raise SystemExit("dev lock mismatch: " + ", ".join(missing_dev))
     if optional_pilot != (PILOT_REQUIREMENT,):
-        raise SystemExit("nautilus-pilot optional dependency must contain only the exact rc4 pin")
+        raise SystemExit("nautilus-pilot optional dependency must contain only the exact rc5 pin")
     expected_pilot = {_pin(PILOT_REQUIREMENT)[0]: (_pin(PILOT_REQUIREMENT)[1], PILOT_WHEEL_SHA256)}
     if pilot != expected_pilot:
-        raise SystemExit("pilot lock must contain only the exact authorized rc4 Linux wheel")
+        raise SystemExit("pilot lock must contain only the exact authorized rc5 Linux wheel")
 
 
 def _verify_runtime_subset(
