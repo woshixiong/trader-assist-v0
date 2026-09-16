@@ -102,6 +102,7 @@ COMPLETE_TASK_PACKET_BEFORE_EXECUTION=YES
 WRITER_PASS_NE_INDEPENDENT_ACCEPTANCE=YES
 USER_AS_ROUTINE_MESSAGE_BUS=PROHIBITED
 ACTIVE_TASK_OWNERSHIP_UNTIL_TERMINAL_DISPOSITION=YES
+REVIEWED_PR_TERMINAL_DISPOSITION_REQUIRED=YES
 NO_SILENT_MODEL_EXECUTOR_FALLBACK=YES
 NO_HIDDEN_SEMANTIC_RETRY=YES
 FALSE_SAFE_STOP_GATE=PROHIBITED
@@ -130,6 +131,25 @@ If GitHub evidence is sufficient, review exact GitHub head/diff + exact-head CI 
 For execution/validation, prefer an authoritative GitHub/provider-native remote surface over user-operated local emulation when it provides equal or higher claim fidelity, exact identity/evidence, and lower human relay. This preference never creates credential/private-API authority and never overrides a genuinely local or target-host-specific claim boundary.
 
 The current control/orchestration role retains task ownership through intermediate CI/review/publication gates, executes every safe authorized next action, and stops only at the specific external or user-retained authority boundary.
+
+Independent Review completion creates a mandatory PR terminal-disposition obligation; it is not permission to leave the reviewed PR indefinitely open or draft:
+
+```text
+FINAL_REVIEW=PASS_AND_CANDIDATE_ACCEPTED
+-> obtain retained user Mark Ready / merge authority
+-> merge
+-> verify live main
+-> record terminal disposition
+
+FINAL_REVIEW=REPLAN|REJECT|SUPERSEDED
+-> do not merge
+-> explicitly close or supersede the PR
+-> record replacement / reason when applicable
+
+DANGLING_REVIEWED_PR_WITHOUT_TERMINAL_DISPOSITION=PROHIBITED
+```
+
+This does not weaken the separate current-user authority required for Mark Ready or merge.
 
 ## 7. Stale / historical files
 
