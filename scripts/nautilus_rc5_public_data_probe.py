@@ -13,28 +13,7 @@ import threading
 import time
 from importlib.metadata import version
 from pathlib import Path
-from typing import Any
-
-from nautilus_trader.adapters.hyperliquid import (
-    HyperliquidDataClientConfig,
-    HyperliquidDataClientFactory,
-    HyperliquidEnvironment,
-)
-from nautilus_trader.common import Environment
-from nautilus_trader.live import LiveNode
-from nautilus_trader.model import (
-    AggregationSource,
-    Bar,
-    BarAggregation,
-    BarSpecification,
-    BarType,
-    InstrumentId,
-    PriceType,
-    QuoteTick,
-    TraderId,
-    TradeTick,
-)
-from nautilus_trader.trading import Strategy, StrategyConfig
+from typing import Any, Self, TYPE_CHECKING
 
 from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
 from trader_assist_v0.nautilus_e4.contracts import (
@@ -45,6 +24,153 @@ from trader_assist_v0.nautilus_e4.contracts import (
 )
 from trader_assist_v0.nautilus_e4.safety import assert_public_only
 from trader_assist_v0.nautilus_e4.storage import EvidenceStore
+
+if TYPE_CHECKING:
+
+    class HyperliquidEnvironment:
+        MAINNET: object
+
+    class HyperliquidDataClientConfig:
+        def __init__(self, *, environment: object) -> None: ...
+
+    class HyperliquidDataClientFactory: ...
+
+    class Environment:
+        LIVE: object
+
+    class AggregationSource:
+        EXTERNAL: object
+
+    class BarAggregation:
+        MINUTE: object
+
+    class PriceType:
+        LAST: object
+
+    class InstrumentId:
+        @classmethod
+        def from_str(cls, value: str) -> Self: ...
+
+        def __str__(self) -> str: ...
+
+    class TraderId:
+        def __init__(self, value: str) -> None: ...
+
+    class BarSpecification:
+        def __init__(
+            self,
+            step: int,
+            aggregation: object,
+            price_type: object,
+        ) -> None: ...
+
+    class BarType:
+        instrument_id: InstrumentId
+
+        def __init__(
+            self,
+            instrument_id: InstrumentId,
+            specification: BarSpecification,
+            aggregation_source: object,
+        ) -> None: ...
+
+        def __str__(self) -> str: ...
+
+    class QuoteTick:
+        instrument_id: InstrumentId
+        bid_price: object
+        bid_size: object
+        ask_price: object
+        ask_size: object
+        ts_event: int
+        ts_init: int
+
+    class TradeTick:
+        instrument_id: InstrumentId
+        price: object
+        size: object
+        aggressor_side: object
+        trade_id: object
+        ts_event: int
+        ts_init: int
+
+    class Bar:
+        bar_type: BarType
+        open: object
+        high: object
+        low: object
+        close: object
+        volume: object
+        ts_event: int
+        ts_init: int
+
+    class StrategyConfig:
+        def __new__(cls, *args: object, **kwargs: object) -> Self: ...
+
+        def __init__(self, *args: object, **kwargs: object) -> None: ...
+
+    class Strategy:
+        def __new__(cls, config: StrategyConfig | None = None) -> Self: ...
+
+        def __init__(self, config: StrategyConfig | None = None) -> None: ...
+
+        def subscribe_quotes(self, instrument_id: InstrumentId) -> None: ...
+
+        def subscribe_trades(self, instrument_id: InstrumentId) -> None: ...
+
+        def subscribe_bars(self, bar_type: BarType) -> None: ...
+
+    class LiveNodeHandle:
+        def stop(self) -> None: ...
+
+    class LiveNodeBuilder:
+        def add_data_client(
+            self,
+            client_id: object | None,
+            factory: HyperliquidDataClientFactory,
+            config: HyperliquidDataClientConfig,
+        ) -> None: ...
+
+        def build(self) -> LiveNode: ...
+
+    class LiveNode:
+        @classmethod
+        def builder(
+            cls,
+            name: str,
+            trader_id: TraderId,
+            environment: object,
+        ) -> LiveNodeBuilder: ...
+
+        def add_strategy(self, strategy: Strategy) -> None: ...
+
+        def handle(self) -> LiveNodeHandle: ...
+
+        def run(self) -> None: ...
+
+        def dispose(self) -> None: ...
+
+else:
+    from nautilus_trader.adapters.hyperliquid import (
+        HyperliquidDataClientConfig,
+        HyperliquidDataClientFactory,
+        HyperliquidEnvironment,
+    )
+    from nautilus_trader.common import Environment
+    from nautilus_trader.live import LiveNode
+    from nautilus_trader.model import (
+        AggregationSource,
+        Bar,
+        BarAggregation,
+        BarSpecification,
+        BarType,
+        InstrumentId,
+        PriceType,
+        QuoteTick,
+        TraderId,
+        TradeTick,
+    )
+    from nautilus_trader.trading import Strategy, StrategyConfig
 
 RC5_VERSION = "2.0.0rc5"
 PASS = 0
@@ -69,18 +195,43 @@ def _write_result(path: Path, payload: dict[str, Any]) -> None:
     print(encoded.decode().strip())
 
 
+class Rc5QualificationStrategyConfig(StrategyConfig):
+    """Qualification-only public Strategy config carried through the rc5 seam."""
+
+    _CUSTOM_FIELDS = ("evidence_root", "instrument_id")
+
+    evidence_root: str
+    instrument_id: str
+
+    def __new__(cls, *args: object, **kwargs: object) -> Self:
+        for key in cls._CUSTOM_FIELDS:
+            kwargs.pop(key, None)
+        return super().__new__(cls, *args, **kwargs)
+
+    def __init__(
+        self,
+        *,
+        evidence_root: str,
+        instrument_id: str,
+        **_kwargs: object,
+    ) -> None:
+        super().__init__()
+        self.evidence_root = evidence_root
+        self.instrument_id = instrument_id
+
+
 class Rc5QualificationStrategy(Strategy):
     """Minimal public-data observer using current Trade OS evidence semantics only."""
 
-    def __init__(self, *, evidence_root: Path, instrument_id: str) -> None:
-        super().__init__(StrategyConfig())
+    def __init__(self, config: Rc5QualificationStrategyConfig) -> None:
+        super().__init__(config)
         if version("nautilus-trader") != RC5_VERSION:
             raise RuntimeError("rc5 qualification requires exact nautilus-trader==2.0.0rc5")
-        self._instrument_id = InstrumentId.from_str(instrument_id)
-        self._bar_type = _external_minute_bar_type(instrument_id)
-        self._market_id = sha256_hex(f"HYPERLIQUID|MAIN|{instrument_id}".encode())
+        self._instrument_id = InstrumentId.from_str(config.instrument_id)
+        self._bar_type = _external_minute_bar_type(config.instrument_id)
+        self._market_id = sha256_hex(f"HYPERLIQUID|MAIN|{config.instrument_id}".encode())
         self._expression_id = "rc5-qualification-public-data"
-        self._store = EvidenceStore(evidence_root)
+        self._store = EvidenceStore(Path(config.evidence_root))
         self._observed: set[DataKind] = set()
         self._ordinal = 0
 
@@ -213,10 +364,11 @@ def _build_public_data_node() -> LiveNode:
 def _run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     proof = assert_public_only(env=os.environ)
     node = _build_public_data_node()
-    strategy = Rc5QualificationStrategy(
-        evidence_root=args.evidence_path,
+    config = Rc5QualificationStrategyConfig(
+        evidence_root=str(args.evidence_path),
         instrument_id=args.instrument_id,
     )
+    strategy = Rc5QualificationStrategy(config)
     node.add_strategy(strategy)
     handle = node.handle()
     timer = threading.Timer(args.run_seconds, handle.stop)
