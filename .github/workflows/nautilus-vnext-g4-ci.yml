@@ -59,7 +59,8 @@ jobs:
       - name: E3 structural-reference regressions
         run: |
           /tmp/trader-assist-g4-venv/bin/python -m pytest -q \
-            tests/test_nautilus_pilot_contracts.py \
+            tests/test_nautilus_pilot_contracts.py
+          /tmp/trader-assist-g4-venv/bin/python -m pytest -q \
             tests/test_nautilus_pilot_version_contract.py
       - name: Static gates
         run: |

@@ -20,6 +20,7 @@ from trader_assist_v0.vnext_g4.contracts import (
     AttemptStop,
     CandidateConfig,
     CandidateManifest,
+    EntryActivation,
     ExecutionModelConfig,
     ExitPolicy,
     OrderPrimitive,
@@ -33,7 +34,7 @@ def _candidate() -> CandidateManifest:
         candidate_id="qualification-reference",
         structural_component_manifest_hash="a" * 64,
         config=CandidateConfig(
-            entry_activation="EA1",
+            entry_activation=EntryActivation.EA1,
             attempt_stop=AttemptStop.AP0,
             room_to_cost_k=Decimal("2"),
             reentry_policy=ReentryPolicy.NO_REENTRY_REFERENCE,
