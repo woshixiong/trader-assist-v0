@@ -7,6 +7,8 @@ from decimal import Decimal
 import pytest
 
 from trader_assist_v0.nautilus_g4.runner import (
+    assert_actual_representative_scale,
+    assert_backtest_node_catalog_surface,
     assert_exact_nautilus_rc5,
     assert_representative_scale,
     build_fill_model,
@@ -17,6 +19,7 @@ from trader_assist_v0.vnext_g4.contracts import (
     AttemptStop,
     CandidateConfig,
     CandidateManifest,
+    EntryActivation,
     ExecutionModelConfig,
     ExitPolicy,
     OrderPrimitive,
@@ -40,7 +43,7 @@ def _assert_required_nautilus_available() -> None:
 
 def candidate(candidate_id: str) -> CandidateManifest:
     config = CandidateConfig(
-        entry_activation="EA1",
+        entry_activation=EntryActivation.EA1,
         attempt_stop=AttemptStop.AP0,
         room_to_cost_k=Decimal("2"),
         reentry_policy=ReentryPolicy.NO_REENTRY_REFERENCE,
@@ -82,6 +85,12 @@ def test_installed_rc5_and_provider_owned_fill_model_are_consumed() -> None:
     assert isinstance(model, ProbabilisticFillModel)
 
 
+@REQUIRES_NAUTILUS
+def test_exact_rc5_exposes_high_level_backtest_node_catalog_surface() -> None:
+    _assert_required_nautilus_available()
+    assert_backtest_node_catalog_surface()
+
+
 def test_candidate_execution_contexts_are_identity_isolated() -> None:
     reference = candidate("reference")
     challenger = candidate("challenger")
@@ -116,3 +125,19 @@ def test_formal_representative_scale_boundary_is_twenty_unique_markets() -> None
     assert_representative_scale(tuple(f"market-{index:02d}" for index in range(20)))
     with pytest.raises(ValueError, match="at least 20"):
         assert_representative_scale(tuple(f"market-{index:02d}" for index in range(19)))
+
+
+def test_actual_representative_scale_requires_source_bound_positive_events() -> None:
+    counts = {f"market-{index:02d}": index + 1 for index in range(20)}
+    with pytest.raises(ValueError, match="source-bound E4 evidence"):
+        assert_actual_representative_scale(counts, source_evidence_hashes=())
+    with pytest.raises(ValueError, match="at least one causal event"):
+        assert_actual_representative_scale(
+            {**counts, "market-00": 0},
+            source_evidence_hashes=("f" * 64,),
+        )
+    markets = assert_actual_representative_scale(
+        counts,
+        source_evidence_hashes=("f" * 64,),
+    )
+    assert len(markets) == 20

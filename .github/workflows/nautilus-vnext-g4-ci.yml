@@ -83,14 +83,16 @@ jobs:
             tests/test_vnext_g4_*.py \
             tests/test_nautilus_vnext_g4_*.py
           git diff --check
-      - name: Provider-native rc5 G4 qualification
+      - name: Formal G4 technical qualification
         run: |
+          G4_EXACT_HEAD="$(git rev-parse HEAD)" \
+          G4_EXACT_TREE="$(git rev-parse 'HEAD^{tree}')" \
           /tmp/trader-assist-g4-venv/bin/python \
             scripts/nautilus_vnext_g4_qualification.py \
-            --result-path "${RUNNER_TEMP}/vnext-g4-qualification.json"
+            --result-path "${RUNNER_TEMP}/vnext-formal-g4-qualification.json"
           /tmp/trader-assist-g4-venv/bin/python -m json.tool \
-            "${RUNNER_TEMP}/vnext-g4-qualification.json"
-      - name: Assert bounded result
+            "${RUNNER_TEMP}/vnext-formal-g4-qualification.json"
+      - name: Assert truthful bounded result
         run: |
           /tmp/trader-assist-g4-venv/bin/python - <<'PY'
           import json
@@ -98,26 +100,45 @@ jobs:
           from pathlib import Path
 
           result = json.loads(
-              (Path(os.environ["RUNNER_TEMP"]) / "vnext-g4-qualification.json").read_text()
+              (Path(os.environ["RUNNER_TEMP"]) / "vnext-formal-g4-qualification.json").read_text()
           )
-          assert result["status"] == "PASS", result
+          assert result["status"] == "TECHNICAL_G4_PARTIAL", result
           assert result["nautilus_version"] == "2.0.0rc5", result
+          assert result["g4e0_contract_identity"] == "PASS", result
+          assert result["g4e1_deterministic_causal_replay"] == "PASS", result
+          assert result["g4e2_vnext_decision_parity"] == "PASS", result
+          assert result["g4e3_explicit_execution_model"] == "PASS", result
+          assert result["g4e4_candidate_state_isolation"] == "PASS", result
+          assert result["g4e5_fill_fee_outcome_report_parity"] == "PASS", result
+          assert result["g4e6_zero_write_live_path_composition"] == (
+              "PASS_REQUIRES_EXACT_HEAD_E4_CI"
+          ), result
+          assert result["g4e7_reconnect_restart_nonregression"] == "PASS", result
+          assert result["g4e8_representative_scale_runtime"] == "NOT_PROVEN", result
+          assert result["formal_g4_technical_acceptance"] is False, result
+          assert result["representative_scale_boundary"] >= 20, result
+          assert result["representative_evidence_supplied"] is False, result
+          assert result["actual_representative_market_count"] == 0, result
+          assert result["backtest_node_catalog_surface"] is True, result
           assert result["provider_native_backtest_engine"] is True, result
           assert result["provider_native_fill_model"] is True, result
-          assert result["explicit_fill_model_config"] is True, result
-          assert result["candidate_state_isolation_by_fresh_engine"] is True, result
-          assert result["representative_scale_boundary"] >= 20, result
+          assert result["controlled_provider_report_fill_rows"] > 0, result
+          assert result["controlled_replay_is_representative_evidence"] is False, result
+          assert result["restart_replay_identical"] is True, result
+          assert result["decision_parity"] is True, result
+          assert result["project_report_deterministic"] is True, result
           assert result["derived_cache_is_authoritative_market_truth"] is False, result
+          assert result["strategy_edge_proven"] is False, result
           assert result["confirmatory_e5_open"] is False, result
           assert result["private_api"] is False, result
           assert result["signing"] is False, result
           assert result["exchange_write"] is False, result
           assert result["venue_submitted"] is False, result
           PY
-      - name: Upload G4 qualification evidence
+      - name: Upload Formal G4 qualification evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: nautilus-vnext-g4-evidence-${{ github.sha }}
-          path: ${{ runner.temp }}/vnext-g4-qualification.json
+          name: nautilus-vnext-formal-g4-evidence-${{ github.sha }}
+          path: ${{ runner.temp }}/vnext-formal-g4-qualification.json
           if-no-files-found: error
           retention-days: 14
