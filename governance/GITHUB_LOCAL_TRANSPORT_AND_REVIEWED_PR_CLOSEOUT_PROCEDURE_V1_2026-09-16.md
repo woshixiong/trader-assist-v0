@@ -41,7 +41,7 @@ Generated project commands must not embed GitHub passwords, PATs, OAuth tokens o
 ```text
 --insecure-storage = PROHIBITED
 PLAINTEXT_GITHUB_TOKEN_FALLBACK = FAIL_CLOSED
-GH_TOKEN / GITHUB_TOKEN ENVIRONMENT OVERRIDE = EXPLICITLY_CLASSIFY_BEFORE_USE
+GH_TOKEN / GITHUB_TOKEN ENVIRONMENT OVERRIDE = EXPLICITLY CLASSIFY BEFORE USE
 ```
 
 When `gh auth login --git-protocol https --web` is required, normal browser OAuth is the preferred route. `gh auth setup-git --hostname github.com` is the preferred Git credential-helper integration.
