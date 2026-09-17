@@ -32,6 +32,8 @@ SSH_OVER_443_FOR_USER_LOCAL_GIT=DEPRECATED
 
 Rationale: repeated project-local SSH-over-443 commands were disrupted by the user's proxy/TUN path, while provider-native HTTPS + GitHub CLI browser OAuth + macOS secure credential storage was independently reviewed and successfully activated. Do not reintroduce SSH-over-443 as the default merely because an older launcher used it.
 
+The default route is a preferred route, not proof that the current local network path is healthy. A prior successful `git ls-remote`, authentication check, or publication on another day does not prove the later mutation path is currently reliable.
+
 ### 1.1 Credential handling
 
 Generated project commands must not embed GitHub passwords, PATs, OAuth tokens or other credentials in scripts, logs, Issue comments or committed files.
@@ -60,6 +62,68 @@ NO_FORCE_AS_NORMAL_PUBLICATION_ROUTE
 ```
 
 Transport reliability never weakens branch/ref/merge authority rules.
+
+### 1.3 Mandatory applicability and transport-health gate
+
+Any bounded task that will generate or execute user-local Git publication for this repository must load this procedure before the publication command is delivered. This is independent of the general Generated Command gate.
+
+Record at minimum:
+
+```text
+LOCAL_GIT_TRANSPORT_APPLICABLE=YES|NO
+LOCAL_GIT_TRANSPORT_PROCEDURE_LOADED=YES|NO|NOT_APPLICABLE
+LOCAL_GIT_TRANSPORT_GATE=PASS|FAIL|NOT_APPLICABLE
+LOCAL_TRANSPORT_HEALTH_PREFLIGHT=PASS|FAIL|NOT_APPLICABLE
+KNOWN_TRANSPORT_INCIDENT_NONREGRESSION=PASS|FAIL|NOT_APPLICABLE
+AUTHORITATIVE_REMOTE_PUBLICATION_SURFACE_CHECKED=YES|NO|NOT_APPLICABLE
+```
+
+Hard enforcement:
+
+```text
+USER_LOCAL_GIT_PUBLICATION_COMMAND
+AND LOCAL_GIT_TRANSPORT_PROCEDURE_LOADED != YES
+=> COMMAND_DELIVERY=PROHIBITED
+
+USER_LOCAL_GIT_PUBLICATION_COMMAND
+AND LOCAL_GIT_TRANSPORT_GATE != PASS
+=> COMMAND_DELIVERY=PROHIBITED
+
+USER_LOCAL_GIT_PUBLICATION_COMMAND
+AND KNOWN_TRANSPORT_INCIDENT_NONREGRESSION != PASS
+=> COMMAND_DELIVERY=PROHIBITED
+```
+
+A local transport-health check must protect a real publication invariant. Do not create repeated speculative network probes merely to earn `PASS`; fresh provider/control-plane identity and an already-proven unhealthy local path are routing evidence. When an authoritative connected GitHub surface can perform the same bounded mutation at equal or higher fidelity with less human relay, apply the Unified V2 remote-execution preference before requiring another local publication attempt.
+
+### 1.4 Checkpoint-aware fallback ladder
+
+After a semantic Writer/action has completed, publication transport failure is an evidence/publication-tail failure unless evidence proves the semantic checkpoint itself is corrupt. Never consume another semantic Writer attempt merely to recover transport.
+
+Use this ladder:
+
+```text
+SEMANTIC_CHECKPOINT_NOT_YET_COMPLETE
+-> use accepted HTTPS + GitHub CLI route when LOCAL_GIT_TRANSPORT_GATE=PASS
+-> otherwise select an authoritative safe publication surface before semantic mutation when practical
+
+SEMANTIC_CHECKPOINT_ALREADY_COMPLETE
+AND LOCAL_GITHUB_TLS_OR_API_PATH_PROVEN_UNRELIABLE
+AND AUTHORITATIVE_GITHUB_CONNECTOR_WRITE_SURFACE_AVAILABLE
+-> RERUN_SEMANTIC_ACTION=NO
+-> LOOP_LOCAL_TRANSPORT_RETRIES=NO
+-> PRESERVE_EXACT_HEAD_TREE_SCOPE_AND_HASH_EVIDENCE=YES
+-> OFFLINE_EXACT_ARTIFACT_EGRESS_WHEN_SOURCE_BYTES_ARE_LOCAL_ONLY
+-> CONNECTOR_PROVIDER_NATIVE_PUBLICATION
+-> VERIFY_TERMINAL_REMOTE_TREE_OR_EXACT_ARTIFACT
+
+AUTHORITATIVE_REMOTE_WRITE_SURFACE_UNAVAILABLE
+-> preserve checkpoint
+-> SAFE_STOP_AT_TRANSPORT_CAPABILITY_BOUNDARY
+-> do not weaken credentials, force semantics, or semantic identity merely to publish
+```
+
+The 2026-09-17 R3 incident is a permanent nonregression case: local Git HTTPS failed with LibreSSL `SSL_ERROR_SYSCALL`, and authenticated `gh api` later failed with EOF after earlier read success. That pattern is classified as `LOCAL_GIT_HTTPS_LIBRESSL_OR_API_EOF_AFTER_PRIOR_SUCCESS`; it proves that earlier connectivity/authentication success alone is not a later mutation-path health proof.
 
 ---
 
@@ -168,6 +232,8 @@ HTTPS_PRE_ACTIVATION_HANDOFF=#163 comment 5690754272
 HTTPS_INDEPENDENT_REVIEW=PASS
 HTTPS_ACTIVATION_RECEIPT=#163 comment 5690829185
 POST_E4_CLOSEOUT_TRACKER=Issue #178
+R3_TRANSPORT_ENFORCEMENT_ROOT_CAUSE=#163 comment 5712157994
+R3_TRANSPORT_AMENDMENT_RECOMMENDATION=#163 comment 5712215961
 ```
 
 Historical incident details remain in the relevant Issue comments; this file keeps only the durable operational rule.
