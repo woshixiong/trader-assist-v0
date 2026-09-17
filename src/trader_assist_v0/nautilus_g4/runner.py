@@ -49,6 +49,15 @@ class ProviderStateProjection(BaseModel):
     state_hash: Sha256Hex
 
 
+BACKTEST_NODE_PUBLIC_METHODS = (
+    "build",
+    "run",
+    "dispose",
+    "get_engine_cache",
+    "get_engine_portfolio",
+)
+
+
 def causal_claim_gate_states(
     *,
     evidence_tier: Literal[
@@ -151,15 +160,9 @@ def assert_backtest_node_catalog_surface() -> None:
     )
     if not all(callable(item) for item in public_types):
         raise RuntimeError("exact rc5 high-level catalog replay surface is incomplete")
-    required_methods = (
-        "build",
-        "run",
-        "get_engine",
-        "dispose",
-    )
     missing = tuple(
         name
-        for name in required_methods
+        for name in BACKTEST_NODE_PUBLIC_METHODS
         if not callable(getattr(BacktestNode, name, None))
     )
     if missing:
@@ -182,19 +185,66 @@ def _identity_rows(values: Collection[object], fields: tuple[str, ...]) -> list[
     return sorted(rows, key=lambda row: tuple(row.values()))
 
 
-def project_provider_native_state(engine: object) -> ProviderStateProjection:
-    """Observe Cache/Portfolio directly; never invoke pandas report generators."""
-    cache = getattr(engine, "cache", None)
-    portfolio = getattr(engine, "portfolio", None)
-    if cache is None or portfolio is None:
-        raise RuntimeError("BacktestEngine does not expose public Cache/Portfolio state")
-    required = ("orders", "positions", "accounts")
-    missing = tuple(name for name in required if not callable(getattr(cache, name, None)))
+def _provider_account(
+    cache: object,
+    portfolio: object,
+    *,
+    venue: object | None,
+    account_id: object | None,
+) -> object:
+    """Resolve one known run account through rc5 public lookup methods only."""
+    lookup_available = False
+    account = None
+    if account_id is not None:
+        lookup = getattr(cache, "account", None)
+        if callable(lookup):
+            lookup_available = True
+            account = lookup(account_id)
+    if account is None and venue is not None:
+        for owner, name in (
+            (cache, "account_for_venue"),
+            (portfolio, "account"),
+        ):
+            lookup = getattr(owner, name, None)
+            if callable(lookup):
+                lookup_available = True
+                account = lookup(venue)
+                if account is not None:
+                    break
+    if not lookup_available:
+        raise RuntimeError("Nautilus Cache/Portfolio lacks a public account lookup method")
+    if account is None:
+        raise RuntimeError("known run account was not found in provider-owned state")
+    return account
+
+
+def project_provider_native_state(
+    cache: object,
+    portfolio: object,
+    *,
+    venue: object | None = None,
+    account_id: object | None = None,
+) -> ProviderStateProjection:
+    """Project public Cache/Portfolio state without raw-engine or report access."""
+    if venue is None and account_id is None:
+        raise ValueError("known run venue or account identity is required")
+    orders_method = getattr(cache, "orders", None)
+    positions_method = getattr(cache, "positions", None)
+    methods = {"orders": orders_method, "positions": positions_method}
+    missing = tuple(name for name, method in methods.items() if not callable(method))
     if missing:
         raise RuntimeError(f"Nautilus Cache is missing public state methods: {missing}")
-    orders = _as_collection(cache.orders(), name="orders")
-    positions = _as_collection(cache.positions(), name="positions")
-    accounts = _as_collection(cache.accounts(), name="accounts")
+    assert callable(orders_method)
+    assert callable(positions_method)
+    orders = _as_collection(orders_method(), name="orders")
+    positions = _as_collection(positions_method(), name="positions")
+    account = _provider_account(
+        cache,
+        portfolio,
+        venue=venue,
+        account_id=account_id,
+    )
+    accounts = (account,)
     cache_type = f"{type(cache).__module__}.{type(cache).__qualname__}"
     portfolio_type = f"{type(portfolio).__module__}.{type(portfolio).__qualname__}"
     filled_orders = tuple(
@@ -212,7 +262,10 @@ def project_provider_native_state(engine: object) -> ProviderStateProjection:
             positions,
             ("id", "instrument_id", "side", "quantity"),
         ),
-        "accounts": _identity_rows(accounts, ("id", "type", "base_currency")),
+        "accounts": _identity_rows(
+            accounts,
+            ("id", "account_type", "base_currency"),
+        ),
     }
     return ProviderStateProjection(
         cache_type=cache_type,

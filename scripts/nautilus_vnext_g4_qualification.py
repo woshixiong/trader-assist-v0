@@ -141,7 +141,7 @@ def _t0_serializer_probe() -> dict[str, object]:
 
 def _controlled_backtest_node_probe(root: Path) -> dict[str, object]:
     """Run a non-promotional provider-native control and inspect Cache/Portfolio."""
-    from nautilus_trader.backtest import BacktestEngine, BacktestNode
+    from nautilus_trader.backtest import BacktestNode
     from nautilus_trader.config import (
         BacktestDataConfig,
         BacktestEngineConfig,
@@ -238,12 +238,15 @@ def _controlled_backtest_node_probe(root: Path) -> dict[str, object]:
             ),
         )
         results = node.run()
-        engine = node.get_engine(config.id)
-        if engine is None:
-            raise AssertionError("BacktestNode did not retain its provider-native engine")
-        if not isinstance(engine, BacktestEngine):
-            raise AssertionError("BacktestNode engine is not provider-native")
-        projection = project_provider_native_state(engine)
+        cache = node.get_engine_cache(config.id)
+        portfolio = node.get_engine_portfolio(config.id)
+        if cache is None or portfolio is None:
+            raise AssertionError("BacktestNode did not retain public Cache/Portfolio state")
+        projection = project_provider_native_state(
+            cache,
+            portfolio,
+            venue=instrument.id.venue,
+        )
         if not projection.cache_type.startswith(
             "nautilus_trader."
         ) or not projection.portfolio_type.startswith("nautilus_trader."):
