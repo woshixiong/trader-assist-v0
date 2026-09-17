@@ -12,7 +12,6 @@ permissions:
 
 jobs:
   recover-and-amend:
-    if: ${{ !contains(github.event.head_commit.message, '[transport-helper-finalize]') }}
     runs-on: ubuntu-24.04
     env:
       REPO_SLUG: woshixiong/trader-assist-v0
@@ -44,19 +43,11 @@ jobs:
           import os
           import pathlib
           import urllib.request
-
           slug = os.environ["REPO_SLUG"]
           sha = os.environ["CHECKPOINT_BLOB"]
           token = os.environ["GH_TOKEN"]
           url = f"https://api.github.com/repos/{slug}/git/blobs/{sha}"
-          req = urllib.request.Request(
-              url,
-              headers={
-                  "Authorization": f"Bearer {token}",
-                  "Accept": "application/vnd.github+json",
-                  "X-GitHub-Api-Version": "2022-11-28",
-              },
-          )
+          req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"})
           with urllib.request.urlopen(req) as resp:
               payload = json.load(resp)
           raw = base64.b64decode(payload["content"])
@@ -91,9 +82,7 @@ jobs:
           import json
           import os
           import pathlib
-          import urllib.error
           import urllib.request
-
           slug = os.environ["REPO_SLUG"]
           token = os.environ["GH_TOKEN"]
           root = pathlib.Path(os.environ["RUNNER_TEMP"], "r3-recovery", "trade_os_r3_checkpoint_export_8efb04251bdf")
@@ -103,79 +92,43 @@ jobs:
           expected_parent_tree = os.environ["EXPECTED_PARENT_TREE"]
           target_branch = os.environ["TARGET_BRANCH"]
           expected_local_head = os.environ["EXPECTED_LOCAL_HEAD"]
-
           def api(method, path, payload=None):
               data = None if payload is None else json.dumps(payload, separators=(",", ":")).encode()
-              req = urllib.request.Request(
-                  f"https://api.github.com/repos/{slug}/{path}",
-                  data=data,
-                  method=method,
-                  headers={
-                      "Authorization": f"Bearer {token}",
-                      "Accept": "application/vnd.github+json",
-                      "X-GitHub-Api-Version": "2022-11-28",
-                      "Content-Type": "application/json",
-                  },
-              )
+              req = urllib.request.Request(f"https://api.github.com/repos/{slug}/{path}", data=data, method=method, headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "Content-Type": "application/json"})
               with urllib.request.urlopen(req) as resp:
                   return json.load(resp)
-
           main = api("GET", "git/ref/heads/main")["object"]["sha"]
           remote_head = api("GET", f"git/ref/heads/{target_branch}")["object"]["sha"]
           parent_tree = api("GET", f"git/commits/{old_head}")["tree"]["sha"]
           assert main == expected_main, (main, expected_main)
           assert remote_head == old_head, (remote_head, old_head)
           assert parent_tree == expected_parent_tree, (parent_tree, expected_parent_tree)
-
           expected_blob = {}
           for line in (root / "git-ls-tree.txt").read_text().splitlines():
               meta, path = line.split("\t", 1)
               mode, typ, sha = meta.split()
               assert typ == "blob"
               expected_blob[path] = (mode, sha)
-
           entries = []
           for path in (root / "paths.txt").read_text().splitlines():
               raw = (root / "files" / path).read_bytes()
-              created = api(
-                  "POST",
-                  "git/blobs",
-                  {"content": base64.b64encode(raw).decode(), "encoding": "base64"},
-              )["sha"]
+              created = api("POST", "git/blobs", {"content": base64.b64encode(raw).decode(), "encoding": "base64"})["sha"]
               mode, wanted = expected_blob[path]
               assert created == wanted, (path, created, wanted)
               entries.append({"path": path, "mode": mode, "type": "blob", "sha": created})
               print(f"R3_BLOB_OK={path}:{created}")
-
           tree = api("POST", "git/trees", {"base_tree": expected_parent_tree, "tree": entries})["sha"]
           assert tree == expected_tree, (tree, expected_tree)
           print(f"R3_REMOTE_TREE={tree}")
-
           meta = {}
           for line in (root / "commit-metadata.txt").read_text().splitlines():
               key, value = line.split("=", 1)
               meta[key] = value
           message = (root / "commit-message.txt").read_text().rstrip("\n")
-          commit_payload = {
-              "message": message,
-              "tree": expected_tree,
-              "parents": [old_head],
-              "author": {
-                  "name": meta["author_name"],
-                  "email": meta["author_email"],
-                  "date": meta["author_date"],
-              },
-              "committer": {
-                  "name": meta["committer_name"],
-                  "email": meta["committer_email"],
-                  "date": meta["committer_date"],
-              },
-          }
-          commit = api("POST", "git/commits", commit_payload)
+          commit = api("POST", "git/commits", {"message": message, "tree": expected_tree, "parents": [old_head], "author": {"name": meta["author_name"], "email": meta["author_email"], "date": meta["author_date"]}, "committer": {"name": meta["committer_name"], "email": meta["committer_email"], "date": meta["committer_date"]}})
           assert commit["tree"]["sha"] == expected_tree, commit
           assert commit["parents"][0]["sha"] == old_head, commit
           sha = commit["sha"]
-          pathlib.Path(os.environ["RUNNER_TEMP"], "r3-recovery", "remote-r3-commit.txt").write_text(sha + "\n")
           print(f"REMOTE_R3_COMMIT={sha}")
           print(f"REMOTE_R3_COMMIT_MATCHES_LOCAL={str(sha == expected_local_head).upper()}")
           print("R3_TARGET_REF_MUTATED=NO")
@@ -186,18 +139,15 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
-
-          def replace_once(path: str, old: str, new: str) -> None:
+          def replace_once(path, old, new):
               p = Path(path)
               text = p.read_text()
               if text.count(old) != 1:
                   raise SystemExit(f"anchor count for {path}: {text.count(old)}")
               p.write_text(text.replace(old, new, 1))
-
           transport = "governance/GITHUB_LOCAL_TRANSPORT_AND_REVIEWED_PR_CLOSEOUT_PROCEDURE_V1_2026-09-16.md"
           preflight = "governance/MANDATORY_ENGINEERING_PREFLIGHT_AND_CONVERGENCE_GATE_V1_2026-08-17.md"
           command = "governance/GENERATED_COMMAND_RELIABILITY_AND_OPERATOR_EFFICIENCY_RULE_V1_2026-08-30.md"
-
           hard_gate = '''### 1.0 Mandatory applicability and transport-health gate
 
 Before delivering or executing any nontrivial user-local GitHub publication command for this repository, load this procedure explicitly and record:
@@ -217,7 +167,6 @@ The default route below remains HTTPS + GitHub CLI browser OAuth. The gate exist
 
 '''
           replace_once(transport, "### 1.1 Credential handling\n", hard_gate + "### 1.1 Credential handling\n")
-
           fallback = '''### 1.3 Checkpoint-aware transport failure and fallback ladder
 
 A local transport failure must be classified against the semantic checkpoint before another publication attempt:
@@ -244,25 +193,16 @@ AND LOCAL_GITHUB_HTTPS_OR_API_PATH_IS_UNHEALTHY
 A fallback publication must retain fresh remote identity/race protection, exact artifact or tree verification, non-force fast-forward semantics where applicable, and the normal exact-head CI/review gates. A local TLS/proxy/TUN incident does not by itself replace the project-wide HTTPS default or revive SSH-over-443 as the default.
 
 '''
-          replace_once(
-              transport,
-              "\n---\n\n## 2. Reviewed Pull Request terminal-disposition discipline",
-              "\n" + fallback + "---\n\n## 2. Reviewed Pull Request terminal-disposition discipline",
-          )
-
-          preflight_fields_anchor = "COMMAND_REPAIR_STAGE=INITIAL|BOUNDED_CORRECTION|HOLISTIC_REGENERATION|NOT_APPLICABLE\n```"
-          preflight_fields = '''COMMAND_REPAIR_STAGE=INITIAL|BOUNDED_CORRECTION|HOLISTIC_REGENERATION|NOT_APPLICABLE
+          replace_once(transport, "\n---\n\n## 2. Reviewed Pull Request terminal-disposition discipline", "\n" + fallback + "---\n\n## 2. Reviewed Pull Request terminal-disposition discipline")
+          replace_once(preflight, "COMMAND_REPAIR_STAGE=INITIAL|BOUNDED_CORRECTION|HOLISTIC_REGENERATION|NOT_APPLICABLE\n```", '''COMMAND_REPAIR_STAGE=INITIAL|BOUNDED_CORRECTION|HOLISTIC_REGENERATION|NOT_APPLICABLE
 LOCAL_GIT_PUBLICATION_APPLICABLE=YES|NO|NOT_APPLICABLE
 LOCAL_GIT_TRANSPORT_PROCEDURE_LOADED=YES|NO|NOT_APPLICABLE
 LOCAL_GIT_TRANSPORT_GATE=PASS|FAIL|NOT_APPLICABLE
 KNOWN_LOCAL_GIT_TRANSPORT_INCIDENTS_REVIEWED=YES|NO|NOT_APPLICABLE
 AUTHORITATIVE_REMOTE_PUBLICATION_SURFACE_CHECKED=YES|NO|NOT_APPLICABLE
 CHECKPOINT_AWARE_PUBLICATION_FALLBACK_PLAN=PASS|FAIL|NOT_APPLICABLE
-```'''
-          replace_once(preflight, preflight_fields_anchor, preflight_fields)
-
-          enforcement_anchor = "COMMAND_IS_WRITER_LAUNCH_PATH\nAND COMMAND_DELIVERY=PROHIBITED"
-          enforcement = '''LOCAL_GIT_PUBLICATION_APPLICABLE=YES
+```''')
+          replace_once(preflight, "COMMAND_IS_WRITER_LAUNCH_PATH\nAND COMMAND_DELIVERY=PROHIBITED", '''LOCAL_GIT_PUBLICATION_APPLICABLE=YES
 AND (
   LOCAL_GIT_TRANSPORT_PROCEDURE_LOADED != YES
   OR LOCAL_GIT_TRANSPORT_GATE != PASS
@@ -273,18 +213,13 @@ AND (
 => COMMAND_DELIVERY=PROHIBITED
 
 COMMAND_IS_WRITER_LAUNCH_PATH
-AND COMMAND_DELIVERY=PROHIBITED'''
-          replace_once(preflight, enforcement_anchor, enforcement)
-
-          command_fields_anchor = "COMMAND_REPAIR_STAGE=INITIAL|BOUNDED_CORRECTION|HOLISTIC_REGENERATION\n```"
-          command_fields = '''COMMAND_REPAIR_STAGE=INITIAL|BOUNDED_CORRECTION|HOLISTIC_REGENERATION
+AND COMMAND_DELIVERY=PROHIBITED''')
+          replace_once(command, "COMMAND_REPAIR_STAGE=INITIAL|BOUNDED_CORRECTION|HOLISTIC_REGENERATION\n```", '''COMMAND_REPAIR_STAGE=INITIAL|BOUNDED_CORRECTION|HOLISTIC_REGENERATION
 APPLICABLE_SPECIALIZED_PROCEDURES=
 LOCAL_GIT_PUBLICATION_ROUTE=LOCAL_HTTPS|AUTHORITATIVE_REMOTE_CONNECTOR|NOT_APPLICABLE
 LOCAL_GIT_TRANSPORT_GATE=PASS|FAIL|NOT_APPLICABLE
 CHECKPOINT_AWARE_PUBLICATION_FALLBACK_PLAN=PASS|FAIL|NOT_APPLICABLE
-```'''
-          replace_once(command, command_fields_anchor, command_fields)
-
+```''')
           checkpoint_section = '''### 7.2 Checkpoint-aware GitHub publication transport
 
 When publication follows a completed semantic Writer/action, treat the completed exact artifact/tree as the authoritative resume checkpoint. Do not couple semantic retry accounting to a later local Git/TLS failure.
@@ -300,7 +235,7 @@ AND LOCAL_GITHUB_TRANSPORT_UNHEALTHY=YES
 => IF equal-or-higher fidelity + no scope expansion:
      OFFLINE_EXACT_CHECKPOINT_EXPORT
      -> AUTHORITATIVE_REMOTE_PUBLICATION
-     -> EXACT_REMOTE_TREE/HEAD READBACK
+     -> EXACT_REMOTE_TREE/HEAD_READBACK
      -> AUTHORITATIVE_CI
 ```
 
@@ -308,12 +243,10 @@ This route is checkpoint resume, not a silent transport substitution. The public
 
 '''
           replace_once(command, "## 8. Command repair budget\n", checkpoint_section + "## 8. Command repair budget\n")
-
           incident_anchor = "| --- | --- | --- |\n"
           incident_row = "| R3 Formal G4 semantic Writer completed, then local `git push` hit LibreSSL `SSL_ERROR_SYSCALL` and local `gh api` hit EOF while an authorized GitHub connector write surface remained available | environment capability mismatch + specialized-transport applicability miss | preserve the exact checkpoint; stop local push/API retry loops; use offline deterministic export + authoritative remote publication; user-local Git publication must load the local-transport procedure as a hard pre-delivery gate |\n"
           replace_once(command, incident_anchor, incident_anchor + incident_row)
           PY
-
           rm -f .github/workflows/r3-connector-recovery.yml
           git diff --check
           mapfile -t changed < <(git diff --name-only "${EXPECTED_MAIN}" | sort)
@@ -328,11 +261,7 @@ This route is checkpoint resume, not a silent transport substitution. The public
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            governance/GITHUB_LOCAL_TRANSPORT_AND_REVIEWED_PR_CLOSEOUT_PROCEDURE_V1_2026-09-16.md \
-            governance/MANDATORY_ENGINEERING_PREFLIGHT_AND_CONVERGENCE_GATE_V1_2026-08-17.md \
-            governance/GENERATED_COMMAND_RELIABILITY_AND_OPERATOR_EFFICIENCY_RULE_V1_2026-08-30.md \
-            .github/workflows/r3-connector-recovery.yml
+          git add governance/GITHUB_LOCAL_TRANSPORT_AND_REVIEWED_PR_CLOSEOUT_PROCEDURE_V1_2026-09-16.md governance/MANDATORY_ENGINEERING_PREFLIGHT_AND_CONVERGENCE_GATE_V1_2026-08-17.md governance/GENERATED_COMMAND_RELIABILITY_AND_OPERATOR_EFFICIENCY_RULE_V1_2026-08-30.md .github/workflows/r3-connector-recovery.yml
           git commit -m "[transport-helper-finalize] Governance: harden GitHub publication fallback"
           git push origin "HEAD:refs/heads/${GOVERNANCE_BRANCH}"
           echo "GOVERNANCE_BRANCH_HEAD=$(git rev-parse HEAD)"
