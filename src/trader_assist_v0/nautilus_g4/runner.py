@@ -1,3 +1,4 @@
+# mypy: disable-error-code="import-not-found"
 """Thin Nautilus rc5 execution seam for Ordinary VNext G4 development replay."""
 
 from __future__ import annotations

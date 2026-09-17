@@ -247,8 +247,8 @@ def _controlled_backtest_node_probe(root: Path) -> dict[str, object]:
         )
         for index, mid in enumerate(mids)
     ]
-    catalog.write_data([instrument])
-    catalog.write_data(ticks)
+    catalog.write_instruments([instrument])
+    catalog.write_quote_ticks(ticks)
     venue = BacktestVenueConfig(
         name=str(instrument.id.venue),
         oms_type=OmsType.NETTING,
