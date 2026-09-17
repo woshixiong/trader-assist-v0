@@ -294,6 +294,21 @@ Ephemeral live-state evidence must be captured during the authoritative observat
 
 Persisted-state copy and evidence identity must follow the owning component's durability model rather than filename heuristics. For SQLite WAL mode, the main database and any extant `-wal` file form part of the database's persistent state; `-shm` has different cache/index semantics. Do not blanket-delete or blanket-exclude `-wal` from a checkpoint copy. Prefer an engine-supported consistent snapshot/backup or a controlled quiescent copy that preserves the required durability set.
 
+### 7.2 Completed semantic checkpoint + local Git publication failure
+
+When a semantic action is already complete and exact head/tree/scope evidence exists, local GitHub transport failure is not authority to repeat the semantic action. For this repository also load the GitHub Local Transport / Reviewed-PR Closeout procedure.
+
+```text
+SEMANTIC_CHECKPOINT_ALREADY_COMPLETE
+AND LOCAL_GITHUB_TLS_OR_API_PATH_PROVEN_UNRELIABLE
+=> RERUN_SEMANTIC_ACTION=NO
+=> LOOP_LOCAL_PUBLICATION_RETRIES=NO
+=> PRESERVE_EXACT_CHECKPOINT=YES
+=> CHECK_AUTHORITATIVE_REMOTE_PUBLICATION_SURFACE=YES
+```
+
+If an authoritative connected GitHub write surface is available and provides equal or higher fidelity, prefer exact offline artifact egress plus provider-native remote publication. If it is unavailable, stop at the transport capability boundary; do not weaken credentials, force semantics or exact identity. Earlier successful authentication, `ls-remote`, or read-only API access does not prove the later mutation route is healthy.
+
 ---
 
 ## 8. Command repair budget
@@ -406,6 +421,7 @@ These incidents are retained as rationale/examples; the normative lessons live i
 | S1 public-provider harness returned an already-decoded list where the production `HttpPost` seam required raw bytes | wrapper/harness contract mismatch | prove exact seam input/output/encoding ownership before external rehearsal |
 | S1 checkpoint evidence logic treated SQLite WAL/SHM by filename suffix and a follow-up copy excluded `-wal` | persisted-state copy/identity failure | durable-state manifests/copies follow engine semantics; SQLite WAL may contain committed state and cannot be blanket-excluded |
 | S1 attempt #2 sampled `RuntimeHealth` only after graceful teardown had cleared connection/ACK/data-ready state and treated normalized `SHUTDOWN` values as evidence live readiness never occurred | wrapper/harness observation-phase mismatch | ephemeral state evidence must be captured in the authoritative lifecycle phase or preserved by teardown-surviving monotonic evidence; post-teardown normalization cannot negate prior readiness |
+| R3 publication local Git HTTPS failed with LibreSSL `SSL_ERROR_SYSCALL`, then authenticated `gh api` failed with EOF after earlier read success | local transport health / checkpoint publication failure | prior connectivity/auth success is not mutation-path health proof; after a completed semantic checkpoint stop local retry loops and prefer exact artifact egress + authoritative remote publication when available |
 
 A reusable new lesson should update Unified V2 or this narrow procedure rather than relying on chat memory.
 

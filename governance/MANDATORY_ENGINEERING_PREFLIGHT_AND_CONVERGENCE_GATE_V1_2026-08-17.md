@@ -2,7 +2,7 @@
 
 **Status:** ACTIVE CHECKLIST CANDIDATE  
 **Effective date:** 2026-08-17  
-**Last material amendment candidate:** 2026-09-15  
+**Last material amendment candidate:** 2026-09-17  
 **Normative owner:** `UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V2_2026-09-01.md`
 
 This file is an **execution checklist and record schema**, not a second engineering constitution. If this checklist and Unified V2 conflict, Unified V2 governs.
@@ -80,6 +80,79 @@ AND COMMAND_DELIVERY=PROHIBITED
 A command may not recreate a known avoidable incident class merely by changing wrapper language, encoding, transport or exact text. Fresh authoritative GitHub/control-plane identity must not be converted into redundant lower-reliability local proof unless the additional proof protects a distinct real invariant.
 
 After any command failure, complete the Generated Command failure classification/checkpoint fields and repair-stage disposition before another command is issued. A pre-semantic command failure does not consume the application semantic repair budget, but it does consume the applicable command-repair progression.
+
+### 1B. User-local Git publication transport hard gate
+
+Whenever the bounded task will deliver or execute a user-local Git publication command for this repository, also load:
+
+- `governance/GITHUB_LOCAL_TRANSPORT_AND_REVIEWED_PR_CLOSEOUT_PROCEDURE_V1_2026-09-16.md`
+
+before the publication command is shown or executed. Record:
+
+```text
+LOCAL_GIT_TRANSPORT_APPLICABLE=YES|NO
+LOCAL_GIT_TRANSPORT_PROCEDURE_LOADED=YES|NO|NOT_APPLICABLE
+LOCAL_GIT_TRANSPORT_GATE=PASS|FAIL|NOT_APPLICABLE
+LOCAL_TRANSPORT_HEALTH_PREFLIGHT=PASS|FAIL|NOT_APPLICABLE
+KNOWN_TRANSPORT_INCIDENT_NONREGRESSION=PASS|FAIL|NOT_APPLICABLE
+AUTHORITATIVE_REMOTE_PUBLICATION_SURFACE_CHECKED=YES|NO|NOT_APPLICABLE
+SEMANTIC_CHECKPOINT_ALREADY_COMPLETE=YES|NO|NOT_APPLICABLE
+```
+
+For an applicable user-local publication command, `LOCAL_GIT_TRANSPORT_GATE=PASS` is derived only when every required transport input is resolved:
+
+```text
+USER_LOCAL_GIT_PUBLICATION_COMMAND
+AND LOCAL_GIT_TRANSPORT_PROCEDURE_LOADED = YES
+AND LOCAL_TRANSPORT_HEALTH_PREFLIGHT = PASS
+AND KNOWN_TRANSPORT_INCIDENT_NONREGRESSION = PASS
+AND AUTHORITATIVE_REMOTE_PUBLICATION_SURFACE_CHECKED = YES
+=> LOCAL_GIT_TRANSPORT_GATE=PASS
+
+USER_LOCAL_GIT_PUBLICATION_COMMAND
+AND LOCAL_TRANSPORT_HEALTH_PREFLIGHT != PASS
+=> LOCAL_GIT_TRANSPORT_GATE=FAIL
+
+USER_LOCAL_GIT_PUBLICATION_COMMAND
+AND AUTHORITATIVE_REMOTE_PUBLICATION_SURFACE_CHECKED != YES
+=> LOCAL_GIT_TRANSPORT_GATE=FAIL
+
+USER_LOCAL_GIT_PUBLICATION_COMMAND
+AND KNOWN_TRANSPORT_INCIDENT_NONREGRESSION != PASS
+=> LOCAL_GIT_TRANSPORT_GATE=FAIL
+
+USER_LOCAL_GIT_PUBLICATION_COMMAND
+AND LOCAL_GIT_TRANSPORT_PROCEDURE_LOADED != YES
+=> LOCAL_GIT_TRANSPORT_GATE=FAIL
+```
+
+`AUTHORITATIVE_REMOTE_PUBLICATION_SURFACE_CHECKED=YES` means the routing check has been resolved; it does not assert that a remote write surface exists. If an equal-or-higher-fidelity authoritative remote publication surface is available, apply Unified V2's remote-execution preference before selecting another user-local publication attempt. A proven-unhealthy local route cannot receive `LOCAL_GIT_TRANSPORT_GATE=PASS` merely because HTTPS remains the project default.
+
+Hard enforcement:
+
+```text
+USER_LOCAL_GIT_PUBLICATION_COMMAND
+AND LOCAL_GIT_TRANSPORT_PROCEDURE_LOADED != YES
+=> COMMAND_DELIVERY=PROHIBITED
+
+USER_LOCAL_GIT_PUBLICATION_COMMAND
+AND LOCAL_GIT_TRANSPORT_GATE != PASS
+=> COMMAND_DELIVERY=PROHIBITED
+
+USER_LOCAL_GIT_PUBLICATION_COMMAND
+AND LOCAL_TRANSPORT_HEALTH_PREFLIGHT != PASS
+=> COMMAND_DELIVERY=PROHIBITED
+
+USER_LOCAL_GIT_PUBLICATION_COMMAND
+AND AUTHORITATIVE_REMOTE_PUBLICATION_SURFACE_CHECKED != YES
+=> COMMAND_DELIVERY=PROHIBITED
+
+USER_LOCAL_GIT_PUBLICATION_COMMAND
+AND KNOWN_TRANSPORT_INCIDENT_NONREGRESSION != PASS
+=> COMMAND_DELIVERY=PROHIBITED
+```
+
+If an exact semantic checkpoint already exists and the local GitHub TLS/API route is proven unreliable, do not rerun the semantic action or loop local publication retries. Preserve the checkpoint and follow the specialized procedure's authoritative remote/offline-artifact fallback ladder. A previously successful local read/authentication probe is not by itself proof that the later mutation path remains healthy.
 
 ---
 
