@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib.util
+import os
 from decimal import Decimal
 
 import pytest
@@ -23,6 +25,17 @@ from trader_assist_v0.vnext_g4.contracts import (
 )
 
 STRUCTURAL = "a" * 64
+NAUTILUS_AVAILABLE = importlib.util.find_spec("nautilus_trader") is not None
+NAUTILUS_REQUIRED = os.environ.get("NAUTILUS_G4_REQUIRED") == "1"
+REQUIRES_NAUTILUS = pytest.mark.skipif(
+    not NAUTILUS_AVAILABLE and not NAUTILUS_REQUIRED,
+    reason="optional Nautilus distribution is absent",
+)
+
+
+def _assert_required_nautilus_available() -> None:
+    if not NAUTILUS_AVAILABLE:
+        raise AssertionError("authoritative G4 CI requires the exact Nautilus distribution")
 
 
 def candidate(candidate_id: str) -> CandidateManifest:
@@ -59,7 +72,9 @@ def execution_model() -> ExecutionModelConfig:
     )
 
 
+@REQUIRES_NAUTILUS
 def test_installed_rc5_and_provider_owned_fill_model_are_consumed() -> None:
+    _assert_required_nautilus_available()
     from nautilus_trader.execution import ProbabilisticFillModel
 
     assert_exact_nautilus_rc5()
@@ -78,7 +93,9 @@ def test_candidate_execution_contexts_are_identity_isolated() -> None:
         candidate_state_isolation_plan((reference, reference))
 
 
+@REQUIRES_NAUTILUS
 def test_new_engine_is_provider_native_and_disposable() -> None:
+    _assert_required_nautilus_available()
     from nautilus_trader.backtest import BacktestEngine
 
     engine = new_isolated_backtest_engine(candidate("reference"))
