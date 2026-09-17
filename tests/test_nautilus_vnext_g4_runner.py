@@ -5,15 +5,21 @@ import os
 from decimal import Decimal
 
 import pytest
+from pydantic import ValidationError
 
+from trader_assist_v0.contracts.common import sha256_hex
 from trader_assist_v0.nautilus_g4.runner import (
+    RepresentativeMarketEvidence,
     assert_actual_representative_scale,
     assert_backtest_node_catalog_surface,
     assert_exact_nautilus_rc5,
     assert_representative_scale,
     build_fill_model,
     candidate_state_isolation_plan,
+    causal_claim_gate_states,
+    formal_g4_acceptance,
     new_isolated_backtest_engine,
+    project_provider_native_state,
 )
 from trader_assist_v0.vnext_g4.contracts import (
     AttemptStop,
@@ -115,8 +121,8 @@ def test_new_engine_is_provider_native_and_disposable() -> None:
         assert callable(engine.add_data)
         assert callable(engine.add_strategy)
         assert callable(engine.run)
-        assert callable(engine.generate_order_fills_report)
-        assert callable(engine.generate_positions_report)
+        assert engine.cache is not None
+        assert engine.portfolio is not None
     finally:
         engine.dispose()
 
@@ -128,16 +134,123 @@ def test_formal_representative_scale_boundary_is_twenty_unique_markets() -> None
 
 
 def test_actual_representative_scale_requires_source_bound_positive_events() -> None:
-    counts = {f"market-{index:02d}": index + 1 for index in range(20)}
-    with pytest.raises(ValueError, match="source-bound E4 evidence"):
-        assert_actual_representative_scale(counts, source_evidence_hashes=())
-    with pytest.raises(ValueError, match="at least one causal event"):
-        assert_actual_representative_scale(
-            {**counts, "market-00": 0},
-            source_evidence_hashes=("f" * 64,),
+    evidence = tuple(
+        RepresentativeMarketEvidence(
+            market_id=sha256_hex(f"actual-market-{index}".encode()),
+            instrument_id=f"ACTUAL-{index}.HYPERLIQUID",
+            source_e4_manifest_hash="f" * 64,
+            source_event_hashes=(sha256_hex(f"actual-event-{index}".encode()),),
+            event_count=index + 1,
         )
-    markets = assert_actual_representative_scale(
-        counts,
-        source_evidence_hashes=("f" * 64,),
+        for index in range(20)
     )
+    with pytest.raises(ValueError, match="retained market evidence"):
+        assert_actual_representative_scale(())
+    markets = assert_actual_representative_scale(evidence)
     assert len(markets) == 20
+    with pytest.raises(ValidationError):
+        RepresentativeMarketEvidence(
+            market_id="generated-market-01",
+            instrument_id="GENERATED.HYPERLIQUID",
+            source_e4_manifest_hash="f" * 64,
+            source_event_hashes=("e" * 64,),
+            event_count=1,
+        )
+
+
+def test_provider_state_projection_uses_cache_portfolio_without_report_generation() -> None:
+    class Value:
+        def __init__(self, **values: object) -> None:
+            self.__dict__.update(values)
+
+    class Cache:
+        def orders(self) -> tuple[object, ...]:
+            return (
+                Value(client_order_id="order-1", status="FILLED", filled_qty="1", avg_px="100"),
+            )
+
+        def positions(self) -> tuple[object, ...]:
+            return (
+                Value(id="position-1", instrument_id="ETH", side="LONG", quantity="1"),
+            )
+
+        def accounts(self) -> tuple[object, ...]:
+            return (Value(id="account-1", type="MARGIN", base_currency="USD"),)
+
+    class Engine:
+        cache = Cache()
+        portfolio = Value()
+
+        def generate_order_fills_report(self) -> None:
+            raise AssertionError("pandas report generation must not be called")
+
+    first = project_provider_native_state(Engine())
+    second = project_provider_native_state(Engine())
+    assert first == second
+    assert first.source_api == "NAUTILUS_CACHE_PORTFOLIO"
+    assert first.filled_order_count == 1
+
+
+def test_synthetic_or_manual_controls_cannot_pass_causal_gates() -> None:
+    synthetic = causal_claim_gate_states(
+        evidence_tier="T0_SYNTHETIC_CONTROL",
+        synthetic=True,
+        manual_substitution=False,
+        deterministic_replay_proven=True,
+        semantic_derivation_proven=True,
+        validation_materialized=True,
+        canonical_order_intent_proven=True,
+        provider_outcome_cost_provenance_complete=True,
+        restart_equivalence_proven=True,
+    )
+    manual = causal_claim_gate_states(
+        evidence_tier="T2_REAL_CAUSAL_G4_ARTIFACT",
+        synthetic=False,
+        manual_substitution=True,
+        deterministic_replay_proven=True,
+        semantic_derivation_proven=True,
+        validation_materialized=True,
+        canonical_order_intent_proven=True,
+        provider_outcome_cost_provenance_complete=True,
+        restart_equivalence_proven=True,
+    )
+    assert set(synthetic.values()) == {"NOT_PROVEN"}
+    assert set(manual.values()) == {"NOT_PROVEN"}
+
+    validation_missing = causal_claim_gate_states(
+        evidence_tier="T2_REAL_CAUSAL_G4_ARTIFACT",
+        synthetic=False,
+        manual_substitution=False,
+        deterministic_replay_proven=True,
+        semantic_derivation_proven=True,
+        validation_materialized=False,
+        canonical_order_intent_proven=True,
+        provider_outcome_cost_provenance_complete=True,
+        restart_equivalence_proven=True,
+    )
+    assert validation_missing["G4E2"] == "NOT_PROVEN"
+    assert validation_missing["G4E5"] == "NOT_PROVEN"
+
+    no_intent = causal_claim_gate_states(
+        evidence_tier="T2_REAL_CAUSAL_G4_ARTIFACT",
+        synthetic=False,
+        manual_substitution=False,
+        deterministic_replay_proven=True,
+        semantic_derivation_proven=True,
+        validation_materialized=True,
+        canonical_order_intent_proven=False,
+        provider_outcome_cost_provenance_complete=True,
+        restart_equivalence_proven=True,
+    )
+    assert no_intent["G4E2"] == "NOT_PROVEN"
+    assert no_intent["G4E5"] == "NOT_PROVEN"
+
+
+def test_formal_acceptance_requires_every_g4_gate_to_genuinely_pass() -> None:
+    gates = {f"G4E{index}": "PASS" for index in range(9)}
+    assert formal_g4_acceptance(gates)
+    gates["G4E5"] = "NOT_PROVEN"
+    assert not formal_g4_acceptance(gates)
+    gates["G4E5"] = "PASS"
+    del gates["G4E8"]
+    assert not formal_g4_acceptance(gates)

@@ -11,20 +11,26 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from trader_assist_v0.contracts.common import (
     GitCommitOid,
+    NonNegativeFiniteDecimal,
     OpaqueId,
+    PositiveFiniteDecimal,
     Sha256Hex,
     VersionId,
     canonical_json_bytes,
     sha256_hex,
 )
 
-VNEXT_STRATEGY_VERSION: Literal["TA_VNEXT_E4_C1_2026-09-11"] = "TA_VNEXT_E4_C1_2026-09-11"
-VNEXT_POLICY_VERSION: Literal["TA_FRICTION_POSITION_POLICY_V0_1"] = (
-    "TA_FRICTION_POSITION_POLICY_V0_1"
+VNEXT_STRATEGY_VERSION: Literal["TA_VNEXT_E4_C1_SEMANTIC_V2R2_2026-09-17"] = (
+    "TA_VNEXT_E4_C1_SEMANTIC_V2R2_2026-09-17"
+)
+VNEXT_POLICY_VERSION: Literal["TA_FRICTION_POSITION_POLICY_V0_2R2"] = (
+    "TA_FRICTION_POSITION_POLICY_V0_2R2"
 )
 VNEXT_PARAMETER_VERSION: Literal["TA_PRE_E4_GRID_V0_1"] = "TA_PRE_E4_GRID_V0_1"
-VNEXT_DERIVATION_VERSION: Literal["TA_MICROSTRUCTURE_DERIV_V0_1"] = (
-    "TA_MICROSTRUCTURE_DERIV_V0_1"
+VNEXT_DERIVATION_VERSION: Literal[
+    "TA_VNEXT_CAUSAL_SEMANTIC_DERIV_V0_1R2_2026-09-17"
+] = (
+    "TA_VNEXT_CAUSAL_SEMANTIC_DERIV_V0_1R2_2026-09-17"
 )
 VNEXT_DATA_VERSION: Literal["TA_VNEXT_RESEARCH_DATA_CONTRACT_V1_2026-09-11_REPAIR1"] = (
     "TA_VNEXT_RESEARCH_DATA_CONTRACT_V1_2026-09-11_REPAIR1"
@@ -39,6 +45,21 @@ REPRESENTATIVE_MARKET_FLOOR = 20
 _CANDIDATE_DOMAIN = b"trader-assist-v0/vnext-g4/candidate/v1\0"
 _MANIFEST_DOMAIN = b"trader-assist-v0/vnext-g4/run-manifest/v1\0"
 _DERIVED_DOMAIN = b"trader-assist-v0/vnext-g4/derived-cache/v1\0"
+_LINEAGE_DOMAIN = b"trader-assist-v0/vnext-g4/causal-lineage/v2r2\0"
+_RESTART_REFERENCE_DOMAIN = b"trader-assist-v0/vnext-g4/restart-reference/v2r2\0"
+_VALIDATION_REFERENCE_DOMAIN = b"trader-assist-v0/vnext-g4/validation-reference/v1\0"
+_ORDER_INTENT_DOMAIN = b"trader-assist-v0/vnext-g4/order-intent/v1\0"
+
+SOURCE_E4_STRATEGY_VERSION: Literal["TA_VNEXT_E4_C1_2026-09-11"] = (
+    "TA_VNEXT_E4_C1_2026-09-11"
+)
+SOURCE_E4_POLICY_VERSION: Literal["TA_FRICTION_POSITION_POLICY_V0_1"] = (
+    "TA_FRICTION_POSITION_POLICY_V0_1"
+)
+SOURCE_E4_PARAMETER_VERSION: Literal["TA_PRE_E4_GRID_V0_1"] = "TA_PRE_E4_GRID_V0_1"
+SOURCE_E4_DERIVATION_VERSION: Literal["TA_MICROSTRUCTURE_DERIV_V0_1"] = (
+    "TA_MICROSTRUCTURE_DERIV_V0_1"
+)
 
 _ROOM_TO_COST_GRID = frozenset({Decimal("2"), Decimal("3"), Decimal("4")})
 _FIXED_STOP_GRID = frozenset(
@@ -112,6 +133,27 @@ class OrderPrimitive(StrEnum):
     PASSIVE = "PASSIVE"
 
 
+class PositionSide(StrEnum):
+    LONG = "LONG"
+    SHORT = "SHORT"
+
+
+class DerivationStatus(StrEnum):
+    EVALUABLE = "EVALUABLE"
+    NOT_EVALUABLE = "NOT_EVALUABLE"
+
+
+class RestartReferenceKind(StrEnum):
+    PIVOT_HIGH = "PIVOT_HIGH"
+    PIVOT_LOW = "PIVOT_LOW"
+
+
+class LatencyEvidenceRole(StrEnum):
+    CONTROL_ONLY = "CONTROL_ONLY"
+    MODELLED = "MODELLED"
+    OBSERVED = "OBSERVED"
+
+
 class StrictFrozenModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -119,6 +161,326 @@ class StrictFrozenModel(BaseModel):
 class EvidenceArtifactHash(StrictFrozenModel):
     name: str = Field(min_length=1, max_length=160)
     sha256: Sha256Hex
+
+
+class CausalLineage(StrictFrozenModel):
+    """Exact source/semantic lineage for one Formal G4 derivation instance."""
+
+    source_e4_manifest_hash: Sha256Hex
+    source_pit_snapshot_hash: Sha256Hex
+    source_structural_artifact_hash: Sha256Hex
+    structural_component_manifest_hash: Sha256Hex
+    market_id: Sha256Hex
+    instrument_id: str = Field(min_length=3, max_length=160)
+    formal_setup_id: OpaqueId
+    formal_setup_admission_ordinal: int = Field(ge=1)
+    formal_setup_admission_ts: int = Field(ge=1)
+    thesis_id: OpaqueId
+    activation_sequence_id: OpaqueId
+    attempt_lineage_id: OpaqueId
+    restart_reference_id: OpaqueId
+    continuity_epoch: OpaqueId
+    admission_epoch: OpaqueId
+    instrument_metadata_version: VersionId
+    instrument_metadata_hash: Sha256Hex
+    validation_reference_id: VersionId
+    validation_reference_hash: Sha256Hex
+    strategy_version: Literal[
+        "TA_VNEXT_E4_C1_SEMANTIC_V2R2_2026-09-17"
+    ] = VNEXT_STRATEGY_VERSION
+    policy_version: Literal["TA_FRICTION_POSITION_POLICY_V0_2R2"] = (
+        VNEXT_POLICY_VERSION
+    )
+    parameter_version: Literal["TA_PRE_E4_GRID_V0_1"] = VNEXT_PARAMETER_VERSION
+    derivation_version: Literal[
+        "TA_VNEXT_CAUSAL_SEMANTIC_DERIV_V0_1R2_2026-09-17"
+    ] = VNEXT_DERIVATION_VERSION
+    lineage_hash: Sha256Hex
+
+    def identity_payload(self) -> dict[str, object]:
+        return self.model_dump(mode="json", exclude={"lineage_hash"})
+
+    @model_validator(mode="after")
+    def verify_identity(self) -> Self:
+        expected = sha256_hex(_LINEAGE_DOMAIN + canonical_json_bytes(self.identity_payload()))
+        if not hmac.compare_digest(self.lineage_hash, expected):
+            raise ValueError("lineage_hash does not bind exact causal source identities")
+        return self
+
+    @classmethod
+    def create(cls, **values: object) -> Self:
+        payload = {
+            **values,
+            "strategy_version": VNEXT_STRATEGY_VERSION,
+            "policy_version": VNEXT_POLICY_VERSION,
+            "parameter_version": VNEXT_PARAMETER_VERSION,
+            "derivation_version": VNEXT_DERIVATION_VERSION,
+        }
+        digest = sha256_hex(_LINEAGE_DOMAIN + canonical_json_bytes(payload))
+        return cls.model_validate({**payload, "lineage_hash": digest})
+
+
+class RestartReferenceEvidence(StrictFrozenModel):
+    """Accepted C1 causal one-minute pivot identity; never inferred from a gap."""
+
+    lineage_hash: Sha256Hex
+    restart_reference_id: OpaqueId
+    side: PositionSide
+    kind: RestartReferenceKind
+    price: PositiveFiniteDecimal
+    reset_admission_ordinal: int = Field(ge=1)
+    confirmed_admission_ordinal: int = Field(ge=1)
+    confirmed_admission_ts: int = Field(ge=1)
+    source_artifact_hash: Sha256Hex
+    reference_hash: Sha256Hex
+
+    def identity_payload(self) -> dict[str, object]:
+        return self.model_dump(mode="json", exclude={"reference_hash"})
+
+    @model_validator(mode="after")
+    def verify_identity(self) -> Self:
+        expected_kind = (
+            RestartReferenceKind.PIVOT_HIGH
+            if self.side is PositionSide.LONG
+            else RestartReferenceKind.PIVOT_LOW
+        )
+        if self.kind is not expected_kind:
+            raise ValueError("restart reference kind conflicts with side")
+        if self.confirmed_admission_ordinal < self.reset_admission_ordinal:
+            raise ValueError("restart reference confirmation precedes its reset")
+        expected = sha256_hex(
+            _RESTART_REFERENCE_DOMAIN + canonical_json_bytes(self.identity_payload())
+        )
+        if not hmac.compare_digest(self.reference_hash, expected):
+            raise ValueError("reference_hash does not bind the causal restart reference")
+        return self
+
+    @classmethod
+    def create(cls, **values: object) -> Self:
+        digest = sha256_hex(
+            _RESTART_REFERENCE_DOMAIN + canonical_json_bytes(values)
+        )
+        return cls.model_validate({**values, "reference_hash": digest})
+
+
+class ValidationReference(StrictFrozenModel):
+    """Accepted Validation authority; absence remains explicit, never a default zero."""
+
+    validation_reference_id: VersionId
+    source_artifact_hash: Sha256Hex
+    accepted_source_bound: Literal[True] = True
+    validation_reference_only: Literal[True] = True
+    production_account_fee_authority: Literal[False] = False
+    actual_user_fee_rate_claim: Literal[False] = False
+    fee_profile_id: VersionId | None = None
+    fee_profile_source_hash: Sha256Hex | None = None
+    fee_effective_at_ns: int | None = Field(default=None, ge=1)
+    fee_bps: NonNegativeFiniteDecimal | None = None
+    all_in_friction_state_id: VersionId | None = None
+    all_in_friction_source_hash: Sha256Hex | None = None
+    all_in_friction_bps: PositiveFiniteDecimal | None = None
+    execution_model_id: VersionId | None = None
+    execution_model_source_hash: Sha256Hex | None = None
+    technical_quantity_rule_id: VersionId | None = None
+    technical_quantity_rule_source_hash: Sha256Hex | None = None
+    latency_control_id: VersionId | None = None
+    latency_control_source_hash: Sha256Hex | None = None
+    latency_ms: NonNegativeFiniteDecimal | None = None
+    latency_evidence_role: LatencyEvidenceRole | None = None
+    reference_hash: Sha256Hex
+
+    def identity_payload(self) -> dict[str, object]:
+        return self.model_dump(mode="json", exclude={"reference_hash"})
+
+    @property
+    def fully_materialized(self) -> bool:
+        return all(
+            item is not None
+            for item in (
+                self.fee_profile_id,
+                self.fee_profile_source_hash,
+                self.fee_effective_at_ns,
+                self.fee_bps,
+                self.all_in_friction_state_id,
+                self.all_in_friction_source_hash,
+                self.all_in_friction_bps,
+                self.execution_model_id,
+                self.execution_model_source_hash,
+                self.technical_quantity_rule_id,
+                self.technical_quantity_rule_source_hash,
+                self.latency_control_id,
+                self.latency_control_source_hash,
+                self.latency_ms,
+                self.latency_evidence_role,
+            )
+        )
+
+    @model_validator(mode="after")
+    def verify_materialization_and_hash(self) -> Self:
+        groups = (
+            (
+                self.fee_profile_id,
+                self.fee_profile_source_hash,
+                self.fee_effective_at_ns,
+                self.fee_bps,
+            ),
+            (
+                self.all_in_friction_state_id,
+                self.all_in_friction_source_hash,
+                self.all_in_friction_bps,
+            ),
+            (self.execution_model_id, self.execution_model_source_hash),
+            (
+                self.technical_quantity_rule_id,
+                self.technical_quantity_rule_source_hash,
+            ),
+            (
+                self.latency_control_id,
+                self.latency_control_source_hash,
+                self.latency_ms,
+                self.latency_evidence_role,
+            ),
+        )
+        if any(
+            any(item is not None for item in group)
+            and any(item is None for item in group)
+            for group in groups
+        ):
+            raise ValueError("Validation materialization groups must be complete or absent")
+        if (
+            self.latency_ms == 0
+            and self.latency_evidence_role is not LatencyEvidenceRole.CONTROL_ONLY
+        ):
+            raise ValueError("0ms latency may be represented only as CONTROL_ONLY")
+        expected = sha256_hex(
+            _VALIDATION_REFERENCE_DOMAIN + canonical_json_bytes(self.identity_payload())
+        )
+        if not hmac.compare_digest(self.reference_hash, expected):
+            raise ValueError("reference_hash does not bind accepted Validation authority")
+        return self
+
+    @classmethod
+    def create(cls, **values: object) -> Self:
+        payload = {
+            "accepted_source_bound": True,
+            "validation_reference_only": True,
+            "production_account_fee_authority": False,
+            "actual_user_fee_rate_claim": False,
+            "fee_profile_id": None,
+            "fee_profile_source_hash": None,
+            "fee_effective_at_ns": None,
+            "fee_bps": None,
+            "all_in_friction_state_id": None,
+            "all_in_friction_source_hash": None,
+            "all_in_friction_bps": None,
+            "execution_model_id": None,
+            "execution_model_source_hash": None,
+            "technical_quantity_rule_id": None,
+            "technical_quantity_rule_source_hash": None,
+            "latency_control_id": None,
+            "latency_control_source_hash": None,
+            "latency_ms": None,
+            "latency_evidence_role": None,
+            **values,
+        }
+        digest = sha256_hex(
+            _VALIDATION_REFERENCE_DOMAIN + canonical_json_bytes(payload)
+        )
+        return cls.model_validate({**payload, "reference_hash": digest})
+
+
+class TechnicalOrderQuantity(StrictFrozenModel):
+    quantity: PositiveFiniteDecimal
+    displayed_opposite_l1_size: PositiveFiniteDecimal
+    size_decimals: int = Field(ge=0, le=18)
+    instrument_metadata_version: VersionId
+    instrument_metadata_hash: Sha256Hex
+    bbo_admission_hash: Sha256Hex
+
+    @model_validator(mode="after")
+    def validate_venue_quantity(self) -> Self:
+        quantum = Decimal(1).scaleb(-self.size_decimals)
+        if self.quantity != self.quantity.quantize(quantum):
+            raise ValueError("technical quantity is not venue grid-aligned")
+        if self.quantity > self.displayed_opposite_l1_size:
+            raise ValueError("technical quantity exceeds causal opposite-side displayed L1")
+        return self
+
+
+class HypotheticalOrderIntent(StrictFrozenModel):
+    strategy_decision_id: OpaqueId
+    candidate_hash: Sha256Hex
+    side: PositionSide
+    technical_quantity: TechnicalOrderQuantity
+    executable_price: PositiveFiniteDecimal
+    technical_notional: PositiveFiniteDecimal
+    activation_sequence_id: OpaqueId
+    activation_reference_hash: Sha256Hex
+    validation_reference_id: VersionId
+    validation_reference_hash: Sha256Hex
+    causal_lineage_hash: Sha256Hex
+    not_submitted: Literal[True] = True
+    venue_submitted: Literal[False] = False
+    order_intent_hash: Sha256Hex
+
+    def identity_payload(self) -> dict[str, object]:
+        return self.model_dump(mode="json", exclude={"order_intent_hash"})
+
+    @model_validator(mode="after")
+    def verify_identity(self) -> Self:
+        if self.technical_notional != self.technical_quantity.quantity * self.executable_price:
+            raise ValueError("technical notional does not bind quantity and executable price")
+        expected = sha256_hex(
+            _ORDER_INTENT_DOMAIN + canonical_json_bytes(self.identity_payload())
+        )
+        if not hmac.compare_digest(self.order_intent_hash, expected):
+            raise ValueError("order_intent_hash does not bind the canonical hypothetical intent")
+        return self
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        strategy_decision_id: str,
+        candidate_hash: str,
+        side: PositionSide,
+        technical_quantity: TechnicalOrderQuantity,
+        executable_price: Decimal,
+        activation_reference_hash: str,
+        validation: ValidationReference,
+        lineage: CausalLineage,
+    ) -> Self:
+        if not validation.fully_materialized:
+            raise ValueError("canonical OrderIntent requires fully materialized Validation")
+        if (
+            validation.validation_reference_id != lineage.validation_reference_id
+            or validation.reference_hash != lineage.validation_reference_hash
+        ):
+            raise ValueError("canonical OrderIntent Validation lineage conflicts")
+        if (
+            technical_quantity.instrument_metadata_version
+            != lineage.instrument_metadata_version
+            or technical_quantity.instrument_metadata_hash
+            != lineage.instrument_metadata_hash
+        ):
+            raise ValueError("canonical OrderIntent quantity metadata conflicts")
+        payload = {
+            "strategy_decision_id": strategy_decision_id,
+            "candidate_hash": candidate_hash,
+            "side": side,
+            "technical_quantity": technical_quantity.model_dump(mode="json"),
+            "executable_price": executable_price,
+            "technical_notional": technical_quantity.quantity * executable_price,
+            "activation_sequence_id": lineage.activation_sequence_id,
+            "activation_reference_hash": activation_reference_hash,
+            "validation_reference_id": validation.validation_reference_id,
+            "validation_reference_hash": validation.reference_hash,
+            "causal_lineage_hash": lineage.lineage_hash,
+            "not_submitted": True,
+            "venue_submitted": False,
+        }
+        digest = sha256_hex(_ORDER_INTENT_DOMAIN + canonical_json_bytes(payload))
+        return cls.model_validate({**payload, "order_intent_hash": digest})
 
 
 class ExecutionModelConfig(StrictFrozenModel):
@@ -224,10 +586,14 @@ class CandidateConfig(StrictFrozenModel):
 
 class CandidateManifest(StrictFrozenModel):
     schema_version: Literal["VNEXT_G4_V1"] = G4_SCHEMA_VERSION
-    strategy_version: Literal["TA_VNEXT_E4_C1_2026-09-11"] = VNEXT_STRATEGY_VERSION
-    policy_version: Literal["TA_FRICTION_POSITION_POLICY_V0_1"] = VNEXT_POLICY_VERSION
+    strategy_version: Literal["TA_VNEXT_E4_C1_SEMANTIC_V2R2_2026-09-17"] = (
+        VNEXT_STRATEGY_VERSION
+    )
+    policy_version: Literal["TA_FRICTION_POSITION_POLICY_V0_2R2"] = VNEXT_POLICY_VERSION
     parameter_version: Literal["TA_PRE_E4_GRID_V0_1"] = VNEXT_PARAMETER_VERSION
-    derivation_version: Literal["TA_MICROSTRUCTURE_DERIV_V0_1"] = VNEXT_DERIVATION_VERSION
+    derivation_version: Literal[
+        "TA_VNEXT_CAUSAL_SEMANTIC_DERIV_V0_1R2_2026-09-17"
+    ] = VNEXT_DERIVATION_VERSION
     data_version: Literal["TA_VNEXT_RESEARCH_DATA_CONTRACT_V1_2026-09-11_REPAIR1"] = (
         VNEXT_DATA_VERSION
     )
@@ -275,13 +641,29 @@ class G4RunManifest(StrictFrozenModel):
     git_sha: GitCommitOid
     git_tree: GitCommitOid
     source_e4_manifest_hash: Sha256Hex
+    source_e4_strategy_version: Literal["TA_VNEXT_E4_C1_2026-09-11"] = (
+        SOURCE_E4_STRATEGY_VERSION
+    )
+    source_e4_policy_version: Literal["TA_FRICTION_POSITION_POLICY_V0_1"] = (
+        SOURCE_E4_POLICY_VERSION
+    )
+    source_e4_parameter_version: Literal["TA_PRE_E4_GRID_V0_1"] = (
+        SOURCE_E4_PARAMETER_VERSION
+    )
+    source_e4_derivation_version: Literal["TA_MICROSTRUCTURE_DERIV_V0_1"] = (
+        SOURCE_E4_DERIVATION_VERSION
+    )
     source_pit_snapshot_hash: Sha256Hex
     source_evidence_artifact_hashes: tuple[EvidenceArtifactHash, ...]
     structural_component_manifest_hash: Sha256Hex
-    strategy_version: Literal["TA_VNEXT_E4_C1_2026-09-11"] = VNEXT_STRATEGY_VERSION
-    policy_version: Literal["TA_FRICTION_POSITION_POLICY_V0_1"] = VNEXT_POLICY_VERSION
+    strategy_version: Literal["TA_VNEXT_E4_C1_SEMANTIC_V2R2_2026-09-17"] = (
+        VNEXT_STRATEGY_VERSION
+    )
+    policy_version: Literal["TA_FRICTION_POSITION_POLICY_V0_2R2"] = VNEXT_POLICY_VERSION
     parameter_version: Literal["TA_PRE_E4_GRID_V0_1"] = VNEXT_PARAMETER_VERSION
-    derivation_version: Literal["TA_MICROSTRUCTURE_DERIV_V0_1"] = VNEXT_DERIVATION_VERSION
+    derivation_version: Literal[
+        "TA_VNEXT_CAUSAL_SEMANTIC_DERIV_V0_1R2_2026-09-17"
+    ] = VNEXT_DERIVATION_VERSION
     data_version: Literal["TA_VNEXT_RESEARCH_DATA_CONTRACT_V1_2026-09-11_REPAIR1"] = (
         VNEXT_DATA_VERSION
     )
@@ -341,6 +723,10 @@ class G4RunManifest(StrictFrozenModel):
             "git_sha": git_sha,
             "git_tree": git_tree,
             "source_e4_manifest_hash": source_e4_manifest_hash,
+            "source_e4_strategy_version": SOURCE_E4_STRATEGY_VERSION,
+            "source_e4_policy_version": SOURCE_E4_POLICY_VERSION,
+            "source_e4_parameter_version": SOURCE_E4_PARAMETER_VERSION,
+            "source_e4_derivation_version": SOURCE_E4_DERIVATION_VERSION,
             "source_pit_snapshot_hash": source_pit_snapshot_hash,
             "source_evidence_artifact_hashes": [item.model_dump(mode="json") for item in artifacts],
             "structural_component_manifest_hash": structural_component_manifest_hash,
