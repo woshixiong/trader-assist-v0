@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# mypy: disable-error-code="import-not-found"
 """Bounded exact-rc5 Ordinary VNext G4 engineering qualification."""
 
 from __future__ import annotations
@@ -61,12 +62,12 @@ def _execution() -> ExecutionModelConfig:
 
 
 def qualify() -> dict[str, object]:
-    from nautilus_trader.backtest.engine import BacktestEngine
-    from nautilus_trader.backtest.models import FillModel
+    from nautilus_trader.backtest import BacktestEngine
+    from nautilus_trader.execution import ProbabilisticFillModel
 
     assert_exact_nautilus_rc5()
     fill_model = build_fill_model(_execution())
-    assert isinstance(fill_model, FillModel)
+    assert isinstance(fill_model, ProbabilisticFillModel)
     engine = new_isolated_backtest_engine(_candidate())
     try:
         assert isinstance(engine, BacktestEngine)

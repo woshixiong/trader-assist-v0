@@ -45,7 +45,10 @@ class DecisionResult(BaseModel):
     venue_submitted: Literal[False] = False
 
 
-def _activation_state(candidate: CandidateConfig, inputs: EvaluationInputs) -> tuple[bool, str | None]:
+def _activation_state(
+    candidate: CandidateConfig,
+    inputs: EvaluationInputs,
+) -> tuple[bool, str | None]:
     if not inputs.formal_setup_confirmed:
         return False, "FORMAL_SETUP_NOT_CONFIRMED"
     if candidate.entry_activation is EntryActivation.EA0:

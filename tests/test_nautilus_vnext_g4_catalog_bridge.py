@@ -33,6 +33,7 @@ def admitted(ordinal: int) -> AdmittedEvent:
     source = SourceEvent.create(
         market_id=MARKET,
         expression_id="expr-ETH",
+        provider_id="NAUTILUS_HYPERLIQUID",
         instrument_id="ETH-PERP.HYPERLIQUID",
         data_kind=DataKind.BAR,
         source_event_id=f"bar-{ordinal}",

@@ -1,3 +1,4 @@
+# mypy: disable-error-code="import-not-found"
 """Thin Nautilus rc5 execution seam for Ordinary VNext G4 development replay."""
 
 from __future__ import annotations
@@ -12,8 +13,8 @@ from trader_assist_v0.vnext_g4.contracts import (
 )
 
 if TYPE_CHECKING:
-    from nautilus_trader.backtest.engine import BacktestEngine
-    from nautilus_trader.backtest.models import FillModel
+    from nautilus_trader.backtest import BacktestEngine
+    from nautilus_trader.execution import ProbabilisticFillModel
 
 
 def assert_exact_nautilus_rc5() -> None:
@@ -24,12 +25,12 @@ def assert_exact_nautilus_rc5() -> None:
         raise RuntimeError(f"expected Nautilus {NAUTILUS_VERSION}, installed {installed}")
 
 
-def build_fill_model(config: ExecutionModelConfig) -> FillModel:
-    """Map explicit project assumptions onto Nautilus' provider-owned FillModel."""
-    from nautilus_trader.backtest.models import FillModel
+def build_fill_model(config: ExecutionModelConfig) -> ProbabilisticFillModel:
+    """Map explicit project assumptions onto Nautilus' provider-owned fill model."""
+    from nautilus_trader.execution import ProbabilisticFillModel
 
     assert_exact_nautilus_rc5()
-    return FillModel(
+    return ProbabilisticFillModel(
         prob_fill_on_limit=float(config.prob_fill_on_limit),
         prob_slippage=float(config.prob_slippage),
         random_seed=config.random_seed,
@@ -38,17 +39,15 @@ def build_fill_model(config: ExecutionModelConfig) -> FillModel:
 
 def new_isolated_backtest_engine(candidate: CandidateManifest) -> BacktestEngine:
     """Create one fresh Nautilus engine per candidate; simulated state is never shared."""
-    from nautilus_trader.backtest.config import BacktestEngineConfig
-    from nautilus_trader.backtest.engine import BacktestEngine
-    from nautilus_trader.config import LoggingConfig
+    from nautilus_trader.backtest import BacktestEngine, BacktestEngineConfig
     from nautilus_trader.model import TraderId
 
     assert_exact_nautilus_rc5()
     config = BacktestEngineConfig(
         trader_id=TraderId(f"VNEXT-G4-{candidate.candidate_hash[:16]}"),
-        logging=LoggingConfig(log_level="ERROR"),
+        bypass_logging=True,
     )
-    return BacktestEngine(config=config)
+    return BacktestEngine(config)
 
 
 def assert_representative_scale(market_ids: tuple[str, ...]) -> None:

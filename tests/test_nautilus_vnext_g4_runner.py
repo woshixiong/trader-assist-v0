@@ -60,11 +60,11 @@ def execution_model() -> ExecutionModelConfig:
 
 
 def test_installed_rc5_and_provider_owned_fill_model_are_consumed() -> None:
-    from nautilus_trader.backtest.models import FillModel
+    from nautilus_trader.execution import ProbabilisticFillModel
 
     assert_exact_nautilus_rc5()
     model = build_fill_model(execution_model())
-    assert isinstance(model, FillModel)
+    assert isinstance(model, ProbabilisticFillModel)
 
 
 def test_candidate_execution_contexts_are_identity_isolated() -> None:
@@ -79,7 +79,7 @@ def test_candidate_execution_contexts_are_identity_isolated() -> None:
 
 
 def test_new_engine_is_provider_native_and_disposable() -> None:
-    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.backtest import BacktestEngine
 
     engine = new_isolated_backtest_engine(candidate("reference"))
     try:
