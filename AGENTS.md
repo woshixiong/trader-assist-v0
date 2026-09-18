@@ -4,13 +4,7 @@ This file is a **compact entry map**, not the project encyclopedia. GitHub is th
 
 ## 1. Authority loading — controller resolves, Writer consumes a compact packet
 
-GitHub remains canonical, but **full governance resolution is an Engineering-Control responsibility, not repeated Writer work**.
-
-Before a material task, Engineering Control must fresh-check:
-1. live main / Issue / PR / exact-head / CI state;
-2. the relevant entries in `governance/PROJECT_RULES_INDEX.md`;
-3. only the Unified V2 sections and Product / Strategy / Operations / Security authorities needed for the bounded decision;
-4. the material preflight checklist and any task-conditional specialized procedures.
+Engineering Control resolves live GitHub state and applicable governance under the Project Rules Index / Unified V2, completes material preflight when applicable, then freezes one exact Task Packet.
 
 Required controller gates remain:
 
@@ -19,28 +13,11 @@ PROJECT_ENGINEERING_RULESET_PREFLIGHT=PASS
 ENGINEERING_PREFLIGHT_GATE=PASS
 ```
 
-After those gates pass, a semantic Writer normally receives:
+A semantic Writer normally receives only the auto-loaded root map, exact Task Packet/hash, a governance/preflight attestation bound to the packet's live-main/base identity, normalized task-required authority assertions with exact provenance locators, affected code/tests, and the selected executor profile when model-backed.
 
-```text
-AUTO_LOADED_ROOT_AGENTS
-+ EXACT FROZEN TASK PACKET
-+ PREFLIGHT ATTESTATION
-+ EXACT AUTHORITY COMMENT / FILE / SECTION LOCATORS
-+ EXACT AFFECTED CODE / TEST SURFACES
-```
+The Writer does not reread full Unified V2, full preflight, full Issue/PR history or broad governance/docs by default. A concrete conflict, missing material fact or identity drift triggers the minimum targeted canonical read or returns control to Engineering Control.
 
-The Writer **must not** reread the full Unified V2, full Mandatory Preflight, full Project Rules Index, full Issue history, or broad governance/docs corpus by default. Read the minimum cited authority only when the Task Packet requires it or a concrete conflict/ambiguity is discovered; otherwise rely on the controller's frozen attestation and stop if it becomes inconsistent.
-
-Permanent context-economy invariants:
-
-```text
-ENGINEERING_CONTROL_RESOLVES_LIVE_GITHUB_AUTHORITY_BEFORE_WRITER=YES
-FULL_GOVERNANCE_CORPUS_PER_WRITER=NO_BY_DEFAULT
-FULL_ISSUE_HISTORY_PER_WRITER=NO_BY_DEFAULT
-BROAD_GOVERNANCE_OR_DOCS_SEARCH_PER_WRITER=NO_BY_DEFAULT
-COMPACT_HASH_OR_ID_BOUND_TASK_PACKET=REQUIRED
-CONTEXT_BLOAT_WITHOUT_DECISION_VALUE=ENGINEERING_DEFECT
-```
+Canonical rules remain full-strength authority; progressive disclosure changes model context, not governance.
 
 ## 2. User shorthand for unified-governance changes
 
