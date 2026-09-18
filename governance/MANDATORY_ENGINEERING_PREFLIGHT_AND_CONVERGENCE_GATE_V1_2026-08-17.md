@@ -18,7 +18,7 @@ ENGINEERING_PREFLIGHT_GATE=PASS
 
 Engineering Control completes this checklist from live GitHub and canonical authority. A downstream Writer receives the resulting attestation in its frozen Task Packet and **does not reread this entire checklist or the entire governance corpus by default**.
 
-Record the execution surface at control time:
+Record the execution surface and bound Writer attestation at control time:
 
 ```text
 EXECUTION_SURFACE_CLASS=
@@ -30,11 +30,16 @@ EXECUTION_SURFACE_CLASS=
   | TARGET_HOST
 MODEL_WRITER_REQUIRED=YES|NO
 CODEX_SELECTED=YES|NO
+TASK_PACKET_HASH=
+GOVERNANCE_ATTESTATION_MAIN_OR_BASE_SHA=
+AUTHORITY_PROVENANCE_LOCATORS=
 WRITER_CONTEXT_MODE=COMPACT_PACKET|EXPLICIT_EXCEPTION
 FULL_GOVERNANCE_CORPUS_REQUIRED=NO|YES
 ```
 
-`FULL_GOVERNANCE_CORPUS_REQUIRED=YES` is exceptional and requires an actual governance conflict or a governance-maintenance task whose object is the corpus itself. Quota availability alone never selects Codex.
+The Task Packet must contain the normalized authority assertions needed by the Writer; provenance locators bind those assertions to canonical GitHub/files. A stale main/base binding, Task Packet hash mismatch or material authority drift invalidates the attestation and returns control to Engineering Control.
+
+`FULL_GOVERNANCE_CORPUS_REQUIRED=YES` is exceptional and requires a governance-maintenance task whose object is the relevant corpus or a concrete unresolved governance conflict. Quota availability alone never selects Codex.
 
 ---
 
