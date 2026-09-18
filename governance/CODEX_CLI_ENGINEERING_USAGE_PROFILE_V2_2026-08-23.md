@@ -2,7 +2,7 @@
 
 **Status:** HOLISTIC-CONVERGENCE GOVERNANCE CANDIDATE  
 **Effective date:** 2026-08-23  
-**Current locally verified CLI:** `codex-cli 0.149.0`
+**Current locally verified CLI:** `codex-cli 0.152.1`
 
 This is the stable, version-independent Codex execution core. Current model facts live in `governance/CODEX_CURRENT_MODEL_PROFILE.md`. Task/model routing lives in `governance/ENGINEERING_EXECUTOR_ROUTER_V2_2026-08-23.md`.
 
@@ -71,22 +71,43 @@ Do not add `CODEX.md` to `project_doc_fallback_filenames`. The historical root `
 
 Detailed rules belong in indexed governance files and on-demand skills. The frozen Task Packet names only the exact deeper authorities needed for the current stage.
 
-## 5. Context-loading discipline
+## 5. Context-loading discipline — controller-resolved, progressive disclosure
 
-Default context order for a Codex Writer:
+Engineering Control resolves live GitHub identity, governance applicability, architecture/research decisions and Task Packet authority before Codex starts.
+
+Default Codex input:
 
 ```text
-ROOT AGENTS MAP
--> FROZEN TASK PACKET
--> exact task-specific authority
--> exact affected files/functions/tests
--> small related directory only when necessary
--> broader repository discovery only when the task genuinely requires it
+AUTO_LOADED_ROOT_AGENTS
+-> FROZEN TASK PACKET + TASK_PACKET_HASH
+-> BOUND PREFLIGHT/GOVERNANCE ATTESTATION
+-> NORMALIZED REQUIRED AUTHORITY ASSERTIONS + PROVENANCE LOCATORS
+-> EXACT AFFECTED FILES / FUNCTIONS / TESTS
+-> SMALL RELATED DIRECTORY ONLY WHEN NEEDED
 ```
 
-Do not paste full chat history. Do not paste full governance files when stable paths plus the frozen fields are sufficient. Do not ask Codex to redo L1 architecture/research that Engineering Control has already frozen.
+The controller provides the bounded facts needed for implementation. A GitHub comment/file locator is provenance, not an instruction for a Web-disabled/local Codex session to rediscover full history.
 
-If a genuine conflict/ambiguity is discovered, read the minimum canonical source needed to resolve it or `SAFE_STOP`.
+Default prohibited expansion:
+
+```text
+READ_FULL_UNIFIED_V2=NO
+READ_FULL_MANDATORY_PREFLIGHT=NO
+READ_FULL_PROJECT_RULES_INDEX=NO
+READ_FULL_ISSUE_OR_PR_HISTORY=NO
+BROAD_RG_GOVERNANCE_DOCS=NO
+BROAD_REPO_SEARCH_WHEN_EXACT_SURFACES_ARE_KNOWN=NO
+REPEAT_L1_ARCHITECTURE_RESEARCH=NO
+```
+
+Before mutation Codex verifies that the packet's bound main/base/worktree identity matches its actual worktree. Mismatch or a material authority conflict returns to Engineering Control.
+
+A governance-maintenance stage may read the exact governance files it changes or reviews. This is not permission to load unrelated governance/history.
+
+```text
+FULL_GOVERNANCE_CORPUS_IS_AUTHORITY_NOT_DEFAULT_MODEL_CONTEXT=YES
+CONTEXT_DISCOVERY_BUDGET_IS_PART_OF_TOTAL_BURDEN=YES
+```
 
 ## 6. Cache-preserving stage invariant — mandatory
 
@@ -249,6 +270,18 @@ IMPLEMENT
 
 Keep passing command output bounded. Preserve raw logs outside the model context when evidence is needed; send decisive excerpts/status back into context rather than entire successful logs.
 
+Codex local validation is for **iteration on the semantic change**, not for reproducing every repository proof:
+
+```text
+FOCUSED_LOCAL_TESTS_FOR_CHANGED_SEMANTICS=YES
+FULL_REPOSITORY_SUITE_IN_CODEX_SESSION=NO_BY_DEFAULT
+LOCKED_DEPENDENCY_FULL_CI=GITHUB_ACTIONS_BY_DEFAULT
+LINUX_SPECIFIC_PROOF=GITHUB_ACTIONS_BY_DEFAULT
+INSTALL_EXTRA_FULL_SUITE_DEPS_ON_USER_MAC_FOR_CI_PARITY=NO_BY_DEFAULT
+```
+
+After the semantic checkpoint is frozen, move full-suite / exact-lock / Linux / status / artifact validation to the canonical GitHub workflow unless the task is genuinely local or no equal-fidelity remote surface exists.
+
 A failing test caused by an in-scope implementation defect may be repaired only inside the frozen repair/stage authority. New root cause, new dependency, allowlist expansion, authority change or repair-budget exhaustion => `SAFE_STOP`.
 
 ## 14. Session policy
@@ -272,7 +305,7 @@ Long context is capacity, not a target. Do not keep unrelated work in one sessio
 
 ## 15. Semantic Writer vs operator tail
 
-Codex quota should pay for semantic code work. Deterministic tail work may be delegated to free OpenCode or, after qualification, Hermes.
+Codex quota should pay for semantic code work. Deterministic tail work defaults to GitHub/Engineering Control/non-model tooling; a model-backed operator is exceptional and requires genuine interpretation.
 
 Recommended boundary:
 
@@ -280,8 +313,8 @@ Recommended boundary:
 CODEX:
   inspect -> reason -> implement -> in-scope tests -> self-check -> evidence freeze
 
-FREE OPERATOR / HERMES:
-  remaining already-authorized deterministic status/diff/evidence/commit/push/CI mechanics
+GITHUB / ENGINEERING CONTROL / QUALIFIED OPERATOR:
+  remaining already-authorized deterministic status/diff/evidence/publication/CI mechanics
 ```
 
 This does not require a handoff after every Codex task. If Codex can finish a tiny authorized tail more cheaply than creating a new handoff, it may do so. Optimize total burden.
@@ -351,7 +384,7 @@ PROJECT_CONFIG_DOES_NOT_PIN_MODEL_OR_REASONING=YES
 WEB_SEARCH_DEFAULT_OFF_FOR_LOCAL_WRITER=YES
 MULTI_AGENT_DEFAULT_OFF=YES
 BOUNDED_TEST_OUTPUT=YES
-FREE_OPERATOR_TAIL_WHEN_IT_REDUCES_TOTAL_BURDEN=YES
+DETERMINISTIC_NONMODEL_TAIL_DEFAULT=YES
 PASSIVE_TOKEN_CACHE_TELEMETRY=YES
 WRITER_SELF_CHECK_NE_INDEPENDENT_ACCEPTANCE=YES
 ```

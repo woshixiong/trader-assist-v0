@@ -2,28 +2,20 @@
 
 This file is the **canonical navigation index**, not a duplicate constitution. Live GitHub/code/exact artifacts override stale chat or historical PR narrative.
 
-## 1. Always-read engineering path
+## 1. Authority loading model
 
-For material engineering work read:
+Engineering Control uses this index to resolve the bounded authority graph. For material work it fresh-checks live GitHub identity, applicable Unified V2 sections, current Product / Strategy / Operations / Security authority, the Mandatory Preflight checklist and only specialized procedures that actually apply.
 
-1. `AGENTS.md`
-2. this index
-3. `governance/UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V2_2026-09-01.md`
-4. current accepted Product / Strategy / Operations / Security authority for the bounded task
-5. current live GitHub main / issue / PR / exact-head / CI state.
-
-For a MATERIAL task also complete:
-
-- `governance/MANDATORY_ENGINEERING_PREFLIGHT_AND_CONVERGENCE_GATE_V1_2026-08-17.md`
-
-Required gates:
+Required material gates:
 
 ```text
 PROJECT_ENGINEERING_RULESET_PREFLIGHT=PASS
 ENGINEERING_PREFLIGHT_GATE=PASS
 ```
 
-The Unified V2 standard is the sole project-wide normative engineering constitution. Other files below are task-conditional procedures, executor/tool contracts, operational authority or history.
+After freeze, the downstream Writer consumes the exact Task Packet, its bound preflight/governance attestation, normalized required authority assertions with provenance locators, affected code/tests and the selected executor profile. It does not recursively reload this index, full Unified V2, full preflight or full Issue history unless an actual conflict/unknown requires a targeted canonical read.
+
+Unified V2 remains the sole project-wide normative engineering constitution.
 
 ### 1.1 User phrase “统一规则”
 

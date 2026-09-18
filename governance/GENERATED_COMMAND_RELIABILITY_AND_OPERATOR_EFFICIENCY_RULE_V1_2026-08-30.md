@@ -182,6 +182,18 @@ LOCAL_PLATFORM_WHEN_FIT
 
 The production target host is not a generic development sandbox.
 
+When the repository already has an accepted GitHub Actions workflow that supplies locked dependencies and equal-or-higher-fidelity Linux/full-suite proof:
+
+```text
+USER_MAC_FULL_REPOSITORY_SUITE=NO_BY_DEFAULT
+LOCAL_LAUNCHER_FOCUSED_TESTS_ONLY=YES_WHEN_USEFUL
+SEMANTIC_CHECKPOINT_BEFORE_REMOTE_FULL_SUITE=REQUIRED
+GITHUB_ACTIONS_FULL_SUITE_AND_LINUX_PROOF=PREFERRED
+LOCAL_MISSING_CI_ONLY_DEPENDENCY!=APPLICATION_FAILURE
+```
+
+Do not spend user workstation resources installing/reproducing the entire CI environment solely for parity when GitHub is the authoritative proof surface. A genuinely local claim remains local.
+
 A known platform mismatch is a routing input. Do not keep rewriting commands merely to make the wrong platform pass.
 
 ---

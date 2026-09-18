@@ -2,25 +2,22 @@
 
 This file is a **compact entry map**, not the project encyclopedia. GitHub is the engineering source of truth.
 
-## 1. Mandatory engineering path
+## 1. Authority loading — controller resolves, Writer consumes a compact packet
 
-Before material engineering work read:
+Engineering Control resolves live GitHub state and applicable governance under the Project Rules Index / Unified V2, completes material preflight when applicable, then freezes one exact Task Packet.
 
-1. `governance/PROJECT_RULES_INDEX.md`
-2. `governance/UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V2_2026-09-01.md`
-3. current Product / Strategy / Operations / Security authority for the bounded task
-4. current live GitHub main / issue / PR / exact-head / CI state.
-
-For a material task, complete the checklist in:
-
-- `governance/MANDATORY_ENGINEERING_PREFLIGHT_AND_CONVERGENCE_GATE_V1_2026-08-17.md`
-
-No material Writer dispatch without:
+Required controller gates remain:
 
 ```text
 PROJECT_ENGINEERING_RULESET_PREFLIGHT=PASS
 ENGINEERING_PREFLIGHT_GATE=PASS
 ```
+
+A semantic Writer normally receives only the auto-loaded root map, exact Task Packet/hash, a governance/preflight attestation bound to the packet's live-main/base identity, normalized task-required authority assertions with exact provenance locators, affected code/tests, and the selected executor profile when model-backed.
+
+The Writer does not reread full Unified V2, full preflight, full Issue/PR history or broad governance/docs by default. A concrete conflict, missing material fact or identity drift triggers the minimum targeted canonical read or returns control to Engineering Control.
+
+Canonical rules remain full-strength authority; progressive disclosure changes model context, not governance.
 
 ## 2. User shorthand for unified-governance changes
 
