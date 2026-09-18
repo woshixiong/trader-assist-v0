@@ -4,42 +4,18 @@ This file is the **canonical navigation index**, not a duplicate constitution. L
 
 ## 1. Authority loading model
 
-This index is read by **Engineering Control** to resolve the bounded authority graph. It is not a requirement that every downstream Writer load every document it names.
+Engineering Control uses this index to resolve the bounded authority graph. For material work it fresh-checks live GitHub identity, applicable Unified V2 sections, current Product / Strategy / Operations / Security authority, the Mandatory Preflight checklist and only specialized procedures that actually apply.
 
-### 1.0A Engineering-Control path for material work
-
-Engineering Control fresh-checks:
-
-1. `AGENTS.md`;
-2. this index;
-3. the relevant sections of `governance/UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V2_2026-09-01.md`;
-4. current accepted Product / Strategy / Operations / Security authority for the bounded task;
-5. current live GitHub main / issue / PR / exact-head / CI state;
-6. `governance/MANDATORY_ENGINEERING_PREFLIGHT_AND_CONVERGENCE_GATE_V1_2026-08-17.md` and only the specialized procedures that actually apply.
-
-Required gates remain:
+Required material gates:
 
 ```text
 PROJECT_ENGINEERING_RULESET_PREFLIGHT=PASS
 ENGINEERING_PREFLIGHT_GATE=PASS
 ```
 
-### 1.0B Downstream Writer path
+After freeze, the downstream Writer consumes the exact Task Packet, its bound preflight/governance attestation, normalized required authority assertions with provenance locators, affected code/tests and the selected executor profile. It does not recursively reload this index, full Unified V2, full preflight or full Issue history unless an actual conflict/unknown requires a targeted canonical read.
 
-Once Engineering Control has frozen the task, a Writer normally loads only:
-
-```text
-AGENTS.md
-+ exact Task Packet / packet hash
-+ preflight attestation
-+ exact cited authority comments / file sections
-+ affected code/tests
-+ selected executor profile when model-backed
-```
-
-Do not instruct a Writer to reread the full Unified V2, full preflight checklist, full Issue history, all specialized governance, or the whole docs tree merely for ceremony. Escalate to the minimum canonical source only when an actual contradiction, missing authority, or material design ambiguity appears.
-
-The Unified V2 standard remains the sole project-wide normative engineering constitution. Progressive disclosure changes context loading, **not authority strength**.
+Unified V2 remains the sole project-wide normative engineering constitution.
 
 ### 1.1 User phrase “统一规则”
 
