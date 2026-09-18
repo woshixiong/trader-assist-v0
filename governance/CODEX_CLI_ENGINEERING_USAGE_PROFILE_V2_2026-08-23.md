@@ -2,7 +2,7 @@
 
 **Status:** HOLISTIC-CONVERGENCE GOVERNANCE CANDIDATE  
 **Effective date:** 2026-08-23  
-**Current locally verified CLI:** `codex-cli 0.149.0`
+**Current locally verified CLI:** `codex-cli 0.152.1`
 
 This is the stable, version-independent Codex execution core. Current model facts live in `governance/CODEX_CURRENT_MODEL_PROFILE.md`. Task/model routing lives in `governance/ENGINEERING_EXECUTOR_ROUTER_V2_2026-08-23.md`.
 
