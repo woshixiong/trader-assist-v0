@@ -154,6 +154,55 @@ CANCELLED
 
 An intermediate test, CI or Reviewer PASS is not task completion unless the active task contract explicitly defines it as terminal.
 
+### Task-completion truth gate
+
+Whole-task completion is distinct from completion of any intermediate stage. Writer completion, a CI pass, an independent Review pass, publication completion, or PR merge is not by itself whole-task completion. When the active task contract requires post-merge readback or verification, a merged PR remains intermediate until that required gate passes.
+
+The project-wide task-completion predicate is:
+
+```text
+TASK_COMPLETION_TRUTH_GATE=PASS
+IFF
+USER_REQUEST_SCOPE_TERMINAL_OBJECTIVE_REACHED=YES
+AND ACTIVE_TASK_CONTRACT_TERMINAL_DISPOSITION_REACHED=YES
+AND ALL_REQUIRED_INDEPENDENT_REVIEWS_TERMINAL=PASS_OR_NOT_APPLICABLE
+AND REQUIRED_PR_TERMINAL_DISPOSITION=PASS_OR_NOT_APPLICABLE
+AND REQUIRED_LIVE_MAIN_READBACK=PASS_OR_NOT_APPLICABLE
+AND REQUIRED_POST_MERGE_OR_POST_PUBLICATION_VERIFICATION=PASS_OR_NOT_APPLICABLE
+AND REQUIRED_LINKED_TASK_TERMINALITY_READBACK=PASS_OR_NOT_APPLICABLE
+AND REQUIRED_OPEN_PR_OR_SUPERSEDED_WORK_SWEEP=PASS_OR_NOT_APPLICABLE
+AND NO_REQUIRED_NEXT_GATE_IS_SILENTLY_OMITTED=YES
+```
+
+Applicability is derived from the current user-request scope and the active bounded-task contract. That contract controls terminality. Every applicable required gate must pass; every non-applicable gate must be recorded as `NOT_APPLICABLE` and must not block completion. A gate may not be skipped when applicable, and an unconditional false or safe-stop gate may not replace contract-scoped applicability.
+
+The mere existence or continued activity of an umbrella Issue, PR, or other linked artifact does not make its closure or terminality a universal prerequisite. An umbrella Issue may remain open or advance to a separate explicit next stage when the current bounded user-request scope and active task contract are terminal and every applicable required gate for that bounded task passes. Conversely, a linked or superseded artifact that is part of the bounded task must receive its applicable readback or sweep.
+
+Any pending user-retained gate required by the active task contract prohibits `TASK_COMPLETION_TRUTH_GATE=PASS`. Mark Ready and merge remain separate user-retained gates. This predicate grants no authority to execute either gate and grants no deployment, runtime, credential, private-API, wallet, signing, exchange, trading, or capital authority. An accepted merged PR may still close or advance its linked task as governed by the reviewed-PR closeout procedure.
+
+Required consequences include:
+
+```text
+MERGE_IN_ACTIVE_TASK_CONTRACT=YES
+AND LIVE_MAIN_READBACK != PASS
+=> TASK_COMPLETION_TRUTH_GATE=FAIL
+
+POST_MERGE_VERIFICATION_REQUIRED_BY_ACTIVE_TASK_CONTRACT=YES
+AND POST_MERGE_OR_POST_PUBLICATION_VERIFICATION != PASS
+=> TASK_COMPLETION_TRUTH_GATE=FAIL
+
+NO_PR_IN_ACTIVE_TASK_CONTRACT
+=> LINKED_PR_STATE_READBACK=NOT_APPLICABLE
+=> OPEN_PR_OR_SUPERSEDED_WORK_SWEEP=NOT_APPLICABLE
+   unless a linked or superseded PR is part of this bounded task
+
+UMBRELLA_ISSUE_CONTINUES_TO_SEPARATE_NEXT_STAGE
+AND CURRENT_BOUNDED_TASK_IS_TERMINAL
+=> ISSUE_CLOSURE_IS_NOT_A_UNIVERSAL_COMPLETION_PREREQUISITE
+```
+
+If `TASK_COMPLETION_TRUTH_GATE != PASS`, user-facing whole-task words such as `complete`, `done`, or `已完成` are prohibited. Report only the exact stage reached, the failed or pending applicable gates, and the next required gate.
+
 ---
 
 ## 4. Task classification and mandatory preflight
