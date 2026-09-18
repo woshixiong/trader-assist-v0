@@ -73,22 +73,22 @@ Detailed rules belong in indexed governance files and on-demand skills. The froz
 
 ## 5. Context-loading discipline — controller-resolved, progressive disclosure
 
-Engineering Control resolves live GitHub identity, governance applicability, architecture/research decisions and Task Packet authority **before Codex starts**.
+Engineering Control resolves live GitHub identity, governance applicability, architecture/research decisions and Task Packet authority before Codex starts.
 
-Default Codex Writer input:
+Default Codex input:
 
 ```text
 AUTO_LOADED_ROOT_AGENTS
--> FROZEN COMPACT TASK PACKET
--> PREFLIGHT ATTESTATION
--> EXACT AUTHORITY COMMENT / FILE / SECTION LOCATORS
+-> FROZEN TASK PACKET + TASK_PACKET_HASH
+-> BOUND PREFLIGHT/GOVERNANCE ATTESTATION
+-> NORMALIZED REQUIRED AUTHORITY ASSERTIONS + PROVENANCE LOCATORS
 -> EXACT AFFECTED FILES / FUNCTIONS / TESTS
 -> SMALL RELATED DIRECTORY ONLY WHEN NEEDED
 ```
 
-Do not ask Codex to repeat control-plane work already frozen by Engineering Control.
+The controller provides the bounded facts needed for implementation. A GitHub comment/file locator is provenance, not an instruction for a Web-disabled/local Codex session to rediscover full history.
 
-Default prohibited context expansion:
+Default prohibited expansion:
 
 ```text
 READ_FULL_UNIFIED_V2=NO
@@ -100,9 +100,9 @@ BROAD_REPO_SEARCH_WHEN_EXACT_SURFACES_ARE_KNOWN=NO
 REPEAT_L1_ARCHITECTURE_RESEARCH=NO
 ```
 
-A concrete conflict, missing fact or semantic ambiguity may justify the minimum targeted read. A material conflict returns to Engineering Control instead of turning the Writer into a second L1 research window.
+Before mutation Codex verifies that the packet's bound main/base/worktree identity matches its actual worktree. Mismatch or a material authority conflict returns to Engineering Control.
 
-The Task Packet should contain the exact already-resolved invariants rather than instructions to rediscover them. Passing paths/hashes/comment IDs is preferred over pasting full historical bodies.
+A governance-maintenance stage may read the exact governance files it changes or reviews. This is not permission to load unrelated governance/history.
 
 ```text
 FULL_GOVERNANCE_CORPUS_IS_AUTHORITY_NOT_DEFAULT_MODEL_CONTEXT=YES
@@ -305,7 +305,7 @@ Long context is capacity, not a target. Do not keep unrelated work in one sessio
 
 ## 15. Semantic Writer vs operator tail
 
-Codex quota should pay for semantic code work. Deterministic tail work may be delegated to free OpenCode or, after qualification, Hermes.
+Codex quota should pay for semantic code work. Deterministic tail work defaults to GitHub/Engineering Control/non-model tooling; a model-backed operator is exceptional and requires genuine interpretation.
 
 Recommended boundary:
 
@@ -384,7 +384,7 @@ PROJECT_CONFIG_DOES_NOT_PIN_MODEL_OR_REASONING=YES
 WEB_SEARCH_DEFAULT_OFF_FOR_LOCAL_WRITER=YES
 MULTI_AGENT_DEFAULT_OFF=YES
 BOUNDED_TEST_OUTPUT=YES
-FREE_OPERATOR_TAIL_WHEN_IT_REDUCES_TOTAL_BURDEN=YES
+DETERMINISTIC_NONMODEL_TAIL_DEFAULT=YES
 PASSIVE_TOKEN_CACHE_TELEMETRY=YES
 WRITER_SELF_CHECK_NE_INDEPENDENT_ACCEPTANCE=YES
 ```
