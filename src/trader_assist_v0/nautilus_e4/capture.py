@@ -31,6 +31,77 @@ from .contracts import (
 )
 from .storage import EvidenceStore, RawCatalogSink
 
+_TERMINAL_LIFECYCLE_STATUSES = frozenset(
+    {
+        LifecycleStatus.TERMINAL,
+        LifecycleStatus.EXPIRED,
+        LifecycleStatus.SUPERSEDED,
+    }
+)
+
+
+def _lifecycle_authority(record: LifecycleRecord) -> tuple[object, ...]:
+    return (
+        record.run_id,
+        record.kind,
+        record.parent_id,
+        record.package_id,
+        record.market_id,
+        record.expression_id,
+    )
+
+
+def _validate_lifecycle_successor(
+    previous: LifecycleRecord, record: LifecycleRecord
+) -> None:
+    if record.record_hash == previous.record_hash:
+        raise ValueError("exact duplicate lifecycle fact")
+    if _lifecycle_authority(record) != _lifecycle_authority(previous):
+        raise ValueError("lifecycle object authority contradicts prior accepted fact")
+    previous_order = (previous.state_ts, previous.last_admission_ordinal)
+    record_order = (record.state_ts, record.last_admission_ordinal)
+    if record_order <= previous_order:
+        raise ValueError("lifecycle fact order must be strictly increasing")
+    if previous.status in _TERMINAL_LIFECYCLE_STATUSES:
+        raise ValueError("lifecycle fact cannot follow terminal-family state")
+    if (
+        previous.status is not LifecycleStatus.ACTIVE
+        or record.status
+        not in {LifecycleStatus.ACTIVE, *_TERMINAL_LIFECYCLE_STATUSES}
+    ):
+        raise ValueError("unsupported repeated-object lifecycle transition")
+
+
+def _fold_lifecycle_records(
+    records: Iterable[LifecycleRecord], *, run_id: str
+) -> tuple[
+    dict[str, LifecycleRecord],
+    set[str],
+    set[str],
+    dict[str, set[str]],
+]:
+    """Validate immutable facts in durable append order and retain latest authority."""
+    latest: dict[str, LifecycleRecord] = {}
+    lifecycle_ids: set[str] = set()
+    record_hashes: set[str] = set()
+    hashes_by_object: dict[str, set[str]] = defaultdict(set)
+    for record in records:
+        if record.run_id != run_id:
+            raise ValueError("persisted lifecycle fact contradicts immutable run identity")
+        if record.record_hash in record_hashes:
+            raise ValueError("persisted lifecycle contains an exact duplicate fact")
+        previous = latest.get(record.object_id)
+        if previous is None:
+            if record.parent_id is not None and record.parent_id not in lifecycle_ids:
+                raise ValueError("persisted lifecycle parent identity is unknown")
+        else:
+            _validate_lifecycle_successor(previous, record)
+        lifecycle_ids.add(record.object_id)
+        record_hashes.add(record.record_hash)
+        hashes_by_object[record.object_id].add(record.record_hash)
+        latest[record.object_id] = record
+    return latest, lifecycle_ids, record_hashes, hashes_by_object
+
 
 @dataclass(frozen=True)
 class SubscriptionPolicy:
@@ -84,6 +155,7 @@ class CaptureSession:
         batch_size: int = 128,
         seen_source_ids: set[str] | None = None,
         seen_lifecycle_ids: set[str] | None = None,
+        latest_lifecycle_records: dict[str, LifecycleRecord] | None = None,
         durable_source_ids: set[str] | None = None,
         runtime_segment_index: int = 0,
         checkpoint_sequence: int = 0,
@@ -120,6 +192,24 @@ class CaptureSession:
         self._packages: dict[str, _PackageState] = {}
         self._market_packages: dict[str, set[str]] = defaultdict(set)
         self._lifecycle_ids = set() if seen_lifecycle_ids is None else set(seen_lifecycle_ids)
+        self._latest_lifecycle_records = (
+            {} if latest_lifecycle_records is None else dict(latest_lifecycle_records)
+        )
+        if not set(self._latest_lifecycle_records) <= self._lifecycle_ids:
+            raise ValueError("latest lifecycle authority is absent from lifecycle_ids")
+        for object_id, record in self._latest_lifecycle_records.items():
+            if record.object_id != object_id:
+                raise ValueError("latest lifecycle checkpoint key contradicts object identity")
+            if record.run_id != manifest.run_id:
+                raise ValueError("latest lifecycle fact contradicts immutable run identity")
+            if record.parent_id is not None and record.parent_id not in self._lifecycle_ids:
+                raise ValueError("latest lifecycle parent identity is unknown")
+        latest_hashes = {
+            record.record_hash for record in self._latest_lifecycle_records.values()
+        }
+        if len(latest_hashes) != len(self._latest_lifecycle_records):
+            raise ValueError("latest lifecycle checkpoint contains duplicate facts")
+        self._lifecycle_record_hashes = latest_hashes
         self._lifecycle: list[LifecycleRecord] = []
         self._decision_commitments: dict[str, tuple[int, DecisionState]] = {}
         self._counts: Counter[str] = Counter()
@@ -317,10 +407,6 @@ class CaptureSession:
         supersedes_id: str | None = None,
         _persist_checkpoint: bool = True,
     ) -> LifecycleRecord:
-        if object_id in self._lifecycle_ids:
-            raise ValueError("duplicate lifecycle object authority")
-        if parent_id is not None and parent_id not in self._lifecycle_ids:
-            raise ValueError("lifecycle parent identity is unknown")
         record = LifecycleRecord.create(
             schema_version="E4_CAPTURE_V1",
             run_id=self.manifest.run_id,
@@ -341,7 +427,20 @@ class CaptureSession:
             last_admission_ordinal=self.ledger.admission_ordinal,
             evidence_state=evidence_state,
         )
+        if record.record_hash in self._lifecycle_record_hashes:
+            raise ValueError("exact duplicate lifecycle fact")
+        previous = self._latest_lifecycle_records.get(object_id)
+        if object_id in self._lifecycle_ids:
+            if previous is None:
+                raise ValueError(
+                    "latest lifecycle authority unavailable for existing object"
+                )
+            _validate_lifecycle_successor(previous, record)
+        elif parent_id is not None and parent_id not in self._lifecycle_ids:
+            raise ValueError("lifecycle parent identity is unknown")
         self._lifecycle_ids.add(object_id)
+        self._lifecycle_record_hashes.add(record.record_hash)
+        self._latest_lifecycle_records[object_id] = record
         self._lifecycle.append(record)
         if self.evidence_store is not None:
             self.evidence_store.append_lifecycle((record,))
@@ -660,6 +759,10 @@ class CaptureSession:
             "schema_version": "E4_CAPTURE_SESSION_CHECKPOINT_V1",
             "ledger": self.ledger.checkpoint(),
             "lifecycle_ids": sorted(self._lifecycle_ids),
+            "latest_lifecycle_records": {
+                object_id: record.model_dump(mode="json")
+                for object_id, record in sorted(self._latest_lifecycle_records.items())
+            },
             "packages": {
                 package_id: {
                     "market_id": package.market_id,
@@ -730,6 +833,16 @@ class CaptureSession:
     ) -> CaptureSession:
         if checkpoint.get("schema_version") != "E4_CAPTURE_SESSION_CHECKPOINT_V1":
             raise ValueError("unsupported Capture session checkpoint")
+        lifecycle_ids = set(checkpoint["lifecycle_ids"])
+        raw_latest = checkpoint.get("latest_lifecycle_records")
+        latest_lifecycle_records: dict[str, LifecycleRecord] | None = None
+        if raw_latest is not None:
+            if not isinstance(raw_latest, dict):
+                raise ValueError("latest lifecycle checkpoint state must be an object")
+            latest_lifecycle_records = {
+                object_id: LifecycleRecord.model_validate(raw)
+                for object_id, raw in raw_latest.items()
+            }
         session = cls(
             manifest=manifest,
             policy=policy,
@@ -737,7 +850,8 @@ class CaptureSession:
             evidence_store=evidence_store,
             batch_size=batch_size,
             seen_source_ids=set(checkpoint["ledger"]["seen_source_ids"]),
-            seen_lifecycle_ids=set(checkpoint["lifecycle_ids"]),
+            seen_lifecycle_ids=lifecycle_ids,
+            latest_lifecycle_records=latest_lifecycle_records,
             durable_source_ids=set(checkpoint["durable_source_ids"]),
             runtime_segment_index=runtime_segment_index,
             checkpoint_sequence=checkpoint_sequence,
@@ -853,9 +967,42 @@ def recover_capture_session(
         for item in state["pending"]
         if item["source_identity"] not in persisted_source_ids
     ]
+    persisted_lifecycle = evidence_store.load_lifecycle()
+    (
+        durable_latest,
+        durable_lifecycle_ids,
+        _,
+        durable_hashes_by_object,
+    ) = _fold_lifecycle_records(persisted_lifecycle, run_id=manifest.run_id)
+    checkpoint_lifecycle_ids = set(state["lifecycle_ids"])
+    raw_checkpoint_latest = state.get("latest_lifecycle_records")
+    if raw_checkpoint_latest is not None:
+        if not isinstance(raw_checkpoint_latest, dict):
+            raise ValueError("latest lifecycle checkpoint state must be an object")
+        checkpoint_latest = {
+            object_id: LifecycleRecord.model_validate(raw)
+            for object_id, raw in raw_checkpoint_latest.items()
+        }
+        if not set(checkpoint_latest) <= checkpoint_lifecycle_ids:
+            raise ValueError("checkpoint latest lifecycle authority lacks lifecycle_id")
+        for object_id, record in checkpoint_latest.items():
+            if record.object_id != object_id:
+                raise ValueError(
+                    "checkpoint latest lifecycle key contradicts object identity"
+                )
+            if record.record_hash not in durable_hashes_by_object.get(object_id, set()):
+                raise ValueError(
+                    "checkpoint lifecycle authority contradicts durable append history"
+                )
+    if persisted_lifecycle:
+        state["latest_lifecycle_records"] = {
+            object_id: record.model_dump(mode="json")
+            for object_id, record in sorted(durable_latest.items())
+        }
+    elif raw_checkpoint_latest:
+        raise ValueError("checkpoint lifecycle authority lacks durable append history")
     state["lifecycle_ids"] = sorted(
-        set(state["lifecycle_ids"])
-        | {item.object_id for item in evidence_store.load_lifecycle()}
+        checkpoint_lifecycle_ids | durable_lifecycle_ids
     )
     segments = evidence_store.load_process_segments()
     if any(
