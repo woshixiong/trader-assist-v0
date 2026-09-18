@@ -260,6 +260,46 @@ REPAIR_STAGE / STOP_CONDITION
 
 ---
 
+### 4.3 Controller-resolved authority and progressive Writer context
+
+Canonical authority and model context are different concerns.
+
+Engineering Control must resolve live GitHub identity, applicable governance, authority ownership, route, scope, evidence topology and preflight **before** semantic Writer dispatch. A downstream Writer is not required to repeat that control-plane research when the frozen packet already supplies exact attestations and locators.
+
+Default material-Writer context:
+
+```text
+ROOT_AGENTS_MAP
++ FROZEN_TASK_PACKET
++ PREFLIGHT_ATTESTATION
++ EXACT_TASK_AUTHORITY_LOCATORS
++ EXACT_AFFECTED_CODE_TEST_SURFACES
++ TASK_CONDITIONAL_EXECUTOR_PROFILE
+```
+
+Default prohibitions:
+
+```text
+FULL_UNIFIED_V2_RELOAD_BY_WRITER=NO
+FULL_MANDATORY_PREFLIGHT_RELOAD_BY_WRITER=NO
+FULL_PROJECT_RULES_INDEX_RELOAD_BY_WRITER=NO
+FULL_ISSUE_OR_PR_HISTORY_RELOAD_BY_WRITER=NO
+BROAD_GOVERNANCE_DOCS_RG_OR_SEARCH_BY_WRITER=NO
+REPEAT_L1_RESEARCH_ALREADY_FROZEN_BY_CONTROL=NO
+```
+
+Exceptions require a concrete conflict, missing fact, authority ambiguity or task-packet instruction. In that case read only the minimum canonical section needed; if the conflict is material, stop and return to Engineering Control rather than expanding context indefinitely.
+
+```text
+PROGRESSIVE_GOVERNANCE_DISCLOSURE=REQUIRED
+COMPACT_EXACT_TASK_PACKET=REQUIRED
+CONTEXT_BLOAT_WITHOUT_INCREMENTAL_DECISION_VALUE=PROHIBITED
+CANONICAL_GOVERNANCE_DETAIL_MAY_REMAIN_FULL=YES
+WRITER_CONTEXT_NE_CANONICAL_CORPUS=YES
+```
+
+This rule preserves full governance as durable authority while preventing repeated token expenditure on already-resolved control-plane material.
+
 ## 5. Research, evidence and decision method
 
 Material direction-setting work uses a strict three-stage method.
@@ -1067,6 +1107,35 @@ Remote preference never grants new secrets or permissions. If the remote path re
 A canonical exact GitHub ref/head already proven through the control plane must not be redundantly transformed into a requirement that the user's local repository already contains the same Git object. If a genuinely local Writer is still required, acquire and verify the exact canonical remote ref in an isolated workspace through the already-authorized Git transport; local object preexistence is not a substitute safety invariant.
 
 ---
+
+### 13.2 Deterministic / GitHub-first execution economy
+
+Use the cheapest sufficient **authoritative** execution surface. Cost never overrides correctness, fidelity or safety, but a scarce model executor is not used for deterministic work merely because quota is available.
+
+Default order:
+
+```text
+AUTHORITATIVE_GITHUB_CONNECTOR / GITHUB_ACTIONS / PROVIDER_NATIVE / DETERMINISTIC_TOOL
+-> ENGINEERING_CONTROL DIRECT READ/WRITE WHEN NO CODING AGENT IS NEEDED
+-> ACCEPTED NON-CODEX SEMANTIC WRITER WHEN SUFFICIENT
+-> CODEX ONLY FOR REMAINING SEMANTIC IMPLEMENTATION WHERE ITS CAPABILITY IS MATERIAL
+```
+
+Permanent rules:
+
+```text
+CODEX_QUOTA_HEALTHY_NE_CODEX_DEFAULT=YES
+CODEX_FOR_GITHUB_STATUS_DIFF_ARTIFACT_CI_EVIDENCE=NO_BY_DEFAULT
+CODEX_FOR_FULL_REPOSITORY_TEST_SUITE=NO_BY_DEFAULT
+CODEX_FOR_DUPLICATE_CONTROL_PLANE_DISCOVERY=NO_BY_DEFAULT
+GITHUB_ACTIONS_DEFAULT_FOR_LOCKED_FULL_SUITE_AND_LINUX_CI=YES
+USER_MAC_FULL_SUITE_DEFAULT=NO_WHEN_GITHUB_CI_IS_EQUAL_OR_HIGHER_FIDELITY
+FOCUSED_LOCAL_TESTS_DURING_SEMANTIC_EDIT=ALLOWED_WHEN_CHEAP_AND_FIT
+```
+
+A model-backed Writer may run the smallest decisive focused tests needed to iterate on its semantic change. Once an exact semantic checkpoint exists, deterministic full-suite, exact-lock, Linux, status, diff, artifact and CI mechanics move to GitHub/Engineering Control unless the claim is genuinely local.
+
+No per-task prose essay is required to justify not using Codex. Router classification applies this policy mechanically.
 
 ## 14. Exact release, staged artifact and deployment topology
 

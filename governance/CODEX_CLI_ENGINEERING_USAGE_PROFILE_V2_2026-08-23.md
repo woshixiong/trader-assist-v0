@@ -71,22 +71,43 @@ Do not add `CODEX.md` to `project_doc_fallback_filenames`. The historical root `
 
 Detailed rules belong in indexed governance files and on-demand skills. The frozen Task Packet names only the exact deeper authorities needed for the current stage.
 
-## 5. Context-loading discipline
+## 5. Context-loading discipline — controller-resolved, progressive disclosure
 
-Default context order for a Codex Writer:
+Engineering Control resolves live GitHub identity, governance applicability, architecture/research decisions and Task Packet authority **before Codex starts**.
+
+Default Codex Writer input:
 
 ```text
-ROOT AGENTS MAP
--> FROZEN TASK PACKET
--> exact task-specific authority
--> exact affected files/functions/tests
--> small related directory only when necessary
--> broader repository discovery only when the task genuinely requires it
+AUTO_LOADED_ROOT_AGENTS
+-> FROZEN COMPACT TASK PACKET
+-> PREFLIGHT ATTESTATION
+-> EXACT AUTHORITY COMMENT / FILE / SECTION LOCATORS
+-> EXACT AFFECTED FILES / FUNCTIONS / TESTS
+-> SMALL RELATED DIRECTORY ONLY WHEN NEEDED
 ```
 
-Do not paste full chat history. Do not paste full governance files when stable paths plus the frozen fields are sufficient. Do not ask Codex to redo L1 architecture/research that Engineering Control has already frozen.
+Do not ask Codex to repeat control-plane work already frozen by Engineering Control.
 
-If a genuine conflict/ambiguity is discovered, read the minimum canonical source needed to resolve it or `SAFE_STOP`.
+Default prohibited context expansion:
+
+```text
+READ_FULL_UNIFIED_V2=NO
+READ_FULL_MANDATORY_PREFLIGHT=NO
+READ_FULL_PROJECT_RULES_INDEX=NO
+READ_FULL_ISSUE_OR_PR_HISTORY=NO
+BROAD_RG_GOVERNANCE_DOCS=NO
+BROAD_REPO_SEARCH_WHEN_EXACT_SURFACES_ARE_KNOWN=NO
+REPEAT_L1_ARCHITECTURE_RESEARCH=NO
+```
+
+A concrete conflict, missing fact or semantic ambiguity may justify the minimum targeted read. A material conflict returns to Engineering Control instead of turning the Writer into a second L1 research window.
+
+The Task Packet should contain the exact already-resolved invariants rather than instructions to rediscover them. Passing paths/hashes/comment IDs is preferred over pasting full historical bodies.
+
+```text
+FULL_GOVERNANCE_CORPUS_IS_AUTHORITY_NOT_DEFAULT_MODEL_CONTEXT=YES
+CONTEXT_DISCOVERY_BUDGET_IS_PART_OF_TOTAL_BURDEN=YES
+```
 
 ## 6. Cache-preserving stage invariant — mandatory
 
@@ -249,6 +270,18 @@ IMPLEMENT
 
 Keep passing command output bounded. Preserve raw logs outside the model context when evidence is needed; send decisive excerpts/status back into context rather than entire successful logs.
 
+Codex local validation is for **iteration on the semantic change**, not for reproducing every repository proof:
+
+```text
+FOCUSED_LOCAL_TESTS_FOR_CHANGED_SEMANTICS=YES
+FULL_REPOSITORY_SUITE_IN_CODEX_SESSION=NO_BY_DEFAULT
+LOCKED_DEPENDENCY_FULL_CI=GITHUB_ACTIONS_BY_DEFAULT
+LINUX_SPECIFIC_PROOF=GITHUB_ACTIONS_BY_DEFAULT
+INSTALL_EXTRA_FULL_SUITE_DEPS_ON_USER_MAC_FOR_CI_PARITY=NO_BY_DEFAULT
+```
+
+After the semantic checkpoint is frozen, move full-suite / exact-lock / Linux / status / artifact validation to the canonical GitHub workflow unless the task is genuinely local or no equal-fidelity remote surface exists.
+
 A failing test caused by an in-scope implementation defect may be repaired only inside the frozen repair/stage authority. New root cause, new dependency, allowlist expansion, authority change or repair-budget exhaustion => `SAFE_STOP`.
 
 ## 14. Session policy
@@ -280,8 +313,8 @@ Recommended boundary:
 CODEX:
   inspect -> reason -> implement -> in-scope tests -> self-check -> evidence freeze
 
-FREE OPERATOR / HERMES:
-  remaining already-authorized deterministic status/diff/evidence/commit/push/CI mechanics
+GITHUB / ENGINEERING CONTROL / QUALIFIED OPERATOR:
+  remaining already-authorized deterministic status/diff/evidence/publication/CI mechanics
 ```
 
 This does not require a handoff after every Codex task. If Codex can finish a tiny authorized tail more cheaply than creating a new handoff, it may do so. Optimize total burden.

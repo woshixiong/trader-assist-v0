@@ -16,6 +16,26 @@ PROJECT_ENGINEERING_RULESET_PREFLIGHT=PASS
 ENGINEERING_PREFLIGHT_GATE=PASS
 ```
 
+Engineering Control completes this checklist from live GitHub and canonical authority. A downstream Writer receives the resulting attestation in its frozen Task Packet and **does not reread this entire checklist or the entire governance corpus by default**.
+
+Record the execution surface at control time:
+
+```text
+EXECUTION_SURFACE_CLASS=
+  GITHUB_DETERMINISTIC
+  | ENGINEERING_CONTROL_DIRECT
+  | NON_CODEX_MODEL_WRITER
+  | CODEX_SEMANTIC_WRITER
+  | LOCAL_DETERMINISTIC
+  | TARGET_HOST
+MODEL_WRITER_REQUIRED=YES|NO
+CODEX_SELECTED=YES|NO
+WRITER_CONTEXT_MODE=COMPACT_PACKET|EXPLICIT_EXCEPTION
+FULL_GOVERNANCE_CORPUS_REQUIRED=NO|YES
+```
+
+`FULL_GOVERNANCE_CORPUS_REQUIRED=YES` is exceptional and requires an actual governance conflict or a governance-maintenance task whose object is the corpus itself. Quota availability alone never selects Codex.
+
 ---
 
 ## 1. Required live identity

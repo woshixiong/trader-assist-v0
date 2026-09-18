@@ -2,24 +2,44 @@
 
 This file is a **compact entry map**, not the project encyclopedia. GitHub is the engineering source of truth.
 
-## 1. Mandatory engineering path
+## 1. Authority loading — controller resolves, Writer consumes a compact packet
 
-Before material engineering work read:
+GitHub remains canonical, but **full governance resolution is an Engineering-Control responsibility, not repeated Writer work**.
 
-1. `governance/PROJECT_RULES_INDEX.md`
-2. `governance/UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V2_2026-09-01.md`
-3. current Product / Strategy / Operations / Security authority for the bounded task
-4. current live GitHub main / issue / PR / exact-head / CI state.
+Before a material task, Engineering Control must fresh-check:
+1. live main / Issue / PR / exact-head / CI state;
+2. the relevant entries in `governance/PROJECT_RULES_INDEX.md`;
+3. only the Unified V2 sections and Product / Strategy / Operations / Security authorities needed for the bounded decision;
+4. the material preflight checklist and any task-conditional specialized procedures.
 
-For a material task, complete the checklist in:
-
-- `governance/MANDATORY_ENGINEERING_PREFLIGHT_AND_CONVERGENCE_GATE_V1_2026-08-17.md`
-
-No material Writer dispatch without:
+Required controller gates remain:
 
 ```text
 PROJECT_ENGINEERING_RULESET_PREFLIGHT=PASS
 ENGINEERING_PREFLIGHT_GATE=PASS
+```
+
+After those gates pass, a semantic Writer normally receives:
+
+```text
+AUTO_LOADED_ROOT_AGENTS
++ EXACT FROZEN TASK PACKET
++ PREFLIGHT ATTESTATION
++ EXACT AUTHORITY COMMENT / FILE / SECTION LOCATORS
++ EXACT AFFECTED CODE / TEST SURFACES
+```
+
+The Writer **must not** reread the full Unified V2, full Mandatory Preflight, full Project Rules Index, full Issue history, or broad governance/docs corpus by default. Read the minimum cited authority only when the Task Packet requires it or a concrete conflict/ambiguity is discovered; otherwise rely on the controller's frozen attestation and stop if it becomes inconsistent.
+
+Permanent context-economy invariants:
+
+```text
+ENGINEERING_CONTROL_RESOLVES_LIVE_GITHUB_AUTHORITY_BEFORE_WRITER=YES
+FULL_GOVERNANCE_CORPUS_PER_WRITER=NO_BY_DEFAULT
+FULL_ISSUE_HISTORY_PER_WRITER=NO_BY_DEFAULT
+BROAD_GOVERNANCE_OR_DOCS_SEARCH_PER_WRITER=NO_BY_DEFAULT
+COMPACT_HASH_OR_ID_BOUND_TASK_PACKET=REQUIRED
+CONTEXT_BLOAT_WITHOUT_DECISION_VALUE=ENGINEERING_DEFECT
 ```
 
 ## 2. User shorthand for unified-governance changes

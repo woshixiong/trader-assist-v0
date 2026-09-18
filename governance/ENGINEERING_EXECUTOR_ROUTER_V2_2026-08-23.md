@@ -67,7 +67,7 @@ ROUTER_REASONING_OR_EQUIVALENT=
 ROUTER_WEB_SEARCH_OR_TOOL_STATE=
 ROUTER_SESSION_POLICY=
 ROUTER_RESOURCE_STATE=
-ROUTER_SELECTION_REASON=
+ROUTER_SELECTION_CLASS=DETERMINISTIC|BOUNDED_SEMANTIC|HIGH_COMPLEXITY_SEMANTIC|INDEPENDENT_REVIEW
 ```
 
 Where the execution surface exposes the information, collect the actual launch/runtime identity without asking the user to inspect raw logs:
@@ -130,145 +130,109 @@ Current user policy until explicitly changed:
 - Ox Alpha and other temporary free models are opportunistic only and do not become durable routing dependencies.
 - Trae GLM-5.3 and Trae DeepSeek V4 Pro consume points, but points are a secondary tie-breaker when a material quality difference is expected.
 
-## 4. Task classes and candidate set
+## 4. Surface-first routing and task classes
+
+Router selection is **surface-first**, then model-fit. Quota health never promotes a task to Codex.
+
+Default priority:
+
+```text
+1 AUTHORITATIVE GITHUB / PROVIDER-NATIVE / DETERMINISTIC TOOL
+2 ENGINEERING CONTROL DIRECT ACTION WHEN NO CODING AGENT IS NEEDED
+3 ACCEPTED NON-CODEX MODEL WRITER WHEN SEMANTIC MUTATION NEEDS AN AGENT
+4 CODEX ONLY WHEN THE REMAINING SEMANTIC IMPLEMENTATION MATERIALLY NEEDS CODEX CAPABILITY
+```
+
+No prose proof of Codex necessity is required. Engineering Control classifies the task and applies this order.
 
 ### T0 — MECHANICAL / OPERATOR
 
-Examples: repo search, grep, log extraction, bounded tests, status/diff/evidence, deterministic formatting, already-authorized commit/push, repetitive file operations.
-
-Default:
+Examples: repo search, GitHub state, log extraction, tests, CI, status/diff/evidence, deterministic formatting, artifact handling, already-authorized publication mechanics.
 
 ```text
-OPENCODE + OPUS_4_6
+DEFAULT=GITHUB_CONNECTOR_OR_GITHUB_ACTIONS_OR_DETERMINISTIC_TOOL
+MODEL_WRITER_REQUIRED=NO
+CODEX=NO
 ```
 
-Optional fast/high-volume Scout:
-
-```text
-OPENCODE + DEEPSEEK_V4_FLASH
-```
-
-Trae GLM-5.3 and DeepSeek V4 Pro are capable but normally unnecessary for T0 unless the user overrides or the task unexpectedly requires their specific harness.
+Use OpenCode/another model only when the operation itself genuinely needs model interpretation; do not invoke a model merely to run commands.
 
 ### T1 — LOW-RISK BOUNDED CODING
 
-Characteristics: frozen scope, simple logic, strong deterministic validation, low blast radius.
+Frozen scope, simple logic, decisive validation, low blast radius.
 
-Default candidate:
-
-```text
-OPENCODE + OPUS_4_6
-```
-
-Also valid:
+Preferred routes:
+- Engineering Control direct GitHub edit when the change is sufficiently mechanical/textual;
+- otherwise OpenCode Opus 4.6 or a fit Trae writer.
 
 ```text
-TRAE + GLM_5_3
-TRAE + DEEPSEEK_V4_PRO
+CODEX_DEFAULT=NO
 ```
-
-Use Trae here when the user chooses it, the task shape specifically favors it, or OpenCode is unavailable. Do not consume Codex quota by default for work that a free strong model plus decisive tests can reliably close.
 
 ### T2 — MATERIAL NORMAL ENGINEERING
 
-Examples: normal feature implementation, meaningful bug fix, bounded multi-file implementation, nontrivial refactor.
+Normal feature implementation, meaningful bug fix, bounded multi-file implementation or nontrivial refactor.
 
-If Codex quota is healthy:
+First use GitHub/Engineering Control for all control-plane discovery, exact-state work and validation setup. If a semantic Writer is required, select among accepted non-Codex Writers by task fit. Codex is eligible only when Engineering Control determines that the remaining semantic implementation materially benefits from Codex-level coding/agentic capability.
 
-```text
-DEFAULT = CODEX_CLI + GPT_5_6_TERRA
-UPGRADE = CODEX_CLI + GPT_5_6_SOL when complexity/consequence warrants
-```
-
-Alternative first-class Writers, especially when Codex is constrained/exhausted or the user overrides:
+Known non-Codex fits remain:
+- Opus 4.6: large-codebase comprehension, debugging and refactoring;
+- GLM-5.3: highly constrained complete packets and long implement/test loops;
+- DeepSeek V4 Pro: broad repo investigation and larger-context root-cause work.
 
 ```text
-OPENCODE + OPUS_4_6
-TRAE + GLM_5_3
-TRAE + DEEPSEEK_V4_PRO
+HEALTHY_CODEX_QUOTA_ALONE_DOES_NOT_SELECT_CODEX=YES
 ```
-
-Known task-fit guidance:
-
-- **GLM-5.3:** highly constrained complete Task Packet; frozen scope/invariants; long coherent agentic implementation; terminal-heavy implement→test→repair loop.
-- **Opus 4.6:** large-codebase comprehension; debugging; refactoring; deep code-context reasoning; tasks where flexible interpretation across existing code is valuable.
-- **DeepSeek V4 Pro:** broad repo investigation; repo-wide/full-stack implementation; larger-context root-cause discovery; clean alternative route when another Writer stalls.
-
-When these fits do not distinguish the candidates, prefer free Opus 4.6 as the tie-breaker while available. The user may override.
 
 ### T3 — COMPLEX / HIGH-CONSEQUENCE ENGINEERING
 
-Examples: state machines, recovery, idempotency, concurrency, durable authority, cross-layer semantics, hard root cause, production-critical logic.
+State machines, recovery, concurrency, durable authority, cross-layer semantics, difficult root cause or production-critical logic.
 
-If Codex quota is healthy:
+Use the strongest appropriate accepted semantic Writer for the exact task. Codex Sol is a first-class option when its capability is materially needed, but is **not** the default merely because quota remains. Opus 4.6, GLM-5.3 and DeepSeek V4 Pro remain first-class alternatives when their task fit is sufficient.
 
-```text
-DEFAULT = CODEX_CLI + GPT_5_6_SOL
-```
-
-If Codex is unavailable/constrained enough to preserve remaining quota, or the user overrides, all three are first-class candidates:
-
-```text
-OPENCODE + OPUS_4_6
-TRAE + GLM_5_3
-TRAE + DEEPSEEK_V4_PRO
-```
-
-Choose by the known task-fit guidance above. Do not manufacture a universal ranking among these three without representative Trader Assist evidence.
+If the task can be decomposed into deterministic control-plane work plus one narrow semantic core, perform the deterministic work outside Codex and send only that core plus compact authority to the selected Writer.
 
 ### T4 — INDEPENDENT REVIEW / ADJUDICATION
 
 Default final adjudicator:
 
 ```text
-SURFACE = SEPARATE ORDINARY CHATGPT REVIEW WINDOW
-MODEL = strongest appropriate available model
-REASONING = highest appropriate level
+SURFACE=SEPARATE ORDINARY CHATGPT REVIEW WINDOW
+MODEL=STRONGEST APPROPRIATE AVAILABLE
+REASONING=HIGHEST APPROPRIATE
 ```
 
-If exact GitHub artifacts/diffs plus exact-head CI are sufficient, review directly through GitHub/connectors. Do not spend a coding-agent turn merely to reproduce a GitHub-only independent review.
-
-If local execution/inspection evidence is required, the preferred route is **not** to downgrade the final Reviewer to a weaker local coding model. Prefer:
-
-```text
-DETERMINISTIC TERMINAL / LOCAL TOOLING
--> exact hash-manifested review bundle
--> upload bundle to a NEW independent strongest-ChatGPT review window
--> strongest ChatGPT performs final review/adjudication
-```
-
-Use `$trade-os-independent-review-bundle` for this path when available. Before Hermes qualification the user may upload the exact bundle manually. After Hermes is independently qualified, Hermes may automate deterministic bundle generation/verification and exact upload/prompt transport under its checkpointed review-transport profile.
-
-A separate local coding model is an exceptional evidence-acquisition route only when deterministic bundle generation cannot provide the necessary local observation. Eligible local evidence providers include:
-
-```text
-CODEX_CLI + appropriate strong Codex model
-OPENCODE + OPUS_4_6
-TRAE + GLM_5_3
-TRAE + DEEPSEEK_V4_PRO
-```
-
-Their output is evidence for the independent ChatGPT adjudicator unless L1/user explicitly freezes a different independently accepted review route. Writer self-review never becomes independent acceptance.
+If exact GitHub artifacts/diffs and exact-head CI are sufficient, review them directly. Do not spend Codex quota to reproduce a GitHub-only review.
 
 ## 5. Quota-state behavior
+
+Quota state constrains availability; it does not define task class.
 
 ### CODEX_QUOTA_STATE=HEALTHY
 
 ```text
-T0 -> OpenCode Opus / Flash
-T1 -> OpenCode Opus; GLM/V4 Pro valid alternatives
-T2 -> Codex Terra/Sol default; Opus/GLM/V4 Pro alternatives
-T3 -> Codex Sol default; Opus/GLM/V4 Pro alternatives
-T4 -> strongest independent ChatGPT; local evidence bundle when needed
+T0 -> deterministic/GitHub
+T1 -> Engineering Control or accepted non-Codex Writer
+T2 -> accepted fit Writer; Codex only if selected for the semantic core
+T3 -> strongest fit Writer; Codex eligible when materially needed
+T4 -> strongest independent ChatGPT
 ```
 
 ### CODEX_QUOTA_STATE=CONSTRAINED
 
-Move T0/T1 entirely off Codex. Move routine T2 to Opus/GLM/V4 Pro unless Codex has a material expected-quality advantage. Preserve Codex Sol preferentially for T3/high-value hard work. T4 remains strongest independent ChatGPT; local evidence generation should normally be deterministic rather than consuming scarce Codex quota.
+```text
+NEW_NONESSENTIAL_CODEX_DISPATCH=HOLD
+T0/T1=NO_CODEX
+T2=NORMALLY_NON_CODEX
+T3=CODEX_ONLY_FOR_IRREDUCIBLE_HIGH_VALUE_SEMANTIC_CORE
+T4=INDEPENDENT_CHATGPT
+```
 
 ### CODEX_QUOTA_STATE=EXHAUSTED
 
-Select Opus 4.6 vs GLM-5.3 vs DeepSeek V4 Pro by task fit for local Writer work. Trae points are a secondary factor, not a reason to accept lower expected quality. If quality difference is not decisive and Opus is available free, prefer Opus. T4 final adjudication remains strongest independent ChatGPT and does not depend on Codex quota.
+Use GitHub/deterministic surfaces and accepted non-Codex Writers. T4 remains strongest independent ChatGPT.
+
+Resource telemetry informs future routing but never creates work merely to consume remaining quota.
 
 ## 6. One coherent stage; no microtask tax
 
