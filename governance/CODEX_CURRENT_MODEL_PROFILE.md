@@ -1,8 +1,8 @@
 # Trader Assist / Trade OS — Codex Current Model Profile
 
 **Status:** REFRESHABLE MODEL-SPECIFIC GOVERNANCE CANDIDATE  
-**Last verified:** 2026-08-23  
-**Locally verified Codex CLI:** `0.149.0`
+**Last verified:** 2026-09-18  
+**Locally verified Codex CLI:** `0.152.1`
 
 This file is refreshable current-state guidance. Durable workflow rules live in `CODEX_CLI_ENGINEERING_USAGE_PROFILE_V2_2026-08-23.md`.
 
