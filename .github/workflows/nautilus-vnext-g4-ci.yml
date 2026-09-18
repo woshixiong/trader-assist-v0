@@ -45,6 +45,112 @@ jobs:
           from importlib.metadata import version
           assert version("nautilus-trader") == "2.0.0rc5"
           PY
+      - name: Freeze exact BTC F1 acquisition plan
+        id: f1_plan_freeze
+        continue-on-error: true
+        env:
+          TARGET_SHA: cb8109b92b37ca4fb85fdce3f95a1bf8954589c4
+          TARGET_TREE: a16075d4cc32c841ce4c207b072a86c1a24c01f8
+          MARKET_ID: 7df4530dee44516e601335ea792c74c1186be88238452edc1f75bafd8257e605
+          INSTRUMENT_ID: BTC-USD-PERP.HYPERLIQUID
+          BAR_TYPE: BTC-USD-PERP.HYPERLIQUID-5-MINUTE-LAST-EXTERNAL
+          UPSTREAM: 1b0a49d2792a9432a3aca3fcb617ce7a630d905e
+          OUT: ${{ runner.temp }}/formal-g4-t2-f1-plan
+          PROOF_HEAD: ${{ github.event.pull_request.head.sha }}
+          PROOF_PR: ${{ github.event.pull_request.number }}
+        run: |
+          set +e
+          mkdir -p "${OUT}"
+          changed="$(git diff --name-only "${TARGET_SHA}" HEAD)"
+          [ "${changed}" = ".github/workflows/nautilus-vnext-g4-ci.yml" ] || {
+            printf 'unexpected proof scope:\n%s\n' "${changed}" >&2; exit 91; }
+          [ "$(git show -s --format=%T "${TARGET_SHA}")" = "${TARGET_TREE}" ] || exit 92
+          /tmp/trader-assist-g4-venv/bin/python - <<'PY' >"${OUT}/builder.stdout" 2>"${OUT}/builder.stderr"
+          import json, os, time
+          from datetime import UTC, datetime
+          from pathlib import Path
+          from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
+          from trader_assist_v0.multi_asset_shadow.hyperliquid_public import HyperliquidPublicClient
+          from trader_assist_v0.multi_asset_shadow.resolution import resolve_first_launch_20
+          from trader_assist_v0.nautilus_e4.contracts import MarketExpression, PitUniverseSnapshot, RunManifest
+          from trader_assist_v0.nautilus_e4.safety import assert_public_only
+
+          E=os.environ; O=Path(E["OUT"]); D=b"trader-assist-v0/g4/t2-acquisition-plan/v1\0"
+          sha,tree,mid,iid,bar,up=E["TARGET_SHA"],E["TARGET_TREE"],E["MARKET_ID"],E["INSTRUMENT_ID"],E["BAR_TYPE"],E["UPSTREAM"]
+          ph,pr=E["PROOF_HEAD"],int(E["PROOF_PR"])
+          assert_public_only(env=E)
+          c=HyperliquidPublicClient(); dex=c.perp_dexes(); metas=c.all_perp_metas()
+          obs=datetime.now(UTC)
+          rr=resolve_first_launch_20(perp_dexes=dex,all_perp_metas=metas,observed_at=obs)
+          mm=[x for x in rr if x.request.display=="BTC"]
+          if len(mm)!=1 or mm[0].status!="RESOLVED" or mm[0].market is None: raise RuntimeError("BTC resolution failed")
+          m=mm[0].market
+          if (m.identity.dex,m.identity.coin,m.identity.market_id)!=("MAIN","BTC",mid): raise RuntimeError("BTC identity drift")
+          mv=f"HL_MAIN_BTC_META_{m.metadata_hash[:16]}"
+          x=MarketExpression(market_id=mid,dex="MAIN",provider_coin="BTC",instrument_id=iid,
+              expression_id=f"mvsf-f1-btc-main-{m.metadata_hash[:16]}",listing_state=m.market_status,
+              instrument_metadata_version=mv,instrument_metadata_hash=m.metadata_hash)
+          s=PitUniverseSnapshot.create(observed_at_ns=time.time_ns(),expressions=(x,))
+          manifest=RunManifest.create(run_id=f"t2-f1-btc-{s.snapshot_hash[:16]}",git_sha=sha,git_tree=tree,snapshot=s,
+              process_epoch=f"t2f1-process-{s.snapshot_hash[:16]}",continuity_epoch=f"t2f1-continuity-{s.snapshot_hash[:16]}",
+              admission_epoch=f"t2f1-admission-{s.snapshot_hash[:16]}",
+              capture_configuration={"purpose":"FORMAL_G4_FIRST_REAL_T2_F1","market_selection_owner":"MARKET_AND_VENUE_SELECTION",
+                "selection_freeze_comment":5726539966,"identity_correction_comment":5726758424,
+                "proof_workflow_head":ph,"proof_pr_number":pr,"expressions":[x.model_dump(mode="json")],
+                "public_metadata_only_at_plan_freeze":True},
+              subscription_policy={"discovery":[mid],"watch":[],"actionable":[mid]},trial_ledger_id="formal-g4-first-real-t2-f1-btc-v1")
+          step=300_000; n=2304; end=(time.time_ns()//1_000_000//step)*step-step; cur=end-n*step; rem=n; pages=[]
+          while rem:
+              k=min(500,rem); nxt=cur+k*step; pages.append({"page_index":len(pages),"start_ms":cur,"end_ms":nxt,"expected_count":k}); cur=nxt; rem-=k
+          if [p["expected_count"] for p in pages] != [500,500,500,500,304]: raise RuntimeError("page ledger drift")
+          payload={"schema_version":"VNEXT_G4_T2_ACQUISITION_PLAN_V1","nautilus_version":"2.0.0rc5","nautilus_upstream_commit":up,
+            "history_5m_required":2304,"history_page_size_max":500,"redundant_15m_1h_requests":False,"git_sha":sha,"git_tree":tree,
+            "source_e4_manifest_hash":manifest.manifest_hash,"source_pit_snapshot_hash":s.snapshot_hash,"market_id":mid,"expression_id":x.expression_id,
+            "instrument_id":iid,"instrument_metadata_version":mv,"instrument_metadata_hash":m.metadata_hash,"bar_type":bar,"pages":pages}
+          h=sha256_hex(D+canonical_json_bytes(payload)); plan={**payload,"acquisition_plan_hash":h}
+          evidence={"schema_version":"T2_F1_PROVIDER_METADATA_EVIDENCE_V2","observed_at":obs.isoformat(),"proof_workflow_head":ph,"proof_pr_number":pr,
+            "requests_performed":["perpDexs","allPerpMetas"],"perp_dexes_hash":sha256_hex(canonical_json_bytes(dex)),
+            "all_perp_metas_hash":sha256_hex(canonical_json_bytes(metas)),"selected_registry_market":m.model_dump(mode="json"),"candle_requests":0,
+            "l2_requests":0,"trade_streams":0,"setup_observation":0,"outcome_observation":0,"private_api":False,"credentials":False,"signing":False,"exchange_write":False}
+          authority={"schema_version":"TRADE_OS_T2_F1_MARKET_VENUE_PLAN_CHECKPOINT_V3_GITHUB_ACTIONS","contract_closure_review_comment":5726453814,
+            "selection_freeze_comment":5726539966,"command_audit_comment":5726758424,"owner_domain":"MARKET_AND_VENUE_SELECTION","selected_underlying":"BTC",
+            "selected_venue":"HYPERLIQUID","selected_dex":"MAIN","selected_provider_coin":"BTC","selection_frozen_before_history_or_setup_observation":True,
+            "post_hoc_market_substitution":False,"git_sha":sha,"git_tree":tree,"nautilus_version":"2.0.0rc5","nautilus_upstream_commit":up,
+            "source_e4_manifest_hash":manifest.manifest_hash,"source_pit_snapshot_hash":s.snapshot_hash,"market_id":mid,"expression_id":x.expression_id,
+            "instrument_id":iid,"instrument_metadata_version":mv,"instrument_metadata_hash":m.metadata_hash,"bar_type":bar,"history_end_ms":end,
+            "exact_2304x5m_page_ledger":pages,"acquisition_plan_hash":h,"proof_workflow_head":ph,"proof_pr_number":pr}
+          files={"f1_market_authority_checkpoint.json":authority,"f1_acquisition_plan.json":plan,"f1_pit_snapshot.json":s.model_dump(mode="json"),
+            "f1_e4_run_manifest.json":manifest.model_dump(mode="json"),"f1_provider_metadata_evidence.json":evidence}
+          for name,obj in files.items(): (O/name).write_bytes(canonical_json_bytes(obj)+b"\n")
+          assert sha256_hex(D+canonical_json_bytes(payload))==h
+          assert PitUniverseSnapshot.model_validate_json((O/"f1_pit_snapshot.json").read_bytes()).snapshot_hash==s.snapshot_hash
+          assert RunManifest.model_validate_json((O/"f1_e4_run_manifest.json").read_bytes()).manifest_hash==manifest.manifest_hash
+          summary={"F1_PLAN_FREEZE":"PASS","target_sha":sha,"target_tree":tree,"market_id":mid,"instrument_id":iid,"bar_type":bar,
+            "metadata_hash":m.metadata_hash,"pit_snapshot_hash":s.snapshot_hash,"e4_manifest_hash":manifest.manifest_hash,"acquisition_plan_hash":h,
+            "history_end_ms":end,"page_counts":[p["expected_count"] for p in pages],"proof_workflow_head":ph,"proof_pr_number":pr}
+          (O/"summary.json").write_bytes(canonical_json_bytes(summary)+b"\n"); print(json.dumps(summary,sort_keys=True))
+          PY
+          rc=$?; printf '%s\n' "${rc}" >"${OUT}/builder.exit_code"
+          cat "${OUT}/builder.stdout" || true; cat "${OUT}/builder.stderr" >&2 || true; exit "${rc}"
+
+      - name: Assert exact F1 plan freeze
+        if: always()
+        env:
+          OUT: ${{ runner.temp }}/formal-g4-t2-f1-plan
+        run: |
+          set -euo pipefail
+          test "$(cat "${OUT}/builder.exit_code")" = "0"
+          /tmp/trader-assist-g4-venv/bin/python -m json.tool "${OUT}/summary.json"
+
+      - name: Preserve exact F1 plan evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: formal-g4-t2-f1-plan-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/formal-g4-t2-f1-plan
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Focused G4 deterministic gates
         run: |
           /tmp/trader-assist-g4-venv/bin/python -m pytest -q \
