@@ -94,11 +94,11 @@ jobs:
                       fh.write("\n")
 
               def on_start(self) -> None:
-                  self.subscribe_quote_ticks(self.config.instrument_id)
-                  self.subscribe_trade_ticks(self.config.instrument_id)
+                  self.subscribe_quotes(self.config.instrument_id)
+                  self.subscribe_trades(self.config.instrument_id)
                   self.subscribe_bars(self.config.bar_type)
 
-              def on_quote_tick(self, tick) -> None:
+              def on_quote(self, tick) -> None:
                   self._record("QUOTE", tick.ts_event)
                   if self._submitted or int(tick.ts_event) != self.config.trigger_ts:
                       return
@@ -114,7 +114,7 @@ jobs:
                   self._record("SUBMIT", tick.ts_event)
                   self.submit_order(order)
 
-              def on_trade_tick(self, tick) -> None:
+              def on_trade(self, tick) -> None:
                   self._record("TRADE", tick.ts_event)
 
               def on_bar(self, bar) -> None:
