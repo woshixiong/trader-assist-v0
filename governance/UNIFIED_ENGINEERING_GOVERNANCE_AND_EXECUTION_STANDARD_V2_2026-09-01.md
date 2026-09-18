@@ -264,15 +264,27 @@ REPAIR_STAGE / STOP_CONDITION
 
 Canonical authority and model context are different concerns.
 
-Engineering Control must resolve live GitHub identity, applicable governance, authority ownership, route, scope, evidence topology and preflight **before** semantic Writer dispatch. A downstream Writer is not required to repeat that control-plane research when the frozen packet already supplies exact attestations and locators.
+Engineering Control resolves live GitHub identity, applicable governance, authority ownership, route, scope, evidence topology and material preflight before semantic Writer dispatch.
 
-Default material-Writer context:
+The frozen Writer packet must bind the control result:
+
+```text
+TASK_PACKET_HASH=REQUIRED
+GOVERNANCE_ATTESTATION_MAIN_OR_BASE_SHA=REQUIRED
+PREFLIGHT_ATTESTATION=REQUIRED
+NORMALIZED_REQUIRED_AUTHORITY_ASSERTIONS=REQUIRED
+AUTHORITY_PROVENANCE_LOCATORS=REQUIRED
+```
+
+The controller supplies the bounded authority facts the Writer actually needs; provenance locators identify their canonical source. A locator by itself is not a demand that a tool-limited Writer rediscover full Issue/file history.
+
+Default Writer context:
 
 ```text
 ROOT_AGENTS_MAP
 + FROZEN_TASK_PACKET
-+ PREFLIGHT_ATTESTATION
-+ EXACT_TASK_AUTHORITY_LOCATORS
++ BOUND_PREFLIGHT_GOVERNANCE_ATTESTATION
++ NORMALIZED_REQUIRED_AUTHORITY_ASSERTIONS_WITH_PROVENANCE
 + EXACT_AFFECTED_CODE_TEST_SURFACES
 + TASK_CONDITIONAL_EXECUTOR_PROFILE
 ```
@@ -284,21 +296,23 @@ FULL_UNIFIED_V2_RELOAD_BY_WRITER=NO
 FULL_MANDATORY_PREFLIGHT_RELOAD_BY_WRITER=NO
 FULL_PROJECT_RULES_INDEX_RELOAD_BY_WRITER=NO
 FULL_ISSUE_OR_PR_HISTORY_RELOAD_BY_WRITER=NO
-BROAD_GOVERNANCE_DOCS_RG_OR_SEARCH_BY_WRITER=NO
+BROAD_GOVERNANCE_DOCS_SEARCH_BY_WRITER=NO
 REPEAT_L1_RESEARCH_ALREADY_FROZEN_BY_CONTROL=NO
 ```
 
-Exceptions require a concrete conflict, missing fact, authority ambiguity or task-packet instruction. In that case read only the minimum canonical section needed; if the conflict is material, stop and return to Engineering Control rather than expanding context indefinitely.
+Exceptions are narrow:
+- a concrete conflict, missing material fact, stale identity or ambiguous authority -> read the minimum canonical source or return to Engineering Control;
+- a governance-maintenance task whose object is the governance corpus may read the exact governance files it changes/reviews, but not unrelated history merely because it exists.
+
+Identity drift between the bound attestation/Task Packet and the actual worktree/head invalidates the attestation.
 
 ```text
 PROGRESSIVE_GOVERNANCE_DISCLOSURE=REQUIRED
 COMPACT_EXACT_TASK_PACKET=REQUIRED
-CONTEXT_BLOAT_WITHOUT_INCREMENTAL_DECISION_VALUE=PROHIBITED
 CANONICAL_GOVERNANCE_DETAIL_MAY_REMAIN_FULL=YES
 WRITER_CONTEXT_NE_CANONICAL_CORPUS=YES
+CONTEXT_BLOAT_WITHOUT_INCREMENTAL_DECISION_VALUE=PROHIBITED
 ```
-
-This rule preserves full governance as durable authority while preventing repeated token expenditure on already-resolved control-plane material.
 
 ## 5. Research, evidence and decision method
 
