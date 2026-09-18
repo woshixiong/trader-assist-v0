@@ -207,6 +207,7 @@ jobs:
 
           instrument, public_instrument_count = asyncio.run(load_btc())
 
+          catalog_path.mkdir(parents=True, exist_ok=True)
           catalog = ParquetDataCatalog(str(catalog_path))
           catalog.write_instruments([instrument])
           reloaded_instruments = catalog.instruments()
