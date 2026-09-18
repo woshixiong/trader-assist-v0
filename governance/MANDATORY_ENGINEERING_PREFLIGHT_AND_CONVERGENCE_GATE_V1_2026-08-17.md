@@ -563,3 +563,58 @@ ACCOUNT_OR_EXCHANGE_WRITE_EXECUTED=YES|NO
 Unrun checks are never reported as PASS.
 
 For material work, broad `PASS`, `DONE`, `READY`, or equivalent wording may describe only the frozen claim actually proven on its authoritative proof surface. Applicable higher-level claims that were not run or were not representatively tested remain `UNPROVEN` and must appear in `RESIDUAL_UNPROVEN_CLAIMS`.
+
+## 11. Task-completion truth gate / terminal readback
+
+Before reporting whole-task completion, evaluate the current bounded user-request scope and active task contract and record this typed readback:
+
+```text
+CURRENT_BOUNDED_TASK_CONTRACT=
+USER_REQUEST_SCOPE_TERMINAL_OBJECTIVE_REACHED=YES|NO
+ACTIVE_TASK_CONTRACT_TERMINAL_DISPOSITION_REACHED=YES|NO
+ALL_REQUIRED_INDEPENDENT_REVIEWS_TERMINAL=PASS|FAIL|NOT_APPLICABLE
+LINKED_PR_STATE_READBACK=PASS|FAIL|NOT_APPLICABLE
+LIVE_MAIN_READBACK=PASS|FAIL|NOT_APPLICABLE
+POST_MERGE_OR_POST_PUBLICATION_VERIFICATION=PASS|FAIL|NOT_APPLICABLE
+OPEN_PR_OR_SUPERSEDED_WORK_SWEEP=PASS|FAIL|NOT_APPLICABLE
+LINKED_ISSUE_OR_TASK_TERMINALITY_READBACK=PASS|FAIL|NOT_APPLICABLE
+USER_RETAINED_GATE_STATUS=COMPLETED|PENDING|NOT_APPLICABLE
+NO_REQUIRED_NEXT_GATE_IS_SILENTLY_OMITTED=YES|NO
+TASK_COMPLETION_TRUTH_GATE=PASS|FAIL
+```
+
+Derive applicability only from the current user-request scope and active bounded-task contract. Record `PASS` only from observed terminal evidence, `FAIL` for an applicable unsatisfied or unproven gate, and `NOT_APPLICABLE` only when the gate is outside that contract. Do not omit an applicable gate, infer `PASS` from an intermediate-stage result, or turn a non-applicable gate into an unconditional failure.
+
+`LINKED_PR_STATE_READBACK` supplies the required PR terminal-disposition check. If a PR is required, it passes only when the PR has reached the terminal disposition required by the active task contract. `LIVE_MAIN_READBACK`, post-merge or post-publication verification, linked-task readback, and the open-PR or superseded-work sweep are independently required only when the contract makes them applicable.
+
+Set `TASK_COMPLETION_TRUTH_GATE=PASS` if and only if both terminal-objective fields are `YES`, every applicable review and readback field is `PASS`, every inapplicable review and readback field is explicitly `NOT_APPLICABLE`, `USER_RETAINED_GATE_STATUS` is `COMPLETED` or `NOT_APPLICABLE`, and `NO_REQUIRED_NEXT_GATE_IS_SILENTLY_OMITTED=YES`. Otherwise set it to `FAIL`.
+
+Apply these mandatory checks:
+
+```text
+WRITER_COMPLETE != WHOLE_TASK_COMPLETE
+CI_PASS != WHOLE_TASK_COMPLETE
+REVIEW_PASS != WHOLE_TASK_COMPLETE
+
+MERGE_IN_ACTIVE_TASK_CONTRACT=YES
+AND LIVE_MAIN_READBACK != PASS
+=> TASK_COMPLETION_TRUTH_GATE=FAIL
+
+POST_MERGE_VERIFICATION_REQUIRED_BY_ACTIVE_TASK_CONTRACT=YES
+AND POST_MERGE_OR_POST_PUBLICATION_VERIFICATION != PASS
+=> TASK_COMPLETION_TRUTH_GATE=FAIL
+
+USER_RETAINED_GATE_STATUS=PENDING
+=> TASK_COMPLETION_TRUTH_GATE=FAIL
+
+NO_PR_IN_ACTIVE_TASK_CONTRACT
+=> LINKED_PR_STATE_READBACK=NOT_APPLICABLE
+=> OPEN_PR_OR_SUPERSEDED_WORK_SWEEP=NOT_APPLICABLE
+   unless a linked or superseded PR is part of this bounded task
+
+UMBRELLA_ISSUE_CONTINUES_TO_SEPARATE_NEXT_STAGE
+AND CURRENT_BOUNDED_TASK_IS_TERMINAL
+=> ISSUE_CLOSURE_IS_NOT_A_UNIVERSAL_COMPLETION_PREREQUISITE
+```
+
+When `TASK_COMPLETION_TRUTH_GATE=FAIL`, do not use user-facing whole-task words such as `complete`, `done`, or `已完成`. Report the exact stage reached, each failed or pending applicable gate, and the next required gate. This checklist does not authorize Mark Ready, merge, deployment, runtime activation, credential or private-API use, wallet or signing action, exchange action, trading, or capital action.
