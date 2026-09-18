@@ -6,6 +6,8 @@
 
 This file is refreshable current-state guidance. Durable workflow rules live in `CODEX_CLI_ENGINEERING_USAGE_PROFILE_V2_2026-08-23.md`.
 
+**Scope:** this profile applies only after `ENGINEERING_EXECUTOR_ROUTER_V2` has already selected `CODEX_CLI` for a semantic Writer stage. Labels such as `NORMAL_MATERIAL` or `HIGH_CONSEQUENCE` choose the Codex model/reasoning within an already-selected Codex route; they never make Codex the default executor, and healthy Codex quota is not a selection reason.
+
 ## Current family
 
 ```text
