@@ -30,6 +30,8 @@ from trader_assist_v0.nautilus_e4.contracts import (
     TailPhase,
 )
 from trader_assist_v0.nautilus_e4.storage import InMemoryCatalogSink
+from trader_assist_v0.nautilus_g4.catalog_bridge import derive_thesis_valid
+from trader_assist_v0.vnext_g4.contracts import CausalLineage, DerivationStatus
 
 BASE = 1_000_000_000_000
 MARKET_A = sha256_hex(b"HYPERLIQUID|MAIN|ETH")
@@ -148,6 +150,32 @@ def _open(session: CaptureSession, *, decision_ts: int, package: str = "pkg-001"
         expression_id="expr-ETH",
         decision_ts=decision_ts,
         decision_state=DecisionState.TAKE,
+    )
+
+
+def _record_thesis_fact(
+    session: CaptureSession,
+    *,
+    state_ts: int,
+    status: LifecycleStatus = LifecycleStatus.ACTIVE,
+    reason: str = "ACTIVE_VALID",
+    **authority_overrides: object,
+):
+    authority: dict[str, object] = {
+        "object_id": "thesis-pkg-001",
+        "parent_id": "opp-pkg-001",
+        "package_id": "pkg-001",
+        "market_id": MARKET_A,
+        "expression_id": "expr-ETH",
+        "kind": LifecycleKind.THESIS,
+    }
+    authority.update(authority_overrides)
+    return session.record_lifecycle(
+        **authority,
+        status=status,
+        state_ts=state_ts,
+        reason_codes=(reason,),
+        evidence_state=EvidenceState.COMPLETE,
     )
 
 
@@ -454,6 +482,190 @@ def test_full_lifecycle_ids_parents_timestamps_and_reasons_are_portable() -> Non
         LifecycleKind.WINNER,
         LifecycleKind.EXIT,
     ]
+
+
+def test_same_thesis_created_then_active_is_append_only_and_g4_evaluable() -> None:
+    session = _session()
+    _admit(session, _event(0, kind=DataKind.BBO), at=BASE + 1)
+    _admit(
+        session,
+        _event(60),
+        at=BASE + PRE_DECISION_RETENTION_NS + 1,
+    )
+    decision_ts = BASE + PRE_DECISION_RETENTION_NS + 1
+    _open(session, decision_ts=decision_ts)
+    created = session.lifecycle_records[-1]
+    active = _record_thesis_fact(
+        session,
+        state_ts=decision_ts + 1,
+    )
+
+    assert created.object_id == active.object_id == "thesis-pkg-001"
+    assert created.record_hash != active.record_hash
+    assert session.lifecycle_records[-2:] == (created, active)
+
+    causal_lineage = CausalLineage.create(
+        source_e4_manifest_hash="1" * 64,
+        source_pit_snapshot_hash="2" * 64,
+        source_structural_artifact_hash="3" * 64,
+        structural_component_manifest_hash="4" * 64,
+        market_id=MARKET_A,
+        instrument_id="ETH-PERP.HYPERLIQUID",
+        formal_setup_id="setup-1",
+        formal_setup_admission_ordinal=1,
+        formal_setup_admission_ts=decision_ts - 1,
+        thesis_id="thesis-pkg-001",
+        activation_sequence_id="activation-1",
+        attempt_lineage_id="attempt-1",
+        restart_reference_id="restart-1",
+        continuity_epoch="continuity-1",
+        admission_epoch="admission-1",
+        instrument_metadata_version="meta-v1",
+        instrument_metadata_hash=sha256_hex(b"meta-ETH"),
+        validation_reference_id="validation-v1",
+        validation_reference_hash="5" * 64,
+    )
+    derived = derive_thesis_valid(
+        formal_setup_confirmed=True,
+        lineage=causal_lineage,
+        records=(created, active),
+    )
+    assert derived.status is DerivationStatus.EVALUABLE
+    assert derived.value is True
+
+
+@pytest.mark.parametrize(
+    "terminal_status",
+    (
+        LifecycleStatus.TERMINAL,
+        LifecycleStatus.EXPIRED,
+        LifecycleStatus.SUPERSEDED,
+    ),
+)
+def test_active_may_repeat_or_enter_terminal_family_once(
+    terminal_status: LifecycleStatus,
+) -> None:
+    session = _session()
+    _open(session, decision_ts=BASE + 2_000_000_000)
+    repeated = _record_thesis_fact(session, state_ts=BASE + 3_000_000_000)
+    terminal = _record_thesis_fact(
+        session,
+        state_ts=BASE + 4_000_000_000,
+        status=terminal_status,
+        reason=terminal_status.value,
+    )
+    assert repeated.status is LifecycleStatus.ACTIVE
+    assert terminal.status is terminal_status
+    with pytest.raises(ValueError, match="terminal-family"):
+        _record_thesis_fact(session, state_ts=BASE + 5_000_000_000)
+
+
+@pytest.mark.parametrize(
+    "authority_override",
+    (
+        {"kind": LifecycleKind.ATTEMPT},
+        {"parent_id": None},
+        {"package_id": "pkg-other"},
+        {"market_id": MARKET_B},
+        {"expression_id": "expr-other"},
+    ),
+)
+def test_existing_object_rejects_cross_identity_reuse(
+    authority_override: dict[str, object],
+) -> None:
+    session = _session()
+    _open(session, decision_ts=BASE + 2_000_000_000)
+    with pytest.raises(ValueError, match="authority contradicts"):
+        _record_thesis_fact(
+            session,
+            state_ts=BASE + 3_000_000_000,
+            **authority_override,
+        )
+
+
+def test_lifecycle_rejects_unknown_parent_duplicate_and_nonmonotonic_fact() -> None:
+    session = _session()
+    with pytest.raises(ValueError, match="parent identity is unknown"):
+        session.record_lifecycle(
+            object_id="attempt-orphan",
+            parent_id="missing-thesis",
+            package_id="pkg-001",
+            market_id=MARKET_A,
+            expression_id="expr-ETH",
+            kind=LifecycleKind.ATTEMPT,
+            status=LifecycleStatus.ACTIVE,
+            state_ts=BASE + 1,
+            reason_codes=("ATTEMPT_CREATED",),
+            evidence_state=EvidenceState.COMPLETE,
+        )
+
+    _open(session, decision_ts=BASE + 2_000_000_000)
+    first = _record_thesis_fact(session, state_ts=BASE + 3_000_000_000)
+    with pytest.raises(ValueError, match="exact duplicate"):
+        _record_thesis_fact(session, state_ts=first.state_ts)
+    with pytest.raises(ValueError, match="strictly increasing"):
+        _record_thesis_fact(
+            session,
+            state_ts=first.state_ts - 1,
+            reason="ACTIVE_VALID_AGAIN",
+        )
+
+
+def test_restart_restores_latest_fact_authority() -> None:
+    session = _session()
+    _open(session, decision_ts=BASE + 2_000_000_000)
+    latest = _record_thesis_fact(session, state_ts=BASE + 3_000_000_000)
+    checkpoint = session.checkpoint()
+    assert checkpoint["latest_lifecycle_records"][latest.object_id]["record_hash"] == (
+        latest.record_hash
+    )
+
+    restarted = CaptureSession.restart_from(
+        checkpoint,
+        manifest=_manifest(
+            process="process-2", continuity="continuity-2", admission="admission-2"
+        ),
+        policy=_policy(),
+        raw_sink=InMemoryCatalogSink(),
+    )
+    terminal = _record_thesis_fact(
+        restarted,
+        state_ts=BASE + 4_000_000_000,
+        status=LifecycleStatus.TERMINAL,
+        reason="STRUCTURAL_THESIS_INVALIDATION",
+    )
+    assert terminal.object_id == latest.object_id
+
+
+def test_legacy_checkpoint_without_history_fails_closed_only_for_existing_object() -> None:
+    session = _session()
+    _open(session, decision_ts=BASE + 2_000_000_000)
+    checkpoint = session.checkpoint()
+    checkpoint.pop("latest_lifecycle_records")
+    restarted = CaptureSession.restart_from(
+        checkpoint,
+        manifest=_manifest(
+            process="process-2", continuity="continuity-2", admission="admission-2"
+        ),
+        policy=_policy(),
+        raw_sink=InMemoryCatalogSink(),
+    )
+    with pytest.raises(ValueError, match="authority unavailable"):
+        _record_thesis_fact(restarted, state_ts=BASE + 3_000_000_000)
+
+    unseen = restarted.record_lifecycle(
+        object_id="new-root-object",
+        parent_id=None,
+        package_id="pkg-new",
+        market_id=MARKET_A,
+        expression_id="expr-ETH",
+        kind=LifecycleKind.OPPORTUNITY,
+        status=LifecycleStatus.ACTIVE,
+        state_ts=BASE + 3_000_000_001,
+        reason_codes=("NEW_OBJECT",),
+        evidence_state=EvidenceState.COMPLETE,
+    )
+    assert unseen.object_id == "new-root-object"
 
 
 def test_full_denominator_states_are_retained() -> None:

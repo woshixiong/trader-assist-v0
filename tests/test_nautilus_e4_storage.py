@@ -16,6 +16,9 @@ from trader_assist_v0.nautilus_e4.contracts import (
     DataKind,
     DecisionState,
     EvidenceState,
+    LifecycleKind,
+    LifecycleRecord,
+    LifecycleStatus,
     MarketExpression,
     PitUniverseSnapshot,
     RunManifest,
@@ -108,6 +111,53 @@ def _policy() -> SubscriptionPolicy:
         watch=frozenset({MARKET}),
         actionable=frozenset({MARKET}),
     )
+
+
+def _record_thesis_fact(
+    session: CaptureSession,
+    *,
+    state_ts: int,
+    status: LifecycleStatus = LifecycleStatus.ACTIVE,
+    reason: str = "ACTIVE_VALID",
+) -> LifecycleRecord:
+    return session.record_lifecycle(
+        object_id="thesis-001",
+        parent_id="opp-001",
+        package_id="pkg-001",
+        market_id=MARKET,
+        expression_id="expr-ETH",
+        kind=LifecycleKind.THESIS,
+        status=status,
+        state_ts=state_ts,
+        reason_codes=(reason,),
+        evidence_state=EvidenceState.COMPLETE,
+    )
+
+
+def _open_durable_session(
+    tmp_path: Path,
+) -> tuple[RunManifest, EvidenceStore, CaptureSession]:
+    snapshot, manifest = _identity()
+    store = EvidenceStore(tmp_path)
+    store.initialize(manifest, snapshot)
+    session = recover_capture_session(
+        manifest=manifest,
+        policy=_policy(),
+        raw_sink=InMemoryCatalogSink(),
+        evidence_store=store,
+    )
+    event = _event(1)
+    session.ingest(event, admission_ts=event.ts_init)
+    session.open_actionable(
+        package_id="pkg-001",
+        opportunity_id="opp-001",
+        thesis_id="thesis-001",
+        market_id=MARKET,
+        expression_id="expr-ETH",
+        decision_ts=BASE + 2_000_000_000,
+        decision_state=DecisionState.WAIT,
+    )
+    return manifest, store, session
 
 
 def test_catalog_and_semantic_round_trip_preserves_causal_identity(tmp_path: Path) -> None:
@@ -327,6 +377,126 @@ def test_durable_host_recovery_preserves_authority_and_creates_new_epochs(
     segments = [json.loads(line) for line in store.process_segments_path.read_text().splitlines()]
     assert [item["segment_index"] for item in segments] == [0, 1]
     assert segments[1]["predecessor_checkpoint_hash"] is not None
+
+
+def test_durable_recovery_restores_latest_fact_without_rewriting_history(
+    tmp_path: Path,
+) -> None:
+    manifest, store, first = _open_durable_session(tmp_path)
+    created = store.load_lifecycle()[-1]
+    active = _record_thesis_fact(first, state_ts=BASE + 3_000_000_000)
+    history_before_restart = store.lifecycle_path.read_bytes()
+
+    restarted = recover_capture_session(
+        manifest=manifest,
+        policy=_policy(),
+        raw_sink=InMemoryCatalogSink(),
+        evidence_store=store,
+    )
+    assert store.lifecycle_path.read_bytes() == history_before_restart
+    terminal = _record_thesis_fact(
+        restarted,
+        state_ts=BASE + 4_000_000_000,
+        status=LifecycleStatus.TERMINAL,
+        reason="STRUCTURAL_THESIS_INVALIDATION",
+    )
+    history_after_terminal = store.lifecycle_path.read_bytes()
+    assert history_after_terminal.startswith(history_before_restart)
+
+    thesis_facts = [
+        item for item in store.load_lifecycle() if item.object_id == "thesis-001"
+    ]
+    assert thesis_facts == [created, active, terminal]
+    assert len({item.record_hash for item in thesis_facts}) == 3
+
+
+def test_legacy_checkpoint_rebuilds_latest_authority_from_durable_store(
+    tmp_path: Path,
+) -> None:
+    manifest, store, first = _open_durable_session(tmp_path)
+    active = _record_thesis_fact(first, state_ts=BASE + 3_000_000_000)
+    checkpoint = store.load_runtime_checkpoint(manifest)
+    assert checkpoint is not None
+    legacy_state = dict(checkpoint.state)
+    legacy_state.pop("latest_lifecycle_records")
+    store.write_runtime_checkpoint(
+        manifest=manifest,
+        state=legacy_state,
+        segment_index=checkpoint.segment_index,
+        checkpoint_sequence=checkpoint.checkpoint_sequence + 1,
+        reason="LEGACY_CHECKPOINT_FIXTURE",
+    )
+
+    restarted = recover_capture_session(
+        manifest=manifest,
+        policy=_policy(),
+        raw_sink=InMemoryCatalogSink(),
+        evidence_store=store,
+    )
+    terminal = _record_thesis_fact(
+        restarted,
+        state_ts=BASE + 4_000_000_000,
+        status=LifecycleStatus.EXPIRED,
+        reason="THESIS_EXPIRED",
+    )
+    assert terminal.object_id == active.object_id
+
+
+def test_crash_stale_checkpoint_accepts_valid_store_ahead(
+    tmp_path: Path,
+) -> None:
+    manifest, store, first = _open_durable_session(tmp_path)
+    stale_checkpoint = store.runtime_checkpoint_path.read_bytes()
+    active = _record_thesis_fact(first, state_ts=BASE + 3_000_000_000)
+    assert store.load_lifecycle()[-1] == active
+    store.runtime_checkpoint_path.write_bytes(stale_checkpoint)
+
+    restarted = recover_capture_session(
+        manifest=manifest,
+        policy=_policy(),
+        raw_sink=InMemoryCatalogSink(),
+        evidence_store=store,
+    )
+    terminal = _record_thesis_fact(
+        restarted,
+        state_ts=BASE + 4_000_000_000,
+        status=LifecycleStatus.SUPERSEDED,
+        reason="SUPERSEDED_BY_NEWER_FORMAL_SETUP_FOR_SAME_MARKET",
+    )
+    assert terminal.object_id == active.object_id
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    (
+        ({"package_id": "pkg-conflict"}, "authority contradicts"),
+        ({"run_id": "other-run"}, "immutable run identity"),
+    ),
+)
+def test_persisted_lifecycle_contradiction_fails_closed(
+    tmp_path: Path,
+    override: dict[str, object],
+    message: str,
+) -> None:
+    manifest, store, _ = _open_durable_session(tmp_path)
+    previous = store.load_lifecycle()[-1]
+    payload = previous.model_dump(mode="python", exclude={"record_hash"})
+    payload.update(
+        {
+            "state_ts": previous.state_ts + 1,
+            "reason_codes": ("CONTRADICTORY_FACT",),
+            **override,
+        }
+    )
+    store.append_lifecycle((LifecycleRecord.create(**payload),))
+
+    with pytest.raises(ValueError, match=message):
+        recover_capture_session(
+            manifest=manifest,
+            policy=_policy(),
+            raw_sink=InMemoryCatalogSink(),
+            evidence_store=store,
+        )
 
 
 @pytest.mark.parametrize("micro_complete", (False, True))
