@@ -45,6 +45,413 @@ jobs:
           from importlib.metadata import version
           assert version("nautilus-trader") == "2.0.0rc5"
           PY
+      - name: Exact rc5 provider-native T2 capability spike
+        id: t2_rc5_spike
+        continue-on-error: true
+        timeout-minutes: 4
+        env:
+          T2_SPIKE_PACKET_SHA256: d93e81c882cf4fd18ecb05c5621dc770d2663a8d3aa269f6074190752bf7ebcd
+        run: |
+          set +e
+          cat > "${RUNNER_TEMP}/g4_rc5_spike_strategy.py" <<'PY'
+          import json
+          from pathlib import Path
+
+          from nautilus_trader.config import StrategyConfig
+          from nautilus_trader.model import BarType, InstrumentId, OrderSide
+          from nautilus_trader.trading import Strategy
+
+
+          class G4Rc5SpikeConfig(StrategyConfig):
+              def __init__(
+                  self,
+                  *,
+                  instrument_id: str,
+                  bar_type: str,
+                  trigger_ts: int,
+                  quantity: str,
+                  proof_path: str,
+                  **_kwargs: object,
+              ) -> None:
+                  super().__init__()
+                  self.instrument_id = InstrumentId.from_str(instrument_id)
+                  self.bar_type = BarType.from_str(bar_type)
+                  self.trigger_ts = int(trigger_ts)
+                  self.quantity = quantity
+                  self.proof_path = proof_path
+
+
+          class G4Rc5SpikeStrategy(Strategy):
+              def __init__(self, config: G4Rc5SpikeConfig) -> None:
+                  super().__init__(config)
+                  self._submitted = False
+
+              def _record(self, kind: str, ts_event: int) -> None:
+                  path = Path(self.config.proof_path)
+                  path.parent.mkdir(parents=True, exist_ok=True)
+                  with path.open("a", encoding="utf-8") as fh:
+                      fh.write(json.dumps({"kind": kind, "ts_event": int(ts_event)}, sort_keys=True))
+                      fh.write("\n")
+
+              def on_start(self) -> None:
+                  self.subscribe_quote_ticks(self.config.instrument_id)
+                  self.subscribe_trade_ticks(self.config.instrument_id)
+                  self.subscribe_bars(self.config.bar_type)
+
+              def on_quote_tick(self, tick) -> None:
+                  self._record("QUOTE", tick.ts_event)
+                  if self._submitted or int(tick.ts_event) != self.config.trigger_ts:
+                      return
+                  instrument = self.cache.instrument(self.config.instrument_id)
+                  if instrument is None:
+                      raise RuntimeError("spike instrument missing from Nautilus cache")
+                  order = self.order_factory.market(
+                      self.config.instrument_id,
+                      OrderSide.BUY,
+                      instrument.make_qty(self.config.quantity),
+                  )
+                  self._submitted = True
+                  self._record("SUBMIT", tick.ts_event)
+                  self.submit_order(order)
+
+              def on_trade_tick(self, tick) -> None:
+                  self._record("TRADE", tick.ts_event)
+
+              def on_bar(self, bar) -> None:
+                  self._record("BAR", bar.ts_event)
+          PY
+
+          T2_SPIKE_EXACT_HEAD="$(git rev-parse HEAD)"           T2_SPIKE_EXACT_TREE="$(git rev-parse 'HEAD^{tree}')"           PYTHONPATH="${RUNNER_TEMP}:${PYTHONPATH:-}"           timeout 180s /tmp/trader-assist-g4-venv/bin/python - <<'PY'
+          from __future__ import annotations
+
+          import asyncio
+          import hashlib
+          import json
+          import os
+          import sys
+          from decimal import Decimal
+          from pathlib import Path
+
+          from nautilus_trader.adapters.hyperliquid import (
+              HyperliquidEnvironment,
+              HyperliquidHttpClient,
+          )
+          from nautilus_trader.backtest import BacktestNode
+          from nautilus_trader.config import (
+              BacktestDataConfig,
+              BacktestEngineConfig,
+              BacktestRunConfig,
+              BacktestVenueConfig,
+              ImportableStrategyConfig,
+          )
+          from nautilus_trader.model import (
+              AccountType,
+              AggregationSource,
+              AggressorSide,
+              Bar,
+              BarAggregation,
+              BarSpecification,
+              BarType,
+              BookType,
+              OmsType,
+              PriceType,
+              QuoteTick,
+              TradeId,
+              TradeTick,
+          )
+          from nautilus_trader.persistence import ParquetDataCatalog
+
+          from trader_assist_v0.nautilus_g4.runner import project_provider_native_state
+
+
+          result_path = Path(os.environ["RUNNER_TEMP"]) / "t2-rc5-capability-spike-result.json"
+          catalog_path = Path(os.environ["RUNNER_TEMP"]) / "t2-rc5-capability-catalog"
+          proof_path = Path(os.environ["RUNNER_TEMP"]) / "t2-rc5-capability-callbacks.jsonl"
+
+          blocked_env_names = (
+              "HYPERLIQUID_PK",
+              "HYPERLIQUID_TESTNET_PK",
+              "HYPERLIQUID_VAULT",
+              "HYPERLIQUID_TESTNET_VAULT",
+              "HYPERLIQUID_ACCOUNT_ADDRESS",
+          )
+          present = tuple(name for name in blocked_env_names if os.environ.get(name))
+          if present:
+              raise RuntimeError(f"credential/account environment must be absent: {present}")
+
+          sys.path.insert(0, os.environ["RUNNER_TEMP"])
+
+          async def load_btc():
+              client = HyperliquidHttpClient(
+                  private_key=None,
+                  vault_address=None,
+                  account_address=None,
+                  environment=HyperliquidEnvironment.MAINNET,
+                  timeout_secs=45,
+                  proxy_url=None,
+                  normalize_prices=True,
+                  include_builder_attribution=False,
+              )
+              instruments = await client.load_instrument_definitions(
+                  include_spot=False,
+                  include_perps=True,
+                  include_perps_hip3=False,
+                  include_outcomes=False,
+              )
+              matches = [item for item in instruments if str(item.id) == "BTC-USD-PERP.HYPERLIQUID"]
+              if len(matches) != 1:
+                  raise RuntimeError(
+                      f"expected one BTC-USD-PERP.HYPERLIQUID instrument, got {len(matches)}"
+                  )
+              return matches[0], len(instruments)
+
+          instrument, public_instrument_count = asyncio.run(load_btc())
+
+          catalog = ParquetDataCatalog(str(catalog_path))
+          catalog.write_instruments([instrument])
+          reloaded_instruments = catalog.instruments()
+          reloaded = [item for item in reloaded_instruments if str(item.id) == str(instrument.id)]
+          if len(reloaded) != 1:
+              raise RuntimeError("provider-native Instrument catalog round-trip failed")
+          instrument = reloaded[0]
+
+          base_ns = 1_800_000_000_000_000_000
+          quote_ts = base_ns + 1_000_000_000
+          trade_ts = base_ns + 2_000_000_000
+          bar_ts = base_ns + 60_000_000_000
+
+          bid = instrument.make_price(Decimal("100000"))
+          price_increment = Decimal(str(instrument.price_increment))
+          ask = instrument.make_price(Decimal("100000") + price_increment)
+          qty = instrument.make_qty(Decimal("0.01"))
+
+          quote = QuoteTick(
+              instrument_id=instrument.id,
+              bid_price=bid,
+              ask_price=ask,
+              bid_size=qty,
+              ask_size=qty,
+              ts_event=quote_ts,
+              ts_init=quote_ts,
+          )
+          trade = TradeTick(
+              instrument_id=instrument.id,
+              price=ask,
+              size=qty,
+              aggressor_side=AggressorSide.BUYER,
+              trade_id=TradeId("T2-RC5-SPIKE-TRADE-1"),
+              ts_event=trade_ts,
+              ts_init=trade_ts,
+          )
+          bar_spec = BarSpecification(1, BarAggregation.MINUTE, PriceType.LAST)
+          bar_type = BarType(instrument.id, bar_spec, AggregationSource.EXTERNAL)
+          bar = Bar(
+              bar_type=bar_type,
+              open=bid,
+              high=ask,
+              low=bid,
+              close=ask,
+              volume=qty,
+              ts_event=bar_ts,
+              ts_init=bar_ts,
+          )
+
+          catalog.write_quote_ticks([quote])
+          catalog.write_trade_ticks([trade])
+          catalog.write_bars([bar])
+
+          settlement_currency = getattr(instrument, "settlement_currency", None)
+          if settlement_currency is None:
+              raise RuntimeError("provider-native perpetual has no settlement_currency")
+
+          venue = BacktestVenueConfig(
+              name=str(instrument.id.venue),
+              oms_type=OmsType.NETTING,
+              account_type=AccountType.MARGIN,
+              book_type=BookType.L1_MBP,
+              base_currency=settlement_currency,
+              starting_balances=[f"1_000_000 {settlement_currency}"],
+          )
+          end_ns = bar_ts + 1
+          data = [
+              BacktestDataConfig(
+                  data_type="QuoteTick",
+                  catalog_path=str(catalog_path),
+                  instrument_id=instrument.id,
+                  start_time=quote_ts,
+                  end_time=end_ns,
+              ),
+              BacktestDataConfig(
+                  data_type="TradeTick",
+                  catalog_path=str(catalog_path),
+                  instrument_id=instrument.id,
+                  start_time=quote_ts,
+                  end_time=end_ns,
+              ),
+              BacktestDataConfig(
+                  data_type="Bar",
+                  catalog_path=str(catalog_path),
+                  instrument_ids=[instrument.id],
+                  start_time=quote_ts,
+                  end_time=end_ns,
+                  bar_spec=bar_spec,
+                  bar_types=[str(bar_type)],
+              ),
+          ]
+          run_config = BacktestRunConfig(
+              venues=[venue],
+              data=data,
+              engine=BacktestEngineConfig(),
+              dispose_on_completion=False,
+          )
+          strategy_config = ImportableStrategyConfig(
+              strategy_path="g4_rc5_spike_strategy:G4Rc5SpikeStrategy",
+              config_path="g4_rc5_spike_strategy:G4Rc5SpikeConfig",
+              config={
+                  "instrument_id": str(instrument.id),
+                  "bar_type": str(bar_type),
+                  "trigger_ts": quote_ts,
+                  "quantity": "0.01",
+                  "proof_path": str(proof_path),
+              },
+          )
+
+          node = BacktestNode(configs=[run_config])
+          try:
+              node.build()
+              node.add_strategy_from_config(run_config.id, strategy_config)
+              backtest_results = node.run()
+              cache = node.get_engine_cache(run_config.id)
+              portfolio = node.get_engine_portfolio(run_config.id)
+              if cache is None or portfolio is None:
+                  raise RuntimeError("BacktestNode did not retain public Cache/Portfolio state")
+              projection = project_provider_native_state(
+                  cache,
+                  portfolio,
+                  venue=instrument.id.venue,
+              )
+          finally:
+              node.dispose()
+
+          callback_rows = [
+              json.loads(line)
+              for line in proof_path.read_text(encoding="utf-8").splitlines()
+              if line.strip()
+          ]
+          callback_kinds = [row["kind"] for row in callback_rows]
+          for required in ("QUOTE", "SUBMIT", "TRADE", "BAR"):
+              if callback_kinds.count(required) != 1:
+                  raise RuntimeError(
+                      f"expected exactly one {required} callback/proof row, got {callback_kinds}"
+                  )
+
+          if projection.order_count != 1:
+              raise RuntimeError(f"expected exactly one provider order, got {projection.order_count}")
+          if projection.filled_order_count != 1:
+              raise RuntimeError(
+                  f"expected exactly one provider fill, got {projection.filled_order_count}"
+              )
+          if projection.position_count != 1:
+              raise RuntimeError(
+                  f"expected exactly one provider position, got {projection.position_count}"
+              )
+          if projection.account_count != 1:
+              raise RuntimeError(
+                  f"expected exactly one provider account, got {projection.account_count}"
+              )
+
+          def hash_tree(root: Path) -> str:
+              digest = hashlib.sha256()
+              files = sorted(path for path in root.rglob("*") if path.is_file())
+              if not files:
+                  raise RuntimeError("catalog artifact tree is empty")
+              for path in files:
+                  rel = path.relative_to(root).as_posix().encode()
+                  digest.update(len(rel).to_bytes(8, "big"))
+                  digest.update(rel)
+                  payload = path.read_bytes()
+                  digest.update(len(payload).to_bytes(8, "big"))
+                  digest.update(payload)
+              return digest.hexdigest()
+
+          payload = {
+              "schema_version": "T2_RC5_CAPABILITY_SPIKE_RESULT_V1",
+              "status": "PASS",
+              "task_packet_sha256": os.environ["T2_SPIKE_PACKET_SHA256"],
+              "exact_head": os.environ["T2_SPIKE_EXACT_HEAD"],
+              "exact_tree": os.environ["T2_SPIKE_EXACT_TREE"],
+              "nautilus_version": "2.0.0rc5",
+              "network_surface": "HYPERLIQUID_PUBLIC_METADATA_ONLY",
+              "credential_environment_present": False,
+              "private_api": False,
+              "signing": False,
+              "exchange_write": False,
+              "real_t2_credit": False,
+              "instrument_id": str(instrument.id),
+              "instrument_type": f"{type(instrument).__module__}.{type(instrument).__qualname__}",
+              "public_instrument_count": public_instrument_count,
+              "catalog_instrument_roundtrip": True,
+              "catalog_tree_sha256": hash_tree(catalog_path),
+              "quote_tick_replayed": callback_kinds.count("QUOTE") == 1,
+              "trade_tick_replayed": callback_kinds.count("TRADE") == 1,
+              "bar_replayed": callback_kinds.count("BAR") == 1,
+              "source_event_bound_submit": callback_kinds.count("SUBMIT") == 1,
+              "backtest_result_count": len(backtest_results),
+              "provider_state": projection.model_dump(mode="json"),
+          }
+          result_path.write_text(json.dumps(payload, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+          print(json.dumps(payload, sort_keys=True))
+          PY
+          spike_exit=$?
+          set -e
+          if [ ! -s "${RUNNER_TEMP}/t2-rc5-capability-spike-result.json" ]; then
+            printf '{"schema_version":"T2_RC5_CAPABILITY_SPIKE_RESULT_V1","status":"FAIL","failure_class":"HARNESS_OR_PUBLIC_SURFACE_FAILURE","exit_code":%s,"real_t2_credit":false,"private_api":false,"signing":false,"exchange_write":false}\n'               "${spike_exit}" > "${RUNNER_TEMP}/t2-rc5-capability-spike-result.json"
+          fi
+          /tmp/trader-assist-g4-venv/bin/python -m json.tool             "${RUNNER_TEMP}/t2-rc5-capability-spike-result.json"
+          exit "${spike_exit}"
+
+      - name: Preserve exact rc5 T2 capability spike evidence
+        if: ${{ always() && steps.t2_rc5_spike.outcome != 'skipped' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: t2-rc5-capability-spike-${{ github.sha }}
+          path: ${{ runner.temp }}/t2-rc5-capability-spike-result.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Assert exact rc5 T2 capability spike
+        run: |
+          /tmp/trader-assist-g4-venv/bin/python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          result = json.loads(
+              (Path(os.environ["RUNNER_TEMP"]) / "t2-rc5-capability-spike-result.json").read_text()
+          )
+          assert result["status"] == "PASS", result
+          assert result["task_packet_sha256"] == (
+              "d93e81c882cf4fd18ecb05c5621dc770d2663a8d3aa269f6074190752bf7ebcd"
+          ), result
+          assert result["nautilus_version"] == "2.0.0rc5", result
+          assert result["network_surface"] == "HYPERLIQUID_PUBLIC_METADATA_ONLY", result
+          assert result["credential_environment_present"] is False, result
+          assert result["private_api"] is False, result
+          assert result["signing"] is False, result
+          assert result["exchange_write"] is False, result
+          assert result["real_t2_credit"] is False, result
+          assert result["instrument_id"] == "BTC-USD-PERP.HYPERLIQUID", result
+          assert result["catalog_instrument_roundtrip"] is True, result
+          assert result["quote_tick_replayed"] is True, result
+          assert result["trade_tick_replayed"] is True, result
+          assert result["bar_replayed"] is True, result
+          assert result["source_event_bound_submit"] is True, result
+          assert result["provider_state"]["order_count"] == 1, result
+          assert result["provider_state"]["filled_order_count"] == 1, result
+          assert result["provider_state"]["position_count"] == 1, result
+          assert result["provider_state"]["account_count"] == 1, result
+          PY
+
       - name: Focused G4 deterministic gates
         run: |
           /tmp/trader-assist-g4-venv/bin/python -m pytest -q \
