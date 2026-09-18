@@ -1149,6 +1149,8 @@ FOCUSED_LOCAL_TESTS_DURING_SEMANTIC_EDIT=ALLOWED_WHEN_CHEAP_AND_FIT
 
 A model-backed Writer may run the smallest decisive focused tests needed to iterate on its semantic change. Once an exact semantic checkpoint exists, deterministic full-suite, exact-lock, Linux, status, diff, artifact and CI mechanics move to GitHub/Engineering Control unless the claim is genuinely local.
 
+Reuse an existing accepted canonical GitHub workflow when one already proves the claim. Do not create a new CI workflow merely to avoid a cheap platform-neutral focused local check; new workflow surface requires its own engineering value and governance fit.
+
 No per-task prose essay is required to justify not using Codex. Router classification applies this policy mechanically.
 
 ## 14. Exact release, staged artifact and deployment topology
