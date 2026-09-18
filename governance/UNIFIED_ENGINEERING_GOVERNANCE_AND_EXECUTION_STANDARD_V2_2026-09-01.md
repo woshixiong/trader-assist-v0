@@ -801,6 +801,20 @@ An intermediary summary may improve readability or navigation, but it is not a s
 
 Where a selected specialized operator/handoff contract is stricter, such as a lossless task-packet schema, the stricter contract additionally applies and may not weaken this project-wide rule.
 
+### 10.5 Authority-bearing review-result egress
+
+Before dispatching an authority-bearing independent review whose result is consumed downstream, the owning controller must have direct access to the exact result. Provider-native direct writeback is preferred when available; when it exists, routine user copy/paste relay is prohibited. Strict-read-only/no-mutation review remains valid when the complete authority-bearing result is directly readable through another exact surface; otherwise the handoff must permit the minimum bounded final-result writeback needed to satisfy the output contract. Terminal-verdict-only output is valid only when the complete result already exists on an exact controller-readable surface. Output-content requirements and mutation/output permissions must be jointly satisfiable; no single transport is mandated.
+
+```text
+AUTHORITY_BEARING_REVIEW_RESULT_DIRECT_CONTROLLER_READABLE=REQUIRED
+USER_RELAY_REQUIRED_WHEN_DIRECT_RESULT_SURFACE_AVAILABLE=NO
+REVIEW_OUTPUT_AND_PERMISSION_CONTRACT_JOINTLY_SATISFIABLE=REQUIRED
+PROVIDER_NATIVE_DIRECT_WRITEBACK=PREFERRED_WHEN_AVAILABLE
+SINGLE_TRANSPORT_MANDATED=NO
+TERMINAL_VERDICT_ONLY_REQUIRES_EXISTING_EXACT_FULL_RESULT=YES
+STRICT_READ_ONLY_REVIEW_ALLOWED_WITH_ALTERNATE_EXACT_DIRECT_RESULT_SURFACE=YES
+```
+
 ---
 
 ## 11. Model/executor/tool routing — general rules
