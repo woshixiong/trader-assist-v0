@@ -162,8 +162,9 @@ Use OpenCode/another model only when the operation itself genuinely needs model 
 Frozen scope, simple logic, decisive validation, low blast radius.
 
 Preferred routes:
-- Engineering Control direct GitHub edit when the change is sufficiently mechanical/textual;
-- otherwise OpenCode Opus 4.6 or a fit Trae writer.
+- Engineering Control direct GitHub edit only for governance/docs, Issue/PR metadata, workflow metadata or mechanical configuration whose semantics are already frozen and deterministically checkable;
+- application/source semantic logic requires an accepted semantic Writer by default;
+- otherwise use OpenCode Opus 4.6 or a fit Trae writer.
 
 ```text
 CODEX_DEFAULT=NO
@@ -247,41 +248,29 @@ ONE COMPLETE HIGH-CONSTRAINT TASK PACKET
 
 Split only at real architecture, authority, worktree, model/harness or independence boundaries.
 
-## 7. Semantic Writer vs operator tail
+## 7. Semantic Writer vs deterministic operator tail
 
-A coding Writer should spend reasoning on semantic code work, not routine transport.
+A coding Writer spends reasoning on semantic code work, not routine transport.
 
-Before Hermes is qualified:
+Default:
 
 ```text
 ENGINEERING CONTROL / ROUTER
 -> frozen Task Packet
--> semantic Writer
--> in-scope tests/self-check
+-> selected semantic Writer only when semantic mutation needs one
+-> focused in-scope tests/self-check
 -> exact artifact/evidence boundary
--> optional FREE OPERATOR (normally OpenCode)
-   for remaining deterministic commit/push/evidence mechanics when useful
+-> GITHUB CONNECTOR / GITHUB ACTIONS / NONMODEL DETERMINISTIC TOOL
+   for already-authorized status/diff/artifact/publication/CI mechanics
 -> exact-head CI
 -> independent ChatGPT review
 ```
 
-After Hermes is independently qualified, Hermes becomes the preferred transport/operator layer when doing so reduces total burden:
+A model-backed operator is not the default for deterministic mechanics. Use one only when the remaining operation genuinely requires model interpretation that cannot be supplied by Engineering Control or deterministic tooling.
 
-```text
-ENGINEERING CONTROL / ROUTER
--> frozen lossless Task Packet
--> HERMES
-   -> dispatch selected semantic Writer
-   -> wait / checkpoint / collect result
-   -> perform remaining authorized deterministic mechanics
-   -> commit/push/CI observation only when explicitly frozen
-   -> build/transport review bundle when T4 needs local evidence
--> strongest independent ChatGPT review
-```
+After Hermes is independently qualified, it may serve as a deterministic transport/operator where it reduces burden, but it remains subject to the same rule: it transports frozen authority and does not redesign, select a different model/reasoning state, declare independent PASS, Mark Ready, merge or deploy.
 
-Do **not** force an operator handoff when the current Writer can safely finish a tiny already-authorized mechanical tail with less total burden. Conversely, do not spend a fresh Codex reasoning turn on mechanics that a qualified Hermes operator can deterministically perform. The decision criterion is total engineering cost and accepted-work latency, not ceremonial role boundaries.
-
-The operator may execute already-frozen actions; it may not redesign, widen scope, choose a different model/reasoning/Web-Search state, declare independent PASS, Mark Ready, merge or deploy.
+Do not force an operator handoff for a microscopic already-authorized tail if the current semantic Writer can finish it with less total burden, but do not start a fresh model turn merely to run deterministic mechanics.
 
 ## 8. Hermes insertion requirements
 
