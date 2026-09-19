@@ -157,6 +157,16 @@ OPERATOR_VISIBLE_BOOTSTRAP
 
 If this cannot be achieved on the current surface, prefer a robust file/artifact transfer surface, an accepted repository-owned launcher, or an explicitly safe phase split over another encoding layer. Hash verification detects corruption after transport; it does not make an overlong transport reliable.
 
+For launcher repair or holistic regeneration, the operator-visible command must not become a self-modifying patch engine. In particular, do not deliver a long interactive `python -c`, `sed`, `perl`, nested shell string or equivalent command whose purpose is to rewrite an existing launcher in-place before execution.
+
+```text
+OPERATOR_VISIBLE_SELF_MODIFYING_LAUNCHER_REWRITE=PROHIBITED
+HOLISTIC_REGENERATION_DELIVERS_COMPLETE_REPLACEMENT_BYTES=REQUIRED
+POST_GENERATION_VALIDATION_RUNS_ON_EXACT_FINAL_BYTES=REQUIRED
+```
+
+A holistic regeneration must produce the complete replacement script/bundle **before** operator handoff, validate its exact final bytes, and reduce the user action to a short verify-and-execute bootstrap. A syntax check on the unmodified/original files does not prove that an intended interactive rewrite succeeded.
+
 ### 3.2 Launch-artifact delivery is a prerequisite to operator execution
 
 A generated ZIP, script, command file or bundle is not available merely because Engineering Control described it or recorded an expected filename/hash.
