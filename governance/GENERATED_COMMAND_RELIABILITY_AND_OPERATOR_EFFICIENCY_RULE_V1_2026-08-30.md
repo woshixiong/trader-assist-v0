@@ -157,6 +157,8 @@ OPERATOR_VISIBLE_BOOTSTRAP
 
 If this cannot be achieved on the current surface, prefer a robust file/artifact transfer surface, an accepted repository-owned launcher, or an explicitly safe phase split over another encoding layer. Hash verification detects corruption after transport; it does not make an overlong transport reliable.
 
+A self-extracting or embedded-payload artifact may be an acceptable emergency transport only when the payload is already complete, hash-verified, rehearsed and materially simpler for the operator than reconstructing it interactively. It is not a preferred steady-state substitute for a versioned stable runner.
+
 For launcher repair or holistic regeneration, the operator-visible command must not become a self-modifying patch engine. In particular, do not deliver a long interactive `python -c`, `sed`, `perl`, nested shell string or equivalent command whose purpose is to rewrite an existing launcher in-place before execution.
 
 ```text
@@ -166,6 +168,29 @@ POST_GENERATION_VALIDATION_RUNS_ON_EXACT_FINAL_BYTES=REQUIRED
 ```
 
 A holistic regeneration must produce the complete replacement script/bundle **before** operator handoff, validate its exact final bytes, and reduce the user action to a short verify-and-execute bootstrap. A syntax check on the unmodified/original files does not prove that an intended interactive rewrite succeeded.
+
+### 3.1A Dynamic-launcher stop rule
+
+Repeated repair must reduce execution freedom, not create another bespoke program.
+
+```text
+TASK_PACKET_IS_DATA_NOT_PROGRAM=YES
+PER_TASK_DYNAMIC_EXECUTION_PROGRAM_GENERATION=PROHIBITED_BY_DEFAULT
+VERSIONED_STABLE_RUNNER_PREFERRED=YES
+```
+
+After a launcher-family termination/holistic regeneration, first ask whether the remaining semantic stage can run through the accepted stable runner with task-specific data only. If yes, generating another task-specific R3/R4/R5-style execution topology is prohibited.
+
+A custom launcher remains exceptional and must show:
+
+```text
+STABLE_RUNNER_INSUFFICICIENCY_PROVEN=YES
+NEW_MECHANIC_IS_TRULY_TASK_SPECIFIC=YES
+ADDED_FAILURE_SURFACE_LT_DECISION_VALUE=YES
+SEPARATE_REVIEW_REQUIRED=YES
+```
+
+Successful emergency recovery mechanisms such as Git-object reconstruction, patch stitching, self-extracting payloads or transport-specific fallbacks remain recovery evidence. They do not automatically become normal launch architecture.
 
 ### 3.2 Launch-artifact delivery is a prerequisite to operator execution
 
