@@ -173,9 +173,7 @@ class ProofInputs:
     bar_type: object
 
 
-def _fixture_inputs(types: dict[str, Any], instrument: object) -> ProofInputs:
-    Price = types["Price"]
-    Quantity = types["Quantity"]
+def _fixture_inputs(types: dict[str, Any], instrument: Any) -> ProofInputs:
     QuoteTick = types["QuoteTick"]
     TradeTick = types["TradeTick"]
     TradeId = types["TradeId"]
@@ -195,17 +193,17 @@ def _fixture_inputs(types: dict[str, Any], instrument: object) -> ProofInputs:
     )
     quote = QuoteTick(
         instrument_id=instrument_id,
-        bid_price=Price.from_str("100000.0"),
-        ask_price=Price.from_str("100001.0"),
-        bid_size=Quantity.from_int(1),
-        ask_size=Quantity.from_int(1),
+        bid_price=instrument.make_price(100000.0),
+        ask_price=instrument.make_price(100001.0),
+        bid_size=instrument.make_qty(1.0),
+        ask_size=instrument.make_qty(1.0),
         ts_event=start,
         ts_init=start + 1,
     )
     trade = TradeTick(
         instrument_id=instrument_id,
-        price=Price.from_str("100000.5"),
-        size=Quantity.from_int(1),
+        price=instrument.make_price(100000.0),
+        size=instrument.make_qty(1.0),
         aggressor_side=AggressorSide.BUY,
         trade_id=TradeId("t2-rc5-capability-spike-trade"),
         ts_event=start + 2,
@@ -213,11 +211,11 @@ def _fixture_inputs(types: dict[str, Any], instrument: object) -> ProofInputs:
     )
     bar = Bar(
         bar_type=bar_type,
-        open=Price.from_str("99999.0"),
-        high=Price.from_str("100002.0"),
-        low=Price.from_str("99998.0"),
-        close=Price.from_str("100000.5"),
-        volume=Quantity.from_int(3),
+        open=instrument.make_price(100000.0),
+        high=instrument.make_price(100002.0),
+        low=instrument.make_price(99999.0),
+        close=instrument.make_price(100001.0),
+        volume=instrument.make_qty(3.0),
         ts_event=start + 4,
         ts_init=start + 5,
     )
