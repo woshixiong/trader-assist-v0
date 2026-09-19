@@ -314,6 +314,93 @@ WRITER_CONTEXT_NE_CANONICAL_CORPUS=YES
 CONTEXT_BLOAT_WITHOUT_INCREMENTAL_DECISION_VALUE=PROHIBITED
 ```
 
+### 4.4 Project-wide context architecture
+
+Progressive disclosure applies to Engineering Control, semantic Writers and independent Reviewers, not only to the Writer.
+
+```text
+L1_ALWAYS_ON_CORE=
+  root authority map + rules index/navigation + live identity
+
+L2_ACTIVE_STATE=
+  current durable stage checkpoint / Task Packet / Review Manifest
+
+L3_TARGETED_CANONICAL_RETRIEVAL=
+  minimum exact source needed for a concrete unknown, conflict, drift or supersession question
+
+L4_COLD_HISTORY_AND_RAW_EVIDENCE=
+  complete historical Issues/PRs/logs/artifacts retained outside model context by default
+```
+
+The active durable checkpoint must preserve, as applicable:
+
+```text
+CURRENT_STAGE
+EXACT_MAIN / BASE / HEAD / TREE
+ACTIVE_AUTHORITY_AND_PROVENANCE
+ACCEPTED_DECISIONS
+SUPERSEDED_OR_REJECTED_ROUTES
+UNRESOLVED_BLOCKERS
+WRITE / READ SCOPE
+ACCEPTANCE_CRITERIA
+NEXT_AUTHORIZED_ACTION
+REVIEW_REQUIRED
+STOP_CONDITIONS
+```
+
+Every compressed assertion that materially affects execution must either carry its exact canonical provenance locator or be directly fresh-verifiable from live state. Compression is not permission to omit an authority, blocker, negative constraint or safety boundary.
+
+```text
+CHAT_HISTORY_IS_NOT_ENGINEERING_STATE=YES
+GITHUB_DURABLE_CHECKPOINT_IS_ENGINEERING_STATE=YES
+NO_CRITICAL_ENGINEERING_STATE_ONLY_IN_CHAT=YES
+FULL_ISSUE_PR_HISTORY_RELOAD_BY_CONTROL=NO_BY_DEFAULT
+FULL_GOVERNANCE_CORPUS_RELOAD_BY_CONTROL=NO_BY_DEFAULT
+FULL_ISSUE_PR_HISTORY_RELOAD_BY_REVIEWER=NO_BY_DEFAULT
+RAW_LONG_LOG_IN_MODEL_CONTEXT=NO_BY_DEFAULT
+QUALITY_AND_CORRECTNESS_GT_CONTEXT_ECONOMY=YES
+```
+
+If the compact state is insufficient, perform a targeted canonical read. If the material fact remains unresolved, fail closed; never guess to save context.
+
+Large single-file retrieval follows the same escalation ladder:
+
+```text
+KNOWN_SYMBOL / HEADING / RANGE
+-> TARGETED RANGE FIRST
+-> ADJACENT SECTION IF NEEDED
+-> FULL FILE ONLY WHEN WHOLE-FILE SEMANTICS ARE MATERIALLY REQUIRED
+```
+
+### 4.5 Engineering-window lifecycle and automatic rotation
+
+Every Engineering Control conversation/window must declare at entry:
+
+```text
+WINDOW_SCOPE=
+ROTATION_TRIGGER=
+ACTIVE_CHECKPOINT_REF=
+```
+
+Rotation is event-driven; it does not depend on the user seeing an internal token/context meter. Default triggers include:
+
+- completion of the current material stage;
+- material replan, authority change or ownership boundary;
+- independent-review handoff;
+- command-family holistic regeneration;
+- product context warning or loss of context trust;
+- repeated transport/stream interruption that creates transcript-integrity risk.
+
+On trigger:
+
+```text
+FREEZE_AND_VERIFY_GITHUB_CHECKPOINT
+-> GENERATE_COMPLETE_SUCCESSOR_WINDOW_PROMPT
+-> STOP CURRENT_WINDOW_BEFORE_NEXT_MATERIAL_STAGE
+```
+
+The successor verifies live identity plus the predecessor checkpoint before material work. It starts from the checkpoint, not by replaying the whole predecessor transcript. Failure to produce/verify the checkpoint or successor prompt blocks transition into the next material stage.
+
 ## 5. Research, evidence and decision method
 
 Material direction-setting work uses a strict three-stage method.
@@ -901,6 +988,8 @@ UNAUTHORIZED_RETRY_OR_RESUME=PROHIBITED
 REQUESTED_VS_ACTUAL_REQUIRED_IDENTITY_MISMATCH=ROUTER_INCIDENT
 ONE_PRIMARY_WRITER_PER_SHARED_AUTHORITY_STAGE=YES
 WRITER_SELF_PASS_IS_NOT_INDEPENDENT_ACCEPTANCE
+ENGINEERING_CONTROL_SELF_PASS_IS_NOT_INDEPENDENT_ACCEPTANCE
+FINAL_INDEPENDENT_REVIEW_REQUIRES_NEW_CHAT_CONTEXT=YES
 T4_DEFAULT=NEW_INDEPENDENT_STRONGEST_APPROPRIATE_CHATGPT_WINDOW
 ```
 
@@ -1131,14 +1220,16 @@ Default order:
 ```text
 AUTHORITATIVE_GITHUB_CONNECTOR / GITHUB_ACTIONS / PROVIDER_NATIVE / DETERMINISTIC_TOOL
 -> ENGINEERING_CONTROL DIRECT READ/WRITE WHEN NO CODING AGENT IS NEEDED
--> ACCEPTED NON-CODEX SEMANTIC WRITER WHEN SUFFICIENT
--> CODEX ONLY FOR REMAINING SEMANTIC IMPLEMENTATION WHERE ITS CAPABILITY IS MATERIAL
+-> CODEX WHEN A SEMANTIC CODING WRITER IS REQUIRED AND THE USER'S CODEX ROUTE IS AVAILABLE
+-> ACCEPTED NON-CODEX SEMANTIC WRITER ONLY WITH EXPLICIT BOUNDED USER SELECTION/FALLBACK AUTHORITY
 ```
 
 Permanent rules:
 
 ```text
-CODEX_QUOTA_HEALTHY_NE_CODEX_DEFAULT=YES
+HEALTHY_CODEX_QUOTA_ALONE_DOES_NOT_CREATE_WORK=YES
+REQUIRED_SEMANTIC_CODING_PLUS_USABLE_CODEX=>CODEX_DEFAULT=YES
+CODEX_QUOTA_FAILURE_DOES_NOT_AUTHORIZE_EXECUTOR_FALLBACK=YES
 CODEX_FOR_GITHUB_STATUS_DIFF_ARTIFACT_CI_EVIDENCE=NO_BY_DEFAULT
 CODEX_FOR_FULL_REPOSITORY_TEST_SUITE=NO_BY_DEFAULT
 CODEX_FOR_DUPLICATE_CONTROL_PLANE_DISCOVERY=NO_BY_DEFAULT
@@ -1251,6 +1342,16 @@ Model-backed executors must not share stdin with the shell/heredoc program that 
 
 Every fail-closed command gate maps to a real authority, identity, safety, state or correctness invariant.
 
+Before a semantic Writer launch, classify each proposed pre-semantic gate as either a true semantic prerequisite or a later publication/egress prerequisite:
+
+```text
+SEMANTIC_START_DEPENDENCY_MINIMIZATION=REQUIRED
+SEMANTIC_READINESS_NE_PUBLICATION_READINESS=YES
+PRE_SEMANTIC_GATE_REQUIRES_DISTINCT_REAL_INVARIANT=YES
+```
+
+GitHub CLI authentication, push permission, PR creation, publication dry-runs, result-comment egress and other publication mechanics must not block semantic start unless the semantic stage genuinely requires that exact capability to obtain/verify its source or satisfy another real pre-mutation invariant. When exact canonical identity is already established through the control plane and an exact local/source artifact is available, redundant lower-reliability GitHub network/auth probes are prohibited before semantic start.
+
 Prohibited false exactness includes:
 
 - implementation-shape checks unrelated to the real invariant;
@@ -1279,10 +1380,13 @@ A later wrapper, network, platform or evidence failure does not erase a complete
 INITIAL_GENERATED_COMMAND
 -> AT MOST ONE BOUNDED CORRECTION
 -> SECOND AVOIDABLE COMMAND/WRAPPER DEFECT IN SAME STAGE
+   => TERMINATE_CURRENT_LAUNCHER_FAMILY
    => COMMAND_RELIABILITY_HOLISTIC_REGENERATION
 ```
 
-Holistic regeneration re-reads the actual environment, canonical workflow and prior failure classes, proves non-regression against the incident catalogue, removes stale assumptions and regenerates one complete route. Do not build CONT1/CONT2/CONT3 patch chains.
+This state is derived from the recorded failure lineage, not reset by renaming a ZIP/script or changing wrapper syntax. Once the launcher family is terminated, another incremental bounded correction is prohibited.
+
+Holistic regeneration re-reads the actual environment, canonical workflow and prior failure classes, proves non-regression against the incident catalogue, removes stale assumptions, reclassifies semantic-start versus publication dependencies, reconsiders whether the local launcher is needed at all, and regenerates one complete route. Do not build CONT1/CONT2/CONT3 or R3/R4/R5 patch chains.
 
 ### 15.7 Evidence egress
 
@@ -1338,6 +1442,33 @@ Independent Review inspects the actual exact object:
 - exact GitHub head; or
 - integrity-bound dirty-worktree review packet; or
 - exact delta against an independently accepted fingerprint.
+
+Authority-bearing independent review requires a **new ChatGPT conversation/window** that did not control or implement the candidate stage. The Engineering Control conversation may perform self-check/readiness work only; its PASS cannot become independent acceptance.
+
+The reviewer receives a compact Review Manifest containing:
+
+```text
+REVIEW_TARGET / EXACT BASE-HEAD-TREE
+EXACT_CHANGED_SCOPE / DIFF
+FROZEN_ACCEPTANCE_CRITERIA
+REQUIRED_SAFETY_BOUNDARIES
+DECISIVE_CI / ARTIFACT / SOURCE / UPSTREAM LOCATORS
+EXPLICITLY_UNTRUSTED_PRIOR_CONCLUSIONS
+OUTPUT / AUTHORITY CONTRACT
+```
+
+Default reviewer loading order is:
+
+```text
+EXACT IDENTITY
+-> EXACT DIFF / CHANGED SURFACES
+-> ACCEPTANCE CONTRACT
+-> DECISIVE CI / ARTIFACT EVIDENCE
+-> NECESSARY UPSTREAM
+-> TARGETED CANONICAL HISTORY ONLY IF A CONCRETE QUESTION REMAINS
+```
+
+Full Issue/PR history and full governance corpus reload are prohibited by default. This is a context-economy rule, not a relaxation of review quality: any missing material fact triggers targeted retrieval and unresolved uncertainty prohibits PASS.
 
 Once a baseline is independently accepted, default to delta review:
 
