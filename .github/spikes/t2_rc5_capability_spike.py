@@ -6,6 +6,9 @@ credentials, constructs an execution client, signs a request, or sends an
 exchange write.  Backtest orders are confined to Nautilus' BacktestNode.
 """
 
+# Delayed optional Nautilus imports are intentionally local to this proof harness.
+# ruff: noqa: I001
+
 from __future__ import annotations
 
 import argparse
@@ -366,7 +369,6 @@ def _run_backtest(
     BacktestNode = types["BacktestNode"]
     AccountType = types["AccountType"]
     BookType = types["BookType"]
-    Currency = types["Currency"]
     OmsType = types["OmsType"]
     ImportableStrategyConfig = types["ImportableStrategyConfig"]
     from trader_assist_v0.nautilus_g4.runner import project_provider_native_state
@@ -385,13 +387,14 @@ def _run_backtest(
     )
     if importable.config["quantity"] != 0.01 or type(importable.config["quantity"]) is not float:
         raise TypeError("ImportableStrategyConfig lost float quantity identity")
+    account_currency = inputs.instrument.settlement_currency
     venue = BacktestVenueConfig(
         name=str(inputs.instrument.id.venue),
         oms_type=OmsType.NETTING,
         account_type=AccountType.MARGIN,
         book_type=BookType.L1_MBP,
-        base_currency=Currency.from_str("USD"),
-        starting_balances=["1_000_000 USD"],
+        base_currency=account_currency,
+        starting_balances=[f"1_000_000 {account_currency}"],
     )
     data = [
         BacktestDataConfig(
@@ -475,7 +478,7 @@ def _run_phase(phase: str, evidence_root: Path) -> dict[str, object]:
     types = _load_nautilus_types()
     if phase == "offline":
         from nautilus_trader.testkit.providers import TestInstrumentProvider
-        instrument = TestInstrumentProvider.default_fx_ccy("AUD/USD")
+        instrument = TestInstrumentProvider.btcusdt_perp_binance()
         public_provider_call = False
     else:
         instrument = _load_public_instrument()
