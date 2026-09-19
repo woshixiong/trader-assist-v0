@@ -1485,6 +1485,8 @@ EXACT IDENTITY
 
 Full Issue/PR history and full governance corpus reload are prohibited by default. This is a context-economy rule, not a relaxation of review quality: any missing material fact triggers targeted retrieval and unresolved uncertainty prohibits PASS.
 
+The authoritative Review Result is also compact. It records verdict, exact reviewed identity, a concise acceptance/FAIL matrix, only material blockers with exact evidence, next allowed action, and retained authority boundaries. Do not restate every already-proven PASS fact or reproduce long raw evidence merely to make the result look exhaustive.
+
 Once a baseline is independently accepted, default to delta review:
 
 ```text
