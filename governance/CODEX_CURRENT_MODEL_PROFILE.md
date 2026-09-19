@@ -1,10 +1,12 @@
 # Trader Assist / Trade OS — Codex Current Model Profile
 
 **Status:** REFRESHABLE MODEL-SPECIFIC GOVERNANCE CANDIDATE  
-**Last verified:** 2026-09-18  
-**Locally verified Codex CLI:** `0.152.1`
+**Last verified:** 2026-09-19  
+**Latest observed local Codex CLI:** `0.155.1`
 
 This file is refreshable current-state guidance. Durable workflow rules live in `CODEX_CLI_ENGINEERING_USAGE_PROFILE_V2_2026-08-23.md`.
+
+The observed CLI version is telemetry, **not an exact-equality launch gate**. A launcher may require a specific version only when a task has a proven version-dependent semantic incompatibility. Otherwise verify the actual installed CLI identity and the exact required command/config capabilities. A newer compatible patch release must not trigger a false SAFE_STOP merely because this profile has not yet been refreshed.
 
 **Scope:** this profile applies only after `ENGINEERING_EXECUTOR_ROUTER_V2` has already selected `CODEX_CLI` for a semantic Writer stage. Labels such as `NORMAL_MATERIAL` or `HIGH_CONSEQUENCE` choose the Codex model/reasoning within an already-selected Codex route; they never make Codex the default executor, and healthy Codex quota is not a selection reason.
 
