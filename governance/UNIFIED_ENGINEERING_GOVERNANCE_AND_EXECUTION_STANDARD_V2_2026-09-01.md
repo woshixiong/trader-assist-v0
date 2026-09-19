@@ -1311,6 +1311,8 @@ A known avoidable failure class may not be reintroduced merely because the exact
 
 File-backed execution must **reduce** operator-input complexity. It is not sufficient to place a long script into a file by embedding the same payload as a giant Base64/hex/escaped literal, giant quoted `shell -c` string, long nested heredoc/subshell or equivalent fragile representation in the same interactive paste. The operator-visible bootstrap must be materially simpler than the payload and parse-complete on its own. If the current surface cannot satisfy that, use a robust transfer/artifact surface, an accepted repository-owned launcher, or an explicitly safe phase split.
 
+A repair/holistic-regeneration handoff must not ask the operator shell to construct the replacement by executing a long inline self-modifying `python -c`/`sed`/`perl`/nested-shell rewrite against old launcher files. The complete replacement bytes must already exist on a proven delivery surface and must be validated **after generation**. The user's command should verify exact identity and execute; it should not serve as the code-generation/rewriting environment.
+
 Interactive shell behavior that affects parsing cannot be assumed from user startup state. Comments, aliases, shell options, history expansion and emulation modes must either be explicitly established or avoided. A command that parses correctly only under an unproven interactive option does not pass the reliability gate.
 
 ### 15.2 Target environment is evidence
