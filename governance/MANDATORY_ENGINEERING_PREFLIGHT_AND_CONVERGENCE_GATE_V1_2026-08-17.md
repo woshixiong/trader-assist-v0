@@ -47,7 +47,7 @@ The Task Packet must contain the normalized authority assertions needed by the W
 
 For Engineering Control itself, the active checkpoint is the durable starting state. Before material work, the context-completeness gate verifies current stage/identity, active authority, accepted/superseded decisions, unresolved blockers, scope, acceptance criteria, next action and provenance. A missing material field triggers targeted canonical retrieval; unresolved uncertainty means `CONTEXT_COMPLETENESS_GATE=FAIL`.
 
-`FULL_GOVERNANCE_CORPUS_REQUIRED=YES` is exceptional and requires a governance-maintenance task whose object is the relevant corpus or a concrete unresolved governance conflict. Quota availability alone never selects Codex.
+`FULL_GOVERNANCE_CORPUS_REQUIRED=YES` is exceptional and requires a governance-maintenance task whose object is the relevant corpus or a concrete unresolved governance conflict. Quota availability alone never creates a semantic task; once a semantic Writer is actually required, apply the current Router/user-priority policy.
 
 ---
 
