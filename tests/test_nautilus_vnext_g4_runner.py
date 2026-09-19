@@ -199,7 +199,11 @@ def fake_provider(monkeypatch: pytest.MonkeyPatch, *, quantity: str = "0.010") -
         id = InstrumentId.from_str("ETH-USD-PERP.HYPERLIQUID")
         quote_currency = "USDC"
 
-        def make_qty(self, _value: object) -> object:
+        def __init__(self) -> None:
+            self.make_qty_inputs: list[object] = []
+
+        def make_qty(self, value: object) -> object:
+            self.make_qty_inputs.append(value)
             return Quantity.from_str(quantity)
 
     monkeypatch.setattr(model, "CryptoPerpetual", ProviderInstrument)
@@ -334,6 +338,9 @@ def test_execution_inputs_bind_source_hash_full_quote_and_quantity(
     assert trigger.bid_price == "1999.0"
     assert side == "BUY"
     assert Decimal(quantity) == Decimal("0.010")
+    make_qty_inputs = instrument.make_qty_inputs
+    assert make_qty_inputs == [0.01]
+    assert type(make_qty_inputs[0]) is float
 
 
 @REQUIRES_NAUTILUS

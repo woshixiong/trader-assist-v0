@@ -8,7 +8,7 @@ from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Self, cast
+from typing import TYPE_CHECKING, Literal, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -26,6 +26,41 @@ from trader_assist_v0.vnext_g4.contracts import (
 if TYPE_CHECKING:
     from nautilus_trader.backtest import BacktestEngine
     from nautilus_trader.execution import ProbabilisticFillModel
+
+    class _QuantityInstrument(Protocol):
+        def make_qty(self, value: float) -> object: ...
+
+    class _MechanicalCache(Protocol):
+        def instrument(self, instrument_id: object) -> _QuantityInstrument | None: ...
+
+    class _MechanicalOrder(Protocol):
+        client_order_id: object
+
+    class _MechanicalOrderFactory(Protocol):
+        def market(
+            self,
+            *,
+            instrument_id: object,
+            order_side: object,
+            quantity: object,
+        ) -> _MechanicalOrder: ...
+
+    class _NautilusStrategyConfig:
+        def __new__(cls, *args: object, **kwargs: object) -> Self: ...
+
+        def __init__(self, **kwargs: object) -> None: ...
+
+    class _NautilusStrategy:
+        cache: _MechanicalCache
+        order_factory: _MechanicalOrderFactory
+
+        def __init__(self, config: object | None = None) -> None: ...
+
+        def subscribe_quotes(self, instrument_id: object) -> None: ...
+
+        def submit_order(self, order: object) -> None: ...
+
+    class _NautilusOrderFilled: ...
 
 
 class RepresentativeMarketEvidence(BaseModel):
@@ -260,25 +295,26 @@ class _ExecutionLedger:
 _EXECUTION_LEDGERS: dict[str, _ExecutionLedger] = {}
 
 
-try:
-    from nautilus_trader.model import OrderFilled as _NautilusOrderFilled
-    from nautilus_trader.trading import Strategy as _NautilusStrategy
-    from nautilus_trader.trading import StrategyConfig as _NautilusStrategyConfig
-except ModuleNotFoundError:
-    # Keep the non-Nautilus contract tests importable; execution still fails at the rc5 gate.
-    class _NautilusStrategyConfig:  # type: ignore[no-redef]
-        def __init__(self, **_kwargs: object) -> None:
+if not TYPE_CHECKING:
+    try:
+        from nautilus_trader.model import OrderFilled as _NautilusOrderFilled
+        from nautilus_trader.trading import Strategy as _NautilusStrategy
+        from nautilus_trader.trading import StrategyConfig as _NautilusStrategyConfig
+    except ModuleNotFoundError:
+        # Keep non-Nautilus contract tests importable; execution still fails at the rc5 gate.
+        class _NautilusStrategyConfig:
+            def __init__(self, **_kwargs: object) -> None:
+                pass
+
+        class _NautilusStrategy:
+            def __init__(self, _config: object | None = None) -> None:
+                pass
+
+        class _NautilusOrderFilled:
             pass
 
-    class _NautilusStrategy:  # type: ignore[no-redef]
-        def __init__(self, _config: object | None = None) -> None:
-            pass
 
-    class _NautilusOrderFilled:  # type: ignore[no-redef]
-        pass
-
-
-class ProviderExecutionStrategyConfig(_NautilusStrategyConfig):  # type: ignore[misc]
+class ProviderExecutionStrategyConfig(_NautilusStrategyConfig):
     """Serializable identities for the mechanical provider submission hook."""
 
     _CUSTOM_FIELDS = (
@@ -303,7 +339,7 @@ class ProviderExecutionStrategyConfig(_NautilusStrategyConfig):  # type: ignore[
     def __new__(cls, *args: object, **kwargs: object) -> Self:
         for key in cls._CUSTOM_FIELDS:
             kwargs.pop(key, None)
-        return cast(Self, super().__new__(cls, *args, **kwargs))
+        return super().__new__(cls, *args, **kwargs)
 
     def __init__(
         self,
@@ -335,7 +371,7 @@ class ProviderExecutionStrategyConfig(_NautilusStrategyConfig):  # type: ignore[
         self.trigger_ask_size = trigger_ask_size
 
 
-class ProviderExecutionStrategy(_NautilusStrategy):  # type: ignore[misc]
+class ProviderExecutionStrategy(_NautilusStrategy):
     """Mechanical exact-QuoteTick hook with no strategy-economic authority."""
 
     def __init__(self, config: ProviderExecutionStrategyConfig) -> None:
@@ -374,7 +410,7 @@ class ProviderExecutionStrategy(_NautilusStrategy):  # type: ignore[misc]
         instrument = self.cache.instrument(self._instrument_id)
         if instrument is None:
             raise RuntimeError("provider instrument is absent from Strategy cache")
-        quantity = instrument.make_qty(self._technical_quantity)
+        quantity = instrument.make_qty(float(self._technical_quantity))
         if _decimal_quantity(quantity, label="provider quantity") != self._technical_quantity:
             raise RuntimeError("provider make_qty changed technical quantity semantics")
         side = OrderSide.BUY if self._order_side == "BUY" else OrderSide.SELL
@@ -477,7 +513,7 @@ def _validate_execution_inputs(
         raise ValueError("source replay contains a second matching trigger QuoteTick")
 
     requested_quantity = intent.technical_quantity.quantity
-    native_quantity = provider_instrument.make_qty(requested_quantity)
+    native_quantity = provider_instrument.make_qty(float(requested_quantity))
     if _decimal_quantity(native_quantity, label="provider quantity") != requested_quantity:
         raise ValueError("technical quantity does not round-trip through provider make_qty")
     quantity_text = str(native_quantity)
@@ -506,32 +542,36 @@ def _persist_and_reload_projection(
         catalog_path.mkdir(parents=True)
     catalog = ParquetDataCatalog(str(catalog_path))
     catalog.write_instruments([provider_instrument])
-    typed_events = {
-        QuoteTick: tuple(event for event in projection.events if isinstance(event, QuoteTick)),
-        TradeTick: tuple(event for event in projection.events if isinstance(event, TradeTick)),
-        Bar: tuple(event for event in projection.events if isinstance(event, Bar)),
-    }
-    if typed_events[QuoteTick]:
-        catalog.write_quote_ticks(list(typed_events[QuoteTick]))
-    if typed_events[TradeTick]:
-        catalog.write_trade_ticks(list(typed_events[TradeTick]))
-    if typed_events[Bar]:
-        catalog.write_bars(list(typed_events[Bar]))
+    quote_ticks: tuple[QuoteTick, ...] = tuple(
+        event for event in projection.events if isinstance(event, QuoteTick)
+    )
+    trade_ticks: tuple[TradeTick, ...] = tuple(
+        event for event in projection.events if isinstance(event, TradeTick)
+    )
+    bars: tuple[Bar, ...] = tuple(
+        event for event in projection.events if isinstance(event, Bar)
+    )
+    if quote_ticks:
+        catalog.write_quote_ticks(quote_ticks)
+    if trade_ticks:
+        catalog.write_trade_ticks(trade_ticks)
+    if bars:
+        catalog.write_bars(bars)
 
     instrument_id = projection.identity.instrument_id
     reloaded_quotes = tuple(catalog.query_quote_ticks(identifiers=[instrument_id]))
     reloaded_trades = tuple(catalog.query_trade_ticks(identifiers=[instrument_id]))
-    bar_ids = tuple(dict.fromkeys(str(event.bar_type) for event in typed_events[Bar]))
+    bar_ids = tuple(dict.fromkeys(str(event.bar_type) for event in bars))
     reloaded_bars = (
         tuple(catalog.query_bars(identifiers=list(bar_ids))) if bar_ids else ()
     )
-    if reloaded_quotes != typed_events[QuoteTick]:
+    if reloaded_quotes != quote_ticks:
         raise RuntimeError("typed catalog QuoteTick read changed content or order")
-    if reloaded_trades != typed_events[TradeTick]:
+    if reloaded_trades != trade_ticks:
         raise RuntimeError("typed catalog TradeTick read changed content or order")
-    if reloaded_bars != typed_events[Bar]:
+    if reloaded_bars != bars:
         raise RuntimeError("typed catalog Bar read changed content or order")
-    if sum(map(len, typed_events.values())) != projection.identity.event_count:
+    if len(quote_ticks) + len(trade_ticks) + len(bars) != projection.identity.event_count:
         raise RuntimeError("typed catalog routing silently dropped a replay event")
 
 
@@ -597,7 +637,14 @@ def execute_provider_native_state(
         BacktestRunConfig,
         BacktestVenueConfig,
     )
-    from nautilus_trader.model import AccountType, BookType, Currency, OmsType, TraderId
+    from nautilus_trader.model import (
+        AccountType,
+        BookType,
+        CryptoPerpetual,
+        Currency,
+        OmsType,
+        TraderId,
+    )
     from nautilus_trader.trading import ImportableStrategyConfig
 
     assert_backtest_node_catalog_surface()
@@ -615,26 +662,46 @@ def execute_provider_native_state(
     )
 
     identity = projection.identity
-    provider_instrument_id = _optional_attr(provider_instrument, "id")
-    if provider_instrument_id is None:
-        raise ValueError("provider CryptoPerpetual lacks public instrument id")
+    if not isinstance(provider_instrument, CryptoPerpetual):
+        raise TypeError("provider instrument must be provider-native CryptoPerpetual")
+    provider_instrument_id = provider_instrument.id
     timestamps = tuple(
         int(str(_required_attr(event, "ts_init"))) for event in projection.events
     )
-    common_data: dict[str, object] = {
-        "catalog_path": str(catalog_root),
-        "instrument_id": provider_instrument_id,
-        "start_time": min(timestamps),
-        "end_time": max(timestamps) + 1,
-    }
-    data = []
-    for data_type, count in (
-        ("QuoteTick", identity.quote_tick_count),
-        ("TradeTick", identity.trade_tick_count),
-        ("Bar", identity.bar_count),
-    ):
-        if count:
-            data.append(BacktestDataConfig(data_type=data_type, **common_data))
+    catalog_path_text = str(catalog_root)
+    start_time = min(timestamps)
+    end_time = max(timestamps) + 1
+    data: list[BacktestDataConfig] = []
+    if identity.quote_tick_count:
+        data.append(
+            BacktestDataConfig(
+                data_type="QuoteTick",
+                catalog_path=catalog_path_text,
+                instrument_id=provider_instrument_id,
+                start_time=start_time,
+                end_time=end_time,
+            )
+        )
+    if identity.trade_tick_count:
+        data.append(
+            BacktestDataConfig(
+                data_type="TradeTick",
+                catalog_path=catalog_path_text,
+                instrument_id=provider_instrument_id,
+                start_time=start_time,
+                end_time=end_time,
+            )
+        )
+    if identity.bar_count:
+        data.append(
+            BacktestDataConfig(
+                data_type="Bar",
+                catalog_path=catalog_path_text,
+                instrument_id=provider_instrument_id,
+                start_time=start_time,
+                end_time=end_time,
+            )
+        )
     quote_currency = _optional_attr(provider_instrument, "quote_currency")
     if quote_currency is None:
         raise ValueError("provider CryptoPerpetual lacks public quote_currency")
