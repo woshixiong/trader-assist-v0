@@ -121,7 +121,11 @@ PUBLICATION_READINESS=PASS|FAIL|NOT_APPLICABLE_YET
 PUBLICATION_PREREQUISITES=
 PRE_SEMANTIC_GATE_NECESSITY_PROOF=PASS|FAIL
 LAUNCH_ARTIFACT_DELIVERY_CONFIRMED=YES|NO|NOT_APPLICABLE
+FINAL_LAUNCH_BYTES_VALIDATED_AFTER_GENERATION=YES|NO|NOT_APPLICABLE
+OPERATOR_VISIBLE_SELF_MODIFYING_REWRITE=NO|YES|NOT_APPLICABLE
 ```
+
+For a material launcher/repair/holistic-regeneration handoff, `OPERATOR_VISIBLE_SELF_MODIFYING_REWRITE=YES` fails the Generated Command gate. Exact final launcher bytes must be produced and validated before the operator is asked to run them; validating the old source files before an inline rewrite is insufficient.
 
 A publication-only prerequisite may not set `SEMANTIC_READINESS=FAIL`. GitHub auth/API/push/PR/result-egress checks belong after the semantic checkpoint unless they are truly required to acquire/verify the semantic source or protect another distinct pre-mutation invariant. A launcher artifact may not be represented as executable by the user until its actual delivery/availability on the operator surface is confirmed.
 
