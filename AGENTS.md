@@ -56,6 +56,14 @@ Rotation is event-driven, not dependent on a user-visible token meter. Material 
 
 When a trigger fires, Engineering Control must first write/verify a durable GitHub checkpoint, then produce a complete successor-window prompt that points to that checkpoint and the minimum canonical locators. The current window must not continue into the next material stage merely because it still has capacity. A successor window verifies the predecessor checkpoint and live identity before material work.
 
+Default operating unit:
+
+```text
+ONE_ENGINEERING_WINDOW ~= ONE_MATERIAL_BOUNDED_STAGE
+```
+
+This is a context-lifecycle default, not a command-count rule. Tiny deterministic follow-up may stay in the same window; a new semantic stage, material replan, independent review or command-family regeneration normally rotates. Before any long Codex/CI/review action, a durable checkpoint must already exist so transport/context loss cannot erase the current authority state.
+
 ## 2. User shorthand for unified-governance changes
 
 When the user says **“往统一规则里增加内容”**, **“把这条加入统一规则”**, **“add this to the unified rules”**, or an equivalent phrase, treat it as a request to start the Unified Engineering Governance change-routing process.
@@ -144,6 +152,9 @@ FALSE_SAFE_STOP_GATE=PROHIBITED
 CHECKPOINT_RESUME_INSTEAD_OF_REDO=YES
 SEMANTIC_START_DEPENDENCY_MINIMIZATION=REQUIRED
 SEMANTIC_READINESS_NE_PUBLICATION_READINESS=YES
+PER_TASK_DYNAMIC_EXECUTION_PROGRAM_GENERATION=PROHIBITED_BY_DEFAULT
+TASK_PACKET_IS_DATA_NOT_EXECUTION_PROGRAM=YES
+VERSIONED_STABLE_SEMANTIC_RUNNER=DEFAULT_WHEN_LOCAL_MODEL_EXECUTION_IS_NEEDED
 ENGINEERING_WINDOW_ROTATION_POLICY=REQUIRED
 TRANSPORT_INTERRUPTION_NE_TASK_FAILURE=YES
 FINAL_INDEPENDENT_REVIEW_REQUIRES_NEW_CHAT_CONTEXT=YES
