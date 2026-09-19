@@ -234,8 +234,9 @@ jobs:
           assert no_signer["status"] == "PASS", no_signer
           assert no_signer["credential_guard_passed"] is True, no_signer
           assert no_signer["no_signer_proven"] is True, no_signer
-          assert no_signer["get_user_address_result"] is None, no_signer
-          assert no_signer["get_user_address_behavior"] == "RETURNED_NONE_NO_SIGNER", no_signer
+          assert no_signer["get_user_address_behavior"] == "RAISED_VALUE_ERROR_NO_SIGNER", no_signer
+          assert no_signer["get_user_address_error_type"] == "ValueError", no_signer
+          assert no_signer["get_user_address_error"] == "auth error: No signer configured", no_signer
           assert no_signer["no_signer_sequence_index"] < (
               no_signer["first_network_call_sequence_index"]
           ), no_signer

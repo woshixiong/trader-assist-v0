@@ -155,13 +155,9 @@ def _construct_public_client(
         HyperliquidEnvironment,
         HyperliquidHttpClient,
     )
-    from nautilus_trader.common import LiveClock
 
     counters["provider_client_construction_count"] += 1
-    return HyperliquidHttpClient(
-        clock=LiveClock(),
-        environment=HyperliquidEnvironment.MAINNET,
-    )
+    return HyperliquidHttpClient(environment=HyperliquidEnvironment.MAINNET)
 
 
 def _credential_negative_proof() -> dict[str, object]:
@@ -594,9 +590,9 @@ def _run_backtest_phase(
     catalog.write_quote_ticks(list(fixture.quotes))
     catalog.write_trade_ticks(list(fixture.trades))
     catalog.write_bars(list(fixture.bars))
-    reloaded_quotes = tuple(catalog.query_quote_ticks(instrument_ids=[fixture.instrument.id]))
-    reloaded_trades = tuple(catalog.query_trade_ticks(instrument_ids=[fixture.instrument.id]))
-    reloaded_bars = tuple(catalog.query_bars(bar_types=[fixture.bar_type]))
+    reloaded_quotes = tuple(catalog.query_quote_ticks(identifiers=[str(fixture.instrument.id)]))
+    reloaded_trades = tuple(catalog.query_trade_ticks(identifiers=[str(fixture.instrument.id)]))
+    reloaded_bars = tuple(catalog.query_bars(identifiers=[str(fixture.bar_type)]))
     if reloaded_quotes != fixture.quotes:
         raise AssertionError("typed quote reload changed the fixture")
     if reloaded_trades != fixture.trades:
@@ -750,10 +746,16 @@ async def _public_instrument_and_no_signer_proof() -> tuple[object, dict[str, ob
     sequence = ["credential_guard_passed"]
     client = _construct_public_client(env=os.environ, counters=counters)
     sequence.append("provider_client_constructed")
-    user_address = client.get_user_address()
-    sequence.append("get_user_address_returned_none")
-    if user_address is not None:
-        raise AssertionError("unauthenticated Hyperliquid client unexpectedly has a signer address")
+    try:
+        client.get_user_address()
+    except ValueError as error:
+        if type(error) is not ValueError or str(error) != "auth error: No signer configured":
+            raise AssertionError("unauthenticated Hyperliquid client raised an unexpected auth error") from error
+        get_user_address_error_type = type(error).__name__
+        get_user_address_error = str(error)
+    else:
+        raise AssertionError("unauthenticated Hyperliquid client did not raise the no-signer error")
+    sequence.append("get_user_address_raised_value_error_no_signer")
     no_signer_sequence_index = len(sequence) - 1
     counters["network_call_count"] += 1
     sequence.append("load_instrument_definitions_called")
@@ -780,8 +782,9 @@ async def _public_instrument_and_no_signer_proof() -> tuple[object, dict[str, ob
         "status": "PASS",
         "credential_guard_passed": True,
         "no_signer_proven": True,
-        "get_user_address_result": None,
-        "get_user_address_behavior": "RETURNED_NONE_NO_SIGNER",
+        "get_user_address_behavior": "RAISED_VALUE_ERROR_NO_SIGNER",
+        "get_user_address_error_type": get_user_address_error_type,
+        "get_user_address_error": get_user_address_error,
         "no_signer_sequence_index": no_signer_sequence_index,
         "first_network_call_sequence_index": first_network_call_sequence_index,
         "event_sequence": sequence,
