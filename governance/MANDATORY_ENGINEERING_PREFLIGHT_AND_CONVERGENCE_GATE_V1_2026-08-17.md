@@ -35,9 +35,17 @@ GOVERNANCE_ATTESTATION_MAIN_OR_BASE_SHA=
 AUTHORITY_PROVENANCE_LOCATORS=
 WRITER_CONTEXT_MODE=COMPACT_PACKET|EXPLICIT_EXCEPTION
 FULL_GOVERNANCE_CORPUS_REQUIRED=NO|YES
+
+ACTIVE_STAGE_CHECKPOINT_REF=
+WINDOW_SCOPE=
+ROTATION_TRIGGER=
+CONTEXT_COMPLETENESS_GATE=PASS|FAIL
+SUCCESSOR_WINDOW_REQUIRED=YES|NO
 ```
 
 The Task Packet must contain the normalized authority assertions needed by the Writer; provenance locators bind those assertions to canonical GitHub/files. A stale main/base binding, Task Packet hash mismatch or material authority drift invalidates the attestation and returns control to Engineering Control.
+
+For Engineering Control itself, the active checkpoint is the durable starting state. Before material work, the context-completeness gate verifies current stage/identity, active authority, accepted/superseded decisions, unresolved blockers, scope, acceptance criteria, next action and provenance. A missing material field triggers targeted canonical retrieval; unresolved uncertainty means `CONTEXT_COMPLETENESS_GATE=FAIL`.
 
 `FULL_GOVERNANCE_CORPUS_REQUIRED=YES` is exceptional and requires a governance-maintenance task whose object is the relevant corpus or a concrete unresolved governance conflict. Quota availability alone never selects Codex.
 
@@ -104,7 +112,20 @@ AND COMMAND_DELIVERY=PROHIBITED
 
 A command may not recreate a known avoidable incident class merely by changing wrapper language, encoding, transport or exact text. Fresh authoritative GitHub/control-plane identity must not be converted into redundant lower-reliability local proof unless the additional proof protects a distinct real invariant.
 
-After any command failure, complete the Generated Command failure classification/checkpoint fields and repair-stage disposition before another command is issued. A pre-semantic command failure does not consume the application semantic repair budget, but it does consume the applicable command-repair progression.
+For Writer launch paths also record:
+
+```text
+SEMANTIC_READINESS=PASS|FAIL
+SEMANTIC_START_PREREQUISITES=
+PUBLICATION_READINESS=PASS|FAIL|NOT_APPLICABLE_YET
+PUBLICATION_PREREQUISITES=
+PRE_SEMANTIC_GATE_NECESSITY_PROOF=PASS|FAIL
+LAUNCH_ARTIFACT_DELIVERY_CONFIRMED=YES|NO|NOT_APPLICABLE
+```
+
+A publication-only prerequisite may not set `SEMANTIC_READINESS=FAIL`. GitHub auth/API/push/PR/result-egress checks belong after the semantic checkpoint unless they are truly required to acquire/verify the semantic source or protect another distinct pre-mutation invariant. A launcher artifact may not be represented as executable by the user until its actual delivery/availability on the operator surface is confirmed.
+
+After any command failure, complete the Generated Command failure classification/checkpoint fields and repair-stage disposition before another command is issued. A pre-semantic command failure does not consume the application semantic repair budget, but it does consume the applicable command-repair progression. The second avoidable defect in one launcher family terminates that family and prohibits another incremental correction.
 
 ### 1B. User-local Git publication transport hard gate
 
@@ -178,6 +199,28 @@ AND KNOWN_TRANSPORT_INCIDENT_NONREGRESSION != PASS
 ```
 
 If an exact semantic checkpoint already exists and the local GitHub TLS/API route is proven unreliable, do not rerun the semantic action or loop local publication retries. Preserve the checkpoint and follow the specialized procedure's authoritative remote/offline-artifact fallback ladder. A previously successful local read/authentication probe is not by itself proof that the later mutation path remains healthy.
+
+### 1C. Engineering-window rotation hard gate
+
+At each material Engineering Control stage entry:
+
+```text
+WINDOW_SCOPE=REQUIRED
+ROTATION_TRIGGER=REQUIRED
+ACTIVE_STAGE_CHECKPOINT_REF=REQUIRED
+```
+
+If a rotation trigger fires, the current window must freeze and verify the durable GitHub checkpoint and produce the successor-window prompt before another material stage begins. The successor window must read the checkpoint and fresh live identity; it must not rely on the predecessor transcript as canonical state.
+
+```text
+ROTATION_TRIGGER_FIRED=YES
+AND CHECKPOINT_VERIFIED != YES
+=> NEXT_MATERIAL_STAGE=PROHIBITED
+
+ROTATION_TRIGGER_FIRED=YES
+AND SUCCESSOR_PROMPT_READY != YES
+=> NEXT_MATERIAL_STAGE=PROHIBITED
+```
 
 ---
 
