@@ -18,7 +18,10 @@ def _rebuild(source: dict[str, object]) -> dict[str, object]:
 
     from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
     from trader_assist_v0.nautilus_e4.contracts import AdmittedEvent
-    from trader_assist_v0.nautilus_g4.catalog_bridge import project_native_replay
+    from trader_assist_v0.nautilus_g4.catalog_bridge import (
+        EvaluationAdmission,
+        project_native_replay,
+    )
     from trader_assist_v0.nautilus_g4.runner import execute_provider_native_state
     from trader_assist_v0.nautilus_g4.t2_shadow import (
         _EVALUATION_DOMAIN,
@@ -44,6 +47,9 @@ def _rebuild(source: dict[str, object]) -> dict[str, object]:
     )
     lineage = CausalLineage.model_validate(source["lineage"])
     evaluation = EvaluationInputs.model_validate(source["evaluation_inputs"])
+    admission = EvaluationAdmission.model_validate(source["evaluation_admission"])
+    if admission.status.value != "EVALUABLE" or admission.inputs != evaluation:
+        raise ValueError("EvaluationInputs do not match accepted derivation evidence")
     ValidationReference.model_validate(source["validation"])
     intent = HypotheticalOrderIntent.model_validate(source["intent"])
     outcome = ThesisOutcome.model_validate(source["outcome"])

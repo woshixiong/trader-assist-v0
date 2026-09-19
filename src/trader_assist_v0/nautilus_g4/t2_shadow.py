@@ -15,6 +15,7 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass
+from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal, Self, cast
@@ -24,7 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from trader_assist_v0.contracts.common import Sha256Hex, canonical_json_bytes, sha256_hex
 from trader_assist_v0.multi_asset_shadow.strategy_kernel.types import DecisionKind, StrategyDecision
 from trader_assist_v0.nautilus_e4.contracts import AdmittedEvent
-from trader_assist_v0.nautilus_g4.catalog_bridge import NativeReplayProjection
+from trader_assist_v0.nautilus_g4.catalog_bridge import EvaluationAdmission, NativeReplayProjection
 from trader_assist_v0.nautilus_g4.runner import ProviderExecutionEvidence
 from trader_assist_v0.vnext_g4.contracts import (
     NAUTILUS_VERSION,
@@ -73,9 +74,30 @@ class CostEvidence(_Frozen):
     ]
     claim_state: CostClaimState
     provenance: CostProvenance
-    amount_bps: object | None
+    amount_bps: Decimal | None
     source_hash: Sha256Hex
     reason: str | None = None
+
+    @model_validator(mode="after")
+    def validate_claim(self) -> Self:
+        expected = {
+            CostProvenance.OBSERVED: CostClaimState.PROVEN,
+            CostProvenance.MODELLED: CostClaimState.PROVEN,
+            CostProvenance.PROVEN_ZERO: CostClaimState.PROVEN_ZERO,
+            CostProvenance.NOT_APPLICABLE: CostClaimState.NOT_APPLICABLE,
+        }.get(self.provenance)
+        if expected is None or self.claim_state is not expected:
+            raise ValueError("cost claim state conflicts with provenance")
+        if self.provenance is CostProvenance.NOT_APPLICABLE:
+            if self.amount_bps is not None:
+                raise ValueError("not-applicable cost cannot carry a numeric amount")
+        else:
+            assert self.amount_bps is not None
+            if not self.amount_bps.is_finite() or self.amount_bps < 0:
+                raise ValueError("cost amount must be finite and non-negative")
+            if self.provenance is CostProvenance.PROVEN_ZERO and self.amount_bps != 0:
+                raise ValueError("PROVEN_ZERO must carry exact zero")
+        return self
 
 
 class RestartIdentitySet(_Frozen):
@@ -117,6 +139,11 @@ class ReplayEquivalence(_Frozen):
         return self
 
 
+# Process-local capabilities deliberately are not part of the serialized claim.  Composition
+# accepts only the exact object minted after this process has observed the trusted worker exit.
+_MINTED_RESTART_CAPABILITIES: dict[int, tuple[ReplayEquivalence, str, str]] = {}
+
+
 @dataclass(frozen=True, slots=True)
 class T2SourceBundle:
     acquisition_plan_hash: str
@@ -133,6 +160,7 @@ class T2SourceBundle:
     structural_decision: StrategyDecision
     lineage: CausalLineage
     evaluation_inputs: EvaluationInputs
+    evaluation_admission: EvaluationAdmission
     validation: ValidationReference
     intent: HypotheticalOrderIntent
     run_manifest: G4RunManifest
@@ -260,6 +288,7 @@ def source_bundle_hash(bundle: T2SourceBundle) -> Sha256Hex:
         "decision": dataclasses.asdict(bundle.structural_decision),
         "lineage": bundle.lineage.model_dump(mode="json"),
         "evaluation": bundle.evaluation_inputs.model_dump(mode="json"),
+        "evaluation_admission": bundle.evaluation_admission.model_dump(mode="json"),
         "validation": bundle.validation.model_dump(mode="json"),
         "intent": bundle.intent.model_dump(mode="json"),
         "outcome": bundle.outcome.model_dump(mode="json"),
@@ -286,6 +315,16 @@ def _validate_bundle(bundle: T2SourceBundle) -> None:
         raise ValueError("synthetic/manual/T0/T1 source substitution is forbidden")
     if bundle.structural_decision.decision is not DecisionKind.FORMAL_SETUP_CONFIRMED:
         raise ValueError("structural decision is not FORMAL_SETUP_CONFIRMED")
+    if (
+        bundle.structural_decision.market_id != bundle.market_id
+        or bundle.structural_decision.market_event_id != bundle.lineage.formal_setup_id
+    ):
+        raise ValueError("structural decision source identity mismatch")
+    if (
+        bundle.evaluation_admission.status.value != "EVALUABLE"
+        or bundle.evaluation_admission.inputs != bundle.evaluation_inputs
+    ):
+        raise ValueError("EvaluationInputs do not match accepted derivation evidence")
     if not bundle.validation.fully_materialized:
         raise ValueError("ValidationReference is not fully materialized")
     lineage, intent, manifest, projection, record, outcome = (
@@ -354,6 +393,13 @@ def _validate_bundle(bundle: T2SourceBundle) -> None:
         bundle.source_pit_snapshot_hash,
     ):
         raise ValueError("G4 manifest source identity mismatch")
+    if manifest.structural_component_manifest_hash != lineage.structural_component_manifest_hash:
+        raise ValueError("G4 manifest structural component mismatch")
+    if (
+        lineage.validation_reference_id != bundle.validation.validation_reference_id
+        or lineage.validation_reference_hash != bundle.validation.reference_hash
+    ):
+        raise ValueError("causal lineage ValidationReference mismatch")
     if (
         bundle.candidate_hash not in manifest.candidate_hashes
         or intent.candidate_hash != bundle.candidate_hash
@@ -414,6 +460,7 @@ def compose_real_t2_artifact(bundle: T2SourceBundle, restart: ReplayEquivalence)
     original = identity_set(bundle)
     if restart.source_bundle_hash != source_bundle_hash(bundle) or restart.original != original:
         raise ValueError("restart evidence does not bind this source bundle")
+    _require_minted_restart(restart)
     lineage, projection, record = (
         bundle.lineage,
         bundle.projection.identity,
@@ -459,8 +506,23 @@ def compose_real_t2_artifact(bundle: T2SourceBundle, restart: ReplayEquivalence)
     return RealT2Artifact.model_validate({**values, "final_t2_artifact_hash": digest})
 
 
+def _require_minted_restart(restart: ReplayEquivalence) -> None:
+    capability = _MINTED_RESTART_CAPABILITIES.get(id(restart))
+    if (
+        capability is None
+        or capability[0] is not restart
+        or capability[1:] != (restart.source_bundle_hash, restart.rebuilt.identity_set_hash)
+    ):
+        raise ValueError("restart evidence was not minted by the fresh-process worker path")
+
+
 def fresh_process_equivalence(bundle: T2SourceBundle, worker: str | Path) -> ReplayEquivalence:
     """Serialize only immutable sources and require an independent child rebuild."""
+    trusted_worker = (
+        Path(__file__).resolve().parents[3] / "scripts" / "nautilus_vnext_g4_t2_shadow.py"
+    )
+    if Path(worker).resolve() != trusted_worker:
+        raise ValueError("restart equivalence requires the repository-owned R3 worker")
     instrument_type = type(bundle.provider_instrument)
     to_dict = getattr(instrument_type, "to_dict", None)
     if not callable(to_dict):
@@ -480,6 +542,7 @@ def fresh_process_equivalence(bundle: T2SourceBundle, worker: str | Path) -> Rep
         "structural_decision": dataclasses.asdict(bundle.structural_decision),
         "lineage": bundle.lineage.model_dump(mode="json"),
         "evaluation_inputs": bundle.evaluation_inputs.model_dump(mode="json"),
+        "evaluation_admission": bundle.evaluation_admission.model_dump(mode="json"),
         "validation": bundle.validation.model_dump(mode="json"),
         "intent": bundle.intent.model_dump(mode="json"),
         "outcome": bundle.outcome.model_dump(mode="json"),
@@ -497,10 +560,16 @@ def fresh_process_equivalence(bundle: T2SourceBundle, worker: str | Path) -> Rep
     )
     response = json.loads(completed.stdout)
     rebuilt = RestartIdentitySet.model_validate(response["identity_set"])
-    return ReplayEquivalence(
+    result = ReplayEquivalence(
         source_bundle_hash=cast(str, payload["source_bundle_hash"]),
         original=original,
         rebuilt=rebuilt,
         child_pid=response["pid"],
         exact_match=True,
     )
+    _MINTED_RESTART_CAPABILITIES[id(result)] = (
+        result,
+        result.source_bundle_hash,
+        result.rebuilt.identity_set_hash,
+    )
+    return result

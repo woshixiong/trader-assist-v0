@@ -9,7 +9,10 @@ from pydantic import ValidationError
 
 from trader_assist_v0.nautilus_g4.t2_shadow import (
     CostClaimState,
+    CostEvidence,
     RealT2Artifact,
+    ReplayEquivalence,
+    RestartIdentitySet,
     project_cost_evidence,
 )
 from trader_assist_v0.vnext_g4.contracts import ParticipationDecision
@@ -78,6 +81,53 @@ def test_each_missing_cost_fails_closed(name: str) -> None:
 def test_artifact_hash_tamper_fails_before_claim_acceptance() -> None:
     with pytest.raises(ValidationError):
         RealT2Artifact.model_validate({"final_t2_artifact_hash": H})
+
+
+@pytest.mark.parametrize(
+    ("provenance", "state", "amount"),
+    [
+        (CostProvenance.MISSING, CostClaimState.PROVEN, "1"),
+        (CostProvenance.OBSERVED, CostClaimState.NOT_APPLICABLE, "1"),
+        (CostProvenance.PROVEN_ZERO, CostClaimState.PROVEN_ZERO, "1"),
+        (CostProvenance.NOT_APPLICABLE, CostClaimState.NOT_APPLICABLE, "not-a-number"),
+    ],
+)
+def test_serialized_cost_evidence_fails_closed(
+    provenance: CostProvenance, state: CostClaimState, amount: str
+) -> None:
+    with pytest.raises(ValidationError):
+        CostEvidence.model_validate(
+            {
+                "name": "fee",
+                "claim_state": state,
+                "provenance": provenance,
+                "amount_bps": amount,
+                "source_hash": H,
+            }
+        )
+
+
+def test_caller_authored_restart_echo_is_not_a_composition_capability() -> None:
+    identities = RestartIdentitySet.create(
+        structural_decision_hash=H,
+        causal_lineage_hash=H,
+        evaluation_inputs_hash=H,
+        order_intent_hash=H,
+        provider_state_projection_hash=H,
+        outcome_report_hash=H,
+    )
+    forged = ReplayEquivalence(
+        source_bundle_hash=H,
+        original=identities,
+        rebuilt=identities,
+        child_pid=1 if 1 != __import__("os").getpid() else 2,
+    )
+    # Construction is only a wire-shape check; composition additionally requires
+    # the process-local capability minted after the worker subprocess completes.
+    from trader_assist_v0.nautilus_g4 import t2_shadow
+
+    with pytest.raises(ValueError, match="not minted"):
+        t2_shadow._require_minted_restart(forged)
 
 
 def test_cli_is_truthfully_nondecisive_without_real_bundle() -> None:
