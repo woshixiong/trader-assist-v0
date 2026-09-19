@@ -36,12 +36,17 @@ BLOCKERS=
 REPAIR_STAGE=
 L1_DECISION_REQUIRED=YES/NO
 
-ACTIVE_STAGE_CHECKPOINT_REF=
-CURRENT_STAGE=
-NEXT_AUTHORIZED_ACTION=
-ROTATION_TRIGGER_STATE=NOT_TRIGGERED|TRIGGERED|NOT_APPLICABLE
-SUCCESSOR_WINDOW_REQUIRED=YES/NO
-SUCCESSOR_WINDOW_PROMPT_REF=
+CONTROL_CAPSULE_REF=
+GOVERNANCE_EPOCH=
+PREFLIGHT_BINDING_KEY=
+PREFLIGHT_REUSE_STATUS=REUSED|RECOMPUTED|NOT_APPLICABLE
+CURRENT_STATE=
+CURRENT_BLOCKER=
+NEXT_ALLOWED_ACTION=
+RUNNING_AGENT_THREAD_OR_WORKSPACE_ID=
+CI_STATE_LOCATOR=
+COMPLETED_WORK_LEDGER_REF=
+CONTEXT_HEADROOM_STATE=SUFFICIENT|ROTATE_BEFORE_NEXT_HEAVY_PHASE|NOT_APPLICABLE
 PUBLICATION_READINESS=PASS|FAIL|NOT_APPLICABLE_YET
 
 COMMIT_PUSH_EXECUTED=YES/NO/NOT_AUTHORIZED
@@ -55,4 +60,4 @@ EXCHANGE_WRITE_EXECUTED=NO
 
 Use `NOT_RUN`, `NOT_EXPOSED` or `NOT_APPLICABLE`; never invent PASS or telemetry. Writer PASS is not independent acceptance.
 
-When a material Engineering Control rotation trigger has fired, downstream control must not proceed to the next material stage until the durable checkpoint is verified and the successor-window prompt is available. These lifecycle fields carry observed control state; they do not authorize the Writer to decide review/merge/deployment gates.
+These lifecycle fields carry observed durable control state; they do not authorize the Writer to decide review/merge/deployment gates. A quota/capacity pause preserves the same semantic attempt when task, authority and checkpoint identity remain bound. A completed-work ledger entry must be checked before any redispatch of a named workstream.

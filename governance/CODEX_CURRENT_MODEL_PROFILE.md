@@ -103,3 +103,34 @@ VERIFY codex --version
 ```
 
 Do not rewrite Router V2 or the stable Codex V2 core merely because a model/version label changed.
+
+## Validated local fallback path / retired assumptions — 2026-09-19
+
+This is current execution telemetry, not the preferred future architecture.
+
+```text
+ROLE=PROVEN_LOCAL_FILE_BACKED_CLI_FALLBACK_OR_RECOVERY
+CANONICAL_EVIDENCE=Issue_163_comment_5740747880
+KNOWN_GOOD_INVOCATION_FAMILY=codex config overrides + exec + frozen model/sandbox/json/output/cwd
+EXACT_PATCH_VERSION_REQUIRED=NO
+UNPROVEN_CONFIG_BYPASS_FLAG_REQUIRED=NO
+UNPROVEN_APPROVAL_FLAG_REQUIRED=NO
+LOCAL_GITHUB_PUBLICATION_REQUIRED_BEFORE_SEMANTIC_START=NO
+LOCAL_CANONICAL_PR_HEAD_OBJECT_REQUIRED_BEFORE_SEMANTIC_START=NO
+ONE_SEMANTIC_SESSION=YES
+IMMEDIATE_DURABLE_CHECKPOINT=YES
+```
+
+Retired unless capability/environment materially changes:
+
+```text
+STALE_EXACT_CODEX_PATCH_VERSION_GATE
+UNPROVEN_CONFIG_BYPASS_FLAG_REQUIREMENT
+UNPROVEN_APPROVAL_FLAG_INVOCATION
+LOCAL_CANONICAL_PR_HEAD_OBJECT_PRESENCE_AS_SEMANTIC_PREREQUISITE
+LOCAL_GITHUB_PUBLICATION_AS_SEMANTIC_START_PREREQUISITE
+DYNAMIC_LAUNCHER_REPAIR_CHAIN_AS_DEFAULT
+```
+
+Provider-native asynchronous/issue-centric execution remains the preferred experiment when fidelity, observability and recovery are sufficient. The proven local file-backed route remains fallback/recovery evidence, not a mandate to reproduce custom source-reconstruction mechanics.
+

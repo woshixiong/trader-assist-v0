@@ -209,29 +209,47 @@ AND KNOWN_TRANSPORT_INCIDENT_NONREGRESSION != PASS
 
 If an exact semantic checkpoint already exists and the local GitHub TLS/API route is proven unreliable, do not rerun the semantic action or loop local publication retries. Preserve the checkpoint and follow the specialized procedure's authoritative remote/offline-artifact fallback ladder. A previously successful local read/authentication probe is not by itself proof that the later mutation path remains healthy.
 
-### 1C. Engineering-window rotation hard gate
+### 1C. Governance epoch, reusable preflight and context-headroom gate
 
-At each material Engineering Control stage entry:
-
-```text
-WINDOW_SCOPE=REQUIRED
-ROTATION_TRIGGER=REQUIRED
-ACTIVE_STAGE_CHECKPOINT_REF=REQUIRED
-```
-
-If a rotation trigger fires, the current window must freeze and verify the durable GitHub checkpoint and produce the successor-window prompt before another material stage begins. The successor window must read the checkpoint and fresh live identity; it must not rely on the predecessor transcript as canonical state.
+At material control entry record:
 
 ```text
-ROTATION_TRIGGER_FIRED=YES
-AND CHECKPOINT_VERIFIED != YES
-=> NEXT_MATERIAL_STAGE=PROHIBITED
-
-ROTATION_TRIGGER_FIRED=YES
-AND SUCCESSOR_PROMPT_READY != YES
-=> NEXT_MATERIAL_STAGE=PROHIBITED
+CONTROL_CAPSULE_REF=REQUIRED
+GOVERNANCE_EPOCH=REQUIRED
+GOVERNANCE_ATTESTATION_REF=REQUIRED
+TASK_PACKET_HASH=REQUIRED_WHEN_WRITER_PACKET_EXISTS
+EXACT_BASE_OR_HEAD=REQUIRED
+EXECUTION_SURFACE=REQUIRED
+PREFLIGHT_BINDING_KEY=REQUIRED
+COMPLETED_WORK_LEDGER_CHECK=PASS
+PREFLIGHT_REUSE_STATUS=REUSED|RECOMPUTED|NOT_APPLICABLE
 ```
+
+```text
+PREFLIGHT_BINDING_KEY =
+  GOVERNANCE_EPOCH
+  + TASK_PACKET_HASH
+  + EXACT_BASE_OR_HEAD
+  + EXECUTION_SURFACE
+```
+
+If the exact key and authority remain unchanged, reuse the bound preflight attestation and perform only fresh identity/state checks plus targeted reads. Any binding drift invalidates reuse.
+
+Before a context-heavy phase, evaluate context trust/headroom using observable proxies; no user-visible token meter is assumed.
+
+```text
+NEXT_PHASE_CONTEXT_HEAVY=YES
+AND TRUSTED_HEADROOM_INSUFFICIENT=YES
+=> FREEZE_VERIFY_CONTROL_CAPSULE
+=> BIND_RUNNING_AGENT_SESSION_OR_WORKSPACE
+=> PREEMPTIVE_ROTATION_REQUIRED
+```
+
+Rotation is not required merely because a material stage ended. Multiple routine stages may stay in one window while active state remains compact and trustworthy. The user is not responsible for making this determination.
 
 ---
+
+## 2. Research / route decision---
 
 ## 2. Research / route decision
 
@@ -523,6 +541,9 @@ USER_RELAY_REQUIRED=YES|NO|NOT_APPLICABLE
 REVIEW_OUTPUT_CONTRACT_SATISFIABLE=YES|NO|NOT_APPLICABLE
 REVIEW_RESULT_EGRESS_PERMISSION_COMPATIBLE=YES|NO|NOT_APPLICABLE
 REVIEW_RESULT_EGRESS_GATE=PASS|FAIL|NOT_APPLICABLE
+REVIEW_RESULT_KEY=
+REVIEW_RESULT_DUPLICATE_CHECK=PASS|FAIL|NOT_APPLICABLE
+REVIEW_CONTEXT_BUDGET_GATE=PASS|FAIL|NOT_APPLICABLE
 ```
 
 A write allowlist means `CHANGED_PATHS ⊆ ALLOWLIST` unless the semantic contract explicitly requires particular files to change.
@@ -553,7 +574,7 @@ REVIEW_RESULT_EGRESS_REQUIRED=NO
 Required regression cases:
 
 ```text
-A DETAILED_RESULT + GITHUB_WRITEBACK_ALLOWED + COMPLETE_DIRECT_RESULT => PASS
+A DETAILED_RESULT + GITHUB_WRITEBACK_ALLOWED + COMPLETE_DIRECT_RESULT + UNIQUE_REVIEW_RESULT_KEY => PASS
 B DETAILED_RESULT + ALL_DIRECT_WRITEBACK_FORBIDDEN + TERMINAL_ONLY_CHAT + NO_PREEXISTING_FULL_RESULT => FAIL
 C TERMINAL_ONLY_CHAT + COMPLETE_RESULT_AT_EXACT_CONTROLLER_READABLE_POINTER => PASS
 D STRICT_READ_ONLY + EXACT_ARTIFACT_POINTER_DIRECT_TO_CONTROLLER + NO_RELAY => PASS
@@ -636,6 +657,15 @@ After a material stage, report observed facts only:
 ```text
 PROJECT_ENGINEERING_RULESET_PREFLIGHT=
 ENGINEERING_PREFLIGHT_GATE=
+CONTROL_CAPSULE_REF=
+GOVERNANCE_EPOCH=
+PREFLIGHT_BINDING_KEY=
+PREFLIGHT_REUSE_STATUS=
+COMPLETED_WORK_LEDGER_REF=
+CURRENT_CONTROL_STATE=
+NEXT_ALLOWED_ACTION=
+RUNNING_AGENT_THREAD_OR_WORKSPACE_ID=
+CI_STATE_LOCATOR=
 EXACT_BASE=
 FINAL_HEAD_OR_ARTIFACT=
 CHANGED_PATHS=

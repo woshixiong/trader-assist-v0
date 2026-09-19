@@ -128,7 +128,7 @@ Current user policy until explicitly changed:
 - Within Codex, choose model and reasoning independently for task difficulty/consequence; strongest/max reasoning is not the default.
 - If Codex quota is insufficient for the required stage, Engineering Control does **not** infer fallback authority. The user supplies a bounded fallback authorization/selection before another semantic executor is used.
 - Accepted alternatives such as the user's GLM/GRM 5.3, DeepSeek V4 Pro, Trae/OpenCode or later approved routes remain fallbacks/task-specific selections, not automatic replacements.
-- Unexpected Codex capacity/quota failure after dispatch preserves the exact checkpoint/evidence, reports the boundary and stops. It does not silently switch semantic executor.
+- Unexpected Codex capacity/quota interruption after dispatch preserves the exact checkpoint/evidence and is an expected capacity pause, not a semantic failure. Resume the exact session/thread when recoverable; otherwise continue from the durable checkpoint. Do not restart the original semantic task from scratch and do not silently switch executor.
 - Temporary free/discounted models are opportunistic only and do not become durable routing dependencies.
 
 ## 4. Surface-first routing and task classes
@@ -145,6 +145,21 @@ Default priority:
 ```
 
 Codex quota never creates work and never moves deterministic work into Codex. But once a semantic Writer is actually required, healthy/usable Codex is the user's default semantic route unless the user selects another route. Engineering Control classifies the task and applies this order.
+
+### 4.1 Provider-native asynchronous semantic route
+
+When an accepted provider-native coding-agent surface can bind a task to an isolated workspace, preserve exact task identity, produce a reviewable result, expose sufficient session/result state and respect the frozen authority boundary, prefer that route over serial chat supervision.
+
+```text
+ISSUE_OR_CONTROL_CAPSULE
+-> ACCEPTED_ASYNC_AGENT
+-> ISOLATED_WORKSPACE
+-> REVIEWABLE_RESULT
+-> CI
+-> INDEPENDENT_REVIEW
+```
+
+This is a surface preference, not blanket authorization. If observability, recovery, exact identity, permission or safety fidelity is weaker than the proven fallback, use the accepted fallback instead. Do not build a custom multi-agent orchestrator merely to imitate provider-native capability.
 
 ### T0 — MECHANICAL / OPERATOR
 
@@ -248,6 +263,18 @@ ONE COMPLETE HIGH-CONSTRAINT TASK PACKET
 
 Split only at real architecture, authority, worktree, model/harness or independence boundaries.
 
+## 6A. Safe concurrency
+
+```text
+INDEPENDENT_TASKS + DISJOINT_WRITE_SURFACES + NO_DEPENDENCY
+=> PARALLEL_EXECUTION_ALLOWED
+
+SAME_WRITE_SURFACE OR SHARED_AUTHORITY OR CROSS_TASK_DEPENDENCY
+=> SERIALIZE
+```
+
+Start with a small bounded number of parallel semantic tasks and increase only after observed CI/review/worktree stability. Quality and safety gates do not relax to consume quota faster.
+
 ## 7. Semantic Writer vs deterministic operator tail
 
 A coding Writer spends reasoning on semantic code work, not routine transport.
@@ -271,6 +298,29 @@ A model-backed operator is not the default for deterministic mechanics. Use one 
 After Hermes is independently qualified, it may serve as a deterministic transport/operator where it reduces burden, but it remains subject to the same rule: it transports frozen authority and does not redesign, select a different model/reasoning state, declare independent PASS, Mark Ready, merge or deploy.
 
 Do not force an operator handoff for a microscopic already-authorized tail if the current semantic Writer can finish it with less total burden, but do not start a fresh model turn merely to run deterministic mechanics.
+
+## 7A. Workflow experiment telemetry
+
+Use real-task evidence to decide `ADOPT | ADOPT_HYBRID | REVISE_AND_CONTINUE | REJECT_AND_RETURN` without precommitting either direction:
+
+```text
+ACCEPTED_ENGINEERING_OUTPUT
+FIRST_PASS_CI_RESULT
+INDEPENDENT_REVIEW_RESULT
+SEMANTIC_REPAIR_OR_REWORK_COUNT
+HUMAN_INTERVENTION_COUNT
+HUMAN_COPY_PASTE_COUNT
+TASK_START_LATENCY
+WAITING_TIME
+WALL_CLOCK_PER_ACCEPTED_TASK
+CODEX_QUOTA_USED_WHEN_EXPOSED
+TRANSPORT_OR_STREAM_INCIDENTS
+DUPLICATE_ACTIONS
+WORKTREE_CONFLICTS
+AUTHORITY_DRIFT
+```
+
+Quota consumption by itself is never success.
 
 ## 8. Hermes insertion requirements
 

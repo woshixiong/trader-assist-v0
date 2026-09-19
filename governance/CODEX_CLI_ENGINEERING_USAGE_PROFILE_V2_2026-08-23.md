@@ -63,6 +63,15 @@ and retain the exact `thread_id` plus `turn.completed.usage` values. This obtain
 
 Use an exact session ID for resume. `resume --last` may be used manually, but it is not an automation identity because the wrong most-recent session can be selected.
 
+A five-hour or other provider capacity boundary is an expected pause when the task/session is otherwise healthy. It does not consume the application repair budget and does not authorize a new semantic run from scratch.
+
+```text
+SAME_TASK + SAME_AUTHORITY + SAME_WORKSPACE + SAME_CHECKPOINT + EXACT_SESSION_RESUME
+=> CONTINUATION_OF_SAME_SEMANTIC_ATTEMPT=YES
+```
+
+If the exact session cannot be recovered, freeze the existing diff/worktree as the durable checkpoint and start a fresh continuation session bound to that checkpoint. Do not discard completed semantic work merely because quota reset occurred.
+
 ## 4. Repository instructions — map, not encyclopedia
 
 The root `AGENTS.md` is a compact routing/authority map. Do not duplicate the full governance corpus there.
@@ -149,6 +158,21 @@ FREEZE CURRENT EVIDENCE
 ```
 
 This rule must be frozen by Engineering Control before Codex dispatch.
+
+## 6A. Execution-path ratchet / negative capability cache
+
+Before inventing a new launcher shape:
+
+```text
+KNOWN_GOOD_PATH_FITS_TASK=YES
+=> REUSE_KNOWN_GOOD_PATH
+
+KNOWN_FAILED_PATH
+=> PROHIBITED_BY_DEFAULT
+=> REOPEN_ONLY_WITH_CHANGED_CAPABILITY_OR_ENVIRONMENT_EVIDENCE
+```
+
+The stable rule is capability-based, not exact-patch-version based. Emergency source reconstruction or transport-specific recovery remains fallback evidence rather than the default architecture.
 
 ## 7. Stable prefix + mutable tail
 

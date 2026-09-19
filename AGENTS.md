@@ -19,52 +19,92 @@ The Writer does not reread full Unified V2, full preflight, full Issue/PR histor
 
 Canonical rules remain full-strength authority; progressive disclosure changes model context, not governance.
 
-### 1.1 Project-wide context architecture
+### 1.1 Durable control plane and Control Capsule
 
-Chat history is an ephemeral working surface, not canonical engineering state. Durable current state belongs in GitHub.
+Chat history is an ephemeral reasoning surface, not canonical engineering state. GitHub owns durable workflow state.
 
-Default context layers:
+Default architecture:
 
 ```text
-ALWAYS_ON_CORE
--> ACTIVE_STAGE_CHECKPOINT / TASK OR REVIEW PACKET
--> TARGETED_CANONICAL_READ ONLY FOR A CONCRETE UNKNOWN / CONFLICT / DRIFT
--> COLD_HISTORY / RAW_EVIDENCE OUTSIDE MODEL CONTEXT BY DEFAULT
+GITHUB = DURABLE CONTROL PLANE / STATE MACHINE
+CHATGPT = MATERIAL DECISION / EXCEPTION / ADJUDICATION SERVICE
+CODEX OR OTHER ACCEPTED WRITER = SEMANTIC IMPLEMENTATION SERVICE
+GITHUB ACTIONS / DETERMINISTIC TOOLS = VERIFICATION AND ROUTINE TRANSITIONS
 ```
 
-Every compact checkpoint must preserve the current stage, exact main/base/head when applicable, active authority, accepted decisions, superseded routes, unresolved blockers, allowed scope, acceptance criteria, next authorized action and exact provenance locators. Context compression may remove repetition, never authority or evidence. A missing material fact, conflicting locator or uncertain supersession state triggers the minimum targeted canonical read; unresolved uncertainty fails closed.
+Each active material task maintains one compact canonical **Control Capsule**:
+
+```text
+TASK_ID
+GOVERNANCE_EPOCH
+EXACT_MAIN
+EXACT_TARGET_HEAD_OR_TREE
+TASK_PACKET_HASH
+RISK_CLASS
+CURRENT_STATE
+CURRENT_BLOCKER
+NEXT_ALLOWED_ACTION
+RUNNING_AGENT_THREAD_OR_WORKSPACE_ID
+CURRENT_PR
+CI_STATE_LOCATOR
+COMPLETED_WORK_LEDGER
+RETAINED_USER_GATES
+AUTHORITY_ATTESTATION_LOCATORS
+PREFLIGHT_BINDING_KEY
+```
+
+Full technical evidence, historical failures and superseded routes stay behind exact GitHub locators. Active model context contains only the capsule, current packet/manifest and the minimum facts required for the current decision.
 
 ```text
 CHAT_HISTORY_IS_NOT_ENGINEERING_STATE=YES
 NO_CRITICAL_ENGINEERING_STATE_ONLY_IN_CHAT=YES
-QUALITY_AND_CORRECTNESS_GT_CONTEXT_ECONOMY=YES
+ACTIVE_STATE_MINIMALITY_GATE=REQUIRED
+COMPLETED_WORK_LEDGER=REQUIRED
 FULL_ISSUE_PR_HISTORY_RELOAD_BY_DEFAULT=NO
 RAW_LONG_LOG_IN_MODEL_CONTEXT=NO_BY_DEFAULT
+QUALITY_AND_CORRECTNESS_GT_CONTEXT_ECONOMY=YES
 ```
 
-### 1.2 Engineering-window lifecycle
+### 1.2 Governance epoch, reusable preflight and context lifecycle
 
-Each Engineering Control conversation/window must establish at entry:
+A governance epoch is the exact set/hash of applicable canonical authority file SHAs used to produce the current governance attestation.
 
 ```text
-WINDOW_SCOPE=
-ROTATION_TRIGGER=
-ACTIVE_CHECKPOINT_REF=
+FULL_CORE_RULE_READ=
+  FIRST MATERIAL ACTION IN A FRESH CONTROL CONTEXT
+  OR GOVERNANCE_EPOCH DRIFT
+  OR CONCRETE AUTHORITY CONFLICT
+
+UNCHANGED_GOVERNANCE_EPOCH
+=> REUSE BOUND GOVERNANCE ATTESTATION
+=> TARGETED CANONICAL READS ONLY
 ```
 
-Rotation is event-driven, not dependent on a user-visible token meter. Material stage completion, material replan/authority change, independent-review boundary, command-family holistic regeneration, context warning or loss of context trust, or repeated transport interruption are default rotation triggers.
-
-When a trigger fires, Engineering Control must first write/verify a durable GitHub checkpoint, then produce a complete successor-window prompt that points to that checkpoint and the minimum canonical locators. The current window must not continue into the next material stage merely because it still has capacity. A successor window verifies the predecessor checkpoint and live identity before material work.
-
-Default operating unit:
+Material preflight is reusable when its binding key is unchanged:
 
 ```text
-ONE_ENGINEERING_WINDOW ~= ONE_MATERIAL_BOUNDED_STAGE
+PREFLIGHT_BINDING_KEY =
+  GOVERNANCE_EPOCH
+  + TASK_PACKET_HASH
+  + EXACT_BASE_OR_HEAD
+  + EXECUTION_SURFACE
 ```
 
-This is a context-lifecycle default, not a command-count rule. Tiny deterministic follow-up may stay in the same window; a new semantic stage, material replan, independent review or command-family regeneration normally rotates. Before any long Codex/CI/review action, a durable checkpoint must already exist so transport/context loss cannot erase the current authority state.
+Fresh live repository/main/Issue/PR/head/CI identity checks remain mandatory. Attestation reuse is memoization of exact proven authority, never permission to ignore drift.
 
-## 2. User shorthand for unified-governance changes
+Engineering Control is event-driven. Routine provider/GitHub-proven transitions do not require a model turn merely to restate state. Wake control for a new material direction, semantic blocker/new root cause, material CI failure requiring reasoning, scope/authority/identity drift, material Review finding, user-retained gate, or context-integrity risk.
+
+Window rotation protects context capacity/trust; it is not a stage ceremony.
+
+```text
+ONE_MATERIAL_STAGE_PER_WINDOW=NO_DEFAULT
+MULTIPLE_ROUTINE_STAGES_PER_WINDOW=ALLOWED_WHEN_CONTEXT_REMAINS_COMPACT
+PREEMPTIVE_ROTATION=REQUIRED_WHEN_NEXT_HEAVY_PHASE_LACKS_TRUSTED_HEADROOM
+```
+
+On rotation, freeze/verify the Control Capsule and any running session/workspace identity, then start the successor from that durable state. The user is not responsible for detecting context pressure or reconstructing the authority chain.
+
+## 2. User shorthand## 2. User shorthand for unified-governance changes
 
 When the user says **“往统一规则里增加内容”**, **“把这条加入统一规则”**, **“add this to the unified rules”**, or an equivalent phrase, treat it as a request to start the Unified Engineering Governance change-routing process.
 
@@ -155,7 +195,18 @@ SEMANTIC_READINESS_NE_PUBLICATION_READINESS=YES
 PER_TASK_DYNAMIC_EXECUTION_PROGRAM_GENERATION=PROHIBITED_BY_DEFAULT
 TASK_PACKET_IS_DATA_NOT_EXECUTION_PROGRAM=YES
 VERSIONED_STABLE_SEMANTIC_RUNNER=DEFAULT_WHEN_LOCAL_MODEL_EXECUTION_IS_NEEDED
-ENGINEERING_WINDOW_ROTATION_POLICY=REQUIRED
+ENGINEERING_WINDOW_ROTATION_POLICY=CAPACITY_AND_TRUST_BASED
+GITHUB_CONTROL_PLANE_STATE_MACHINE=YES
+CONTROL_CAPSULE_REQUIRED=YES
+GOVERNANCE_EPOCH_ATTESTATION=REQUIRED
+BOUND_PREFLIGHT_REUSE_WHEN_BINDING_UNCHANGED=YES
+EVENT_DRIVEN_CHATGPT_CONTROL=YES
+ACTIVE_STATE_MINIMALITY_GATE=REQUIRED
+COMPLETED_WORK_LEDGER=REQUIRED
+VALIDATED_EXECUTION_PATH_LEDGER=REQUIRED
+FAILED_PATH_RETIREMENT_LEDGER=REQUIRED
+QUOTA_BOUNDARY_RESUME_NOT_RETRY=YES
+REVIEW_RESULT_EGRESS_IDEMPOTENCY=REQUIRED
 TRANSPORT_INTERRUPTION_NE_TASK_FAILURE=YES
 FINAL_INDEPENDENT_REVIEW_REQUIRES_NEW_CHAT_CONTEXT=YES
 EXACT_ARTIFACT_EXACT_HEAD_CI_INDEPENDENT_REVIEW=WHEN_APPLICABLE

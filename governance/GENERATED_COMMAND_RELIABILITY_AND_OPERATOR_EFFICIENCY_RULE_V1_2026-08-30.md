@@ -192,6 +192,30 @@ SEPARATE_REVIEW_REQUIRED=YES
 
 Successful emergency recovery mechanisms such as Git-object reconstruction, patch stitching, self-extracting payloads or transport-specific fallbacks remain recovery evidence. They do not automatically become normal launch architecture.
 
+### 3.1B Validated execution-path and failed-path ledgers
+
+Command reliability must preserve successful knowledge as aggressively as failure knowledge.
+
+```text
+VALIDATED_EXECUTION_PATH_LEDGER=REQUIRED
+FAILED_PATH_RETIREMENT_LEDGER=REQUIRED
+```
+
+A validated entry records:
+- executor/client family;
+- minimum required capabilities;
+- known-good invocation shape;
+- source-acquisition and workspace-materialization contract;
+- checkpoint/egress contract;
+- last proven version or capability evidence;
+- canonical evidence locator.
+
+When a known-good path fits the frozen task, prefer it. Introduce a new execution shape only when a concrete requirement or capability/environment drift proves the known-good path insufficient.
+
+A failed-path entry records the retired assumption/mechanic and canonical evidence. Known-failed paths are prohibited by default and may reopen only with changed capability/environment evidence plus bounded requalification. Renaming or wrapping the same assumption does not reset retirement.
+
+Current Codex-specific entries live in the applicable Codex profile rather than being duplicated here.
+
 ### 3.2 Launch-artifact delivery is a prerequisite to operator execution
 
 A generated ZIP, script, command file or bundle is not available merely because Engineering Control described it or recorded an expected filename/hash.
@@ -345,6 +369,25 @@ Examples:
 - macOS failure caused by platform mismatch -> move remaining proof to the correct Linux surface.
 
 Hidden reruns/retries are prohibited.
+
+### 7.0 Quota/session capacity interruption
+
+Capacity/quota interruption after semantic start is a lifecycle pause, not automatically a semantic failure or repair-budget event.
+
+```text
+QUOTA_BOUNDARY_INTERRUPTION=EXPECTED_CAPACITY_PAUSE
+SEMANTIC_FAILURE_FROM_CAPACITY_PAUSE=NO
+APPLICATION_REPAIR_BUDGET_CONSUMED=NO
+AUTOMATIC_RERUN_FROM_SCRATCH=NO
+```
+
+Before or during resumable material model work persist the task/packet identity, exact workspace, session/thread identity when exposed, model/tool shape, last durable worktree checkpoint, current diff/artifact identity, validation state and next pending step.
+
+After capacity returns:
+1. verify same task/authority/workspace/model-tool shape and no unexpected drift;
+2. resume the exact session/thread when recoverable;
+3. otherwise start a fresh continuation bound to the existing durable checkpoint, not the original task from scratch;
+4. ambiguous/conflicted state => control reconciliation / SAFE_STOP.
 
 ### 7.1 Harness and persisted-state boundary proof
 

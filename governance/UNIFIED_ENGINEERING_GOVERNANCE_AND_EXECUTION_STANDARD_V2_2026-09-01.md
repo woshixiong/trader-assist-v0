@@ -156,7 +156,7 @@ An intermediate test, CI or Reviewer PASS is not task completion unless the acti
 
 ### Task-completion truth gate
 
-Whole-task completion is distinct from completion of any intermediate stage. Writer completion, a CI pass, an independent Review pass, publication completion, or PR merge is not by itself whole-task completion. When the active task contract requires post-merge readback or verification, a merged PR remains intermediate until that required gate passes.
+Whole-task completion is distinct from completion of any intermediate stage. Writer completion, a CI pass, an independent Review pass, publication completion, or PR merge is not by itself whole-task completion. When the active task contract requires post-merge readback or verification, a merged PR remains intermediate until that required gate passes. The current terminality/readback state belongs in the canonical Control Capsule/completed-work state; it must not exist only in chat memory.
 
 The project-wide task-completion predicate is:
 
@@ -314,96 +314,142 @@ WRITER_CONTEXT_NE_CANONICAL_CORPUS=YES
 CONTEXT_BLOAT_WITHOUT_INCREMENTAL_DECISION_VALUE=PROHIBITED
 ```
 
-### 4.4 Project-wide context architecture
+### 4.4 Durable control plane, Control Capsule and active-state minimality
 
-Progressive disclosure applies to Engineering Control, semantic Writers and independent Reviewers, not only to the Writer.
+Progressive disclosure applies to Engineering Control, semantic Writers and independent Reviewers.
+
+The durable workflow owner is GitHub, not a chat transcript:
 
 ```text
-L1_ALWAYS_ON_CORE=
-  root authority map + rules index/navigation + live identity
-
-L2_ACTIVE_STATE=
-  current durable stage checkpoint / Task Packet / Review Manifest
-
-L3_TARGETED_CANONICAL_RETRIEVAL=
-  minimum exact source needed for a concrete unknown, conflict, drift or supersession question
-
-L4_COLD_HISTORY_AND_RAW_EVIDENCE=
-  complete historical Issues/PRs/logs/artifacts retained outside model context by default
+GITHUB = DURABLE CONTROL PLANE / STATE MACHINE
+CHATGPT = MATERIAL DECISION / EXCEPTION / ADJUDICATION SERVICE
+ACCEPTED SEMANTIC WRITER = IMPLEMENTATION SERVICE
+GITHUB ACTIONS / DETERMINISTIC TOOLS = ROUTINE VERIFICATION / STATE TRANSITION SURFACES
 ```
 
-The active durable checkpoint must preserve, as applicable:
+Every active material task maintains one compact canonical Control Capsule:
 
 ```text
-CURRENT_STAGE
-EXACT_MAIN / BASE / HEAD / TREE
-ACTIVE_AUTHORITY_AND_PROVENANCE
-ACCEPTED_DECISIONS
-SUPERSEDED_OR_REJECTED_ROUTES
-UNRESOLVED_BLOCKERS
-WRITE / READ SCOPE
-ACCEPTANCE_CRITERIA
-NEXT_AUTHORIZED_ACTION
-REVIEW_REQUIRED
-STOP_CONDITIONS
+TASK_ID
+GOVERNANCE_EPOCH
+EXACT_MAIN
+EXACT_TARGET_HEAD / TREE
+TASK_PACKET_HASH
+RISK_CLASS
+CURRENT_STATE
+CURRENT_BLOCKER
+NEXT_ALLOWED_ACTION
+RUNNING_AGENT_THREAD_OR_WORKSPACE_ID
+CURRENT_PR
+CI_STATE_LOCATOR
+COMPLETED_WORK_LEDGER
+RETAINED_USER_GATES
+AUTHORITY_ATTESTATION_LOCATORS
+PREFLIGHT_BINDING_KEY
 ```
 
-Every compressed assertion that materially affects execution must either carry its exact canonical provenance locator or be directly fresh-verifiable from live state. Compression is not permission to omit an authority, blocker, negative constraint or safety boundary.
+Suggested state vocabulary is intentionally small:
 
 ```text
-CHAT_HISTORY_IS_NOT_ENGINEERING_STATE=YES
-GITHUB_DURABLE_CHECKPOINT_IS_ENGINEERING_STATE=YES
+PLANNING
+READY_FOR_AGENT
+AGENT_RUNNING
+PR_OPEN
+CI_RUNNING
+CI_BLOCKED
+REVIEW_NEEDED
+BLOCKED_DECISION
+ACCEPTED
+TERMINAL
+```
+
+The Control Capsule is active state, not a second authority. Full evidence/history remains canonical behind exact locators.
+
+```text
+ACTIVE_STATE_MINIMALITY_GATE=REQUIRED
+DURABLE_FULL_EVIDENCE_NE_ACTIVE_MODEL_CONTEXT=YES
 NO_CRITICAL_ENGINEERING_STATE_ONLY_IN_CHAT=YES
 FULL_ISSUE_PR_HISTORY_RELOAD_BY_CONTROL=NO_BY_DEFAULT
 FULL_GOVERNANCE_CORPUS_RELOAD_BY_CONTROL=NO_BY_DEFAULT
-FULL_ISSUE_PR_HISTORY_RELOAD_BY_REVIEWER=NO_BY_DEFAULT
 RAW_LONG_LOG_IN_MODEL_CONTEXT=NO_BY_DEFAULT
-QUALITY_AND_CORRECTNESS_GT_CONTEXT_ECONOMY=YES
 ```
 
-If the compact state is insufficient, perform a targeted canonical read. If the material fact remains unresolved, fail closed; never guess to save context.
-
-Large single-file retrieval follows the same escalation ladder:
+The completed-work ledger must record each separate workstream sufficiently to prevent stale redispatch:
 
 ```text
-KNOWN_SYMBOL / HEADING / RANGE
--> TARGETED RANGE FIRST
--> ADJACENT SECTION IF NEEDED
--> FULL FILE ONLY WHEN WHOLE-FILE SEMANTICS ARE MATERIALLY REQUIRED
+TASK_OR_WORKSTREAM_ID
+SEMANTIC_ATTEMPT_STATUS
+TERMINAL_RESULT_OR_RC
+CANONICAL_RESULT_LOCATOR
+RETRY_OR_RESUME_ELIGIBILITY
+NEXT_ALLOWED_ACTION
 ```
 
-### 4.5 Engineering-window lifecycle and automatic rotation
+Before dispatching a named workstream, fresh-check this ledger and its canonical result locator. A terminal/completed semantic action is not rerun merely because an older plan still mentions it.
 
-Every Engineering Control conversation/window must declare at entry:
+### 4.5 Governance epoch, reusable attestation and event-driven control
+
+A governance epoch is the exact set/hash of applicable current authority-file SHAs that produced the bound governance attestation.
 
 ```text
-WINDOW_SCOPE=
-ROTATION_TRIGGER=
-ACTIVE_CHECKPOINT_REF=
+FULL_CORE_RULE_READ=
+  FIRST MATERIAL CONTROL ACTION IN A FRESH CONTEXT
+  OR GOVERNANCE_EPOCH_DRIFT
+  OR CONCRETE AUTHORITY CONFLICT
+
+UNCHANGED_GOVERNANCE_EPOCH
+=> REUSE_BOUND_GOVERNANCE_ATTESTATION
+=> TARGETED_CANONICAL_READ_ONLY
 ```
 
-Rotation is event-driven; it does not depend on the user seeing an internal token/context meter. Default triggers include:
+Fresh live repository/main/Issue/PR/head/CI identity checks remain mandatory. Reuse never overrides a changed authority, changed task packet, changed execution surface or identity drift.
 
-- completion of the current material stage;
-- material replan, authority change or ownership boundary;
-- independent-review handoff;
-- command-family holistic regeneration;
-- product context warning or loss of context trust;
-- repeated transport/stream interruption that creates transcript-integrity risk.
-
-On trigger:
+Material preflight is reusable only when this binding key is unchanged:
 
 ```text
-FREEZE_AND_VERIFY_GITHUB_CHECKPOINT
--> GENERATE_COMPLETE_SUCCESSOR_WINDOW_PROMPT
--> STOP CURRENT_WINDOW_BEFORE_NEXT_MATERIAL_STAGE
+PREFLIGHT_BINDING_KEY =
+  GOVERNANCE_EPOCH
+  + TASK_PACKET_HASH
+  + EXACT_BASE_OR_HEAD
+  + EXECUTION_SURFACE
 ```
 
-The successor verifies live identity plus the predecessor checkpoint before material work. It starts from the checkpoint, not by replaying the whole predecessor transcript. Failure to produce/verify the checkpoint or successor prompt blocks transition into the next material stage.
+```text
+NO_BINDING_DRIFT
+=> REUSE_PREFLIGHT_ATTESTATION
 
-Default lifecycle granularity is one material bounded stage per Engineering Control window. This is not one-command-per-window and must not cause gratuitous rotation for tiny deterministic tails. A durable checkpoint is required **before** any long-running/fragile Codex, CI or independent-review handoff.
+ANY_BINDING_DRIFT
+=> INVALIDATE_AND_RECOMPUTE_APPLICABLE_PREFLIGHT
+```
 
-### 4.6 Stable semantic-execution substrate
+Engineering Control is event-driven. It must wake for:
+- a new material direction, architecture, provider or authority decision;
+- a semantic blocker or new root cause;
+- a material CI failure that requires reasoning/replan;
+- scope, authority or identity drift;
+- a material independent-Review finding;
+- a user-retained gate;
+- context-capacity/trust risk.
+
+Routine healthy transitions proven by canonical provider/GitHub state should update the Control Capsule without an extra Engineering-Control model turn merely to restate them.
+
+```text
+READY_FOR_AGENT -> AGENT_RUNNING -> PR_OPEN -> CI_RUNNING -> CI_PASS -> REVIEW_NEEDED
+```
+
+may be mechanically advanced when the exact transition evidence exists and no material decision is introduced.
+
+Window rotation protects context capacity and trust; it is not a stage ceremony.
+
+```text
+ONE_MATERIAL_STAGE_PER_WINDOW=NO_DEFAULT
+MULTIPLE_ROUTINE_STAGES_PER_WINDOW=ALLOWED_WHEN_ACTIVE_CONTEXT_REMAINS_COMPACT
+PREEMPTIVE_ROTATION=REQUIRED_WHEN_NEXT_CONTEXT_HEAVY_PHASE_LACKS_TRUSTED_HEADROOM
+```
+
+Observable rotation triggers include growing handoff payloads, repeated transport interruption, command-family holistic regeneration, context warning/loss of context trust, or a coming research/review/replan phase requiring broad evidence. On trigger, freeze/verify the Control Capsule plus any running agent/session/workspace identity and start the successor from those locators. The user is not responsible for monitoring the token meter or reconstructing state.
+
+### 4.6 Stable semantic-execution substrate### 4.6 Stable semantic-execution substrate
 
 Repeated command incidents show that reliability does not converge by generating a new execution program for every task. The project therefore separates **task semantics** from **execution mechanics**.
 
@@ -438,6 +484,17 @@ ALREADY-EXACT VERIFIED LOCAL SOURCE / ACCEPTED EXACT SOURCE ARTIFACT
 ```
 
 A recovery technique that succeeds once does not become the default substrate merely because it bypassed the latest failure.
+
+Execution knowledge must ratchet in both directions:
+
+```text
+VALIDATED_EXECUTION_PATH_LEDGER=REQUIRED
+FAILED_PATH_RETIREMENT_LEDGER=REQUIRED
+```
+
+A validated path records executor/client family, minimum required capabilities, known-good invocation shape, source/workspace/checkpoint/egress contract, last proven capability evidence and canonical locator. If a known-good path fits the frozen task, reuse it unless concrete capability/environment drift proves it insufficient.
+
+A failed-path entry records the failed assumption/mechanic and canonical evidence. A known failed path is prohibited by default and may be reopened only with changed capability/environment evidence plus a bounded requalification. Renaming a wrapper does not make the same failed assumption new.
 
 ## 5. Research, evidence and decision method
 
@@ -909,15 +966,16 @@ Do not respond by building a generic capacity platform unless evidence requires 
 
 ## 10. Writer stage, Task Packet and active ownership
 
-### 10.1 One coherent Writer
+### 10.1 One coherent Writer and safe task-level parallelism
 
 ```text
-PARALLELIZE INDEPENDENT WORK
+PARALLELIZE INDEPENDENT TASKS
 SERIALIZE SHARED AUTHORITY
+SERIALIZE SAME WRITE SURFACE OR DEPENDENT WORKSTREAMS
 ONE_PRIMARY_WRITER_PER_COHERENT_SHARED_AUTHORITY_STAGE=YES
 ```
 
-Do not create competing Writers against the same durable truth or release branch. Split only at real contract, authority, worktree or independence boundaries.
+Task-level parallelism is allowed when worktrees/write surfaces and authority are disjoint and the dependency graph permits it. Start with bounded independent tasks and increase concurrency only from observed stability evidence. Do not create competing Writers against the same durable truth, code surface or release branch. Split only at real contract, authority, worktree or independence boundaries.
 
 ### 10.2 Complete Task Packet
 
@@ -945,13 +1003,15 @@ FINAL_USER_AUTHORITY_BOUNDARY
 
 If a new architecture invariant, provider constraint, authority boundary, mature-solution P0 blocker or major attack case is discovered before execution, regenerate one complete replacement packet. Architecture-critical prompt addenda assembled by the user are prohibited.
 
-### 10.3 Active task ownership
+### 10.3 Active task ownership through durable state
 
-The current control/orchestration role owns the bounded task until terminal disposition or explicit acknowledged handoff.
+The bounded task remains owned until terminal disposition or explicit acknowledged handoff, but ownership is represented by the canonical Control Capsule rather than by one chat window retaining the entire chain in memory.
 
-At intermediate gates it must execute every safe authorized next action, prepare the minimum blocked next step, minimize user relay and stop only the specific unauthorized/external action. A blocked action does not abandon the task.
+Routine provider/GitHub-proven transitions may proceed mechanically. Engineering Control intervenes only when the transition needs material judgment, exception handling, adjudication or a user-retained gate.
 
-The user is not the routine Writer/CI/Reviewer information bus when exact evidence can be carried directly.
+At intermediate gates, execute every safe authorized next action, prepare the minimum blocked next step, update durable state, minimize user relay and stop only the specific unauthorized/external action. A blocked action does not abandon the task.
+
+The user is not the routine Writer/CI/Reviewer information bus and is not responsible for remembering completed work, context headroom, repair budgets or running-session identity.
 
 ### 10.4 Lossless authority-bearing handoff
 
@@ -980,12 +1040,42 @@ An intermediary summary may improve readability or navigation, but it is not a s
 
 Where a selected specialized operator/handoff contract is stricter, such as a lossless task-packet schema, the stricter contract additionally applies and may not weaken this project-wide rule.
 
-### 10.5 Authority-bearing review-result egress
+### 10.5 Authority-bearing review context and idempotent result egress
 
-Before dispatching an authority-bearing independent review whose result is consumed downstream, the owning controller must have direct access to the exact result. Provider-native direct writeback is preferred when available; when it exists, routine user copy/paste relay is prohibited. Strict-read-only/no-mutation review remains valid when the complete authority-bearing result is directly readable through another exact surface; otherwise the handoff must permit the minimum bounded final-result writeback needed to satisfy the output contract. Terminal-verdict-only output is valid only when the complete result already exists on an exact controller-readable surface. Output-content requirements and mutation/output permissions must be jointly satisfiable; no single transport is mandated.
+One authority-bearing independent Review uses a fresh ordinary ChatGPT review window and that window retires after final result egress. A second unrelated authority-bearing Review starts fresh.
+
+The compact Review Manifest contains only exact target/base/head/tree, exact changed scope/diff, frozen acceptance criteria, decisive evidence locators, exact upstream identity when applicable, required safety/authority boundaries and the output contract. Full history/governance/source inventory is not default input.
+
+If proof collection itself becomes large enough to threaten context integrity:
 
 ```text
+FREEZE_BOUNDED_EVIDENCE_VERIFICATION_CHECKPOINT
+-> FRESH_ADJUDICATION_WINDOW
+```
+
+without weakening the acceptance contract.
+
+Before dispatching an authority-bearing independent review whose result is consumed downstream, the owning controller must have direct access to the exact result. Provider-native direct writeback is preferred when available; routine user copy/paste relay is prohibited when an exact direct surface exists.
+
+Every authority-bearing Review result has a deterministic idempotency key:
+
+```text
+REVIEW_RESULT_KEY =
+  REVIEW_CLASS
+  + TARGET_IDENTITY
+  + CANDIDATE_OR_PACKET_IDENTITY
+  + EXACT_HEAD_OR_TREE
+```
+
+Before writeback, fresh-read the canonical target thread and search for the same key. If it exists, consume its canonical comment/result ID and do not write another authority-bearing result. After stream interruption/reconnect, read-before-write is mandatory; blind rewrite is prohibited.
+
+```text
+ONE_AUTHORITY_BEARING_REVIEW_PER_FRESH_WINDOW=YES
+REVIEW_WINDOW_RETIRES_AFTER_RESULT_EGRESS=YES
+REVIEW_CONTEXT_BUDGET_GATE=REQUIRED
 AUTHORITY_BEARING_REVIEW_RESULT_DIRECT_CONTROLLER_READABLE=REQUIRED
+REVIEW_RESULT_EGRESS_IDEMPOTENCY=REQUIRED
+READ_BEFORE_REVIEW_RESULT_WRITE=REQUIRED
 USER_RELAY_REQUIRED_WHEN_DIRECT_RESULT_SURFACE_AVAILABLE=NO
 REVIEW_OUTPUT_AND_PERMISSION_CONTRACT_JOINTLY_SATISFIABLE=REQUIRED
 PROVIDER_NATIVE_DIRECT_WRITEBACK=PREFERRED_WHEN_AVAILABLE
@@ -1023,6 +1113,9 @@ QUALITY_FIRST=YES
 USER_MANUAL_OVERRIDE=ALWAYS_AVAILABLE
 SILENT_SUBSTITUTION_OR_FALLBACK=PROHIBITED
 UNAUTHORIZED_RETRY_OR_RESUME=PROHIBITED
+QUOTA_OR_CAPACITY_PAUSE_WITH_SAME_TASK_AUTHORITY_CHECKPOINT_IS_NOT_SEMANTIC_RETRY=YES
+EXACT_SESSION_RESUME_FIRST_WHEN_SUPPORTED=YES
+RESTART_FROM_ORIGINAL_TASK_AFTER_CAPACITY_PAUSE=NO_BY_DEFAULT
 REQUESTED_VS_ACTUAL_REQUIRED_IDENTITY_MISMATCH=ROUTER_INCIDENT
 ONE_PRIMARY_WRITER_PER_SHARED_AUTHORITY_STAGE=YES
 WRITER_SELF_PASS_IS_NOT_INDEPENDENT_ACCEPTANCE
