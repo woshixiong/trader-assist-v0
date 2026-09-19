@@ -24,6 +24,7 @@ from trader_assist_v0.nautilus_e4.contracts import (
     SourceEvent,
 )
 from trader_assist_v0.nautilus_g4.catalog_bridge import (
+    _canonical_native_aggressor_side,
     admit_hypothetical_order_intent,
     bind_rebuildable_cache,
     build_replay_payload,
@@ -122,7 +123,7 @@ def replay_admitted(
     }
     if data_kind is DataKind.TRADE:
         native_trade_id = native_trade_id or f"native-trade-{ordinal}"
-        aggressor_side = aggressor_side or "BUYER"
+        aggressor_side = aggressor_side or "BUY"
     source = SourceEvent.create(
         market_id=market_id,
         expression_id=expression_id,
@@ -408,7 +409,7 @@ def test_native_replay_projection_is_lossless_deterministic_and_source_bound() -
     )
     events = (
         replay_admitted(1, DataKind.BBO),
-        replay_admitted(2, DataKind.TRADE, aggressor_side="BUYER"),
+        replay_admitted(2, DataKind.TRADE, aggressor_side="BUY"),
         replay_admitted(3, DataKind.BAR, event_context=bar_type),
     )
     projection = project_native_replay(
@@ -445,7 +446,7 @@ def test_native_replay_projection_is_lossless_deterministic_and_source_bound() -
     assert str(trade.instrument_id) == NATIVE_INSTRUMENT
     assert (str(trade.price), str(trade.size)) == ("2000.00", "1.00")
     assert str(trade.trade_id) == "native-trade-2"
-    assert str(trade.aggressor_side) == "BUYER"
+    assert str(trade.aggressor_side) == "BUY"
     assert (trade.ts_event, trade.ts_init) == (20, 21)
 
     assert isinstance(bar, Bar)
@@ -458,6 +459,78 @@ def test_native_replay_projection_is_lossless_deterministic_and_source_bound() -
     )
     assert str(bar.volume) == "12.00"
     assert (bar.ts_event, bar.ts_init) == (30, 31)
+
+
+@pytest.mark.parametrize(
+    ("source_side", "canonical_side"),
+    (("BUY", "BUY"), ("BUYER", "BUY"), ("SELL", "SELL"), ("SELLER", "SELL")),
+)
+def test_aggressor_side_source_labels_have_unambiguous_canonical_meaning(
+    source_side: str,
+    canonical_side: str,
+) -> None:
+    assert _canonical_native_aggressor_side(source_side) == canonical_side
+
+
+@pytest.mark.skipif(not NAUTILUS_AVAILABLE, reason="optional Nautilus rc5 is absent")
+def test_aggressor_aliases_bind_canonical_native_content_and_source_provenance() -> None:
+    from nautilus_trader.model import TradeTick
+
+    projections = {
+        source_side: project_native_replay(
+            events=(
+                replay_admitted(1, DataKind.TRADE, aggressor_side=source_side),
+            ),
+            market_id=MARKET,
+            expression_id="expr-ETH",
+            instrument_id=NATIVE_INSTRUMENT,
+        )
+        for source_side in ("BUY", "BUYER", "SELL", "SELLER")
+    }
+
+    for source_side, canonical_side in (
+        ("BUY", "BUY"),
+        ("BUYER", "BUY"),
+        ("SELL", "SELL"),
+        ("SELLER", "SELL"),
+    ):
+        trade = projections[source_side].events[0]
+        assert isinstance(trade, TradeTick)
+        assert str(trade.aggressor_side) == canonical_side
+        repeated = project_native_replay(
+            events=(
+                replay_admitted(1, DataKind.TRADE, aggressor_side=source_side),
+            ),
+            market_id=MARKET,
+            expression_id="expr-ETH",
+            instrument_id=NATIVE_INSTRUMENT,
+        )
+        assert repeated.identity == projections[source_side].identity
+
+    for canonical, legacy in (("BUY", "BUYER"), ("SELL", "SELLER")):
+        assert (
+            projections[canonical].identity.ordered_native_event_hashes
+            == projections[legacy].identity.ordered_native_event_hashes
+        )
+        assert (
+            projections[canonical].identity.ordered_source_admission_hashes
+            != projections[legacy].identity.ordered_source_admission_hashes
+        )
+        assert (
+            projections[canonical].identity.projection_hash
+            != projections[legacy].identity.projection_hash
+        )
+
+
+@pytest.mark.parametrize(
+    "source_side",
+    (None, "", "UNKNOWN", "BUY/SELL", "NO_AGGRESSOR", "buy"),
+)
+def test_aggressor_side_unknown_missing_or_ambiguous_fails_closed(
+    source_side: str | None,
+) -> None:
+    with pytest.raises(ValueError, match="unknown or ambiguous"):
+        _canonical_native_aggressor_side(source_side)
 
 
 def test_native_replay_projection_rejects_unaccepted_or_mixed_sources() -> None:

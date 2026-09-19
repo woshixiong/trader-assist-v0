@@ -234,6 +234,14 @@ def _decimal_payload_value(
     return value
 
 
+def _canonical_native_aggressor_side(value: str | None) -> Literal["BUY", "SELL"]:
+    if value in {"BUY", "BUYER"}:
+        return "BUY"
+    if value in {"SELL", "SELLER"}:
+        return "SELL"
+    raise ValueError("TRADE provider aggressor side is unknown or ambiguous")
+
+
 def _validate_replayable_payload(event: AdmittedEvent) -> None:
     source = event.source
     if source.data_kind is DataKind.BBO:
@@ -249,8 +257,7 @@ def _validate_replayable_payload(event: AdmittedEvent) -> None:
         _decimal_payload_value(event, "size", allow_zero=False)
         if not source.native_trade_id:
             raise ValueError("TRADE source requires a non-empty native_trade_id")
-        if source.provider_aggressor_side not in {"BUYER", "SELLER"}:
-            raise ValueError("TRADE provider aggressor side is unknown or ambiguous")
+        _canonical_native_aggressor_side(source.provider_aggressor_side)
         return
     if source.data_kind is DataKind.BAR:
         values = {
@@ -397,9 +404,12 @@ def project_native_replay(
             size = Quantity.from_str(size_raw)
             _assert_native_text_round_trip(field_name="price", source=price_raw, native=price)
             _assert_native_text_round_trip(field_name="size", source=size_raw, native=size)
+            canonical_aggressor_side = _canonical_native_aggressor_side(
+                source.provider_aggressor_side
+            )
             aggressor_side = (
                 AggressorSide.BUY
-                if source.provider_aggressor_side == "BUYER"
+                if canonical_aggressor_side == "BUY"
                 else AggressorSide.SELL
             )
             trade_id = TradeId(native_trade_id)
@@ -417,15 +427,15 @@ def project_native_replay(
                 ts_event=source.ts_event,
                 ts_init=source.ts_init,
             )
-            if str(native_event.aggressor_side) != source.provider_aggressor_side:
-                raise ValueError("native aggressor-side conversion is not lossless")
+            if str(native_event.aggressor_side) != canonical_aggressor_side:
+                raise ValueError("native aggressor-side conversion changed source meaning")
             native_payload = {
                 "data_kind": DataKind.TRADE.value,
                 "instrument_id": str(native_event.instrument_id),
                 "price": str(native_event.price),
                 "size": str(native_event.size),
                 "native_trade_id": str(native_event.trade_id),
-                "provider_aggressor_side": str(native_event.aggressor_side),
+                "native_aggressor_side": str(native_event.aggressor_side),
                 "ts_event": native_event.ts_event,
                 "ts_init": native_event.ts_init,
             }
