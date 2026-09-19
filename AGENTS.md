@@ -19,6 +19,91 @@ The Writer does not reread full Unified V2, full preflight, full Issue/PR histor
 
 Canonical rules remain full-strength authority; progressive disclosure changes model context, not governance.
 
+### 1.1 Durable control plane and Control Capsule
+
+Chat history is an ephemeral reasoning surface, not canonical engineering state. GitHub owns durable workflow state.
+
+Default architecture:
+
+```text
+GITHUB = DURABLE CONTROL PLANE / STATE MACHINE
+CHATGPT = MATERIAL DECISION / EXCEPTION / ADJUDICATION SERVICE
+CODEX OR OTHER ACCEPTED WRITER = SEMANTIC IMPLEMENTATION SERVICE
+GITHUB ACTIONS / DETERMINISTIC TOOLS = VERIFICATION AND ROUTINE TRANSITIONS
+```
+
+Each active material task maintains one compact canonical **Control Capsule**:
+
+```text
+TASK_ID
+GOVERNANCE_EPOCH
+EXACT_MAIN
+EXACT_TARGET_HEAD_OR_TREE
+TASK_PACKET_HASH
+RISK_CLASS
+CURRENT_STATE
+CURRENT_BLOCKER
+NEXT_ALLOWED_ACTION
+RUNNING_AGENT_THREAD_OR_WORKSPACE_ID
+CURRENT_PR
+CI_STATE_LOCATOR
+COMPLETED_WORK_LEDGER
+RETAINED_USER_GATES
+AUTHORITY_ATTESTATION_LOCATORS
+PREFLIGHT_BINDING_KEY
+```
+
+Full technical evidence, historical failures and superseded routes stay behind exact GitHub locators. Active model context contains only the capsule, current packet/manifest and the minimum facts required for the current decision.
+
+```text
+CHAT_HISTORY_IS_NOT_ENGINEERING_STATE=YES
+NO_CRITICAL_ENGINEERING_STATE_ONLY_IN_CHAT=YES
+ACTIVE_STATE_MINIMALITY_GATE=REQUIRED
+COMPLETED_WORK_LEDGER=REQUIRED
+FULL_ISSUE_PR_HISTORY_RELOAD_BY_DEFAULT=NO
+RAW_LONG_LOG_IN_MODEL_CONTEXT=NO_BY_DEFAULT
+QUALITY_AND_CORRECTNESS_GT_CONTEXT_ECONOMY=YES
+```
+
+### 1.2 Governance epoch, reusable preflight and context lifecycle
+
+A governance epoch is the exact set/hash of applicable canonical authority file SHAs used to produce the current governance attestation.
+
+```text
+FULL_CORE_RULE_READ=
+  FIRST MATERIAL ACTION IN A FRESH CONTROL CONTEXT
+  OR GOVERNANCE_EPOCH DRIFT
+  OR CONCRETE AUTHORITY CONFLICT
+
+UNCHANGED_GOVERNANCE_EPOCH
+=> REUSE BOUND GOVERNANCE ATTESTATION
+=> TARGETED CANONICAL READS ONLY
+```
+
+Material preflight is reusable when its binding key is unchanged:
+
+```text
+PREFLIGHT_BINDING_KEY =
+  GOVERNANCE_EPOCH
+  + TASK_PACKET_HASH
+  + EXACT_BASE_OR_HEAD
+  + EXECUTION_SURFACE
+```
+
+Fresh live repository/main/Issue/PR/head/CI identity checks remain mandatory. Attestation reuse is memoization of exact proven authority, never permission to ignore drift.
+
+Engineering Control is event-driven. Routine provider/GitHub-proven transitions do not require a model turn merely to restate state. Wake control for a new material direction, semantic blocker/new root cause, material CI failure requiring reasoning, scope/authority/identity drift, material Review finding, user-retained gate, or context-integrity risk.
+
+Window rotation protects context capacity/trust; it is not a stage ceremony.
+
+```text
+ONE_MATERIAL_STAGE_PER_WINDOW=NO_DEFAULT
+MULTIPLE_ROUTINE_STAGES_PER_WINDOW=ALLOWED_WHEN_CONTEXT_REMAINS_COMPACT
+PREEMPTIVE_ROTATION=REQUIRED_WHEN_NEXT_HEAVY_PHASE_LACKS_TRUSTED_HEADROOM
+```
+
+On rotation, freeze/verify the Control Capsule and any running session/workspace identity, then start the successor from that durable state. The user is not responsible for detecting context pressure or reconstructing the authority chain.
+
 ## 2. User shorthand for unified-governance changes
 
 When the user says **“往统一规则里增加内容”**, **“把这条加入统一规则”**, **“add this to the unified rules”**, or an equivalent phrase, treat it as a request to start the Unified Engineering Governance change-routing process.
@@ -105,6 +190,25 @@ NO_SILENT_MODEL_EXECUTOR_FALLBACK=YES
 NO_HIDDEN_SEMANTIC_RETRY=YES
 FALSE_SAFE_STOP_GATE=PROHIBITED
 CHECKPOINT_RESUME_INSTEAD_OF_REDO=YES
+SEMANTIC_START_DEPENDENCY_MINIMIZATION=REQUIRED
+SEMANTIC_READINESS_NE_PUBLICATION_READINESS=YES
+PER_TASK_DYNAMIC_EXECUTION_PROGRAM_GENERATION=PROHIBITED_BY_DEFAULT
+TASK_PACKET_IS_DATA_NOT_EXECUTION_PROGRAM=YES
+VERSIONED_STABLE_SEMANTIC_RUNNER=DEFAULT_WHEN_LOCAL_MODEL_EXECUTION_IS_NEEDED
+ENGINEERING_WINDOW_ROTATION_POLICY=CAPACITY_AND_TRUST_BASED
+GITHUB_CONTROL_PLANE_STATE_MACHINE=YES
+CONTROL_CAPSULE_REQUIRED=YES
+GOVERNANCE_EPOCH_ATTESTATION=REQUIRED
+BOUND_PREFLIGHT_REUSE_WHEN_BINDING_UNCHANGED=YES
+EVENT_DRIVEN_CHATGPT_CONTROL=YES
+ACTIVE_STATE_MINIMALITY_GATE=REQUIRED
+COMPLETED_WORK_LEDGER=REQUIRED
+VALIDATED_EXECUTION_PATH_LEDGER=REQUIRED
+FAILED_PATH_RETIREMENT_LEDGER=REQUIRED
+QUOTA_BOUNDARY_RESUME_NOT_RETRY=YES
+REVIEW_RESULT_EGRESS_IDEMPOTENCY=REQUIRED
+TRANSPORT_INTERRUPTION_NE_TASK_FAILURE=YES
+FINAL_INDEPENDENT_REVIEW_REQUIRES_NEW_CHAT_CONTEXT=YES
 EXACT_ARTIFACT_EXACT_HEAD_CI_INDEPENDENT_REVIEW=WHEN_APPLICABLE
 AUTHORITATIVE_REMOTE_EXECUTION_PREFERRED_WHEN_EQUAL_OR_HIGHER_FIDELITY=YES
 USER_LOCAL_WORKSTATION_NOT_DEFAULT_FOR_CI_OR_LINUX_PROOF=YES
@@ -122,9 +226,9 @@ REMOTE_EXECUTION_CREDENTIAL_AUTHORITY_MUST_BE_EXPLICIT=YES
 
 ## 6. Review and task ownership
 
-Final independent adjudication defaults to a **new ordinary ChatGPT review window using the strongest appropriate available model and highest appropriate reasoning**.
+Authority-bearing final independent adjudication **requires a new ordinary ChatGPT conversation/window** using the strongest appropriate available model and highest appropriate reasoning. Engineering Control and the semantic Writer may perform self-check/readiness work, but a PASS produced in the same conversation that controlled or implemented the stage is not independent acceptance.
 
-If GitHub evidence is sufficient, review exact GitHub head/diff + exact-head CI directly. If local evidence is needed, prefer deterministic hash-manifested evidence/review bundles rather than downgrading the final Reviewer to a weaker local coding model.
+The reviewer receives a compact Review Manifest: exact target identity, exact changed scope/diff, frozen acceptance criteria, required safety boundaries, decisive CI/artifact/source locators, and any explicitly untrusted prior conclusions. If GitHub evidence is sufficient, review exact GitHub head/diff + exact-head CI directly. Do not reload full Issue/PR history or the full governance corpus by default; use targeted canonical reads only for concrete unknowns/conflicts. If local evidence is needed, prefer deterministic hash-manifested evidence/review bundles rather than downgrading the final Reviewer to a weaker local coding model.
 
 For execution/validation, prefer an authoritative GitHub/provider-native remote surface over user-operated local emulation when it provides equal or higher claim fidelity, exact identity/evidence, and lower human relay. This preference never creates credential/private-API authority and never overrides a genuinely local or target-host-specific claim boundary.
 

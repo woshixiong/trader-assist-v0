@@ -35,6 +35,20 @@ RESIDUAL_RISKS=
 BLOCKERS=
 REPAIR_STAGE=
 L1_DECISION_REQUIRED=YES/NO
+
+CONTROL_CAPSULE_REF=
+GOVERNANCE_EPOCH=
+PREFLIGHT_BINDING_KEY=
+PREFLIGHT_REUSE_STATUS=REUSED|RECOMPUTED|NOT_APPLICABLE
+CURRENT_STATE=
+CURRENT_BLOCKER=
+NEXT_ALLOWED_ACTION=
+RUNNING_AGENT_THREAD_OR_WORKSPACE_ID=
+CI_STATE_LOCATOR=
+COMPLETED_WORK_LEDGER_REF=
+CONTEXT_HEADROOM_STATE=SUFFICIENT|ROTATE_BEFORE_NEXT_HEAVY_PHASE|NOT_APPLICABLE
+PUBLICATION_READINESS=PASS|FAIL|NOT_APPLICABLE_YET
+
 COMMIT_PUSH_EXECUTED=YES/NO/NOT_AUTHORIZED
 MARK_READY_EXECUTED=NO
 MERGE_EXECUTED=NO
@@ -45,3 +59,5 @@ EXCHANGE_WRITE_EXECUTED=NO
 ```
 
 Use `NOT_RUN`, `NOT_EXPOSED` or `NOT_APPLICABLE`; never invent PASS or telemetry. Writer PASS is not independent acceptance.
+
+These lifecycle fields carry observed durable control state; they do not authorize the Writer to decide review/merge/deployment gates. A quota/capacity pause preserves the same semantic attempt when task, authority and checkpoint identity remain bound. A completed-work ledger entry must be checked before any redispatch of a named workstream.

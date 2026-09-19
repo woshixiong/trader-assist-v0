@@ -4,7 +4,9 @@
 **Effective date:** 2026-09-16  
 **Normative owner:** `UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V2_2026-09-01.md`
 
-This procedure operationalizes two already-established project-wide invariants for GitHub publication work:
+This procedure operationalizes two already-established project-wide invariants for GitHub publication work.
+
+**Applicability boundary:** local GitHub transport health is a publication/source-acquisition concern, not a universal semantic-Writer-start prerequisite. `SEMANTIC_READINESS` and `PUBLICATION_READINESS` are separate derived states.
 
 1. project-generated local Git commands must use the simplest mature/provider-native reliable transport compatible with the current environment; and
 2. independently reviewed Pull Requests must reach an explicit terminal disposition rather than remain indefinitely open or draft.
@@ -65,7 +67,18 @@ Transport reliability never weakens branch/ref/merge authority rules.
 
 ### 1.3 Mandatory applicability and transport-health gate
 
-Any bounded task that will generate or execute user-local Git publication for this repository must load this procedure before the publication command is delivered. This is independent of the general Generated Command gate.
+Any bounded task that will generate or execute user-local Git publication for this repository must load this procedure before the **publication command** is delivered.
+
+Do not move this gate in front of semantic work merely because one wrapper combines semantic execution and publication. Before semantic start classify:
+
+```text
+SEMANTIC_SOURCE_ACQUISITION_REQUIRES_LOCAL_GITHUB_TRANSPORT=YES|NO
+PUBLICATION_REQUIRES_LOCAL_GITHUB_TRANSPORT=YES|NO
+```
+
+If the semantic source is already exact/available and the first value is `NO`, local GitHub auth/API/push health must not block the semantic Writer. Publication may remain `NOT_READY` until after the semantic checkpoint.
+
+For a public repository, unauthenticated exact source acquisition or an already-verified exact local/artifact source should be preferred over introducing authenticated `gh` as a semantic-start dependency when they provide equal identity fidelity. This is independent of the general Generated Command gate.
 
 Record at minimum:
 
@@ -131,7 +144,7 @@ AND KNOWN_TRANSPORT_INCIDENT_NONREGRESSION != PASS
 => COMMAND_DELIVERY=PROHIBITED
 ```
 
-A local transport-health check must protect a real publication invariant. Do not create repeated speculative network probes merely to earn `PASS`; fresh provider/control-plane identity and an already-proven unhealthy local path are routing evidence. When an authoritative connected GitHub surface can perform the same bounded mutation at equal or higher fidelity with less human relay, apply the Unified V2 remote-execution preference before requiring another local publication attempt.
+A local transport-health check must protect a real publication invariant. Do not create repeated speculative network probes merely to earn `PASS`; fresh provider/control-plane identity and an already-proven unhealthy local path are routing evidence. A provider-native connector identity check must not be redundantly re-proved through lower-reliability local `gh api` before semantic start unless the local result protects a distinct source invariant. When an authoritative connected GitHub surface can perform the same bounded mutation at equal or higher fidelity with less human relay, apply the Unified V2 remote-execution preference before requiring another local publication attempt.
 
 ### 1.4 Checkpoint-aware fallback ladder
 

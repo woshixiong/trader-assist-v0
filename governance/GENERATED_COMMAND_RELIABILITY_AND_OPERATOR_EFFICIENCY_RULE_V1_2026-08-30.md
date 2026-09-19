@@ -55,6 +55,10 @@ PERSISTED_STATE_COPY_SEMANTICS_PROOF=PASS|FAIL|NOT_APPLICABLE
 
 ONE_SHOT_SEMANTIC_BOUNDARY=
 SIDE_EFFECT_FREE_PREFLIGHT_COMPLETE_BEFORE_ONE_SHOT=YES|NO|NOT_APPLICABLE
+SEMANTIC_START_PREREQUISITES=
+PUBLICATION_PREREQUISITES=
+PRE_SEMANTIC_GATE_NECESSITY_PROOF=PASS|FAIL|NOT_APPLICABLE
+LAUNCH_ARTIFACT_DELIVERY_CONFIRMED=YES|NO|NOT_APPLICABLE
 CHECKPOINT_RESUME_PLAN=
 POST_SEMANTIC_EVIDENCE_CHECKPOINT_PLAN=
 
@@ -153,6 +157,80 @@ OPERATOR_VISIBLE_BOOTSTRAP
 
 If this cannot be achieved on the current surface, prefer a robust file/artifact transfer surface, an accepted repository-owned launcher, or an explicitly safe phase split over another encoding layer. Hash verification detects corruption after transport; it does not make an overlong transport reliable.
 
+A self-extracting or embedded-payload artifact may be an acceptable emergency transport only when the payload is already complete, hash-verified, rehearsed and materially simpler for the operator than reconstructing it interactively. It is not a preferred steady-state substitute for a versioned stable runner.
+
+For launcher repair or holistic regeneration, the operator-visible command must not become a self-modifying patch engine. In particular, do not deliver a long interactive `python -c`, `sed`, `perl`, nested shell string or equivalent command whose purpose is to rewrite an existing launcher in-place before execution.
+
+```text
+OPERATOR_VISIBLE_SELF_MODIFYING_LAUNCHER_REWRITE=PROHIBITED
+HOLISTIC_REGENERATION_DELIVERS_COMPLETE_REPLACEMENT_BYTES=REQUIRED
+POST_GENERATION_VALIDATION_RUNS_ON_EXACT_FINAL_BYTES=REQUIRED
+```
+
+A holistic regeneration must produce the complete replacement script/bundle **before** operator handoff, validate its exact final bytes, and reduce the user action to a short verify-and-execute bootstrap. A syntax check on the unmodified/original files does not prove that an intended interactive rewrite succeeded.
+
+### 3.1A Dynamic-launcher stop rule
+
+Repeated repair must reduce execution freedom, not create another bespoke program.
+
+```text
+TASK_PACKET_IS_DATA_NOT_PROGRAM=YES
+PER_TASK_DYNAMIC_EXECUTION_PROGRAM_GENERATION=PROHIBITED_BY_DEFAULT
+VERSIONED_STABLE_RUNNER_PREFERRED=YES
+```
+
+After a launcher-family termination/holistic regeneration, first ask whether the remaining semantic stage can run through the accepted stable runner with task-specific data only. If yes, generating another task-specific R3/R4/R5-style execution topology is prohibited.
+
+A custom launcher remains exceptional and must show:
+
+```text
+STABLE_RUNNER_INSUFFICIENCY_PROVEN=YES
+NEW_MECHANIC_IS_TRULY_TASK_SPECIFIC=YES
+ADDED_FAILURE_SURFACE_LT_DECISION_VALUE=YES
+SEPARATE_REVIEW_REQUIRED=YES
+```
+
+Successful emergency recovery mechanisms such as Git-object reconstruction, patch stitching, self-extracting payloads or transport-specific fallbacks remain recovery evidence. They do not automatically become normal launch architecture.
+
+### 3.1B Validated execution-path and failed-path ledgers
+
+Command reliability must preserve successful knowledge as aggressively as failure knowledge.
+
+```text
+VALIDATED_EXECUTION_PATH_LEDGER=REQUIRED
+FAILED_PATH_RETIREMENT_LEDGER=REQUIRED
+```
+
+A validated entry records:
+- executor/client family;
+- minimum required capabilities;
+- known-good invocation shape;
+- source-acquisition and workspace-materialization contract;
+- checkpoint/egress contract;
+- last proven version or capability evidence;
+- canonical evidence locator.
+
+When a known-good path fits the frozen task, prefer it. Introduce a new execution shape only when a concrete requirement or capability/environment drift proves the known-good path insufficient.
+
+A failed-path entry records the retired assumption/mechanic and canonical evidence. Known-failed paths are prohibited by default and may reopen only with changed capability/environment evidence plus bounded requalification. Renaming or wrapping the same assumption does not reset retirement.
+
+Current Codex-specific entries live in the applicable Codex profile rather than being duplicated here.
+
+### 3.2 Launch-artifact delivery is a prerequisite to operator execution
+
+A generated ZIP, script, command file or bundle is not available merely because Engineering Control described it or recorded an expected filename/hash.
+
+Before telling the user to execute a local artifact:
+
+```text
+ARTIFACT_BYTES_CREATED=YES
+ARTIFACT_SHA256_VERIFIED=YES
+OPERATOR_DELIVERY_SURFACE=PROVEN
+LAUNCH_ARTIFACT_DELIVERY_CONFIRMED=YES
+```
+
+If the artifact is expected in a local path such as Downloads, that path must come from actual delivered/operator evidence, not an invented filename. If delivery cannot be proven, use a provider-native artifact/download surface or give a short self-contained bootstrap whose payload source is itself real and verified. Missing-artifact execution is a command-generation defect and consumes command-repair progression.
+
 ---
 
 ## 4. Canonical validation command and platform fidelity
@@ -245,6 +323,15 @@ Manifest creation from source and staged-artifact verification are separate cont
 
 ## 7. One-shot boundary, checkpoint and resume
 
+Before an expensive/irreversible/rate-limited one-shot action, finish all **necessary** side-effect-free proof first. Preflight scope is minimized to prerequisites that protect semantic safety/correctness or are irreducibly required to obtain/verify the semantic source.
+
+```text
+SEMANTIC_READINESS != PUBLICATION_READINESS
+SEMANTIC_START_DEPENDENCY_MINIMIZATION=REQUIRED
+```
+
+Do not place GitHub push/PR/result-egress authentication, publication dry-runs or redundant control-plane identity probes before a semantic Writer merely because the same wrapper intends to publish afterward. When practical, semantic execution must be able to reach a durable local/exact checkpoint even if publication transport is unavailable.
+
 Before an expensive/irreversible/rate-limited one-shot action, finish all side-effect-free proof first.
 
 Suggested phases:
@@ -282,6 +369,25 @@ Examples:
 - macOS failure caused by platform mismatch -> move remaining proof to the correct Linux surface.
 
 Hidden reruns/retries are prohibited.
+
+### 7.0 Quota/session capacity interruption
+
+Capacity/quota interruption after semantic start is a lifecycle pause, not automatically a semantic failure or repair-budget event.
+
+```text
+QUOTA_BOUNDARY_INTERRUPTION=EXPECTED_CAPACITY_PAUSE
+SEMANTIC_FAILURE_FROM_CAPACITY_PAUSE=NO
+APPLICATION_REPAIR_BUDGET_CONSUMED=NO
+AUTOMATIC_RERUN_FROM_SCRATCH=NO
+```
+
+Before or during resumable material model work persist the task/packet identity, exact workspace, session/thread identity when exposed, model/tool shape, last durable worktree checkpoint, current diff/artifact identity, validation state and next pending step.
+
+After capacity returns:
+1. verify same task/authority/workspace/model-tool shape and no unexpected drift;
+2. resume the exact session/thread when recoverable;
+3. otherwise start a fresh continuation bound to the existing durable checkpoint, not the original task from scratch;
+4. ambiguous/conflicted state => control reconciliation / SAFE_STOP.
 
 ### 7.1 Harness and persisted-state boundary proof
 
@@ -329,8 +435,12 @@ If an authoritative connected GitHub write surface is available and provides equ
 INITIAL_GENERATED_COMMAND
 -> AT MOST ONE BOUNDED COMMAND CORRECTION
 -> SECOND AVOIDABLE COMMAND/WRAPPER DEFECT IN SAME STAGE
+   => CURRENT_LAUNCHER_FAMILY=TERMINATED
+   => FURTHER_INCREMENTAL_CORRECTION=PROHIBITED
    => COMMAND_RELIABILITY_HOLISTIC_REGENERATION
 ```
+
+Renaming/regenerating the ZIP/script without changing the responsibility topology does not reset this counter. The lineage is keyed to the bounded stage + launcher responsibility family, not the filename.
 
 Holistic regeneration requires:
 

@@ -1,12 +1,14 @@
 # Trader Assist / Trade OS — Codex Current Model Profile
 
 **Status:** REFRESHABLE MODEL-SPECIFIC GOVERNANCE CANDIDATE  
-**Last verified:** 2026-09-18  
-**Locally verified Codex CLI:** `0.152.1`
+**Last verified:** 2026-09-19  
+**Latest observed local Codex CLI:** `0.155.1`
 
 This file is refreshable current-state guidance. Durable workflow rules live in `CODEX_CLI_ENGINEERING_USAGE_PROFILE_V2_2026-08-23.md`.
 
-**Scope:** this profile applies only after `ENGINEERING_EXECUTOR_ROUTER_V2` has already selected `CODEX_CLI` for a semantic Writer stage. Labels such as `NORMAL_MATERIAL` or `HIGH_CONSEQUENCE` choose the Codex model/reasoning within an already-selected Codex route; they never make Codex the default executor, and healthy Codex quota is not a selection reason.
+The observed CLI version is telemetry, **not an exact-equality launch gate**. A launcher may require a specific version only when a task has a proven version-dependent semantic incompatibility. Otherwise verify the actual installed CLI identity and the exact required command/config capabilities. A newer compatible patch release must not trigger a false SAFE_STOP merely because this profile has not yet been refreshed.
+
+**Scope:** this profile applies only after `ENGINEERING_EXECUTOR_ROUTER_V2` has selected `CODEX_CLI` for a semantic Writer stage. Labels such as `NORMAL_MATERIAL` or `HIGH_CONSEQUENCE` choose the Codex model/reasoning within that route; they do not create semantic work and do not override Router/user executor authority.
 
 ## Current family
 
@@ -101,3 +103,34 @@ VERIFY codex --version
 ```
 
 Do not rewrite Router V2 or the stable Codex V2 core merely because a model/version label changed.
+
+## Validated local fallback path / retired assumptions — 2026-09-19
+
+This is current execution telemetry, not the preferred future architecture.
+
+```text
+ROLE=PROVEN_LOCAL_FILE_BACKED_CLI_FALLBACK_OR_RECOVERY
+CANONICAL_EVIDENCE=Issue_163_comment_5740747880
+KNOWN_GOOD_INVOCATION_FAMILY=codex config overrides + exec + frozen model/sandbox/json/output/cwd
+EXACT_PATCH_VERSION_REQUIRED=NO
+UNPROVEN_CONFIG_BYPASS_FLAG_REQUIRED=NO
+UNPROVEN_APPROVAL_FLAG_REQUIRED=NO
+LOCAL_GITHUB_PUBLICATION_REQUIRED_BEFORE_SEMANTIC_START=NO
+LOCAL_CANONICAL_PR_HEAD_OBJECT_REQUIRED_BEFORE_SEMANTIC_START=NO
+ONE_SEMANTIC_SESSION=YES
+IMMEDIATE_DURABLE_CHECKPOINT=YES
+```
+
+Retired unless capability/environment materially changes:
+
+```text
+STALE_EXACT_CODEX_PATCH_VERSION_GATE
+UNPROVEN_CONFIG_BYPASS_FLAG_REQUIREMENT
+UNPROVEN_APPROVAL_FLAG_INVOCATION
+LOCAL_CANONICAL_PR_HEAD_OBJECT_PRESENCE_AS_SEMANTIC_PREREQUISITE
+LOCAL_GITHUB_PUBLICATION_AS_SEMANTIC_START_PREREQUISITE
+DYNAMIC_LAUNCHER_REPAIR_CHAIN_AS_DEFAULT
+```
+
+Provider-native asynchronous/issue-centric execution remains the preferred experiment when fidelity, observability and recovery are sufficient. The proven local file-backed route remains fallback/recovery evidence, not a mandate to reproduce custom source-reconstruction mechanics.
+

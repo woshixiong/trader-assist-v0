@@ -35,11 +35,19 @@ GOVERNANCE_ATTESTATION_MAIN_OR_BASE_SHA=
 AUTHORITY_PROVENANCE_LOCATORS=
 WRITER_CONTEXT_MODE=COMPACT_PACKET|EXPLICIT_EXCEPTION
 FULL_GOVERNANCE_CORPUS_REQUIRED=NO|YES
+
+ACTIVE_STAGE_CHECKPOINT_REF=
+WINDOW_SCOPE=
+ROTATION_TRIGGER=
+CONTEXT_COMPLETENESS_GATE=PASS|FAIL
+SUCCESSOR_WINDOW_REQUIRED=YES|NO
 ```
 
 The Task Packet must contain the normalized authority assertions needed by the Writer; provenance locators bind those assertions to canonical GitHub/files. A stale main/base binding, Task Packet hash mismatch or material authority drift invalidates the attestation and returns control to Engineering Control.
 
-`FULL_GOVERNANCE_CORPUS_REQUIRED=YES` is exceptional and requires a governance-maintenance task whose object is the relevant corpus or a concrete unresolved governance conflict. Quota availability alone never selects Codex.
+For Engineering Control itself, the active checkpoint is the durable starting state. Before material work, the context-completeness gate verifies current stage/identity, active authority, accepted/superseded decisions, unresolved blockers, scope, acceptance criteria, next action and provenance. A missing material field triggers targeted canonical retrieval; unresolved uncertainty means `CONTEXT_COMPLETENESS_GATE=FAIL`.
+
+`FULL_GOVERNANCE_CORPUS_REQUIRED=YES` is exceptional and requires a governance-maintenance task whose object is the relevant corpus or a concrete unresolved governance conflict. Quota availability alone never creates a semantic task; once a semantic Writer is actually required, apply the current Router/user-priority policy.
 
 ---
 
@@ -104,7 +112,29 @@ AND COMMAND_DELIVERY=PROHIBITED
 
 A command may not recreate a known avoidable incident class merely by changing wrapper language, encoding, transport or exact text. Fresh authoritative GitHub/control-plane identity must not be converted into redundant lower-reliability local proof unless the additional proof protects a distinct real invariant.
 
-After any command failure, complete the Generated Command failure classification/checkpoint fields and repair-stage disposition before another command is issued. A pre-semantic command failure does not consume the application semantic repair budget, but it does consume the applicable command-repair progression.
+For Writer launch paths also record:
+
+```text
+SEMANTIC_READINESS=PASS|FAIL
+SEMANTIC_START_PREREQUISITES=
+EXECUTION_SUBSTRATE=VERSIONED_STABLE_RUNNER|PROVIDER_NATIVE|CUSTOM_EXCEPTION
+STABLE_RUNNER_APPLICABLE=YES|NO
+CUSTOM_EXECUTION_PROGRAM_JUSTIFICATION=
+PUBLICATION_READINESS=PASS|FAIL|NOT_APPLICABLE_YET
+PUBLICATION_PREREQUISITES=
+PRE_SEMANTIC_GATE_NECESSITY_PROOF=PASS|FAIL
+LAUNCH_ARTIFACT_DELIVERY_CONFIRMED=YES|NO|NOT_APPLICABLE
+FINAL_LAUNCH_BYTES_VALIDATED_AFTER_GENERATION=YES|NO|NOT_APPLICABLE
+OPERATOR_VISIBLE_SELF_MODIFYING_REWRITE=NO|YES|NOT_APPLICABLE
+```
+
+For a material launcher/repair/holistic-regeneration handoff, `OPERATOR_VISIBLE_SELF_MODIFYING_REWRITE=YES` fails the Generated Command gate. Exact final launcher bytes must be produced and validated before the operator is asked to run them; validating the old source files before an inline rewrite is insufficient.
+
+If `STABLE_RUNNER_APPLICABLE=YES`, then `EXECUTION_SUBSTRATE=CUSTOM_EXCEPTION` is prohibited. A custom execution program requires a concrete stable-runner insufficiency and is itself a material execution-surface change subject to the Generated Command reliability/review gates.
+
+A publication-only prerequisite may not set `SEMANTIC_READINESS=FAIL`. GitHub auth/API/push/PR/result-egress checks belong after the semantic checkpoint unless they are truly required to acquire/verify the semantic source or protect another distinct pre-mutation invariant. A launcher artifact may not be represented as executable by the user until its actual delivery/availability on the operator surface is confirmed.
+
+After any command failure, complete the Generated Command failure classification/checkpoint fields and repair-stage disposition before another command is issued. A pre-semantic command failure does not consume the application semantic repair budget, but it does consume the applicable command-repair progression. The second avoidable defect in one launcher family terminates that family and prohibits another incremental correction.
 
 ### 1B. User-local Git publication transport hard gate
 
@@ -178,6 +208,44 @@ AND KNOWN_TRANSPORT_INCIDENT_NONREGRESSION != PASS
 ```
 
 If an exact semantic checkpoint already exists and the local GitHub TLS/API route is proven unreliable, do not rerun the semantic action or loop local publication retries. Preserve the checkpoint and follow the specialized procedure's authoritative remote/offline-artifact fallback ladder. A previously successful local read/authentication probe is not by itself proof that the later mutation path remains healthy.
+
+### 1C. Governance epoch, reusable preflight and context-headroom gate
+
+At material control entry record:
+
+```text
+CONTROL_CAPSULE_REF=REQUIRED
+GOVERNANCE_EPOCH=REQUIRED
+GOVERNANCE_ATTESTATION_REF=REQUIRED
+TASK_PACKET_HASH=REQUIRED_WHEN_WRITER_PACKET_EXISTS
+EXACT_BASE_OR_HEAD=REQUIRED
+EXECUTION_SURFACE=REQUIRED
+PREFLIGHT_BINDING_KEY=REQUIRED
+COMPLETED_WORK_LEDGER_CHECK=PASS
+PREFLIGHT_REUSE_STATUS=REUSED|RECOMPUTED|NOT_APPLICABLE
+```
+
+```text
+PREFLIGHT_BINDING_KEY =
+  GOVERNANCE_EPOCH
+  + TASK_PACKET_HASH
+  + EXACT_BASE_OR_HEAD
+  + EXECUTION_SURFACE
+```
+
+If the exact key and authority remain unchanged, reuse the bound preflight attestation and perform only fresh identity/state checks plus targeted reads. Any binding drift invalidates reuse.
+
+Before a context-heavy phase, evaluate context trust/headroom using observable proxies; no user-visible token meter is assumed.
+
+```text
+NEXT_PHASE_CONTEXT_HEAVY=YES
+AND TRUSTED_HEADROOM_INSUFFICIENT=YES
+=> FREEZE_VERIFY_CONTROL_CAPSULE
+=> BIND_RUNNING_AGENT_SESSION_OR_WORKSPACE
+=> PREEMPTIVE_ROTATION_REQUIRED
+```
+
+Rotation is not required merely because a material stage ended. Multiple routine stages may stay in one window while active state remains compact and trustworthy. The user is not responsible for making this determination.
 
 ---
 
@@ -471,6 +539,9 @@ USER_RELAY_REQUIRED=YES|NO|NOT_APPLICABLE
 REVIEW_OUTPUT_CONTRACT_SATISFIABLE=YES|NO|NOT_APPLICABLE
 REVIEW_RESULT_EGRESS_PERMISSION_COMPATIBLE=YES|NO|NOT_APPLICABLE
 REVIEW_RESULT_EGRESS_GATE=PASS|FAIL|NOT_APPLICABLE
+REVIEW_RESULT_KEY=
+REVIEW_RESULT_DUPLICATE_CHECK=PASS|FAIL|NOT_APPLICABLE
+REVIEW_CONTEXT_BUDGET_GATE=PASS|FAIL|NOT_APPLICABLE
 ```
 
 A write allowlist means `CHANGED_PATHS ⊆ ALLOWLIST` unless the semantic contract explicitly requires particular files to change.
@@ -501,7 +572,7 @@ REVIEW_RESULT_EGRESS_REQUIRED=NO
 Required regression cases:
 
 ```text
-A DETAILED_RESULT + GITHUB_WRITEBACK_ALLOWED + COMPLETE_DIRECT_RESULT => PASS
+A DETAILED_RESULT + GITHUB_WRITEBACK_ALLOWED + COMPLETE_DIRECT_RESULT + UNIQUE_REVIEW_RESULT_KEY => PASS
 B DETAILED_RESULT + ALL_DIRECT_WRITEBACK_FORBIDDEN + TERMINAL_ONLY_CHAT + NO_PREEXISTING_FULL_RESULT => FAIL
 C TERMINAL_ONLY_CHAT + COMPLETE_RESULT_AT_EXACT_CONTROLLER_READABLE_POINTER => PASS
 D STRICT_READ_ONLY + EXACT_ARTIFACT_POINTER_DIRECT_TO_CONTROLLER + NO_RELAY => PASS
@@ -584,6 +655,15 @@ After a material stage, report observed facts only:
 ```text
 PROJECT_ENGINEERING_RULESET_PREFLIGHT=
 ENGINEERING_PREFLIGHT_GATE=
+CONTROL_CAPSULE_REF=
+GOVERNANCE_EPOCH=
+PREFLIGHT_BINDING_KEY=
+PREFLIGHT_REUSE_STATUS=
+COMPLETED_WORK_LEDGER_REF=
+CURRENT_CONTROL_STATE=
+NEXT_ALLOWED_ACTION=
+RUNNING_AGENT_THREAD_OR_WORKSPACE_ID=
+CI_STATE_LOCATOR=
 EXACT_BASE=
 FINAL_HEAD_OR_ARTIFACT=
 CHANGED_PATHS=

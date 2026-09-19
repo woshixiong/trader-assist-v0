@@ -123,12 +123,13 @@ OPENCODE_FREE_STATE=AVAILABLE|DEGRADED|UNAVAILABLE
 
 Current user policy until explicitly changed:
 
-- OpenCode Opus 4.6, Sonnet 4.6 and DeepSeek V4 Flash have zero marginal quota cost.
-- OpenCode default free Writer is **Claude Opus 4.6** when available.
-- Sonnet 4.6 is a valid fallback/task-specific alternative, not the default merely to save free tokens.
-- DeepSeek V4 Flash is mainly Scout/triage/high-volume mechanical work.
-- Ox Alpha and other temporary free models are opportunistic only and do not become durable routing dependencies.
-- Trae GLM-5.3 and Trae DeepSeek V4 Pro consume points, but points are a secondary tie-breaker when a material quality difference is expected.
+- GitHub/provider-native/deterministic surfaces remain first for deterministic control-plane work.
+- When a semantic coding Writer is genuinely required and usable Codex quota is available, **Codex is the primary semantic Writer**.
+- Within Codex, choose model and reasoning independently for task difficulty/consequence; strongest/max reasoning is not the default.
+- If Codex quota is insufficient for the required stage, Engineering Control does **not** infer fallback authority. The user supplies a bounded fallback authorization/selection before another semantic executor is used.
+- Accepted alternatives such as the user's GLM/GRM 5.3, DeepSeek V4 Pro, Trae/OpenCode or later approved routes remain fallbacks/task-specific selections, not automatic replacements.
+- Unexpected Codex capacity/quota interruption after dispatch preserves the exact checkpoint/evidence and is an expected capacity pause, not a semantic failure. Resume the exact session/thread when recoverable; otherwise continue from the durable checkpoint. Do not restart the original semantic task from scratch and do not silently switch executor.
+- Temporary free/discounted models are opportunistic only and do not become durable routing dependencies.
 
 ## 4. Surface-first routing and task classes
 
@@ -139,11 +140,26 @@ Default priority:
 ```text
 1 AUTHORITATIVE GITHUB / PROVIDER-NATIVE / DETERMINISTIC TOOL
 2 ENGINEERING CONTROL DIRECT ACTION WHEN NO CODING AGENT IS NEEDED
-3 ACCEPTED NON-CODEX MODEL WRITER WHEN SEMANTIC MUTATION NEEDS AN AGENT
-4 CODEX ONLY WHEN THE REMAINING SEMANTIC IMPLEMENTATION MATERIALLY NEEDS CODEX CAPABILITY
+3 CODEX WHEN A SEMANTIC CODING WRITER IS REQUIRED AND THE USER'S CODEX ROUTE IS AVAILABLE
+4 ACCEPTED NON-CODEX SEMANTIC WRITER ONLY BY EXPLICIT BOUNDED USER SELECTION/FALLBACK AUTHORITY OR A TASK-SPECIFIC USER OVERRIDE
 ```
 
-No prose proof of Codex necessity is required. Engineering Control classifies the task and applies this order.
+Codex quota never creates work and never moves deterministic work into Codex. But once a semantic Writer is actually required, healthy/usable Codex is the user's default semantic route unless the user selects another route. Engineering Control classifies the task and applies this order.
+
+### 4.1 Provider-native asynchronous semantic route
+
+When an accepted provider-native coding-agent surface can bind a task to an isolated workspace, preserve exact task identity, produce a reviewable result, expose sufficient session/result state and respect the frozen authority boundary, prefer that route over serial chat supervision.
+
+```text
+ISSUE_OR_CONTROL_CAPSULE
+-> ACCEPTED_ASYNC_AGENT
+-> ISOLATED_WORKSPACE
+-> REVIEWABLE_RESULT
+-> CI
+-> INDEPENDENT_REVIEW
+```
+
+This is a surface preference, not blanket authorization. If observability, recovery, exact identity, permission or safety fidelity is weaker than the proven fallback, use the accepted fallback instead. Do not build a custom multi-agent orchestrator merely to imitate provider-native capability.
 
 ### T0 — MECHANICAL / OPERATOR
 
@@ -164,32 +180,33 @@ Frozen scope, simple logic, decisive validation, low blast radius.
 Preferred routes:
 - Engineering Control direct GitHub edit only for governance/docs, Issue/PR metadata, workflow metadata or mechanical configuration whose semantics are already frozen and deterministically checkable;
 - application/source semantic logic requires an accepted semantic Writer by default;
-- otherwise use OpenCode Opus 4.6 or a fit Trae writer.
+- when semantic coding is required and Codex is available, use the frozen Codex route; use another accepted Writer only under current bounded user selection/fallback authority.
 
 ```text
-CODEX_DEFAULT=NO
+CODEX_DEFAULT_FOR_REQUIRED_SEMANTIC_CODING=YES_WHEN_AVAILABLE
 ```
 
 ### T2 — MATERIAL NORMAL ENGINEERING
 
 Normal feature implementation, meaningful bug fix, bounded multi-file implementation or nontrivial refactor.
 
-First use GitHub/Engineering Control for all control-plane discovery, exact-state work and validation setup. If a semantic Writer is required, select among accepted non-Codex Writers by task fit. Codex is eligible only when Engineering Control determines that the remaining semantic implementation materially benefits from Codex-level coding/agentic capability.
+First use GitHub/Engineering Control for all control-plane discovery, exact-state work and validation setup. If a semantic Writer is required and the user's Codex route is available, Codex is the default semantic Writer. A non-Codex semantic Writer requires an explicit bounded user selection/fallback authorization or another current user override.
 
-Known non-Codex fits remain:
-- Opus 4.6: large-codebase comprehension, debugging and refactoring;
-- GLM-5.3: highly constrained complete packets and long implement/test loops;
+Known non-Codex fits remain useful only after that fallback/selection gate:
+- Opus-class accepted routes: large-codebase comprehension, debugging and refactoring;
+- GLM/GRM 5.3: highly constrained complete packets and long implement/test loops;
 - DeepSeek V4 Pro: broad repo investigation and larger-context root-cause work.
 
 ```text
-HEALTHY_CODEX_QUOTA_ALONE_DOES_NOT_SELECT_CODEX=YES
+HEALTHY_CODEX_QUOTA_ALONE_DOES_NOT_CREATE_WORK=YES
+REQUIRED_SEMANTIC_CODING_PLUS_USABLE_CODEX=>CODEX_DEFAULT=YES
 ```
 
 ### T3 — COMPLEX / HIGH-CONSEQUENCE ENGINEERING
 
 State machines, recovery, concurrency, durable authority, cross-layer semantics, difficult root cause or production-critical logic.
 
-Use the strongest appropriate accepted semantic Writer for the exact task. Codex Sol is a first-class option when its capability is materially needed, but is **not** the default merely because quota remains. Opus 4.6, GLM-5.3 and DeepSeek V4 Pro remain first-class alternatives when their task fit is sufficient.
+Use the strongest appropriate accepted semantic route for the exact task while preserving the user's executor priority. When semantic coding is required and Codex is available, Codex remains the default executor; select the Codex model/reasoning level for the consequence/difficulty. Non-Codex alternatives remain valid only under explicit bounded user selection/fallback authority.
 
 If the task can be decomposed into deterministic control-plane work plus one narrow semantic core, perform the deterministic work outside Codex and send only that core plus compact authority to the selected Writer.
 
@@ -213,25 +230,23 @@ Quota state constrains availability; it does not define task class.
 
 ```text
 T0 -> deterministic/GitHub
-T1 -> Engineering Control or accepted non-Codex Writer
-T2 -> accepted fit Writer; Codex only if selected for the semantic core
-T3 -> strongest fit Writer; Codex eligible when materially needed
-T4 -> strongest independent ChatGPT
+T1/T2/T3 -> if semantic coding Writer is required, Codex by default; model/reasoning right-sized
+T4 -> strongest independent ChatGPT in a new conversation/window
 ```
 
 ### CODEX_QUOTA_STATE=CONSTRAINED
 
+Do not silently substitute executor. Engineering Control identifies whether the remaining semantic stage can still use Codex within the available quota. If not, preserve the checkpoint and request/consume an explicit bounded user fallback selection.
+
 ```text
-NEW_NONESSENTIAL_CODEX_DISPATCH=HOLD
-T0/T1=NO_CODEX
-T2=NORMALLY_NON_CODEX
-T3=CODEX_ONLY_FOR_IRREDUCIBLE_HIGH_VALUE_SEMANTIC_CORE
-T4=INDEPENDENT_CHATGPT
+T0 -> deterministic/GitHub
+T1/T2/T3 -> CODEX if still viable; otherwise USER_AUTHORIZED_FALLBACK_REQUIRED
+T4 -> independent ChatGPT
 ```
 
 ### CODEX_QUOTA_STATE=EXHAUSTED
 
-Use GitHub/deterministic surfaces and accepted non-Codex Writers. T4 remains strongest independent ChatGPT.
+Use GitHub/deterministic surfaces for non-semantic work. A semantic Writer waits for explicit bounded user fallback authorization/selection; exhaustion alone does not authorize another executor. T4 remains strongest independent ChatGPT.
 
 Resource telemetry informs future routing but never creates work merely to consume remaining quota.
 
@@ -247,6 +262,18 @@ ONE COMPLETE HIGH-CONSTRAINT TASK PACKET
 ```
 
 Split only at real architecture, authority, worktree, model/harness or independence boundaries.
+
+## 6A. Safe concurrency
+
+```text
+INDEPENDENT_TASKS + DISJOINT_WRITE_SURFACES + NO_DEPENDENCY
+=> PARALLEL_EXECUTION_ALLOWED
+
+SAME_WRITE_SURFACE OR SHARED_AUTHORITY OR CROSS_TASK_DEPENDENCY
+=> SERIALIZE
+```
+
+Start with a small bounded number of parallel semantic tasks and increase only after observed CI/review/worktree stability. Quality and safety gates do not relax to consume quota faster.
 
 ## 7. Semantic Writer vs deterministic operator tail
 
@@ -272,6 +299,29 @@ After Hermes is independently qualified, it may serve as a deterministic transpo
 
 Do not force an operator handoff for a microscopic already-authorized tail if the current semantic Writer can finish it with less total burden, but do not start a fresh model turn merely to run deterministic mechanics.
 
+## 7A. Workflow experiment telemetry
+
+Use real-task evidence to decide `ADOPT | ADOPT_HYBRID | REVISE_AND_CONTINUE | REJECT_AND_RETURN` without precommitting either direction:
+
+```text
+ACCEPTED_ENGINEERING_OUTPUT
+FIRST_PASS_CI_RESULT
+INDEPENDENT_REVIEW_RESULT
+SEMANTIC_REPAIR_OR_REWORK_COUNT
+HUMAN_INTERVENTION_COUNT
+HUMAN_COPY_PASTE_COUNT
+TASK_START_LATENCY
+WAITING_TIME
+WALL_CLOCK_PER_ACCEPTED_TASK
+CODEX_QUOTA_USED_WHEN_EXPOSED
+TRANSPORT_OR_STREAM_INCIDENTS
+DUPLICATE_ACTIONS
+WORKTREE_CONFLICTS
+AUTHORITY_DRIFT
+```
+
+Quota consumption by itself is never success.
+
 ## 8. Hermes insertion requirements
 
 Hermes is an L3 transport/operator/orchestration layer, not a model-quality, routing or engineering-decision authority.
@@ -292,9 +342,10 @@ Hermes must expose checkpointed run state sufficient for human takeover. It must
 QUALITY_FIRST=YES
 HUMAN_RELAY_IS_A_COST=YES
 QUOTA_STATE_IS_ROUTING_INPUT=YES
-OPENCODE_OPUS_DEFAULT_FREE_MODEL=YES
-GLM_5_3_FIRST_CLASS_ADVANCED_WRITER=YES
-DEEPSEEK_V4_PRO_FIRST_CLASS_ADVANCED_WRITER=YES
+CODEX_PRIMARY_FOR_REQUIRED_SEMANTIC_CODING_WHEN_AVAILABLE=YES
+NON_CODEX_SEMANTIC_FALLBACK_REQUIRES_BOUNDED_USER_AUTHORITY=YES
+GLM_5_3_ACCEPTED_FALLBACK_WRITER=YES
+DEEPSEEK_V4_PRO_ACCEPTED_FALLBACK_WRITER=YES
 NO_UNIVERSAL_OPUS_VS_GLM_VS_V4PRO_RANKING=YES
 USER_OVERRIDE_PRESERVED=YES
 ONE_PRIMARY_WRITER_PER_SHARED_AUTHORITY_STAGE=YES

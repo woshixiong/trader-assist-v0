@@ -15,6 +15,10 @@ ENGINEERING_PREFLIGHT_GATE=PASS
 
 After freeze, the downstream Writer consumes the exact Task Packet, its bound preflight/governance attestation, normalized required authority assertions with provenance locators, affected code/tests and the selected executor profile. It does not recursively reload this index, full Unified V2, full preflight or full Issue history unless an actual conflict/unknown requires a targeted canonical read.
 
+The same progressive-disclosure rule applies to Engineering Control and independent review: begin from the current Control Capsule/manifest plus fresh live identity, not from the complete chat transcript or full Issue history. Missing material context triggers targeted canonical retrieval; unresolved uncertainty fails closed. Chat history is not canonical project state.
+
+Engineering Control binds the applicable authority-file SHAs into a governance epoch. A full core-governance read is required on the first material action in a fresh control context, governance-epoch drift or a concrete authority conflict. With an unchanged epoch, reuse the exact bound governance/preflight attestation and read only changed/needed authority. Fresh live repository/main/Issue/PR/head/CI checks remain required.
+
 Unified V2 remains the sole project-wide normative engineering constitution.
 
 ### 1.1 User phrase “统一规则”
@@ -164,16 +168,21 @@ Router V2 freezes requested role/executor/provider/model/reasoning/tool/session/
 Default final adjudicator:
 
 ```text
-SURFACE=NEW ORDINARY CHATGPT WINDOW
+SURFACE=NEW ORDINARY CHATGPT CONVERSATION/WINDOW
 MODEL=STRONGEST APPROPRIATE AVAILABLE
 REASONING=HIGHEST APPROPRIATE
+SAME_ENGINEERING_CONTROL_CONVERSATION=PROHIBITED_FOR_INDEPENDENT_ACCEPTANCE
 ```
 
-If exact GitHub artifacts + exact-head CI are sufficient, review directly through GitHub/connectors.
+The handoff is a compact Review Manifest, not an Engineering-Control conclusion dump. It contains exact target identity, changed scope/diff, frozen acceptance criteria, required safety boundaries, decisive evidence locators and any explicitly untrusted prior conclusions.
+
+If exact GitHub artifacts + exact-head CI are sufficient, review directly through GitHub/connectors. Default reviewer loading is delta/targeted: exact target -> exact diff -> acceptance contract -> decisive CI/artifact -> only necessary upstream/canonical history. Full Issue/PR history and full governance reload are prohibited by default.
 
 If local evidence is required, prefer deterministic evidence generation -> hash-manifested review bundle -> exact upload to the new independent ChatGPT review window. Use `.agents/skills/trade-os-independent-review-bundle` when applicable.
 
-Writer self-review never becomes independent acceptance.
+Writer self-review and Engineering-Control self-review never become independent acceptance.
+
+One authority-bearing Review uses one fresh Review window, which retires after result egress. If proof collection threatens context integrity, freeze a bounded evidence-verification checkpoint and adjudicate in a fresh window. Authority-bearing result writeback is idempotent: derive the deterministic Review Result Key, fresh-read before write, and consume an existing matching result instead of duplicating it.
 
 ## 6. Tool onboarding / material tool change
 
