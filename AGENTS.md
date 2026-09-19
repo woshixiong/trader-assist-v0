@@ -19,6 +19,43 @@ The Writer does not reread full Unified V2, full preflight, full Issue/PR histor
 
 Canonical rules remain full-strength authority; progressive disclosure changes model context, not governance.
 
+### 1.1 Project-wide context architecture
+
+Chat history is an ephemeral working surface, not canonical engineering state. Durable current state belongs in GitHub.
+
+Default context layers:
+
+```text
+ALWAYS_ON_CORE
+-> ACTIVE_STAGE_CHECKPOINT / TASK OR REVIEW PACKET
+-> TARGETED_CANONICAL_READ ONLY FOR A CONCRETE UNKNOWN / CONFLICT / DRIFT
+-> COLD_HISTORY / RAW_EVIDENCE OUTSIDE MODEL CONTEXT BY DEFAULT
+```
+
+Every compact checkpoint must preserve the current stage, exact main/base/head when applicable, active authority, accepted decisions, superseded routes, unresolved blockers, allowed scope, acceptance criteria, next authorized action and exact provenance locators. Context compression may remove repetition, never authority or evidence. A missing material fact, conflicting locator or uncertain supersession state triggers the minimum targeted canonical read; unresolved uncertainty fails closed.
+
+```text
+CHAT_HISTORY_IS_NOT_ENGINEERING_STATE=YES
+NO_CRITICAL_ENGINEERING_STATE_ONLY_IN_CHAT=YES
+QUALITY_AND_CORRECTNESS_GT_CONTEXT_ECONOMY=YES
+FULL_ISSUE_PR_HISTORY_RELOAD_BY_DEFAULT=NO
+RAW_LONG_LOG_IN_MODEL_CONTEXT=NO_BY_DEFAULT
+```
+
+### 1.2 Engineering-window lifecycle
+
+Each Engineering Control conversation/window must establish at entry:
+
+```text
+WINDOW_SCOPE=
+ROTATION_TRIGGER=
+ACTIVE_CHECKPOINT_REF=
+```
+
+Rotation is event-driven, not dependent on a user-visible token meter. Material stage completion, material replan/authority change, independent-review boundary, command-family holistic regeneration, context warning or loss of context trust, or repeated transport interruption are default rotation triggers.
+
+When a trigger fires, Engineering Control must first write/verify a durable GitHub checkpoint, then produce a complete successor-window prompt that points to that checkpoint and the minimum canonical locators. The current window must not continue into the next material stage merely because it still has capacity. A successor window verifies the predecessor checkpoint and live identity before material work.
+
 ## 2. User shorthand for unified-governance changes
 
 When the user says **“往统一规则里增加内容”**, **“把这条加入统一规则”**, **“add this to the unified rules”**, or an equivalent phrase, treat it as a request to start the Unified Engineering Governance change-routing process.
@@ -105,6 +142,10 @@ NO_SILENT_MODEL_EXECUTOR_FALLBACK=YES
 NO_HIDDEN_SEMANTIC_RETRY=YES
 FALSE_SAFE_STOP_GATE=PROHIBITED
 CHECKPOINT_RESUME_INSTEAD_OF_REDO=YES
+SEMANTIC_START_DEPENDENCY_MINIMIZATION=REQUIRED
+SEMANTIC_READINESS_NE_PUBLICATION_READINESS=YES
+ENGINEERING_WINDOW_ROTATION_POLICY=REQUIRED
+FINAL_INDEPENDENT_REVIEW_REQUIRES_NEW_CHAT_CONTEXT=YES
 EXACT_ARTIFACT_EXACT_HEAD_CI_INDEPENDENT_REVIEW=WHEN_APPLICABLE
 AUTHORITATIVE_REMOTE_EXECUTION_PREFERRED_WHEN_EQUAL_OR_HIGHER_FIDELITY=YES
 USER_LOCAL_WORKSTATION_NOT_DEFAULT_FOR_CI_OR_LINUX_PROOF=YES
@@ -122,9 +163,9 @@ REMOTE_EXECUTION_CREDENTIAL_AUTHORITY_MUST_BE_EXPLICIT=YES
 
 ## 6. Review and task ownership
 
-Final independent adjudication defaults to a **new ordinary ChatGPT review window using the strongest appropriate available model and highest appropriate reasoning**.
+Authority-bearing final independent adjudication **requires a new ordinary ChatGPT conversation/window** using the strongest appropriate available model and highest appropriate reasoning. Engineering Control and the semantic Writer may perform self-check/readiness work, but a PASS produced in the same conversation that controlled or implemented the stage is not independent acceptance.
 
-If GitHub evidence is sufficient, review exact GitHub head/diff + exact-head CI directly. If local evidence is needed, prefer deterministic hash-manifested evidence/review bundles rather than downgrading the final Reviewer to a weaker local coding model.
+The reviewer receives a compact Review Manifest: exact target identity, exact changed scope/diff, frozen acceptance criteria, required safety boundaries, decisive CI/artifact/source locators, and any explicitly untrusted prior conclusions. If GitHub evidence is sufficient, review exact GitHub head/diff + exact-head CI directly. Do not reload full Issue/PR history or the full governance corpus by default; use targeted canonical reads only for concrete unknowns/conflicts. If local evidence is needed, prefer deterministic hash-manifested evidence/review bundles rather than downgrading the final Reviewer to a weaker local coding model.
 
 For execution/validation, prefer an authoritative GitHub/provider-native remote surface over user-operated local emulation when it provides equal or higher claim fidelity, exact identity/evidence, and lower human relay. This preference never creates credential/private-API authority and never overrides a genuinely local or target-host-specific claim boundary.
 
