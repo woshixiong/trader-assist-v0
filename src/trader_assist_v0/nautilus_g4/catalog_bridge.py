@@ -375,7 +375,7 @@ def project_native_replay(
                     source=raw,
                     native=native,
                 )
-            native_event = QuoteTick(
+            quote_tick = QuoteTick(
                 instrument_id=native_instrument_id,
                 bid_price=bid_price,
                 ask_price=ask_price,
@@ -386,14 +386,15 @@ def project_native_replay(
             )
             native_payload: dict[str, object] = {
                 "data_kind": DataKind.BBO.value,
-                "instrument_id": str(native_event.instrument_id),
-                "bid_price": str(native_event.bid_price),
-                "ask_price": str(native_event.ask_price),
-                "bid_size": str(native_event.bid_size),
-                "ask_size": str(native_event.ask_size),
-                "ts_event": native_event.ts_event,
-                "ts_init": native_event.ts_init,
+                "instrument_id": str(quote_tick.instrument_id),
+                "bid_price": str(quote_tick.bid_price),
+                "ask_price": str(quote_tick.ask_price),
+                "bid_size": str(quote_tick.bid_size),
+                "ask_size": str(quote_tick.ask_size),
+                "ts_event": quote_tick.ts_event,
+                "ts_init": quote_tick.ts_init,
             }
+            native_events.append(quote_tick)
         elif source.data_kind is DataKind.TRADE:
             price_raw = _required_payload_text(event, "price")
             size_raw = _required_payload_text(event, "size")
@@ -418,7 +419,7 @@ def project_native_replay(
                 source=native_trade_id,
                 native=trade_id,
             )
-            native_event = TradeTick(
+            trade_tick = TradeTick(
                 instrument_id=native_instrument_id,
                 price=price,
                 size=size,
@@ -427,18 +428,19 @@ def project_native_replay(
                 ts_event=source.ts_event,
                 ts_init=source.ts_init,
             )
-            if str(native_event.aggressor_side) != canonical_aggressor_side:
+            if str(trade_tick.aggressor_side) != canonical_aggressor_side:
                 raise ValueError("native aggressor-side conversion changed source meaning")
             native_payload = {
                 "data_kind": DataKind.TRADE.value,
-                "instrument_id": str(native_event.instrument_id),
-                "price": str(native_event.price),
-                "size": str(native_event.size),
-                "native_trade_id": str(native_event.trade_id),
-                "native_aggressor_side": str(native_event.aggressor_side),
-                "ts_event": native_event.ts_event,
-                "ts_init": native_event.ts_init,
+                "instrument_id": str(trade_tick.instrument_id),
+                "price": str(trade_tick.price),
+                "size": str(trade_tick.size),
+                "native_trade_id": str(trade_tick.trade_id),
+                "native_aggressor_side": str(trade_tick.aggressor_side),
+                "ts_event": trade_tick.ts_event,
+                "ts_init": trade_tick.ts_init,
             }
+            native_events.append(trade_tick)
         else:
             bar_type = BarType.from_str(source.event_context)
             _assert_native_text_round_trip(
@@ -457,20 +459,19 @@ def project_native_replay(
             low_price = Price.from_str(raw_values["low"])
             close_price = Price.from_str(raw_values["close"])
             volume = Quantity.from_str(raw_values["volume"])
-            native_values = {
-                "open": open_price,
-                "high": high_price,
-                "low": low_price,
-                "close": close_price,
-                "volume": volume,
-            }
-            for field_name, native in native_values.items():
+            for bar_field_name, native_bar_value in (
+                ("open", open_price),
+                ("high", high_price),
+                ("low", low_price),
+                ("close", close_price),
+                ("volume", volume),
+            ):
                 _assert_native_text_round_trip(
-                    field_name=field_name,
-                    source=raw_values[field_name],
-                    native=native,
+                    field_name=bar_field_name,
+                    source=raw_values[bar_field_name],
+                    native=native_bar_value,
                 )
-            native_event = Bar(
+            bar = Bar(
                 bar_type=bar_type,
                 open=open_price,
                 high=high_price,
@@ -482,17 +483,17 @@ def project_native_replay(
             )
             native_payload = {
                 "data_kind": DataKind.BAR.value,
-                "bar_type": str(native_event.bar_type),
-                "open": str(native_event.open),
-                "high": str(native_event.high),
-                "low": str(native_event.low),
-                "close": str(native_event.close),
-                "volume": str(native_event.volume),
-                "ts_event": native_event.ts_event,
-                "ts_init": native_event.ts_init,
+                "bar_type": str(bar.bar_type),
+                "open": str(bar.open),
+                "high": str(bar.high),
+                "low": str(bar.low),
+                "close": str(bar.close),
+                "volume": str(bar.volume),
+                "ts_event": bar.ts_event,
+                "ts_init": bar.ts_init,
             }
+            native_events.append(bar)
 
-        native_events.append(native_event)
         native_event_hashes.append(
             sha256_hex(_NATIVE_EVENT_DOMAIN + canonical_json_bytes(native_payload))
         )
