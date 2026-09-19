@@ -2,7 +2,7 @@
 
 **Status:** HOLISTIC-CONVERGENCE GOVERNANCE CANDIDATE  
 **Effective date:** 2026-08-23  
-**Current locally verified CLI:** `codex-cli 0.152.1`
+**Latest observed local CLI:** `codex-cli 0.155.1`
 
 This is the stable, version-independent Codex execution core. Current model facts live in `governance/CODEX_CURRENT_MODEL_PROFILE.md`. Task/model routing lives in `governance/ENGINEERING_EXECUTOR_ROUTER_V2_2026-08-23.md`.
 
@@ -50,6 +50,8 @@ For bounded Writer work use provider-native non-interactive:
 ```text
 codex exec
 ```
+
+The version recorded in a current-state profile is telemetry, not a patch-version equality gate. Before launch verify the actual installed Codex identity plus only the command/config capabilities the frozen task requires. Exact version pinning requires a proven task-specific incompatibility.
 
 Prefer interactive TUI only for deliberate pair-programming/exploration. For material/resumable automated work enable:
 
@@ -107,6 +109,16 @@ A governance-maintenance stage may read the exact governance files it changes or
 ```text
 FULL_GOVERNANCE_CORPUS_IS_AUTHORITY_NOT_DEFAULT_MODEL_CONTEXT=YES
 CONTEXT_DISCOVERY_BUDGET_IS_PART_OF_TOTAL_BURDEN=YES
+```
+
+Large-file retrieval also uses progressive disclosure:
+
+```text
+KNOWN_SYMBOL_OR_SECTION -> TARGETED RANGE FIRST
+-> ADJACENT CONTEXT IF NEEDED
+-> FULL FILE ONLY WHEN WHOLE-FILE SEMANTICS ARE MATERIALLY REQUIRED
+RAW_LARGE_LOG_IN_CODEX_CONTEXT=NO
+DECISIVE_EXCERPT_OR_STATUS=YES
 ```
 
 ## 6. Cache-preserving stage invariant — mandatory
@@ -245,6 +257,16 @@ Do not create a skill for every command. Add a new skill only when a repeated pr
 
 Use the minimum capability required for the frozen stage.
 
+Before Codex semantic start, minimize prerequisites to what protects source identity, authority, scope, safety and the actual Codex execution contract.
+
+```text
+SEMANTIC_READINESS_NE_PUBLICATION_READINESS=YES
+GITHUB_PUSH_PR_RESULT_EGRESS_AUTH_BEFORE_CODEX=NO_BY_DEFAULT
+PUBLICATION_DRY_RUN_BEFORE_CODEX=NO_BY_DEFAULT
+```
+
+Publication/auth/network capability may remain unresolved until after the semantic checkpoint unless the semantic task genuinely needs that exact capability for source acquisition or another real pre-mutation invariant.
+
 ```text
 READ/REVIEW STAGE -> read-only sandbox
 WRITER STAGE      -> workspace-write when local file mutation is required
@@ -325,9 +347,11 @@ The handoff must carry exact worktree/artifact/head and frozen packet identity; 
 
 Writer self-check is mandatory but not independent acceptance.
 
-When GitHub exact diff/artifacts and exact-head CI are sufficient, use a separate strong ordinary ChatGPT review window. Do not spend Codex quota on a duplicate local Reviewer solely for ceremony.
+When GitHub exact diff/artifacts and exact-head CI are sufficient, use a **new separate ordinary ChatGPT conversation/window** for authority-bearing final review. The Engineering Control conversation and the Writer conversation may self-check, but neither can declare independent acceptance.
 
-Use a different local strong agent only when independent validation genuinely requires execution/inspection that the ChatGPT review window cannot access.
+Send the reviewer a compact Review Manifest containing exact identity/diff, acceptance criteria, safety boundaries and decisive evidence locators. Do not front-load full Issue/PR history or the full governance corpus; retrieve exact canonical history only for concrete unresolved questions.
+
+Do not spend Codex quota on a duplicate local Reviewer solely for ceremony. Use a different local strong agent only when independent validation genuinely requires execution/inspection that the ChatGPT review window cannot access.
 
 ## 17. Telemetry — passive, not synthetic
 
