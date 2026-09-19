@@ -184,7 +184,7 @@ After a launcher-family termination/holistic regeneration, first ask whether the
 A custom launcher remains exceptional and must show:
 
 ```text
-STABLE_RUNNER_INSUFFICICIENCY_PROVEN=YES
+STABLE_RUNNER_INSUFFICIENCY_PROVEN=YES
 NEW_MECHANIC_IS_TRULY_TASK_SPECIFIC=YES
 ADDED_FAILURE_SURFACE_LT_DECISION_VALUE=YES
 SEPARATE_REVIEW_REQUIRED=YES
