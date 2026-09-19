@@ -1413,6 +1413,21 @@ RERUN_SEMANTIC_ACTION=YES|NO
 
 Useful failure classes include environment-capability mismatch, wrong validation environment, CLI/shell transport defect, false gate, artifact identity failure, deployment mechanic failure, wrapper/harness failure, persisted-state copy/identity failure, application/strategy failure, evidence packaging/egress failure and authority/safety block.
 
+A ChatGPT/UI/network streaming interruption is a separate transport fault domain. It is not evidence that a remote/local engineering action failed.
+
+```text
+STREAM_INTERRUPTION_DETECTED
+-> NO_ASSUMED_TASK_FAILURE
+-> READ_DURABLE_CHECKPOINT
+-> READ_AUTHORITATIVE_REMOTE_OR_LOCAL_ACTION_STATUS
+-> IF TERMINAL: CONSUME EXISTING RESULT
+-> IF STILL_RUNNING: WAIT / BOUNDED STATUS CHECK
+-> IF NO_START_EVIDENCE: REDISPATCH ONLY WHEN IDEMPOTENT AND STILL AUTHORIZED
+-> IF SIDE_EFFECT_STATE_AMBIGUOUS: SAFE_STOP
+```
+
+Do not rerun Codex, CI, publication or a final review-result write merely because the assistant response stream was interrupted. For review, a new window may restart from the compact Review Manifest plus live evidence instead of replaying the full failed transcript.
+
 Resume from the latest exact accepted checkpoint. Hidden retries and silent reruns are prohibited.
 
 Material incidents must become reusable learning:
