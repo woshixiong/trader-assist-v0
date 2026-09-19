@@ -449,7 +449,7 @@ PREEMPTIVE_ROTATION=REQUIRED_WHEN_NEXT_CONTEXT_HEAVY_PHASE_LACKS_TRUSTED_HEADROO
 
 Observable rotation triggers include growing handoff payloads, repeated transport interruption, command-family holistic regeneration, context warning/loss of context trust, or a coming research/review/replan phase requiring broad evidence. On trigger, freeze/verify the Control Capsule plus any running agent/session/workspace identity and start the successor from those locators. The user is not responsible for monitoring the token meter or reconstructing state.
 
-### 4.6 Stable semantic-execution substrate### 4.6 Stable semantic-execution substrate
+### 4.6 Stable semantic-execution substrate
 
 Repeated command incidents show that reliability does not converge by generating a new execution program for every task. The project therefore separates **task semantics** from **execution mechanics**.
 

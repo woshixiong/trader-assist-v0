@@ -249,8 +249,6 @@ Rotation is not required merely because a material stage ended. Multiple routine
 
 ---
 
-## 2. Research / route decision---
-
 ## 2. Research / route decision
 
 For material direction-setting work:

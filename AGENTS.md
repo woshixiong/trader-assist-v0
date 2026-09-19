@@ -104,7 +104,7 @@ PREEMPTIVE_ROTATION=REQUIRED_WHEN_NEXT_HEAVY_PHASE_LACKS_TRUSTED_HEADROOM
 
 On rotation, freeze/verify the Control Capsule and any running session/workspace identity, then start the successor from that durable state. The user is not responsible for detecting context pressure or reconstructing the authority chain.
 
-## 2. User shorthand## 2. User shorthand for unified-governance changes
+## 2. User shorthand for unified-governance changes
 
 When the user says **“往统一规则里增加内容”**, **“把这条加入统一规则”**, **“add this to the unified rules”**, or an equivalent phrase, treat it as a request to start the Unified Engineering Governance change-routing process.
 
