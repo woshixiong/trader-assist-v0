@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -29,6 +30,7 @@ from trader_assist_v0.nautilus_g4.catalog_bridge import (
     derive_economics_can_improve,
     derive_retest_seen,
     derive_thesis_valid,
+    project_native_replay,
 )
 from trader_assist_v0.vnext_g4.contracts import (
     AttemptStop,
@@ -50,8 +52,10 @@ from trader_assist_v0.vnext_g4.contracts import (
 )
 
 MARKET = MarketIdentity.canonical_market_id(dex="MAIN", coin="ETH")
+NATIVE_INSTRUMENT = "ETH-USD-PERP.HYPERLIQUID"
 STRUCTURAL = "b" * 64
 METADATA = "f" * 64
+NAUTILUS_AVAILABLE = importlib.util.find_spec("nautilus_trader") is not None
 
 
 def admitted(ordinal: int) -> AdmittedEvent:
@@ -80,6 +84,70 @@ def admitted(ordinal: int) -> AdmittedEvent:
         source_identity=source.replay_identity,
         out_of_order=False,
         continuity_state=EvidenceState.COMPLETE,
+        source=source,
+    )
+
+
+def replay_admitted(
+    ordinal: int,
+    data_kind: DataKind,
+    *,
+    market_id: str = MARKET,
+    expression_id: str = "expr-ETH",
+    instrument_id: str = NATIVE_INSTRUMENT,
+    payload: dict[str, object] | None = None,
+    event_context: str = "accepted-context",
+    native_trade_id: str | None = None,
+    aggressor_side: str | None = None,
+    out_of_order: bool = False,
+    continuity_state: EvidenceState = EvidenceState.COMPLETE,
+) -> AdmittedEvent:
+    defaults: dict[DataKind, dict[str, object]] = {
+        DataKind.BBO: {
+            "bid_price": "1999.00",
+            "ask_price": "2001.00",
+            "bid_size": "2.00",
+            "ask_size": "3.00",
+        },
+        DataKind.TRADE: {"price": "2000.00", "size": "1.00"},
+        DataKind.BAR: {
+            "open": "1998.00",
+            "high": "2002.00",
+            "low": "1997.00",
+            "close": "2000.00",
+            "volume": "12.00",
+            "finalized": True,
+        },
+        DataKind.CONTEXT: {"mark_price": "2000.00"},
+    }
+    if data_kind is DataKind.TRADE:
+        native_trade_id = native_trade_id or f"native-trade-{ordinal}"
+        aggressor_side = aggressor_side or "BUYER"
+    source = SourceEvent.create(
+        market_id=market_id,
+        expression_id=expression_id,
+        provider_id="NAUTILUS_HYPERLIQUID",
+        instrument_id=instrument_id,
+        data_kind=data_kind,
+        source_event_id=f"{data_kind.value.lower()}-{ordinal}",
+        native_trade_id=native_trade_id,
+        provider_aggressor_side=aggressor_side,
+        event_context=event_context,
+        ts_event=ordinal * 10,
+        ts_init=ordinal * 10 + 1,
+        true_network_receive_ts=None,
+        payload=defaults[data_kind] if payload is None else payload,
+    )
+    return AdmittedEvent.create(
+        schema_version="E4_CAPTURE_V1",
+        process_epoch="process-1",
+        continuity_epoch="continuity-1",
+        admission_epoch="admission-1",
+        admission_ordinal=ordinal,
+        admission_ts=ordinal * 10 + 2,
+        source_identity=source.replay_identity,
+        out_of_order=out_of_order,
+        continuity_state=continuity_state,
         source=source,
     )
 
@@ -315,6 +383,202 @@ def test_replay_bridge_rejects_noncausal_or_duplicate_order() -> None:
         build_replay_payload((admitted(2), admitted(1)))
     with pytest.raises(ValueError, match="duplicate admission ordinals"):
         build_replay_payload((admitted(1), admitted(1)))
+
+
+@pytest.mark.skipif(not NAUTILUS_AVAILABLE, reason="optional Nautilus rc5 is absent")
+def test_native_replay_projection_is_lossless_deterministic_and_source_bound() -> None:
+    from nautilus_trader.model import (
+        AggregationSource,
+        Bar,
+        BarAggregation,
+        BarSpecification,
+        BarType,
+        InstrumentId,
+        PriceType,
+        QuoteTick,
+        TradeTick,
+    )
+
+    bar_type = str(
+        BarType(
+            InstrumentId.from_str(NATIVE_INSTRUMENT),
+            BarSpecification(1, BarAggregation.MINUTE, PriceType.LAST),
+            AggregationSource.EXTERNAL,
+        )
+    )
+    events = (
+        replay_admitted(1, DataKind.BBO),
+        replay_admitted(2, DataKind.TRADE, aggressor_side="BUYER"),
+        replay_admitted(3, DataKind.BAR, event_context=bar_type),
+    )
+    projection = project_native_replay(
+        events=events,
+        market_id=MARKET,
+        expression_id="expr-ETH",
+        instrument_id=NATIVE_INSTRUMENT,
+    )
+    repeated = project_native_replay(
+        events=events,
+        market_id=MARKET,
+        expression_id="expr-ETH",
+        instrument_id=NATIVE_INSTRUMENT,
+    )
+
+    assert projection.identity == repeated.identity
+    assert projection.identity.ordered_source_admission_hashes == tuple(
+        event.admission_hash for event in events
+    )
+    assert projection.identity.event_count == 3
+    assert projection.identity.quote_tick_count == 1
+    assert projection.identity.trade_tick_count == 1
+    assert projection.identity.bar_count == 1
+    assert len(set(projection.identity.ordered_native_event_hashes)) == 3
+
+    quote, trade, bar = projection.events
+    assert isinstance(quote, QuoteTick)
+    assert str(quote.instrument_id) == NATIVE_INSTRUMENT
+    assert (str(quote.bid_price), str(quote.ask_price)) == ("1999.00", "2001.00")
+    assert (str(quote.bid_size), str(quote.ask_size)) == ("2.00", "3.00")
+    assert (quote.ts_event, quote.ts_init) == (10, 11)
+
+    assert isinstance(trade, TradeTick)
+    assert str(trade.instrument_id) == NATIVE_INSTRUMENT
+    assert (str(trade.price), str(trade.size)) == ("2000.00", "1.00")
+    assert str(trade.trade_id) == "native-trade-2"
+    assert str(trade.aggressor_side) == "BUYER"
+    assert (trade.ts_event, trade.ts_init) == (20, 21)
+
+    assert isinstance(bar, Bar)
+    assert str(bar.bar_type) == bar_type
+    assert (str(bar.open), str(bar.high), str(bar.low), str(bar.close)) == (
+        "1998.00",
+        "2002.00",
+        "1997.00",
+        "2000.00",
+    )
+    assert str(bar.volume) == "12.00"
+    assert (bar.ts_event, bar.ts_init) == (30, 31)
+
+
+def test_native_replay_projection_rejects_unaccepted_or_mixed_sources() -> None:
+    project = {
+        "market_id": MARKET,
+        "expression_id": "expr-ETH",
+        "instrument_id": NATIVE_INSTRUMENT,
+    }
+    with pytest.raises(ValueError, match="at least one"):
+        project_native_replay(events=(), **project)
+    with pytest.raises(ValueError, match="causal admission order"):
+        project_native_replay(
+            events=(
+                replay_admitted(2, DataKind.BBO),
+                replay_admitted(1, DataKind.BBO),
+            ),
+            **project,
+        )
+    with pytest.raises(ValueError, match="duplicate admission ordinals"):
+        project_native_replay(
+            events=(
+                replay_admitted(1, DataKind.BBO),
+                replay_admitted(1, DataKind.TRADE),
+            ),
+            **project,
+        )
+    with pytest.raises(ValueError, match="out_of_order"):
+        project_native_replay(
+            events=(replay_admitted(1, DataKind.BBO, out_of_order=True),),
+            **project,
+        )
+    with pytest.raises(ValueError, match="COMPLETE continuity"):
+        project_native_replay(
+            events=(
+                replay_admitted(
+                    1,
+                    DataKind.BBO,
+                    continuity_state=EvidenceState.GAPPED,
+                ),
+            ),
+            **project,
+        )
+    with pytest.raises(ValueError, match="mixed or unselected"):
+        project_native_replay(
+            events=(
+                replay_admitted(1, DataKind.BBO),
+                replay_admitted(2, DataKind.TRADE, expression_id="expr-other"),
+            ),
+            **project,
+        )
+    with pytest.raises(ValueError, match="unsupported native replay data kind"):
+        project_native_replay(
+            events=(replay_admitted(1, DataKind.CONTEXT),),
+            **project,
+        )
+
+
+def test_native_replay_projection_rejects_malformed_or_synthetic_content() -> None:
+    project = {
+        "market_id": MARKET,
+        "expression_id": "expr-ETH",
+        "instrument_id": NATIVE_INSTRUMENT,
+    }
+    with pytest.raises(ValueError, match="ask_size"):
+        project_native_replay(
+            events=(
+                replay_admitted(
+                    1,
+                    DataKind.BBO,
+                    payload={
+                        "bid_price": "1999.00",
+                        "ask_price": "2001.00",
+                        "bid_size": "2.00",
+                    },
+                ),
+            ),
+            **project,
+        )
+    with pytest.raises(ValueError, match="unknown or ambiguous"):
+        project_native_replay(
+            events=(
+                replay_admitted(1, DataKind.TRADE, aggressor_side="UNKNOWN"),
+            ),
+            **project,
+        )
+    with pytest.raises(ValueError, match="finalized=true"):
+        project_native_replay(
+            events=(
+                replay_admitted(
+                    1,
+                    DataKind.BAR,
+                    payload={
+                        "open": "1998.00",
+                        "high": "2002.00",
+                        "low": "1997.00",
+                        "close": "2000.00",
+                        "volume": "12.00",
+                        "finalized": False,
+                    },
+                ),
+            ),
+            **project,
+        )
+    with pytest.raises(ValueError, match="BAR high"):
+        project_native_replay(
+            events=(
+                replay_admitted(
+                    1,
+                    DataKind.BAR,
+                    payload={
+                        "open": "1998.00",
+                        "high": "1999.00",
+                        "low": "1997.00",
+                        "close": "2000.00",
+                        "volume": "12.00",
+                        "finalized": True,
+                    },
+                ),
+            ),
+            **project,
+        )
 
 
 def test_s1_attempt_failure_does_not_invalidate_thesis_and_stale_freezes_history() -> None:

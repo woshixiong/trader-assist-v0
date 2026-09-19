@@ -1,11 +1,13 @@
+# mypy: disable-error-code="import-not-found"
 """Source-bound, rebuildable replay payload bridge over accepted E4 evidence."""
 
 from __future__ import annotations
 
 import hmac
 from collections.abc import Sequence
+from dataclasses import dataclass
 from decimal import ROUND_CEILING, Decimal
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -40,7 +42,13 @@ from trader_assist_v0.vnext_g4.contracts import (
 from trader_assist_v0.vnext_g4.evaluator import EvaluationInputs
 
 TRANSFORM_VERSION = "E4_ADMITTED_TO_G4_REPLAY_V1"
+NATIVE_REPLAY_TRANSFORM_VERSION: Literal[
+    "E4_ADMITTED_TO_NAUTILUS_RC5_NATIVE_REPLAY_V1"
+] = "E4_ADMITTED_TO_NAUTILUS_RC5_NATIVE_REPLAY_V1"
 _SUPPLEMENT_DOMAIN = b"trader-assist-v0/vnext-g4/evaluator-supplement/v2r2\0"
+_NATIVE_EVENT_DOMAIN = b"trader-assist-v0/nautilus-g4/native-replay-event/v1\0"
+_NATIVE_CONTENT_DOMAIN = b"trader-assist-v0/nautilus-g4/native-replay-content/v1\0"
+_NATIVE_PROJECTION_DOMAIN = b"trader-assist-v0/nautilus-g4/native-replay-projection/v1\0"
 
 _TERMINAL_THESIS_FAMILIES = frozenset(
     {
@@ -127,6 +135,377 @@ class OrderIntentAdmission(_FrozenModel):
     status: DerivationStatus
     intent: HypotheticalOrderIntent | None
     reason_codes: tuple[str, ...]
+
+
+def _native_content_hash(event_hashes: tuple[Sha256Hex, ...]) -> Sha256Hex:
+    return sha256_hex(
+        _NATIVE_CONTENT_DOMAIN
+        + canonical_json_bytes({"ordered_native_event_hashes": event_hashes})
+    )
+
+
+class NativeReplayProjectionIdentity(_FrozenModel):
+    """Immutable source and exact native-content identity for one projection."""
+
+    schema_version: Literal["NATIVE_REPLAY_PROJECTION_V1"] = "NATIVE_REPLAY_PROJECTION_V1"
+    transform_version: Literal["E4_ADMITTED_TO_NAUTILUS_RC5_NATIVE_REPLAY_V1"] = (
+        NATIVE_REPLAY_TRANSFORM_VERSION
+    )
+    market_id: Sha256Hex
+    expression_id: str
+    instrument_id: str
+    ordered_source_admission_hashes: tuple[Sha256Hex, ...] = Field(min_length=1)
+    ordered_native_event_hashes: tuple[Sha256Hex, ...] = Field(min_length=1)
+    native_content_hash: Sha256Hex
+    event_count: int = Field(ge=1)
+    quote_tick_count: int = Field(ge=0)
+    trade_tick_count: int = Field(ge=0)
+    bar_count: int = Field(ge=0)
+    projection_hash: Sha256Hex
+
+    def identity_payload(self) -> dict[str, object]:
+        return self.model_dump(mode="json", exclude={"projection_hash"})
+
+    @model_validator(mode="after")
+    def verify_identity(self) -> Self:
+        if len(self.ordered_source_admission_hashes) != self.event_count:
+            raise ValueError("source admission hash count does not match projected event count")
+        if len(self.ordered_native_event_hashes) != self.event_count:
+            raise ValueError("native event hash count does not match projected event count")
+        if self.quote_tick_count + self.trade_tick_count + self.bar_count != self.event_count:
+            raise ValueError("native replay type counts do not match projected event count")
+        expected_content = _native_content_hash(self.ordered_native_event_hashes)
+        if not hmac.compare_digest(self.native_content_hash, expected_content):
+            raise ValueError("native_content_hash does not bind ordered native events")
+        expected_projection = sha256_hex(
+            _NATIVE_PROJECTION_DOMAIN + canonical_json_bytes(self.identity_payload())
+        )
+        if not hmac.compare_digest(self.projection_hash, expected_projection):
+            raise ValueError("projection_hash does not bind source and native replay identity")
+        return self
+
+    @classmethod
+    def create(cls, **values: object) -> Self:
+        digest = sha256_hex(
+            _NATIVE_PROJECTION_DOMAIN + canonical_json_bytes(values)
+        )
+        return cls.model_validate({**values, "projection_hash": digest})
+
+
+@dataclass(frozen=True, slots=True)
+class NativeReplayProjection:
+    """Nautilus-native replay events with their deterministic source binding."""
+
+    identity: NativeReplayProjectionIdentity
+    events: tuple[object, ...]
+
+    def __post_init__(self) -> None:
+        if len(self.events) != self.identity.event_count:
+            raise ValueError("native replay events do not match projection identity count")
+
+
+def _required_payload_text(event: AdmittedEvent, field_name: str) -> str:
+    value = event.source.payload.get(field_name)
+    if not isinstance(value, str) or not value:
+        raise ValueError(
+            f"{event.source.data_kind.value} payload field {field_name!r} must be non-empty text"
+        )
+    return value
+
+
+def _decimal_payload_value(
+    event: AdmittedEvent,
+    field_name: str,
+    *,
+    allow_zero: bool,
+) -> Decimal:
+    raw = _required_payload_text(event, field_name)
+    try:
+        value = Decimal(raw)
+    except Exception as exc:
+        raise ValueError(
+            f"{event.source.data_kind.value} payload field {field_name!r} is not decimal"
+        ) from exc
+    if not value.is_finite() or value < 0 or (not allow_zero and value == 0):
+        qualifier = "non-negative" if allow_zero else "positive"
+        raise ValueError(
+            f"{event.source.data_kind.value} payload field {field_name!r} must be {qualifier}"
+        )
+    return value
+
+
+def _validate_replayable_payload(event: AdmittedEvent) -> None:
+    source = event.source
+    if source.data_kind is DataKind.BBO:
+        bid = _decimal_payload_value(event, "bid_price", allow_zero=False)
+        ask = _decimal_payload_value(event, "ask_price", allow_zero=False)
+        _decimal_payload_value(event, "bid_size", allow_zero=True)
+        _decimal_payload_value(event, "ask_size", allow_zero=True)
+        if bid > ask:
+            raise ValueError("BBO payload is crossed")
+        return
+    if source.data_kind is DataKind.TRADE:
+        _decimal_payload_value(event, "price", allow_zero=False)
+        _decimal_payload_value(event, "size", allow_zero=False)
+        if not source.native_trade_id:
+            raise ValueError("TRADE source requires a non-empty native_trade_id")
+        if source.provider_aggressor_side not in {"BUYER", "SELLER"}:
+            raise ValueError("TRADE provider aggressor side is unknown or ambiguous")
+        return
+    if source.data_kind is DataKind.BAR:
+        values = {
+            name: _decimal_payload_value(
+                event,
+                name,
+                allow_zero=name == "volume",
+            )
+            for name in ("open", "high", "low", "close", "volume")
+        }
+        if source.payload.get("finalized") is not True:
+            raise ValueError("BAR source must truthfully state finalized=true")
+        if values["high"] < max(values["open"], values["low"], values["close"]):
+            raise ValueError("BAR high does not contain open/low/close")
+        if values["low"] > min(values["open"], values["high"], values["close"]):
+            raise ValueError("BAR low does not contain open/high/close")
+        return
+    raise ValueError(f"unsupported native replay data kind: {source.data_kind.value}")
+
+
+def _validate_projection_sources(
+    events: Sequence[AdmittedEvent],
+    *,
+    market_id: str,
+    expression_id: str,
+    instrument_id: str,
+) -> tuple[AdmittedEvent, ...]:
+    ordered = tuple(events)
+    if not ordered:
+        raise ValueError("native replay projection requires at least one accepted admission")
+    ordinals = tuple(event.admission_ordinal for event in ordered)
+    if ordinals != tuple(sorted(ordinals)):
+        raise ValueError("native replay input is not in accepted causal admission order")
+    if len(ordinals) != len(set(ordinals)):
+        raise ValueError("native replay input contains duplicate admission ordinals")
+    admission_hashes = tuple(event.admission_hash for event in ordered)
+    if len(admission_hashes) != len(set(admission_hashes)):
+        raise ValueError("native replay input contains duplicate admissions")
+
+    expected_identity = (market_id, expression_id, instrument_id)
+    for event in ordered:
+        source = event.source
+        if event.out_of_order:
+            raise ValueError("native replay input contains an out_of_order admission")
+        if event.continuity_state is not EvidenceState.COMPLETE:
+            raise ValueError("native replay input requires COMPLETE continuity")
+        actual_identity = (source.market_id, source.expression_id, source.instrument_id)
+        if actual_identity != expected_identity:
+            raise ValueError("native replay input contains mixed or unselected market identity")
+        _validate_replayable_payload(event)
+    return ordered
+
+
+def _assert_native_text_round_trip(*, field_name: str, source: str, native: object) -> None:
+    if str(native) != source:
+        raise ValueError(f"native {field_name} conversion is not lossless")
+
+
+def project_native_replay(
+    *,
+    events: Sequence[AdmittedEvent],
+    market_id: str,
+    expression_id: str,
+    instrument_id: str,
+) -> NativeReplayProjection:
+    """Translate one explicitly selected accepted E4 sequence to rc5 native events."""
+    ordered = _validate_projection_sources(
+        events,
+        market_id=market_id,
+        expression_id=expression_id,
+        instrument_id=instrument_id,
+    )
+
+    from nautilus_trader.model import (
+        AggressorSide,
+        Bar,
+        BarType,
+        InstrumentId,
+        Price,
+        Quantity,
+        QuoteTick,
+        TradeId,
+        TradeTick,
+    )
+
+    native_instrument_id = InstrumentId.from_str(instrument_id)
+    _assert_native_text_round_trip(
+        field_name="instrument_id",
+        source=instrument_id,
+        native=native_instrument_id,
+    )
+    native_events: list[object] = []
+    native_event_hashes: list[Sha256Hex] = []
+    counts = {DataKind.BBO: 0, DataKind.TRADE: 0, DataKind.BAR: 0}
+
+    for event in ordered:
+        source = event.source
+        if source.data_kind is DataKind.BBO:
+            bid_price_raw = _required_payload_text(event, "bid_price")
+            ask_price_raw = _required_payload_text(event, "ask_price")
+            bid_size_raw = _required_payload_text(event, "bid_size")
+            ask_size_raw = _required_payload_text(event, "ask_size")
+            bid_price = Price.from_str(bid_price_raw)
+            ask_price = Price.from_str(ask_price_raw)
+            bid_size = Quantity.from_str(bid_size_raw)
+            ask_size = Quantity.from_str(ask_size_raw)
+            for field_name, raw, native in (
+                ("bid_price", bid_price_raw, bid_price),
+                ("ask_price", ask_price_raw, ask_price),
+                ("bid_size", bid_size_raw, bid_size),
+                ("ask_size", ask_size_raw, ask_size),
+            ):
+                _assert_native_text_round_trip(
+                    field_name=field_name,
+                    source=raw,
+                    native=native,
+                )
+            native_event = QuoteTick(
+                instrument_id=native_instrument_id,
+                bid_price=bid_price,
+                ask_price=ask_price,
+                bid_size=bid_size,
+                ask_size=ask_size,
+                ts_event=source.ts_event,
+                ts_init=source.ts_init,
+            )
+            native_payload: dict[str, object] = {
+                "data_kind": DataKind.BBO.value,
+                "instrument_id": str(native_event.instrument_id),
+                "bid_price": str(native_event.bid_price),
+                "ask_price": str(native_event.ask_price),
+                "bid_size": str(native_event.bid_size),
+                "ask_size": str(native_event.ask_size),
+                "ts_event": native_event.ts_event,
+                "ts_init": native_event.ts_init,
+            }
+        elif source.data_kind is DataKind.TRADE:
+            price_raw = _required_payload_text(event, "price")
+            size_raw = _required_payload_text(event, "size")
+            native_trade_id = source.native_trade_id
+            if native_trade_id is None:
+                raise ValueError("TRADE source requires a native_trade_id")
+            price = Price.from_str(price_raw)
+            size = Quantity.from_str(size_raw)
+            _assert_native_text_round_trip(field_name="price", source=price_raw, native=price)
+            _assert_native_text_round_trip(field_name="size", source=size_raw, native=size)
+            aggressor_side = (
+                AggressorSide.BUY
+                if source.provider_aggressor_side == "BUYER"
+                else AggressorSide.SELL
+            )
+            trade_id = TradeId(native_trade_id)
+            _assert_native_text_round_trip(
+                field_name="native_trade_id",
+                source=native_trade_id,
+                native=trade_id,
+            )
+            native_event = TradeTick(
+                instrument_id=native_instrument_id,
+                price=price,
+                size=size,
+                aggressor_side=aggressor_side,
+                trade_id=trade_id,
+                ts_event=source.ts_event,
+                ts_init=source.ts_init,
+            )
+            if str(native_event.aggressor_side) != source.provider_aggressor_side:
+                raise ValueError("native aggressor-side conversion is not lossless")
+            native_payload = {
+                "data_kind": DataKind.TRADE.value,
+                "instrument_id": str(native_event.instrument_id),
+                "price": str(native_event.price),
+                "size": str(native_event.size),
+                "native_trade_id": str(native_event.trade_id),
+                "provider_aggressor_side": str(native_event.aggressor_side),
+                "ts_event": native_event.ts_event,
+                "ts_init": native_event.ts_init,
+            }
+        else:
+            bar_type = BarType.from_str(source.event_context)
+            _assert_native_text_round_trip(
+                field_name="bar_type",
+                source=source.event_context,
+                native=bar_type,
+            )
+            if str(bar_type.instrument_id) != instrument_id:
+                raise ValueError("BAR type instrument conflicts with selected instrument")
+            raw_values = {
+                name: _required_payload_text(event, name)
+                for name in ("open", "high", "low", "close", "volume")
+            }
+            open_price = Price.from_str(raw_values["open"])
+            high_price = Price.from_str(raw_values["high"])
+            low_price = Price.from_str(raw_values["low"])
+            close_price = Price.from_str(raw_values["close"])
+            volume = Quantity.from_str(raw_values["volume"])
+            native_values = {
+                "open": open_price,
+                "high": high_price,
+                "low": low_price,
+                "close": close_price,
+                "volume": volume,
+            }
+            for field_name, native in native_values.items():
+                _assert_native_text_round_trip(
+                    field_name=field_name,
+                    source=raw_values[field_name],
+                    native=native,
+                )
+            native_event = Bar(
+                bar_type=bar_type,
+                open=open_price,
+                high=high_price,
+                low=low_price,
+                close=close_price,
+                volume=volume,
+                ts_event=source.ts_event,
+                ts_init=source.ts_init,
+            )
+            native_payload = {
+                "data_kind": DataKind.BAR.value,
+                "bar_type": str(native_event.bar_type),
+                "open": str(native_event.open),
+                "high": str(native_event.high),
+                "low": str(native_event.low),
+                "close": str(native_event.close),
+                "volume": str(native_event.volume),
+                "ts_event": native_event.ts_event,
+                "ts_init": native_event.ts_init,
+            }
+
+        native_events.append(native_event)
+        native_event_hashes.append(
+            sha256_hex(_NATIVE_EVENT_DOMAIN + canonical_json_bytes(native_payload))
+        )
+        counts[source.data_kind] += 1
+
+    event_hashes = tuple(native_event_hashes)
+    identity = NativeReplayProjectionIdentity.create(
+        schema_version="NATIVE_REPLAY_PROJECTION_V1",
+        transform_version=NATIVE_REPLAY_TRANSFORM_VERSION,
+        market_id=market_id,
+        expression_id=expression_id,
+        instrument_id=instrument_id,
+        ordered_source_admission_hashes=tuple(
+            event.admission_hash for event in ordered
+        ),
+        ordered_native_event_hashes=event_hashes,
+        native_content_hash=_native_content_hash(event_hashes),
+        event_count=len(ordered),
+        quote_tick_count=counts[DataKind.BBO],
+        trade_tick_count=counts[DataKind.TRADE],
+        bar_count=counts[DataKind.BAR],
+    )
+    return NativeReplayProjection(identity=identity, events=tuple(native_events))
 
 
 def build_replay_payload(events: Sequence[AdmittedEvent]) -> bytes:
