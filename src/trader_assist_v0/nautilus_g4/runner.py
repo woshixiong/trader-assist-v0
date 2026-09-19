@@ -657,7 +657,7 @@ def _assert_single_provider_state(
 def _mint_provider_execution_evidence(
     *,
     node: object,
-    run_config_id: object,
+    run_config_id: str,
     venue: object,
     projection: NativeReplayProjection,
     intent: HypotheticalOrderIntent,
