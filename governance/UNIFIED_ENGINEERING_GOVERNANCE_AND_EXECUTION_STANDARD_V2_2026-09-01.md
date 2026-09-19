@@ -401,6 +401,44 @@ FREEZE_AND_VERIFY_GITHUB_CHECKPOINT
 
 The successor verifies live identity plus the predecessor checkpoint before material work. It starts from the checkpoint, not by replaying the whole predecessor transcript. Failure to produce/verify the checkpoint or successor prompt blocks transition into the next material stage.
 
+Default lifecycle granularity is one material bounded stage per Engineering Control window. This is not one-command-per-window and must not cause gratuitous rotation for tiny deterministic tails. A durable checkpoint is required **before** any long-running/fragile Codex, CI or independent-review handoff.
+
+### 4.6 Stable semantic-execution substrate
+
+Repeated command incidents show that reliability does not converge by generating a new execution program for every task. The project therefore separates **task semantics** from **execution mechanics**.
+
+```text
+TASK_PACKET=DATA
+EXECUTION_SUBSTRATE=VERSIONED_REVIEWED_STABLE_COMPONENT
+PER_TASK_DYNAMIC_EXECUTION_PROGRAM_GENERATION=PROHIBITED_BY_DEFAULT
+```
+
+For local Codex semantic execution, the default substrate has a deliberately narrow responsibility:
+
+```text
+VERIFY EXACT TASK/SOURCE INPUT
+-> MATERIALIZE OR SELECT ISOLATED WORKSPACE
+-> VERIFY ONLY TRUE SEMANTIC PREREQUISITES
+-> START EXACTLY ONE FROZEN CODEX SESSION
+-> CAPTURE DIFF / RESULT / CHECKPOINT
+-> STOP
+```
+
+It does **not** own GitHub publication, PR creation, Actions CI, final review, merge or deployment. Those remain Engineering Control/provider-native responsibilities after the semantic checkpoint.
+
+Task-specific variation must normally be represented as packet/manifest/allowlist/acceptance data consumed by the stable runner, not by generating another large shell/Python launcher. A new/custom execution program requires an explicit exception proving the stable runner cannot safely express the required mechanics and must itself pass the Generated Command + tool-change/review gates.
+
+Source exactness and source transport are separate concerns. Preferred source acquisition order is:
+
+```text
+ALREADY-EXACT VERIFIED LOCAL SOURCE / ACCEPTED EXACT SOURCE ARTIFACT
+-> PROVIDER-NATIVE EXACT SOURCE SNAPSHOT / HASH-MANIFESTED BUNDLE
+-> HEALTHY NORMAL GIT MATERIALIZATION WHEN NEEDED
+-> PATCH / OBJECT RECONSTRUCTION ONLY AS BOUNDED RECOVERY, NOT DEFAULT EXECUTION ARCHITECTURE
+```
+
+A recovery technique that succeeds once does not become the default substrate merely because it bypassed the latest failure.
+
 ## 5. Research, evidence and decision method
 
 Material direction-setting work uses a strict three-stage method.
@@ -1353,6 +1391,8 @@ PRE_SEMANTIC_GATE_REQUIRES_DISTINCT_REAL_INVARIANT=YES
 ```
 
 GitHub CLI authentication, push permission, PR creation, publication dry-runs, result-comment egress and other publication mechanics must not block semantic start unless the semantic stage genuinely requires that exact capability to obtain/verify its source or satisfy another real pre-mutation invariant. When exact canonical identity is already established through the control plane and an exact local/source artifact is available, redundant lower-reliability GitHub network/auth probes are prohibited before semantic start.
+
+Do not require the local Git object database to contain/reconstruct the canonical merge commit/tree graph merely to start a semantic Writer when the Writer can operate safely from an exact hash-manifested source snapshot and canonical identity is already bound in the Task Packet. Local Git may be used as an isolated diff/checkpoint mechanism without pretending its synthetic local commit is the canonical GitHub commit.
 
 Prohibited false exactness includes:
 
