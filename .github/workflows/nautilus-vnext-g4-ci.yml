@@ -80,11 +80,103 @@ jobs:
             src/trader_assist_v0/vnext_g4 \
             src/trader_assist_v0/nautilus_g4 \
             scripts/nautilus_vnext_g4_qualification.py \
+            .github/spikes/t2_rc5_capability_spike.py \
             tests/test_vnext_g4_*.py \
             tests/test_nautilus_vnext_g4_*.py
           test "$(sha256sum src/trader_assist_v0/vnext_g4/evaluator.py | cut -d' ' -f1)" = \
             "63e44fcefdbb714267a293e823aa5114bc705a5f220b1db3834f4706521a4c18"
           git diff --check
+      - name: Phase A offline exact-rc5 harness self-check
+        id: t2_phase_a
+        continue-on-error: true
+        run: |
+          /tmp/trader-assist-g4-venv/bin/python \
+            .github/spikes/t2_rc5_capability_spike.py \
+            --phase offline \
+            --evidence-dir "${RUNNER_TEMP}/t2-rc5-capability-spike" \
+            --result-path "${RUNNER_TEMP}/spike-v2-offline-result.json"
+      - name: Phase B public combined capability proof
+        id: t2_phase_b
+        if: ${{ steps.t2_phase_a.outcome == 'success' }}
+        continue-on-error: true
+        run: |
+          /tmp/trader-assist-g4-venv/bin/python \
+            .github/spikes/t2_rc5_capability_spike.py \
+            --phase public \
+            --evidence-dir "${RUNNER_TEMP}/t2-rc5-capability-spike" \
+            --result-path "${RUNNER_TEMP}/spike-v2-public-result.json"
+      - name: Record Phase B fail-closed skip
+        if: ${{ always() && steps.t2_phase_a.outcome != 'success' }}
+        run: |
+          /tmp/trader-assist-g4-venv/bin/python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"])
+          evidence = root / "t2-rc5-capability-spike"
+          evidence.mkdir(parents=True, exist_ok=True)
+          (evidence / "phase-b-terminal-status").write_text(
+              "SPIKE_V2=NOT_RUN_PHASE_A_FAILED\n", encoding="utf-8"
+          )
+          (root / "spike-v2-public-result.json").write_text(
+              json.dumps(
+                  {
+                      "schema_version": "T2_RC5_CAPABILITY_SPIKE_V2",
+                      "status": "SPIKE_V2=NOT_RUN_PHASE_A_FAILED",
+                      "phase": "public",
+                      "phase_b_run": "NO",
+                  },
+                  sort_keys=True,
+              ) + "\n",
+              encoding="utf-8",
+          )
+          PY
+      - name: Preserve T2 RC5 spike evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: t2-rc5-capability-spike-v2-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/spike-v2-offline-result.json
+            ${{ runner.temp }}/spike-v2-public-result.json
+            ${{ runner.temp }}/t2-rc5-capability-spike
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Assert typed T2 RC5 spike result
+        run: |
+          /tmp/trader-assist-g4-venv/bin/python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"])
+          offline = json.loads((root / "spike-v2-offline-result.json").read_text())
+          public = json.loads((root / "spike-v2-public-result.json").read_text())
+          for result, phase in ((offline, "offline"), (public, "public")):
+              assert result["status"] == "PASS", result
+              assert result["phase"] == phase, result
+              assert result["task_packet_sha256"] == (
+                  "1d447a3537170b264c74dfefbe0914248a454d97199d0e2361961ac4a787dca4"
+              ), result
+              assert result["private_api"] is False, result
+              assert result["signing"] is False, result
+              assert result["exchange_write"] is False, result
+              assert result["real_t2_credit"] is False, result
+              state = result["provider_state"]
+              assert (state["order_count"], state["filled_order_count"], state["position_count"], state["account_count"]) == (1, 1, 1, 1), result
+          assert offline["network"] is False and offline["public_provider_call"] is False, offline
+          assert public["network"] is True and public["public_provider_call"] is True, public
+          evidence = root / "t2-rc5-capability-spike"
+          required = {
+              "callback-ledger.jsonl", "catalog-tree-sha256", "exact-head", "exact-tree",
+              "task-packet-sha256", "exact-nautilus-version", "instrument-identity-and-type",
+              "provider-state-hash-and-counts", "zero-private-api-assertion",
+              "zero-signing-assertion", "zero-exchange-write-assertion",
+              "phase-a-terminal-status", "phase-b-terminal-status",
+          }
+          assert all((evidence / name).is_file() for name in required), sorted(required)
+          PY
       - name: Same-job bounded zero-write public E4 probe
         id: public_e4_probe
         continue-on-error: true
