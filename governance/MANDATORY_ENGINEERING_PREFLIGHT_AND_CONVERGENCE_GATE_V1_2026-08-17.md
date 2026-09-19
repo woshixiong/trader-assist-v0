@@ -117,6 +117,9 @@ For Writer launch paths also record:
 ```text
 SEMANTIC_READINESS=PASS|FAIL
 SEMANTIC_START_PREREQUISITES=
+EXECUTION_SUBSTRATE=VERSIONED_STABLE_RUNNER|PROVIDER_NATIVE|CUSTOM_EXCEPTION
+STABLE_RUNNER_APPLICABLE=YES|NO
+CUSTOM_EXECUTION_PROGRAM_JUSTIFICATION=
 PUBLICATION_READINESS=PASS|FAIL|NOT_APPLICABLE_YET
 PUBLICATION_PREREQUISITES=
 PRE_SEMANTIC_GATE_NECESSITY_PROOF=PASS|FAIL
@@ -126,6 +129,8 @@ OPERATOR_VISIBLE_SELF_MODIFYING_REWRITE=NO|YES|NOT_APPLICABLE
 ```
 
 For a material launcher/repair/holistic-regeneration handoff, `OPERATOR_VISIBLE_SELF_MODIFYING_REWRITE=YES` fails the Generated Command gate. Exact final launcher bytes must be produced and validated before the operator is asked to run them; validating the old source files before an inline rewrite is insufficient.
+
+If `STABLE_RUNNER_APPLICABLE=YES`, then `EXECUTION_SUBSTRATE=CUSTOM_EXCEPTION` is prohibited. A custom execution program requires a concrete stable-runner insufficiency and is itself a material execution-surface change subject to the Generated Command reliability/review gates.
 
 A publication-only prerequisite may not set `SEMANTIC_READINESS=FAIL`. GitHub auth/API/push/PR/result-egress checks belong after the semantic checkpoint unless they are truly required to acquire/verify the semantic source or protect another distinct pre-mutation invariant. A launcher artifact may not be represented as executable by the user until its actual delivery/availability on the operator surface is confirmed.
 
