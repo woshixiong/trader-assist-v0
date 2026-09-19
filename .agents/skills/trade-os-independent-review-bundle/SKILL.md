@@ -11,6 +11,8 @@ Use only when T4 independent review needs local execution/inspection evidence th
 
 Generate evidence, not an acceptance judgment.
 
+Authority-bearing final review must occur in a **new ordinary ChatGPT conversation/window** distinct from the Engineering Control/Writer conversation. A same-conversation self-check may inform readiness but is never independent acceptance.
+
 Preferred flow:
 
 ```text
@@ -19,6 +21,24 @@ LOCAL DETERMINISTIC EVIDENCE
 -> HASH MANIFEST
 -> independent strongest-appropriate ChatGPT review
 ```
+
+## Compact Review Manifest
+
+Before adding evidence, freeze a compact manifest:
+
+```text
+REVIEW_TARGET
+EXACT_BASE / HEAD / TREE
+EXACT_CHANGED_PATHS / DIFF_REF
+FROZEN_ACCEPTANCE_CRITERIA
+REQUIRED_SAFETY_BOUNDARIES
+DECISIVE_CI / ARTIFACT / SOURCE / UPSTREAM_REFS
+UNTRUSTED_PRIOR_CONCLUSIONS
+OUTPUT_CONTRACT
+AUTHORITY_BOUNDARY
+```
+
+The reviewer loads in that order. Full Issue/PR history, full governance corpus and unchanged accepted code are not default inputs. Any concrete missing/ambiguous fact triggers a targeted canonical read; unresolved uncertainty prohibits PASS.
 
 ## Required bundle identity
 
@@ -41,6 +61,19 @@ Create a manifest containing the SHA-256 of every included file. Recompute/verif
 ## Context economy
 
 Do not include full repo archives, caches, dependencies, virtual environments, successful verbose logs or unrelated governance/history. Include only what the frozen review plan requires.
+
+Default review progression:
+
+```text
+EXACT IDENTITY
+-> EXACT DELTA
+-> ACCEPTANCE / SAFETY CONTRACT
+-> DECISIVE CI / ARTIFACT
+-> NECESSARY UPSTREAM
+-> TARGETED HISTORY ONLY FOR A CONCRETE UNRESOLVED QUESTION
+```
+
+Context reduction must never remove a required acceptance criterion, blocker, negative case or safety boundary. Quality/correctness outrank context economy.
 
 ## Prohibited material
 
