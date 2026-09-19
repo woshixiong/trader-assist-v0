@@ -55,6 +55,10 @@ PERSISTED_STATE_COPY_SEMANTICS_PROOF=PASS|FAIL|NOT_APPLICABLE
 
 ONE_SHOT_SEMANTIC_BOUNDARY=
 SIDE_EFFECT_FREE_PREFLIGHT_COMPLETE_BEFORE_ONE_SHOT=YES|NO|NOT_APPLICABLE
+SEMANTIC_START_PREREQUISITES=
+PUBLICATION_PREREQUISITES=
+PRE_SEMANTIC_GATE_NECESSITY_PROOF=PASS|FAIL|NOT_APPLICABLE
+LAUNCH_ARTIFACT_DELIVERY_CONFIRMED=YES|NO|NOT_APPLICABLE
 CHECKPOINT_RESUME_PLAN=
 POST_SEMANTIC_EVIDENCE_CHECKPOINT_PLAN=
 
@@ -153,6 +157,21 @@ OPERATOR_VISIBLE_BOOTSTRAP
 
 If this cannot be achieved on the current surface, prefer a robust file/artifact transfer surface, an accepted repository-owned launcher, or an explicitly safe phase split over another encoding layer. Hash verification detects corruption after transport; it does not make an overlong transport reliable.
 
+### 3.2 Launch-artifact delivery is a prerequisite to operator execution
+
+A generated ZIP, script, command file or bundle is not available merely because Engineering Control described it or recorded an expected filename/hash.
+
+Before telling the user to execute a local artifact:
+
+```text
+ARTIFACT_BYTES_CREATED=YES
+ARTIFACT_SHA256_VERIFIED=YES
+OPERATOR_DELIVERY_SURFACE=PROVEN
+LAUNCH_ARTIFACT_DELIVERY_CONFIRMED=YES
+```
+
+If the artifact is expected in a local path such as Downloads, that path must come from actual delivered/operator evidence, not an invented filename. If delivery cannot be proven, use a provider-native artifact/download surface or give a short self-contained bootstrap whose payload source is itself real and verified. Missing-artifact execution is a command-generation defect and consumes command-repair progression.
+
 ---
 
 ## 4. Canonical validation command and platform fidelity
@@ -245,6 +264,15 @@ Manifest creation from source and staged-artifact verification are separate cont
 
 ## 7. One-shot boundary, checkpoint and resume
 
+Before an expensive/irreversible/rate-limited one-shot action, finish all **necessary** side-effect-free proof first. Preflight scope is minimized to prerequisites that protect semantic safety/correctness or are irreducibly required to obtain/verify the semantic source.
+
+```text
+SEMANTIC_READINESS != PUBLICATION_READINESS
+SEMANTIC_START_DEPENDENCY_MINIMIZATION=REQUIRED
+```
+
+Do not place GitHub push/PR/result-egress authentication, publication dry-runs or redundant control-plane identity probes before a semantic Writer merely because the same wrapper intends to publish afterward. When practical, semantic execution must be able to reach a durable local/exact checkpoint even if publication transport is unavailable.
+
 Before an expensive/irreversible/rate-limited one-shot action, finish all side-effect-free proof first.
 
 Suggested phases:
@@ -329,8 +357,12 @@ If an authoritative connected GitHub write surface is available and provides equ
 INITIAL_GENERATED_COMMAND
 -> AT MOST ONE BOUNDED COMMAND CORRECTION
 -> SECOND AVOIDABLE COMMAND/WRAPPER DEFECT IN SAME STAGE
+   => CURRENT_LAUNCHER_FAMILY=TERMINATED
+   => FURTHER_INCREMENTAL_CORRECTION=PROHIBITED
    => COMMAND_RELIABILITY_HOLISTIC_REGENERATION
 ```
+
+Renaming/regenerating the ZIP/script without changing the responsibility topology does not reset this counter. The lineage is keyed to the bounded stage + launcher responsibility family, not the filename.
 
 Holistic regeneration requires:
 
