@@ -25,6 +25,7 @@ from trader_assist_v0.vnext_g4.contracts import (
 
 if TYPE_CHECKING:
     from nautilus_trader.backtest import BacktestEngine
+    from nautilus_trader.backtest import BacktestNode as _NautilusBacktestNode
     from nautilus_trader.execution import ProbabilisticFillModel
 
     class _QuantityInstrument(Protocol):
@@ -142,8 +143,8 @@ class ProviderFillEvidence(BaseModel):
     provider_event_type: str = Field(min_length=1)
 
 
-class ProviderExecutionEvidence(BaseModel):
-    """Immutable R2 execution evidence; it grants no T2 or G4 promotion."""
+class ProviderExecutionRecord(BaseModel):
+    """Serializable run record; alone it is not provider-runtime evidence."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -177,6 +178,7 @@ class ProviderExecutionEvidence(BaseModel):
     live_venue_submitted: Literal[False] = False
     real_t2_credit: Literal[False] = False
     g4_promotion: Literal[False] = False
+    authoritative_provider_runtime: Literal[False] = False
     evidence_hash: Sha256Hex
 
     def identity_payload(self) -> dict[str, object]:
@@ -197,6 +199,33 @@ class ProviderExecutionEvidence(BaseModel):
     def create(cls, **values: object) -> Self:
         digest = sha256_hex(_PROVIDER_EXECUTION_DOMAIN + canonical_json_bytes(values))
         return cls.model_validate({**values, "evidence_hash": digest})
+
+
+class ProviderExecutionEvidence:
+    """Capability minted only from a completed, genuine rc5 BacktestNode run."""
+
+    __slots__ = ("_node", "_record")
+    _node: object
+    _record: ProviderExecutionRecord
+
+    def __new__(cls, *_args: object, **_kwargs: object) -> Self:
+        raise TypeError(
+            "ProviderExecutionEvidence is minted only from a completed BacktestNode run"
+        )
+
+    def __setattr__(self, _name: str, _value: object) -> None:
+        raise TypeError("ProviderExecutionEvidence is immutable")
+
+    @property
+    def record(self) -> ProviderExecutionRecord:
+        return self._record
+
+    @property
+    def authoritative_provider_runtime(self) -> Literal[True]:
+        return True
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._record, name)
 
 
 def _quote_identity(tick: object) -> dict[str, object]:
@@ -297,11 +326,15 @@ _EXECUTION_LEDGERS: dict[str, _ExecutionLedger] = {}
 
 if not TYPE_CHECKING:
     try:
+        from nautilus_trader.backtest import BacktestNode as _NautilusBacktestNode
         from nautilus_trader.model import OrderFilled as _NautilusOrderFilled
         from nautilus_trader.trading import Strategy as _NautilusStrategy
         from nautilus_trader.trading import StrategyConfig as _NautilusStrategyConfig
     except ModuleNotFoundError:
         # Keep non-Nautilus contract tests importable; execution still fails at the rc5 gate.
+        class _NautilusBacktestNode:
+            pass
+
         class _NautilusStrategyConfig:
             def __init__(self, **_kwargs: object) -> None:
                 pass
@@ -621,6 +654,77 @@ def _assert_single_provider_state(
     return state
 
 
+def _mint_provider_execution_evidence(
+    *,
+    node: object,
+    run_config_id: object,
+    venue: object,
+    projection: NativeReplayProjection,
+    intent: HypotheticalOrderIntent,
+    trigger_admission_hash: str,
+    trigger: TriggerQuoteEvidence,
+    provider_instrument: object,
+    submitted_client_order_id: str,
+    submitted_side: Literal["BUY", "SELL"],
+    submitted_quantity: str,
+    fill: ProviderFillEvidence,
+) -> ProviderExecutionEvidence:
+    """Validate the completed native run and mint its non-serializable capability."""
+    if not isinstance(node, _NautilusBacktestNode):
+        raise TypeError("provider-runtime provenance requires an actual BacktestNode")
+    cache = node.get_engine_cache(run_config_id)
+    portfolio = node.get_engine_portfolio(run_config_id)
+    if cache is None or portfolio is None:
+        raise RuntimeError("BacktestNode did not retain public Cache/Portfolio state")
+    identity = projection.identity
+    provider_state = _assert_single_provider_state(
+        cache=cache,
+        portfolio=portfolio,
+        venue=venue,
+        instrument_id=identity.instrument_id,
+        client_order_id=submitted_client_order_id,
+        technical_quantity=intent.technical_quantity.quantity,
+    )
+    record = ProviderExecutionRecord.create(
+        schema_version="PROVIDER_EXECUTION_STATE_V1",
+        projection_hash=identity.projection_hash,
+        ordered_source_admission_hashes=identity.ordered_source_admission_hashes,
+        order_intent_hash=intent.order_intent_hash,
+        trigger_admission_hash=trigger_admission_hash,
+        trigger=trigger.model_dump(mode="json"),
+        provider_instrument_id=identity.instrument_id,
+        provider_instrument_type=(
+            f"{type(provider_instrument).__module__}."
+            f"{type(provider_instrument).__qualname__}"
+        ),
+        submitted_client_order_id=submitted_client_order_id,
+        submitted_side=submitted_side,
+        submitted_technical_quantity=submitted_quantity,
+        fill=fill.model_dump(mode="json"),
+        provider_state=provider_state.model_dump(mode="json"),
+        event_count=identity.event_count,
+        quote_tick_count=identity.quote_tick_count,
+        trade_tick_count=identity.trade_tick_count,
+        bar_count=identity.bar_count,
+        submitted_order_count=1,
+        fill_count=1,
+        position_count=provider_state.position_count,
+        account_count=provider_state.account_count,
+        simulation_only=True,
+        private_api=False,
+        signing=False,
+        exchange_write=False,
+        live_venue_submitted=False,
+        real_t2_credit=False,
+        g4_promotion=False,
+        authoritative_provider_runtime=False,
+    )
+    evidence = object.__new__(ProviderExecutionEvidence)
+    object.__setattr__(evidence, "_record", record)
+    object.__setattr__(evidence, "_node", node)
+    return evidence
+
+
 def execute_provider_native_state(
     *,
     projection: NativeReplayProjection,
@@ -786,7 +890,7 @@ def execute_provider_native_state(
             label="provider fill last_qty",
         ) != intent.technical_quantity.quantity:
             raise RuntimeError("provider fill quantity changed canonical technical quantity")
-        provider_state = _assert_single_provider_state(
+        _assert_single_provider_state(
             cache=cache,
             portfolio=portfolio,
             venue=venue,
@@ -796,42 +900,24 @@ def execute_provider_native_state(
         )
         submitted_client_order_id = ledger.submitted_client_order_id
         submitted_quantity = ledger.submitted_quantity
+        evidence = _mint_provider_execution_evidence(
+            node=node,
+            run_config_id=config.id,
+            venue=venue,
+            projection=projection,
+            intent=intent,
+            trigger_admission_hash=trigger_admission_hash,
+            trigger=trigger_evidence,
+            provider_instrument=provider_instrument,
+            submitted_client_order_id=submitted_client_order_id,
+            submitted_side=order_side,
+            submitted_quantity=submitted_quantity,
+            fill=fill,
+        )
     finally:
         node.dispose()
         _EXECUTION_LEDGERS.pop(ledger_key, None)
-
-    return ProviderExecutionEvidence.create(
-        schema_version="PROVIDER_EXECUTION_STATE_V1",
-        projection_hash=identity.projection_hash,
-        ordered_source_admission_hashes=identity.ordered_source_admission_hashes,
-        order_intent_hash=intent.order_intent_hash,
-        trigger_admission_hash=trigger_admission_hash,
-        trigger=trigger_evidence.model_dump(mode="json"),
-        provider_instrument_id=identity.instrument_id,
-        provider_instrument_type=(
-            f"{type(provider_instrument).__module__}.{type(provider_instrument).__qualname__}"
-        ),
-        submitted_client_order_id=submitted_client_order_id,
-        submitted_side=order_side,
-        submitted_technical_quantity=submitted_quantity,
-        fill=fill.model_dump(mode="json"),
-        provider_state=provider_state.model_dump(mode="json"),
-        event_count=identity.event_count,
-        quote_tick_count=identity.quote_tick_count,
-        trade_tick_count=identity.trade_tick_count,
-        bar_count=identity.bar_count,
-        submitted_order_count=1,
-        fill_count=1,
-        position_count=provider_state.position_count,
-        account_count=provider_state.account_count,
-        simulation_only=True,
-        private_api=False,
-        signing=False,
-        exchange_write=False,
-        live_venue_submitted=False,
-        real_t2_credit=False,
-        g4_promotion=False,
-    )
+    return evidence
 
 
 def causal_claim_gate_states(

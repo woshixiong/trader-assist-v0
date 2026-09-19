@@ -21,12 +21,14 @@ from trader_assist_v0.nautilus_g4.catalog_bridge import (
 from trader_assist_v0.nautilus_g4.runner import (
     BACKTEST_NODE_PUBLIC_METHODS,
     ProviderExecutionEvidence,
+    ProviderExecutionRecord,
     ProviderFillEvidence,
     ProviderStateProjection,
     RepresentativeMarketEvidence,
     TriggerQuoteEvidence,
     _assert_single_provider_state,
     _ExecutionLedger,
+    _mint_provider_execution_evidence,
     _persist_and_reload_projection,
     _provider_order_side,
     _validate_execution_inputs,
@@ -189,6 +191,132 @@ def quote_tick(
     )
 
 
+def native_hyperliquid_instrument() -> object:
+    """Construct one offline real rc5 CryptoPerpetual with provider identity."""
+    from nautilus_trader.model import (
+        CryptoPerpetual,
+        Currency,
+        InstrumentId,
+        Price,
+        Quantity,
+        Symbol,
+    )
+
+    return CryptoPerpetual(
+        instrument_id=InstrumentId.from_str("ETH-USD-PERP.HYPERLIQUID"),
+        raw_symbol=Symbol("ETH"),
+        base_currency=Currency.from_str("ETH"),
+        quote_currency=Currency.from_str("USDC"),
+        settlement_currency=Currency.from_str("USDC"),
+        is_inverse=False,
+        price_precision=1,
+        size_precision=3,
+        price_increment=Price.from_str("0.1"),
+        size_increment=Quantity.from_str("0.001"),
+        ts_event=0,
+        ts_init=0,
+        margin_init=Decimal("0.05"),
+        margin_maint=Decimal("0.025"),
+        maker_fee=Decimal("0.0002"),
+        taker_fee=Decimal("0.0005"),
+    )
+
+
+def install_post_run_node_double(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    emit_fill: bool,
+    extra_position: bool,
+) -> None:
+    """Replace only the run boundary after real input/catalog construction."""
+    import nautilus_trader.backtest as backtest
+
+    import trader_assist_v0.nautilus_g4.runner as runner_module
+
+    class Value:
+        def __init__(self, **values: object) -> None:
+            self.__dict__.update(values)
+
+    class Cache:
+        def orders(self) -> tuple[object, ...]:
+            return (
+                Value(
+                    client_order_id="order-1",
+                    status="FILLED",
+                    filled_qty="0.010",
+                    avg_px="2001.0",
+                ),
+            )
+
+        def positions(self) -> tuple[object, ...]:
+            position = Value(
+                id="position-1",
+                instrument_id="ETH-USD-PERP.HYPERLIQUID",
+                side="LONG",
+                quantity="0.010",
+            )
+            if extra_position:
+                return (position, Value(**position.__dict__))
+            return (position,)
+
+        def account_for_venue(self, _venue: object) -> object:
+            return Value(id="account-1", account_type="MARGIN", base_currency="USDC")
+
+    class Portfolio:
+        pass
+
+    Cache.__module__ = "nautilus_trader.cache.cache"
+    Portfolio.__module__ = "nautilus_trader.portfolio.portfolio"
+
+    class NodeDouble:
+        def __init__(self, *, configs: list[object]) -> None:
+            assert len(configs) == 1
+            self.cache = Cache()
+            self.portfolio = Portfolio()
+
+        def build(self) -> None:
+            pass
+
+        def add_strategy_from_config(self, _run_id: object, _config: object) -> None:
+            pass
+
+        def run(self) -> list[object]:
+            (ledger,) = runner_module._EXECUTION_LEDGERS.values()
+            ledger.trigger_match_count = 1
+            ledger.submission_count = 1
+            ledger.submitted_client_order_id = "order-1"
+            ledger.submitted_quantity = "0.010"
+            if emit_fill:
+                ledger.fills.append(
+                    ProviderFillEvidence(
+                        client_order_id="order-1",
+                        venue_order_id="venue-1",
+                        trade_id="trade-1",
+                        event_id="event-1",
+                        last_qty="0.010",
+                        last_px="2001.0",
+                        ts_event=1_700_000_000_000_000_002,
+                        ts_init=1_700_000_000_000_000_003,
+                        provider_event_type=(
+                            "nautilus_trader.model.events.OrderFilled"
+                        ),
+                    )
+                )
+            return []
+
+        def get_engine_cache(self, _run_id: object) -> object:
+            return self.cache
+
+        def get_engine_portfolio(self, _run_id: object) -> object:
+            return self.portfolio
+
+        def dispose(self) -> None:
+            pass
+
+    NodeDouble.__module__ = "nautilus_trader.backtest.node"
+    monkeypatch.setattr(backtest, "BacktestNode", NodeDouble)
+
+
 def fake_provider(monkeypatch: pytest.MonkeyPatch, *, quantity: str = "0.010") -> object:
     import nautilus_trader.model as model
     from nautilus_trader.model import InstrumentId, Quantity
@@ -224,6 +352,81 @@ def test_installed_rc5_and_provider_owned_fill_model_are_consumed() -> None:
 def test_exact_rc5_exposes_high_level_backtest_node_catalog_surface() -> None:
     _assert_required_nautilus_available()
     assert_backtest_node_catalog_surface()
+
+
+@REQUIRES_NAUTILUS
+def test_execute_provider_native_state_runs_real_rc5_hyperliquid_product_seam(
+    tmp_path: Path,
+) -> None:
+    _assert_required_nautilus_available()
+    assert_exact_nautilus_rc5()
+    instrument = native_hyperliquid_instrument()
+    trigger_quote = quote_tick(
+        ts_event=1_700_000_000_000_000_000,
+        ts_init=1_700_000_000_000_000_001,
+    )
+    projection = native_projection((trigger_quote,))
+    trigger_hash = projection.identity.ordered_source_admission_hashes[0]
+
+    evidence = execute_provider_native_state(
+        projection=projection,
+        intent=canonical_intent(),
+        trigger_admission_hash=trigger_hash,
+        provider_instrument=instrument,
+        catalog_path=tmp_path / "real-product-seam",
+    )
+
+    assert isinstance(evidence, ProviderExecutionEvidence)
+    assert evidence.authoritative_provider_runtime is True
+    assert evidence.record.authoritative_provider_runtime is False
+    assert evidence.provider_instrument_id == "ETH-USD-PERP.HYPERLIQUID"
+    assert evidence.submitted_order_count == 1
+    assert evidence.fill_count == 1
+    assert evidence.position_count == 1
+    assert evidence.account_count == 1
+    assert evidence.simulation_only is True
+    assert evidence.real_t2_credit is False
+    assert evidence.g4_promotion is False
+
+
+@pytest.mark.parametrize(
+    ("emit_fill", "extra_position", "message"),
+    (
+        (False, False, "exactly one OrderFilled"),
+        (True, True, "unexpected extra or missing"),
+    ),
+)
+@REQUIRES_NAUTILUS
+def test_execute_provider_native_state_fails_closed_on_post_run_attacks(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    emit_fill: bool,
+    extra_position: bool,
+    message: str,
+) -> None:
+    _assert_required_nautilus_available()
+    instrument = native_hyperliquid_instrument()
+    trigger_quote = quote_tick(
+        ts_event=1_700_000_000_000_000_000,
+        ts_init=1_700_000_000_000_000_001,
+    )
+    projection = native_projection((trigger_quote,))
+    install_post_run_node_double(
+        monkeypatch,
+        emit_fill=emit_fill,
+        extra_position=extra_position,
+    )
+
+    with pytest.raises(RuntimeError, match=message):
+        execute_provider_native_state(
+            projection=projection,
+            intent=canonical_intent(),
+            trigger_admission_hash=(
+                projection.identity.ordered_source_admission_hashes[0]
+            ),
+            provider_instrument=instrument,
+            catalog_path=tmp_path / f"attack-{emit_fill}-{extra_position}",
+        )
 
 
 def test_candidate_execution_contexts_are_identity_isolated() -> None:
@@ -773,7 +976,7 @@ def test_provider_state_cardinality_fails_closed_for_extra_or_unavailable_state(
         )
 
 
-def test_execution_evidence_is_hash_bound_and_has_fixed_non_promotion_flags() -> None:
+def test_serializable_record_is_hash_bound_but_cannot_mint_accepted_evidence() -> None:
     trigger = TriggerQuoteEvidence(
         native_event_hash="1" * 64,
         instrument_id="ETH-USD-PERP.HYPERLIQUID",
@@ -835,18 +1038,71 @@ def test_execution_evidence_is_hash_bound_and_has_fixed_non_promotion_flags() ->
         "live_venue_submitted": False,
         "real_t2_credit": False,
         "g4_promotion": False,
+        "authoritative_provider_runtime": False,
     }
-    evidence = ProviderExecutionEvidence.create(**values)
-    assert evidence.provider_state.state_hash == "2" * 64
-    assert evidence.simulation_only is True
-    assert evidence.real_t2_credit is False
-    assert evidence.g4_promotion is False
+    record = ProviderExecutionRecord.create(**values)
+    assert record.provider_state.state_hash == "2" * 64
+    assert record.authoritative_provider_runtime is False
+    assert not isinstance(record, ProviderExecutionEvidence)
+    assert not hasattr(ProviderExecutionEvidence, "create")
+    assert not hasattr(ProviderExecutionEvidence, "model_validate")
+    with pytest.raises(TypeError, match="completed BacktestNode run"):
+        ProviderExecutionEvidence(record=record, provider_state=state)
     with pytest.raises(ValidationError, match="evidence_hash"):
-        ProviderExecutionEvidence.model_validate(
-            {**evidence.model_dump(mode="python"), "submitted_side": "SELL"}
+        ProviderExecutionRecord.model_validate(
+            {**record.model_dump(mode="python"), "submitted_side": "SELL"}
         )
     with pytest.raises(ValidationError):
-        ProviderExecutionEvidence.create(**{**values, "simulation_only": False})
+        ProviderExecutionRecord.create(**{**values, "simulation_only": False})
+
+
+@REQUIRES_NAUTILUS
+def test_module_name_spoof_cannot_mint_provider_runtime_provenance() -> None:
+    _assert_required_nautilus_available()
+
+    class FakeNode:
+        pass
+
+    FakeNode.__module__ = "nautilus_trader.backtest.node"
+    quote = quote_tick()
+    projection = native_projection((quote,))
+    trigger_hash = projection.identity.ordered_source_admission_hashes[0]
+    trigger = TriggerQuoteEvidence(
+        native_event_hash=projection.identity.ordered_native_event_hashes[0],
+        instrument_id=str(quote.instrument_id),
+        ts_event=quote.ts_event,
+        ts_init=quote.ts_init,
+        bid_price=str(quote.bid_price),
+        ask_price=str(quote.ask_price),
+        bid_size=str(quote.bid_size),
+        ask_size=str(quote.ask_size),
+    )
+    fill = ProviderFillEvidence(
+        client_order_id="order-1",
+        venue_order_id="venue-1",
+        trade_id="trade-1",
+        event_id="event-1",
+        last_qty="0.010",
+        last_px="2001.0",
+        ts_event=102,
+        ts_init=103,
+        provider_event_type="nautilus_trader.model.events.OrderFilled",
+    )
+    with pytest.raises(TypeError, match="actual BacktestNode"):
+        _mint_provider_execution_evidence(
+            node=FakeNode(),
+            run_config_id="run-1",
+            venue="HYPERLIQUID",
+            projection=projection,
+            intent=canonical_intent(),
+            trigger_admission_hash=trigger_hash,
+            trigger=trigger,
+            provider_instrument=native_hyperliquid_instrument(),
+            submitted_client_order_id="order-1",
+            submitted_side="BUY",
+            submitted_quantity="0.010",
+            fill=fill,
+        )
 
 
 def test_t0_t1_or_manual_controls_cannot_pass_causal_gates() -> None:
