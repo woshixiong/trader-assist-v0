@@ -77,6 +77,21 @@ Context reduction must never remove a required acceptance criterion, blocker, ne
 
 If the ChatGPT review stream is interrupted, do not infer review failure or repeat any final write blindly. Re-read the Review Manifest and exact live target/status; if no authoritative final result exists, resume/restart the read-only adjudication from the compact manifest. This recovery must not require replaying the full prior review transcript.
 
+## Compact authoritative Review Result
+
+Prefer:
+
+```text
+VERDICT
+EXACT_REVIEWED_IDENTITY
+ACCEPTANCE_MATRIX
+MATERIAL_BLOCKERS + EXACT_EVIDENCE
+NEXT_ALLOWED_ACTION
+AUTHORITY_BOUNDARY
+```
+
+Do not repeat long lists of already-proven PASS facts, raw logs or unchanged historical narrative. Compact output is allowed only after the reviewer has actually checked every required criterion; output brevity is not review-scope reduction.
+
 ## Prohibited material
 
 Never bundle secrets, tokens, credentials, cookies, wallets, private account identifiers, production databases, raw private/account data or unredacted sensitive logs.
