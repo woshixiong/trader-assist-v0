@@ -14,7 +14,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
-import inspect
 import json
 import os
 import subprocess
@@ -450,10 +449,16 @@ def _load_public_instrument() -> Any:
     _assert_public_only_environment()
     from nautilus_trader.adapters.hyperliquid import HyperliquidHttpClient
 
-    client = HyperliquidHttpClient()
-    definitions = client.load_instrument_definitions()
-    if inspect.isawaitable(definitions):
-        definitions = asyncio.run(definitions)
+    async def load_definitions() -> list[Any]:
+        client = HyperliquidHttpClient()
+        return await client.load_instrument_definitions(
+            include_spot=False,
+            include_perps=True,
+            include_perps_hip3=False,
+            include_outcomes=False,
+        )
+
+    definitions = asyncio.run(load_definitions())
     for instrument in definitions:
         if str(instrument.id) == PUBLIC_INSTRUMENT_ID:
             return instrument
