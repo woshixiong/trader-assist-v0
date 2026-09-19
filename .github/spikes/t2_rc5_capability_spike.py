@@ -14,7 +14,6 @@ import hashlib
 import inspect
 import json
 import os
-import shutil
 import subprocess
 import sys
 import traceback
@@ -71,7 +70,35 @@ def _load_nautilus_types() -> dict[str, Any]:
     from nautilus_trader.persistence import ParquetDataCatalog
     from nautilus_trader.trading import ImportableStrategyConfig, Strategy, StrategyConfig
 
-    return locals()
+    return {
+        "AccountType": AccountType,
+        "AggressorSide": AggressorSide,
+        "AggregationSource": AggregationSource,
+        "BacktestDataConfig": BacktestDataConfig,
+        "BacktestEngineConfig": BacktestEngineConfig,
+        "BacktestNode": BacktestNode,
+        "BacktestRunConfig": BacktestRunConfig,
+        "BacktestVenueConfig": BacktestVenueConfig,
+        "Bar": Bar,
+        "BarAggregation": BarAggregation,
+        "BarSpecification": BarSpecification,
+        "BarType": BarType,
+        "BookType": BookType,
+        "Currency": Currency,
+        "ImportableStrategyConfig": ImportableStrategyConfig,
+        "InstrumentId": InstrumentId,
+        "OmsType": OmsType,
+        "OrderSide": OrderSide,
+        "ParquetDataCatalog": ParquetDataCatalog,
+        "Price": Price,
+        "PriceType": PriceType,
+        "Quantity": Quantity,
+        "QuoteTick": QuoteTick,
+        "Strategy": Strategy,
+        "StrategyConfig": StrategyConfig,
+        "TradeId": TradeId,
+        "TradeTick": TradeTick,
+    }
 
 
 def _canonical_json(value: object) -> bytes:
@@ -82,16 +109,16 @@ def _sha256(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
-def _event_identity(tick: object) -> str:
+def _event_identity(tick: Any) -> str:
     """Bind a submission to all material fields of one exact replayed quote."""
     fields = {
-        "instrument_id": str(getattr(tick, "instrument_id")),
-        "ts_event": int(getattr(tick, "ts_event")),
-        "ts_init": int(getattr(tick, "ts_init")),
-        "bid_price": str(getattr(tick, "bid_price")),
-        "ask_price": str(getattr(tick, "ask_price")),
-        "bid_size": str(getattr(tick, "bid_size")),
-        "ask_size": str(getattr(tick, "ask_size")),
+        "instrument_id": str(tick.instrument_id),
+        "ts_event": int(tick.ts_event),
+        "ts_init": int(tick.ts_init),
+        "bid_price": str(tick.bid_price),
+        "ask_price": str(tick.ask_price),
+        "bid_size": str(tick.bid_size),
+        "ask_size": str(tick.ask_size),
     }
     return _sha256(_canonical_json(fields))
 
@@ -157,7 +184,7 @@ def _fixture_inputs(types: dict[str, Any], instrument: object) -> ProofInputs:
     AggregationSource = types["AggregationSource"]
     Bar = types["Bar"]
     start = 1_700_000_000_000_000_000
-    instrument_id = getattr(instrument, "id")
+    instrument_id = instrument.id
     bar_type = BarType(
         instrument_id,
         BarSpecification(1, BarAggregation.MINUTE, PriceType.LAST),
@@ -200,7 +227,13 @@ def _define_strategy(types: dict[str, Any]) -> tuple[type[object], type[object]]
     OrderSide = types["OrderSide"]
 
     class _Config(StrategyConfig):
-        _CUSTOM_FIELDS = ("instrument_id", "bar_type", "quantity", "trigger_identity", "ledger_path")
+        _CUSTOM_FIELDS = (
+            "instrument_id",
+            "bar_type",
+            "quantity",
+            "trigger_identity",
+            "ledger_path",
+        )
         instrument_id: str
         bar_type: str
         quantity: float
@@ -239,7 +272,8 @@ def _define_strategy(types: dict[str, Any]) -> tuple[type[object], type[object]]
 
         def _ledger(self, callback: str, payload: object) -> None:
             with Path(self._config.ledger_path).open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps({"callback": callback, "payload": payload}, sort_keys=True) + "\n")
+                record = {"callback": callback, "payload": payload}
+                handle.write(json.dumps(record, sort_keys=True) + "\n")
 
         def on_start(self) -> None:
             InstrumentId = types["InstrumentId"]
@@ -268,13 +302,25 @@ def _define_strategy(types: dict[str, Any]) -> tuple[type[object], type[object]]
             )
             self.submit_order(order)
             self._triggered = True
-            self._ledger("submit_order", {"source_event_identity": identity, "quantity": str(quantity)})
+            self._ledger(
+                "submit_order",
+                {"source_event_identity": identity, "quantity": str(quantity)},
+            )
 
         def on_trade(self, tick: object) -> None:
-            self._ledger("on_trade", {"trade_id": str(tick.trade_id), "aggressor_side": str(tick.aggressor_side)})
+            self._ledger(
+                "on_trade",
+                {
+                    "trade_id": str(tick.trade_id),
+                    "aggressor_side": str(tick.aggressor_side),
+                },
+            )
 
         def on_bar(self, bar: object) -> None:
-            self._ledger("on_bar", {"bar_type": str(bar.bar_type), "ts_event": int(bar.ts_event)})
+            self._ledger(
+                "on_bar",
+                {"bar_type": str(bar.bar_type), "ts_event": int(bar.ts_event)},
+            )
 
     _Config.__name__ = "CapabilitySpikeStrategyConfig"
     _Config.__qualname__ = "CapabilitySpikeStrategyConfig"
@@ -283,20 +329,31 @@ def _define_strategy(types: dict[str, Any]) -> tuple[type[object], type[object]]
     return _Config, _Strategy
 
 
-def _write_and_reload(catalog: object, inputs: ProofInputs) -> None:
+def _write_and_reload(catalog: Any, inputs: ProofInputs) -> None:
     catalog.write_instruments([inputs.instrument])
     catalog.write_quote_ticks([inputs.quote])
     catalog.write_trade_ticks([inputs.trade])
     catalog.write_bars([inputs.bar])
-    instruments = catalog.instruments()
-    quotes = catalog.quote_ticks(instrument_ids=[getattr(inputs.instrument, "id")])
-    trades = catalog.trade_ticks(instrument_ids=[getattr(inputs.instrument, "id")])
-    bars = catalog.bars(bar_types=[inputs.bar_type])
-    if len(instruments) != 1 or len(quotes) != 1 or len(trades) != 1 or len(bars) != 1:
+    instrument_id = str(inputs.instrument.id)
+    instruments = catalog.instruments(instrument_ids=[instrument_id])
+    quotes = catalog.query_quote_ticks(identifiers=[instrument_id])
+    trades = catalog.query_trade_ticks(identifiers=[instrument_id])
+    bars = catalog.query_bars(identifiers=[str(inputs.bar_type)])
+    if (
+        len(instruments) != 1
+        or len(quotes) != 1
+        or len(trades) != 1
+        or len(bars) != 1
+    ):
         raise RuntimeError("immutable Parquet write/reload cardinality mismatch")
 
 
-def _run_backtest(types: dict[str, Any], inputs: ProofInputs, root: Path, ledger: Path) -> dict[str, object]:
+def _run_backtest(
+    types: dict[str, Any],
+    inputs: ProofInputs,
+    root: Path,
+    ledger: Path,
+) -> dict[str, object]:
     Config, Strategy = _define_strategy(types)
     globals()["CapabilitySpikeStrategyConfig"] = Config
     globals()["CapabilitySpikeStrategy"] = Strategy
@@ -319,7 +376,7 @@ def _run_backtest(types: dict[str, Any], inputs: ProofInputs, root: Path, ledger
         strategy_path="t2_rc5_capability_spike:CapabilitySpikeStrategy",
         config_path="t2_rc5_capability_spike:CapabilitySpikeStrategyConfig",
         config={
-            "instrument_id": str(getattr(inputs.instrument, "id")),
+            "instrument_id": str(inputs.instrument.id),
             "bar_type": str(inputs.bar_type),
             "quantity": 0.01,
             "trigger_identity": trigger,
@@ -329,7 +386,7 @@ def _run_backtest(types: dict[str, Any], inputs: ProofInputs, root: Path, ledger
     if importable.config["quantity"] != 0.01 or type(importable.config["quantity"]) is not float:
         raise TypeError("ImportableStrategyConfig lost float quantity identity")
     venue = BacktestVenueConfig(
-        name=str(getattr(getattr(inputs.instrument, "id"), "venue")),
+        name=str(inputs.instrument.id.venue),
         oms_type=OmsType.NETTING,
         account_type=AccountType.MARGIN,
         book_type=BookType.L1_MBP,
@@ -337,7 +394,11 @@ def _run_backtest(types: dict[str, Any], inputs: ProofInputs, root: Path, ledger
         starting_balances=["1_000_000 USD"],
     )
     data = [
-        BacktestDataConfig(data_type=name, catalog_path=str(root), instrument_id=getattr(inputs.instrument, "id"))
+        BacktestDataConfig(
+            data_type=name,
+            catalog_path=str(root),
+            instrument_id=inputs.instrument.id,
+        )
         for name in ("QuoteTick", "TradeTick", "Bar")
     ]
     config = BacktestRunConfig(
@@ -352,13 +413,24 @@ def _run_backtest(types: dict[str, Any], inputs: ProofInputs, root: Path, ledger
         portfolio = node.get_engine_portfolio(config.id)
         if cache is None or portfolio is None:
             raise RuntimeError("BacktestNode did not retain public Cache/Portfolio state")
-        projection = project_provider_native_state(cache, portfolio, venue=getattr(getattr(inputs.instrument, "id"), "venue"))
+        projection = project_provider_native_state(
+            cache,
+            portfolio,
+            venue=inputs.instrument.id.venue,
+        )
         result = projection.model_dump(mode="json")
-        if (result["order_count"], result["filled_order_count"], result["position_count"], result["account_count"]) != (1, 1, 1, 1):
+        counts = (
+            result["order_count"],
+            result["filled_order_count"],
+            result["position_count"],
+            result["account_count"],
+        )
+        if counts != (1, 1, 1, 1):
             raise RuntimeError("unexpected provider-owned order/fill/position/account counts")
         lines = ledger.read_text(encoding="utf-8").splitlines()
         callbacks = [json.loads(line)["callback"] for line in lines]
-        if callbacks.count("submit_order") != 1 or not {"on_quote", "on_trade", "on_bar"} <= set(callbacks):
+        required_callbacks = {"on_quote", "on_trade", "on_bar"}
+        if callbacks.count("submit_order") != 1 or not required_callbacks <= set(callbacks):
             raise RuntimeError("callback ledger does not show exactly one source-event-bound order")
         return {
             "source_event_bound_trigger": True,
@@ -373,7 +445,7 @@ def _run_backtest(types: dict[str, Any], inputs: ProofInputs, root: Path, ledger
         node.dispose()
 
 
-def _load_public_instrument() -> object:
+def _load_public_instrument() -> Any:
     _assert_public_only_environment()
     from nautilus_trader.adapters.hyperliquid import HyperliquidHttpClient
 
@@ -382,7 +454,7 @@ def _load_public_instrument() -> object:
     if inspect.isawaitable(definitions):
         definitions = asyncio.run(definitions)
     for instrument in definitions:
-        if str(getattr(instrument, "id")) == PUBLIC_INSTRUMENT_ID:
+        if str(instrument.id) == PUBLIC_INSTRUMENT_ID:
             return instrument
     raise RuntimeError("official Hyperliquid public metadata lacks BTC-USD-PERP.HYPERLIQUID")
 
@@ -422,9 +494,19 @@ def _run_phase(phase: str, evidence_root: Path) -> dict[str, object]:
     _write_evidence_value(
         evidence_root,
         "instrument-identity-and-type",
-        json.dumps({"instrument_id": str(getattr(instrument, "id")), "type": type(instrument).__name__}, sort_keys=True),
+        json.dumps(
+            {
+                "instrument_id": str(instrument.id),
+                "type": type(instrument).__name__,
+            },
+            sort_keys=True,
+        ),
     )
-    _write_evidence_value(evidence_root, "provider-state-hash-and-counts", json.dumps(backtest["provider_state"], sort_keys=True))
+    _write_evidence_value(
+        evidence_root,
+        "provider-state-hash-and-counts",
+        json.dumps(backtest["provider_state"], sort_keys=True),
+    )
     return {
         "schema_version": "T2_RC5_CAPABILITY_SPIKE_V2",
         "status": "PASS",
@@ -439,7 +521,10 @@ def _run_phase(phase: str, evidence_root: Path) -> dict[str, object]:
         "exact_tree": exact_tree,
         "task_packet_sha256": TASK_PACKET_SHA256,
         "nautilus_version": NAUTILUS_VERSION,
-        "instrument_identity_and_type": {"instrument_id": str(getattr(instrument, "id")), "type": type(instrument).__name__},
+        "instrument_identity_and_type": {
+            "instrument_id": str(instrument.id),
+            "type": type(instrument).__name__,
+        },
         "catalog_tree_sha256": catalog_hash,
         **backtest,
     }
@@ -451,11 +536,19 @@ def main() -> int:
     parser.add_argument("--evidence-dir", type=Path, required=True)
     parser.add_argument("--result-path", type=Path, required=True)
     args = parser.parse_args()
-    result_name = "phase-a-terminal-status" if args.phase == "offline" else "phase-b-terminal-status"
+    result_name = (
+        "phase-a-terminal-status"
+        if args.phase == "offline"
+        else "phase-b-terminal-status"
+    )
     try:
         result = _run_phase(args.phase, args.evidence_dir)
     except Exception as exc:
-        status = "SPIKE_V2=FAIL_HARNESS_SELF_CHECK" if args.phase == "offline" else "SPIKE_V2=FAIL_PUBLIC_COMBINED_PROOF"
+        status = (
+            "SPIKE_V2=FAIL_HARNESS_SELF_CHECK"
+            if args.phase == "offline"
+            else "SPIKE_V2=FAIL_PUBLIC_COMBINED_PROOF"
+        )
         result = {
             "schema_version": "T2_RC5_CAPABILITY_SPIKE_V2",
             "status": status,
