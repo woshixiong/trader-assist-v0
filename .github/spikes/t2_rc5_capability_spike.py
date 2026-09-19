@@ -303,7 +303,7 @@ class CapabilitySpikeStrategy(Strategy):
         self._mutate_ledger(subscriptions={"quotes": True, "trades": True, "bars": True})
 
     def on_quote(self, tick: Any) -> None:
-        from nautilus_trader.model import OrderSide, Quantity
+        from nautilus_trader.model import OrderSide
 
         ledger = _read_json(self._ledger_path)
         quote_count = int(ledger["quote_observation_count"]) + 1
@@ -327,10 +327,13 @@ class CapabilitySpikeStrategy(Strategy):
                 duplicate_trigger_failed_closed=True,
             )
             raise RuntimeError("second matching source quote failed closed")
+        instrument = self.cache.instrument(self._instrument_id)
+        if instrument is None:
+            raise RuntimeError("strategy instrument missing from provider cache")
         order = self.order_factory.market(
             instrument_id=self._instrument_id,
             order_side=OrderSide.BUY,
-            quantity=Quantity.from_float(self._quantity),
+            quantity=instrument.make_qty(self._quantity),
         )
         client_order_id = str(order.client_order_id)
         self._mutate_ledger(
@@ -750,7 +753,9 @@ async def _public_instrument_and_no_signer_proof() -> tuple[object, dict[str, ob
         client.get_user_address()
     except ValueError as error:
         if type(error) is not ValueError or str(error) != "auth error: No signer configured":
-            raise AssertionError("unauthenticated Hyperliquid client raised an unexpected auth error") from error
+            raise AssertionError(
+                "unauthenticated Hyperliquid client raised an unexpected auth error"
+            ) from error
         get_user_address_error_type = type(error).__name__
         get_user_address_error = str(error)
     else:
