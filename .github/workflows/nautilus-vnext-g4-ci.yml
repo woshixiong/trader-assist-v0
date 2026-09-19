@@ -52,7 +52,8 @@ jobs:
             tests/test_vnext_g4_evaluator.py \
             tests/test_vnext_g4_reporting.py \
             tests/test_nautilus_vnext_g4_catalog_bridge.py \
-            tests/test_nautilus_vnext_g4_runner.py
+            tests/test_nautilus_vnext_g4_runner.py \
+            tests/test_nautilus_vnext_g4_t2_shadow.py
       - name: E4 source-authority regressions
         run: |
           /tmp/trader-assist-g4-venv/bin/python -m pytest -q \
