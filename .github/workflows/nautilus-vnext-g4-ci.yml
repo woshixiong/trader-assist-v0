@@ -80,11 +80,182 @@ jobs:
             src/trader_assist_v0/vnext_g4 \
             src/trader_assist_v0/nautilus_g4 \
             scripts/nautilus_vnext_g4_qualification.py \
+            .github/spikes/t2_rc5_capability_spike.py \
             tests/test_vnext_g4_*.py \
             tests/test_nautilus_vnext_g4_*.py
           test "$(sha256sum src/trader_assist_v0/vnext_g4/evaluator.py | cut -d' ' -f1)" = \
             "63e44fcefdbb714267a293e823aa5114bc705a5f220b1db3834f4706521a4c18"
           git diff --check
+      - name: Exact-head rc5 two-phase capability spike
+        id: t2_rc5_capability_spike
+        timeout-minutes: 5
+        run: |
+          /tmp/trader-assist-g4-venv/bin/python \
+            .github/spikes/t2_rc5_capability_spike.py \
+            --evidence-root "${RUNNER_TEMP}/t2-rc5-capability-spike-evidence" \
+            --result-path "${RUNNER_TEMP}/t2-rc5-capability-spike-evidence/result.json"
+      - name: Preserve exact-head rc5 capability-spike evidence
+        if: ${{ always() && steps.t2_rc5_capability_spike.outcome != 'skipped' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: t2-rc5-capability-spike-evidence-${{ github.sha }}
+          path: ${{ runner.temp }}/t2-rc5-capability-spike-evidence
+          if-no-files-found: error
+          retention-days: 14
+      - name: Assert exact-head typed rc5 capability evidence
+        env:
+          T2_RESULT: ${{ runner.temp }}/t2-rc5-capability-spike-evidence/result.json
+        run: |
+          T2_EXPECTED_HEAD="$(git rev-parse HEAD)" \
+          T2_EXPECTED_TREE="$(git rev-parse 'HEAD^{tree}')" \
+          /tmp/trader-assist-g4-venv/bin/python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          result = json.loads(Path(os.environ["T2_RESULT"]).read_text())
+          assert result["schema_version"] == "T2_RC5_CAPABILITY_SPIKE_V2", result
+          assert result["status"] == "PASS", result
+          assert result["exact_git_head"] == os.environ["T2_EXPECTED_HEAD"], result
+          assert result["exact_git_tree"] == os.environ["T2_EXPECTED_TREE"], result
+          assert result["nautilus_version"] == "2.0.0rc5", result
+          assert result["task_packet_sha256"] == (
+              "df432697ba3083dec3542002f5771733c09c1b8f250da85ee7a2ca817084bfa9"
+          ), result
+          canonical_packet = json.dumps(
+              result["task_packet_identity"],
+              ensure_ascii=True,
+              allow_nan=False,
+              separators=(",", ":"),
+              sort_keys=True,
+          ).encode()
+          assert hashlib.sha256(canonical_packet).hexdigest() == result[
+              "task_packet_sha256"
+          ], result
+          assert result["phase_order"] == ["PHASE_A", "PHASE_B"], result
+          assert result["phase_b_requires_phase_a_pass"] is True, result
+          assert result["phase_a_status"] == "PASS", result
+          assert result["phase_b_status"] == "PASS", result
+          assert result["PHASE_A_FILL_EVENT_COUNT"] == 1, result
+          assert result["PHASE_B_FILL_EVENT_COUNT"] == 1, result
+          assert result["same_fixture_both_phases"] is True, result
+          assert result["same_strategy_config_both_phases"] is True, result
+          assert result["same_parquet_backtest_node_path_both_phases"] is True, result
+
+          required_trigger_fields = {
+              "instrument_id",
+              "ts_event",
+              "ts_init",
+              "bid_price",
+              "ask_price",
+              "bid_size",
+              "ask_size",
+          }
+          for name, expected_network, expected_public_call in (
+              ("phase_a", False, False),
+              ("phase_b", True, True),
+          ):
+              phase = result[name]
+              assert phase["status"] == "PASS", phase
+              assert phase["exact_git_head"] == result["exact_git_head"], phase
+              assert phase["exact_git_tree"] == result["exact_git_tree"], phase
+              assert phase["task_packet_sha256"] == result["task_packet_sha256"], phase
+              assert phase["network"] is expected_network, phase
+              assert phase["public_provider_call"] is expected_public_call, phase
+              assert phase["source_event_bound_trigger"] is True, phase
+              assert phase["timestamp_only_trigger"] is False, phase
+              assert set(phase["trigger_identity_fields"]) == required_trigger_fields, phase
+              assert set(phase["trigger_identity"]) == required_trigger_fields, phase
+              assert phase["trigger_match_count"] == 1, phase
+              assert phase["submit_order_count"] == 1, phase
+              assert phase["quantity"] == 0.01, phase
+              assert phase["quantity_python_type"] == "float", phase
+              assert phase["fill_event_count"] == 1, phase
+              fill = phase["sole_fill_event"]
+              assert fill["phase"] == phase["phase"], phase
+              assert fill["provider_native_order_filled"] is True, phase
+              assert {
+                  "client_order_id",
+                  "venue_order_id",
+                  "trade_id",
+                  "event_id",
+                  "last_qty",
+                  "last_px",
+                  "ts_event",
+                  "ts_init",
+              } <= set(fill), phase
+              assert fill["client_order_id"] == phase["submitted_client_order_id"], phase
+              assert phase["fill_client_order_id_equals_submitted"] is True, phase
+              assert phase["subscriptions"] == {
+                  "quotes": True,
+                  "trades": True,
+                  "bars": True,
+              }, phase
+              assert all(value > 0 for value in phase["observations"].values()), phase
+              assert phase["catalog_typed_reads"] == {
+                  "query_quote_ticks": 3,
+                  "query_trade_ticks": 1,
+                  "query_bars": 1,
+              }, phase
+              state = phase["provider_state"]
+              assert state["source_api"] == "NAUTILUS_CACHE_PORTFOLIO", phase
+              assert state["order_count"] == 1, phase
+              assert state["position_count"] == 1, phase
+              assert state["account_count"] == 1, phase
+              assert phase["private_api"] is False, phase
+              assert phase["signing"] is False, phase
+              assert phase["exchange_write"] is False, phase
+              assert phase["real_t2_credit"] is False, phase
+
+          credential_proof = result["credential_negative_proof"]
+          assert credential_proof["status"] == "PASS", credential_proof
+          assert credential_proof["case_count"] == 4, credential_proof
+          assert set(credential_proof["covered_variables"]) == {
+              "HYPERLIQUID_PK",
+              "HYPERLIQUID_VAULT",
+              "HYPERLIQUID_TESTNET_PK",
+              "HYPERLIQUID_TESTNET_VAULT",
+          }, credential_proof
+          assert len(credential_proof["cases"]) == 4, credential_proof
+          for case in credential_proof["cases"]:
+              assert case["synthetic_non_secret_sentinel"] is True, case
+              assert case["guard_failed_closed"] is True, case
+              for counter in (
+                  "provider_client_construction_count",
+                  "network_call_count",
+                  "private_api_call_count",
+                  "signing_count",
+                  "exchange_write_count",
+              ):
+                  assert case[counter] == 0, case
+
+          no_signer = result["runtime_no_signer_proof"]
+          assert no_signer["status"] == "PASS", no_signer
+          assert no_signer["credential_guard_passed"] is True, no_signer
+          assert no_signer["no_signer_proven"] is True, no_signer
+          assert no_signer["get_user_address_result"] is None, no_signer
+          assert no_signer["get_user_address_behavior"] == "RETURNED_NONE_NO_SIGNER", no_signer
+          assert no_signer["no_signer_sequence_index"] < (
+              no_signer["first_network_call_sequence_index"]
+          ), no_signer
+          assert no_signer["provider_client_construction_count"] == 1, no_signer
+          assert no_signer["network_call_count"] == 1, no_signer
+          assert no_signer["private_api_call_count"] == 0, no_signer
+          assert no_signer["signing_count"] == 0, no_signer
+          assert no_signer["exchange_write_count"] == 0, no_signer
+          assert no_signer["public_call"] == (
+              "HyperliquidHttpClient.load_instrument_definitions"
+          ), no_signer
+          assert no_signer["public_instrument_id"] == (
+              "BTC-USD-PERP.HYPERLIQUID"
+          ), no_signer
+          assert no_signer["is_crypto_perpetual"] is True, no_signer
+          assert result["private_api"] is False, result
+          assert result["signing"] is False, result
+          assert result["exchange_write"] is False, result
+          assert result["real_t2_credit"] is False, result
+          PY
       - name: Same-job bounded zero-write public E4 probe
         id: public_e4_probe
         continue-on-error: true
