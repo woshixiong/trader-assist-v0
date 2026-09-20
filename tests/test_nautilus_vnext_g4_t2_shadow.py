@@ -12,6 +12,7 @@ import pytest
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
+from trader_assist_v0.nautilus_g4.runner import provider_state_semantic_source_hash
 from trader_assist_v0.nautilus_g4.t2_shadow import (
     AcceptedRealT2Receipt,
     CanonicalAcceptanceExpectation,
@@ -80,7 +81,7 @@ def mechanical_result(root: T2SourceRootSnapshot, *, salt: str = "genuine") -> R
         participation_result_hash=G,
         order_intent_hash=H,
         replay_projection_hash=G,
-        provider_execution_record_hash=H,
+        provider_execution_semantic_hash=H,
         provider_state_source_hash=H,
         provider_instrument_wire_hash=G,
         thesis_outcome_hash=H,
@@ -523,7 +524,7 @@ def _build_real_fixture(catalog_path: Path) -> RealFixture:
     outcome = ThesisOutcome(
         thesis_id=lineage.thesis_id,
         market_id=lineage.market_id,
-        provider_state_source_hash=execution.record.evidence_hash,
+        provider_state_source_hash=provider_state_semantic_source_hash(execution.record),
         order_intent_hash=intent_admission.intent.order_intent_hash,
         decision="TAKE",
         attempt_count=1,

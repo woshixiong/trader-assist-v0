@@ -77,6 +77,35 @@ class RepresentativeMarketEvidence(BaseModel):
     event_count: int = Field(gt=0)
 
 
+class ProviderOrderStateSemantics(BaseModel):
+    """Stable provider order facts with generated identities removed."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: str
+    filled_qty: str
+    avg_px: str
+
+
+class ProviderPositionStateSemantics(BaseModel):
+    """Stable provider position facts with generated identities removed."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    instrument_id: str
+    side: str
+    quantity: str
+
+
+class ProviderAccountStateSemantics(BaseModel):
+    """Stable provider account facts with generated identities removed."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    account_type: str
+    base_currency: str
+
+
 class ProviderStateProjection(BaseModel):
     """Deterministic observation of provider-owned Cache/Portfolio state."""
 
@@ -89,7 +118,20 @@ class ProviderStateProjection(BaseModel):
     filled_order_count: int = Field(ge=0)
     position_count: int = Field(ge=0)
     account_count: int = Field(ge=0)
+    order_semantics: tuple[ProviderOrderStateSemantics, ...]
+    position_semantics: tuple[ProviderPositionStateSemantics, ...]
+    account_semantics: tuple[ProviderAccountStateSemantics, ...]
     state_hash: Sha256Hex
+
+    @model_validator(mode="after")
+    def verify_semantic_cardinalities(self) -> Self:
+        if len(self.order_semantics) != self.order_count:
+            raise ValueError("provider order semantics do not match order_count")
+        if len(self.position_semantics) != self.position_count:
+            raise ValueError("provider position semantics do not match position_count")
+        if len(self.account_semantics) != self.account_count:
+            raise ValueError("provider account semantics do not match account_count")
+        return self
 
 
 BACKTEST_NODE_PUBLIC_METHODS = (
@@ -101,6 +143,10 @@ BACKTEST_NODE_PUBLIC_METHODS = (
 )
 
 _PROVIDER_EXECUTION_DOMAIN = b"trader-assist-v0/nautilus-g4/provider-execution/v1\0"
+_PROVIDER_STATE_SEMANTIC_DOMAIN = b"trader-assist-v0/nautilus-g4/provider-state-semantic/v1\0"
+_PROVIDER_EXECUTION_SEMANTIC_DOMAIN = (
+    b"trader-assist-v0/nautilus-g4/provider-execution-semantic/v1\0"
+)
 _TRIGGER_FIELDS = (
     "instrument_id",
     "ts_event",
@@ -199,6 +245,77 @@ class ProviderExecutionRecord(BaseModel):
     def create(cls, **values: object) -> Self:
         digest = sha256_hex(_PROVIDER_EXECUTION_DOMAIN + canonical_json_bytes(values))
         return cls.model_validate({**values, "evidence_hash": digest})
+
+
+def _validated_provider_execution_record(
+    record: ProviderExecutionRecord,
+) -> ProviderExecutionRecord:
+    if type(record) is not ProviderExecutionRecord:
+        raise TypeError("exact ProviderExecutionRecord is required")
+    return ProviderExecutionRecord.model_validate(record.model_dump(mode="python"))
+
+
+def provider_state_semantic_source_hash(record: ProviderExecutionRecord) -> Sha256Hex:
+    """Hash stable, validated provider-state facts without run-generated identities."""
+    validated = _validated_provider_execution_record(record)
+    state = validated.provider_state
+    payload = {
+        "schema_version": "PROVIDER_STATE_SEMANTIC_V1",
+        "source_api": state.source_api,
+        "cache_type": state.cache_type,
+        "portfolio_type": state.portfolio_type,
+        "order_count": state.order_count,
+        "filled_order_count": state.filled_order_count,
+        "position_count": state.position_count,
+        "account_count": state.account_count,
+        "orders": tuple(item.model_dump(mode="json") for item in state.order_semantics),
+        "positions": tuple(item.model_dump(mode="json") for item in state.position_semantics),
+        "accounts": tuple(item.model_dump(mode="json") for item in state.account_semantics),
+    }
+    return sha256_hex(_PROVIDER_STATE_SEMANTIC_DOMAIN + canonical_json_bytes(payload))
+
+
+def provider_execution_semantic_hash(record: ProviderExecutionRecord) -> Sha256Hex:
+    """Hash stable execution semantics while excluding only generated identities."""
+    validated = _validated_provider_execution_record(record)
+    fill = validated.fill
+    payload = {
+        "schema_version": "PROVIDER_EXECUTION_SEMANTIC_V1",
+        "projection_hash": validated.projection_hash,
+        "ordered_source_admission_hashes": validated.ordered_source_admission_hashes,
+        "order_intent_hash": validated.order_intent_hash,
+        "trigger_admission_hash": validated.trigger_admission_hash,
+        "trigger": validated.trigger.model_dump(mode="json"),
+        "provider_instrument_id": validated.provider_instrument_id,
+        "provider_instrument_type": validated.provider_instrument_type,
+        "submitted_side": validated.submitted_side,
+        "submitted_technical_quantity": validated.submitted_technical_quantity,
+        "fill": {
+            "last_qty": fill.last_qty,
+            "last_px": fill.last_px,
+            "ts_event": fill.ts_event,
+            "ts_init": fill.ts_init,
+            "provider_event_type": fill.provider_event_type,
+        },
+        "provider_state_source_hash": provider_state_semantic_source_hash(validated),
+        "event_count": validated.event_count,
+        "quote_tick_count": validated.quote_tick_count,
+        "trade_tick_count": validated.trade_tick_count,
+        "bar_count": validated.bar_count,
+        "submitted_order_count": validated.submitted_order_count,
+        "fill_count": validated.fill_count,
+        "position_count": validated.position_count,
+        "account_count": validated.account_count,
+        "simulation_only": validated.simulation_only,
+        "private_api": validated.private_api,
+        "signing": validated.signing,
+        "exchange_write": validated.exchange_write,
+        "live_venue_submitted": validated.live_venue_submitted,
+        "real_t2_credit": validated.real_t2_credit,
+        "g4_promotion": validated.g4_promotion,
+        "authoritative_provider_runtime": validated.authoritative_provider_runtime,
+    }
+    return sha256_hex(_PROVIDER_EXECUTION_SEMANTIC_DOMAIN + canonical_json_bytes(payload))
 
 
 class ProviderExecutionEvidence:
@@ -1129,6 +1246,21 @@ def project_provider_native_state(
             ("id", "account_type", "base_currency"),
         ),
     }
+    order_semantics = tuple(
+        ProviderOrderStateSemantics.model_validate(row)
+        for row in _identity_rows(orders, ("status", "filled_qty", "avg_px"))
+    )
+    position_semantics = tuple(
+        ProviderPositionStateSemantics.model_validate(row)
+        for row in _identity_rows(
+            positions,
+            ("instrument_id", "side", "quantity"),
+        )
+    )
+    account_semantics = tuple(
+        ProviderAccountStateSemantics.model_validate(row)
+        for row in _identity_rows(accounts, ("account_type", "base_currency"))
+    )
     return ProviderStateProjection(
         cache_type=cache_type,
         portfolio_type=portfolio_type,
@@ -1136,6 +1268,9 @@ def project_provider_native_state(
         filled_order_count=len(filled_orders),
         position_count=len(positions),
         account_count=len(accounts),
+        order_semantics=order_semantics,
+        position_semantics=position_semantics,
+        account_semantics=account_semantics,
         state_hash=sha256_hex(canonical_json_bytes(payload)),
     )
 

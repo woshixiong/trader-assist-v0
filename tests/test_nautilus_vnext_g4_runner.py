@@ -20,9 +20,12 @@ from trader_assist_v0.nautilus_g4.catalog_bridge import (
 )
 from trader_assist_v0.nautilus_g4.runner import (
     BACKTEST_NODE_PUBLIC_METHODS,
+    ProviderAccountStateSemantics,
     ProviderExecutionEvidence,
     ProviderExecutionRecord,
     ProviderFillEvidence,
+    ProviderOrderStateSemantics,
+    ProviderPositionStateSemantics,
     ProviderStateProjection,
     RepresentativeMarketEvidence,
     TriggerQuoteEvidence,
@@ -43,6 +46,8 @@ from trader_assist_v0.nautilus_g4.runner import (
     formal_g4_acceptance,
     new_isolated_backtest_engine,
     project_provider_native_state,
+    provider_execution_semantic_hash,
+    provider_state_semantic_source_hash,
 )
 from trader_assist_v0.vnext_g4.contracts import (
     AttemptStop,
@@ -105,6 +110,99 @@ def execution_model() -> ExecutionModelConfig:
         random_seed=7,
         execution_model_limited=True,
     )
+
+
+def stable_provider_record() -> ProviderExecutionRecord:
+    trigger = TriggerQuoteEvidence(
+        native_event_hash="1" * 64,
+        instrument_id="ETH-USD-PERP.HYPERLIQUID",
+        ts_event=100,
+        ts_init=101,
+        bid_price="1999.0",
+        ask_price="2001.0",
+        bid_size="1.000",
+        ask_size="1.000",
+    )
+    fill = ProviderFillEvidence(
+        client_order_id="order-1",
+        venue_order_id="venue-1",
+        trade_id="trade-1",
+        event_id="event-1",
+        last_qty="0.010",
+        last_px="2001.0",
+        ts_event=102,
+        ts_init=103,
+        provider_event_type="nautilus_trader.model.events.OrderFilled",
+    )
+    state = ProviderStateProjection(
+        cache_type="nautilus_trader.cache.Cache",
+        portfolio_type="nautilus_trader.portfolio.Portfolio",
+        order_count=1,
+        filled_order_count=1,
+        position_count=1,
+        account_count=1,
+        order_semantics=(
+            ProviderOrderStateSemantics(
+                status="FILLED",
+                filled_qty="0.010",
+                avg_px="2001.0",
+            ),
+        ),
+        position_semantics=(
+            ProviderPositionStateSemantics(
+                instrument_id="ETH-USD-PERP.HYPERLIQUID",
+                side="LONG",
+                quantity="0.010",
+            ),
+        ),
+        account_semantics=(
+            ProviderAccountStateSemantics(
+                account_type="MARGIN",
+                base_currency="USD",
+            ),
+        ),
+        state_hash="2" * 64,
+    )
+    return ProviderExecutionRecord.create(
+        schema_version="PROVIDER_EXECUTION_STATE_V1",
+        projection_hash="3" * 64,
+        ordered_source_admission_hashes=("4" * 64,),
+        order_intent_hash="5" * 64,
+        trigger_admission_hash="4" * 64,
+        trigger=trigger.model_dump(mode="json"),
+        provider_instrument_id="ETH-USD-PERP.HYPERLIQUID",
+        provider_instrument_type=(
+            "nautilus_trader.model.instruments.crypto_perpetual.CryptoPerpetual"
+        ),
+        submitted_client_order_id="order-1",
+        submitted_side="BUY",
+        submitted_technical_quantity="0.010",
+        fill=fill.model_dump(mode="json"),
+        provider_state=state.model_dump(mode="json"),
+        event_count=1,
+        quote_tick_count=1,
+        trade_tick_count=0,
+        bar_count=0,
+        submitted_order_count=1,
+        fill_count=1,
+        position_count=1,
+        account_count=1,
+        simulation_only=True,
+        private_api=False,
+        signing=False,
+        exchange_write=False,
+        live_venue_submitted=False,
+        real_t2_credit=False,
+        g4_promotion=False,
+        authoritative_provider_runtime=False,
+    )
+
+
+def recreate_provider_record(
+    record: ProviderExecutionRecord, **changes: object
+) -> ProviderExecutionRecord:
+    values = {**record.identity_payload(), **changes}
+    return ProviderExecutionRecord.create(**values)
 
 
 def canonical_intent(side: PositionSide = PositionSide.LONG) -> HypotheticalOrderIntent:
@@ -375,6 +473,13 @@ def test_execute_provider_native_state_runs_real_rc5_hyperliquid_product_seam(
         provider_instrument=instrument,
         catalog_path=tmp_path / "real-product-seam",
     )
+    repeated = execute_provider_native_state(
+        projection=projection,
+        intent=canonical_intent(),
+        trigger_admission_hash=trigger_hash,
+        provider_instrument=instrument,
+        catalog_path=tmp_path / "real-product-seam-repeat",
+    )
 
     assert isinstance(evidence, ProviderExecutionEvidence)
     assert evidence.authoritative_provider_runtime is True
@@ -387,6 +492,14 @@ def test_execute_provider_native_state_runs_real_rc5_hyperliquid_product_seam(
     assert evidence.simulation_only is True
     assert evidence.real_t2_credit is False
     assert evidence.g4_promotion is False
+    assert repeated.record.evidence_hash != evidence.record.evidence_hash
+    assert repeated.record.submitted_client_order_id != evidence.record.submitted_client_order_id
+    assert provider_state_semantic_source_hash(repeated.record) == (
+        provider_state_semantic_source_hash(evidence.record)
+    )
+    assert provider_execution_semantic_hash(repeated.record) == (
+        provider_execution_semantic_hash(evidence.record)
+    )
 
 
 @pytest.mark.parametrize(
@@ -1005,6 +1118,19 @@ def test_serializable_record_is_hash_bound_but_cannot_mint_accepted_evidence() -
         filled_order_count=1,
         position_count=1,
         account_count=1,
+        order_semantics=(
+            ProviderOrderStateSemantics(status="FILLED", filled_qty="0.010", avg_px="2001.0"),
+        ),
+        position_semantics=(
+            ProviderPositionStateSemantics(
+                instrument_id="ETH-USD-PERP.HYPERLIQUID",
+                side="LONG",
+                quantity="0.010",
+            ),
+        ),
+        account_semantics=(
+            ProviderAccountStateSemantics(account_type="MARGIN", base_currency="USD"),
+        ),
         state_hash="2" * 64,
     )
     values: dict[str, object] = {
@@ -1054,6 +1180,70 @@ def test_serializable_record_is_hash_bound_but_cannot_mint_accepted_evidence() -
         )
     with pytest.raises(ValidationError):
         ProviderExecutionRecord.create(**{**values, "simulation_only": False})
+
+
+def test_generated_provider_identifiers_do_not_change_semantic_hashes() -> None:
+    record = stable_provider_record()
+    fill = record.fill.model_dump(mode="json")
+    state = record.provider_state.model_dump(mode="json")
+    generated_identifier_changes = (
+        {
+            "submitted_client_order_id": "order-generated-2",
+            "fill": {**fill, "client_order_id": "order-generated-2"},
+        },
+        {"fill": {**fill, "venue_order_id": "venue-generated-2"}},
+        {"fill": {**fill, "trade_id": "trade-generated-2"}},
+        {"fill": {**fill, "event_id": "event-generated-2"}},
+        {"provider_state": {**state, "state_hash": "6" * 64}},
+    )
+
+    for mutation in generated_identifier_changes:
+        changed = recreate_provider_record(record, **mutation)
+        assert changed.evidence_hash != record.evidence_hash
+        assert provider_state_semantic_source_hash(changed) == (
+            provider_state_semantic_source_hash(record)
+        )
+        assert provider_execution_semantic_hash(changed) == (
+            provider_execution_semantic_hash(record)
+        )
+
+
+def test_provider_semantic_hashes_bind_all_retained_execution_facts() -> None:
+    record = stable_provider_record()
+    expected = provider_execution_semantic_hash(record)
+    trigger = record.trigger.model_dump(mode="json")
+    fill = record.fill.model_dump(mode="json")
+    state = record.provider_state.model_dump(mode="json")
+    order = state["order_semantics"][0]
+    second_order = {**order, "filled_qty": "0.020"}
+    state_semantic_change = {
+        **state,
+        "order_semantics": ({**order, "status": "CANCELED"},),
+    }
+    state_cardinality_change = {
+        **state,
+        "order_count": 2,
+        "order_semantics": (order, second_order),
+    }
+    changes = (
+        {"submitted_side": "SELL"},
+        {"submitted_technical_quantity": "0.020"},
+        {"fill": {**fill, "last_px": "2002.0"}},
+        {"fill": {**fill, "last_qty": "0.020"}},
+        {"trigger": {**trigger, "ask_price": "2002.0"}},
+        {"provider_state": state_semantic_change},
+        {"provider_state": state_cardinality_change},
+    )
+
+    for mutation in changes:
+        changed = recreate_provider_record(record, **mutation)
+        assert provider_execution_semantic_hash(changed) != expected
+    assert provider_state_semantic_source_hash(
+        recreate_provider_record(record, provider_state=state_semantic_change)
+    ) != provider_state_semantic_source_hash(record)
+    assert provider_state_semantic_source_hash(
+        recreate_provider_record(record, provider_state=state_cardinality_change)
+    ) != provider_state_semantic_source_hash(record)
 
 
 @REQUIRES_NAUTILUS

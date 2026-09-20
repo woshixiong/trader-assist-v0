@@ -222,7 +222,7 @@ class RootedT2Rederivation(_FrozenModel):
     participation_result_hash: Sha256Hex
     order_intent_hash: Sha256Hex
     replay_projection_hash: Sha256Hex
-    provider_execution_record_hash: Sha256Hex
+    provider_execution_semantic_hash: Sha256Hex
     provider_state_source_hash: Sha256Hex
     provider_instrument_wire_hash: Sha256Hex
     thesis_outcome_hash: Sha256Hex
@@ -258,7 +258,7 @@ class T2ArtifactCandidate(_FrozenModel):
     participation_result_hash: Sha256Hex
     order_intent_hash: Sha256Hex
     replay_projection_hash: Sha256Hex
-    provider_execution_record_hash: Sha256Hex
+    provider_execution_semantic_hash: Sha256Hex
     provider_state_source_hash: Sha256Hex
     provider_instrument_wire_hash: Sha256Hex
     thesis_outcome_hash: Sha256Hex
@@ -294,7 +294,7 @@ class T2ArtifactCandidate(_FrozenModel):
             "participation_result_hash": rederivation.participation_result_hash,
             "order_intent_hash": rederivation.order_intent_hash,
             "replay_projection_hash": rederivation.replay_projection_hash,
-            "provider_execution_record_hash": rederivation.provider_execution_record_hash,
+            "provider_execution_semantic_hash": (rederivation.provider_execution_semantic_hash),
             "provider_state_source_hash": rederivation.provider_state_source_hash,
             "provider_instrument_wire_hash": rederivation.provider_instrument_wire_hash,
             "thesis_outcome_hash": rederivation.thesis_outcome_hash,
@@ -477,7 +477,11 @@ def rederive_rooted_t2(
         derive_evaluation_admission,
         project_native_replay,
     )
-    from trader_assist_v0.nautilus_g4.runner import execute_provider_native_state
+    from trader_assist_v0.nautilus_g4.runner import (
+        execute_provider_native_state,
+        provider_execution_semantic_hash,
+        provider_state_semantic_source_hash,
+    )
     from trader_assist_v0.vnext_g4.contracts import (
         CandidateManifest,
         CausalLineage,
@@ -669,7 +673,8 @@ def rederive_rooted_t2(
         raise ValueError("rooted outcome decision is not TAKE")
     if outcome.order_intent_hash != intent.order_intent_hash:
         raise ValueError("rooted outcome does not bind the canonical OrderIntent")
-    if outcome.provider_state_source_hash != record.evidence_hash:
+    provider_state_hash = provider_state_semantic_source_hash(record)
+    if outcome.provider_state_source_hash != provider_state_hash:
         raise ValueError("rooted outcome does not bind the fresh provider state")
     rooted_costs = {item.artifact_hash for item in _many(root, T2SourceRole.COST_SOURCE)}
     costs = (
@@ -698,8 +703,8 @@ def rederive_rooted_t2(
         ),
         order_intent_hash=intent.order_intent_hash,
         replay_projection_hash=projection.identity.projection_hash,
-        provider_execution_record_hash=record.evidence_hash,
-        provider_state_source_hash=record.evidence_hash,
+        provider_execution_semantic_hash=provider_execution_semantic_hash(record),
+        provider_state_source_hash=provider_state_hash,
         provider_instrument_wire_hash=wire_hash,
         thesis_outcome_hash=outcome_artifact.artifact_hash,
         cost_source_hashes=tuple(sorted(set(cost_hashes))),
