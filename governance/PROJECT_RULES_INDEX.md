@@ -192,7 +192,7 @@ For a new engineering executor/operator/orchestrator or a material configuration
 
 - `governance/ENGINEERING_TOOL_ONBOARDING_AND_CHANGE_ACCEPTANCE_RULE_V1_2026-08-23.md`
 
-A tool requires exact identity, representative capability/safety evidence, independent acceptance and separate user activation before first project use. Material tool changes require re-acceptance.
+A tool requires exact identity, representative capability/safety evidence, independent acceptance and separate user activation before accepted routine project use. When the specialized Tool-Onboarding rule's strict `PILOT_ONLY_QUALIFICATION_CANARY` conditions hold, one explicitly user-activated, reversible, nonproduction real-task canary may precede full acceptance solely to acquire representative evidence; it is not accepted infrastructure. Material tool changes require re-acceptance.
 
 The mature-solution/build-vs-buy gate in Unified V2 and the external mature-solution selection procedure apply before custom commodity tooling.
 
