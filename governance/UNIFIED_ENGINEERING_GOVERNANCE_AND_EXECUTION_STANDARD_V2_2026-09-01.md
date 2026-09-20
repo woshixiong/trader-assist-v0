@@ -439,6 +439,61 @@ READY_FOR_AGENT -> AGENT_RUNNING -> PR_OPEN -> CI_RUNNING -> CI_PASS -> REVIEW_N
 
 may be mechanically advanced when the exact transition evidence exists and no material decision is introduced.
 
+#### 4.5.1 Token-sustainable mechanical state and model wake policy
+
+Model invocation is reserved for semantic work, material judgment and authority-bearing review. Routine canonical-state acquisition and waiting are control-plane mechanics.
+
+```text
+M0_MECHANICAL_STATE
+-> ZERO_MODEL
+-> GitHub / provider-native / deterministic tooling
+
+M1_LIGHTWEIGHT_NONAUTHORITATIVE_TRANSFORM
+-> LOWEST_SUFFICIENT_MODEL_ONLY_IF_M0_CANNOT_EXPRESS
+-> MACHINE_VERIFIABLE_NONAUTHORITATIVE_OUTPUT
+
+M2_SEMANTIC_WRITER
+-> TASK_ADAPTIVE_CAPABLE_MODEL_AND_REASONING
+
+M3_AUTHORITY_BEARING_REVIEW
+-> FRESH_STRONG_INDEPENDENT_REVIEWER
+-> HIGH_OR_SUFFICIENT_HIGH_REASONING
+```
+
+M0 includes live-main SHA, PR/Draft/base/head/tree, changed paths, mergeability metadata, CI run/job discovery and terminal status, run conclusions, artifact ID/name/digest, hash/allowlist comparison, and typed terminal-result extraction.
+
+```text
+MODEL_MEDIATED_CI_POLLING=PROHIBITED
+CI_WAIT_OWNER=GITHUB_OR_DETERMINISTIC_TOOL
+WRITER_AFTER_EXACT_HEAD_PUBLICATION=CHECKPOINT_CI_PENDING_THEN_STOP_SEMANTIC_POLLING
+CI_ALL_GREEN=MECHANICALLY_ADVANCE_TO_REVIEW_NEEDED
+RAW_SUCCESS_LOG_INGESTION=PROHIBITED_BY_DEFAULT
+FAILURE_LOG_READ=FAILED_RUN_JOB_STEP_PLUS_MINIMUM_DECISIVE_EXCERPT
+EXACT_ITEM_ENDPOINT_BEFORE_COLLECTION_ENDPOINT=YES
+BROAD_ISSUE_COMMENT_ARRAY_INGESTION=NO_BY_DEFAULT
+RAW_DIRECTORY_LISTING_INGESTION=NO_BY_DEFAULT
+KNOWN_LARGE_FILE_FULL_READ=NO_BY_DEFAULT
+PROJECT_DECISION_REQUIRED_FIELDS_FIRST=YES
+TARGETED_EXPANSION_FOR_MATERIAL_UNKNOWN=YES
+```
+
+A CI failure first receives a deterministic evidence projection and deterministic known-transient/mechanical classification where the active contract permits. Wake Engineering Control only when semantic/new-root/ambiguous/material reasoning is required; never blind-redispatch a semantic Writer.
+
+A healthy terminal transition does not need an intermediate model narration turn. `CI_PASS -> REVIEW_NEEDED` should wake one fresh M3 Reviewer directly. Review strength, independence, exact-head binding and read-only authority are not reduced to save tokens.
+
+A new chat/window is not by itself a new control context:
+
+```text
+NEW_CHAT_NE_NEW_CONTROL_CONTEXT=YES
+VALID_CONTROL_CAPSULE
++ VALID_GOVERNANCE_ATTESTATION
++ UNCHANGED_BINDING
++ NO_CONCRETE_AUTHORITY_CONFLICT
+=> FRESH_IDENTITY_METADATA_ONLY
+=> TARGETED_EXACT_LOCATORS_ONLY
+=> NO_FULL_GOVERNANCE_OR_HISTORY_RELOAD
+```
+
 Window rotation protects context capacity and trust; it is not a stage ceremony.
 
 ```text
@@ -464,6 +519,7 @@ For local Codex semantic execution, the default substrate has a deliberately nar
 ```text
 VERIFY EXACT TASK/SOURCE INPUT
 -> MATERIALIZE OR SELECT ISOLATED WORKSPACE
+-> RUN PRE-MODEL DETERMINISTIC BASE/WORKTREE FRESHNESS GATE
 -> VERIFY ONLY TRUE SEMANTIC PREREQUISITES
 -> START EXACTLY ONE FROZEN CODEX SESSION
 -> CAPTURE DIFF / RESULT / CHECKPOINT
@@ -471,6 +527,20 @@ VERIFY EXACT TASK/SOURCE INPUT
 ```
 
 It does **not** own GitHub publication, PR creation, Actions CI, final review, merge or deployment. Those remain Engineering Control/provider-native responsibilities after the semantic checkpoint.
+
+Before semantic-token spend on a managed worktree, deterministic identity checks must prove the frozen source boundary:
+
+```text
+PRE_MODEL_BASE_FRESHNESS_GATE=REQUIRED
+FRESHEN_REMOTE_TRACKING_MAIN_WHEN_APPLICABLE
+REQUIRE_CANONICAL_ORIGIN_MAIN_EQ_FROZEN_EXACT_BASE
+REQUIRE_FROZEN_TREE_EQ_CANONICAL_EXPECTED_TREE_WHEN_BOUND
+REQUIRE_MANAGED_WORKTREE_HEAD_EQ_FROZEN_EXACT_BASE
+REQUIRE_WORKTREE_CLEAN
+ONLY_THEN_START_SEMANTIC_MODEL
+```
+
+A stale local branch label is not proof of canonical main. A clean deterministic realignment to the frozen exact commit is execution-surface recovery, not semantic repair; a dirty/ambiguous worktree fails closed and returns to control.
 
 Task-specific variation must normally be represented as packet/manifest/allowlist/acceptance data consumed by the stable runner, not by generating another large shell/Python launcher. A new/custom execution program requires an explicit exception proving the stable runner cannot safely express the required mechanics and must itself pass the Generated Command + tool-change/review gates.
 
