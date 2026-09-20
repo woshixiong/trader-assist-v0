@@ -19,6 +19,8 @@ The Writer does not reread full Unified V2, full preflight, full Issue/PR histor
 
 Canonical rules remain full-strength authority; progressive disclosure changes model context, not governance.
 
+Compact context must preserve a risk-adaptive Impact Envelope. A Writer or Reviewer may omit duplicate/raw/history payload, but not materially necessary changed code, affected interfaces/contracts, safety/authority boundaries, acceptance criteria, decisive tests/CI, or concrete transitive dependencies required to judge correctness. Unresolved material unknowns prohibit PASS.
+
 ### 1.1 Durable control plane and Control Capsule
 
 Chat history is an ephemeral reasoning surface, not canonical engineering state. GitHub owns durable workflow state.
