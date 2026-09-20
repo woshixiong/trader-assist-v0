@@ -1042,7 +1042,7 @@ Where a selected specialized operator/handoff contract is stricter, such as a lo
 
 ### 10.5 Authority-bearing review context and idempotent result egress
 
-One authority-bearing independent Review uses a fresh ordinary ChatGPT review window and that window retires after final result egress. A second unrelated authority-bearing Review starts fresh.
+One authority-bearing independent Review uses a fresh independent review context/agent and that context retires after final result egress. The Reviewer must not have controlled or implemented the candidate stage, must not inherit Writer/Supervisor/Engineering-Control PASS conclusions as facts, and must operate under the accepted review permission/evidence contract. A new ordinary ChatGPT review window remains an accepted fallback. An independently accepted provider-native Reviewer Agent may be authority-bearing when its frozen route enforces the same or stronger independence properties. A second unrelated authority-bearing Review starts fresh.
 
 The compact Review Manifest contains only exact target/base/head/tree, exact changed scope/diff, frozen acceptance criteria, decisive evidence locators, exact upstream identity when applicable, required safety/authority boundaries and the output contract. Full history/governance/source inventory is not default input.
 
@@ -1070,8 +1070,11 @@ REVIEW_RESULT_KEY =
 Before writeback, fresh-read the canonical target thread and search for the same key. If it exists, consume its canonical comment/result ID and do not write another authority-bearing result. After stream interruption/reconnect, read-before-write is mandatory; blind rewrite is prohibited.
 
 ```text
-ONE_AUTHORITY_BEARING_REVIEW_PER_FRESH_WINDOW=YES
-REVIEW_WINDOW_RETIRES_AFTER_RESULT_EGRESS=YES
+ONE_AUTHORITY_BEARING_REVIEW_PER_FRESH_CONTEXT=YES
+REVIEW_CONTEXT_RETIRES_AFTER_RESULT_EGRESS=YES
+FIXED_REVIEW_UI_REQUIRED=NO
+ORDINARY_CHATGPT_NEW_WINDOW_ACCEPTED_FALLBACK=YES
+PROVIDER_NATIVE_INDEPENDENT_REVIEWER_ALLOWED_AFTER_ACCEPTANCE=YES
 REVIEW_CONTEXT_BUDGET_GATE=REQUIRED
 AUTHORITY_BEARING_REVIEW_RESULT_DIRECT_CONTROLLER_READABLE=REQUIRED
 REVIEW_RESULT_EGRESS_IDEMPOTENCY=REQUIRED
@@ -1593,7 +1596,7 @@ Independent Review inspects the actual exact object:
 - integrity-bound dirty-worktree review packet; or
 - exact delta against an independently accepted fingerprint.
 
-Authority-bearing independent review requires a **new ChatGPT conversation/window** that did not control or implement the candidate stage. The Engineering Control conversation may perform self-check/readiness work only; its PASS cannot become independent acceptance.
+Authority-bearing independent review requires a **fresh independent review context/agent** that did not control or implement the candidate stage. The Engineering Control context, Desktop/other Supervisor, semantic Writer and any self-review may perform readiness work only; their PASS cannot become independent acceptance. The Reviewer route must enforce read-only review authority, direct access to the exact canonical target/evidence, no inheritance of prior PASS conclusions as facts, and an independently produced verdict. A new ordinary ChatGPT review window is an accepted fallback rather than a mandatory UI boundary. An independently accepted provider-native Reviewer Agent may serve as the authority-bearing reviewer under the same contract.
 
 The reviewer receives a compact Review Manifest containing:
 
@@ -1631,6 +1634,8 @@ ACCEPTED_BASELINE
 ```
 
 Do not repeatedly rereview unchanged accepted thousands of lines without a concrete dependency/regression reason.
+
+A repaired or materially changed candidate head requires a **new fresh authority-bearing Reviewer context/agent**. The prior Reviewer may supply exact finding locators as untrusted input, but it must not remain the authority-bearing adjudicator for the downstream repair result.
 
 Default application/design repair budget:
 
