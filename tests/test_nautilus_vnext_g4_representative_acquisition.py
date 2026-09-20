@@ -312,6 +312,22 @@ def test_workflow_pr_and_default_dispatch_do_not_run_representative_capture() ->
     assert "github.event_name == 'pull_request'" not in capture_guard
 
 
+def test_workflow_uses_module_invocation_for_representative_acquisition() -> None:
+    workflow = Path(".github/workflows/nautilus-vnext-g4-ci.yml").read_text()
+    assert (
+        "/tmp/trader-assist-g4-capture-venv/bin/python -m \\\n"
+        "            scripts.nautilus_vnext_g4_representative_acquisition \\\n"
+    ) in workflow
+
+
+def test_workflow_omits_broken_direct_representative_acquisition_invocation() -> None:
+    workflow = Path(".github/workflows/nautilus-vnext-g4-ci.yml").read_text()
+    assert (
+        "/tmp/trader-assist-g4-capture-venv/bin/python \\\n"
+        "            scripts/nautilus_vnext_g4_representative_acquisition.py \\\n"
+    ) not in workflow
+
+
 def test_public_only_zero_write_safety_non_regression() -> None:
     base = acquisition._result_base(
         exact_head=HEAD,
