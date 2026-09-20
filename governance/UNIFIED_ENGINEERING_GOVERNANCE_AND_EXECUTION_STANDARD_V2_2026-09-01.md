@@ -1081,6 +1081,28 @@ One authority-bearing independent Review uses a fresh independent review context
 
 The compact Review Manifest contains only exact target/base/head/tree, exact changed scope/diff, frozen acceptance criteria, decisive evidence locators, exact upstream identity when applicable, required safety/authority boundaries and the output contract. Full history/governance/source inventory is not default input.
 
+Independent Review is delta-first and should complete in one bounded invocation when possible:
+
+```text
+REVIEW_BOOTSTRAP=
+  EXACT_REVIEW_MANIFEST
+  -> EXACT_TARGET_IDENTITY
+  -> EXACT_CHANGED_PATHS_AND_DIFF
+  -> EXACT_HEAD_CI_SUMMARY
+  -> DECISIVE_EVIDENCE_LOCATORS
+  -> TARGETED_AUTHORITY_OR_SOURCE_READS_ONLY_FOR_CONCRETE_UNKNOWNS
+
+BROAD_DISCOVERY_SEARCH=NO_BY_DEFAULT
+REPEATED_READ_OF_SAME_ARTIFACT=NO_BY_DEFAULT
+FULL_GOVERNANCE_RELOAD=NO_BY_DEFAULT
+RAW_LONG_CI_LOG=NO_BY_DEFAULT
+TOOL_RESULT_PROJECTION=REQUIRED_WHEN_SUPPORTED
+ROUTINE_USER_CONTINUE_PROMPT=NOT_REQUIRED
+REVIEWER_RUN_TO_TERMINAL_VERDICT_IN_ONE_INVOCATION=YES_WHEN_POSSIBLE
+```
+
+If a concrete unresolved acceptance question requires broader evidence, record that question first and expand only the relevant evidence surface. If proof collection itself threatens context integrity, freeze a bounded evidence-verification checkpoint and resume from that exact checkpoint without restarting discovery or requiring the user to reconstruct progress.
+
 If proof collection itself becomes large enough to threaten context integrity:
 
 ```text
