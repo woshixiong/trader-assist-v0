@@ -1,3 +1,4 @@
+# mypy: disable-error-code="import-not-found"
 """Rooted, non-authorizing Real-T2 candidate evidence.
 
 This module deliberately separates deterministic evidence construction from the
@@ -9,10 +10,16 @@ from __future__ import annotations
 
 import base64
 import hmac
+import json
+import subprocess
+import sys
+import tempfile
+from decimal import Decimal
 from enum import StrEnum
+from pathlib import Path
 from typing import Literal, Self, cast
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 from trader_assist_v0.contracts.common import Sha256Hex, canonical_json_bytes, sha256_hex
 
@@ -299,6 +306,280 @@ class RealT2AcceptanceDecision(_FrozenModel):
     accepted: bool
     real_t2_credit: bool
     reason: str
+
+
+class RootedT2Rederivation(_FrozenModel):
+    """Typed identities produced only by existing semantic owners."""
+
+    source_root_hash: Sha256Hex
+    evaluation_inputs_hash: Sha256Hex
+    participation_result_hash: Sha256Hex
+    order_intent_hash: Sha256Hex
+    replay_projection_hash: Sha256Hex
+    provider_execution_record_hash: Sha256Hex
+    provider_instrument_wire_hash: Sha256Hex
+    thesis_outcome_hash: Sha256Hex
+    cost_source_hashes: tuple[Sha256Hex, ...]
+
+
+def _one(root: T2SourceRootSnapshot, role: T2SourceRole) -> RoleBoundSourceArtifact:
+    matches = tuple(item for item in root.artifacts if item.role is role)
+    if len(matches) != 1:
+        raise ValueError(f"source root requires exactly one {role.value} artifact")
+    return matches[0]
+
+
+def _many(root: T2SourceRootSnapshot, role: T2SourceRole) -> tuple[RoleBoundSourceArtifact, ...]:
+    matches = tuple(item for item in root.artifacts if item.role is role)
+    if not matches:
+        raise ValueError(f"source root requires at least one {role.value} artifact")
+    return matches
+
+
+def _parse(artifact: RoleBoundSourceArtifact, target: type[object]) -> object:
+    return TypeAdapter(target).validate_json(artifact.exact_bytes())
+
+
+def rederive_rooted_t2(
+    *, root: T2SourceRootSnapshot, catalog_path: str | Path
+) -> RootedT2Rederivation:
+    """Rederive the complete mechanical T2 result from rooted bytes only."""
+    from trader_assist_v0.multi_asset_shadow.models import RegistryMarket
+    from trader_assist_v0.multi_asset_shadow.strategy_kernel.types import StrategyDecision
+    from trader_assist_v0.nautilus_e4.contracts import (
+        AdmittedEvent,
+        DataKind,
+        EvidenceState,
+        LifecycleRecord,
+        MarketExpression,
+    )
+    from trader_assist_v0.nautilus_g4.catalog_bridge import (
+        EvaluatorSupplementEvidence,
+        admit_hypothetical_order_intent,
+        derive_evaluation_admission,
+        project_native_replay,
+    )
+    from trader_assist_v0.nautilus_g4.runner import execute_provider_native_state
+    from trader_assist_v0.vnext_g4.contracts import (
+        CandidateManifest,
+        CausalLineage,
+        DerivationStatus,
+        G4RunManifest,
+        ParticipationDecision,
+        PositionSide,
+        RestartReferenceEvidence,
+        ValidationReference,
+    )
+    from trader_assist_v0.vnext_g4.evaluator import evaluate_participation
+    from trader_assist_v0.vnext_g4.reporting import CostProvenance, ThesisOutcome
+
+    structural_artifact = _one(root, T2SourceRole.STRUCTURAL_SOURCE)
+    structural = cast(StrategyDecision, _parse(structural_artifact, StrategyDecision))
+    lineage = cast(CausalLineage, _parse(_one(root, T2SourceRole.CAUSAL_LINEAGE), CausalLineage))
+    candidate = cast(
+        CandidateManifest, _parse(_one(root, T2SourceRole.SELECTED_CANDIDATE), CandidateManifest)
+    )
+    g4 = cast(G4RunManifest, _parse(_one(root, T2SourceRole.G4_RUN_MANIFEST), G4RunManifest))
+    if candidate.candidate_hash not in g4.candidate_hashes:
+        raise ValueError("rooted selected candidate is not a member of the rooted G4 run")
+    if candidate.structural_component_manifest_hash != structural_artifact.artifact_hash:
+        raise ValueError("selected candidate does not bind the exact structural source bytes")
+    if (
+        structural.market_id != lineage.market_id
+        or structural.market_event_id != lineage.formal_setup_id
+    ):
+        raise ValueError("structural decision and lineage do not form one causal unit")
+
+    expression = cast(
+        MarketExpression, _parse(_one(root, T2SourceRole.MARKET_EXPRESSION), MarketExpression)
+    )
+    admissions = tuple(
+        cast(AdmittedEvent, _parse(item, AdmittedEvent))
+        for item in _many(root, T2SourceRole.E4_ADMISSION)
+    )
+    bbo = tuple(
+        item
+        for item in admissions
+        if item.source.data_kind is DataKind.BBO
+        and item.source.market_id == lineage.market_id
+        and item.source.expression_id == expression.expression_id
+        and item.source.instrument_id == lineage.instrument_id
+        and item.continuity_state is EvidenceState.COMPLETE
+        and not item.out_of_order
+    )
+    if not bbo:
+        raise ValueError("complete rooted evidence has no causally eligible BBO")
+    current_bbo = max(bbo, key=lambda item: (item.admission_ordinal, item.admission_ts))
+    lifecycle = tuple(
+        cast(LifecycleRecord, _parse(item, LifecycleRecord))
+        for item in _many(root, T2SourceRole.E4_LIFECYCLE)
+    )
+    restarts = tuple(
+        cast(RestartReferenceEvidence, _parse(item, RestartReferenceEvidence))
+        for item in _many(root, T2SourceRole.RESTART_REFERENCE)
+    )
+    validation = cast(
+        ValidationReference,
+        _parse(_one(root, T2SourceRole.VALIDATION_REFERENCE), ValidationReference),
+    )
+    supplement = cast(
+        EvaluatorSupplementEvidence,
+        _parse(_one(root, T2SourceRole.EVALUATOR_SUPPLEMENT), EvaluatorSupplementEvidence),
+    )
+    registry = cast(
+        RegistryMarket, _parse(_one(root, T2SourceRole.REGISTRY_MARKET), RegistryMarket)
+    )
+    admission = derive_evaluation_admission(
+        candidate_room_to_cost_k=candidate.config.room_to_cost_k,
+        lineage=lineage,
+        formal_decision=structural,
+        lifecycle_records=lifecycle,
+        bbo_events=tuple(sorted(bbo, key=lambda item: item.admission_ordinal)),
+        restart_references=restarts,
+        market_expression=expression,
+        registry_market=registry,
+        validation=validation,
+        supplement=supplement,
+    )
+    if admission.status is not DerivationStatus.EVALUABLE or admission.inputs is None:
+        raise ValueError(f"rooted evaluation is not evaluable: {admission.reason_codes}")
+    participation = evaluate_participation(candidate.config, admission.inputs)
+    if participation.decision is not ParticipationDecision.TAKE:
+        raise ValueError("rooted selected candidate does not produce TAKE")
+
+    wire_artifact = _one(root, T2SourceRole.PROVIDER_INSTRUMENT_WIRE)
+    wire = json.loads(wire_artifact.exact_bytes())
+    from nautilus_trader.model import CryptoPerpetual
+
+    provider_instrument = CryptoPerpetual.from_dict(wire)
+    child_wire = provider_instrument.to_dict()
+    if canonical_json_bytes(wire) != canonical_json_bytes(child_wire):
+        raise ValueError("provider instrument public wire does not round-trip exactly")
+    wire_hash = sha256_hex(canonical_json_bytes(wire))
+    metadata_artifact = _one(root, T2SourceRole.INSTRUMENT_METADATA)
+    metadata = json.loads(metadata_artifact.exact_bytes())
+    if metadata.get("provider_wire_hash") != wire_hash:
+        raise ValueError("instrument metadata does not bind the rooted provider wire")
+    quantity = Decimal(str(provider_instrument.size_increment))
+    size_decimals = int(provider_instrument.size_precision)
+    side = PositionSide.LONG if structural.side.value == "LONG" else PositionSide.SHORT
+    payload = current_bbo.source.payload
+    opposite = Decimal(
+        str(payload["ask_size"] if side is PositionSide.LONG else payload["bid_size"])
+    )
+    if quantity <= 0 or quantity > opposite:
+        raise ValueError("one public size increment is not executable at the same causal BBO")
+    restart = next(
+        (item for item in restarts if item.reference_hash == lineage.restart_reference_id), None
+    )
+    if restart is None:
+        restart = next(
+            (
+                item
+                for item in restarts
+                if item.restart_reference_id == lineage.restart_reference_id
+            ),
+            None,
+        )
+    if restart is None:
+        raise ValueError("exact accepted restart reference is absent")
+    intent_admission = admit_hypothetical_order_intent(
+        strategy_decision_id=structural_artifact.artifact_hash,
+        candidate_hash=candidate.candidate_hash,
+        side=side,
+        lineage=lineage,
+        current_bbo=current_bbo,
+        technical_quantity=quantity,
+        size_decimals=size_decimals,
+        activation_reference_hash=restart.reference_hash,
+        validation=validation,
+    )
+    if intent_admission.intent is None:
+        raise ValueError(f"canonical OrderIntent is not evaluable: {intent_admission.reason_codes}")
+    intent = intent_admission.intent
+    projection = project_native_replay(
+        events=admissions,
+        market_id=lineage.market_id,
+        expression_id=expression.expression_id,
+        instrument_id=lineage.instrument_id,
+    )
+    execution = execute_provider_native_state(
+        projection=projection,
+        intent=intent,
+        trigger_admission_hash=current_bbo.admission_hash,
+        provider_instrument=provider_instrument,
+        catalog_path=catalog_path,
+    )
+    record = execution.record
+    expected_side = "BUY" if side is PositionSide.LONG else "SELL"
+    if (
+        record.projection_hash != projection.identity.projection_hash
+        or record.order_intent_hash != intent.order_intent_hash
+        or record.trigger_admission_hash != current_bbo.admission_hash
+        or record.submitted_side != expected_side
+        or Decimal(record.submitted_technical_quantity) != quantity
+    ):
+        raise ValueError("provider execution does not cross-bind the canonical causal unit")
+    outcome_artifact = _one(root, T2SourceRole.THESIS_OUTCOME)
+    outcome = cast(ThesisOutcome, _parse(outcome_artifact, ThesisOutcome))
+    if outcome.order_intent_hash != intent.order_intent_hash:
+        raise ValueError("rooted outcome does not bind the canonical OrderIntent")
+    if outcome.provider_state_source_hash != record.evidence_hash:
+        raise ValueError("rooted outcome does not bind the fresh provider state")
+    rooted_costs = {item.artifact_hash for item in _many(root, T2SourceRole.COST_SOURCE)}
+    costs = (
+        outcome.fee,
+        outcome.spread,
+        outcome.slippage,
+        outcome.impact_size_feasibility,
+        outcome.funding,
+        outcome.implementation_shortfall,
+    )
+    if any(item.provenance is CostProvenance.MISSING for item in costs):
+        raise ValueError("rooted outcome has missing cost provenance")
+    cost_hashes = tuple(sorted(cast(str, item.source_hash) for item in costs))
+    if any(item not in rooted_costs for item in cost_hashes):
+        raise ValueError("outcome cost source is absent or rooted under the wrong role")
+    return RootedT2Rederivation(
+        source_root_hash=root.accepted_t2_source_root_hash,
+        evaluation_inputs_hash=sha256_hex(
+            canonical_json_bytes(admission.inputs.model_dump(mode="json"))
+        ),
+        participation_result_hash=sha256_hex(
+            canonical_json_bytes(participation.model_dump(mode="json"))
+        ),
+        order_intent_hash=intent.order_intent_hash,
+        replay_projection_hash=projection.identity.projection_hash,
+        provider_execution_record_hash=record.evidence_hash,
+        provider_instrument_wire_hash=wire_hash,
+        thesis_outcome_hash=outcome_artifact.artifact_hash,
+        cost_source_hashes=tuple(sorted(set(cost_hashes))),
+    )
+
+
+def fresh_process_rederive(
+    *, root: T2SourceRootSnapshot, catalog_path: str | Path
+) -> RootedT2Rederivation:
+    """Give a child only the source snapshot; never transmit derived authority."""
+    with tempfile.TemporaryDirectory(prefix="rooted-t2-child-") as directory:
+        snapshot = Path(directory) / "source-root.json"
+        output = Path(directory) / "result.json"
+        snapshot.write_text(root.model_dump_json(), encoding="utf-8")
+        subprocess.run(
+            [
+                sys.executable,
+                "scripts/nautilus_vnext_g4_t2_shadow.py",
+                "--source-root",
+                str(snapshot),
+                "--rederive",
+                "--catalog-path",
+                str(catalog_path),
+                "--output",
+                str(output),
+            ],
+            check=True,
+        )
+        return RootedT2Rederivation.model_validate_json(output.read_bytes())
 
 
 def verify_external_acceptance(
