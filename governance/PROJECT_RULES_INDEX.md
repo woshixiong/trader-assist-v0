@@ -182,7 +182,7 @@ If exact GitHub artifacts + exact-head CI are sufficient, the fresh Reviewer rea
 
 If local evidence is required, prefer deterministic evidence generation -> hash-manifested review bundle -> exact delivery to the fresh independent Reviewer. Use `.agents/skills/trade-os-independent-review-bundle` when applicable.
 
-Writer self-review, Supervisor self-review and Engineering-Control self-review never become independent acceptance. A provider-native Reviewer Agent is authority-bearing only when its accepted route enforces fresh context, read-only review authority, direct exact-canonical-evidence access, no inheritance of prior PASS conclusions as facts, and direct idempotent result egress.
+Writer self-review, Supervisor self-review and Engineering-Control self-review never become independent acceptance. A provider-native Reviewer Agent is authority-bearing only when its accepted route enforces fresh context, read-only review authority, direct exact-canonical-evidence access, no inheritance of prior PASS conclusions as facts, and idempotent result egress through an accepted direct or lossless transport surface.
 
 One authority-bearing Review uses one fresh Reviewer context/agent, which retires after result egress. A repaired or materially changed head receives a new fresh Reviewer context. If proof collection threatens context integrity, freeze a bounded evidence-verification checkpoint and adjudicate in a fresh context. Authority-bearing result writeback is idempotent: derive the deterministic Review Result Key, fresh-read before write, and consume an existing matching result instead of duplicating it.
 
