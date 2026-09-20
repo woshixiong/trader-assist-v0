@@ -215,12 +215,16 @@ If the task can be decomposed into deterministic control-plane work plus one nar
 Default final adjudicator:
 
 ```text
-SURFACE=SEPARATE ORDINARY CHATGPT REVIEW WINDOW
-MODEL=STRONGEST APPROPRIATE AVAILABLE
-REASONING=HIGHEST APPROPRIATE
+SURFACE=STRONGEST_APPROPRIATE_ACCEPTED_FRESH_INDEPENDENT_REVIEW_SURFACE
+CONTEXT=FRESH_SEPARATE_FROM_CONTROL_AND_IMPLEMENTATION
+PERMISSION=READ_ONLY
+ORDINARY_CHATGPT_NEW_WINDOW=ACCEPTED_FALLBACK
+PROVIDER_NATIVE_REVIEWER_AGENT=ALLOWED_AFTER_INDEPENDENT_ACCEPTANCE
+MODEL=STRONGEST_APPROPRIATE_ACCEPTED_REVIEW_MODEL
+REASONING=HIGHEST_APPROPRIATE
 ```
 
-If exact GitHub artifacts/diffs and exact-head CI are sufficient, review them directly. Do not spend Codex quota to reproduce a GitHub-only review.
+If exact GitHub artifacts/diffs and exact-head CI are sufficient, review them directly from the accepted independent surface. Do not spend model quota to reproduce evidence already canonically available. Automation never permits Writer-context reuse or a weaker-than-appropriate reviewer solely for convenience.
 
 ## 5. Quota-state behavior
 
@@ -231,7 +235,7 @@ Quota state constrains availability; it does not define task class.
 ```text
 T0 -> deterministic/GitHub
 T1/T2/T3 -> if semantic coding Writer is required, Codex by default; model/reasoning right-sized
-T4 -> strongest independent ChatGPT in a new conversation/window
+T4 -> strongest appropriate accepted fresh independent Reviewer; ordinary ChatGPT new window is fallback
 ```
 
 ### CODEX_QUOTA_STATE=CONSTRAINED
@@ -241,12 +245,12 @@ Do not silently substitute executor. Engineering Control identifies whether the 
 ```text
 T0 -> deterministic/GitHub
 T1/T2/T3 -> CODEX if still viable; otherwise USER_AUTHORIZED_FALLBACK_REQUIRED
-T4 -> independent ChatGPT
+T4 -> accepted fresh independent Reviewer
 ```
 
 ### CODEX_QUOTA_STATE=EXHAUSTED
 
-Use GitHub/deterministic surfaces for non-semantic work. A semantic Writer waits for explicit bounded user fallback authorization/selection; exhaustion alone does not authorize another executor. T4 remains strongest independent ChatGPT.
+Use GitHub/deterministic surfaces for non-semantic work. A semantic Writer waits for explicit bounded user fallback authorization/selection; exhaustion alone does not authorize another executor. T4 remains the strongest appropriate accepted fresh independent Reviewer surface and is not silently coupled to the Writer's quota state.
 
 Resource telemetry informs future routing but never creates work merely to consume remaining quota.
 
@@ -349,7 +353,10 @@ DEEPSEEK_V4_PRO_ACCEPTED_FALLBACK_WRITER=YES
 NO_UNIVERSAL_OPUS_VS_GLM_VS_V4PRO_RANKING=YES
 USER_OVERRIDE_PRESERVED=YES
 ONE_PRIMARY_WRITER_PER_SHARED_AUTHORITY_STAGE=YES
-T4_FINAL_REVIEW_STRONGEST_CHATGPT_DEFAULT=YES
+T4_FINAL_REVIEW_STRONGEST_ACCEPTED_INDEPENDENT_SURFACE_DEFAULT=YES
+T4_ORDINARY_CHATGPT_NEW_WINDOW_FALLBACK=YES
+T4_PROVIDER_NATIVE_REVIEWER_ALLOWED_AFTER_INDEPENDENT_ACCEPTANCE=YES
+T4_WRITER_OR_CONTROL_CONTEXT_REUSE=PROHIBITED
 T4_LOCAL_EVIDENCE_BUNDLE_BEFORE_WEAKER_LOCAL_FINAL_REVIEW=YES
 WRITER_PASS_NE_INDEPENDENT_ACCEPTANCE=YES
 HERMES_IS_OPERATOR_TRANSPORT_NOT_L1_OR_REVIEWER=YES
