@@ -70,14 +70,24 @@ QUALITY_AND_CORRECTNESS_GT_CONTEXT_ECONOMY=YES
 A governance epoch is the exact set/hash of applicable canonical authority file SHAs used to produce the current governance attestation.
 
 ```text
-FULL_CORE_RULE_READ=
-  FIRST MATERIAL ACTION IN A FRESH CONTROL CONTEXT
-  OR GOVERNANCE_EPOCH DRIFT
-  OR CONCRETE AUTHORITY CONFLICT
+NEW_CHAT_WINDOW_ALONE != FRESH_CONTROL_CONTEXT
 
-UNCHANGED_GOVERNANCE_EPOCH
+VALID_CONTROL_CAPSULE
++ VALID_BOUND_GOVERNANCE_ATTESTATION
++ AUTHORITY_SHA_SET_UNCHANGED
++ NO_CONCRETE_AUTHORITY_CONFLICT
+=> ZERO_CORE_CONTENT_RELOAD
 => REUSE BOUND GOVERNANCE ATTESTATION
-=> TARGETED CANONICAL READS ONLY
+=> FRESH LIVE IDENTITY METADATA ONLY
+=> EXACT TARGETED CANONICAL READS ONLY
+
+NO_VALID_BOUND_ATTESTATION
+OR AUTHORITY_SHA_DRIFT
+OR CONCRETE_AUTHORITY_CONFLICT
+=> READ COMPACT AUTHORITY MANIFEST / CAPSULE FIRST
+=> COMPARE EXACT AUTHORITY SHAS
+=> READ ONLY CHANGED / MISSING / CONFLICTING SECTIONS
+=> FULL FILE ONLY WHEN WHOLE-FILE SEMANTICS ARE MATERIALLY REQUIRED
 ```
 
 Material preflight is reusable when its binding key is unchanged:
@@ -93,6 +103,17 @@ PREFLIGHT_BINDING_KEY =
 Fresh live repository/main/Issue/PR/head/CI identity checks remain mandatory. Attestation reuse is memoization of exact proven authority, never permission to ignore drift.
 
 Engineering Control is event-driven. Routine provider/GitHub-proven transitions do not require a model turn merely to restate state. Wake control for a new material direction, semantic blocker/new root cause, material CI failure requiring reasoning, scope/authority/identity drift, material Review finding, user-retained gate, or context-integrity risk.
+
+Control-role consolidation is the default when the same live Control Capsule and authority apply:
+
+```text
+ENGINEERING_CONTROL + GOVERNANCE_CONTROL = SAME ORDINARY CONTROL CONTEXT BY DEFAULT
+ENGINEERING / ACTIVE PRODUCT BLOCKER FIRST
+GOVERNANCE / PROCESS FOLLOW-UP AFTER A SAFE CHECKPOINT
+INDEPENDENT AUTHORITY-BEARING REVIEW = FRESH SEPARATE CONTEXT / AGENT
+```
+
+Tool retrieval must preserve active-state minimality. Prefer exact-item reads over collection scans and project/filter provider results to the decision-required fields before model ingestion whenever supported. Broad Issue/PR histories, directory dumps, raw long logs and known-large full-file reads are prohibited by default.
 
 Window rotation protects context capacity/trust; it is not a stage ceremony.
 
