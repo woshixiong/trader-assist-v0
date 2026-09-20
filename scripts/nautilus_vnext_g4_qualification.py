@@ -969,9 +969,11 @@ def _task5b_artifact_state(
             isinstance(workflow_run, dict)
             and workflow_run.get("head_sha") == TASK5B_EXACT_HEAD,
             isinstance(repository, dict),
-            isinstance(workflow_run, dict)
+            isinstance(repository, dict)
+            and isinstance(workflow_run, dict)
             and workflow_run.get("repository_id") == repository.get("id"),
-            isinstance(workflow_run, dict)
+            isinstance(repository, dict)
+            and isinstance(workflow_run, dict)
             and workflow_run.get("head_repository_id") == repository.get("id"),
         )
         if not all(run_required) or not all(artifact_required):
