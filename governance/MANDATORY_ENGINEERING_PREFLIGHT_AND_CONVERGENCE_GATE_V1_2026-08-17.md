@@ -594,14 +594,16 @@ SAFE_STOP_OR_REPLAN_TRIGGER=
 ROLLBACK_OR_RECOVERY_PLAN=
 ```
 
-Before consuming any application semantic repair budget after CI failure, record:
+After every failed exact-head CI, and before any retry, repair, recovery, or code mutation, record or update the classification in the canonical durable task state:
 
 ```text
 CI_FAILURE_CLASS=TRANSIENT_OR_KNOWN_FLAKE|DETERMINISTIC_MECHANICAL|SEMANTIC|INFRASTRUCTURE_OR_TRANSPORT|UNRESOLVED
 FAILED_CI_RUN_OR_JOB=
 FAILED_EXACT_HEAD=
+CI_FAILURE_RECORD_REF=
 SAME_HEAD_RERUN_COUNT=
 MECHANICAL_REPAIR_PROVEN_NON_SEMANTIC=YES|NO|NOT_APPLICABLE
+MECHANICAL_REPAIR_PROOF_LOCATOR=
 APPLICATION_SEMANTIC_REPAIR_CONSUMED=YES|NO
 CI_FAILURE_DISPOSITION=RERUN_SAME_HEAD_ONCE|NARROW_MECHANICAL_REPAIR|SEMANTIC_REPAIR|RECOVER_TRANSPORT_ONLY|COLLECT_DECISIVE_EVIDENCE|ESCALATE
 ```
@@ -609,6 +611,10 @@ CI_FAILURE_DISPOSITION=RERUN_SAME_HEAD_ONCE|NARROW_MECHANICAL_REPAIR|SEMANTIC_RE
 Hard handling rules:
 
 ```text
+CI_FAILURE_RECORD_REF=EMPTY_OR_NOT_CANONICAL_DURABLE_TASK_STATE
+=> RETRY_REPAIR_RECOVERY_OR_CODE_MUTATION=PROHIBITED
+=> DURABLE_CLASSIFICATION_UPDATE_REQUIRED=YES
+
 CI_FAILURE_CLASS=TRANSIENT_OR_KNOWN_FLAKE
 AND SAME_HEAD_RERUN_COUNT=0
 => CI_FAILURE_DISPOSITION=RERUN_SAME_HEAD_ONCE
@@ -621,7 +627,17 @@ AND CI_STILL_FAILS
 => RECLASSIFICATION_REQUIRED=YES
 
 CI_FAILURE_CLASS=DETERMINISTIC_MECHANICAL
+AND (
+  MECHANICAL_REPAIR_PROVEN_NON_SEMANTIC != YES
+  OR MECHANICAL_REPAIR_PROOF_LOCATOR=EMPTY_OR_UNRESOLVED
+)
+=> NARROW_MECHANICAL_REPAIR=PROHIBITED
+=> CODE_MUTATION=PROHIBITED
+=> RECLASSIFICATION_REQUIRED=YES
+
+CI_FAILURE_CLASS=DETERMINISTIC_MECHANICAL
 AND MECHANICAL_REPAIR_PROVEN_NON_SEMANTIC=YES
+AND MECHANICAL_REPAIR_PROOF_LOCATOR=RESOLVED
 => SAME_HEAD_RERUN_FOR_UNCHANGED_DETERMINISTIC_SOURCE=PROHIBITED
 => FULL_SEMANTIC_WRITER_REDISPATCH=PROHIBITED_BY_DEFAULT
 => APPLICATION_SEMANTIC_REPAIR_CONSUMED=NO
@@ -650,6 +666,8 @@ INITIAL
 ```
 
 No routine Repair 3/4/5. A new root cause or authority/layer expansion triggers holistic convergence.
+
+A deterministic mechanical classification does not create an unlimited correction loop. Repeated mechanical corrections remain subject to the existing bounded repair/convergence rules: a repeated failure, new root cause, scope/authority expansion, or loss of proof that the change is non-semantic requires reclassification and the applicable semantic repair, replan, or holistic-convergence path.
 
 For legacy project-owned commodity infrastructure, a material defect, clean-replacement requirement, repeated provider/qualification failure, material verification burden or exhausted repair budget expires prior `KEEP_CUSTOM` / `DEFER_MIGRATION` decisions before another semantic repair. Reopen the mature-solution gate first.
 
