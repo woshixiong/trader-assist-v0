@@ -493,7 +493,23 @@ def test_execute_provider_native_state_runs_real_rc5_hyperliquid_product_seam(
     assert evidence.real_t2_credit is False
     assert evidence.g4_promotion is False
     assert repeated.record.evidence_hash != evidence.record.evidence_hash
-    assert repeated.record.submitted_client_order_id != evidence.record.submitted_client_order_id
+    first_generated_identities = (
+        evidence.record.submitted_client_order_id,
+        evidence.record.fill.client_order_id,
+        evidence.record.fill.venue_order_id,
+        evidence.record.fill.trade_id,
+        evidence.record.fill.event_id,
+        evidence.record.provider_state.state_hash,
+    )
+    repeated_generated_identities = (
+        repeated.record.submitted_client_order_id,
+        repeated.record.fill.client_order_id,
+        repeated.record.fill.venue_order_id,
+        repeated.record.fill.trade_id,
+        repeated.record.fill.event_id,
+        repeated.record.provider_state.state_hash,
+    )
+    assert repeated_generated_identities != first_generated_identities
     assert provider_state_semantic_source_hash(repeated.record) == (
         provider_state_semantic_source_hash(evidence.record)
     )
