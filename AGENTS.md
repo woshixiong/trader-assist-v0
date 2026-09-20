@@ -128,6 +128,8 @@ M3_AUTHORITY_REVIEW
 
 M0 owns routine reads and waits including live-main SHA, PR state/Draft/base/head/tree, changed paths, mergeability metadata, CI run/job state and conclusions, artifact IDs/names/digests, hashes, allowlists and typed terminal-result extraction.
 
+For exact-head PR CI waiting/terminal projection, use `.agents/skills/trade-os-ci-terminal-wait/SKILL.md` when that execution surface is available.
+
 ```text
 MODEL_MEDIATED_CI_POLLING=PROHIBITED
 CI_WAIT_OWNER=GITHUB_OR_DETERMINISTIC_TOOL
