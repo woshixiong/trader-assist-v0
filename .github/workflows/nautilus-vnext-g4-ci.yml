@@ -9,18 +9,41 @@ on:
         required: false
         type: boolean
         default: false
+      formal_g4_finalize:
+        description: Run fail-closed Formal G4 finalization on this exact reviewed head
+        required: false
+        type: boolean
+        default: false
       expected_exact_head:
-        description: Full live-main Git head authorized for representative capture
+        description: Full exact Git head authorized for the selected dispatch mode
+        required: false
+        type: string
+        default: ""
+      authoritative_e4_ci_run_id:
+        description: Successful exact-head pull-request CI run proving G4E6
+        required: false
+        type: string
+        default: ""
+      canonical_g4e8_reattestation_comment_id:
+        description: Owner same-head G4E8 re-attestation comment ID
+        required: false
+        type: string
+        default: ""
+      canonical_t2_acceptance_comment_id:
+        description: Owner canonical Rooted-T2 acceptance comment ID
         required: false
         type: string
         default: ""
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   vnext-g4:
-    if: ${{ github.event_name == 'pull_request' || !inputs.representative_capture }}
+    if: >-
+      ${{ github.event_name == 'pull_request' ||
+          (!inputs.representative_capture && !inputs.formal_g4_finalize) }}
     runs-on: ubuntu-24.04
     env:
       NAUTILUS_G4_REQUIRED: "1"
@@ -67,6 +90,7 @@ jobs:
             tests/test_nautilus_vnext_g4_catalog_bridge.py \
             tests/test_nautilus_vnext_g4_runner.py \
             tests/test_nautilus_vnext_g4_qualification.py \
+            tests/test_nautilus_vnext_g4_formal_closure.py \
             tests/test_nautilus_vnext_g4_representative_scale.py \
             tests/test_nautilus_vnext_g4_representative_acquisition.py
       - name: E4 source-authority regressions
@@ -489,4 +513,116 @@ jobs:
           assert result["zero_signing"] is True, result
           assert result["zero_exchange_write"] is True, result
           assert result["RESULT"] == "COMPLETE_REPRESENTATIVE_CANDIDATE_BUILT", result
+          PY
+
+  formal-g4-finalize:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.formal_g4_finalize }}
+    runs-on: ubuntu-24.04
+    env:
+      NAUTILUS_G4_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-dev.lock
+            requirements-nautilus-pilot.lock
+      - name: Exact hashed rc5 finalization environment
+        run: |
+          python -m venv /tmp/trader-assist-g4-finalize-venv
+          /tmp/trader-assist-g4-finalize-venv/bin/python -m pip install \
+            --require-hashes -r requirements-dev.lock
+          /tmp/trader-assist-g4-finalize-venv/bin/python -m pip install \
+            --require-hashes --no-deps --only-binary=:all: \
+            -r requirements-nautilus-pilot.lock
+          /tmp/trader-assist-g4-finalize-venv/bin/python -m pip install \
+            -e . --no-deps --no-build-isolation
+      - name: Validate Formal G4 exact reviewed head
+        env:
+          EXPECTED_EXACT_HEAD: ${{ inputs.expected_exact_head }}
+          AUTHORITATIVE_E4_CI_RUN_ID: ${{ inputs.authoritative_e4_ci_run_id }}
+          G4E8_REATTESTATION_COMMENT_ID: ${{ inputs.canonical_g4e8_reattestation_comment_id }}
+        run: |
+          test "${#EXPECTED_EXACT_HEAD}" -eq 40
+          test "$(git rev-parse HEAD)" = "${EXPECTED_EXACT_HEAD}"
+          test "${GITHUB_SHA}" = "${EXPECTED_EXACT_HEAD}"
+          test "${AUTHORITATIVE_E4_CI_RUN_ID}" -gt 0
+          test "${G4E8_REATTESTATION_COMMENT_ID}" -gt 0
+      - name: Download exact accepted Task 5B artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: "10613633203"
+          path: ${{ runner.temp }}/task5b-representative-artifact
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: woshixiong/trader-assist-v0
+          run-id: "35538401855"
+      - name: Produce exact-head Formal G4 qualification
+        id: formal_g4_qualification
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AUTHORITATIVE_E4_CI_RUN_ID: ${{ inputs.authoritative_e4_ci_run_id }}
+          G4E8_REATTESTATION_COMMENT_ID: ${{ inputs.canonical_g4e8_reattestation_comment_id }}
+          T2_ACCEPTANCE_COMMENT_ID: ${{ inputs.canonical_t2_acceptance_comment_id }}
+        run: |
+          args=(
+            --result-path "${RUNNER_TEMP}/vnext-formal-g4-qualification.json"
+            --formal-g4-finalize
+            --task5b-artifact-root "${RUNNER_TEMP}/task5b-representative-artifact"
+            --authoritative-e4-ci-run-id "${AUTHORITATIVE_E4_CI_RUN_ID}"
+            --canonical-g4e8-reattestation-comment-id "${G4E8_REATTESTATION_COMMENT_ID}"
+          )
+          if [ -n "${T2_ACCEPTANCE_COMMENT_ID}" ]; then
+            args+=(--canonical-t2-acceptance-comment-id "${T2_ACCEPTANCE_COMMENT_ID}")
+          fi
+          G4_EXACT_HEAD="$(git rev-parse HEAD)" \
+          G4_EXACT_TREE="$(git rev-parse 'HEAD^{tree}')" \
+          /tmp/trader-assist-g4-finalize-venv/bin/python \
+            scripts/nautilus_vnext_g4_qualification.py "${args[@]}"
+      - name: Preserve exact-head Formal G4 qualification artifact
+        if: ${{ always() && steps.formal_g4_qualification.outcome != 'skipped' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nautilus-vnext-formal-g4-qualification-${{ github.sha }}
+          path: ${{ runner.temp }}/vnext-formal-g4-qualification.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Assert exact Formal G4 closure
+        if: ${{ always() }}
+        env:
+          FORMAL_RESULT: ${{ runner.temp }}/vnext-formal-g4-qualification.json
+          EXPECTED_EXACT_HEAD: ${{ inputs.expected_exact_head }}
+        run: |
+          test "${{ steps.formal_g4_qualification.outcome }}" = "success"
+          /tmp/trader-assist-g4-finalize-venv/bin/python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          result = json.loads(Path(os.environ["FORMAL_RESULT"]).read_text())
+          assert result["schema_version"] == (
+              "VNEXT_FORMAL_G4_TECHNICAL_QUALIFICATION_RESULT_V3"
+          ), result
+          assert result["status"] == "FORMAL_G4_TECHNICAL_ACCEPTED", result
+          assert result["formal_g4_finalization_mode"] is True, result
+          assert result["exact_head"] == os.environ["EXPECTED_EXACT_HEAD"], result
+          assert set(result["formal_g4_ladder"]) == {
+              f"G4E{ordinal}" for ordinal in range(9)
+          }, result
+          assert set(result["formal_g4_ladder"].values()) == {"PASS"}, result
+          assert result["formal_g4_technical_acceptance"] is True, result
+          assert result["task5b_artifact_status"] == "PASS", result
+          assert result["g4e6_zero_write_live_path_composition"] == "PASS", result
+          assert result["g4e8_representative_scale_runtime"] == "PASS", result
+          assert result["strategy_edge_proven"] is False, result
+          assert result["confirmatory_e5_open"] is False, result
+          assert result["private_api"] is False, result
+          assert result["signing"] is False, result
+          assert result["exchange_write"] is False, result
+          assert result["venue_submitted"] is False, result
           PY

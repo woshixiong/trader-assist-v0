@@ -9,6 +9,7 @@ remain NOT_PROVEN unless a future accepted T2 artifact is explicitly consumed.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -68,8 +69,43 @@ CANONICAL_REPRESENTATIVE_READBACK_HEADING = (
     "## G4 REPRESENTATIVE-SCALE CANONICAL ACCEPTANCE READBACK V1"
 )
 REPRESENTATIVE_ARTIFACT_SCHEMA = "G4_REPRESENTATIVE_SCALE_CANDIDATE_V1"
+FORMAL_G4_GATE_KEYS = tuple(f"G4E{ordinal}" for ordinal in range(9))
+CANONICAL_G4_WORKFLOW_PATH = ".github/workflows/nautilus-vnext-g4-ci.yml"
+CANONICAL_G4_WORKFLOW_NAME = "Nautilus VNext G4 CI"
+CANONICAL_G4E8_REATTESTATION_SCHEMA = (
+    "G4_REPRESENTATIVE_SCALE_SAME_HEAD_REATTESTATION_V1"
+)
+CANONICAL_G4E8_REATTESTATION_HEADING = (
+    "## G4 REPRESENTATIVE-SCALE SAME-HEAD RE-ATTESTATION V1"
+)
+TASK5B_RUN_ID = 35538401855
+TASK5B_RUN_ATTEMPT = 1
+TASK5B_ARTIFACT_ID = 10613633203
+TASK5B_ARTIFACT_NAME = (
+    "g4-representative-capture-35538401855-1-"
+    "88370917259152367a4bb1859143450ce649c8b7"
+)
+TASK5B_ARTIFACT_DIGEST = (
+    "sha256:16a9d55962e7b9dbda17fc3983e7f999642adf3f1b1e9176574d18182e7eed42"
+)
+TASK5B_EXACT_HEAD = "88370917259152367a4bb1859143450ce649c8b7"
+TASK5B_EXACT_TREE = "1d83185e5133744aa5601e213d07d8496ed85147"
+TASK5B_REPRESENTATIVE_ARTIFACT_HASH = (
+    "c80d96cc7c8e5467488bd38a47329a1aab9341358bdff55097b53a6ec3e65cdd"
+)
+TASK5B_REPRESENTATIVE_MARKET_SET_HASH = (
+    "35fdbd8529db91b9bdba136795d68c9b529d20ea67ee0a6024c00876f812f443"
+)
+TASK5B_SOURCE_E4_MANIFEST_HASH = (
+    "2f8df3251281e54880568d64dcf71139d7b5a7408a534c0f5abce9b36f49d60f"
+)
+TASK5B_CANONICAL_G4E8_ACCEPTANCE_COMMENT_ID = 5752835201
+TASK5B_CANONICAL_G4E8_ACCEPTANCE_RECEIPT_HASH = (
+    "4be1cf59cc3f933863483434aa2333290d89005609fd983ef07fc3c1369dcca6"
+)
 _CANONICAL_T2_AUTHORITY = object()
 _CANONICAL_REPRESENTATIVE_AUTHORITY = object()
+_CANONICAL_G4E8_REATTESTATION_AUTHORITY = object()
 
 
 @dataclass(frozen=True)
@@ -90,6 +126,44 @@ class _CanonicalRepresentativeAcceptanceReadback:
     comment_id: int
     comment_url: str
     receipt: dict[str, object]
+
+
+@dataclass(frozen=True)
+class _CanonicalG4E8ReattestationReadback:
+    """Owner-authored same-head G4E8 re-attestation for Formal G4 closure."""
+
+    authority: object
+    comment_id: int
+    comment_url: str
+    receipt: dict[str, object]
+
+
+def _github_api_json(
+    api_path: str,
+    *,
+    github_token: str,
+) -> dict[str, Any]:
+    if not github_token:
+        raise ValueError("GitHub API proof requires the current workflow token")
+    if not api_path.startswith(f"/repos/{CANONICAL_REPOSITORY}/"):
+        raise ValueError("GitHub API proof path is outside the canonical repository")
+    api_url = f"https://api.github.com{api_path}"
+    request = Request(
+        api_url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {github_token}",
+            "User-Agent": "trader-assist-vnext-g4-formal-closure",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    with urlopen(request, timeout=10.0) as response:
+        if response.geturl() != api_url:
+            raise ValueError("GitHub API proof endpoint redirected")
+        payload: Any = json.loads(response.read())
+    if not isinstance(payload, dict):
+        raise ValueError("GitHub API proof response must be an object")
+    return payload
 
 
 def _not_proven_causal_gates() -> dict[str, str]:
@@ -641,6 +715,362 @@ def _fetch_canonical_representative_readback(
     )
 
 
+def _parse_canonical_g4e8_reattestation(
+    raw_response: bytes,
+    *,
+    expected_comment_id: int,
+) -> _CanonicalG4E8ReattestationReadback:
+    envelope: Any = json.loads(raw_response)
+    if not isinstance(envelope, dict):
+        raise ValueError("canonical G4E8 re-attestation response must be an object")
+    if envelope.get("id") != expected_comment_id:
+        raise ValueError("canonical G4E8 re-attestation comment identity mismatch")
+    expected_url = re.compile(
+        rf"https://github\.com/{re.escape(CANONICAL_REPOSITORY)}"
+        rf"/issues/[1-9][0-9]*#issuecomment-{expected_comment_id}"
+    )
+    comment_url = envelope.get("html_url")
+    if not isinstance(comment_url, str) or expected_url.fullmatch(comment_url) is None:
+        raise ValueError("canonical G4E8 re-attestation URL is outside the repository")
+    user = envelope.get("user")
+    if (
+        not isinstance(user, dict)
+        or user.get("login") != CANONICAL_REPOSITORY.split("/", maxsplit=1)[0]
+        or envelope.get("author_association") != "OWNER"
+    ):
+        raise ValueError("canonical G4E8 re-attestation is not owner authored")
+    body = envelope.get("body")
+    if not isinstance(body, str):
+        raise ValueError("canonical G4E8 re-attestation body must be text")
+    body_match = re.fullmatch(
+        re.escape(CANONICAL_G4E8_REATTESTATION_HEADING)
+        + r"\n\n```json\n(?P<payload>\{.*\})\n```\n?",
+        body,
+        flags=re.DOTALL,
+    )
+    if body_match is None:
+        raise ValueError("canonical G4E8 re-attestation envelope is not exact")
+    payload: Any = json.loads(body_match.group("payload"))
+    if not isinstance(payload, dict) or set(payload) != {
+        "acceptance",
+        "repository",
+        "schema_version",
+    }:
+        raise ValueError("canonical G4E8 re-attestation payload fields are not exact")
+    if payload.get("schema_version") != CANONICAL_G4E8_REATTESTATION_SCHEMA:
+        raise ValueError("canonical G4E8 re-attestation schema is not accepted")
+    if payload.get("repository") != CANONICAL_REPOSITORY:
+        raise ValueError("canonical G4E8 re-attestation repository mismatch")
+    receipt = payload.get("acceptance")
+    receipt_fields = {
+        "acceptance_claim",
+        "canonical_g4e8_acceptance_comment_id",
+        "canonical_g4e8_acceptance_receipt_hash",
+        "exact_implementation_head",
+        "exact_implementation_tree",
+        "exact_reviewed_head",
+        "fresh_independent_review_locator",
+        "fresh_independent_review_result_key",
+        "fresh_independent_review_verdict",
+        "reattestation_hash",
+        "representative_artifact_hash",
+        "representative_market_set_hash",
+        "representative_source_artifact_id",
+        "representative_source_run_id",
+        "required_ci_run_ids_and_conclusions",
+        "source_e4_manifest_hash",
+        "task_id",
+    }
+    if not isinstance(receipt, dict) or set(receipt) != receipt_fields:
+        raise ValueError("canonical G4E8 re-attestation fields are not exact")
+    if receipt.get("acceptance_claim") != "RE_ATTESTED":
+        raise ValueError("canonical G4E8 re-attestation claim is not accepted")
+    for field in (
+        "canonical_g4e8_acceptance_receipt_hash",
+        "reattestation_hash",
+        "representative_artifact_hash",
+        "representative_market_set_hash",
+        "source_e4_manifest_hash",
+    ):
+        _assert_sha256(receipt.get(field), field=field)
+    for field in (
+        "exact_implementation_head",
+        "exact_implementation_tree",
+        "exact_reviewed_head",
+    ):
+        _assert_git_oid(receipt.get(field), field=field)
+    if receipt.get("fresh_independent_review_verdict") != "PASS":
+        raise ValueError("canonical G4E8 re-attestation review did not pass")
+    for field in ("task_id", "fresh_independent_review_result_key"):
+        if not isinstance(receipt.get(field), str) or not receipt[field]:
+            raise ValueError(f"canonical G4E8 re-attestation {field} is missing")
+    review_locator = receipt.get("fresh_independent_review_locator")
+    accepted_locator = re.compile(
+        rf"https://github\.com/{re.escape(CANONICAL_REPOSITORY)}"
+        r"/issues/[1-9][0-9]*#issuecomment-[1-9][0-9]*"
+    )
+    if not isinstance(review_locator, str) or accepted_locator.fullmatch(review_locator) is None:
+        raise ValueError("canonical G4E8 re-attestation review locator is invalid")
+    ci_results = receipt.get("required_ci_run_ids_and_conclusions")
+    if not isinstance(ci_results, list) or not ci_results:
+        raise ValueError("canonical G4E8 re-attestation required CI is missing")
+    ci_bindings = tuple(
+        result.rpartition(":") for result in ci_results if isinstance(result, str)
+    )
+    if (
+        len(ci_bindings) != len(ci_results)
+        or len(ci_results) != len(set(ci_results))
+        or any(not run_id or separator != ":" for run_id, separator, _ in ci_bindings)
+        or any(conclusion.lower() != "success" for _, _, conclusion in ci_bindings)
+    ):
+        raise ValueError("canonical G4E8 re-attestation CI is not uniquely successful")
+    receipt_identity = {
+        key: value for key, value in receipt.items() if key != "reattestation_hash"
+    }
+    if sha256_hex(canonical_json_bytes(receipt_identity)) != receipt["reattestation_hash"]:
+        raise ValueError("canonical G4E8 re-attestation hash does not bind its contents")
+    return _CanonicalG4E8ReattestationReadback(
+        authority=_CANONICAL_G4E8_REATTESTATION_AUTHORITY,
+        comment_id=expected_comment_id,
+        comment_url=comment_url,
+        receipt=receipt,
+    )
+
+
+def _fetch_canonical_g4e8_reattestation(
+    comment_id: object,
+) -> _CanonicalG4E8ReattestationReadback:
+    if type(comment_id) is not int or comment_id <= 0:
+        raise ValueError("canonical G4E8 re-attestation requires a positive comment ID")
+    api_url = (
+        f"https://api.github.com/repos/{CANONICAL_REPOSITORY}/issues/comments/"
+        f"{comment_id}"
+    )
+    request = Request(
+        api_url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "trader-assist-vnext-g4-formal-closure",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    with urlopen(request, timeout=10.0) as response:
+        if response.geturl() != api_url:
+            raise ValueError("canonical G4E8 re-attestation endpoint redirected")
+        raw_response = response.read()
+    return _parse_canonical_g4e8_reattestation(
+        raw_response,
+        expected_comment_id=comment_id,
+    )
+
+
+def _authoritative_e4_ci_state(
+    run_id: object,
+    *,
+    expected_head: str,
+    github_token: str,
+) -> dict[str, object]:
+    not_proven: dict[str, object] = {
+        "status": "NOT_PROVEN",
+        "run_id": run_id,
+    }
+    if type(run_id) is not int or run_id <= 0:
+        return {**not_proven, "reason": "MISSING_OR_INVALID_G4E6_RUN_ID"}
+    try:
+        run = _github_api_json(
+            f"/repos/{CANONICAL_REPOSITORY}/actions/runs/{run_id}",
+            github_token=github_token,
+        )
+    except (OSError, URLError, ValueError) as exc:
+        return {
+            **not_proven,
+            "reason": f"AUTHORITATIVE_G4E6_RUN_REJECTED:{type(exc).__name__}",
+        }
+    repository = run.get("repository")
+    required = (
+        run.get("id") == run_id,
+        isinstance(repository, dict),
+        isinstance(repository, dict)
+        and repository.get("full_name") == CANONICAL_REPOSITORY,
+        run.get("name") == CANONICAL_G4_WORKFLOW_NAME,
+        run.get("path") == CANONICAL_G4_WORKFLOW_PATH,
+        run.get("event") == "pull_request",
+        run.get("head_sha") == expected_head,
+        run.get("status") == "completed",
+        run.get("conclusion") == "success",
+    )
+    if not all(required):
+        return {**not_proven, "reason": "AUTHORITATIVE_G4E6_RUN_BINDING_MISMATCH"}
+    return {
+        "status": "PASS",
+        "reason": None,
+        "run_id": run_id,
+        "run_attempt": run.get("run_attempt"),
+        "repository": CANONICAL_REPOSITORY,
+        "workflow_path": CANONICAL_G4_WORKFLOW_PATH,
+        "head_sha": expected_head,
+        "conclusion": "success",
+    }
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _task5b_artifact_state(
+    artifact_root: Path | None,
+    *,
+    github_token: str,
+) -> dict[str, object]:
+    failed: dict[str, object] = {
+        "status": "FAIL_CLOSED",
+        "run_id": TASK5B_RUN_ID,
+        "artifact_id": TASK5B_ARTIFACT_ID,
+        "artifact_name": TASK5B_ARTIFACT_NAME,
+    }
+    if artifact_root is None:
+        return {**failed, "reason": "TASK5B_ARTIFACT_ROOT_MISSING"}
+    try:
+        run = _github_api_json(
+            f"/repos/{CANONICAL_REPOSITORY}/actions/runs/{TASK5B_RUN_ID}",
+            github_token=github_token,
+        )
+        metadata = _github_api_json(
+            f"/repos/{CANONICAL_REPOSITORY}/actions/artifacts/{TASK5B_ARTIFACT_ID}",
+            github_token=github_token,
+        )
+        repository = run.get("repository")
+        run_required = (
+            run.get("id") == TASK5B_RUN_ID,
+            run.get("run_attempt") == TASK5B_RUN_ATTEMPT,
+            isinstance(repository, dict),
+            isinstance(repository, dict)
+            and repository.get("full_name") == CANONICAL_REPOSITORY,
+            run.get("name") == CANONICAL_G4_WORKFLOW_NAME,
+            run.get("path") == CANONICAL_G4_WORKFLOW_PATH,
+            run.get("event") == "workflow_dispatch",
+            run.get("head_sha") == TASK5B_EXACT_HEAD,
+            run.get("status") == "completed",
+            run.get("conclusion") == "success",
+        )
+        workflow_run = metadata.get("workflow_run")
+        artifact_required = (
+            metadata.get("id") == TASK5B_ARTIFACT_ID,
+            metadata.get("name") == TASK5B_ARTIFACT_NAME,
+            metadata.get("digest") == TASK5B_ARTIFACT_DIGEST,
+            metadata.get("expired") is False,
+            isinstance(workflow_run, dict),
+            isinstance(workflow_run, dict)
+            and workflow_run.get("id") == TASK5B_RUN_ID,
+            isinstance(workflow_run, dict)
+            and workflow_run.get("head_sha") == TASK5B_EXACT_HEAD,
+            isinstance(repository, dict),
+            isinstance(workflow_run, dict)
+            and workflow_run.get("repository_id") == repository.get("id"),
+            isinstance(workflow_run, dict)
+            and workflow_run.get("head_repository_id") == repository.get("id"),
+        )
+        if not all(run_required) or not all(artifact_required):
+            raise ValueError("Task #5B provider provenance binding mismatch")
+
+        candidates = tuple(artifact_root.rglob("representative-scale-candidate.json"))
+        if len(candidates) != 1:
+            raise ValueError("Task #5B artifact must contain one representative candidate")
+        candidate_path = candidates[0]
+        if candidate_path.is_symlink():
+            raise ValueError("Task #5B representative candidate cannot be a symlink")
+        extracted_root = candidate_path.parent
+        acquisition_result_path = extracted_root / "acquisition-result.json"
+        run_manifest_path = extracted_root / "run-manifest.json"
+        if not acquisition_result_path.is_file() or not run_manifest_path.is_file():
+            raise ValueError("Task #5B artifact provenance files are missing")
+        candidate_raw: Any = json.loads(candidate_path.read_text(encoding="utf-8"))
+        candidate, markets = _validate_representative_artifact(candidate_raw)
+        candidate_required = (
+            candidate["artifact_hash"] == TASK5B_REPRESENTATIVE_ARTIFACT_HASH,
+            candidate["representative_market_set_hash"]
+            == TASK5B_REPRESENTATIVE_MARKET_SET_HASH,
+            candidate["source_e4_manifest_hash"] == TASK5B_SOURCE_E4_MANIFEST_HASH,
+            candidate["source_e4_exact_head"] == TASK5B_EXACT_HEAD,
+            candidate["source_e4_exact_tree"] == TASK5B_EXACT_TREE,
+        )
+        if not all(candidate_required):
+            raise ValueError("Task #5B representative candidate identity mismatch")
+        source_hashes = candidate["source_artifact_hashes"]
+        assert isinstance(source_hashes, dict)
+        for name, expected_digest in source_hashes.items():
+            source_path = extracted_root / str(name)
+            if (
+                not source_path.is_file()
+                or source_path.is_symlink()
+                or _sha256_file(source_path) != expected_digest
+            ):
+                raise ValueError(f"Task #5B source artifact hash mismatch: {name}")
+
+        acquisition: Any = json.loads(
+            acquisition_result_path.read_text(encoding="utf-8")
+        )
+        run_manifest: Any = json.loads(run_manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(acquisition, dict) or not isinstance(run_manifest, dict):
+            raise ValueError("Task #5B provenance files must be objects")
+        acquisition_required = (
+            acquisition.get("schema_version")
+            == "G4_REPRESENTATIVE_ACQUISITION_RESULT_V1",
+            acquisition.get("RESULT") == "COMPLETE_REPRESENTATIVE_CANDIDATE_BUILT",
+            acquisition.get("G4E8") == "NOT_PROVEN",
+            acquisition.get("github_run_id") == str(TASK5B_RUN_ID),
+            acquisition.get("github_run_attempt") == TASK5B_RUN_ATTEMPT,
+            acquisition.get("exact_head") == TASK5B_EXACT_HEAD,
+            acquisition.get("exact_tree") == TASK5B_EXACT_TREE,
+            acquisition.get("target_count") == REPRESENTATIVE_MARKET_FLOOR,
+            acquisition.get("representative_candidate_hash")
+            == TASK5B_REPRESENTATIVE_ARTIFACT_HASH,
+            acquisition.get("run_manifest_hash") == TASK5B_SOURCE_E4_MANIFEST_HASH,
+            acquisition.get("automatic_retry") is False,
+            acquisition.get("manual_market_input") is False,
+            acquisition.get("post_hoc_market_substitution") is False,
+            acquisition.get("public_data_only") is True,
+            acquisition.get("zero_credentials") is True,
+            acquisition.get("zero_execution_client") is True,
+            acquisition.get("zero_signing") is True,
+            acquisition.get("zero_exchange_write") is True,
+        )
+        manifest_required = (
+            run_manifest.get("git_sha") == TASK5B_EXACT_HEAD,
+            run_manifest.get("git_tree") == TASK5B_EXACT_TREE,
+            run_manifest.get("manifest_hash") == TASK5B_SOURCE_E4_MANIFEST_HASH,
+            run_manifest.get("private_api") is False,
+            run_manifest.get("real_exec_client_registered") is False,
+            run_manifest.get("exchange_write") is False,
+        )
+        if not all(acquisition_required) or not all(manifest_required):
+            raise ValueError("Task #5B extracted provenance binding mismatch")
+    except (OSError, URLError, json.JSONDecodeError, ValueError) as exc:
+        return {
+            **failed,
+            "reason": f"TASK5B_ARTIFACT_REJECTED:{type(exc).__name__}",
+        }
+    return {
+        "status": "PASS",
+        "reason": None,
+        "run_id": TASK5B_RUN_ID,
+        "artifact_id": TASK5B_ARTIFACT_ID,
+        "artifact_name": TASK5B_ARTIFACT_NAME,
+        "artifact_digest": TASK5B_ARTIFACT_DIGEST,
+        "candidate_path": str(candidate_path),
+        "representative_artifact_hash": TASK5B_REPRESENTATIVE_ARTIFACT_HASH,
+        "representative_market_count": len(markets),
+        "representative_market_set_hash": TASK5B_REPRESENTATIVE_MARKET_SET_HASH,
+        "source_e4_manifest_hash": TASK5B_SOURCE_E4_MANIFEST_HASH,
+        "source_e4_exact_head": TASK5B_EXACT_HEAD,
+        "source_e4_exact_tree": TASK5B_EXACT_TREE,
+    }
+
+
 def _validate_representative_artifact(raw: Any) -> tuple[dict[str, object], tuple[str, ...]]:
     if not isinstance(raw, dict):
         raise ValueError("representative evidence must be an object")
@@ -808,6 +1238,106 @@ def _representative_scale_probe(
     }
 
 
+def _formal_g4e8_state(
+    artifact_state: dict[str, object],
+    reattestation_comment_id: int | None,
+    *,
+    expected_head: str,
+    expected_tree: str,
+    authoritative_e4_ci_run_id: int | None,
+) -> dict[str, object]:
+    not_proven: dict[str, object] = {
+        "status": "NOT_PROVEN",
+        "representative_evidence_supplied": artifact_state.get("status") == "PASS",
+        "actual_representative_market_count": artifact_state.get(
+            "representative_market_count", 0
+        ),
+        "canonical_acceptance_comment_id": reattestation_comment_id,
+    }
+    if artifact_state.get("status") != "PASS":
+        return {**not_proven, "reason": str(artifact_state.get("reason"))}
+    candidate_path_raw = artifact_state.get("candidate_path")
+    if not isinstance(candidate_path_raw, str):
+        return {**not_proven, "reason": "TASK5B_CANDIDATE_PATH_MISSING"}
+    source_acceptance = _representative_scale_probe(
+        Path(candidate_path_raw),
+        TASK5B_CANONICAL_G4E8_ACCEPTANCE_COMMENT_ID,
+        expected_head=TASK5B_EXACT_HEAD,
+        expected_tree=TASK5B_EXACT_TREE,
+    )
+    if source_acceptance.get("status") != "PASS":
+        return {
+            **not_proven,
+            "reason": "TASK5B_CANONICAL_G4E8_ACCEPTANCE_NOT_PROVEN",
+        }
+    if reattestation_comment_id is None:
+        return {
+            **not_proven,
+            "reason": "NO_SAME_HEAD_CANONICAL_G4E8_REATTESTATION_SUPPLIED",
+        }
+    try:
+        readback = _fetch_canonical_g4e8_reattestation(reattestation_comment_id)
+    except (OSError, URLError, ValueError) as exc:
+        return {
+            **not_proven,
+            "reason": f"CANONICAL_G4E8_REATTESTATION_REJECTED:{type(exc).__name__}",
+        }
+    receipt = readback.receipt
+    required_ci = (
+        [f"{authoritative_e4_ci_run_id}:success"]
+        if authoritative_e4_ci_run_id is not None
+        else []
+    )
+    binding_matches = (
+        readback.authority is _CANONICAL_G4E8_REATTESTATION_AUTHORITY,
+        receipt["task_id"]
+        == "PILOT_TASK5C_FORMAL_G4_END_TO_END_CLOSURE_PHASE_A",
+        receipt["exact_implementation_head"] == expected_head,
+        receipt["exact_implementation_tree"] == expected_tree,
+        receipt["exact_reviewed_head"] == expected_head,
+        receipt["canonical_g4e8_acceptance_comment_id"]
+        == TASK5B_CANONICAL_G4E8_ACCEPTANCE_COMMENT_ID,
+        receipt["canonical_g4e8_acceptance_receipt_hash"]
+        == TASK5B_CANONICAL_G4E8_ACCEPTANCE_RECEIPT_HASH,
+        receipt["representative_source_run_id"] == TASK5B_RUN_ID,
+        receipt["representative_source_artifact_id"] == TASK5B_ARTIFACT_ID,
+        receipt["representative_artifact_hash"]
+        == TASK5B_REPRESENTATIVE_ARTIFACT_HASH,
+        receipt["representative_market_set_hash"]
+        == TASK5B_REPRESENTATIVE_MARKET_SET_HASH,
+        receipt["source_e4_manifest_hash"] == TASK5B_SOURCE_E4_MANIFEST_HASH,
+        receipt["required_ci_run_ids_and_conclusions"] == required_ci,
+    )
+    if not all(binding_matches):
+        return {
+            **not_proven,
+            "reason": "CANONICAL_G4E8_REATTESTATION_REJECTED:BINDING",
+        }
+    return {
+        **not_proven,
+        "status": "PASS",
+        "reason": None,
+        "canonical_acceptance_comment_id": readback.comment_id,
+        "canonical_acceptance_comment_url": readback.comment_url,
+        "canonical_acceptance_receipt_key": (
+            f"TASK5C_G4E8_SAME_HEAD_REATTESTATION|head={expected_head}|"
+            f"source_artifact={TASK5B_ARTIFACT_ID}"
+        ),
+        "canonical_acceptance_receipt_hash": receipt["reattestation_hash"],
+        "representative_artifact_hash": TASK5B_REPRESENTATIVE_ARTIFACT_HASH,
+        "representative_market_set_hash": TASK5B_REPRESENTATIVE_MARKET_SET_HASH,
+        "source_e4_manifest_hash": TASK5B_SOURCE_E4_MANIFEST_HASH,
+        "accepted_required_ci": required_ci,
+        "accepted_review_locator": receipt["fresh_independent_review_locator"],
+    }
+
+
+def _exact_formal_g4_acceptance(ladder: dict[str, str]) -> bool:
+    return set(ladder) == set(FORMAL_G4_GATE_KEYS) and all(
+        ladder[key] == "PASS" for key in FORMAL_G4_GATE_KEYS
+    )
+
+
 def _e4_probe_state(
     path: Path | None,
     *,
@@ -853,6 +1383,12 @@ def qualify(
     e4_probe_result: Path | None,
     canonical_t2_acceptance_comment_id: int | None = None,
     canonical_representative_acceptance_comment_id: int | None = None,
+    *,
+    formal_g4_finalize: bool = False,
+    task5b_artifact_root: Path | None = None,
+    github_token: str = "",
+    authoritative_e4_ci_run_id: int | None = None,
+    canonical_g4e8_reattestation_comment_id: int | None = None,
 ) -> dict[str, object]:
     from nautilus_trader.backtest import BacktestEngine
     from nautilus_trader.execution import ProbabilisticFillModel
@@ -887,17 +1423,48 @@ def qualify(
     git_tree = os.environ.get("G4_EXACT_TREE", "0" * 40)
     if len(git_sha) != 40 or len(git_tree) != 40:
         raise AssertionError("exact-head and exact-tree identity must be supplied by the harness")
-    scale = _representative_scale_probe(
-        representative_evidence,
-        canonical_representative_acceptance_comment_id,
-        expected_head=git_sha,
-        expected_tree=git_tree,
-    )
-    e4_probe = _e4_probe_state(
-        e4_probe_result,
-        expected_head=git_sha,
-        expected_tree=git_tree,
-    )
+    artifact_state: dict[str, object] = {
+        "status": "NOT_APPLICABLE",
+        "reason": "FORMAL_G4_FINALIZATION_NOT_REQUESTED",
+    }
+    if formal_g4_finalize:
+        artifact_state = _task5b_artifact_state(
+            task5b_artifact_root,
+            github_token=github_token,
+        )
+        authoritative_e4_ci = _authoritative_e4_ci_state(
+            authoritative_e4_ci_run_id,
+            expected_head=git_sha,
+            github_token=github_token,
+        )
+        scale = _formal_g4e8_state(
+            artifact_state,
+            canonical_g4e8_reattestation_comment_id,
+            expected_head=git_sha,
+            expected_tree=git_tree,
+            authoritative_e4_ci_run_id=authoritative_e4_ci_run_id,
+        )
+        e4_probe: dict[str, object] = {
+            "status": authoritative_e4_ci["status"],
+            "source_hash": None,
+        }
+    else:
+        authoritative_e4_ci = {
+            "status": "NOT_APPLICABLE",
+            "reason": "FORMAL_G4_FINALIZATION_NOT_REQUESTED",
+            "run_id": None,
+        }
+        scale = _representative_scale_probe(
+            representative_evidence,
+            canonical_representative_acceptance_comment_id,
+            expected_head=git_sha,
+            expected_tree=git_tree,
+        )
+        e4_probe = _e4_probe_state(
+            e4_probe_result,
+            expected_head=git_sha,
+            expected_tree=git_tree,
+        )
     manifest = G4RunManifest.create(
         run_id=f"formal-g4-control-{git_sha[:12]}",
         git_sha=git_sha,
@@ -933,9 +1500,19 @@ def qualify(
         "G4E7": causal_gates["G4E7"],
         "G4E8": str(scale["status"]),
     }
+    formal_g4_accepted = (
+        formal_g4_finalize
+        and _exact_formal_g4_acceptance(ladder)
+        and formal_g4_acceptance(ladder)
+    )
     return {
-        "schema_version": "VNEXT_FORMAL_G4_TECHNICAL_QUALIFICATION_RESULT_V2R2",
-        "status": "TECHNICAL_G4_PARTIAL",
+        "schema_version": "VNEXT_FORMAL_G4_TECHNICAL_QUALIFICATION_RESULT_V3",
+        "status": (
+            "FORMAL_G4_TECHNICAL_ACCEPTED"
+            if formal_g4_accepted
+            else "TECHNICAL_G4_PARTIAL"
+        ),
+        "formal_g4_finalization_mode": formal_g4_finalize,
         "nautilus_version": "2.0.0rc5",
         "exact_head": git_sha,
         "exact_tree": git_tree,
@@ -949,7 +1526,8 @@ def qualify(
         "g4e6_zero_write_live_path_composition": e4_probe["status"],
         "g4e7_reconnect_restart_nonregression": causal_gates["G4E7"],
         "g4e8_representative_scale_runtime": scale["status"],
-        "formal_g4_technical_acceptance": formal_g4_acceptance(ladder),
+        "formal_g4_ladder": ladder,
+        "formal_g4_technical_acceptance": formal_g4_accepted,
         "representative_scale_boundary": REPRESENTATIVE_MARKET_FLOOR,
         "representative_evidence_supplied": scale["representative_evidence_supplied"],
         "actual_representative_market_count": scale[
@@ -977,6 +1555,18 @@ def qualify(
         "g4e8_source_e4_manifest_hash": scale.get("source_e4_manifest_hash"),
         "g4e8_accepted_required_ci": scale.get("accepted_required_ci"),
         "g4e8_accepted_review_locator": scale.get("accepted_review_locator"),
+        "g4e6_authoritative_ci_reason": authoritative_e4_ci.get("reason"),
+        "g4e6_authoritative_ci_run_id": authoritative_e4_ci.get("run_id"),
+        "g4e6_authoritative_ci_run_attempt": authoritative_e4_ci.get("run_attempt"),
+        "g4e6_authoritative_ci_workflow_path": authoritative_e4_ci.get(
+            "workflow_path"
+        ),
+        "task5b_artifact_status": artifact_state.get("status"),
+        "task5b_artifact_reason": artifact_state.get("reason"),
+        "task5b_artifact_run_id": artifact_state.get("run_id"),
+        "task5b_artifact_id": artifact_state.get("artifact_id"),
+        "task5b_artifact_name": artifact_state.get("artifact_name"),
+        "task5b_artifact_digest": artifact_state.get("artifact_digest"),
         "t2_real_causal_artifact_supplied": t2_state["accepted"],
         "t2_absence_reason": t2_state["reason"],
         "t2_canonical_acceptance_comment_id": t2_state.get("comment_id"),
@@ -1023,12 +1613,23 @@ def main() -> None:
     parser.add_argument("--e4-probe-result", type=Path)
     parser.add_argument("--canonical-t2-acceptance-comment-id", type=int)
     parser.add_argument("--canonical-representative-acceptance-comment-id", type=int)
+    parser.add_argument("--formal-g4-finalize", action="store_true")
+    parser.add_argument("--task5b-artifact-root", type=Path)
+    parser.add_argument("--authoritative-e4-ci-run-id", type=int)
+    parser.add_argument("--canonical-g4e8-reattestation-comment-id", type=int)
     args = parser.parse_args()
     result = qualify(
         args.representative_evidence,
         args.e4_probe_result,
         args.canonical_t2_acceptance_comment_id,
         args.canonical_representative_acceptance_comment_id,
+        formal_g4_finalize=args.formal_g4_finalize,
+        task5b_artifact_root=args.task5b_artifact_root,
+        github_token=os.environ.get("GITHUB_TOKEN", ""),
+        authoritative_e4_ci_run_id=args.authoritative_e4_ci_run_id,
+        canonical_g4e8_reattestation_comment_id=(
+            args.canonical_g4e8_reattestation_comment_id
+        ),
     )
     args.result_path.parent.mkdir(parents=True, exist_ok=True)
     args.result_path.write_text(

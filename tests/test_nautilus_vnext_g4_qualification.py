@@ -172,10 +172,19 @@ def test_local_matching_receipt_or_expectation_cannot_mint_credit() -> None:
     "payload",
     (
         _envelope(_receipt(), author_association="COLLABORATOR"),
+        _envelope(_receipt(), user={"login": "not-the-repository-owner"}),
         _envelope(_receipt(reviewed_head="6" * 40)),
         _envelope(_receipt(ci=("run-1:failure",))),
         _envelope(_receipt(ci=("run-1:success", "run-1:success"))),
         _envelope(_receipt(), html_url="https://example.invalid/comment"),
+        _envelope(_receipt()).replace(
+            qualification.CANONICAL_REPOSITORY.encode(),
+            b"wrong-owner/wrong-repository",
+        ),
+        _envelope(_receipt()).replace(
+            qualification.CANONICAL_T2_READBACK_SCHEMA.encode(),
+            b"ROOTED_T2_CALLER_SUPPLIED_RECEIPT_V1",
+        ),
     ),
 )
 def test_noncanonical_or_cross_bound_readback_fails_closed(
