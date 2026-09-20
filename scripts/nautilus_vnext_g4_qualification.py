@@ -61,7 +61,15 @@ REPRESENTATIVE_MARKET_FLOOR = 20
 CANONICAL_REPOSITORY = "woshixiong/trader-assist-v0"
 CANONICAL_T2_READBACK_SCHEMA = "ROOTED_T2_CANONICAL_ACCEPTANCE_READBACK_V1"
 CANONICAL_T2_READBACK_HEADING = "## ROOTED-T2 CANONICAL ACCEPTANCE READBACK V1"
+CANONICAL_REPRESENTATIVE_READBACK_SCHEMA = (
+    "G4_REPRESENTATIVE_SCALE_CANONICAL_ACCEPTANCE_READBACK_V1"
+)
+CANONICAL_REPRESENTATIVE_READBACK_HEADING = (
+    "## G4 REPRESENTATIVE-SCALE CANONICAL ACCEPTANCE READBACK V1"
+)
+REPRESENTATIVE_ARTIFACT_SCHEMA = "G4_REPRESENTATIVE_SCALE_CANDIDATE_V1"
 _CANONICAL_T2_AUTHORITY = object()
+_CANONICAL_REPRESENTATIVE_AUTHORITY = object()
 
 
 @dataclass(frozen=True)
@@ -72,6 +80,16 @@ class _CanonicalT2AcceptanceReadback:
     comment_id: int
     comment_url: str
     receipt: AcceptedRealT2Receipt
+
+
+@dataclass(frozen=True)
+class _CanonicalRepresentativeAcceptanceReadback:
+    """Owner-authored representative-scale acceptance from the canonical repo."""
+
+    authority: object
+    comment_id: int
+    comment_url: str
+    receipt: dict[str, object]
 
 
 def _not_proven_causal_gates() -> dict[str, str]:
@@ -458,7 +476,266 @@ def _assert_sha256(value: object, *, field: str) -> str:
     return value
 
 
-def _representative_scale_probe(path: Path | None) -> dict[str, object]:
+def _assert_git_oid(value: object, *, field: str) -> str:
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{40}", value) is None:
+        raise ValueError(f"{field} must be a lowercase Git commit/tree OID")
+    return value
+
+
+def _parse_canonical_representative_readback(
+    raw_response: bytes,
+    *,
+    expected_comment_id: int,
+) -> _CanonicalRepresentativeAcceptanceReadback:
+    envelope: Any = json.loads(raw_response)
+    if not isinstance(envelope, dict):
+        raise ValueError("canonical representative GitHub response must be an object")
+    if envelope.get("id") != expected_comment_id:
+        raise ValueError("canonical representative comment identity mismatch")
+    expected_url = re.compile(
+        rf"https://github\.com/{re.escape(CANONICAL_REPOSITORY)}"
+        rf"/issues/[1-9][0-9]*#issuecomment-{expected_comment_id}"
+    )
+    comment_url = envelope.get("html_url")
+    if not isinstance(comment_url, str) or expected_url.fullmatch(comment_url) is None:
+        raise ValueError("canonical representative comment URL is outside the repository")
+    user = envelope.get("user")
+    if (
+        not isinstance(user, dict)
+        or user.get("login") != CANONICAL_REPOSITORY.split("/", maxsplit=1)[0]
+        or envelope.get("author_association") != "OWNER"
+    ):
+        raise ValueError("canonical representative readback is not owner authored")
+    body = envelope.get("body")
+    if not isinstance(body, str):
+        raise ValueError("canonical representative comment body must be text")
+    body_match = re.fullmatch(
+        re.escape(CANONICAL_REPRESENTATIVE_READBACK_HEADING)
+        + r"\n\n```json\n(?P<payload>\{.*\})\n```\n?",
+        body,
+        flags=re.DOTALL,
+    )
+    if body_match is None:
+        raise ValueError("canonical representative comment envelope is not exact")
+    payload: Any = json.loads(body_match.group("payload"))
+    if not isinstance(payload, dict) or set(payload) != {
+        "acceptance",
+        "repository",
+        "schema_version",
+    }:
+        raise ValueError("canonical representative payload fields are not exact")
+    if payload.get("schema_version") != CANONICAL_REPRESENTATIVE_READBACK_SCHEMA:
+        raise ValueError("canonical representative readback schema is not accepted")
+    if payload.get("repository") != CANONICAL_REPOSITORY:
+        raise ValueError("canonical representative readback repository mismatch")
+    receipt = payload.get("acceptance")
+    receipt_fields = {
+        "acceptance_claim",
+        "canonical_acceptance_receipt_key",
+        "exact_implementation_head",
+        "exact_implementation_tree",
+        "exact_reviewed_head",
+        "fresh_independent_review_locator",
+        "fresh_independent_review_result_key",
+        "fresh_independent_review_verdict",
+        "receipt_hash",
+        "representative_artifact_hash",
+        "representative_market_count",
+        "representative_market_set_hash",
+        "required_ci_run_ids_and_conclusions",
+        "source_e4_exact_head",
+        "source_e4_exact_tree",
+        "source_e4_manifest_hash",
+        "task_id",
+    }
+    if not isinstance(receipt, dict) or set(receipt) != receipt_fields:
+        raise ValueError("canonical representative acceptance fields are not exact")
+    if receipt.get("acceptance_claim") != "ACCEPTED":
+        raise ValueError("canonical representative acceptance claim is not accepted")
+    task_id = receipt.get("task_id")
+    if not isinstance(task_id, str) or not task_id:
+        raise ValueError("canonical representative acceptance task identity is missing")
+    for field in (
+        "representative_artifact_hash",
+        "source_e4_manifest_hash",
+        "representative_market_set_hash",
+        "receipt_hash",
+    ):
+        _assert_sha256(receipt.get(field), field=field)
+    for field in (
+        "source_e4_exact_head",
+        "source_e4_exact_tree",
+        "exact_implementation_head",
+        "exact_implementation_tree",
+        "exact_reviewed_head",
+    ):
+        _assert_git_oid(receipt.get(field), field=field)
+    market_count = receipt.get("representative_market_count")
+    if type(market_count) is not int or market_count < REPRESENTATIVE_MARKET_FLOOR:
+        raise ValueError("canonical representative market count is below the floor")
+    ci_results = receipt.get("required_ci_run_ids_and_conclusions")
+    if not isinstance(ci_results, list) or not ci_results:
+        raise ValueError("canonical representative required CI is missing")
+    ci_bindings = tuple(
+        result.rpartition(":") for result in ci_results if isinstance(result, str)
+    )
+    if (
+        len(ci_bindings) != len(ci_results)
+        or len(ci_results) != len(set(ci_results))
+        or any(not run_id or separator != ":" for run_id, separator, _ in ci_bindings)
+        or any(conclusion.lower() != "success" for _, _, conclusion in ci_bindings)
+    ):
+        raise ValueError("canonical representative required CI is not uniquely successful")
+    if receipt.get("fresh_independent_review_verdict") != "PASS":
+        raise ValueError("canonical representative independent review did not pass")
+    review_result_key = receipt.get("fresh_independent_review_result_key")
+    if not isinstance(review_result_key, str) or not review_result_key:
+        raise ValueError("canonical representative review result key is missing")
+    review_locator = receipt.get("fresh_independent_review_locator")
+    accepted_locator = re.compile(
+        rf"https://github\.com/{re.escape(CANONICAL_REPOSITORY)}"
+        r"/issues/[1-9][0-9]*#issuecomment-[1-9][0-9]*"
+    )
+    if not isinstance(review_locator, str) or accepted_locator.fullmatch(review_locator) is None:
+        raise ValueError("canonical representative review locator is outside the repository")
+    receipt_key = receipt.get("canonical_acceptance_receipt_key")
+    if not isinstance(receipt_key, str) or not receipt_key:
+        raise ValueError("canonical representative receipt key is missing")
+    if receipt["exact_reviewed_head"] != receipt["exact_implementation_head"]:
+        raise ValueError("canonical representative review does not bind implementation head")
+    receipt_identity = {key: value for key, value in receipt.items() if key != "receipt_hash"}
+    if sha256_hex(canonical_json_bytes(receipt_identity)) != receipt["receipt_hash"]:
+        raise ValueError("canonical representative receipt hash does not bind its contents")
+    return _CanonicalRepresentativeAcceptanceReadback(
+        authority=_CANONICAL_REPRESENTATIVE_AUTHORITY,
+        comment_id=expected_comment_id,
+        comment_url=comment_url,
+        receipt=receipt,
+    )
+
+
+def _fetch_canonical_representative_readback(
+    comment_id: object,
+) -> _CanonicalRepresentativeAcceptanceReadback:
+    if type(comment_id) is not int or comment_id <= 0:
+        raise ValueError("canonical representative acceptance requires a positive comment ID")
+    api_url = (
+        f"https://api.github.com/repos/{CANONICAL_REPOSITORY}/issues/comments/"
+        f"{comment_id}"
+    )
+    request = Request(
+        api_url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "trader-assist-vnext-g4-qualification",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    with urlopen(request, timeout=10.0) as response:
+        if response.geturl() != api_url:
+            raise ValueError("canonical representative GitHub endpoint redirected")
+        raw_response = response.read()
+    return _parse_canonical_representative_readback(
+        raw_response,
+        expected_comment_id=comment_id,
+    )
+
+
+def _validate_representative_artifact(raw: Any) -> tuple[dict[str, object], tuple[str, ...]]:
+    if not isinstance(raw, dict):
+        raise ValueError("representative evidence must be an object")
+    if raw.get("synthetic") is not False or raw.get("manual_substitution") is not False:
+        raise ValueError("synthetic/manual evidence cannot count for G4E8")
+    expected_fields = {
+        "artifact_hash",
+        "candidate_only",
+        "canonical_acceptance_required",
+        "evidence_tier",
+        "manual_substitution",
+        "markets",
+        "public_data_only",
+        "repository",
+        "representative_market_count",
+        "representative_market_set_hash",
+        "schema_version",
+        "source_artifact_hashes",
+        "source_e4_exact_head",
+        "source_e4_exact_tree",
+        "source_e4_manifest_hash",
+        "source_e4_snapshot_hash",
+        "synthetic",
+        "unique_retained_event_identity_count",
+        "zero_credentials",
+        "zero_exchange_write",
+        "zero_execution_client",
+        "zero_signing",
+    }
+    if set(raw) != expected_fields:
+        raise ValueError("representative evidence fields are not exact")
+    artifact_hash = _assert_sha256(raw.get("artifact_hash"), field="artifact_hash")
+    identity = {key: value for key, value in raw.items() if key != "artifact_hash"}
+    if sha256_hex(canonical_json_bytes(identity)) != artifact_hash:
+        raise ValueError("representative evidence artifact hash does not bind its contents")
+    required_identity = (
+        raw.get("schema_version") == REPRESENTATIVE_ARTIFACT_SCHEMA,
+        raw.get("repository") == CANONICAL_REPOSITORY,
+        raw.get("candidate_only") is True,
+        raw.get("canonical_acceptance_required") is True,
+        raw.get("evidence_tier")
+        == "E4_PUBLIC_PROVIDER_REPRESENTATIVE_SCALE_CANDIDATE",
+        raw.get("synthetic") is False,
+        raw.get("manual_substitution") is False,
+        raw.get("public_data_only") is True,
+        raw.get("zero_credentials") is True,
+        raw.get("zero_execution_client") is True,
+        raw.get("zero_signing") is True,
+        raw.get("zero_exchange_write") is True,
+    )
+    if not all(required_identity):
+        raise ValueError("representative evidence violates the public candidate boundary")
+    source_manifest_hash = _assert_sha256(
+        raw.get("source_e4_manifest_hash"), field="source_e4_manifest_hash"
+    )
+    _assert_sha256(raw.get("source_e4_snapshot_hash"), field="source_e4_snapshot_hash")
+    _assert_git_oid(raw.get("source_e4_exact_head"), field="source_e4_exact_head")
+    _assert_git_oid(raw.get("source_e4_exact_tree"), field="source_e4_exact_tree")
+    source_artifact_hashes = raw.get("source_artifact_hashes")
+    if not isinstance(source_artifact_hashes, dict) or not source_artifact_hashes:
+        raise ValueError("representative evidence source artifact hashes are missing")
+    for name, digest in source_artifact_hashes.items():
+        if not isinstance(name, str) or not name:
+            raise ValueError("representative evidence source artifact name is invalid")
+        _assert_sha256(digest, field=f"source_artifact_hashes[{name}]")
+    records_raw = raw.get("markets")
+    if not isinstance(records_raw, list):
+        raise ValueError("representative evidence requires source-bound market records")
+    records = tuple(RepresentativeMarketEvidence.model_validate(item) for item in records_raw)
+    if any(item.source_e4_manifest_hash != source_manifest_hash for item in records):
+        raise ValueError("representative market record source manifest mismatch")
+    if any(item.event_count != len(item.source_event_hashes) for item in records):
+        raise ValueError("representative market event count is not source-identity bound")
+    markets = assert_actual_representative_scale(records)
+    market_set_hash = _assert_sha256(
+        raw.get("representative_market_set_hash"),
+        field="representative_market_set_hash",
+    )
+    if sha256_hex(canonical_json_bytes(list(markets))) != market_set_hash:
+        raise ValueError("representative market-set hash does not bind the market set")
+    if raw.get("representative_market_count") != len(markets):
+        raise ValueError("representative market count does not bind the market set")
+    event_count = sum(len(item.source_event_hashes) for item in records)
+    if raw.get("unique_retained_event_identity_count") != event_count:
+        raise ValueError("representative retained-event count does not bind identities")
+    return raw, markets
+
+
+def _representative_scale_probe(
+    path: Path | None,
+    canonical_acceptance_comment_id: int | None = None,
+    *,
+    expected_head: str = "0" * 40,
+    expected_tree: str = "0" * 40,
+) -> dict[str, object]:
     if path is None:
         return {
             "status": "NOT_PROVEN",
@@ -467,26 +744,67 @@ def _representative_scale_probe(path: Path | None) -> dict[str, object]:
             "reason": "NO_ACCEPTED_T2_REPRESENTATIVE_EVIDENCE_SUPPLIED",
         }
     raw: Any = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
-        raise ValueError("representative evidence must be an object")
-    artifact_hash = _assert_sha256(raw.get("artifact_hash"), field="artifact_hash")
-    identity = {key: value for key, value in raw.items() if key != "artifact_hash"}
-    if sha256_hex(canonical_json_bytes(identity)) != artifact_hash:
-        raise ValueError("representative evidence artifact hash does not bind its contents")
-    if raw.get("evidence_tier") != "T2_REAL_CAUSAL_G4_ARTIFACT":
-        raise ValueError("representative evidence must be accepted T2 causal evidence")
-    if raw.get("synthetic") is not False or raw.get("manual_substitution") is not False:
-        raise ValueError("synthetic/manual evidence cannot count for G4E8")
-    records_raw = raw.get("markets")
-    if not isinstance(records_raw, list):
-        raise ValueError("representative evidence requires source-bound market records")
-    records = tuple(RepresentativeMarketEvidence.model_validate(item) for item in records_raw)
-    markets = assert_actual_representative_scale(records)
+    artifact, markets = _validate_representative_artifact(raw)
+    not_proven = {
+        "status": "NOT_PROVEN",
+        "representative_evidence_supplied": True,
+        "actual_representative_market_count": len(markets),
+        "canonical_acceptance_comment_id": canonical_acceptance_comment_id,
+    }
+    if canonical_acceptance_comment_id is None:
+        return {
+            **not_proven,
+            "reason": "NO_CANONICAL_REPRESENTATIVE_ACCEPTANCE_READBACK_SUPPLIED",
+        }
+    try:
+        readback = _fetch_canonical_representative_readback(
+            canonical_acceptance_comment_id
+        )
+    except (OSError, URLError, ValueError) as exc:
+        return {
+            **not_proven,
+            "reason": (
+                "CANONICAL_REPRESENTATIVE_READBACK_REJECTED:"
+                f"{type(exc).__name__}"
+            ),
+        }
+    receipt = readback.receipt
+    binding_matches = (
+        readback.authority is _CANONICAL_REPRESENTATIVE_AUTHORITY,
+        receipt["representative_artifact_hash"] == artifact["artifact_hash"],
+        receipt["source_e4_manifest_hash"] == artifact["source_e4_manifest_hash"],
+        receipt["source_e4_exact_head"] == artifact["source_e4_exact_head"],
+        receipt["source_e4_exact_tree"] == artifact["source_e4_exact_tree"],
+        receipt["representative_market_set_hash"]
+        == artifact["representative_market_set_hash"],
+        receipt["representative_market_count"]
+        == artifact["representative_market_count"],
+        receipt["exact_implementation_head"] == expected_head,
+        receipt["exact_implementation_tree"] == expected_tree,
+    )
+    if not all(binding_matches):
+        return {
+            **not_proven,
+            "reason": "CANONICAL_REPRESENTATIVE_READBACK_REJECTED:BINDING",
+        }
     return {
         "status": "PASS",
         "representative_evidence_supplied": True,
         "actual_representative_market_count": len(markets),
         "reason": None,
+        "canonical_acceptance_comment_id": readback.comment_id,
+        "canonical_acceptance_comment_url": readback.comment_url,
+        "canonical_acceptance_receipt_key": receipt[
+            "canonical_acceptance_receipt_key"
+        ],
+        "canonical_acceptance_receipt_hash": receipt["receipt_hash"],
+        "representative_artifact_hash": artifact["artifact_hash"],
+        "representative_market_set_hash": artifact[
+            "representative_market_set_hash"
+        ],
+        "source_e4_manifest_hash": artifact["source_e4_manifest_hash"],
+        "accepted_required_ci": receipt["required_ci_run_ids_and_conclusions"],
+        "accepted_review_locator": receipt["fresh_independent_review_locator"],
     }
 
 
@@ -534,6 +852,7 @@ def qualify(
     representative_evidence: Path | None,
     e4_probe_result: Path | None,
     canonical_t2_acceptance_comment_id: int | None = None,
+    canonical_representative_acceptance_comment_id: int | None = None,
 ) -> dict[str, object]:
     from nautilus_trader.backtest import BacktestEngine
     from nautilus_trader.execution import ProbabilisticFillModel
@@ -564,12 +883,16 @@ def qualify(
     serializer = _t0_serializer_probe()
     with TemporaryDirectory(prefix="trade-os-formal-g4-") as directory:
         provider = _controlled_backtest_node_probe(Path(directory))
-    scale = _representative_scale_probe(representative_evidence)
-
     git_sha = os.environ.get("G4_EXACT_HEAD", "0" * 40)
     git_tree = os.environ.get("G4_EXACT_TREE", "0" * 40)
     if len(git_sha) != 40 or len(git_tree) != 40:
         raise AssertionError("exact-head and exact-tree identity must be supplied by the harness")
+    scale = _representative_scale_probe(
+        representative_evidence,
+        canonical_representative_acceptance_comment_id,
+        expected_head=git_sha,
+        expected_tree=git_tree,
+    )
     e4_probe = _e4_probe_state(
         e4_probe_result,
         expected_head=git_sha,
@@ -633,6 +956,27 @@ def qualify(
             "actual_representative_market_count"
         ],
         "g4e8_reason": scale["reason"],
+        "g4e8_canonical_acceptance_comment_id": scale.get(
+            "canonical_acceptance_comment_id"
+        ),
+        "g4e8_canonical_acceptance_comment_url": scale.get(
+            "canonical_acceptance_comment_url"
+        ),
+        "g4e8_canonical_acceptance_receipt_key": scale.get(
+            "canonical_acceptance_receipt_key"
+        ),
+        "g4e8_canonical_acceptance_receipt_hash": scale.get(
+            "canonical_acceptance_receipt_hash"
+        ),
+        "g4e8_representative_artifact_hash": scale.get(
+            "representative_artifact_hash"
+        ),
+        "g4e8_representative_market_set_hash": scale.get(
+            "representative_market_set_hash"
+        ),
+        "g4e8_source_e4_manifest_hash": scale.get("source_e4_manifest_hash"),
+        "g4e8_accepted_required_ci": scale.get("accepted_required_ci"),
+        "g4e8_accepted_review_locator": scale.get("accepted_review_locator"),
         "t2_real_causal_artifact_supplied": t2_state["accepted"],
         "t2_absence_reason": t2_state["reason"],
         "t2_canonical_acceptance_comment_id": t2_state.get("comment_id"),
@@ -678,11 +1022,13 @@ def main() -> None:
     parser.add_argument("--representative-evidence", type=Path)
     parser.add_argument("--e4-probe-result", type=Path)
     parser.add_argument("--canonical-t2-acceptance-comment-id", type=int)
+    parser.add_argument("--canonical-representative-acceptance-comment-id", type=int)
     args = parser.parse_args()
     result = qualify(
         args.representative_evidence,
         args.e4_probe_result,
         args.canonical_t2_acceptance_comment_id,
+        args.canonical_representative_acceptance_comment_id,
     )
     args.result_path.parent.mkdir(parents=True, exist_ok=True)
     args.result_path.write_text(
