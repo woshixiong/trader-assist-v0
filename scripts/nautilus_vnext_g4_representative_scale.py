@@ -53,6 +53,14 @@ def build_representative_scale_candidate(
         expression = expressions.get(event.source.market_id)
         if expression is None:
             raise ValueError("retained E4 event is outside the bound PIT snapshot")
+        if event.process_epoch != manifest.process_epoch:
+            raise ValueError("retained E4 event process epoch contradicts the manifest")
+        if event.continuity_epoch != manifest.continuity_epoch:
+            raise ValueError("retained E4 event continuity epoch contradicts the manifest")
+        if event.admission_epoch != manifest.admission_epoch:
+            raise ValueError("retained E4 event admission epoch contradicts the manifest")
+        if event.source.expression_id != expression.expression_id:
+            raise ValueError("retained E4 event expression contradicts the PIT snapshot")
         if event.source.instrument_id != expression.instrument_id:
             raise ValueError("retained E4 event instrument contradicts the PIT snapshot")
         if event.continuity_state is not EvidenceState.COMPLETE:

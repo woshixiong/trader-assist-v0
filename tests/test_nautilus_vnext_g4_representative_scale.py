@@ -139,6 +139,15 @@ def _artifact(market_count: int = 20) -> dict[str, object]:
     )
 
 
+def _replace_admission(
+    admission: AdmittedEvent,
+    **changes: object,
+) -> AdmittedEvent:
+    values = admission.model_dump(mode="python", exclude={"admission_hash"})
+    values.update(changes)
+    return AdmittedEvent.create(**values)
+
+
 def _write_artifact(tmp_path: Path, artifact: dict[str, object]) -> Path:
     path = tmp_path / "representative-scale-candidate.json"
     path.write_bytes(canonical_json_bytes(artifact) + b"\n")
@@ -231,6 +240,52 @@ def test_candidate_requires_twenty_actual_unique_source_bound_markets() -> None:
     ) == 20
     with pytest.raises(ValueError, match="at least 20"):
         _artifact(19)
+
+
+@pytest.mark.parametrize(
+    ("field", "message"),
+    (
+        ("process_epoch", "process epoch"),
+        ("continuity_epoch", "continuity epoch"),
+        ("admission_epoch", "admission epoch"),
+    ),
+)
+def test_candidate_rejects_admissions_from_another_e4_run(
+    field: str,
+    message: str,
+) -> None:
+    manifest, snapshot, admissions = _source_fixture()
+    cross_run = _replace_admission(admissions[0], **{field: f"other-{field}"})
+    with pytest.raises(ValueError, match=message):
+        build_representative_scale_candidate(
+            manifest=manifest,
+            snapshot=snapshot,
+            admissions=(cross_run, *admissions[1:]),
+            source_artifact_hashes={"causal-admission-columns.jsonl": "a" * 64},
+        )
+
+
+def test_candidate_rejects_source_expression_outside_bound_snapshot() -> None:
+    manifest, snapshot, admissions = _source_fixture()
+    original = admissions[0]
+    source_values = original.source.model_dump(
+        mode="python",
+        exclude={"payload_hash"},
+    )
+    source_values["expression_id"] = "expr-from-another-run"
+    mismatched_source = SourceEvent.create(**source_values)
+    mismatch = _replace_admission(
+        original,
+        source=mismatched_source,
+        source_identity=mismatched_source.replay_identity,
+    )
+    with pytest.raises(ValueError, match="expression"):
+        build_representative_scale_candidate(
+            manifest=manifest,
+            snapshot=snapshot,
+            admissions=(mismatch, *admissions[1:]),
+            source_artifact_hashes={"causal-admission-columns.jsonl": "a" * 64},
+        )
 
 
 def test_valid_self_hash_without_canonical_readback_cannot_promote(
