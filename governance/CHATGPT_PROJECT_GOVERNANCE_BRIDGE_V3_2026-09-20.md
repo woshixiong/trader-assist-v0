@@ -33,6 +33,9 @@ TOOL CONTEXT:
 - Exact item endpoint before collection endpoint when available.
 - Project/filter provider results to decision-required fields before model ingestion when supported.
 - Broad Issue-comment arrays, full PR histories, raw directory dumps, raw long logs and known-large full-file reads are prohibited by default.
+- Context economy removes duplicate/raw/unchanged accepted evidence only; it never narrows materially required proof.
+- Material Writer/Review work must preserve a risk-adaptive Impact Envelope covering changed human-written code, affected interfaces/contracts, safety/authority boundaries, acceptance criteria, decisive tests/CI and concrete transitive dependencies needed for correctness.
+- Any unresolved material unknown prohibits PASS and triggers targeted expansion.
 
 CONTROL ROLES:
 - Engineering Control + Governance Control use one ordinary control context by default when bound to the same live Control Capsule/governance epoch.
