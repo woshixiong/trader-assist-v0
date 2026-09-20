@@ -55,6 +55,8 @@ def _run_payload(
     head: str,
     *,
     event: str,
+    workflow_name: str = qualification.CANONICAL_G4_WORKFLOW_NAME,
+    workflow_path: str = qualification.CANONICAL_G4_WORKFLOW_PATH,
     **changes: object,
 ) -> dict[str, object]:
     payload: dict[str, object] = {
@@ -64,8 +66,8 @@ def _run_payload(
             "id": 1290262291,
             "full_name": qualification.CANONICAL_REPOSITORY,
         },
-        "name": qualification.CANONICAL_G4_WORKFLOW_NAME,
-        "path": qualification.CANONICAL_G4_WORKFLOW_PATH,
+        "name": workflow_name,
+        "path": workflow_path,
         "event": event,
         "head_sha": head,
         "status": "completed",
@@ -281,6 +283,7 @@ def _reattestation_envelope(
     (
         (None, {}, "NOT_PROVEN"),
         (E4_CI_RUN_ID, {"repository": {"full_name": "wrong/repo"}}, "NOT_PROVEN"),
+        (E4_CI_RUN_ID, {"name": "Wrong E4 Capture CI"}, "NOT_PROVEN"),
         (E4_CI_RUN_ID, {"path": ".github/workflows/wrong.yml"}, "NOT_PROVEN"),
         (E4_CI_RUN_ID, {"head_sha": "9" * 40}, "NOT_PROVEN"),
         (E4_CI_RUN_ID, {"status": "in_progress", "conclusion": None}, "NOT_PROVEN"),
@@ -296,7 +299,14 @@ def test_g4e6_requires_exact_authoritative_success(
     expected: str,
 ) -> None:
     if run_id is not None:
-        run = _run_payload(E4_CI_RUN_ID, HEAD, event="pull_request", **changes)
+        run = _run_payload(
+            E4_CI_RUN_ID,
+            HEAD,
+            event="pull_request",
+            workflow_name=qualification.CANONICAL_E4_WORKFLOW_NAME,
+            workflow_path=qualification.CANONICAL_E4_WORKFLOW_PATH,
+            **changes,
+        )
         _install_json_responses(
             monkeypatch,
             {
@@ -312,6 +322,27 @@ def test_g4e6_requires_exact_authoritative_success(
         github_token="workflow-token",
     )
     assert state["status"] == expected
+
+
+def test_same_head_successful_g4_workflow_cannot_mint_g4e6(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = _run_payload(E4_CI_RUN_ID, HEAD, event="pull_request")
+    _install_json_responses(
+        monkeypatch,
+        {
+            (
+                "https://api.github.com/repos/woshixiong/"
+                f"trader-assist-v0/actions/runs/{E4_CI_RUN_ID}"
+            ): run
+        },
+    )
+    state = qualification._authoritative_e4_ci_state(
+        E4_CI_RUN_ID,
+        expected_head=HEAD,
+        github_token="workflow-token",
+    )
+    assert state["status"] == "NOT_PROVEN"
 
 
 def test_local_g4e6_pass_value_cannot_mint_credit() -> None:

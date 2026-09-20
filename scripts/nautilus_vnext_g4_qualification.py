@@ -70,6 +70,8 @@ CANONICAL_REPRESENTATIVE_READBACK_HEADING = (
 )
 REPRESENTATIVE_ARTIFACT_SCHEMA = "G4_REPRESENTATIVE_SCALE_CANDIDATE_V1"
 FORMAL_G4_GATE_KEYS = tuple(f"G4E{ordinal}" for ordinal in range(9))
+CANONICAL_E4_WORKFLOW_PATH = ".github/workflows/nautilus-e4-ci.yml"
+CANONICAL_E4_WORKFLOW_NAME = "Nautilus E4 Capture CI"
 CANONICAL_G4_WORKFLOW_PATH = ".github/workflows/nautilus-vnext-g4-ci.yml"
 CANONICAL_G4_WORKFLOW_NAME = "Nautilus VNext G4 CI"
 CANONICAL_G4E8_REATTESTATION_SCHEMA = (
@@ -892,8 +894,8 @@ def _authoritative_e4_ci_state(
         isinstance(repository, dict),
         isinstance(repository, dict)
         and repository.get("full_name") == CANONICAL_REPOSITORY,
-        run.get("name") == CANONICAL_G4_WORKFLOW_NAME,
-        run.get("path") == CANONICAL_G4_WORKFLOW_PATH,
+        run.get("name") == CANONICAL_E4_WORKFLOW_NAME,
+        run.get("path") == CANONICAL_E4_WORKFLOW_PATH,
         run.get("event") == "pull_request",
         run.get("head_sha") == expected_head,
         run.get("status") == "completed",
@@ -907,7 +909,7 @@ def _authoritative_e4_ci_state(
         "run_id": run_id,
         "run_attempt": run.get("run_attempt"),
         "repository": CANONICAL_REPOSITORY,
-        "workflow_path": CANONICAL_G4_WORKFLOW_PATH,
+        "workflow_path": CANONICAL_E4_WORKFLOW_PATH,
         "head_sha": expected_head,
         "conclusion": "success",
     }
