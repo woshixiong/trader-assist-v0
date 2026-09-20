@@ -503,6 +503,35 @@ Use `NOT_APPLICABLE` only when the change is genuinely scale-neutral.
 
 ---
 
+## 5A. Quality-preserving context / Impact Envelope
+
+For every material Writer dispatch and authority-bearing independent Review:
+
+```text
+IMPACT_ENVELOPE_STATUS=PASS|FAIL
+EXACT_CHANGED_PATHS_BOUND=YES|NO
+CHANGED_HUMAN_WRITTEN_LINES_COVERED=YES|NO|NOT_APPLICABLE
+AFFECTED_INTERFACES_CONTRACTS_IDENTIFIED=YES|NO|NOT_APPLICABLE
+MATERIAL_TRANSITIVE_CONSUMERS_IDENTIFIED=YES|NO|NOT_APPLICABLE
+SAFETY_AUTHORITY_BOUNDARIES_IDENTIFIED=YES|NO|NOT_APPLICABLE
+ACCEPTANCE_CLAIM_TO_PROOF_MAP=PASS|FAIL
+KNOWN_PROOF_GAPS=
+UNRESOLVED_MATERIAL_UNKNOWNS=NONE|PRESENT
+RISK_ADAPTIVE_EXPANSION_APPLIED=YES|NO|NOT_APPLICABLE
+```
+
+Hard gate:
+
+```text
+IMPACT_ENVELOPE_STATUS != PASS
+OR ACCEPTANCE_CLAIM_TO_PROOF_MAP != PASS
+OR UNRESOLVED_MATERIAL_UNKNOWNS != NONE
+=> ENGINEERING_PREFLIGHT_GATE=FAIL
+=> REVIEW_PASS=PROHIBITED
+```
+
+Context economy may remove duplicate/raw/unchanged accepted evidence only. It may not remove evidence required by the Impact Envelope. High-risk boundary changes widen targeted retrieval automatically; token/context economy is never authority to narrow the proof surface.
+
 ## 6. Verification and validation-environment plan
 
 ```text
