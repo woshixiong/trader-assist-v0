@@ -190,6 +190,8 @@ The handoff is a compact Review Manifest, not an Engineering-Control conclusion 
 
 If exact GitHub artifacts + exact-head CI are sufficient, the fresh Reviewer reads them directly through the accepted canonical surface. Default reviewer loading is delta/targeted: exact target -> exact diff -> acceptance contract -> decisive CI/artifact -> only necessary upstream/canonical history. Full Issue/PR history and full governance reload are prohibited by default.
 
+Reviewer execution should be one-pass and checkpointed. The Reviewer does not perform broad discovery before reading the compact Review Manifest, does not repeatedly reread unchanged artifacts, and does not ingest raw long CI logs when a focused failed step/error excerpt is sufficient. Routine "continue" prompts from the user are not part of the review protocol: if interruption occurs, resume from the exact review checkpoint/result key and remaining acceptance questions rather than restarting review discovery.
+
 If local evidence is required, prefer deterministic evidence generation -> hash-manifested review bundle -> exact delivery to the fresh independent Reviewer. Use `.agents/skills/trade-os-independent-review-bundle` when applicable.
 
 Writer self-review, Supervisor self-review and Engineering-Control self-review never become independent acceptance. A provider-native Reviewer Agent is authority-bearing only when its accepted route enforces fresh context, read-only review authority, direct exact-canonical-evidence access, no inheritance of prior PASS conclusions as facts, and idempotent result egress through an accepted direct or lossless transport surface.
