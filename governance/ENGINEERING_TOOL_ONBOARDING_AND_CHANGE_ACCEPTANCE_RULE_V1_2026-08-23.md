@@ -7,18 +7,56 @@ This rule governs the admission and material reconfiguration of coding executors
 
 ## 1. Permanent rule
 
+Default admission:
+
 ```text
 NEW_ENGINEERING_TOOL_OR_MATERIAL_TOOL_CONFIG
--> BOUNDED CANDIDATE
--> EXACT ARTIFACT / CONFIG IDENTITY
--> REPRESENTATIVE CAPABILITY / SAFETY EVIDENCE
--> SEPARATE INDEPENDENT CHATGPT REVIEW
+-> BOUNDED_CANDIDATE
+-> EXACT_ARTIFACT_OR_CONFIG_IDENTITY
+-> REPRESENTATIVE_CAPABILITY_AND_SAFETY_EVIDENCE
+-> FRESH_INDEPENDENT_REVIEW
 -> PASS
--> USER PUBLICATION / ACTIVATION AUTHORITY
--> FIRST REAL TASK
+-> USER_PUBLICATION_OR_ACTIVATION_AUTHORITY
+-> ACCEPTED_REAL_TASK
 ```
 
 A tool being installed, free, popular, provider-supported or technically functional does not make it accepted project infrastructure.
+
+### 1.0.1 Pilot-only qualification canary
+
+A separate synthetic smoke is **not mandatory** when it is materially lower-value than proving the same behavior in one bounded real task. Before full acceptance, Engineering Control may freeze exactly one `PILOT_ONLY_QUALIFICATION_CANARY` only when all of the following are true:
+
+```text
+EXACT_CANDIDATE_CONFIG_OR_ARTIFACT_IDENTITY=KNOWN
+PROVIDER_NATIVE_OR_MATURE_ROUTE=YES
+SEPARATE_SMOKE_DECISION_VALUE=LOWER_THAN_BOUNDED_REAL_CANARY
+CANARY_TASK=REVERSIBLE_NONPRODUCTION_ENGINEERING_TASK
+ISOLATED_WORKTREE_OR_EQUIVALENT=REQUIRED
+EXACT_TASK_PACKET=REQUIRED
+EXACT_MUTATION_ALLOWLIST=REQUIRED
+ONE_PRIMARY_WRITER=REQUIRED
+CHECKPOINT_AND_RESUME_IDENTITY=REQUIRED
+NO_SILENT_FALLBACK=YES
+NO_HIDDEN_SEMANTIC_RETRY=YES
+FAIL_CLOSED_ON_TOOL_IDENTITY_PERMISSION_REVIEW_INDEPENDENCE_OR_RECOVERY_MISMATCH=YES
+MARK_READY=NO
+MERGE=NO
+DEPLOYMENT_OR_RUNTIME_MUTATION=NO
+CREDENTIAL_OR_PRIVATE_API=NO
+EXCHANGE_OR_TRADING=NO
+CURRENT_EXPLICIT_USER_PILOT_ACTIVATION=REQUIRED
+```
+
+The canary may create only the bounded development artifacts explicitly frozen in its packet, including a task branch / commit / Draft PR when required to prove the real publication path. It remains **qualification evidence**, not accepted infrastructure.
+
+```text
+CANARY_COMPLETE
+-> FREEZE_EXACT_REPRESENTATIVE_EVIDENCE
+-> FRESH_INDEPENDENT_TOOL_ACCEPTANCE_REVIEW
+-> ACCEPT | REJECT | REPLAN
+```
+
+A canary failure or ambiguity never authorizes another canary by default. Preserve the exact checkpoint/result and return to L1. A second canary requires a new material reason and explicit current user authority.
 
 ### 1.1 Mandatory pre-admission mature-solution / build-vs-buy gate
 
@@ -143,7 +181,7 @@ This invariant applies to Codex, OpenCode and future model-backed executors/oper
 
 ## 2. What requires independent acceptance
 
-Independent acceptance is required before first project use when adding a new:
+Full independent acceptance is required before accepted routine project use when adding a new. The sole pre-acceptance exception is the bounded `PILOT_ONLY_QUALIFICATION_CANARY` in §1.0.1:
 
 - L2 semantic coding executor/harness;
 - L3 operator/orchestrator such as Hermes;
@@ -169,16 +207,19 @@ A narrow refresh of a current-model snapshot that does not change durable workfl
 When exact GitHub/config artifacts and CI/evidence are sufficient:
 
 ```text
-REVIEWER_SURFACE = SEPARATE_ORDINARY_CHATGPT_WINDOW
-MODEL = STRONGEST_APPROPRIATE_AVAILABLE_MODEL
+REVIEWER_SURFACE = STRONGEST_APPROPRIATE_ACCEPTED_FRESH_INDEPENDENT_REVIEW_SURFACE
+REVIEWER_CONTEXT = FRESH_AND_SEPARATE_FROM_CONTROL_AND_IMPLEMENTATION
+REVIEWER_PERMISSION = READ_ONLY
+ORDINARY_CHATGPT_NEW_WINDOW = ACCEPTED_FALLBACK
+PROVIDER_NATIVE_REVIEWER_AGENT = ALLOWED_AFTER_INDEPENDENT_ACCEPTANCE
 REASONING = HIGHEST_APPROPRIATE_LEVEL
 ```
 
-The implementation/configuration Writer must not independently accept its own work.
+The implementation/configuration Writer, its Supervisor and the controlling Engineering context must not independently accept their own work.
 
-If local execution is needed, prefer deterministic evidence generation into a review bundle and upload that exact bundle to the independent ChatGPT reviewer. A second lower-capability coding model is not the default reviewer merely because it can run locally.
+An authority-bearing provider-native Reviewer Agent is acceptable only after the exact reviewer configuration/route has itself been independently accepted. It must receive a compact Review Manifest, read exact canonical evidence directly, inherit no Writer/Supervisor/Engineering-Control PASS conclusion as fact, have no implementation/repair authority, and produce an independently attributable result with idempotent egress through an accepted direct or lossless transport surface.
 
-Only when the strongest ChatGPT review cannot obtain necessary local evidence through a deterministic bundle may L1 explicitly freeze a separate local reviewer route; that local route supplies evidence and does not silently weaken the final independent-adjudication standard.
+If local evidence is needed, prefer deterministic evidence generation into a review bundle and deliver that exact bundle to the fresh independent Reviewer. Do not choose a materially weaker Reviewer merely to increase automation; reviewer capability must remain appropriate to the consequence of the task. A new ordinary ChatGPT review window remains the fail-safe fallback when an automated reviewer route is unavailable, unaccepted, ambiguous or degraded.
 
 ## 4. Required acceptance evidence
 

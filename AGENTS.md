@@ -208,7 +208,7 @@ FAILED_PATH_RETIREMENT_LEDGER=REQUIRED
 QUOTA_BOUNDARY_RESUME_NOT_RETRY=YES
 REVIEW_RESULT_EGRESS_IDEMPOTENCY=REQUIRED
 TRANSPORT_INTERRUPTION_NE_TASK_FAILURE=YES
-FINAL_INDEPENDENT_REVIEW_REQUIRES_NEW_CHAT_CONTEXT=YES
+FINAL_INDEPENDENT_REVIEW_REQUIRES_FRESH_INDEPENDENT_CONTEXT=YES
 EXACT_ARTIFACT_EXACT_HEAD_CI_INDEPENDENT_REVIEW=WHEN_APPLICABLE
 AUTHORITATIVE_REMOTE_EXECUTION_PREFERRED_WHEN_EQUAL_OR_HIGHER_FIDELITY=YES
 USER_LOCAL_WORKSTATION_NOT_DEFAULT_FOR_CI_OR_LINUX_PROOF=YES
@@ -226,7 +226,7 @@ REMOTE_EXECUTION_CREDENTIAL_AUTHORITY_MUST_BE_EXPLICIT=YES
 
 ## 6. Review and task ownership
 
-Authority-bearing final independent adjudication **requires a new ordinary ChatGPT conversation/window** using the strongest appropriate available model and highest appropriate reasoning. Engineering Control and the semantic Writer may perform self-check/readiness work, but a PASS produced in the same conversation that controlled or implemented the stage is not independent acceptance.
+Authority-bearing final independent adjudication **requires a fresh independent review context/agent** that did not control or implement the candidate stage. Engineering Control and the semantic Writer may perform self-check/readiness work, but their PASS cannot become independent acceptance. The accepted fallback is a new ordinary ChatGPT review window. An independently accepted provider-native Reviewer Agent may instead be used when its route is frozen and it proves fresh context, read-only review permissions, direct exact-canonical-evidence access, no inheritance of Writer/Supervisor/Engineering-Control conclusions as facts, and idempotent result egress through an accepted direct or lossless transport surface. Independence is a role/context/authority property; a different model vendor is not required by itself.
 
 The reviewer receives a compact Review Manifest: exact target identity, exact changed scope/diff, frozen acceptance criteria, required safety boundaries, decisive CI/artifact/source locators, and any explicitly untrusted prior conclusions. If GitHub evidence is sufficient, review exact GitHub head/diff + exact-head CI directly. Do not reload full Issue/PR history or the full governance corpus by default; use targeted canonical reads only for concrete unknowns/conflicts. If local evidence is needed, prefer deterministic hash-manifested evidence/review bundles rather than downgrading the final Reviewer to a weaker local coding model.
 

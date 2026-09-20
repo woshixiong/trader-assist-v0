@@ -1042,7 +1042,7 @@ Where a selected specialized operator/handoff contract is stricter, such as a lo
 
 ### 10.5 Authority-bearing review context and idempotent result egress
 
-One authority-bearing independent Review uses a fresh ordinary ChatGPT review window and that window retires after final result egress. A second unrelated authority-bearing Review starts fresh.
+One authority-bearing independent Review uses a fresh independent review context/agent and that context retires after final result egress. The Reviewer must not have controlled or implemented the candidate stage, must not inherit Writer/Supervisor/Engineering-Control PASS conclusions as facts, and must operate under the accepted review permission/evidence contract. A new ordinary ChatGPT review window remains an accepted fallback. An independently accepted provider-native Reviewer Agent may be authority-bearing when its frozen route enforces the same or stronger independence properties. A second unrelated authority-bearing Review starts fresh.
 
 The compact Review Manifest contains only exact target/base/head/tree, exact changed scope/diff, frozen acceptance criteria, decisive evidence locators, exact upstream identity when applicable, required safety/authority boundaries and the output contract. Full history/governance/source inventory is not default input.
 
@@ -1070,8 +1070,11 @@ REVIEW_RESULT_KEY =
 Before writeback, fresh-read the canonical target thread and search for the same key. If it exists, consume its canonical comment/result ID and do not write another authority-bearing result. After stream interruption/reconnect, read-before-write is mandatory; blind rewrite is prohibited.
 
 ```text
-ONE_AUTHORITY_BEARING_REVIEW_PER_FRESH_WINDOW=YES
-REVIEW_WINDOW_RETIRES_AFTER_RESULT_EGRESS=YES
+ONE_AUTHORITY_BEARING_REVIEW_PER_FRESH_CONTEXT=YES
+REVIEW_CONTEXT_RETIRES_AFTER_RESULT_EGRESS=YES
+FIXED_REVIEW_UI_REQUIRED=NO
+ORDINARY_CHATGPT_NEW_WINDOW_ACCEPTED_FALLBACK=YES
+PROVIDER_NATIVE_INDEPENDENT_REVIEWER_ALLOWED_AFTER_ACCEPTANCE=YES
 REVIEW_CONTEXT_BUDGET_GATE=REQUIRED
 AUTHORITY_BEARING_REVIEW_RESULT_DIRECT_CONTROLLER_READABLE=REQUIRED
 REVIEW_RESULT_EGRESS_IDEMPOTENCY=REQUIRED
@@ -1120,8 +1123,8 @@ REQUESTED_VS_ACTUAL_REQUIRED_IDENTITY_MISMATCH=ROUTER_INCIDENT
 ONE_PRIMARY_WRITER_PER_SHARED_AUTHORITY_STAGE=YES
 WRITER_SELF_PASS_IS_NOT_INDEPENDENT_ACCEPTANCE
 ENGINEERING_CONTROL_SELF_PASS_IS_NOT_INDEPENDENT_ACCEPTANCE
-FINAL_INDEPENDENT_REVIEW_REQUIRES_NEW_CHAT_CONTEXT=YES
-T4_DEFAULT=NEW_INDEPENDENT_STRONGEST_APPROPRIATE_CHATGPT_WINDOW
+FINAL_INDEPENDENT_REVIEW_REQUIRES_FRESH_INDEPENDENT_CONTEXT=YES
+T4_DEFAULT=STRONGEST_APPROPRIATE_ACCEPTED_FRESH_INDEPENDENT_REVIEW_SURFACE
 ```
 
 Quota, points, free availability and wall-clock time are routing inputs, never authority to lower required quality.
@@ -1130,7 +1133,7 @@ A Router incident fails closed, prohibits automatic rerun and produces one compl
 
 ### Tool onboarding
 
-A new engineering executor/operator/orchestrator or material tool-configuration change requires:
+A new engineering executor/operator/orchestrator or material tool-configuration change normally requires:
 
 ```text
 BOUNDED_CANDIDATE
@@ -1138,8 +1141,31 @@ BOUNDED_CANDIDATE
 -> REPRESENTATIVE CAPABILITY + SAFETY EVIDENCE
 -> SEPARATE INDEPENDENT REVIEW
 -> USER ACTIVATION / PUBLICATION AUTHORITY
--> FIRST REAL TASK
+-> ACCEPTED REAL TASK
 ```
+
+When the exact material behavior cannot be evidenced efficiently without exercising the real route, and a separate synthetic smoke has lower decision value or materially higher operator burden, Engineering Control may freeze one **PILOT_ONLY qualification canary** before full tool acceptance. This is an evidence-acquisition exception, not accepted infrastructure.
+
+```text
+PILOT_ONLY_CANARY_REQUIRES=
+  EXACT_CANDIDATE_IDENTITY
+  + PROVIDER_NATIVE_OR_MATURE_ROUTE
+  + REVERSIBLE_BOUNDED_REAL_TASK
+  + ISOLATED_WORKTREE_OR_EQUIVALENT
+  + EXACT_TASK_PACKET_AND_MUTATION_ALLOWLIST
+  + ONE_PRIMARY_WRITER
+  + NO_SILENT_FALLBACK_OR_HIDDEN_RETRY
+  + FAIL_CLOSED_ON_IDENTITY_PERMISSION_INDEPENDENCE_OR_RECOVERY_MISMATCH
+  + NO_MARK_READY_MERGE_DEPLOY_RUNTIME_PRIVATE_API_EXCHANGE_OR_TRADING_AUTHORITY
+  + EXPLICIT_CURRENT_USER_PILOT_ACTIVATION
+
+CANARY_RESULT
+-> REPRESENTATIVE TOOL EVIDENCE
+-> FRESH INDEPENDENT TOOL_ACCEPTANCE_REVIEW
+-> ACCEPT | REJECT | REPLAN
+```
+
+The canary may create only the bounded development artifacts explicitly authorized by its packet, such as a task branch and Draft PR. It may not promote itself, merge itself, or convert a tool mismatch into a semantic retry. A failed canary preserves its exact checkpoint/evidence and returns to L1.
 
 Installed/free/popular does not equal accepted infrastructure. Multi-step automation must be checkpointed and human-recoverable; hidden semantic retries are prohibited.
 
@@ -1593,7 +1619,7 @@ Independent Review inspects the actual exact object:
 - integrity-bound dirty-worktree review packet; or
 - exact delta against an independently accepted fingerprint.
 
-Authority-bearing independent review requires a **new ChatGPT conversation/window** that did not control or implement the candidate stage. The Engineering Control conversation may perform self-check/readiness work only; its PASS cannot become independent acceptance.
+Authority-bearing independent review requires a **fresh independent review context/agent** that did not control or implement the candidate stage. The Engineering Control context, Desktop/other Supervisor, semantic Writer and any self-review may perform readiness work only; their PASS cannot become independent acceptance. The Reviewer route must enforce read-only review authority, direct access to the exact canonical target/evidence, no inheritance of prior PASS conclusions as facts, and an independently produced verdict. A new ordinary ChatGPT review window is an accepted fallback rather than a mandatory UI boundary. An independently accepted provider-native Reviewer Agent may serve as the authority-bearing reviewer under the same contract.
 
 The reviewer receives a compact Review Manifest containing:
 
@@ -1631,6 +1657,8 @@ ACCEPTED_BASELINE
 ```
 
 Do not repeatedly rereview unchanged accepted thousands of lines without a concrete dependency/regression reason.
+
+A repaired or materially changed candidate head requires a **new fresh authority-bearing Reviewer context/agent**. The prior Reviewer may supply exact finding locators as untrusted input, but it must not remain the authority-bearing adjudicator for the downstream repair result.
 
 Default application/design repair budget:
 
