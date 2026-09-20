@@ -168,21 +168,23 @@ Router V2 freezes requested role/executor/provider/model/reasoning/tool/session/
 Default final adjudicator:
 
 ```text
-SURFACE=NEW ORDINARY CHATGPT CONVERSATION/WINDOW
-MODEL=STRONGEST APPROPRIATE AVAILABLE
-REASONING=HIGHEST APPROPRIATE
-SAME_ENGINEERING_CONTROL_CONVERSATION=PROHIBITED_FOR_INDEPENDENT_ACCEPTANCE
+SURFACE=FRESH_ACCEPTED_INDEPENDENT_REVIEW_CONTEXT
+MODEL=STRONGEST_APPROPRIATE_ACCEPTED_REVIEW_MODEL
+REASONING=HIGHEST_APPROPRIATE
+WRITER_OR_ENGINEERING_CONTROL_CONTEXT=PROHIBITED_FOR_INDEPENDENT_ACCEPTANCE
+ORDINARY_CHATGPT_NEW_WINDOW=ACCEPTED_FALLBACK
+PROVIDER_NATIVE_REVIEWER_AGENT=ALLOWED_AFTER_INDEPENDENT_TOOL_ROUTE_ACCEPTANCE
 ```
 
 The handoff is a compact Review Manifest, not an Engineering-Control conclusion dump. It contains exact target identity, changed scope/diff, frozen acceptance criteria, required safety boundaries, decisive evidence locators and any explicitly untrusted prior conclusions.
 
-If exact GitHub artifacts + exact-head CI are sufficient, review directly through GitHub/connectors. Default reviewer loading is delta/targeted: exact target -> exact diff -> acceptance contract -> decisive CI/artifact -> only necessary upstream/canonical history. Full Issue/PR history and full governance reload are prohibited by default.
+If exact GitHub artifacts + exact-head CI are sufficient, the fresh Reviewer reads them directly through the accepted canonical surface. Default reviewer loading is delta/targeted: exact target -> exact diff -> acceptance contract -> decisive CI/artifact -> only necessary upstream/canonical history. Full Issue/PR history and full governance reload are prohibited by default.
 
-If local evidence is required, prefer deterministic evidence generation -> hash-manifested review bundle -> exact upload to the new independent ChatGPT review window. Use `.agents/skills/trade-os-independent-review-bundle` when applicable.
+If local evidence is required, prefer deterministic evidence generation -> hash-manifested review bundle -> exact delivery to the fresh independent Reviewer. Use `.agents/skills/trade-os-independent-review-bundle` when applicable.
 
-Writer self-review and Engineering-Control self-review never become independent acceptance.
+Writer self-review, Supervisor self-review and Engineering-Control self-review never become independent acceptance. A provider-native Reviewer Agent is authority-bearing only when its accepted route enforces fresh context, read-only review authority, direct exact-canonical-evidence access, no inheritance of prior PASS conclusions as facts, and direct idempotent result egress.
 
-One authority-bearing Review uses one fresh Review window, which retires after result egress. If proof collection threatens context integrity, freeze a bounded evidence-verification checkpoint and adjudicate in a fresh window. Authority-bearing result writeback is idempotent: derive the deterministic Review Result Key, fresh-read before write, and consume an existing matching result instead of duplicating it.
+One authority-bearing Review uses one fresh Reviewer context/agent, which retires after result egress. A repaired or materially changed head receives a new fresh Reviewer context. If proof collection threatens context integrity, freeze a bounded evidence-verification checkpoint and adjudicate in a fresh context. Authority-bearing result writeback is idempotent: derive the deterministic Review Result Key, fresh-read before write, and consume an existing matching result instead of duplicating it.
 
 ## 6. Tool onboarding / material tool change
 
