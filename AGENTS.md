@@ -104,6 +104,46 @@ PREEMPTIVE_ROTATION=REQUIRED_WHEN_NEXT_HEAVY_PHASE_LACKS_TRUSTED_HEADROOM
 
 On rotation, freeze/verify the Control Capsule and any running session/workspace identity, then start the successor from that durable state. The user is not responsible for detecting context pressure or reconstructing the authority chain.
 
+### 1.3 Token-sustainable mechanical-state routing
+
+Mechanical repository/control-plane work is **zero-model by default**. Do not keep Codex, ChatGPT or another semantic model active merely to wait for or restate provider state.
+
+```text
+M0_MECHANICAL_STATE
+= GitHub / provider-native / deterministic tool
+= ZERO MODEL
+
+M1_LIGHTWEIGHT_NONAUTHORITATIVE_TRANSFORM
+= lowest sufficient model only when deterministic tooling cannot express the transform
+= output remains machine-verifiable and non-authoritative
+
+M2_SEMANTIC_WRITER
+= task-adaptive capable model + reasoning
+= semantic implementation / repair only
+
+M3_AUTHORITY_REVIEW
+= fresh strong independent reviewer
+= high / sufficient-high reasoning
+```
+
+M0 owns routine reads and waits including live-main SHA, PR state/Draft/base/head/tree, changed paths, mergeability metadata, CI run/job state and conclusions, artifact IDs/names/digests, hashes, allowlists and typed terminal-result extraction.
+
+For exact-head PR CI waiting/terminal projection, use `.agents/skills/trade-os-ci-terminal-wait/SKILL.md` when that execution surface is available.
+
+```text
+MODEL_MEDIATED_CI_POLLING=PROHIBITED
+CI_WAIT_OWNER=GITHUB_OR_DETERMINISTIC_TOOL
+RAW_SUCCESS_LOG_INGESTION=PROHIBITED_BY_DEFAULT
+FAILURE_LOG_READ=BOUNDED_FAILED_STEP_EVIDENCE_ONLY
+EXACT_ITEM_ENDPOINT_BEFORE_COLLECTION_ENDPOINT=YES
+KNOWN_LARGE_FILE_FULL_READ=NO_BY_DEFAULT
+NEW_CHAT_NE_NEW_CONTROL_CONTEXT=YES
+```
+
+After a Writer publishes an exact head, checkpoint at `CI_PENDING` and stop semantic polling. A healthy all-green terminal transition may mechanically advance to `REVIEW_NEEDED`; wake one fresh M3 Reviewer directly. Wake Engineering Control only for a material decision/exception such as a new root cause, semantic or ambiguous CI failure, non-mechanical identity/scope/authority drift, repair-budget exhaustion, material Review finding, retained user gate or context-integrity risk.
+
+A new chat/window does not invalidate a still-valid Control Capsule/governance attestation. When the governance epoch, task binding and exact authority identity remain unchanged, fresh-check identity metadata and exact locators only; do not reread full governance/history merely because the conversation surface changed.
+
 ## 2. User shorthand for unified-governance changes
 
 When the user says **“往统一规则里增加内容”**, **“把这条加入统一规则”**, **“add this to the unified rules”**, or an equivalent phrase, treat it as a request to start the Unified Engineering Governance change-routing process.
