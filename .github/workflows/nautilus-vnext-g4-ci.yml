@@ -48,6 +48,7 @@ jobs:
       - name: Focused G4 deterministic gates
         run: |
           /tmp/trader-assist-g4-venv/bin/python -m pytest -q \
+            tests/test_nautilus_vnext_g4_t2_shadow.py \
             tests/test_vnext_g4_contracts.py \
             tests/test_vnext_g4_evaluator.py \
             tests/test_vnext_g4_reporting.py \
@@ -69,16 +70,19 @@ jobs:
           /tmp/trader-assist-g4-venv/bin/python -m ruff check \
             src/trader_assist_v0/vnext_g4 \
             src/trader_assist_v0/nautilus_g4 \
+            scripts/nautilus_vnext_g4_t2_shadow.py \
             scripts/nautilus_vnext_g4_qualification.py \
             tests/test_vnext_g4_*.py \
             tests/test_nautilus_vnext_g4_*.py
           /tmp/trader-assist-g4-venv/bin/python -m mypy \
             src/trader_assist_v0/vnext_g4 \
             src/trader_assist_v0/nautilus_g4 \
+            scripts/nautilus_vnext_g4_t2_shadow.py \
             scripts/nautilus_vnext_g4_qualification.py
           /tmp/trader-assist-g4-venv/bin/python -m compileall -q \
             src/trader_assist_v0/vnext_g4 \
             src/trader_assist_v0/nautilus_g4 \
+            scripts/nautilus_vnext_g4_t2_shadow.py \
             scripts/nautilus_vnext_g4_qualification.py \
             .github/spikes/t2_rc5_capability_spike.py \
             tests/test_vnext_g4_*.py \
