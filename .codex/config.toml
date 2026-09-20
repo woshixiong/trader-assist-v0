@@ -6,4 +6,4 @@ model_reasoning_summary = "none"
 web_search = "disabled"
 
 [agents]
-enabled = false
+enabled = true
