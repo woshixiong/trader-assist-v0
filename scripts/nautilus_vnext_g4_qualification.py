@@ -11,10 +11,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 
 from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
 from trader_assist_v0.nautilus_e4.contracts import (
@@ -36,6 +40,7 @@ from trader_assist_v0.nautilus_g4.runner import (
     new_isolated_backtest_engine,
     project_provider_native_state,
 )
+from trader_assist_v0.nautilus_g4.t2_shadow import AcceptedRealT2Receipt
 from trader_assist_v0.vnext_g4.contracts import (
     AttemptStop,
     CandidateConfig,
@@ -53,6 +58,185 @@ from trader_assist_v0.vnext_g4.contracts import (
 STRUCTURAL_HASH = "a" * 64
 CONTROL_MARKET = "b" * 64
 REPRESENTATIVE_MARKET_FLOOR = 20
+CANONICAL_REPOSITORY = "woshixiong/trader-assist-v0"
+CANONICAL_T2_READBACK_SCHEMA = "ROOTED_T2_CANONICAL_ACCEPTANCE_READBACK_V1"
+CANONICAL_T2_READBACK_HEADING = "## ROOTED-T2 CANONICAL ACCEPTANCE READBACK V1"
+_CANONICAL_T2_AUTHORITY = object()
+
+
+@dataclass(frozen=True)
+class _CanonicalT2AcceptanceReadback:
+    """Owner-authored GitHub readback; not constructible through the public CLI."""
+
+    authority: object
+    comment_id: int
+    comment_url: str
+    receipt: AcceptedRealT2Receipt
+
+
+def _not_proven_causal_gates() -> dict[str, str]:
+    return causal_claim_gate_states(
+        evidence_tier="T0_SYNTHETIC_CONTROL",
+        synthetic=True,
+        manual_substitution=False,
+        deterministic_replay_proven=False,
+        semantic_derivation_proven=False,
+        validation_materialized=False,
+        canonical_order_intent_proven=False,
+        provider_outcome_cost_provenance_complete=False,
+        restart_equivalence_proven=False,
+    )
+
+
+def _parse_canonical_t2_readback(
+    raw_response: bytes,
+    *,
+    expected_comment_id: int,
+) -> _CanonicalT2AcceptanceReadback:
+    envelope: Any = json.loads(raw_response)
+    if not isinstance(envelope, dict):
+        raise ValueError("canonical T2 GitHub response must be an object")
+    if envelope.get("id") != expected_comment_id:
+        raise ValueError("canonical T2 comment identity mismatch")
+    expected_url = re.compile(
+        rf"https://github\.com/{re.escape(CANONICAL_REPOSITORY)}"
+        rf"/issues/[1-9][0-9]*#issuecomment-{expected_comment_id}"
+    )
+    comment_url = envelope.get("html_url")
+    if not isinstance(comment_url, str) or expected_url.fullmatch(comment_url) is None:
+        raise ValueError("canonical T2 comment URL is outside the accepted repository")
+    user = envelope.get("user")
+    if (
+        not isinstance(user, dict)
+        or user.get("login") != CANONICAL_REPOSITORY.split("/", maxsplit=1)[0]
+        or envelope.get("author_association") != "OWNER"
+    ):
+        raise ValueError("canonical T2 readback is not repository-owner authored")
+
+    body = envelope.get("body")
+    if not isinstance(body, str):
+        raise ValueError("canonical T2 comment body must be text")
+    body_match = re.fullmatch(
+        re.escape(CANONICAL_T2_READBACK_HEADING)
+        + r"\n\n```json\n(?P<payload>\{.*\})\n```\n?",
+        body,
+        flags=re.DOTALL,
+    )
+    if body_match is None:
+        raise ValueError("canonical T2 comment does not match the readback envelope")
+    payload: Any = json.loads(body_match.group("payload"))
+    if not isinstance(payload, dict) or set(payload) != {
+        "acceptance",
+        "repository",
+        "schema_version",
+    }:
+        raise ValueError("canonical T2 readback payload fields are not exact")
+    if payload.get("schema_version") != CANONICAL_T2_READBACK_SCHEMA:
+        raise ValueError("canonical T2 readback schema is not accepted")
+    if payload.get("repository") != CANONICAL_REPOSITORY:
+        raise ValueError("canonical T2 readback repository mismatch")
+    receipt = AcceptedRealT2Receipt.model_validate(payload.get("acceptance"))
+    if receipt.exact_reviewed_head != receipt.exact_implementation_head:
+        raise ValueError("canonical T2 review does not bind the implementation head")
+    ci_results = receipt.required_ci_run_ids_and_conclusions
+    ci_bindings = tuple(result.rpartition(":") for result in ci_results)
+    if (
+        len(ci_results) != len(set(ci_results))
+        or any(not run_id or separator != ":" for run_id, separator, _ in ci_bindings)
+        or any(conclusion.lower() != "success" for _, _, conclusion in ci_bindings)
+    ):
+        raise ValueError("canonical T2 required CI is not uniquely successful")
+    review_locator = re.compile(
+        rf"https://github\.com/{re.escape(CANONICAL_REPOSITORY)}"
+        r"/issues/[1-9][0-9]*#issuecomment-[1-9][0-9]*"
+    )
+    if review_locator.fullmatch(receipt.fresh_independent_review_locator) is None:
+        raise ValueError("canonical T2 review locator is outside the accepted repository")
+    return _CanonicalT2AcceptanceReadback(
+        authority=_CANONICAL_T2_AUTHORITY,
+        comment_id=expected_comment_id,
+        comment_url=comment_url,
+        receipt=receipt,
+    )
+
+
+def _fetch_canonical_t2_readback(
+    comment_id: object,
+) -> _CanonicalT2AcceptanceReadback:
+    if type(comment_id) is not int or comment_id <= 0:
+        raise ValueError("canonical T2 acceptance requires a positive comment ID")
+    api_url = (
+        f"https://api.github.com/repos/{CANONICAL_REPOSITORY}/issues/comments/"
+        f"{comment_id}"
+    )
+    request = Request(
+        api_url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "trader-assist-vnext-g4-qualification",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    with urlopen(request, timeout=10.0) as response:
+        if response.geturl() != api_url:
+            raise ValueError("canonical T2 GitHub endpoint redirected")
+        raw_response = response.read()
+    return _parse_canonical_t2_readback(
+        raw_response,
+        expected_comment_id=comment_id,
+    )
+
+
+def _canonical_t2_state(
+    comment_id: object | None,
+) -> tuple[dict[str, str], dict[str, object]]:
+    if comment_id is None:
+        return _not_proven_causal_gates(), {
+            "accepted": False,
+            "reason": "NO_CANONICAL_ACCEPTED_T2_READBACK_SUPPLIED",
+        }
+    try:
+        readback = _fetch_canonical_t2_readback(comment_id)
+    except (OSError, URLError, ValueError) as exc:
+        return _not_proven_causal_gates(), {
+            "accepted": False,
+            "reason": f"CANONICAL_T2_READBACK_REJECTED:{type(exc).__name__}",
+        }
+    if readback.authority is not _CANONICAL_T2_AUTHORITY:
+        return _not_proven_causal_gates(), {
+            "accepted": False,
+            "reason": "CANONICAL_T2_READBACK_REJECTED:AUTHORITY",
+        }
+    receipt = readback.receipt
+    return (
+        causal_claim_gate_states(
+            evidence_tier="T2_REAL_CAUSAL_G4_ARTIFACT",
+            synthetic=False,
+            manual_substitution=False,
+            deterministic_replay_proven=True,
+            semantic_derivation_proven=True,
+            validation_materialized=True,
+            canonical_order_intent_proven=True,
+            provider_outcome_cost_provenance_complete=True,
+            restart_equivalence_proven=True,
+        ),
+        {
+            "accepted": True,
+            "reason": None,
+            "comment_id": readback.comment_id,
+            "comment_url": readback.comment_url,
+            "binding_identity_hash": receipt.evidence_hash,
+            "source_root_hash": receipt.accepted_t2_source_root_hash,
+            "artifact_candidate_hash": receipt.t2_artifact_candidate_hash,
+            "implementation_head": receipt.exact_implementation_head,
+            "implementation_tree": receipt.exact_implementation_tree,
+            "required_ci": list(receipt.required_ci_run_ids_and_conclusions),
+            "review_result_key": receipt.fresh_independent_review_result_key,
+            "review_locator": receipt.fresh_independent_review_locator,
+            "reviewed_head": receipt.exact_reviewed_head,
+            "canonical_receipt_key": receipt.canonical_acceptance_receipt_key,
+        },
+    )
 
 
 def _candidate(candidate_id: str = "qualification-reference") -> CandidateManifest:
@@ -349,6 +533,7 @@ def _e4_probe_state(
 def qualify(
     representative_evidence: Path | None,
     e4_probe_result: Path | None,
+    canonical_t2_acceptance_comment_id: int | None = None,
 ) -> dict[str, object]:
     from nautilus_trader.backtest import BacktestEngine
     from nautilus_trader.execution import ProbabilisticFillModel
@@ -411,16 +596,8 @@ def qualify(
 
     provider_state = provider["provider_state"]
     assert isinstance(provider_state, dict)
-    causal_gates = causal_claim_gate_states(
-        evidence_tier="T0_SYNTHETIC_CONTROL",
-        synthetic=True,
-        manual_substitution=False,
-        deterministic_replay_proven=True,
-        semantic_derivation_proven=False,
-        validation_materialized=False,
-        canonical_order_intent_proven=False,
-        provider_outcome_cost_provenance_complete=False,
-        restart_equivalence_proven=True,
+    causal_gates, t2_state = _canonical_t2_state(
+        canonical_t2_acceptance_comment_id
     )
     ladder = {
         "G4E0": "PASS",
@@ -456,8 +633,22 @@ def qualify(
             "actual_representative_market_count"
         ],
         "g4e8_reason": scale["reason"],
-        "t2_real_causal_artifact_supplied": False,
-        "t2_absence_reason": "NO_ACCEPTED_T2_REAL_CAUSAL_G4_ARTIFACT_SUPPLIED",
+        "t2_real_causal_artifact_supplied": t2_state["accepted"],
+        "t2_absence_reason": t2_state["reason"],
+        "t2_canonical_acceptance_comment_id": t2_state.get("comment_id"),
+        "t2_canonical_acceptance_comment_url": t2_state.get("comment_url"),
+        "t2_binding_identity_hash": t2_state.get("binding_identity_hash"),
+        "t2_accepted_source_root_hash": t2_state.get("source_root_hash"),
+        "t2_accepted_artifact_candidate_hash": t2_state.get(
+            "artifact_candidate_hash"
+        ),
+        "t2_accepted_implementation_head": t2_state.get("implementation_head"),
+        "t2_accepted_implementation_tree": t2_state.get("implementation_tree"),
+        "t2_accepted_required_ci": t2_state.get("required_ci"),
+        "t2_accepted_review_result_key": t2_state.get("review_result_key"),
+        "t2_accepted_review_locator": t2_state.get("review_locator"),
+        "t2_accepted_reviewed_head": t2_state.get("reviewed_head"),
+        "t2_canonical_receipt_key": t2_state.get("canonical_receipt_key"),
         "provider_native_backtest_engine": True,
         "provider_native_fill_model": True,
         "backtest_node_catalog_surface": True,
@@ -486,8 +677,13 @@ def main() -> None:
     parser.add_argument("--result-path", type=Path, required=True)
     parser.add_argument("--representative-evidence", type=Path)
     parser.add_argument("--e4-probe-result", type=Path)
+    parser.add_argument("--canonical-t2-acceptance-comment-id", type=int)
     args = parser.parse_args()
-    result = qualify(args.representative_evidence, args.e4_probe_result)
+    result = qualify(
+        args.representative_evidence,
+        args.e4_probe_result,
+        args.canonical_t2_acceptance_comment_id,
+    )
     args.result_path.parent.mkdir(parents=True, exist_ok=True)
     args.result_path.write_text(
         json.dumps(result, sort_keys=True) + "\n",
