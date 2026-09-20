@@ -470,6 +470,8 @@ def rederive_rooted_t2(
         EvidenceState,
         LifecycleRecord,
         MarketExpression,
+        PitUniverseSnapshot,
+        RunManifest,
     )
     from trader_assist_v0.nautilus_g4.catalog_bridge import (
         EvaluatorSupplementEvidence,
@@ -497,11 +499,33 @@ def rederive_rooted_t2(
 
     structural_artifact = _one(root, T2SourceRole.STRUCTURAL_SOURCE)
     structural = cast(StrategyDecision, _parse(structural_artifact, StrategyDecision))
+    e4_manifest = cast(
+        RunManifest, _parse(_one(root, T2SourceRole.E4_RUN_MANIFEST), RunManifest)
+    )
+    pit_snapshot = cast(
+        PitUniverseSnapshot,
+        _parse(_one(root, T2SourceRole.E4_PIT_SNAPSHOT), PitUniverseSnapshot),
+    )
     lineage = cast(CausalLineage, _parse(_one(root, T2SourceRole.CAUSAL_LINEAGE), CausalLineage))
     candidate = cast(
         CandidateManifest, _parse(_one(root, T2SourceRole.SELECTED_CANDIDATE), CandidateManifest)
     )
     g4 = cast(G4RunManifest, _parse(_one(root, T2SourceRole.G4_RUN_MANIFEST), G4RunManifest))
+    if (
+        not hmac.compare_digest(e4_manifest.pit_snapshot_hash, pit_snapshot.snapshot_hash)
+        or not hmac.compare_digest(e4_manifest.pit_snapshot_id, pit_snapshot.snapshot_id)
+    ):
+        raise ValueError("rooted E4 manifest does not bind rooted PIT snapshot")
+    if (
+        not hmac.compare_digest(e4_manifest.manifest_hash, lineage.source_e4_manifest_hash)
+        or not hmac.compare_digest(e4_manifest.manifest_hash, g4.source_e4_manifest_hash)
+    ):
+        raise ValueError("rooted E4 manifest is not cross-bound to lineage and G4 run")
+    if (
+        not hmac.compare_digest(pit_snapshot.snapshot_hash, lineage.source_pit_snapshot_hash)
+        or not hmac.compare_digest(pit_snapshot.snapshot_hash, g4.source_pit_snapshot_hash)
+    ):
+        raise ValueError("rooted PIT snapshot is not cross-bound to lineage and G4 run")
     if candidate.candidate_hash not in g4.candidate_hashes:
         raise ValueError("rooted selected candidate is not a member of the rooted G4 run")
     if candidate.structural_component_manifest_hash != structural_artifact.artifact_hash:

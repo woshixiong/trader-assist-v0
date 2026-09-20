@@ -210,6 +210,8 @@ def _build_real_fixture(catalog_path: Path) -> RealFixture:
         LifecycleRecord,
         LifecycleStatus,
         MarketExpression,
+        PitUniverseSnapshot,
+        RunManifest,
         SourceEvent,
     )
     from trader_assist_v0.nautilus_g4.catalog_bridge import (
@@ -300,11 +302,39 @@ def _build_real_fixture(catalog_path: Path) -> RealFixture:
         latency_ms=Decimal("0"),
         latency_evidence_role="CONTROL_ONLY",
     )
+    expression = MarketExpression(
+        market_id=MARKET,
+        dex="MAIN",
+        provider_coin="ETH",
+        instrument_id=INSTRUMENT,
+        expression_id="expr-ETH",
+        listing_state="ACTIVE",
+        instrument_metadata_version="meta-v1",
+        instrument_metadata_hash="b" * 64,
+        fee_state_version="fee-v1",
+        fee_state_hash="d" * 64,
+    )
+    pit_snapshot = PitUniverseSnapshot.create(
+        observed_at_ns=1_700_000_000_000_000_000,
+        expressions=(expression,),
+    )
+    e4_manifest = RunManifest.create(
+        run_id="run-1",
+        git_sha=PROJECT_GIT_OID,
+        git_tree="a" * 40,
+        snapshot=pit_snapshot,
+        process_epoch="process-1",
+        continuity_epoch="continuity-1",
+        admission_epoch="admission-1",
+        capture_configuration={"mode": "rooted-t2-test"},
+        subscription_policy={"scope": "ETH"},
+        trial_ledger_id="trial-v1",
+    )
     from trader_assist_v0.vnext_g4.contracts import CausalLineage
 
     lineage = CausalLineage.create(
-        source_e4_manifest_hash="9" * 64,
-        source_pit_snapshot_hash="a" * 64,
+        source_e4_manifest_hash=e4_manifest.manifest_hash,
+        source_pit_snapshot_hash=pit_snapshot.snapshot_hash,
         source_structural_artifact_hash=structural_artifact.artifact_hash,
         structural_component_manifest_hash=structural_artifact.artifact_hash,
         market_id=MARKET,
@@ -408,18 +438,6 @@ def _build_real_fixture(catalog_path: Path) -> RealFixture:
         confirmed_admission_ts=10,
         source_artifact_hash="c" * 64,
     )
-    expression = MarketExpression(
-        market_id=MARKET,
-        dex="MAIN",
-        provider_coin="ETH",
-        instrument_id=INSTRUMENT,
-        expression_id="expr-ETH",
-        listing_state="ACTIVE",
-        instrument_metadata_version="meta-v1",
-        instrument_metadata_hash="b" * 64,
-        fee_state_version="fee-v1",
-        fee_state_hash="d" * 64,
-    )
     registry = RegistryMarket(
         display="ETH",
         tier=RegistryTier.P0,
@@ -472,8 +490,8 @@ def _build_real_fixture(catalog_path: Path) -> RealFixture:
         run_id="run-1",
         git_sha=PROJECT_GIT_OID,
         git_tree="a" * 40,
-        source_e4_manifest_hash="9" * 64,
-        source_pit_snapshot_hash="a" * 64,
+        source_e4_manifest_hash=e4_manifest.manifest_hash,
+        source_pit_snapshot_hash=pit_snapshot.snapshot_hash,
         source_evidence_artifact_hashes=(EvidenceArtifactHash(name="admissions", sha256=H),),
         structural_component_manifest_hash=structural_artifact.artifact_hash,
         execution_model=execution_model,
@@ -536,8 +554,12 @@ def _build_real_fixture(catalog_path: Path) -> RealFixture:
         funding=costs[4],
         implementation_shortfall=costs[5],
     )
-    e4_run = artifact(T2SourceRole.E4_RUN_MANIFEST, "e4-run")
-    e4_pit = artifact(T2SourceRole.E4_PIT_SNAPSHOT, "e4-pit")
+    e4_run = artifact(
+        T2SourceRole.E4_RUN_MANIFEST, "e4-run", _json_bytes(e4_manifest)
+    )
+    e4_pit = artifact(
+        T2SourceRole.E4_PIT_SNAPSHOT, "e4-pit", _json_bytes(pit_snapshot)
+    )
     g4_artifact = artifact(T2SourceRole.G4_RUN_MANIFEST, "g4-run", _json_bytes(g4))
     selected_artifact = artifact(
         T2SourceRole.SELECTED_CANDIDATE, "selected", _json_bytes(selected)
@@ -614,6 +636,131 @@ def _patch_execution(monkeypatch: pytest.MonkeyPatch, record: object) -> None:
         "trader_assist_v0.nautilus_g4.runner.execute_provider_native_state",
         lambda **_kwargs: SimpleNamespace(record=record),
     )
+
+
+def _replace_declared_role_artifact(
+    root: T2SourceRootSnapshot,
+    role: T2SourceRole,
+    replacement: RoleBoundSourceArtifact,
+) -> T2SourceRootSnapshot:
+    field_by_role = {
+        T2SourceRole.E4_RUN_MANIFEST: "e4_run_manifest_hash",
+        T2SourceRole.E4_PIT_SNAPSHOT: "e4_pit_snapshot_hash",
+        T2SourceRole.G4_RUN_MANIFEST: "g4_run_manifest_hash",
+    }
+    values = root.model_dump(mode="python", exclude={"source_root_hash"})
+    values["artifacts"] = (
+        tuple(item for item in root.artifacts if item.role is not role) + (replacement,)
+    )
+    values[field_by_role[role]] = replacement.artifact_hash
+    return T2SourceRootSnapshot.create(**values)
+
+
+@REQUIRES_NAUTILUS
+def test_t04a_e4_manifest_must_cross_bind_lineage_and_g4(
+    real_fixture: RealFixture, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from trader_assist_v0.nautilus_e4.contracts import PitUniverseSnapshot, RunManifest
+
+    _patch_execution(monkeypatch, real_fixture.execution_record)
+    manifest_artifact = next(
+        item
+        for item in real_fixture.root.artifacts
+        if item.role is T2SourceRole.E4_RUN_MANIFEST
+    )
+    pit_artifact = next(
+        item
+        for item in real_fixture.root.artifacts
+        if item.role is T2SourceRole.E4_PIT_SNAPSHOT
+    )
+    manifest = RunManifest.model_validate_json(manifest_artifact.exact_bytes())
+    pit = PitUniverseSnapshot.model_validate_json(pit_artifact.exact_bytes())
+    other = RunManifest.create(
+        run_id="run-other",
+        git_sha=manifest.git_sha,
+        git_tree=manifest.git_tree,
+        snapshot=pit,
+        process_epoch=manifest.process_epoch,
+        continuity_epoch=manifest.continuity_epoch,
+        admission_epoch=manifest.admission_epoch,
+        capture_configuration=manifest.capture_configuration,
+        subscription_policy=manifest.subscription_policy,
+        trial_ledger_id=manifest.trial_ledger_id,
+    )
+    root = _replace_declared_role_artifact(
+        real_fixture.root,
+        T2SourceRole.E4_RUN_MANIFEST,
+        artifact(T2SourceRole.E4_RUN_MANIFEST, "e4-run", _json_bytes(other)),
+    )
+    with pytest.raises(ValueError, match="E4 manifest is not cross-bound"):
+        rederive_rooted_t2(root=root, catalog_path=tmp_path)
+
+
+@REQUIRES_NAUTILUS
+def test_t04b_e4_manifest_must_bind_rooted_pit_snapshot(
+    real_fixture: RealFixture, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from trader_assist_v0.nautilus_e4.contracts import PitUniverseSnapshot
+
+    _patch_execution(monkeypatch, real_fixture.execution_record)
+    pit_artifact = next(
+        item
+        for item in real_fixture.root.artifacts
+        if item.role is T2SourceRole.E4_PIT_SNAPSHOT
+    )
+    pit = PitUniverseSnapshot.model_validate_json(pit_artifact.exact_bytes())
+    other = PitUniverseSnapshot.create(
+        observed_at_ns=pit.observed_at_ns + 1,
+        expressions=pit.expressions,
+    )
+    root = _replace_declared_role_artifact(
+        real_fixture.root,
+        T2SourceRole.E4_PIT_SNAPSHOT,
+        artifact(T2SourceRole.E4_PIT_SNAPSHOT, "e4-pit", _json_bytes(other)),
+    )
+    with pytest.raises(ValueError, match="E4 manifest does not bind rooted PIT"):
+        rederive_rooted_t2(root=root, catalog_path=tmp_path)
+
+
+@REQUIRES_NAUTILUS
+def test_t04c_g4_manifest_must_share_e4_identity_with_lineage(
+    real_fixture: RealFixture, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from trader_assist_v0.vnext_g4.contracts import CandidateManifest, G4RunManifest
+
+    _patch_execution(monkeypatch, real_fixture.execution_record)
+    g4_artifact = next(
+        item
+        for item in real_fixture.root.artifacts
+        if item.role is T2SourceRole.G4_RUN_MANIFEST
+    )
+    selected_artifact = next(
+        item
+        for item in real_fixture.root.artifacts
+        if item.role is T2SourceRole.SELECTED_CANDIDATE
+    )
+    g4 = G4RunManifest.model_validate_json(g4_artifact.exact_bytes())
+    selected = CandidateManifest.model_validate_json(selected_artifact.exact_bytes())
+    other = G4RunManifest.create(
+        run_id=g4.run_id,
+        git_sha=g4.git_sha,
+        git_tree=g4.git_tree,
+        source_e4_manifest_hash="f" * 64,
+        source_pit_snapshot_hash=g4.source_pit_snapshot_hash,
+        source_evidence_artifact_hashes=g4.source_evidence_artifact_hashes,
+        structural_component_manifest_hash=g4.structural_component_manifest_hash,
+        execution_model=g4.execution_model,
+        candidates=(selected,),
+        trial_adaptivity_id=g4.trial_adaptivity_id,
+        cutoff_id=g4.cutoff_id,
+    )
+    root = _replace_declared_role_artifact(
+        real_fixture.root,
+        T2SourceRole.G4_RUN_MANIFEST,
+        artifact(T2SourceRole.G4_RUN_MANIFEST, "g4-run", _json_bytes(other)),
+    )
+    with pytest.raises(ValueError, match="E4 manifest is not cross-bound"):
+        rederive_rooted_t2(root=root, catalog_path=tmp_path)
 
 
 @REQUIRES_NAUTILUS
