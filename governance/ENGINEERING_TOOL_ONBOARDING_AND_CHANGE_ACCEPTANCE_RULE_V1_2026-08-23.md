@@ -169,16 +169,19 @@ A narrow refresh of a current-model snapshot that does not change durable workfl
 When exact GitHub/config artifacts and CI/evidence are sufficient:
 
 ```text
-REVIEWER_SURFACE = SEPARATE_ORDINARY_CHATGPT_WINDOW
-MODEL = STRONGEST_APPROPRIATE_AVAILABLE_MODEL
+REVIEWER_SURFACE = STRONGEST_APPROPRIATE_ACCEPTED_FRESH_INDEPENDENT_REVIEW_SURFACE
+REVIEWER_CONTEXT = FRESH_AND_SEPARATE_FROM_CONTROL_AND_IMPLEMENTATION
+REVIEWER_PERMISSION = READ_ONLY
+ORDINARY_CHATGPT_NEW_WINDOW = ACCEPTED_FALLBACK
+PROVIDER_NATIVE_REVIEWER_AGENT = ALLOWED_AFTER_INDEPENDENT_ACCEPTANCE
 REASONING = HIGHEST_APPROPRIATE_LEVEL
 ```
 
-The implementation/configuration Writer must not independently accept its own work.
+The implementation/configuration Writer, its Supervisor and the controlling Engineering context must not independently accept their own work.
 
-If local execution is needed, prefer deterministic evidence generation into a review bundle and upload that exact bundle to the independent ChatGPT reviewer. A second lower-capability coding model is not the default reviewer merely because it can run locally.
+An authority-bearing provider-native Reviewer Agent is acceptable only after the exact reviewer configuration/route has itself been independently accepted. It must receive a compact Review Manifest, read exact canonical evidence directly, inherit no Writer/Supervisor/Engineering-Control PASS conclusion as fact, have no implementation/repair authority, and produce an independently attributable idempotent result.
 
-Only when the strongest ChatGPT review cannot obtain necessary local evidence through a deterministic bundle may L1 explicitly freeze a separate local reviewer route; that local route supplies evidence and does not silently weaken the final independent-adjudication standard.
+If local evidence is needed, prefer deterministic evidence generation into a review bundle and deliver that exact bundle to the fresh independent Reviewer. Do not choose a materially weaker Reviewer merely to increase automation; reviewer capability must remain appropriate to the consequence of the task. A new ordinary ChatGPT review window remains the fail-safe fallback when an automated reviewer route is unavailable, unaccepted, ambiguous or degraded.
 
 ## 4. Required acceptance evidence
 
