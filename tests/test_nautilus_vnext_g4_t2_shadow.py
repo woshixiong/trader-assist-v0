@@ -651,7 +651,8 @@ def _replace_declared_role_artifact(
     }
     values = root.model_dump(mode="python", exclude={"source_root_hash"})
     values["artifacts"] = (
-        tuple(item for item in root.artifacts if item.role is not role) + (replacement,)
+        *(item for item in root.artifacts if item.role is not role),
+        replacement,
     )
     values[field_by_role[role]] = replacement.artifact_hash
     return T2SourceRootSnapshot.create(**values)
