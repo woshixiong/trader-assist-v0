@@ -21,7 +21,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Protocol
 
 from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
 from trader_assist_v0.nautilus_e4.contracts import (
@@ -144,7 +144,7 @@ def fetch_selection_source(
 
 
 def selection_source_hash(source: Mapping[str, object]) -> str:
-    return cast(str, sha256_hex(canonical_json_bytes(dict(source))))
+    return sha256_hex(canonical_json_bytes(dict(source)))
 
 
 def _canonical_positive_decimal(value: object) -> tuple[Decimal, str] | None:
