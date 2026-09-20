@@ -179,7 +179,7 @@ REASONING = HIGHEST_APPROPRIATE_LEVEL
 
 The implementation/configuration Writer, its Supervisor and the controlling Engineering context must not independently accept their own work.
 
-An authority-bearing provider-native Reviewer Agent is acceptable only after the exact reviewer configuration/route has itself been independently accepted. It must receive a compact Review Manifest, read exact canonical evidence directly, inherit no Writer/Supervisor/Engineering-Control PASS conclusion as fact, have no implementation/repair authority, and produce an independently attributable idempotent result.
+An authority-bearing provider-native Reviewer Agent is acceptable only after the exact reviewer configuration/route has itself been independently accepted. It must receive a compact Review Manifest, read exact canonical evidence directly, inherit no Writer/Supervisor/Engineering-Control PASS conclusion as fact, have no implementation/repair authority, and produce an independently attributable result with idempotent egress through an accepted direct or lossless transport surface.
 
 If local evidence is needed, prefer deterministic evidence generation into a review bundle and deliver that exact bundle to the fresh independent Reviewer. Do not choose a materially weaker Reviewer merely to increase automation; reviewer capability must remain appropriate to the consequence of the task. A new ordinary ChatGPT review window remains the fail-safe fallback when an automated reviewer route is unavailable, unaccepted, ambiguous or degraded.
 
