@@ -466,6 +466,42 @@ KNOWN_LARGE_FULL_FILE_READ=NO_BY_DEFAULT
 
 A broad collection or full-file read is allowed only when the bounded decision genuinely requires collection/whole-file semantics and a narrower query cannot preserve correctness.
 
+Context economy is never allowed to reduce the evidence needed for correctness. Progressive disclosure changes **when and how** evidence is loaded, not the quality floor:
+
+```text
+QUALITY_PRESERVING_PROGRESSIVE_DISCLOSURE=REQUIRED
+
+CONTEXT_COMPRESSION_MAY_REMOVE=
+  DUPLICATE_EVIDENCE
+  + UNCHANGED_ACCEPTED_HISTORY
+  + RAW_PAYLOAD_REDUNDANCY
+  + IRRELEVANT_AUTHORITY
+
+CONTEXT_COMPRESSION_MUST_NOT_REMOVE=
+  CHANGED_HUMAN_WRITTEN_CODE
+  + MATERIAL_INTERFACE / CONTRACT IMPACT
+  + SAFETY / AUTHORITY BOUNDARIES
+  + ACCEPTANCE_CRITERIA_COVERAGE
+  + DECISIVE_TEST / CI EVIDENCE
+  + CONCRETE TRANSITIVE DEPENDENCIES NEEDED TO JUDGE CORRECTNESS
+
+UNRESOLVED_MATERIAL_UNKNOWN => PASS_PROHIBITED
+```
+
+Every material Writer and authority-bearing Reviewer operates against a compact **Impact Envelope**:
+
+```text
+EXACT_CHANGED_PATHS
+EXACT_CHANGED_HUMAN_WRITTEN_LINES
+DIRECTLY_AFFECTED_PUBLIC_INTERFACES / CONTRACTS
+KNOWN_TRANSITIVE_CALLERS_OR_CONSUMERS_NEEDED_FOR_THE_CLAIM
+APPLICABLE_AUTHORITY / SAFETY BOUNDARIES
+TESTS_AND_CI_THAT_PROVE_EACH_MATERIAL_ACCEPTANCE_CLAIM
+KNOWN_PROOF_GAPS / UNRESOLVED_QUESTIONS
+```
+
+The envelope is risk-adaptive. Boundary, security, persistence, concurrency, provider, execution, money/trading, lifecycle, schema/API or governance changes automatically widen targeted retrieval to the relevant surrounding system. There is no token-saving cap that may suppress materially necessary evidence.
+
 Routine healthy transitions proven by canonical provider/GitHub state should update the Control Capsule without an extra Engineering-Control model turn merely to restate them.
 
 ```text
@@ -1081,7 +1117,7 @@ One authority-bearing independent Review uses a fresh independent review context
 
 The compact Review Manifest contains only exact target/base/head/tree, exact changed scope/diff, frozen acceptance criteria, decisive evidence locators, exact upstream identity when applicable, required safety/authority boundaries and the output contract. Full history/governance/source inventory is not default input.
 
-Independent Review is delta-first and should complete in one bounded invocation when possible:
+Independent Review is delta-first and should complete in one bounded invocation when possible. Delta-first does not mean diff-only: the Reviewer must understand every human-written changed line and the Impact Envelope required to judge design, behavior, regressions and authority boundaries:
 
 ```text
 REVIEW_BOOTSTRAP=
