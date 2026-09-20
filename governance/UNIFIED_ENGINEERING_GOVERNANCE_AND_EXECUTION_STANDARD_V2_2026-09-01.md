@@ -392,14 +392,24 @@ Before dispatching a named workstream, fresh-check this ledger and its canonical
 A governance epoch is the exact set/hash of applicable current authority-file SHAs that produced the bound governance attestation.
 
 ```text
-FULL_CORE_RULE_READ=
-  FIRST MATERIAL CONTROL ACTION IN A FRESH CONTEXT
-  OR GOVERNANCE_EPOCH_DRIFT
-  OR CONCRETE AUTHORITY CONFLICT
+NEW_CHAT_WINDOW_ALONE != FRESH_CONTROL_CONTEXT
 
-UNCHANGED_GOVERNANCE_EPOCH
+VALID_CONTROL_CAPSULE
++ VALID_BOUND_GOVERNANCE_ATTESTATION
++ AUTHORITY_FILE_SHA_SET_UNCHANGED
++ NO_CONCRETE_AUTHORITY_CONFLICT
+=> ZERO_CORE_CONTENT_RELOAD
 => REUSE_BOUND_GOVERNANCE_ATTESTATION
-=> TARGETED_CANONICAL_READ_ONLY
+=> FRESH_LIVE_IDENTITY_METADATA_ONLY
+=> EXACT_TARGETED_CANONICAL_READ_ONLY
+
+NO_VALID_BOUND_ATTESTATION
+OR AUTHORITY_FILE_SHA_DRIFT
+OR CONCRETE_AUTHORITY_CONFLICT
+=> READ_COMPACT_CAPSULE_OR_AUTHORITY_MANIFEST_FIRST
+=> COMPARE_EXACT_AUTHORITY_SHAS
+=> READ_ONLY_CHANGED_MISSING_OR_CONFLICTING_SECTIONS
+=> FULL_FILE_ONLY_IF_WHOLE_FILE_SEMANTICS_ARE_MATERIALLY_REQUIRED
 ```
 
 Fresh live repository/main/Issue/PR/head/CI identity checks remain mandatory. Reuse never overrides a changed authority, changed task packet, changed execution surface or identity drift.
@@ -430,6 +440,31 @@ Engineering Control is event-driven. It must wake for:
 - a material independent-Review finding;
 - a user-retained gate;
 - context-capacity/trust risk.
+
+Engineering Control and Governance Control are not separate authority classes. When they operate on the same project, live Control Capsule and governance epoch, they should share one ordinary control context by default. The active engineering/product blocker is handled first; governance/process repair follows after a safe checkpoint. This consolidation never weakens independent acceptance:
+
+```text
+ENGINEERING_CONTROL + GOVERNANCE_CONTROL
+=> SAME_ORDINARY_CONTROL_CONTEXT_BY_DEFAULT
+
+AUTHORITY_BEARING_INDEPENDENT_REVIEW
+=> FRESH_SEPARATE_ACCEPTED_CONTEXT_OR_AGENT
+=> WRITER_OR_CONTROL_SELF_PASS_IS_NOT_ACCEPTANCE
+```
+
+Model-context ingestion is itself a bounded control-plane resource. Provider/tool retrieval must use the narrowest equal-fidelity surface:
+
+```text
+EXACT_ITEM_ENDPOINT_BEFORE_COLLECTION_ENDPOINT=REQUIRED_WHEN_AVAILABLE
+TOOL_RESULT_PROJECTION_TO_DECISION_REQUIRED_FIELDS=REQUIRED_WHEN_SUPPORTED
+BROAD_ISSUE_COMMENT_ARRAY_IN_MODEL_CONTEXT=NO_BY_DEFAULT
+FULL_PR_HISTORY_IN_MODEL_CONTEXT=NO_BY_DEFAULT
+RAW_DIRECTORY_DUMP_IN_MODEL_CONTEXT=NO_BY_DEFAULT
+RAW_LONG_LOG_IN_MODEL_CONTEXT=NO_BY_DEFAULT
+KNOWN_LARGE_FULL_FILE_READ=NO_BY_DEFAULT
+```
+
+A broad collection or full-file read is allowed only when the bounded decision genuinely requires collection/whole-file semantics and a narrower query cannot preserve correctness.
 
 Routine healthy transitions proven by canonical provider/GitHub state should update the Control Capsule without an extra Engineering-Control model turn merely to restate them.
 
