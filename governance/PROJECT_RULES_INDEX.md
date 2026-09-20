@@ -17,11 +17,21 @@ After freeze, the downstream Writer consumes the exact Task Packet, its bound pr
 
 The same progressive-disclosure rule applies to Engineering Control and independent review: begin from the current Control Capsule/manifest plus fresh live identity, not from the complete chat transcript or full Issue history. Missing material context triggers targeted canonical retrieval; unresolved uncertainty fails closed. Chat history is not canonical project state.
 
-Engineering Control binds the applicable authority-file SHAs into a governance epoch. A full core-governance read is required on the first material action in a fresh control context, governance-epoch drift or a concrete authority conflict. With an unchanged epoch, reuse the exact bound governance/preflight attestation and read only changed/needed authority. Fresh live repository/main/Issue/PR/head/CI checks remain required.
+Engineering Control binds the applicable authority-file SHAs into a governance epoch. A new Chat window is not by itself a fresh control context and does not trigger a full governance read. Start from the valid Control Capsule/bound attestation, compare exact authority SHAs, and with an unchanged epoch read only changed/needed authority. When no valid attestation exists, an authority SHA drifts, or a concrete authority conflict appears, read the compact manifest first and then only changed/missing/conflicting sections; full files are exceptional when whole-file semantics are materially required. Fresh live repository/main/Issue/PR/head/CI checks remain required.
+
+Provider/tool retrieval follows the same progressive-disclosure rule: exact item before collection scan, projected decision-required fields before raw payload, and no broad Issue/PR history, raw directory dump, raw long log or known-large full-file ingestion by default.
 
 Unified V2 remains the sole project-wide normative engineering constitution.
 
-### 1.1 User phrase “统一规则”
+### 1.1 ChatGPT Project control bridge
+
+For ChatGPT Project-level enforcement use:
+
+- `governance/CHATGPT_PROJECT_GOVERNANCE_BRIDGE_V3_2026-09-20.md`
+
+The bridge is intentionally compact. It points ordinary control chats to the canonical GitHub Control Capsule and SHA-first authority model; it is not a second engineering constitution. Engineering Control and Governance Control may share one ordinary control context when bound to the same capsule/epoch, but authority-bearing independent Review remains separate.
+
+### 1.2 User phrase “统一规则”
 
 When the user asks to **“往统一规则里增加内容”**, **“把这条加入统一规则”**, **“add this to the unified rules”**, or equivalent, route the request through the governance-maintenance rule in Unified V2 and the shorthand in `AGENTS.md`.
 
