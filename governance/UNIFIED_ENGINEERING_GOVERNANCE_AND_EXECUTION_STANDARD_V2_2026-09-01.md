@@ -1123,8 +1123,8 @@ REQUESTED_VS_ACTUAL_REQUIRED_IDENTITY_MISMATCH=ROUTER_INCIDENT
 ONE_PRIMARY_WRITER_PER_SHARED_AUTHORITY_STAGE=YES
 WRITER_SELF_PASS_IS_NOT_INDEPENDENT_ACCEPTANCE
 ENGINEERING_CONTROL_SELF_PASS_IS_NOT_INDEPENDENT_ACCEPTANCE
-FINAL_INDEPENDENT_REVIEW_REQUIRES_NEW_CHAT_CONTEXT=YES
-T4_DEFAULT=NEW_INDEPENDENT_STRONGEST_APPROPRIATE_CHATGPT_WINDOW
+FINAL_INDEPENDENT_REVIEW_REQUIRES_FRESH_INDEPENDENT_CONTEXT=YES
+T4_DEFAULT=STRONGEST_APPROPRIATE_ACCEPTED_FRESH_INDEPENDENT_REVIEW_SURFACE
 ```
 
 Quota, points, free availability and wall-clock time are routing inputs, never authority to lower required quality.
@@ -1133,7 +1133,7 @@ A Router incident fails closed, prohibits automatic rerun and produces one compl
 
 ### Tool onboarding
 
-A new engineering executor/operator/orchestrator or material tool-configuration change requires:
+A new engineering executor/operator/orchestrator or material tool-configuration change normally requires:
 
 ```text
 BOUNDED_CANDIDATE
@@ -1141,8 +1141,31 @@ BOUNDED_CANDIDATE
 -> REPRESENTATIVE CAPABILITY + SAFETY EVIDENCE
 -> SEPARATE INDEPENDENT REVIEW
 -> USER ACTIVATION / PUBLICATION AUTHORITY
--> FIRST REAL TASK
+-> ACCEPTED REAL TASK
 ```
+
+When the exact material behavior cannot be evidenced efficiently without exercising the real route, and a separate synthetic smoke has lower decision value or materially higher operator burden, Engineering Control may freeze one **PILOT_ONLY qualification canary** before full tool acceptance. This is an evidence-acquisition exception, not accepted infrastructure.
+
+```text
+PILOT_ONLY_CANARY_REQUIRES=
+  EXACT_CANDIDATE_IDENTITY
+  + PROVIDER_NATIVE_OR_MATURE_ROUTE
+  + REVERSIBLE_BOUNDED_REAL_TASK
+  + ISOLATED_WORKTREE_OR_EQUIVALENT
+  + EXACT_TASK_PACKET_AND_MUTATION_ALLOWLIST
+  + ONE_PRIMARY_WRITER
+  + NO_SILENT_FALLBACK_OR_HIDDEN_RETRY
+  + FAIL_CLOSED_ON_IDENTITY_PERMISSION_INDEPENDENCE_OR_RECOVERY_MISMATCH
+  + NO_MARK_READY_MERGE_DEPLOY_RUNTIME_PRIVATE_API_EXCHANGE_OR_TRADING_AUTHORITY
+  + EXPLICIT_CURRENT_USER_PILOT_ACTIVATION
+
+CANARY_RESULT
+-> REPRESENTATIVE TOOL EVIDENCE
+-> FRESH INDEPENDENT TOOL_ACCEPTANCE_REVIEW
+-> ACCEPT | REJECT | REPLAN
+```
+
+The canary may create only the bounded development artifacts explicitly authorized by its packet, such as a task branch and Draft PR. It may not promote itself, merge itself, or convert a tool mismatch into a semantic retry. A failed canary preserves its exact checkpoint/evidence and returns to L1.
 
 Installed/free/popular does not equal accepted infrastructure. Multi-step automation must be checkpointed and human-recoverable; hidden semantic retries are prohibited.
 
