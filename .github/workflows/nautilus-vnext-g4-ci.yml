@@ -433,8 +433,8 @@ jobs:
         run: |
           set +e
           evidence_root="${RUNNER_TEMP}/g4-representative-capture"
-          /tmp/trader-assist-g4-capture-venv/bin/python \
-            scripts/nautilus_vnext_g4_representative_acquisition.py \
+          /tmp/trader-assist-g4-capture-venv/bin/python -m \
+            scripts.nautilus_vnext_g4_representative_acquisition \
             --evidence-root "${evidence_root}" \
             --result-path "${evidence_root}/acquisition-result.json" \
             --expected-head "${EXPECTED_EXACT_HEAD}" \
