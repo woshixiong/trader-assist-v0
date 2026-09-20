@@ -233,7 +233,23 @@ PREFLIGHT_BINDING_KEY =
   + EXECUTION_SURFACE
 ```
 
-If the exact key and authority remain unchanged, reuse the bound preflight attestation and perform only fresh identity/state checks plus targeted reads. Any binding drift invalidates reuse.
+If the exact key and authority remain unchanged, reuse the bound preflight attestation and perform only fresh identity/state checks plus targeted reads. A new Chat window by itself is not binding drift and does not require a full governance-content reload.
+
+If no valid bound attestation is available, or an applicable authority SHA changed, load the compact Control Capsule/authority manifest first, compare exact authority SHAs, and read only changed, missing or conflicting sections. Full-file governance loading is exceptional and requires materially necessary whole-file semantics.
+
+Before any potentially large provider/tool retrieval, apply the model-ingestion gate:
+
+```text
+EXACT_ITEM_ENDPOINT_CHECKED=YES|NOT_AVAILABLE
+COLLECTION_SCAN_REQUIRED=YES|NO
+TOOL_RESULT_PROJECTION_SUPPORTED=YES|NO
+DECISION_REQUIRED_FIELDS_ONLY=YES|NO
+RAW_LONG_LOG_OR_LARGE_FILE_REQUIRED=YES|NO
+```
+
+Default PASS requires exact-item/targeted retrieval and projected decision fields when the provider surface supports them. Broad Issue/PR history arrays, raw directory dumps, raw long logs and known-large full-file reads fail this gate unless a concrete decision need is recorded.
+
+When Engineering Control and Governance Control share the same Control Capsule/epoch, use one control context by default and sequence active engineering first, governance/process follow-up second. Independent authority-bearing Review remains a fresh separate context/agent.
 
 Before a context-heavy phase, evaluate context trust/headroom using observable proxies; no user-visible token meter is assumed.
 
