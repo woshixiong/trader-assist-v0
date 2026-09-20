@@ -1395,6 +1395,70 @@ USER_MAC_FULL_SUITE_DEFAULT=NO_WHEN_GITHUB_CI_IS_EQUAL_OR_HIGHER_FIDELITY
 FOCUSED_LOCAL_TESTS_DURING_SEMANTIC_EDIT=ALLOWED_WHEN_CHEAP_AND_FIT
 ```
 
+### 13.2A Exact-head CI failure classification before repair
+
+Every failed exact-head CI result must be classified **before** any retry, model-backed repair, or code mutation. A red check is evidence requiring diagnosis; it is not automatic authority to edit code.
+
+Use exactly one current classification:
+
+```text
+CI_FAILURE_CLASS=
+  TRANSIENT_OR_KNOWN_FLAKE
+  | DETERMINISTIC_MECHANICAL
+  | SEMANTIC
+  | INFRASTRUCTURE_OR_TRANSPORT
+  | UNRESOLVED
+```
+
+Required handling:
+
+```text
+TRANSIENT_OR_KNOWN_FLAKE
+-> preserve the same exact head
+-> rerun only the failed job/workflow at most once
+-> if PASS: continue; APPLICATION_SEMANTIC_REPAIR_CONSUMED=NO
+-> if FAIL again: stop blind reruns and reclassify from evidence
+
+DETERMINISTIC_MECHANICAL
+-> examples: formatter/linter rule, unambiguous import/static-config correction,
+   generated-file normalization, or another exact non-semantic source defect
+-> do not same-head rerun when unchanged source deterministically reproduces the failure
+-> prefer deterministic/provider-native tooling or Engineering-Control direct narrow repair
+-> model-backed semantic Writer is prohibited by default when the correction is exact and non-semantic
+-> repair must remain inside the frozen allowlist and preserve semantics
+-> new head -> required exact-head CI rerun
+-> APPLICATION_SEMANTIC_REPAIR_CONSUMED=NO unless the correction changes behavior/contract semantics
+
+SEMANTIC
+-> enter the frozen bounded semantic repair route
+-> consume the applicable semantic repair budget
+-> new head -> exact-head CI -> fresh independent Review when required
+
+INFRASTRUCTURE_OR_TRANSPORT
+-> preserve semantic checkpoint/head
+-> retry or recover only the failed transport/provider/CI-control-plane tail as authorized
+-> do not redispatch semantic Writer merely to recover publication, network, runner, quota,
+   worktree, or result-egress failure
+
+UNRESOLVED
+-> no retry loop and no code mutation
+-> collect the minimum decisive evidence and classify before proceeding
+```
+
+Permanent invariants:
+
+```text
+CI_FAILURE_CLASSIFICATION_BEFORE_REPAIR=REQUIRED
+FIRST_RED_CI_NE_AUTOMATIC_CODE_CHANGE=YES
+KNOWN_TRANSIENT_SAME_HEAD_RERUN_MAX=1
+DETERMINISTIC_MECHANICAL_FAILURE_NE_SEMANTIC_REPAIR=YES
+DETERMINISTIC_MECHANICAL_FAILURE_PREFERS_NON_MODEL_REPAIR=YES
+TRANSPORT_OR_INFRA_FAILURE_NE_SEMANTIC_RETRY=YES
+SECOND_FAILED_SAME_HEAD_TRANSIENT_ATTEMPT=>RECLASSIFY_NOT_BLIND_RERUN
+```
+
+A mechanical repair stops being mechanical when it changes behavior, authority, interface, contract, lifecycle, strategy semantics, or another material invariant; it must then be reclassified and use the applicable semantic route.
+
 A model-backed Writer may run the smallest decisive focused tests needed to iterate on its semantic change. Once an exact semantic checkpoint exists, deterministic full-suite, exact-lock, Linux, status, diff, artifact and CI mechanics move to GitHub/Engineering Control unless the claim is genuinely local.
 
 Reuse an existing accepted canonical GitHub workflow when one already proves the claim. Do not create a new CI workflow merely to avoid a cheap platform-neutral focused local check; new workflow surface requires its own engineering value and governance fit.
