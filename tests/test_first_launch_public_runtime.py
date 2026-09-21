@@ -31,6 +31,7 @@ from websockets.exceptions import ConnectionClosedOK
 
 from trader_assist_v0.first_launch.configuration import RiskConfiguration
 from trader_assist_v0.first_launch.market_data import (
+    DataQualityState,
     MarketDataError,
     RawEvidence,
     evidence_from_raw,
@@ -2290,6 +2291,24 @@ def test_r3_e_blocked_send_times_out_without_an_orphan_coordinator(
             received_at=shifted_now,
             received_monotonic=shifted_monotonic,
         )
+        runtime.recover_public_snapshot(
+            raw_5m=_snapshot_json([_candle_obj(i) for i in range(64)]),
+            raw_15m=_snapshot_json(
+                [_candle_obj(i, interval="15m") for i in range(1, 21)]
+            ),
+            raw_metadata=_metadata_json(),
+            now=shifted_now,
+        )
+        snapshot = runtime._market_data.strategy_snapshot(shifted_now)
+        assert snapshot.active_context is not None
+        assert shifted_now - snapshot.active_context.evidence.received_at <= timedelta(seconds=15)
+        assert snapshot.candles_5m
+        assert shifted_now.timestamp() * 1000 - snapshot.candles_5m[-1].close_time_ms <= 390_000
+        assert snapshot.candles_15m
+        assert shifted_now.timestamp() * 1000 - snapshot.candles_15m[-1].close_time_ms <= 990_000
+        assert snapshot.metadata is not None
+        assert shifted_now - snapshot.metadata.evidence.received_at <= timedelta(hours=24)
+        assert snapshot.quality.state is DataQualityState.READY
         assert runtime.health_state is RuntimeHealthState.READY
         websocket = _ControlledWebSocket(clock=clock, post_plans=[_ControlledPost(candle)])
         shutdown_event = asyncio.Event()
