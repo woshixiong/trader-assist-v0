@@ -57,7 +57,9 @@ ONE_MINUTE_NS = 60_000_000_000
 PHASE0C_STRATEGY_RELEASE_SHA = "830f0e6ab3bfb711cf29b83f41a7c86ed7fae0c2"
 PHASE0C_STRATEGY_PACKAGE_HASH = "e9fc9b43de439bfd62748007974c07540a83c7a5f7cbc0017e993b42eea417f0"
 PHASE0C_MARKET_SET_HASH = "9044fb1fa5f25d29cea9c42ee5e3f5aa73448db08d26a988f5d0e8df10dd24ca"
-PHASE0C_PROSPECTIVE_CANDIDATE_HASH = "5176739d9ac0b2384675dd077781be187d25458bb3ea00bdc25b5366419ef1e2"
+PHASE0C_PROSPECTIVE_CANDIDATE_HASH = (
+    "5176739d9ac0b2384675dd077781be187d25458bb3ea00bdc25b5366419ef1e2"
+)
 
 
 class RealT2IntegrationError(ValueError):
@@ -191,7 +193,9 @@ class StructuralSourceEvidence(BaseModel):
     ) -> "StructuralSourceEvidence":
         frozen = FROZEN_BY_MARKET.get(decision.market_id)
         if frozen is None or decision.decision is not DecisionKind.FORMAL_SETUP_CONFIRMED:
-            raise RealT2IntegrationError("only frozen Formal Setup may materialize structural source")
+            raise RealT2IntegrationError(
+                "only frozen Formal Setup may materialize structural source"
+            )
         payload = cast(
             dict[str, object],
             json.loads(TypeAdapter(StrategyDecision).dump_json(decision)),
@@ -349,7 +353,10 @@ class RealT2StrategyCoordinator:
             admission=admission,
             decision=decision,
         )
-        if any(x.structural.formal_setup_id == structural.formal_setup_id for x in self.observations):
+        if any(
+            x.structural.formal_setup_id == structural.formal_setup_id
+            for x in self.observations
+        ):
             raise RealT2IntegrationError("same Formal Setup emitted more than once")
         seed = sha256_hex(canonical_json_bytes({
             "admission": admission.admission_hash,
@@ -523,7 +530,15 @@ def derive_restart_pivot_source(
     eligible.sort(key=lambda e: e.admission_ordinal)
     if len(eligible) < 3:
         return None
-    candidates: list[tuple[AdmittedEvent, AdmittedEvent, AdmittedEvent, Decimal, RestartReferenceKind]] = []
+    candidates: list[
+        tuple[
+            AdmittedEvent,
+            AdmittedEvent,
+            AdmittedEvent,
+            Decimal,
+            RestartReferenceKind,
+        ]
+    ] = []
     for left, pivot, right in zip(eligible, eligible[1:], eligible[2:], strict=False):
         if not (
             left.source.ts_event + ONE_MINUTE_NS == pivot.source.ts_event
@@ -532,11 +547,15 @@ def derive_restart_pivot_source(
             return None
         if side is PositionSide.LONG:
             value = _decimal(pivot.source.payload, "high")
-            if value > _decimal(left.source.payload, "high") and value >= _decimal(right.source.payload, "high"):
+            if value > _decimal(left.source.payload, "high") and value >= _decimal(
+                right.source.payload, "high"
+            ):
                 candidates.append((left, pivot, right, value, RestartReferenceKind.PIVOT_HIGH))
         else:
             value = _decimal(pivot.source.payload, "low")
-            if value < _decimal(left.source.payload, "low") and value <= _decimal(right.source.payload, "low"):
+            if value < _decimal(left.source.payload, "low") and value <= _decimal(
+                right.source.payload, "low"
+            ):
                 candidates.append((left, pivot, right, value, RestartReferenceKind.PIVOT_LOW))
     if not candidates:
         return None
@@ -735,7 +754,10 @@ def provider_instrument_metadata_document(
         raise RealT2IntegrationError("provider instrument serialization is invalid")
     if str(getattr(provider_instrument, "id", "")) != materialization.identity.instrument_id:
         raise RealT2IntegrationError("provider instrument id conflicts with frozen identity")
-    if int(getattr(provider_instrument, "size_precision")) != materialization.registry_market.size_decimals:
+    if (
+        int(getattr(provider_instrument, "size_precision"))
+        != materialization.registry_market.size_decimals
+    ):
         raise RealT2IntegrationError("provider size precision conflicts with raw metadata")
     tick = _provider_tick(provider_instrument)
     quantity = Decimal(str(getattr(provider_instrument, "size_increment")))
@@ -804,7 +826,8 @@ def assemble_real_t2_root(
     ):
         if len(by_role.get(role, [])) != 20:
             raise RealT2IntegrationError(f"root requires 20 {role.value} artifacts")
-    one = lambda role: by_role[role][0]
+    def one(role: object) -> Any:
+        return by_role[role][0]
     return T2SourceRootSnapshot.create(
         task_id=REAL_T2_TASK_ID,
         governance_epoch=governance_epoch,
