@@ -90,9 +90,9 @@ def _admission(
         },
     )
     return AdmittedEvent.create(
-        process_epoch="p",
-        continuity_epoch="c",
-        admission_epoch="a",
+        process_epoch="process-test",
+        continuity_epoch="continuity-test",
+        admission_epoch="admission-test",
         admission_ordinal=ordinal,
         admission_ts=initialized,
         source_identity=source.replay_identity,
@@ -213,8 +213,8 @@ def test_focal_rule_uses_timestamp_then_market_then_admission_then_id() -> None:
             package_id="p-" + setup_id,
             opportunity_id="o-" + setup_id,
             thesis_id="t-" + setup_id,
-            continuity_epoch="c",
-            admission_epoch="a",
+            continuity_epoch="continuity-test",
+            admission_epoch="admission-test",
         )
 
     later_take_like = obs(101, 1, 1, "later")
@@ -280,8 +280,8 @@ def _focal_for_validation() -> FormalSetupObservation:
         package_id="package-validation",
         opportunity_id="opportunity-validation",
         thesis_id="thesis-validation",
-        continuity_epoch="c",
-        admission_epoch="a",
+        continuity_epoch="continuity-test",
+        admission_epoch="admission-test",
     )
 
 
@@ -310,9 +310,9 @@ def _bbo_for_validation(
         },
     )
     return AdmittedEvent.create(
-        process_epoch="p",
-        continuity_epoch="c",
-        admission_epoch="a",
+        process_epoch="process-test",
+        continuity_epoch="continuity-test",
+        admission_epoch="admission-test",
         admission_ordinal=ordinal,
         admission_ts=1_800_000_000_000_000_200 + ordinal,
         source_identity=source.replay_identity,
