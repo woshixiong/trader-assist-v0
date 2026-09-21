@@ -37,7 +37,15 @@ if TYPE_CHECKING:
 
 INFO_URL = "https://api.hyperliquid.xyz/info"
 _ALLOWED_TYPES = frozenset(
-    {"perpDexs", "allPerpMetas", "meta", "metaAndAssetCtxs", "candleSnapshot", "l2Book"}
+    {
+        "perpDexs",
+        "allPerpMetas",
+        "meta",
+        "metaAndAssetCtxs",
+        "candleSnapshot",
+        "l2Book",
+        "fundingHistory",
+    }
 )
 
 
@@ -144,8 +152,29 @@ class HyperliquidPublicClient:
                 and isinstance(request["endTime"], int)
             )
         if request_type == "l2Book":
-            return set(payload) <= {"type", "coin", "nSigFigs", "mantissa"} and isinstance(
-                payload.get("coin"), str
+            return set(payload) <= {
+                "type", "coin", "nSigFigs", "mantissa"
+            } and isinstance(payload.get("coin"), str)
+        if request_type == "fundingHistory":
+            if set(payload) != {
+                "type",
+                "coin",
+                "startTime",
+                "endTime",
+            }:
+                return False
+            coin = payload["coin"]
+            start_time = payload["startTime"]
+            end_time = payload["endTime"]
+            return (
+                isinstance(coin, str)
+                and bool(coin)
+                and isinstance(start_time, int)
+                and not isinstance(start_time, bool)
+                and isinstance(end_time, int)
+                and not isinstance(end_time, bool)
+                and start_time >= 0
+                and end_time >= start_time
             )
         return False
 
@@ -187,6 +216,27 @@ class HyperliquidPublicClient:
 
     def l2_book(self, *, coin: str) -> object:
         return self.request({"type": "l2Book", "coin": coin})
+
+    def funding_history_with_raw(
+        self, *, coin: str, start_ms: int, end_ms: int
+    ) -> PublicApiResponse:
+        return self.request_with_raw(
+            {
+                "type": "fundingHistory",
+                "coin": coin,
+                "startTime": start_ms,
+                "endTime": end_ms,
+            }
+        )
+
+    def funding_history(
+        self, *, coin: str, start_ms: int, end_ms: int
+    ) -> object:
+        return self.funding_history_with_raw(
+            coin=coin,
+            start_ms=start_ms,
+            end_ms=end_ms,
+        ).parsed
 
     def liquidity_assessment(
         self, *, market_id: str, coin: str, side: Side, response: object

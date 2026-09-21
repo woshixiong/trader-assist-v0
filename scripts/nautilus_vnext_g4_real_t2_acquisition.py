@@ -31,12 +31,22 @@ from trader_assist_v0.nautilus_g4.t2_acquisition import (
     RealT2IntegrationError,
     RealT2StrategyCoordinator,
     expected_external_bar_type,
+    frozen_task5d_prospective_candidate,
     materialize_fixed_markets_from_public_metadata,
+    materialize_task5d_g4_manifest,
+    materialize_task5d_validation_source,
+    position_side_for_focal,
     provider_instrument_metadata_document,
+    select_focal_causal_bbo,
+)
+from trader_assist_v0.nautilus_g4.t2_shadow import (
+    RoleBoundSourceArtifact,
+    SourceReference,
+    T2SourceRole,
 )
 
 _GIT_OID = re.compile(r"^[0-9a-f]{40}$")
-TASK_PACKET_SHA256 = "7688773c709ba2fa69999e5703c575541a90425ab6b1c49dbe8d9fc91fe6ded4"
+TASK_PACKET_SHA256 = "9be069776518f311872e0e1cde25efc74a6f1a4f97726a1f36ab4ef865107250"
 RESULT_SCHEMA = "TASK5D_REAL_T2_ACQUISITION_RESULT_V1"
 NOT_EVALUABLE = 2
 APPLICATION_FAILURE = 3
@@ -240,56 +250,369 @@ def run_single_attempt(*, evidence_root: Path, result_path: Path, expected_head:
             return NOT_EVALUABLE
 
         # Structural source is the outcome-blind global minimum among all Formal Setups.
+        structural_artifact = RoleBoundSourceArtifact.create(
+            role=T2SourceRole.STRUCTURAL_SOURCE,
+            name="focal-structural-source",
+            exact_bytes=canonical_json_bytes(
+                focal.structural.model_dump(mode="json")
+            ),
+        )
         structural_path = evidence_root / "focal-structural-source.json"
-        structural_path.write_text(focal.structural.model_dump_json(), encoding="utf-8")
+        structural_path.write_bytes(structural_artifact.exact_bytes())
 
         # Persist provider-native normalized metadata for every frozen market; absence
         # is NOT_EVALUABLE, never a default or reconstructed substitute.
         from nautilus_trader.model import CryptoPerpetual
+
         metadata_dir = evidence_root / "provider-instruments"
         metadata_dir.mkdir(parents=True, exist_ok=True)
         metadata_names: list[str] = []
+        metadata_documents: dict[str, bytes] = {}
+        native_by_market: dict[str, CryptoPerpetual] = {}
         for item in markets:
-            normalized = coordinator.provider_instruments.get(item.identity.market_id)
+            normalized = coordinator.provider_instruments.get(
+                item.identity.market_id
+            )
             if normalized is None:
                 _write_json(result_path, {
                     **base,
                     "RESULT": "MISSING_PROVIDER_NATIVE_INSTRUMENT",
-                    "terminal_state": "REAL_T2_SOURCE_ABSENT_OR_NOT_EVALUABLE",
+                    "terminal_state": (
+                        "REAL_T2_SOURCE_ABSENT_OR_NOT_EVALUABLE"
+                    ),
                     "market_id": item.identity.market_id,
                     "formal_setup_count": len(coordinator.observations),
                     "focal_key": focal.focal_key,
                 })
                 return NOT_EVALUABLE
             native = CryptoPerpetual.from_dict(normalized)
+            native_by_market[item.identity.market_id] = native
             document = provider_instrument_metadata_document(
                 raw_provider_response=response.raw_bytes,
                 materialization=item,
                 provider_instrument=native,
             )
+            metadata_documents[item.identity.market_id] = document
             target = metadata_dir / (
-                f"{item.identity.ordinal:02d}-{item.identity.provider_coin}.json"
+                f"{item.identity.ordinal:02d}-"
+                f"{item.identity.provider_coin}.json"
             )
             target.write_bytes(document)
-            metadata_names.append(str(target.relative_to(evidence_root)))
+            metadata_names.append(
+                str(target.relative_to(evidence_root))
+            )
 
-        # Exact Validation/cost/G4 participation roles are intentionally never guessed.
-        # The source-root assembler in t2_acquisition accepts them only after exact
-        # existing owners have materialized every required source role.
+        provider_wire_artifact = RoleBoundSourceArtifact.create(
+            role=T2SourceRole.PROVIDER_INSTRUMENT_WIRE,
+            name="provider-metaAndAssetCtxs-raw",
+            exact_bytes=response.raw_bytes,
+        )
+        expression_artifacts = tuple(
+            RoleBoundSourceArtifact.create(
+                role=T2SourceRole.MARKET_EXPRESSION,
+                name=f"market-expression-{item.identity.ordinal:02d}",
+                exact_bytes=canonical_json_bytes(
+                    item.expression.model_dump(mode="json")
+                ),
+            )
+            for item in markets
+        )
+        registry_artifacts = tuple(
+            RoleBoundSourceArtifact.create(
+                role=T2SourceRole.REGISTRY_MARKET,
+                name=f"registry-market-{item.identity.ordinal:02d}",
+                exact_bytes=canonical_json_bytes(
+                    item.registry_market.model_dump(mode="json")
+                ),
+            )
+            for item in markets
+        )
+        metadata_artifacts = tuple(
+            RoleBoundSourceArtifact.create(
+                role=T2SourceRole.INSTRUMENT_METADATA,
+                name=f"instrument-metadata-{item.identity.ordinal:02d}",
+                exact_bytes=metadata_documents[
+                    item.identity.market_id
+                ],
+                references=(
+                    SourceReference(
+                        role=provider_wire_artifact.role,
+                        name=provider_wire_artifact.name,
+                        artifact_hash=(
+                            provider_wire_artifact.artifact_hash
+                        ),
+                    ),
+                    SourceReference(
+                        role=registry_artifacts[
+                            item.identity.ordinal - 1
+                        ].role,
+                        name=registry_artifacts[
+                            item.identity.ordinal - 1
+                        ].name,
+                        artifact_hash=registry_artifacts[
+                            item.identity.ordinal - 1
+                        ].artifact_hash,
+                    ),
+                ),
+            )
+            for item in markets
+        )
+        metadata_artifact_by_market = {
+            item.identity.market_id: artifact
+            for item, artifact in zip(
+                markets, metadata_artifacts, strict=True
+            )
+        }
+        e4_run_artifact = RoleBoundSourceArtifact.create(
+            role=T2SourceRole.E4_RUN_MANIFEST,
+            name="e4-run-manifest",
+            exact_bytes=canonical_json_bytes(
+                manifest.model_dump(mode="json")
+            ),
+        )
+        e4_pit_artifact = RoleBoundSourceArtifact.create(
+            role=T2SourceRole.E4_PIT_SNAPSHOT,
+            name="e4-pit-snapshot",
+            exact_bytes=canonical_json_bytes(
+                snapshot.model_dump(mode="json")
+            ),
+        )
+        e4_admission_artifacts = tuple(
+            RoleBoundSourceArtifact.create(
+                role=T2SourceRole.E4_ADMISSION,
+                name=(
+                    f"e4-admission-{event.admission_ordinal:09d}-"
+                    f"{event.admission_hash[:12]}"
+                ),
+                exact_bytes=canonical_json_bytes(
+                    event.model_dump(mode="json")
+                ),
+            )
+            for event in coordinator.admissions
+        )
+        admission_artifact_by_hash = {
+            event.admission_hash: artifact
+            for event, artifact in zip(
+                coordinator.admissions,
+                e4_admission_artifacts,
+                strict=True,
+            )
+        }
+
+        side = position_side_for_focal(focal)
+        causal_bbo = select_focal_causal_bbo(
+            admissions=coordinator.admissions,
+            focal=focal,
+            side=side,
+        )
+        if causal_bbo is None:
+            _write_json(result_path, {
+                **base,
+                "RESULT": "MISSING_CAUSAL_BBO",
+                "terminal_state": (
+                    "REAL_T2_SOURCE_ABSENT_OR_NOT_EVALUABLE"
+                ),
+                "formal_setup_count": len(coordinator.observations),
+                "focal_key": focal.focal_key,
+                "focal_market_id": focal.structural.market_id,
+                "focal_formal_setup_id": (
+                    focal.structural.formal_setup_id
+                ),
+                "focal_opportunity_switch": False,
+                "candidate_switch": False,
+            })
+            return NOT_EVALUABLE
+        bbo_artifact = admission_artifact_by_hash.get(
+            causal_bbo.admission.admission_hash
+        )
+        if bbo_artifact is None:
+            raise RealT2IntegrationError(
+                "causal BBO admission artifact is absent"
+            )
+
+        prospective = frozen_task5d_prospective_candidate()
+        prospective_artifact = RoleBoundSourceArtifact.create(
+            role=(
+                T2SourceRole.PROSPECTIVE_ECONOMIC_CANDIDATE_IDENTITY
+            ),
+            name="prospective-economic-candidate",
+            exact_bytes=canonical_json_bytes(
+                prospective.model_dump(mode="json")
+            ),
+        )
+        selected = prospective.materialize_candidate_manifest(
+            structural_component_manifest_hash=(
+                structural_artifact.artifact_hash
+            )
+        )
+        selected_artifact = RoleBoundSourceArtifact.create(
+            role=T2SourceRole.SELECTED_CANDIDATE,
+            name="selected-candidate",
+            exact_bytes=canonical_json_bytes(
+                selected.model_dump(mode="json")
+            ),
+            references=(
+                SourceReference(
+                    role=prospective_artifact.role,
+                    name=prospective_artifact.name,
+                    artifact_hash=prospective_artifact.artifact_hash,
+                ),
+            ),
+        )
+        g4_manifest = materialize_task5d_g4_manifest(
+            exact_source_git_head=head,
+            exact_source_git_tree=tree,
+            e4_manifest_hash=manifest.manifest_hash,
+            pit_snapshot_hash=snapshot.snapshot_hash,
+            structural_artifact=structural_artifact,
+            candidate=selected,
+            e4_admission_artifacts=e4_admission_artifacts,
+        )
+        g4_artifact = RoleBoundSourceArtifact.create(
+            role=T2SourceRole.G4_RUN_MANIFEST,
+            name="g4-run-manifest",
+            exact_bytes=canonical_json_bytes(
+                g4_manifest.model_dump(mode="json")
+            ),
+        )
+        focal_market = next(
+            item
+            for item in markets
+            if item.identity.market_id == focal.structural.market_id
+        )
+        focal_metadata_artifact = metadata_artifact_by_market[
+            focal.structural.market_id
+        ]
+        focal_native = native_by_market[
+            focal.structural.market_id
+        ]
+        try:
+            validation = materialize_task5d_validation_source(
+                clock_start_ns=start_ns,
+                exact_source_git_head=head,
+                exact_source_git_tree=tree,
+                focal=focal,
+                side=side,
+                causal_bbo=causal_bbo,
+                provider_instrument=focal_native,
+                registry_market=focal_market.registry_market,
+                instrument_metadata_version=(
+                    focal_market.expression.instrument_metadata_version
+                ),
+                instrument_metadata_artifact=(
+                    focal_metadata_artifact
+                ),
+                e4_admission_artifact=bbo_artifact,
+                prospective_candidate_artifact=(
+                    prospective_artifact
+                ),
+                prospective_candidate=prospective,
+                g4_run_manifest_artifact=g4_artifact,
+                g4_run_manifest=g4_manifest,
+            )
+        except RealT2IntegrationError as exc:
+            _write_json(result_path, {
+                **base,
+                "RESULT": "VALIDATION_SOURCE_NOT_EVALUABLE",
+                "terminal_state": (
+                    "REAL_T2_SOURCE_ABSENT_OR_NOT_EVALUABLE"
+                ),
+                "reason": str(exc),
+                "formal_setup_count": len(coordinator.observations),
+                "focal_key": focal.focal_key,
+                "focal_market_id": focal.structural.market_id,
+                "focal_formal_setup_id": (
+                    focal.structural.formal_setup_id
+                ),
+                "focal_bbo_admission_hash": (
+                    causal_bbo.admission.admission_hash
+                ),
+                "focal_opportunity_switch": False,
+                "candidate_switch": False,
+            })
+            return NOT_EVALUABLE
+
+        source_artifacts = (
+            e4_run_artifact,
+            e4_pit_artifact,
+            structural_artifact,
+            prospective_artifact,
+            selected_artifact,
+            g4_artifact,
+            provider_wire_artifact,
+            *expression_artifacts,
+            *registry_artifacts,
+            *metadata_artifacts,
+            *e4_admission_artifacts,
+            validation.validation_source_artifact,
+            validation.validation_reference_artifact,
+        )
+        source_role_dir = evidence_root / "source-roles"
+        source_role_dir.mkdir(parents=True, exist_ok=True)
+        source_role_names: list[str] = []
+        for artifact in source_artifacts:
+            target = source_role_dir / (
+                f"{artifact.role.value}--{artifact.name}.json"
+            )
+            _write_json(
+                target, artifact.model_dump(mode="json")
+            )
+            source_role_names.append(
+                str(target.relative_to(evidence_root))
+            )
+
+        required_root_roles = {
+            role.value for role in T2SourceRole
+        }
+        materialized_roles = {
+            artifact.role.value for artifact in source_artifacts
+        }
+        missing_roles = sorted(
+            required_root_roles - materialized_roles
+        )
         _write_json(result_path, {
             **base,
-            "RESULT": "FOCAL_SOURCE_CAPTURED",
-            "terminal_state": "ROOT_MATERIALIZATION_REQUIRES_EXACT_SOURCE_ROLES",
+            "RESULT": "VALIDATION_SOURCE_MATERIALIZED",
+            "terminal_state": (
+                "ROOT_MATERIALIZATION_MISSING_EXACT_SOURCE_ROLES"
+                if missing_roles
+                else "ROOT_SOURCE_ROLES_COMPLETE"
+            ),
             "formal_setup_count": len(coordinator.observations),
             "focal_key": focal.focal_key,
             "focal_market_id": focal.structural.market_id,
-            "focal_formal_setup_id": focal.structural.formal_setup_id,
+            "focal_formal_setup_id": (
+                focal.structural.formal_setup_id
+            ),
             "focal_structural_source": structural_path.name,
+            "focal_bbo_admission_hash": (
+                causal_bbo.admission.admission_hash
+            ),
             "provider_instrument_metadata": metadata_names,
+            "source_role_artifacts": source_role_names,
+            "validation_source_artifact_hash": (
+                validation.validation_source_artifact.artifact_hash
+            ),
+            "validation_reference_hash": (
+                validation.validation_reference.reference_hash
+            ),
+            "validation_fully_materialized": (
+                validation.validation_reference.fully_materialized
+            ),
+            "fee_control_bps_one_way": "4.5",
+            "round_trip_technical_fee_control_bps": "9.0",
+            "actual_user_fee_rate_claim": False,
+            "spread_separate_debit": (
+                "NOT_APPLICABLE_EXECUTABLE_BBO_EMBEDS_CROSSING"
+            ),
+            "slippage_zero_scope": "CONTROL_ONLY",
+            "latency_ms": "0",
+            "latency_evidence_role": "CONTROL_ONLY",
+            "missing_root_roles": missing_roles,
             "focal_opportunity_switch": False,
             "candidate_switch": False,
         })
-        return NOT_EVALUABLE
+        return NOT_EVALUABLE if missing_roles else 0
     except Exception as exc:
         _write_json(result_path, {
             **_result_base(head, tree, start_ns),

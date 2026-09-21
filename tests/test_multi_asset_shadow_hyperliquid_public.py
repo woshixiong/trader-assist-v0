@@ -41,6 +41,11 @@ def test_only_public_info_market_data_request_shapes_are_issued() -> None:
     client.metadata_and_context("xyz")
     client.closed_candles(coin="xyz:XYZ100", interval="5m", start_ms=0, end_ms=300_000)
     client.l2_book(coin="BTC")
+    client.funding_history_with_raw(
+        coin="BTC",
+        start_ms=1_000,
+        end_ms=2_000,
+    )
     assert {url for url, _ in seen} == {INFO_URL}
     assert [body["type"] for _, body in seen] == [
         "perpDexs",
@@ -48,6 +53,7 @@ def test_only_public_info_market_data_request_shapes_are_issued() -> None:
         "metaAndAssetCtxs",
         "candleSnapshot",
         "l2Book",
+        "fundingHistory",
     ]
     assert "dex" not in seen[1][1]
     assert seen[3][1] == {
@@ -67,7 +73,28 @@ def test_only_public_info_market_data_request_shapes_are_issued() -> None:
         {"type": "clearinghouseState", "user": "0xabc"},
         {"type": "openOrders", "user": "0xabc"},
         {"type": "userRateLimit", "user": "0xabc"},
-        {"type": "candleSnapshot", "req": {"coin": "BTC", "interval": "15m"}},
+        {
+            "type": "candleSnapshot",
+            "req": {"coin": "BTC", "interval": "15m"},
+        },
+        {
+            "type": "fundingHistory",
+            "coin": "BTC",
+            "startTime": 0,
+        },
+        {
+            "type": "fundingHistory",
+            "coin": "BTC",
+            "startTime": 0,
+            "endTime": 1,
+            "user": "0xabc",
+        },
+        {
+            "type": "fundingHistory",
+            "coin": "BTC",
+            "startTime": True,
+            "endTime": 1,
+        },
     ],
 )
 def test_account_and_unsupported_public_surfaces_fail_before_transport(
@@ -310,3 +337,57 @@ def test_request_with_raw_preserves_exact_http_bytes_without_reserialization() -
     assert response.parsed == {"universe": [1, 2]}
     assert response.raw_sha256 == sha256_hex(raw)
     assert json.dumps(response.parsed, separators=(",", ":")).encode() != raw
+
+
+def test_funding_history_preserves_exact_public_raw_bytes_and_shape() -> None:
+    raw = (
+        b'[{"coin":"BTC","fundingRate":"0.0001",'
+        b'"premium":"0","time":1500}]\n'
+    )
+    seen: list[dict[str, object]] = []
+
+    def post(
+        _url: str,
+        body: bytes,
+        _timeout: float,
+    ) -> bytes:
+        seen.append(json.loads(body))
+        return raw
+
+    client = HyperliquidPublicClient(post=post)
+    response = client.funding_history_with_raw(
+        coin="BTC",
+        start_ms=1_000,
+        end_ms=2_000,
+    )
+    assert seen == [
+        {
+            "type": "fundingHistory",
+            "coin": "BTC",
+            "startTime": 1_000,
+            "endTime": 2_000,
+        }
+    ]
+    assert response.raw_bytes == raw
+    assert response.parsed == [
+        {
+            "coin": "BTC",
+            "fundingRate": "0.0001",
+            "premium": "0",
+            "time": 1500,
+        }
+    ]
+    assert response.raw_sha256 == sha256_hex(raw)
+
+
+def test_funding_history_rejects_reverse_window_before_transport() -> None:
+    client = HyperliquidPublicClient(
+        post=lambda *_: pytest.fail("transport must not run")
+    )
+    with pytest.raises(PublicDataError, match="approved"):
+        client.funding_history_with_raw(
+            coin="BTC",
+            start_ms=2_000,
+            end_ms=1_000,
+        )
+

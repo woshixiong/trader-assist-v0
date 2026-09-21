@@ -13,7 +13,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any, Protocol, cast
+from typing import Protocol, cast, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
@@ -37,16 +37,30 @@ from trader_assist_v0.nautilus_e4.contracts import (
     MarketExpression,
 )
 from trader_assist_v0.nautilus_g4.catalog_bridge import EvaluatorSupplementEvidence
+from trader_assist_v0.nautilus_g4.t2_shadow import (
+    RoleBoundSourceArtifact,
+    SourceReference,
+    T2SourceRole,
+    T2SourceRootSnapshot,
+)
 from trader_assist_v0.nautilus_pilot.contracts import StrategyInputEvent
 from trader_assist_v0.nautilus_pilot.strategy_package import (
     PilotStrategyEvaluator,
     StrategyPackageManifest,
 )
 from trader_assist_v0.vnext_g4.contracts import (
+    CandidateConfig,
+    CandidateManifest,
     CausalLineage,
+    EvidenceArtifactHash,
+    ExecutionModelConfig,
+    G4RunManifest,
+    LatencyEvidenceRole,
     PositionSide,
+    ProspectiveEconomicCandidateIdentity,
     RestartReferenceEvidence,
     RestartReferenceKind,
+    ValidationReference,
 )
 
 REAL_T2_TASK_ID = "PILOT_TASK5D_PHASE0E_R_REAL_T2_INTEGRATION_R1"
@@ -60,6 +74,107 @@ PHASE0C_MARKET_SET_HASH = "9044fb1fa5f25d29cea9c42ee5e3f5aa73448db08d26a988f5d0e
 PHASE0C_PROSPECTIVE_CANDIDATE_HASH = (
     "5176739d9ac0b2384675dd077781be187d25458bb3ea00bdc25b5366419ef1e2"
 )
+
+
+VALIDATION_SOURCE_PROFILE_ID = (
+    "TASK5D_REAL_T2_NONPROD_TECH_VALIDATION_V1_2026_09_21"
+)
+VALIDATION_REFERENCE_ID = "TASK5D_REAL_T2_VALIDATION_REF_V1"
+FEE_PROFILE_ID = "TASK5D_HL_MAIN_PUBLIC_BASE_TAKER_CONTROL_V1_2026_09_21"
+FEE_PROFILE_SOURCE_HASH = (
+    "401fd7af740b713c488600840a51ff3f7fb86a59e1e1ef2b76929c23dc8d5d42"
+)
+FRICTION_POLICY_SOURCE_HASH = (
+    "710c757098f45a3104e344f5b44340dd03fd8f335fd12e91d7dc0cc42bb102f8"
+)
+ALL_IN_FRICTION_STATE_ID = "TASK5D_SINGLE_ATTEMPT_ROUNDTRIP_9BPS_CONTROL_V1"
+EXECUTION_MODEL_ID = "VNEXT_G4_EXPLICIT_NAUTILUS_RC5_V1"
+EXECUTION_MODEL_SOURCE_HASH = (
+    "0d7fa719eca868531823bab2c30adc810aa48b05e9b196a75f1ec647ca7bd606"
+)
+TECHNICAL_QUANTITY_RULE_ID = (
+    "TASK5D_ONE_PROVIDER_SIZE_INCREMENT_CAUSAL_L1_V1"
+)
+LATENCY_CONTROL_ID = "TASK5D_ZERO_MS_CONTROL_ONLY_V1"
+LATENCY_CONTROL_SOURCE_HASH = (
+    "f85a647cb68cb4e29897f3760bef2e3b914cec8acc69a7fba520b48a911f321b"
+)
+
+FEE_CONTROL_RECORD: dict[str, object] = {
+    "account_private_source_used": False,
+    "actual_user_fee_rate_claim": False,
+    "hip3_rule": (
+        "NOT_APPLICABLE_FOR_FROZEN_MAIN_NON_HIP3; "
+        "OTHERWISE_NOT_EVALUABLE_WITHOUT_EXACT_PUBLIC_MODIFIERS"
+    ),
+    "liquidity_role": "TAKER",
+    "market_scope": "FIRST_PERP_DEX_MAIN_NON_HIP3_ONLY",
+    "one_way_taker_bps": "4.5",
+    "one_way_taker_rate_decimal": "0.00045",
+    "production_account_fee_authority": False,
+    "public_reference_tier": "BASE_RATE_TIER_0",
+    "schema_version": "TASK5D_FEE_SOURCE_CONTROL_V1",
+    "source_observed_utc_date": "2026-09-21",
+    "source_owner": "Hyperliquid",
+    "source_url": "https://hyperliquid.gitbook.io/hyperliquid-docs/trading/fees",
+}
+FRICTION_POLICY_RECORD: dict[str, object] = {
+    "all_in_friction_bps": "9.0",
+    "claim_scope": "TECHNICAL_CONTROL_ONLY_NOT_PRODUCTION_REALISM",
+    "entry_fee_bps": "4.5",
+    "exit_fee_bps": "4.5",
+    "fee_profile_source_hash": FEE_PROFILE_SOURCE_HASH,
+    "funding_outcome_rule": (
+        "REQUIRE_PUBLIC_FUNDING_HISTORY; ANY_EVENT_IN_HOLD_INTERVAL=>"
+        "NOT_EVALUABLE_V1; NO_EVENT=>NOT_APPLICABLE"
+    ),
+    "funding_predecision": "NOT_APPLICABLE_TO_ZERO_HOLD_TECHNICAL_REFERENCE_ONLY",
+    "impact_extra_model_bps": "0",
+    "impact_zero_condition": (
+        "QTY_ONE_VALID_INCREMENT_AND_QTY_LE_CAUSAL_OPPOSITE_L1"
+    ),
+    "implementation_shortfall": (
+        "OUTCOME_ONLY_NOT_INCLUDED_IN_PREDECISION_ALL_IN"
+    ),
+    "missing_source_rule": "NOT_EVALUABLE",
+    "schema_version": "TASK5D_ALL_IN_FRICTION_CONTROL_V1",
+    "scope": "PRE_DECISION_TECHNICAL_CONTROL_PER_ATTEMPT",
+    "slippage_extra_model_bps": "0",
+    "slippage_zero_scope": "CONTROL_ONLY",
+    "spread_double_count": "PROHIBITED",
+    "spread_separate_debit": "NOT_APPLICABLE_EXECUTABLE_BBO_EMBEDS_CROSSING",
+    "state_id": ALL_IN_FRICTION_STATE_ID,
+}
+EXECUTION_CONTROL_RECORD: dict[str, object] = {
+    "book_type": "L1_MBP",
+    "claim_scope": "TECHNICAL_CONTROL_ONLY",
+    "execution_model_limited": True,
+    "fill_limit_at_price": False,
+    "fill_stop_at_price": False,
+    "l1_size_feasibility_required": True,
+    "liquidity_consumption": True,
+    "nautilus_release_commit_sha": "1b0a49d2792a9432a3aca3fcb617ce7a630d905e",
+    "nautilus_release_tag": "v2.0.0rc5",
+    "nautilus_tag_object_sha": "34de0d6f886a9fe8359f9d6590f43f53c86b1d32",
+    "order_primitive": "MARKETABLE",
+    "passive_touch_equals_fill": False,
+    "prob_fill_on_limit": "0",
+    "prob_slippage": "0",
+    "project_execution_model_id": EXECUTION_MODEL_ID,
+    "queue_position": False,
+    "random_seed": None,
+    "schema_version": "TASK5D_EXECUTION_CONTROL_SOURCE_V1",
+    "trade_execution": True,
+    "trigger_price_equals_fill": False,
+}
+LATENCY_CONTROL_RECORD: dict[str, object] = {
+    "latency_control_id": LATENCY_CONTROL_ID,
+    "latency_evidence_role": "CONTROL_ONLY",
+    "latency_ms": "0",
+    "nonzero_latency_calibration_claim": False,
+    "production_realism_claim": False,
+    "schema_version": "TASK5D_LATENCY_CONTROL_SOURCE_V1",
+}
 
 
 class RealT2IntegrationError(ValueError):
@@ -213,7 +328,7 @@ class StructuralSourceEvidence(BaseModel):
         )
 
     def strategy_decision(self) -> StrategyDecision:
-        return cast(StrategyDecision, TypeAdapter(StrategyDecision).validate_python(self.decision))
+        return TypeAdapter(StrategyDecision).validate_python(self.decision)
 
 
 @dataclass(frozen=True, slots=True)
@@ -261,11 +376,31 @@ def _strategy_package() -> StrategyPackageManifest:
     return manifest
 
 
-def _provider_tick(provider_instrument: object) -> Decimal:
+@runtime_checkable
+class ProviderInstrumentView(Protocol):
+    id: object
+    price_increment: object
+    size_precision: int
+    size_increment: object
+
+    def to_dict(self) -> dict[str, object]: ...
+
+
+def _provider_instrument_view(provider_instrument: object) -> ProviderInstrumentView:
+    if not isinstance(provider_instrument, ProviderInstrumentView):
+        raise RealT2IntegrationError(
+            "provider instrument lacks required normalized metadata surface"
+        )
+    return provider_instrument
+
+
+def _provider_tick(provider_instrument: ProviderInstrumentView) -> Decimal:
     try:
         tick = Decimal(str(provider_instrument.price_increment))
-    except (InvalidOperation, ValueError, AttributeError) as exc:
-        raise RealT2IntegrationError("provider-native minimum tick is unavailable") from exc
+    except (InvalidOperation, ValueError) as exc:
+        raise RealT2IntegrationError(
+            "provider-native minimum tick is unavailable"
+        ) from exc
     if not tick.is_finite() or tick <= 0:
         raise RealT2IntegrationError("provider-native minimum tick is invalid")
     return tick
@@ -303,15 +438,15 @@ class RealT2StrategyCoordinator:
             return
         self.admissions.append(event)
         if provider_instrument is not None:
-            to_dict = getattr(provider_instrument, "to_dict", None)
-            if not callable(to_dict):
-                raise RealT2IntegrationError("provider instrument lacks normalized serializer")
-            normalized = to_dict()
-            if not isinstance(normalized, dict):
-                raise RealT2IntegrationError("provider instrument normalization is invalid")
-            if str(getattr(provider_instrument, "id", "")) != event.source.instrument_id:
-                raise RealT2IntegrationError("provider instrument conflicts with admitted source")
-            prior = self.provider_instruments.setdefault(event.source.market_id, normalized)
+            provider_view = _provider_instrument_view(provider_instrument)
+            normalized = provider_view.to_dict()
+            if str(provider_view.id) != event.source.instrument_id:
+                raise RealT2IntegrationError(
+                    "provider instrument conflicts with admitted source"
+                )
+            prior = self.provider_instruments.setdefault(
+                event.source.market_id, normalized
+            )
             if canonical_json_bytes(prior) != canonical_json_bytes(normalized):
                 raise RealT2IntegrationError("provider instrument changed within attempt")
         if event.source.data_kind is not DataKind.BAR:
@@ -330,7 +465,7 @@ class RealT2StrategyCoordinator:
         self.last_5m_ts_event[event.source.market_id] = event.source.ts_event
         if provider_instrument is None:
             raise RealT2IntegrationError("5m Strategy input lacks provider-native instrument")
-        tick = _provider_tick(provider_instrument)
+        tick = _provider_tick(_provider_instrument_view(provider_instrument))
         evaluator = self.evaluators.get(event.source.market_id)
         if evaluator is None:
             evaluator = PilotStrategyEvaluator(
@@ -743,22 +878,23 @@ def replay_frozen_structural_source(
 
 
 def provider_instrument_metadata_document(
-    *, raw_provider_response: bytes, materialization: FixedMarketMaterialization,
-    provider_instrument: object,
+    *,
+    raw_provider_response: bytes,
+    materialization: FixedMarketMaterialization,
+    provider_instrument: ProviderInstrumentView,
 ) -> bytes:
-    to_dict = getattr(provider_instrument, "to_dict", None)
-    if not callable(to_dict):
-        raise RealT2IntegrationError("provider instrument lacks to_dict")
-    normalized = to_dict()
-    if not isinstance(normalized, dict):
-        raise RealT2IntegrationError("provider instrument serialization is invalid")
-    if str(getattr(provider_instrument, "id", "")) != materialization.identity.instrument_id:
-        raise RealT2IntegrationError("provider instrument id conflicts with frozen identity")
+    normalized = provider_instrument.to_dict()
+    if str(provider_instrument.id) != materialization.identity.instrument_id:
+        raise RealT2IntegrationError(
+            "provider instrument id conflicts with frozen identity"
+        )
     if (
-        int(provider_instrument.size_precision)
+        provider_instrument.size_precision
         != materialization.registry_market.size_decimals
     ):
-        raise RealT2IntegrationError("provider size precision conflicts with raw metadata")
+        raise RealT2IntegrationError(
+            "provider size precision conflicts with raw metadata"
+        )
     tick = _provider_tick(provider_instrument)
     quantity = Decimal(str(provider_instrument.size_increment))
     if not quantity.is_finite() or quantity <= 0:
@@ -775,19 +911,717 @@ def provider_instrument_metadata_document(
     })
 
 
-def assemble_real_t2_root(
-    *, artifacts: Sequence[object], governance_epoch: str, acquisition_plan_hash: str,
-    exact_source_git_head: str, exact_source_git_tree: str, strategy_package_identity: str,
-):
-    from trader_assist_v0.nautilus_g4.t2_shadow import (
-        RoleBoundSourceArtifact,
-        T2SourceRole,
-        T2SourceRootSnapshot,
+@dataclass(frozen=True, slots=True)
+class CausalBboBinding:
+    admission: AdmittedEvent
+    executable_price: Decimal
+    opposite_l1_size: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class FundingHistoryAssessment:
+    state: str
+    source_hash: str | None
+    event_count: int
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class Task5DValidationMaterialization:
+    validation_source_artifact: RoleBoundSourceArtifact
+    validation_reference: ValidationReference
+    validation_reference_artifact: RoleBoundSourceArtifact
+    quantity_source_hash: str
+    friction_source_hash: str
+
+
+def _assert_frozen_validation_source_hashes() -> None:
+    checks = (
+        (FEE_CONTROL_RECORD, FEE_PROFILE_SOURCE_HASH),
+        (FRICTION_POLICY_RECORD, FRICTION_POLICY_SOURCE_HASH),
+        (EXECUTION_CONTROL_RECORD, EXECUTION_MODEL_SOURCE_HASH),
+        (LATENCY_CONTROL_RECORD, LATENCY_CONTROL_SOURCE_HASH),
     )
+    for record, expected in checks:
+        if sha256_hex(canonical_json_bytes(record)) != expected:
+            raise RealT2IntegrationError("frozen Validation source hash drifted")
+
+
+def frozen_task5d_prospective_candidate() -> ProspectiveEconomicCandidateIdentity:
+    config = CandidateConfig.model_validate(
+        {
+            "entry_activation": "EA0",
+            "ea3_base": None,
+            "attempt_stop": "AP0",
+            "room_to_cost_k": "3",
+            "fixed_stop_bps": None,
+            "rv_multiplier": None,
+            "time_stop_seconds": None,
+            "reentry_policy": "NO_REENTRY_REFERENCE",
+            "winner_confirmation": "WC0",
+            "winner_progress_bps": "10",
+            "persistence_seconds": None,
+            "winner_add": "A0_NO_ADD",
+            "exit_policy": "X0",
+            "giveback_ratio": None,
+            "comparison_role": "REFERENCE",
+        }
+    )
+    prospective = ProspectiveEconomicCandidateIdentity.create(
+        candidate_id="TASK5D_PHASE0C_TECHNICAL_REFERENCE_V1",
+        config=config,
+    )
+    if (
+        prospective.prospective_candidate_hash
+        != PHASE0C_PROSPECTIVE_CANDIDATE_HASH
+    ):
+        raise RealT2IntegrationError(
+            "Phase 0C prospective candidate identity drifted"
+        )
+    return prospective
+
+
+def task5d_execution_model_config() -> ExecutionModelConfig:
+    return ExecutionModelConfig.model_validate(
+        {
+            "book_type": "L1_MBP",
+            "order_primitive": "MARKETABLE",
+            "prob_fill_on_limit": "0",
+            "prob_slippage": "0",
+            "trade_execution": True,
+            "queue_position": False,
+            "liquidity_consumption": True,
+            "fill_limit_at_price": False,
+            "fill_stop_at_price": False,
+            "random_seed": None,
+            "l1_size_feasibility_required": True,
+            "passive_touch_equals_fill": False,
+            "trigger_price_equals_fill": False,
+            "execution_model_limited": True,
+        }
+    )
+
+
+def materialize_task5d_g4_manifest(
+    *,
+    exact_source_git_head: str,
+    exact_source_git_tree: str,
+    e4_manifest_hash: str,
+    pit_snapshot_hash: str,
+    structural_artifact: RoleBoundSourceArtifact,
+    candidate: CandidateManifest,
+    e4_admission_artifacts: Sequence[RoleBoundSourceArtifact],
+) -> G4RunManifest:
+    if structural_artifact.role is not T2SourceRole.STRUCTURAL_SOURCE:
+        raise RealT2IntegrationError(
+            "G4 manifest requires exact structural source artifact"
+        )
+    evidence = tuple(
+        EvidenceArtifactHash(name=item.name, sha256=item.artifact_hash)
+        for item in sorted(e4_admission_artifacts, key=lambda item: item.name)
+    )
+    if not evidence:
+        raise RealT2IntegrationError(
+            "G4 manifest requires exact E4 admission evidence"
+        )
+    return G4RunManifest.create(
+        run_id=f"task5d-g4-{structural_artifact.artifact_hash[:24]}",
+        git_sha=exact_source_git_head,
+        git_tree=exact_source_git_tree,
+        source_e4_manifest_hash=e4_manifest_hash,
+        source_pit_snapshot_hash=pit_snapshot_hash,
+        source_evidence_artifact_hashes=evidence,
+        structural_component_manifest_hash=structural_artifact.artifact_hash,
+        execution_model=task5d_execution_model_config(),
+        candidates=(candidate,),
+        trial_adaptivity_id="task5d-single-prospective-v1",
+        cutoff_id="task5d-14400s-single-attempt-v1",
+    )
+
+
+def position_side_for_focal(focal: FormalSetupObservation) -> PositionSide:
+    side = focal.structural.strategy_decision().side.value
+    if side == "LONG":
+        return PositionSide.LONG
+    if side == "SHORT":
+        return PositionSide.SHORT
+    raise RealT2IntegrationError("focal Strategy side is unsupported")
+
+
+def select_focal_causal_bbo(
+    *,
+    admissions: Sequence[AdmittedEvent],
+    focal: FormalSetupObservation,
+    side: PositionSide,
+) -> CausalBboBinding | None:
+    frozen = FROZEN_BY_MARKET[focal.structural.market_id]
+    eligible = tuple(
+        event
+        for event in admissions
+        if event.source.data_kind is DataKind.BBO
+        and event.source.market_id == focal.structural.market_id
+        and event.source.instrument_id == frozen.instrument_id
+        and event.continuity_epoch == focal.continuity_epoch
+        and event.admission_epoch == focal.admission_epoch
+        and event.continuity_state is EvidenceState.COMPLETE
+        and not event.out_of_order
+        and (
+            event.admission_ordinal
+            > focal.structural.formal_setup_admission_ordinal
+        )
+        and event.admission_ts >= focal.structural.formal_setup_admission_ts
+    )
+    if not eligible:
+        return None
+    admission = max(
+        eligible,
+        key=lambda item: (
+            item.admission_ordinal,
+            item.admission_ts,
+            item.admission_hash,
+        ),
+    )
+    bid = _decimal(admission.source.payload, "bid_price")
+    ask = _decimal(admission.source.payload, "ask_price")
+    bid_size = _decimal(admission.source.payload, "bid_size")
+    ask_size = _decimal(admission.source.payload, "ask_size")
+    if bid <= 0 or ask <= bid or bid_size <= 0 or ask_size <= 0:
+        raise RealT2IntegrationError("causal BBO is invalid")
+    if side is PositionSide.LONG:
+        return CausalBboBinding(admission, ask, ask_size)
+    return CausalBboBinding(admission, bid, bid_size)
+
+
+def assess_public_funding_history(
+    *,
+    raw_response: bytes | None,
+    parsed_response: object | None,
+    coin: str,
+    start_time_ms: int,
+    end_time_ms: int,
+) -> FundingHistoryAssessment:
+    if (
+        raw_response is None
+        or parsed_response is None
+        or start_time_ms < 0
+        or end_time_ms < start_time_ms
+    ):
+        return FundingHistoryAssessment(
+            "NOT_EVALUABLE",
+            None,
+            0,
+            "MISSING_OR_INVALID_PUBLIC_FUNDING_SOURCE",
+        )
+    try:
+        reparsed = json.loads(raw_response)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return FundingHistoryAssessment(
+            "NOT_EVALUABLE", None, 0, "INVALID_PUBLIC_FUNDING_SOURCE"
+        )
+    if reparsed != parsed_response or not isinstance(parsed_response, list):
+        return FundingHistoryAssessment(
+            "NOT_EVALUABLE", None, 0, "INVALID_PUBLIC_FUNDING_SOURCE"
+        )
+    for item in parsed_response:
+        if not isinstance(item, dict):
+            return FundingHistoryAssessment(
+                "NOT_EVALUABLE", None, 0, "INVALID_PUBLIC_FUNDING_EVENT"
+            )
+        event_coin = item.get("coin")
+        event_time = item.get("time")
+        if (
+            event_coin != coin
+            or isinstance(event_time, bool)
+            or not isinstance(event_time, int)
+            or not start_time_ms <= event_time <= end_time_ms
+        ):
+            return FundingHistoryAssessment(
+                "NOT_EVALUABLE", None, 0, "INVALID_PUBLIC_FUNDING_EVENT"
+            )
+    source_hash = sha256_hex(raw_response)
+    if parsed_response:
+        return FundingHistoryAssessment(
+            "NOT_EVALUABLE",
+            source_hash,
+            len(parsed_response),
+            "FUNDING_EVENT_PRESENT_V1",
+        )
+    return FundingHistoryAssessment(
+        "NOT_APPLICABLE",
+        source_hash,
+        0,
+        "NO_FUNDING_EVENT_IN_EXACT_HOLD_INTERVAL",
+    )
+
+
+def _source_reference(
+    artifact: RoleBoundSourceArtifact,
+) -> SourceReference:
+    return SourceReference(
+        role=artifact.role,
+        name=artifact.name,
+        artifact_hash=artifact.artifact_hash,
+    )
+
+
+def _validated_execution_model(manifest: G4RunManifest) -> None:
+    expected = task5d_execution_model_config()
+    if manifest.execution_model != expected:
+        raise RealT2IntegrationError(
+            "G4 execution model differs from frozen Validation source"
+        )
+
+
+def materialize_task5d_validation_source(
+    *,
+    clock_start_ns: int,
+    exact_source_git_head: str,
+    exact_source_git_tree: str,
+    focal: FormalSetupObservation,
+    side: PositionSide,
+    causal_bbo: CausalBboBinding,
+    provider_instrument: ProviderInstrumentView,
+    registry_market: RegistryMarket,
+    instrument_metadata_version: str,
+    instrument_metadata_artifact: RoleBoundSourceArtifact,
+    e4_admission_artifact: RoleBoundSourceArtifact,
+    prospective_candidate_artifact: RoleBoundSourceArtifact,
+    prospective_candidate: ProspectiveEconomicCandidateIdentity,
+    g4_run_manifest_artifact: RoleBoundSourceArtifact,
+    g4_run_manifest: G4RunManifest,
+) -> Task5DValidationMaterialization:
+    _assert_frozen_validation_source_hashes()
+    if clock_start_ns <= 0:
+        raise RealT2IntegrationError("Validation CLOCK_START_NS is invalid")
+    if registry_market.identity.dex != "MAIN" or registry_market.is_hip3:
+        raise RealT2IntegrationError(
+            "Validation V1 is MAIN non-HIP3 only"
+        )
+    if (
+        prospective_candidate.prospective_candidate_hash
+        != PHASE0C_PROSPECTIVE_CANDIDATE_HASH
+    ):
+        raise RealT2IntegrationError(
+            "Validation candidate is not frozen Phase 0C identity"
+        )
+    if (
+        prospective_candidate_artifact.role
+        is not T2SourceRole.PROSPECTIVE_ECONOMIC_CANDIDATE_IDENTITY
+        or ProspectiveEconomicCandidateIdentity.model_validate_json(
+            prospective_candidate_artifact.exact_bytes()
+        )
+        != prospective_candidate
+    ):
+        raise RealT2IntegrationError(
+            "prospective candidate artifact is not exact"
+        )
+    if (
+        g4_run_manifest_artifact.role is not T2SourceRole.G4_RUN_MANIFEST
+        or G4RunManifest.model_validate_json(
+            g4_run_manifest_artifact.exact_bytes()
+        )
+        != g4_run_manifest
+    ):
+        raise RealT2IntegrationError("G4 manifest artifact is not exact")
+    _validated_execution_model(g4_run_manifest)
+    if (
+        instrument_metadata_artifact.role
+        is not T2SourceRole.INSTRUMENT_METADATA
+    ):
+        raise RealT2IntegrationError(
+            "instrument metadata is rooted under wrong role"
+        )
+    if e4_admission_artifact.role is not T2SourceRole.E4_ADMISSION:
+        raise RealT2IntegrationError("causal BBO is rooted under wrong role")
+    rooted_bbo = AdmittedEvent.model_validate_json(
+        e4_admission_artifact.exact_bytes()
+    )
+    if rooted_bbo != causal_bbo.admission:
+        raise RealT2IntegrationError(
+            "causal BBO artifact does not bind exact admission"
+        )
+    provider_view = _provider_instrument_view(provider_instrument)
+    if str(provider_view.id) != causal_bbo.admission.source.instrument_id:
+        raise RealT2IntegrationError(
+            "provider instrument conflicts with causal BBO"
+        )
+    quantity = Decimal(str(provider_view.size_increment))
+    if not quantity.is_finite() or quantity <= 0:
+        raise RealT2IntegrationError("provider size increment is invalid")
+    size_decimals = provider_view.size_precision
+    quantum = Decimal(1).scaleb(-size_decimals)
+    if quantity != quantity.quantize(quantum):
+        raise RealT2IntegrationError(
+            "provider size increment is not grid-valid"
+        )
+    if quantity > causal_bbo.opposite_l1_size:
+        raise RealT2IntegrationError(
+            "one provider size increment exceeds causal opposite L1"
+        )
+    metadata = json.loads(instrument_metadata_artifact.exact_bytes())
+    if (
+        not isinstance(metadata, dict)
+        or metadata.get("market_id") != focal.structural.market_id
+        or (
+            metadata.get("instrument_id")
+            != causal_bbo.admission.source.instrument_id
+        )
+        or Decimal(str(metadata.get("provider_size_increment"))) != quantity
+    ):
+        raise RealT2IntegrationError(
+            "instrument metadata source conflicts with focal quantity"
+        )
+    quantity_record = {
+        "schema_version": "TASK5D_TECHNICAL_QUANTITY_SOURCE_V1",
+        "rule_id": TECHNICAL_QUANTITY_RULE_ID,
+        "market_id": focal.structural.market_id,
+        "instrument_id": causal_bbo.admission.source.instrument_id,
+        "side": side.value,
+        "instrument_metadata_version": instrument_metadata_version,
+        "instrument_metadata_hash": instrument_metadata_artifact.artifact_hash,
+        "bbo_admission_hash": causal_bbo.admission.admission_hash,
+        "provider_size_increment": str(quantity),
+        "size_decimals": size_decimals,
+        "opposite_l1_size": str(causal_bbo.opposite_l1_size),
+        "quantity": str(quantity),
+        "rule_result": "PASS_ONE_INCREMENT_LE_OPPOSITE_L1",
+    }
+    quantity_hash = sha256_hex(canonical_json_bytes(quantity_record))
+    friction_record = {
+        "schema_version": "TASK5D_ALL_IN_FRICTION_INSTANCE_V1",
+        "policy_source_hash": FRICTION_POLICY_SOURCE_HASH,
+        "fee_profile_source_hash": FEE_PROFILE_SOURCE_HASH,
+        "execution_model_source_hash": EXECUTION_MODEL_SOURCE_HASH,
+        "technical_quantity_rule_source_hash": quantity_hash,
+        "instrument_metadata_hash": instrument_metadata_artifact.artifact_hash,
+        "focal_bbo_admission_hash": causal_bbo.admission.admission_hash,
+        "entry_fee_bps": "4.5",
+        "exit_fee_bps": "4.5",
+        "spread_state": "NOT_APPLICABLE_AS_SEPARATE_DEBIT",
+        "slippage_extra_control_bps": "0",
+        "impact_extra_control_bps": "0",
+        "funding_predecision_state": (
+            "NOT_APPLICABLE_TECHNICAL_REFERENCE"
+        ),
+        "implementation_shortfall_state": "OUTCOME_ONLY",
+        "all_in_friction_bps": "9.0",
+    }
+    friction_hash = sha256_hex(canonical_json_bytes(friction_record))
+    document = {
+        "schema_version": "TASK5D_VALIDATION_SOURCE_V1",
+        "profile_id": VALIDATION_SOURCE_PROFILE_ID,
+        "validation_reference_id": VALIDATION_REFERENCE_ID,
+        "authority": (
+            "Issue_85_comment_5709098638",
+            "Issue_85_comment_5709405967",
+            "Issue_85_comment_5741961048",
+            "Issue_163_comment_5758381459",
+            "Issue_163_comment_5760105677",
+        ),
+        "fee_control": {
+            "record": FEE_CONTROL_RECORD,
+            "source_hash": FEE_PROFILE_SOURCE_HASH,
+        },
+        "friction_control": {
+            "policy_record": FRICTION_POLICY_RECORD,
+            "policy_source_hash": FRICTION_POLICY_SOURCE_HASH,
+            "record": friction_record,
+            "source_hash": friction_hash,
+        },
+        "execution_control": {
+            "record": EXECUTION_CONTROL_RECORD,
+            "source_hash": EXECUTION_MODEL_SOURCE_HASH,
+        },
+        "technical_quantity_control": {
+            "record": quantity_record,
+            "source_hash": quantity_hash,
+        },
+        "latency_control": {
+            "record": LATENCY_CONTROL_RECORD,
+            "source_hash": LATENCY_CONTROL_SOURCE_HASH,
+        },
+        "attempt_binding": {
+            "clock_start_ns": clock_start_ns,
+            "source_git_head": exact_source_git_head,
+            "source_git_tree": exact_source_git_tree,
+            "focal_market_id": focal.structural.market_id,
+            "focal_instrument_id": (
+                causal_bbo.admission.source.instrument_id
+            ),
+            "focal_bbo_admission_hash": (
+                causal_bbo.admission.admission_hash
+            ),
+            "instrument_metadata_version": instrument_metadata_version,
+            "instrument_metadata_hash": (
+                instrument_metadata_artifact.artifact_hash
+            ),
+            "prospective_candidate_hash": (
+                prospective_candidate.prospective_candidate_hash
+            ),
+        },
+    }
+    references = tuple(
+        _source_reference(item)
+        for item in (
+            instrument_metadata_artifact,
+            e4_admission_artifact,
+            prospective_candidate_artifact,
+            g4_run_manifest_artifact,
+        )
+    )
+    validation_source = RoleBoundSourceArtifact.create(
+        role=T2SourceRole.VALIDATION_SOURCE,
+        name="task5d-validation-source-v1",
+        exact_bytes=canonical_json_bytes(document),
+        references=references,
+    )
+    validation = ValidationReference.create(
+        validation_reference_id=VALIDATION_REFERENCE_ID,
+        source_artifact_hash=validation_source.artifact_hash,
+        fee_profile_id=FEE_PROFILE_ID,
+        fee_profile_source_hash=FEE_PROFILE_SOURCE_HASH,
+        fee_effective_at_ns=clock_start_ns,
+        fee_bps=Decimal("4.5"),
+        all_in_friction_state_id=ALL_IN_FRICTION_STATE_ID,
+        all_in_friction_source_hash=friction_hash,
+        all_in_friction_bps=Decimal("9.0"),
+        execution_model_id=EXECUTION_MODEL_ID,
+        execution_model_source_hash=EXECUTION_MODEL_SOURCE_HASH,
+        technical_quantity_rule_id=TECHNICAL_QUANTITY_RULE_ID,
+        technical_quantity_rule_source_hash=quantity_hash,
+        latency_control_id=LATENCY_CONTROL_ID,
+        latency_control_source_hash=LATENCY_CONTROL_SOURCE_HASH,
+        latency_ms=Decimal("0"),
+        latency_evidence_role=LatencyEvidenceRole.CONTROL_ONLY,
+    )
+    if not validation.fully_materialized:
+        raise RealT2IntegrationError(
+            "ValidationReference is not fully materialized"
+        )
+    validation_reference_artifact = RoleBoundSourceArtifact.create(
+        role=T2SourceRole.VALIDATION_REFERENCE,
+        name="task5d-validation-reference-v1",
+        exact_bytes=canonical_json_bytes(
+            validation.model_dump(mode="json")
+        ),
+        references=(_source_reference(validation_source),),
+    )
+    return Task5DValidationMaterialization(
+        validation_source_artifact=validation_source,
+        validation_reference=validation,
+        validation_reference_artifact=validation_reference_artifact,
+        quantity_source_hash=quantity_hash,
+        friction_source_hash=friction_hash,
+    )
+
+
+def validate_task5d_validation_artifacts(
+    *,
+    validation_source_artifact: RoleBoundSourceArtifact,
+    validation_reference_artifact: RoleBoundSourceArtifact,
+    validation: ValidationReference,
+    exact_source_git_head: str,
+    exact_source_git_tree: str,
+    focal_market_id: str,
+    focal_instrument_id: str,
+    focal_bbo_admission_hash: str,
+    instrument_metadata_version: str,
+    instrument_metadata_artifact: RoleBoundSourceArtifact,
+    e4_admission_artifact: RoleBoundSourceArtifact,
+    prospective_candidate_artifact: RoleBoundSourceArtifact,
+    g4_run_manifest_artifact: RoleBoundSourceArtifact,
+) -> None:
+    _assert_frozen_validation_source_hashes()
+    if not validation.fully_materialized:
+        raise RealT2IntegrationError(
+            "Task5D ValidationReference is incomplete"
+        )
+    if (
+        validation.validation_reference_id != VALIDATION_REFERENCE_ID
+        or (
+            validation.source_artifact_hash
+            != validation_source_artifact.artifact_hash
+        )
+        or validation.production_account_fee_authority
+        or validation.actual_user_fee_rate_claim
+        or validation.fee_profile_id != FEE_PROFILE_ID
+        or validation.fee_profile_source_hash != FEE_PROFILE_SOURCE_HASH
+        or validation.fee_bps != Decimal("4.5")
+        or (
+            validation.all_in_friction_state_id
+            != ALL_IN_FRICTION_STATE_ID
+        )
+        or validation.all_in_friction_bps != Decimal("9.0")
+        or validation.execution_model_id != EXECUTION_MODEL_ID
+        or (
+            validation.execution_model_source_hash
+            != EXECUTION_MODEL_SOURCE_HASH
+        )
+        or (
+            validation.technical_quantity_rule_id
+            != TECHNICAL_QUANTITY_RULE_ID
+        )
+        or validation.latency_control_id != LATENCY_CONTROL_ID
+        or (
+            validation.latency_control_source_hash
+            != LATENCY_CONTROL_SOURCE_HASH
+        )
+        or validation.latency_ms != Decimal("0")
+        or (
+            validation.latency_evidence_role
+            is not LatencyEvidenceRole.CONTROL_ONLY
+        )
+    ):
+        raise RealT2IntegrationError(
+            "Task5D ValidationReference conflicts with frozen profile"
+        )
+    parsed_reference = ValidationReference.model_validate_json(
+        validation_reference_artifact.exact_bytes()
+    )
+    if (
+        validation_reference_artifact.role
+        is not T2SourceRole.VALIDATION_REFERENCE
+        or parsed_reference != validation
+        or (
+            _source_reference(validation_source_artifact)
+            not in validation_reference_artifact.references
+        )
+    ):
+        raise RealT2IntegrationError(
+            "ValidationReference artifact is not source-bound"
+        )
+    if validation_source_artifact.role is not T2SourceRole.VALIDATION_SOURCE:
+        raise RealT2IntegrationError(
+            "Validation source is rooted under wrong role"
+        )
+    document = json.loads(validation_source_artifact.exact_bytes())
+    if not isinstance(document, dict):
+        raise RealT2IntegrationError(
+            "Validation source document is invalid"
+        )
+    fee = document.get("fee_control")
+    friction = document.get("friction_control")
+    execution = document.get("execution_control")
+    quantity = document.get("technical_quantity_control")
+    latency = document.get("latency_control")
+    binding = document.get("attempt_binding")
+    if not all(
+        isinstance(item, dict)
+        for item in (
+            fee,
+            friction,
+            execution,
+            quantity,
+            latency,
+            binding,
+        )
+    ):
+        raise RealT2IntegrationError(
+            "Validation source groups are incomplete"
+        )
+    assert isinstance(fee, dict)
+    assert isinstance(friction, dict)
+    assert isinstance(execution, dict)
+    assert isinstance(quantity, dict)
+    assert isinstance(latency, dict)
+    assert isinstance(binding, dict)
+    quantity_record = quantity.get("record")
+    friction_record = friction.get("record")
+    if (
+        not isinstance(quantity_record, dict)
+        or not isinstance(friction_record, dict)
+    ):
+        raise RealT2IntegrationError(
+            "Validation dynamic source records are invalid"
+        )
+    quantity_hash = sha256_hex(canonical_json_bytes(quantity_record))
+    friction_hash = sha256_hex(canonical_json_bytes(friction_record))
+    if (
+        document.get("schema_version") != "TASK5D_VALIDATION_SOURCE_V1"
+        or document.get("profile_id") != VALIDATION_SOURCE_PROFILE_ID
+        or (
+            document.get("validation_reference_id")
+            != VALIDATION_REFERENCE_ID
+        )
+        or fee
+        != {
+            "record": FEE_CONTROL_RECORD,
+            "source_hash": FEE_PROFILE_SOURCE_HASH,
+        }
+        or execution
+        != {
+            "record": EXECUTION_CONTROL_RECORD,
+            "source_hash": EXECUTION_MODEL_SOURCE_HASH,
+        }
+        or latency
+        != {
+            "record": LATENCY_CONTROL_RECORD,
+            "source_hash": LATENCY_CONTROL_SOURCE_HASH,
+        }
+        or friction.get("policy_record") != FRICTION_POLICY_RECORD
+        or (
+            friction.get("policy_source_hash")
+            != FRICTION_POLICY_SOURCE_HASH
+        )
+        or friction.get("source_hash") != friction_hash
+        or quantity.get("source_hash") != quantity_hash
+        or validation.all_in_friction_source_hash != friction_hash
+        or (
+            validation.technical_quantity_rule_source_hash
+            != quantity_hash
+        )
+        or binding.get("source_git_head") != exact_source_git_head
+        or binding.get("source_git_tree") != exact_source_git_tree
+        or binding.get("focal_market_id") != focal_market_id
+        or binding.get("focal_instrument_id") != focal_instrument_id
+        or (
+            binding.get("focal_bbo_admission_hash")
+            != focal_bbo_admission_hash
+        )
+        or (
+            binding.get("instrument_metadata_version")
+            != instrument_metadata_version
+        )
+        or (
+            binding.get("instrument_metadata_hash")
+            != instrument_metadata_artifact.artifact_hash
+        )
+        or (
+            binding.get("prospective_candidate_hash")
+            != PHASE0C_PROSPECTIVE_CANDIDATE_HASH
+        )
+    ):
+        raise RealT2IntegrationError(
+            "Validation source document cross-binding failed"
+        )
+    expected_references = (
+        _source_reference(instrument_metadata_artifact),
+        _source_reference(e4_admission_artifact),
+        _source_reference(prospective_candidate_artifact),
+        _source_reference(g4_run_manifest_artifact),
+    )
+    if any(
+        item not in validation_source_artifact.references
+        for item in expected_references
+    ):
+        raise RealT2IntegrationError(
+            "Validation source lacks exact source-reference closure"
+        )
+
+
+def assemble_real_t2_root(
+    *,
+    artifacts: Sequence[RoleBoundSourceArtifact],
+    governance_epoch: str,
+    acquisition_plan_hash: str,
+    exact_source_git_head: str,
+    exact_source_git_tree: str,
+    strategy_package_identity: str,
+) -> T2SourceRootSnapshot:
     typed = tuple(artifacts)
     if not typed or any(type(x) is not RoleBoundSourceArtifact for x in typed):
         raise RealT2IntegrationError("root requires exact materialized role artifacts")
-    by_role: dict[object, list[Any]] = {}
+    by_role: dict[T2SourceRole, list[RoleBoundSourceArtifact]] = {}
     for item in typed:
         by_role.setdefault(item.role, []).append(item)
     singleton = (
@@ -799,6 +1633,7 @@ def assemble_real_t2_root(
         T2SourceRole.STRUCTURAL_SOURCE,
         T2SourceRole.CAUSAL_LINEAGE,
         T2SourceRole.VALIDATION_REFERENCE,
+        T2SourceRole.VALIDATION_SOURCE,
         T2SourceRole.PROVIDER_INSTRUMENT_WIRE,
         T2SourceRole.THESIS_OUTCOME,
     )
@@ -813,7 +1648,6 @@ def assemble_real_t2_root(
         T2SourceRole.RESTART_REFERENCE,
         T2SourceRole.EVALUATOR_SUPPLEMENT_SOURCE,
         T2SourceRole.EVALUATOR_SUPPLEMENT,
-        T2SourceRole.VALIDATION_SOURCE,
         T2SourceRole.COST_SOURCE,
     )
     for role in required_nonempty:
@@ -826,7 +1660,7 @@ def assemble_real_t2_root(
     ):
         if len(by_role.get(role, [])) != 20:
             raise RealT2IntegrationError(f"root requires 20 {role.value} artifacts")
-    def one(role: object) -> Any:
+    def one(role: T2SourceRole) -> RoleBoundSourceArtifact:
         return by_role[role][0]
     return T2SourceRootSnapshot.create(
         task_id=REAL_T2_TASK_ID,

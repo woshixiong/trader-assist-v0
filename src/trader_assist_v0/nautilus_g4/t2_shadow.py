@@ -492,6 +492,7 @@ def rederive_rooted_t2(
         StructuralSourceEvidence,
         raw_response_sha256,
         replay_frozen_structural_source,
+        validate_task5d_validation_artifacts,
     )
     from trader_assist_v0.vnext_g4.contracts import (
         TASK5D_PHASE0C_PROSPECTIVE_ECONOMIC_CANDIDATE_HASH,
@@ -565,7 +566,8 @@ def rederive_rooted_t2(
         raise ValueError(
             "selected candidate is not the exact source-bound prospective materialization"
         )
-    g4 = cast(G4RunManifest, _parse(_one(root, T2SourceRole.G4_RUN_MANIFEST), G4RunManifest))
+    g4_artifact = _one(root, T2SourceRole.G4_RUN_MANIFEST)
+    g4 = cast(G4RunManifest, _parse(g4_artifact, G4RunManifest))
     if (
         not hmac.compare_digest(e4_manifest.pit_snapshot_hash, pit_snapshot.snapshot_hash)
         or not hmac.compare_digest(e4_manifest.pit_snapshot_id, pit_snapshot.snapshot_id)
@@ -612,15 +614,29 @@ def rederive_rooted_t2(
     )
     if expression is None:
         raise ValueError("rooted MarketExpression for focal lineage is absent")
+    admission_artifacts = _many(root, T2SourceRole.E4_ADMISSION)
+    admission_pairs = tuple(
+        (item, cast(AdmittedEvent, _parse(item, AdmittedEvent)))
+        for item in admission_artifacts
+    )
     admissions = tuple(
         sorted(
-            (
-                cast(AdmittedEvent, _parse(item, AdmittedEvent))
-                for item in _many(root, T2SourceRole.E4_ADMISSION)
+            (event for _, event in admission_pairs),
+            key=lambda item: (
+                item.admission_ordinal,
+                item.admission_ts,
+                item.admission_hash,
             ),
-            key=lambda item: (item.admission_ordinal, item.admission_ts, item.admission_hash),
         )
     )
+    admission_artifact_by_hash = {
+        event.admission_hash: artifact
+        for artifact, event in admission_pairs
+    }
+    if len(admission_artifact_by_hash) != len(admission_pairs):
+        raise ValueError(
+            "rooted E4 admission artifacts contain duplicate identities"
+        )
     registry_artifacts = (
         _many(root, T2SourceRole.REGISTRY_MARKET)
         if strict_real_t2
@@ -637,13 +653,25 @@ def rederive_rooted_t2(
         if strict_real_t2
         else (_one(root, T2SourceRole.INSTRUMENT_METADATA),)
     )
-    metadata_docs = tuple(json.loads(item.exact_bytes()) for item in metadata_artifacts)
+    metadata_docs = tuple(
+        json.loads(item.exact_bytes()) for item in metadata_artifacts
+    )
     metadata_by_market: dict[str, dict[str, object]] = {}
+    metadata_artifact_by_market: dict[str, RoleBoundSourceArtifact] = {}
     if strict_real_t2:
         metadata_by_market = {
             str(item.get("market_id")): item
             for item in metadata_docs
-            if isinstance(item, dict) and isinstance(item.get("market_id"), str)
+            if isinstance(item, dict)
+            and isinstance(item.get("market_id"), str)
+        }
+        metadata_artifact_by_market = {
+            str(doc.get("market_id")): artifact
+            for artifact, doc in zip(
+                metadata_artifacts, metadata_docs, strict=True
+            )
+            if isinstance(doc, dict)
+            and isinstance(doc.get("market_id"), str)
         }
         if len(metadata_by_market) != len(metadata_docs):
             raise ValueError(
@@ -692,14 +720,50 @@ def rederive_rooted_t2(
         and item.source.market_id == lineage.market_id
         and item.source.expression_id == expression.expression_id
         and item.source.instrument_id == lineage.instrument_id
+        and item.continuity_epoch == lineage.continuity_epoch
+        and item.admission_epoch == lineage.admission_epoch
         and item.continuity_state is EvidenceState.COMPLETE
         and not item.out_of_order
     )
     if not bbo:
-        raise ValueError("complete rooted evidence has no causally eligible BBO")
-    current_bbo = max(
-        bbo, key=lambda item: (item.admission_ordinal, item.admission_ts, item.admission_hash)
-    )
+        raise ValueError(
+            "complete rooted evidence has no causally eligible BBO"
+        )
+    validation_source_artifact: RoleBoundSourceArtifact | None = None
+    if strict_real_t2:
+        validation_source_artifact = _one(
+            root, T2SourceRole.VALIDATION_SOURCE
+        )
+        validation_document = json.loads(
+            validation_source_artifact.exact_bytes()
+        )
+        binding = (
+            validation_document.get("attempt_binding")
+            if isinstance(validation_document, dict)
+            else None
+        )
+        if not isinstance(binding, dict):
+            raise ValueError(
+                "Task5D Validation source lacks attempt binding"
+            )
+        bound_bbo_hash = binding.get("focal_bbo_admission_hash")
+        matched_bbo = tuple(
+            item for item in bbo if item.admission_hash == bound_bbo_hash
+        )
+        if len(matched_bbo) != 1:
+            raise ValueError(
+                "Task5D Validation source does not bind one causal BBO"
+            )
+        current_bbo = matched_bbo[0]
+    else:
+        current_bbo = max(
+            bbo,
+            key=lambda item: (
+                item.admission_ordinal,
+                item.admission_ts,
+                item.admission_hash,
+            ),
+        )
     lifecycle = tuple(
         sorted(
             (
@@ -722,9 +786,12 @@ def rederive_rooted_t2(
             ),
         )
     )
+    validation_artifact = _one(
+        root, T2SourceRole.VALIDATION_REFERENCE
+    )
     validation = cast(
         ValidationReference,
-        _parse(_one(root, T2SourceRole.VALIDATION_REFERENCE), ValidationReference),
+        _parse(validation_artifact, ValidationReference),
     )
     supplement = cast(
         EvaluatorSupplementEvidence,
@@ -742,7 +809,45 @@ def rederive_rooted_t2(
             or registry.market_status != "ACTIVE"
             or expression.instrument_metadata_hash != registry.metadata_hash
         ):
-            raise ValueError("focal RegistryMarket is not exact source-bound MAIN perp metadata")
+            raise ValueError(
+                "focal RegistryMarket is not exact source-bound MAIN perp metadata"
+            )
+        focal_metadata_artifact = metadata_artifact_by_market.get(
+            lineage.market_id
+        )
+        bbo_artifact = admission_artifact_by_hash.get(
+            current_bbo.admission_hash
+        )
+        if (
+            validation_source_artifact is None
+            or focal_metadata_artifact is None
+            or bbo_artifact is None
+        ):
+            raise ValueError(
+                "Task5D Validation source dependency is absent"
+            )
+        try:
+            validate_task5d_validation_artifacts(
+                validation_source_artifact=validation_source_artifact,
+                validation_reference_artifact=validation_artifact,
+                validation=validation,
+                exact_source_git_head=root.exact_source_git_head,
+                exact_source_git_tree=root.exact_source_git_tree,
+                focal_market_id=lineage.market_id,
+                focal_instrument_id=lineage.instrument_id,
+                focal_bbo_admission_hash=current_bbo.admission_hash,
+                instrument_metadata_version=(
+                    expression.instrument_metadata_version
+                ),
+                instrument_metadata_artifact=focal_metadata_artifact,
+                e4_admission_artifact=bbo_artifact,
+                prospective_candidate_artifact=prospective_artifact,
+                g4_run_manifest_artifact=g4_artifact,
+            )
+        except ValueError as exc:
+            raise ValueError(
+                "Task5D Validation source cross-binding failed"
+            ) from exc
     admission = derive_evaluation_admission(
         candidate_room_to_cost_k=candidate.config.room_to_cost_k,
         lineage=lineage,
