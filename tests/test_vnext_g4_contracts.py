@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from trader_assist_v0.vnext_g4.contracts import (
+    TASK5D_PHASE0C_PROSPECTIVE_ECONOMIC_CANDIDATE_HASH,
     AttemptStop,
     CandidateConfig,
     CandidateManifest,
@@ -20,6 +21,7 @@ from trader_assist_v0.vnext_g4.contracts import (
     LatencyEvidenceRole,
     OrderPrimitive,
     PositionSide,
+    ProspectiveEconomicCandidateIdentity,
     ReentryPolicy,
     TechnicalOrderQuantity,
     ValidationReference,
@@ -87,6 +89,53 @@ def test_candidate_identity_binds_vnext_and_structural_component() -> None:
     old["derivation_version"] = "TA_MICROSTRUCTURE_DERIV_V0_1"
     with pytest.raises(ValidationError):
         CandidateManifest.model_validate(old)
+
+
+def test_phase0c_prospective_identity_binds_exact_economic_candidate() -> None:
+    config = candidate_config(
+        entry_activation=EntryActivation.EA0,
+        room_to_cost_k=Decimal("3"),
+        winner_progress_bps=Decimal("10"),
+        exit_policy=ExitPolicy.X0,
+    )
+    prospective = ProspectiveEconomicCandidateIdentity.create(
+        candidate_id="TASK5D_PHASE0C_TECHNICAL_REFERENCE_V1",
+        config=config,
+    )
+    expected_hash = TASK5D_PHASE0C_PROSPECTIVE_ECONOMIC_CANDIDATE_HASH
+    assert prospective.prospective_candidate_hash == expected_hash
+    assert ProspectiveEconomicCandidateIdentity.model_validate_json(
+        prospective.model_dump_json()
+    ) == prospective
+
+    for field, value in (
+        ("candidate_id", "tampered-reference"),
+        ("config", {**prospective.config.model_dump(mode="json"), "room_to_cost_k": "2"}),
+    ):
+        raw = prospective.model_dump(mode="json")
+        raw[field] = value
+        with pytest.raises(ValidationError, match="prospective_candidate_hash"):
+            ProspectiveEconomicCandidateIdentity.model_validate(raw)
+
+    version_tamper = prospective.model_dump(mode="json")
+    version_tamper["strategy_version"] = "TA_VNEXT_E4_C1_2026-09-11"
+    with pytest.raises(ValidationError):
+        ProspectiveEconomicCandidateIdentity.model_validate(version_tamper)
+
+    materialized = prospective.materialize_candidate_manifest(
+        structural_component_manifest_hash=HASH_A
+    )
+    ordinary = CandidateManifest.create(
+        candidate_id=prospective.candidate_id,
+        structural_component_manifest_hash=HASH_A,
+        config=prospective.config,
+    )
+    assert materialized == ordinary
+    other_source = prospective.materialize_candidate_manifest(
+        structural_component_manifest_hash=HASH_B
+    )
+    assert other_source.candidate_hash != materialized.candidate_hash
+    assert prospective.prospective_candidate_hash == expected_hash
 
 
 def test_frozen_family_grid_fails_closed() -> None:

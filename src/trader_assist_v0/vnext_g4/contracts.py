@@ -49,6 +49,15 @@ _LINEAGE_DOMAIN = b"trader-assist-v0/vnext-g4/causal-lineage/v2r2\0"
 _RESTART_REFERENCE_DOMAIN = b"trader-assist-v0/vnext-g4/restart-reference/v2r2\0"
 _VALIDATION_REFERENCE_DOMAIN = b"trader-assist-v0/vnext-g4/validation-reference/v1\0"
 _ORDER_INTENT_DOMAIN = b"trader-assist-v0/vnext-g4/order-intent/v1\0"
+PROSPECTIVE_ECONOMIC_CANDIDATE_SCHEMA_VERSION: Literal[
+    "TASK5D_PROSPECTIVE_ECONOMIC_CANDIDATE_V1"
+] = "TASK5D_PROSPECTIVE_ECONOMIC_CANDIDATE_V1"
+TASK5D_PHASE0C_PROSPECTIVE_ECONOMIC_CANDIDATE_HASH: Literal[
+    "5176739d9ac0b2384675dd077781be187d25458bb3ea00bdc25b5366419ef1e2"
+] = "5176739d9ac0b2384675dd077781be187d25458bb3ea00bdc25b5366419ef1e2"
+_PROSPECTIVE_ECONOMIC_CANDIDATE_DOMAIN = (
+    b"trader-assist-v0/task5d/prospective-economic-candidate/v1\0"
+)
 
 SOURCE_E4_STRATEGY_VERSION: Literal["TA_VNEXT_E4_C1_2026-09-11"] = (
     "TA_VNEXT_E4_C1_2026-09-11"
@@ -633,6 +642,69 @@ class CandidateManifest(StrictFrozenModel):
         }
         digest = sha256_hex(_CANDIDATE_DOMAIN + canonical_json_bytes(payload))
         return cls.model_validate({**payload, "candidate_hash": digest})
+
+
+class ProspectiveEconomicCandidateIdentity(StrictFrozenModel):
+    """Pre-evidence economic identity that materializes one source-bound candidate."""
+
+    schema_version: Literal["TASK5D_PROSPECTIVE_ECONOMIC_CANDIDATE_V1"] = (
+        PROSPECTIVE_ECONOMIC_CANDIDATE_SCHEMA_VERSION
+    )
+    strategy_version: Literal["TA_VNEXT_E4_C1_SEMANTIC_V2R2_2026-09-17"] = (
+        VNEXT_STRATEGY_VERSION
+    )
+    policy_version: Literal["TA_FRICTION_POSITION_POLICY_V0_2R2"] = VNEXT_POLICY_VERSION
+    parameter_version: Literal["TA_PRE_E4_GRID_V0_1"] = VNEXT_PARAMETER_VERSION
+    derivation_version: Literal[
+        "TA_VNEXT_CAUSAL_SEMANTIC_DERIV_V0_1R2_2026-09-17"
+    ] = VNEXT_DERIVATION_VERSION
+    data_version: Literal["TA_VNEXT_RESEARCH_DATA_CONTRACT_V1_2026-09-11_REPAIR1"] = (
+        VNEXT_DATA_VERSION
+    )
+    candidate_id: OpaqueId
+    config: CandidateConfig
+    prospective_candidate_hash: Sha256Hex
+
+    def identity_payload(self) -> dict[str, object]:
+        return self.model_dump(mode="json", exclude={"prospective_candidate_hash"})
+
+    @model_validator(mode="after")
+    def verify_hash(self) -> Self:
+        expected = sha256_hex(
+            _PROSPECTIVE_ECONOMIC_CANDIDATE_DOMAIN
+            + canonical_json_bytes(self.identity_payload())
+        )
+        if not hmac.compare_digest(self.prospective_candidate_hash, expected):
+            raise ValueError(
+                "prospective_candidate_hash does not bind the frozen economic identity"
+            )
+        return self
+
+    @classmethod
+    def create(cls, *, candidate_id: str, config: CandidateConfig) -> Self:
+        payload: dict[str, object] = {
+            "schema_version": PROSPECTIVE_ECONOMIC_CANDIDATE_SCHEMA_VERSION,
+            "candidate_id": candidate_id,
+            "strategy_version": VNEXT_STRATEGY_VERSION,
+            "policy_version": VNEXT_POLICY_VERSION,
+            "parameter_version": VNEXT_PARAMETER_VERSION,
+            "derivation_version": VNEXT_DERIVATION_VERSION,
+            "data_version": VNEXT_DATA_VERSION,
+            "config": config.model_dump(mode="json"),
+        }
+        digest = sha256_hex(
+            _PROSPECTIVE_ECONOMIC_CANDIDATE_DOMAIN + canonical_json_bytes(payload)
+        )
+        return cls.model_validate({**payload, "prospective_candidate_hash": digest})
+
+    def materialize_candidate_manifest(
+        self, *, structural_component_manifest_hash: str
+    ) -> CandidateManifest:
+        return CandidateManifest.create(
+            candidate_id=self.candidate_id,
+            structural_component_manifest_hash=structural_component_manifest_hash,
+            config=self.config,
+        )
 
 
 class G4RunManifest(StrictFrozenModel):
