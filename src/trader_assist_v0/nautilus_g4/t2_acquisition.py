@@ -470,3 +470,326 @@ def materialize_fixed_markets_from_public_metadata(
     if tuple(x.identity for x in result) != FROZEN_MARKETS:
         raise RealT2IntegrationError("frozen market order changed")
     return tuple(result)
+
+
+@dataclass(frozen=True, slots=True)
+class RestartPivotSource:
+    restart_reference_id: str
+    side: PositionSide
+    kind: RestartReferenceKind
+    price: Decimal
+    reset_admission_ordinal: int
+    confirmed_admission_ordinal: int
+    confirmed_admission_ts: int
+    source_bytes: bytes
+
+
+def derive_restart_pivot_source(
+    *, admissions: Sequence[AdmittedEvent], focal: FormalSetupObservation, side: PositionSide
+) -> RestartPivotSource | None:
+    eligible = [
+        e for e in admissions
+        if e.source.market_id == focal.structural.market_id
+        and e.source.data_kind is DataKind.BAR
+        and e.admission_ordinal > focal.structural.formal_setup_admission_ordinal
+        and e.source.event_context.endswith("-1-MINUTE-LAST-EXTERNAL")
+    ]
+    for event in eligible:
+        validate_external_bar_admission(event, minutes=1)
+        if (
+            event.continuity_epoch != focal.continuity_epoch
+            or event.admission_epoch != focal.admission_epoch
+        ):
+            return None
+    eligible.sort(key=lambda e: e.admission_ordinal)
+    if len(eligible) < 3:
+        return None
+    candidates: list[tuple[AdmittedEvent, AdmittedEvent, AdmittedEvent, Decimal, RestartReferenceKind]] = []
+    for left, pivot, right in zip(eligible, eligible[1:], eligible[2:], strict=False):
+        if not (
+            left.source.ts_event + ONE_MINUTE_NS == pivot.source.ts_event
+            and pivot.source.ts_event + ONE_MINUTE_NS == right.source.ts_event
+        ):
+            return None
+        if side is PositionSide.LONG:
+            value = _decimal(pivot.source.payload, "high")
+            if value > _decimal(left.source.payload, "high") and value >= _decimal(right.source.payload, "high"):
+                candidates.append((left, pivot, right, value, RestartReferenceKind.PIVOT_HIGH))
+        else:
+            value = _decimal(pivot.source.payload, "low")
+            if value < _decimal(left.source.payload, "low") and value <= _decimal(right.source.payload, "low"):
+                candidates.append((left, pivot, right, value, RestartReferenceKind.PIVOT_LOW))
+    if not candidates:
+        return None
+    left, pivot, right, price, kind = candidates[-1]
+    source_bytes = canonical_json_bytes({
+        "left": left.model_dump(mode="json"),
+        "pivot": pivot.model_dump(mode="json"),
+        "right": right.model_dump(mode="json"),
+        "knowable_at_admission_ordinal": right.admission_ordinal,
+    })
+    rid = sha256_hex(source_bytes)
+    return RestartPivotSource(
+        restart_reference_id=rid,
+        side=side,
+        kind=kind,
+        price=price,
+        reset_admission_ordinal=focal.structural.formal_setup_admission_ordinal,
+        confirmed_admission_ordinal=right.admission_ordinal,
+        confirmed_admission_ts=right.admission_ts,
+        source_bytes=source_bytes,
+    )
+
+
+def materialize_restart_reference(
+    *, source: RestartPivotSource, lineage: CausalLineage, source_artifact_hash: str
+) -> RestartReferenceEvidence:
+    return RestartReferenceEvidence.create(
+        restart_reference_id=source.restart_reference_id,
+        lineage_hash=lineage.lineage_hash,
+        side=source.side,
+        kind=source.kind,
+        price=source.price,
+        reset_admission_ordinal=source.reset_admission_ordinal,
+        confirmed_admission_ordinal=source.confirmed_admission_ordinal,
+        confirmed_admission_ts=source.confirmed_admission_ts,
+        source_artifact_hash=source_artifact_hash,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class SupplementSource:
+    source_bytes: bytes
+    microstructure_warmup_seconds: int
+    side_adjusted_aggressor_imbalance_15s: Decimal
+    flow_price_response_15s_bps: Decimal
+
+
+def derive_evaluator_supplement_source(
+    *, admissions: Sequence[AdmittedEvent], lineage: CausalLineage, side: PositionSide
+) -> SupplementSource | None:
+    bbo = [
+        e for e in admissions
+        if e.source.market_id == lineage.market_id
+        and e.source.instrument_id == lineage.instrument_id
+        and e.source.data_kind is DataKind.BBO
+        and e.continuity_epoch == lineage.continuity_epoch
+        and e.admission_epoch == lineage.admission_epoch
+        and e.continuity_state is EvidenceState.COMPLETE
+        and not e.out_of_order
+        and e.admission_ts >= lineage.formal_setup_admission_ts
+    ]
+    if not bbo:
+        return None
+    bbo.sort(key=lambda e: e.admission_ordinal)
+    end = bbo[-1]
+    start_cutoff = end.admission_ts - 15_000_000_000
+    start = next((e for e in bbo if e.admission_ts >= start_cutoff), None)
+    if start is None or start.admission_ts > start_cutoff:
+        return None
+    trades = [
+        e for e in admissions
+        if e.source.market_id == lineage.market_id
+        and e.source.instrument_id == lineage.instrument_id
+        and e.source.data_kind is DataKind.TRADE
+        and start_cutoff <= e.admission_ts <= end.admission_ts
+        and e.continuity_epoch == lineage.continuity_epoch
+        and e.admission_epoch == lineage.admission_epoch
+        and e.continuity_state is EvidenceState.COMPLETE
+        and not e.out_of_order
+    ]
+    buy = Decimal("0")
+    sell = Decimal("0")
+    for trade in trades:
+        notional = _decimal(trade.source.payload, "price") * _decimal(trade.source.payload, "size")
+        aggressor = (trade.source.provider_aggressor_side or "").upper()
+        if "BUY" in aggressor:
+            buy += notional
+        elif "SELL" in aggressor:
+            sell += notional
+        else:
+            return None
+    total = buy + sell
+    sign = Decimal("1") if side is PositionSide.LONG else Decimal("-1")
+    imbalance = Decimal("0") if total == 0 else sign * (buy - sell) / total
+
+    def executable(event: AdmittedEvent) -> Decimal:
+        key = "ask_price" if side is PositionSide.LONG else "bid_price"
+        return _decimal(event.source.payload, key)
+
+    first = executable(start)
+    last = executable(end)
+    response = sign * (last - first) / first * Decimal("10000")
+    source_bytes = canonical_json_bytes({
+        "start_bbo": start.admission_hash,
+        "end_bbo": end.admission_hash,
+        "trades": [e.admission_hash for e in trades],
+        "window_ns": 15_000_000_000,
+        "side": side.value,
+    })
+    warmup = max(0, (end.admission_ts - lineage.formal_setup_admission_ts) // 1_000_000_000)
+    return SupplementSource(source_bytes, int(warmup), imbalance, response)
+
+
+def materialize_evaluator_supplement(
+    *, source: SupplementSource, lineage: CausalLineage, source_artifact_hash: str
+) -> EvaluatorSupplementEvidence:
+    return EvaluatorSupplementEvidence.create(
+        causal_lineage_hash=lineage.lineage_hash,
+        source_artifact_hash=source_artifact_hash,
+        microstructure_warmup_seconds=source.microstructure_warmup_seconds,
+        side_adjusted_aggressor_imbalance_15s=source.side_adjusted_aggressor_imbalance_15s,
+        flow_price_response_15s_bps=source.flow_price_response_15s_bps,
+    )
+
+
+def replay_frozen_structural_source(
+    *, admissions: Sequence[AdmittedEvent], registry_markets: Mapping[str, RegistryMarket],
+    provider_minimum_ticks: Mapping[str, Decimal],
+) -> StructuralSourceEvidence:
+    if (
+        set(registry_markets) != set(FROZEN_BY_MARKET)
+        or set(provider_minimum_ticks) != set(FROZEN_BY_MARKET)
+    ):
+        raise RealT2IntegrationError("global replay requires exact 20-market source boundary")
+    package = _strategy_package()
+    evaluators: dict[str, PilotStrategyEvaluator] = {}
+    observed: list[StructuralSourceEvidence] = []
+    ordered = tuple(sorted(admissions, key=lambda e: e.admission_ordinal))
+    ordinals = [e.admission_ordinal for e in ordered]
+    if ordinals != sorted(set(ordinals)):
+        raise RealT2IntegrationError("rooted admissions have duplicate/conflicting causal order")
+    for event in ordered:
+        if (
+            event.source.data_kind is not DataKind.BAR
+            or not event.source.event_context.endswith("-5-MINUTE-LAST-EXTERNAL")
+        ):
+            continue
+        strategy_input = admitted_external_5m_to_strategy_input(
+            event, strategy_package_hash=package.manifest_hash
+        )
+        tick = provider_minimum_ticks[event.source.market_id]
+        if not tick.is_finite() or tick <= 0:
+            raise RealT2IntegrationError("rooted provider-native minimum tick is invalid")
+        evaluator = evaluators.get(event.source.market_id)
+        if evaluator is None:
+            evaluator = PilotStrategyEvaluator(
+                manifest=package, market_id=event.source.market_id, minimum_tick=tick
+            )
+            evaluators[event.source.market_id] = evaluator
+        envelope = evaluator.evaluate(strategy_input)
+        if envelope is None:
+            continue
+        for decision in envelope.kernel_result.decisions:
+            if decision.decision is DecisionKind.FORMAL_SETUP_CONFIRMED:
+                observed.append(StructuralSourceEvidence.create(
+                    strategy_package_hash=package.manifest_hash,
+                    admission=event,
+                    decision=decision,
+                ))
+    if not observed:
+        raise RealT2IntegrationError("rooted source contains no Formal Setup")
+    return min(observed, key=lambda s: (
+        s.formal_setup_admission_ts,
+        s.exact_market_set_ordinal,
+        s.formal_setup_admission_ordinal,
+        s.formal_setup_id,
+    ))
+
+
+def provider_instrument_metadata_document(
+    *, raw_provider_response: bytes, materialization: FixedMarketMaterialization,
+    provider_instrument: object,
+) -> bytes:
+    to_dict = getattr(provider_instrument, "to_dict", None)
+    if not callable(to_dict):
+        raise RealT2IntegrationError("provider instrument lacks to_dict")
+    normalized = to_dict()
+    if not isinstance(normalized, dict):
+        raise RealT2IntegrationError("provider instrument serialization is invalid")
+    if str(getattr(provider_instrument, "id", "")) != materialization.identity.instrument_id:
+        raise RealT2IntegrationError("provider instrument id conflicts with frozen identity")
+    if int(getattr(provider_instrument, "size_precision")) != materialization.registry_market.size_decimals:
+        raise RealT2IntegrationError("provider size precision conflicts with raw metadata")
+    tick = _provider_tick(provider_instrument)
+    quantity = Decimal(str(getattr(provider_instrument, "size_increment")))
+    if not quantity.is_finite() or quantity <= 0:
+        raise RealT2IntegrationError("provider-native size increment is invalid")
+    return canonical_json_bytes({
+        "schema_version": "TASK5D_PROVIDER_INSTRUMENT_METADATA_V1",
+        "market_id": materialization.identity.market_id,
+        "instrument_id": materialization.identity.instrument_id,
+        "raw_provider_response_sha256": raw_response_sha256(raw_provider_response),
+        "registry_metadata_hash": materialization.registry_market.metadata_hash,
+        "provider_minimum_tick": str(tick),
+        "provider_size_increment": str(quantity),
+        "provider_instrument": normalized,
+    })
+
+
+def assemble_real_t2_root(
+    *, artifacts: Sequence[object], governance_epoch: str, acquisition_plan_hash: str,
+    exact_source_git_head: str, exact_source_git_tree: str, strategy_package_identity: str,
+):
+    from trader_assist_v0.nautilus_g4.t2_shadow import (
+        RoleBoundSourceArtifact,
+        T2SourceRole,
+        T2SourceRootSnapshot,
+    )
+    typed = tuple(artifacts)
+    if not typed or any(type(x) is not RoleBoundSourceArtifact for x in typed):
+        raise RealT2IntegrationError("root requires exact materialized role artifacts")
+    by_role: dict[object, list[Any]] = {}
+    for item in typed:
+        by_role.setdefault(item.role, []).append(item)
+    singleton = (
+        T2SourceRole.E4_RUN_MANIFEST,
+        T2SourceRole.E4_PIT_SNAPSHOT,
+        T2SourceRole.G4_RUN_MANIFEST,
+        T2SourceRole.SELECTED_CANDIDATE,
+        T2SourceRole.PROSPECTIVE_ECONOMIC_CANDIDATE_IDENTITY,
+        T2SourceRole.STRUCTURAL_SOURCE,
+        T2SourceRole.CAUSAL_LINEAGE,
+        T2SourceRole.VALIDATION_REFERENCE,
+        T2SourceRole.PROVIDER_INSTRUMENT_WIRE,
+        T2SourceRole.THESIS_OUTCOME,
+    )
+    for role in singleton:
+        if len(by_role.get(role, [])) != 1:
+            raise RealT2IntegrationError(f"root requires exactly one {role.value}")
+    required_nonempty = (
+        T2SourceRole.E4_ADMISSION,
+        T2SourceRole.E4_LIFECYCLE,
+        T2SourceRole.E4_CONTINUITY,
+        T2SourceRole.RESTART_REFERENCE_SOURCE,
+        T2SourceRole.RESTART_REFERENCE,
+        T2SourceRole.EVALUATOR_SUPPLEMENT_SOURCE,
+        T2SourceRole.EVALUATOR_SUPPLEMENT,
+        T2SourceRole.VALIDATION_SOURCE,
+        T2SourceRole.COST_SOURCE,
+    )
+    for role in required_nonempty:
+        if not by_role.get(role):
+            raise RealT2IntegrationError(f"root requires source role {role.value}")
+    for role in (
+        T2SourceRole.MARKET_EXPRESSION,
+        T2SourceRole.REGISTRY_MARKET,
+        T2SourceRole.INSTRUMENT_METADATA,
+    ):
+        if len(by_role.get(role, [])) != 20:
+            raise RealT2IntegrationError(f"root requires 20 {role.value} artifacts")
+    one = lambda role: by_role[role][0]
+    return T2SourceRootSnapshot.create(
+        task_id=REAL_T2_TASK_ID,
+        governance_epoch=governance_epoch,
+        acquisition_plan_hash=acquisition_plan_hash,
+        exact_source_git_head=exact_source_git_head,
+        exact_source_git_tree=exact_source_git_tree,
+        e4_run_manifest_hash=one(T2SourceRole.E4_RUN_MANIFEST).artifact_hash,
+        e4_pit_snapshot_hash=one(T2SourceRole.E4_PIT_SNAPSHOT).artifact_hash,
+        g4_run_manifest_hash=one(T2SourceRole.G4_RUN_MANIFEST).artifact_hash,
+        selected_candidate_hash=one(T2SourceRole.SELECTED_CANDIDATE).artifact_hash,
+        strategy_package_identity=strategy_package_identity,
+        validation_reference_hash=one(T2SourceRole.VALIDATION_REFERENCE).artifact_hash,
+        artifacts=typed,
+    )
