@@ -5,8 +5,8 @@ from dataclasses import replace
 import pytest
 
 from trader_assist_v0.fast_decision_model_lab.contracts import (
-    AggressorSide,
     BBO,
+    AggressorSide,
     BlockReason,
     CompletedBar,
     FreshnessInputs,
