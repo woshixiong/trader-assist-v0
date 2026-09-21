@@ -617,6 +617,67 @@ def rederive_rooted_t2(
             key=lambda item: (item.admission_ordinal, item.admission_ts, item.admission_hash),
         )
     )
+    registry_artifacts = (
+        _many(root, T2SourceRole.REGISTRY_MARKET)
+        if strict_real_t2
+        else (_one(root, T2SourceRole.REGISTRY_MARKET),)
+    )
+    registries = tuple(
+        cast(RegistryMarket, _parse(item, RegistryMarket)) for item in registry_artifacts
+    )
+    registry_by_market = {item.identity.market_id: item for item in registries}
+    if len(registry_by_market) != len(registries):
+        raise ValueError("rooted RegistryMarket identities are duplicated")
+    metadata_artifacts = (
+        _many(root, T2SourceRole.INSTRUMENT_METADATA)
+        if strict_real_t2
+        else (_one(root, T2SourceRole.INSTRUMENT_METADATA),)
+    )
+    metadata_docs = tuple(json.loads(item.exact_bytes()) for item in metadata_artifacts)
+    metadata_by_market = {
+        str(item.get("market_id")): item
+        for item in metadata_docs
+        if isinstance(item, dict) and isinstance(item.get("market_id"), str)
+    }
+    if len(metadata_by_market) != len(metadata_docs):
+        raise ValueError("rooted instrument metadata identities are duplicated/invalid")
+    if strict_real_t2:
+        if len(expressions) != 20 or len(registries) != 20 or len(metadata_docs) != 20:
+            raise ValueError("Task5D root must retain exact 20-market source boundary")
+        provider_ticks: dict[str, Decimal] = {}
+        for market_id, registry_item in registry_by_market.items():
+            doc = metadata_by_market.get(market_id)
+            if doc is None or doc.get("registry_metadata_hash") != registry_item.metadata_hash:
+                raise ValueError("instrument metadata does not bind RegistryMarket")
+            try:
+                tick = Decimal(str(doc["provider_minimum_tick"]))
+            except (KeyError, ValueError) as exc:
+                raise ValueError("instrument metadata lacks provider-native minimum tick") from exc
+            if not tick.is_finite() or tick <= 0:
+                raise ValueError("provider-native minimum tick is invalid")
+            provider_ticks[market_id] = tick
+        replayed = replay_frozen_structural_source(
+            admissions=admissions,
+            registry_markets=registry_by_market,
+            provider_minimum_ticks=provider_ticks,
+        )
+        assert structural_claim is not None
+        if structural_claim != replayed:
+            raise ValueError(
+                "rooted structural source is not the globally selected replayed Formal Setup"
+            )
+        structural = structural_claim.strategy_decision()
+        if (
+            structural.market_id != lineage.market_id
+            or structural.market_event_id != lineage.formal_setup_id
+            or structural_claim.formal_setup_admission_ordinal
+            != lineage.formal_setup_admission_ordinal
+            or structural_claim.formal_setup_admission_ts
+            != lineage.formal_setup_admission_ts
+        ):
+            raise ValueError("replayed structural focal identity conflicts with causal lineage")
+    assert structural is not None
+
     bbo = tuple(
         item
         for item in admissions
