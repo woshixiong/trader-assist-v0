@@ -723,9 +723,19 @@ def rederive_rooted_t2(
         EvaluatorSupplementEvidence,
         _parse(_one(root, T2SourceRole.EVALUATOR_SUPPLEMENT), EvaluatorSupplementEvidence),
     )
-    registry = cast(
-        RegistryMarket, _parse(_one(root, T2SourceRole.REGISTRY_MARKET), RegistryMarket)
-    )
+    registry = registry_by_market.get(lineage.market_id)
+    if registry is None:
+        raise ValueError("rooted RegistryMarket for focal lineage is absent")
+    if strict_real_t2:
+        if (
+            registry.asset_class.value != "CRYPTO"
+            or registry.identity.dex != "MAIN"
+            or registry.is_hip3
+            or registry.timeframe_profile != "FAST_5M"
+            or registry.market_status != "ACTIVE"
+            or expression.instrument_metadata_hash != registry.metadata_hash
+        ):
+            raise ValueError("focal RegistryMarket is not exact source-bound MAIN perp metadata")
     admission = derive_evaluation_admission(
         candidate_room_to_cost_k=candidate.config.room_to_cost_k,
         lineage=lineage,
