@@ -172,7 +172,7 @@ class StructuralSourceEvidence(BaseModel):
     decision_hash: Sha256Hex
 
     @model_validator(mode="after")
-    def validate_identity(self) -> "StructuralSourceEvidence":
+    def validate_identity(self) -> StructuralSourceEvidence:
         frozen = FROZEN_MARKETS[self.exact_market_set_ordinal - 1]
         if self.market_id != frozen.market_id:
             raise ValueError("structural ordinal conflicts with frozen market")
@@ -190,7 +190,7 @@ class StructuralSourceEvidence(BaseModel):
     @classmethod
     def create(
         cls, *, strategy_package_hash: str, admission: AdmittedEvent, decision: StrategyDecision
-    ) -> "StructuralSourceEvidence":
+    ) -> StructuralSourceEvidence:
         frozen = FROZEN_BY_MARKET.get(decision.market_id)
         if frozen is None or decision.decision is not DecisionKind.FORMAL_SETUP_CONFIRMED:
             raise RealT2IntegrationError(
@@ -263,7 +263,7 @@ def _strategy_package() -> StrategyPackageManifest:
 
 def _provider_tick(provider_instrument: object) -> Decimal:
     try:
-        tick = Decimal(str(getattr(provider_instrument, "price_increment")))
+        tick = Decimal(str(provider_instrument.price_increment))
     except (InvalidOperation, ValueError, AttributeError) as exc:
         raise RealT2IntegrationError("provider-native minimum tick is unavailable") from exc
     if not tick.is_finite() or tick <= 0:
@@ -755,12 +755,12 @@ def provider_instrument_metadata_document(
     if str(getattr(provider_instrument, "id", "")) != materialization.identity.instrument_id:
         raise RealT2IntegrationError("provider instrument id conflicts with frozen identity")
     if (
-        int(getattr(provider_instrument, "size_precision"))
+        int(provider_instrument.size_precision)
         != materialization.registry_market.size_decimals
     ):
         raise RealT2IntegrationError("provider size precision conflicts with raw metadata")
     tick = _provider_tick(provider_instrument)
-    quantity = Decimal(str(getattr(provider_instrument, "size_increment")))
+    quantity = Decimal(str(provider_instrument.size_increment))
     if not quantity.is_finite() or quantity <= 0:
         raise RealT2IntegrationError("provider-native size increment is invalid")
     return canonical_json_bytes({
