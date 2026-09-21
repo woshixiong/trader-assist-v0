@@ -1205,3 +1205,16 @@ def test_cli_without_real_root_is_truthful(capsys: pytest.CaptureFixture[str]) -
     assert result["R3_RUNTIME_T2_STATUS"] == "NONDECISIVE_REAL_INPUT_ABSENT"
     assert result["FORMAL_REAL_T2_CREDIT"] == "NO"
     assert result["REAL_T2_CREDIT"] == "NO"
+
+
+def test_task5d_strict_root_cannot_reuse_legacy_hand_authored_source_graph(
+    tmp_path: Path,
+) -> None:
+    from trader_assist_v0.nautilus_g4.t2_acquisition import REAL_T2_TASK_ID
+
+    legacy = minimal_root()
+    values = legacy.model_dump(mode="python", exclude={"source_root_hash"})
+    values["task_id"] = REAL_T2_TASK_ID
+    strict = T2SourceRootSnapshot.create(**values)
+    with pytest.raises(ValueError, match="PROSPECTIVE_ECONOMIC_CANDIDATE_IDENTITY"):
+        rederive_rooted_t2(root=strict, catalog_path=tmp_path)
