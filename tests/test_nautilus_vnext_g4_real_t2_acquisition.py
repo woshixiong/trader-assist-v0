@@ -90,6 +90,7 @@ def _admission(
         },
     )
     return AdmittedEvent.create(
+        schema_version="E4_CAPTURE_V1",
         process_epoch="process-test",
         continuity_epoch="continuity-test",
         admission_epoch="admission-test",
@@ -310,6 +311,7 @@ def _bbo_for_validation(
         },
     )
     return AdmittedEvent.create(
+        schema_version="E4_CAPTURE_V1",
         process_epoch="process-test",
         continuity_epoch="continuity-test",
         admission_epoch="admission-test",
