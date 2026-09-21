@@ -8,15 +8,15 @@ from dataclasses import asdict, dataclass
 from typing import Final
 
 from .contracts import (
-    AggressorSide,
     BBO,
+    STATE_SCHEMA_VERSION,
+    AggressorSide,
     CompletedBar,
     FreshnessResult,
     L2Level,
     L2Snapshot,
     MarketIdentity,
     PublicTrade,
-    STATE_SCHEMA_VERSION,
 )
 
 WINDOW_SECONDS: Final = (5, 15, 60)
