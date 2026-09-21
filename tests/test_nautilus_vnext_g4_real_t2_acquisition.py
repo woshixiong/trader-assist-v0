@@ -49,8 +49,8 @@ from trader_assist_v0.nautilus_g4.t2_shadow import (
     RoleBoundSourceArtifact,
     T2SourceRole,
 )
-from trader_assist_v0.vnext_g4.contracts import PositionSide
 from trader_assist_v0.nautilus_pilot.strategy_package import StrategyPackageManifest
+from trader_assist_v0.vnext_g4.contracts import PositionSide
 
 
 def _admission(
