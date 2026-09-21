@@ -1,5 +1,5 @@
 # Platform lock: CPython 3.12 / Linux x86_64
-# Complete exact JEV optional dependency closure; one selected wheel hash per distribution.
+# Complete exact TypeSafe decision-model adapter closure; one selected wheel hash per distribution.
 annotated-types==0.7.0 --hash=sha256:1f02e8b43a8fbbc3f3e0d4f0f4bfc8131bcb4eebe8849b8e5c773f3a1c582a53
 anyio==4.15.1 --hash=sha256:6152fdbbf9a77fdec97731721bebf7c4c44f7c29b424b0065826173efc7ed101
 h11==0.16.0 --hash=sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86

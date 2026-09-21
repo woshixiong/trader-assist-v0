@@ -24,7 +24,7 @@ dev = [
 nautilus-pilot = [
   "nautilus-trader==2.0.0rc5",
 ]
-jev = [
+decision-model-typesafe = [
   "typesafe-sdk==0.7.0",
 ]
 
