@@ -487,6 +487,12 @@ def rederive_rooted_t2(
         provider_execution_semantic_hash,
         provider_state_semantic_source_hash,
     )
+    from trader_assist_v0.nautilus_g4.t2_acquisition import (
+        REAL_T2_TASK_ID,
+        StructuralSourceEvidence,
+        raw_response_sha256,
+        replay_frozen_structural_source,
+    )
     from trader_assist_v0.vnext_g4.contracts import (
         TASK5D_PHASE0C_PROSPECTIVE_ECONOMIC_CANDIDATE_HASH,
         CandidateManifest,
@@ -502,15 +508,16 @@ def rederive_rooted_t2(
     from trader_assist_v0.vnext_g4.evaluator import evaluate_participation
     from trader_assist_v0.vnext_g4.reporting import CostProvenance, ThesisOutcome
 
-    from trader_assist_v0.nautilus_g4.t2_acquisition import (
-        REAL_T2_TASK_ID,
-        StructuralSourceEvidence,
-        raw_response_sha256,
-        replay_frozen_structural_source,
-    )
-
-    structural_artifact = _one(root, T2SourceRole.STRUCTURAL_SOURCE)
     strict_real_t2 = root.task_id == REAL_T2_TASK_ID
+    if strict_real_t2:
+        prospective_artifact = _one(
+            root, T2SourceRole.PROSPECTIVE_ECONOMIC_CANDIDATE_IDENTITY
+        )
+    structural_artifact = _one(root, T2SourceRole.STRUCTURAL_SOURCE)
+    if not strict_real_t2:
+        prospective_artifact = _one(
+            root, T2SourceRole.PROSPECTIVE_ECONOMIC_CANDIDATE_IDENTITY
+        )
     structural_claim = (
         cast(StructuralSourceEvidence, _parse(structural_artifact, StructuralSourceEvidence))
         if strict_real_t2
@@ -520,9 +527,6 @@ def rederive_rooted_t2(
         None
         if strict_real_t2
         else cast(StrategyDecision, _parse(structural_artifact, StrategyDecision))
-    )
-    prospective_artifact = _one(
-        root, T2SourceRole.PROSPECTIVE_ECONOMIC_CANDIDATE_IDENTITY
     )
     prospective = cast(
         ProspectiveEconomicCandidateIdentity,
@@ -634,14 +638,17 @@ def rederive_rooted_t2(
         else (_one(root, T2SourceRole.INSTRUMENT_METADATA),)
     )
     metadata_docs = tuple(json.loads(item.exact_bytes()) for item in metadata_artifacts)
-    metadata_by_market = {
-        str(item.get("market_id")): item
-        for item in metadata_docs
-        if isinstance(item, dict) and isinstance(item.get("market_id"), str)
-    }
-    if len(metadata_by_market) != len(metadata_docs):
-        raise ValueError("rooted instrument metadata identities are duplicated/invalid")
+    metadata_by_market: dict[str, dict[str, object]] = {}
     if strict_real_t2:
+        metadata_by_market = {
+            str(item.get("market_id")): item
+            for item in metadata_docs
+            if isinstance(item, dict) and isinstance(item.get("market_id"), str)
+        }
+        if len(metadata_by_market) != len(metadata_docs):
+            raise ValueError(
+                "rooted instrument metadata identities are duplicated/invalid"
+            )
         if len(expressions) != 20 or len(registries) != 20 or len(metadata_docs) != 20:
             raise ValueError("Task5D root must retain exact 20-market source boundary")
         provider_ticks: dict[str, Decimal] = {}
@@ -805,8 +812,11 @@ def rederive_rooted_t2(
         if canonical_json_bytes(wire) != canonical_json_bytes(child_wire):
             raise ValueError("provider instrument public wire does not round-trip exactly")
         wire_hash = sha256_hex(canonical_json_bytes(wire))
-        metadata = metadata_by_market.get(lineage.market_id)
-        if metadata is None or metadata.get("provider_wire_hash") != wire_hash:
+        metadata = metadata_docs[0]
+        if (
+            not isinstance(metadata, dict)
+            or metadata.get("provider_wire_hash") != wire_hash
+        ):
             raise ValueError("instrument metadata does not bind the rooted provider wire")
     quantity = Decimal(str(provider_instrument.size_increment))
     size_decimals = int(provider_instrument.size_precision)
