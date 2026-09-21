@@ -211,6 +211,11 @@ class NautilusE4CaptureStrategy(Strategy):
         """Attach one synchronous composition observer; E4 remains admission owner."""
         self._admitted_event_observer = observer
 
+    @property
+    def capture_session(self) -> CaptureSession:
+        """Read-only composition access to the existing E4 semantic owner."""
+        return self._session
+
     def open_structural_package(
         self,
         *,
