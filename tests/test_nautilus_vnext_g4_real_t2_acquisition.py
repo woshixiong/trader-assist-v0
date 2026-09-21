@@ -348,6 +348,7 @@ def _validation_materialization(
         admissions=(bbo,),
         focal=focal,
         side=PositionSide.LONG,
+        evaluation_admission_hash=bbo.admission_hash,
     )
     assert causal is not None
     provider = _ProviderInstrument(
@@ -476,7 +477,7 @@ def test_validation_source_materializes_exact_control_profile() -> None:
     )
 
 
-def test_causal_bbo_uses_latest_complete_same_lineage_at_cutoff() -> None:
+def test_causal_bbo_freezes_exact_evaluation_admission_not_cutoff_latest() -> None:
     focal = _focal_for_validation()
     first = _bbo_for_validation(ordinal=2)
     later = _bbo_for_validation(ordinal=3)
@@ -484,9 +485,10 @@ def test_causal_bbo_uses_latest_complete_same_lineage_at_cutoff() -> None:
         admissions=(later, first),
         focal=focal,
         side=PositionSide.LONG,
+        evaluation_admission_hash=first.admission_hash,
     )
     assert binding is not None
-    assert binding.admission.admission_hash == later.admission_hash
+    assert binding.admission.admission_hash == first.admission_hash
     assert binding.executable_price == Decimal("100.1")
     assert binding.opposite_l1_size == Decimal("1.000")
 
@@ -566,7 +568,7 @@ def test_missing_bbo_is_not_evaluable_and_not_synthesized() -> None:
             admissions=(),
             focal=_focal_for_validation(),
             side=PositionSide.LONG,
+            evaluation_admission_hash="0" * 64,
         )
         is None
     )
-

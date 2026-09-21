@@ -483,15 +483,23 @@ def rederive_rooted_t2(
         project_native_replay,
     )
     from trader_assist_v0.nautilus_g4.runner import (
+        ProviderExecutionRecord,
+        ProviderRoundTripExecutionRecord,
+        execute_provider_native_round_trip_state,
         execute_provider_native_state,
         provider_execution_semantic_hash,
+        provider_round_trip_semantic_hash,
+        provider_round_trip_state_semantic_source_hash,
         provider_state_semantic_source_hash,
     )
     from trader_assist_v0.nautilus_g4.t2_acquisition import (
+        CausalBboBinding,
+        FormalSetupObservation,
         REAL_T2_TASK_ID,
         StructuralSourceEvidence,
         raw_response_sha256,
         replay_frozen_structural_source,
+        select_first_exit_trigger,
         validate_task5d_validation_artifacts,
     )
     from trader_assist_v0.vnext_g4.contracts import (
@@ -966,22 +974,71 @@ def rederive_rooted_t2(
         expression_id=expression.expression_id,
         instrument_id=lineage.instrument_id,
     )
-    execution = execute_provider_native_state(
-        projection=projection,
-        intent=intent,
-        trigger_admission_hash=current_bbo.admission_hash,
-        provider_instrument=provider_instrument,
-        catalog_path=catalog_path,
-    )
-    record = execution.record
+    if strict_real_t2:
+        entry_binding = CausalBboBinding(
+            admission=current_bbo,
+            executable_price=intent.executable_price,
+            opposite_l1_size=opposite,
+        )
+        if structural_claim is None:
+            raise ValueError("round-trip exit requires exact rooted structural source")
+        exit_trigger = select_first_exit_trigger(
+            admissions=admissions,
+            focal=FormalSetupObservation(
+                structural=structural_claim,
+                package_id=lineage.activation_sequence_id,
+                opportunity_id=lineage.activation_sequence_id,
+                thesis_id=lineage.thesis_id,
+                continuity_epoch=lineage.continuity_epoch,
+                admission_epoch=lineage.admission_epoch,
+            ),
+            side=side,
+            entry_binding=entry_binding,
+            entry_executable_price=intent.executable_price,
+            candidate=candidate.config,
+        )
+        if exit_trigger is None:
+            raise ValueError("rooted TAKE has no causal provider-native exit before cutoff")
+        execution = execute_provider_native_round_trip_state(
+            projection=projection,
+            intent=intent,
+            entry_trigger_admission_hash=current_bbo.admission_hash,
+            exit_trigger_admission_hash=exit_trigger.admission.admission_hash,
+            provider_instrument=provider_instrument,
+            catalog_path=catalog_path,
+        )
+        record: ProviderExecutionRecord | ProviderRoundTripExecutionRecord = execution.record
+    else:
+        execution = execute_provider_native_state(
+            projection=projection,
+            intent=intent,
+            trigger_admission_hash=current_bbo.admission_hash,
+            provider_instrument=provider_instrument,
+            catalog_path=catalog_path,
+        )
+        record = execution.record
     expected_side = "BUY" if side is PositionSide.LONG else "SELL"
-    if (
-        record.projection_hash != projection.identity.projection_hash
-        or record.order_intent_hash != intent.order_intent_hash
-        or record.trigger_admission_hash != current_bbo.admission_hash
-        or record.submitted_side != expected_side
-        or Decimal(record.submitted_technical_quantity) != quantity
-    ):
+    valid_execution = (
+        record.projection_hash == projection.identity.projection_hash
+        and record.order_intent_hash == intent.order_intent_hash
+    )
+    if strict_real_t2:
+        round_trip_record = cast(ProviderRoundTripExecutionRecord, record)
+        valid_execution = valid_execution and (
+            round_trip_record.entry_trigger_admission_hash == current_bbo.admission_hash
+            and round_trip_record.exit_trigger_admission_hash
+            == exit_trigger.admission.admission_hash
+            and round_trip_record.entry.side == expected_side
+            and Decimal(round_trip_record.entry.quantity) == quantity
+        )
+    else:
+        single_leg_record = cast(ProviderExecutionRecord, record)
+        valid_execution = valid_execution and (
+            single_leg_record.trigger_admission_hash == current_bbo.admission_hash
+            and single_leg_record.submitted_side == expected_side
+            and Decimal(single_leg_record.submitted_technical_quantity) == quantity
+        )
+    if not valid_execution:
         raise ValueError("provider execution does not cross-bind the canonical causal unit")
     outcome_artifact = _one(root, T2SourceRole.THESIS_OUTCOME)
     outcome = cast(ThesisOutcome, _parse(outcome_artifact, ThesisOutcome))
@@ -993,7 +1050,13 @@ def rederive_rooted_t2(
         raise ValueError("rooted outcome decision is not TAKE")
     if outcome.order_intent_hash != intent.order_intent_hash:
         raise ValueError("rooted outcome does not bind the canonical OrderIntent")
-    provider_state_hash = provider_state_semantic_source_hash(record)
+    provider_state_hash = (
+        provider_round_trip_state_semantic_source_hash(
+            cast(ProviderRoundTripExecutionRecord, record)
+        )
+        if strict_real_t2
+        else provider_state_semantic_source_hash(cast(ProviderExecutionRecord, record))
+    )
     if outcome.provider_state_source_hash != provider_state_hash:
         raise ValueError("rooted outcome does not bind the fresh provider state")
     rooted_costs = {item.artifact_hash for item in _many(root, T2SourceRole.COST_SOURCE)}
@@ -1023,7 +1086,11 @@ def rederive_rooted_t2(
         ),
         order_intent_hash=intent.order_intent_hash,
         replay_projection_hash=projection.identity.projection_hash,
-        provider_execution_semantic_hash=provider_execution_semantic_hash(record),
+        provider_execution_semantic_hash=(
+            provider_round_trip_semantic_hash(cast(ProviderRoundTripExecutionRecord, record))
+            if strict_real_t2
+            else provider_execution_semantic_hash(cast(ProviderExecutionRecord, record))
+        ),
         provider_state_source_hash=provider_state_hash,
         provider_instrument_wire_hash=wire_hash,
         thesis_outcome_hash=outcome_artifact.artifact_hash,

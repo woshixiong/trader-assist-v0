@@ -48,6 +48,7 @@ from trader_assist_v0.nautilus_pilot.strategy_package import (
     PilotStrategyEvaluator,
     StrategyPackageManifest,
 )
+from trader_assist_v0.vnext_g4.evaluator import exit_triggered, winner_confirmed
 from trader_assist_v0.vnext_g4.contracts import (
     CandidateConfig,
     CandidateManifest,
@@ -430,6 +431,7 @@ class RealT2StrategyCoordinator:
         self.provider_instruments: dict[str, dict[str, object]] = {}
         self.admissions: list[AdmittedEvent] = []
         self.last_5m_ts_event: dict[str, int] = {}
+        self.first_source_bound_bbo: dict[str, CausalBboBinding] = {}
 
     def observe_admitted_event(
         self, event: AdmittedEvent, provider_instrument: object | None = None
@@ -449,6 +451,21 @@ class RealT2StrategyCoordinator:
             )
             if canonical_json_bytes(prior) != canonical_json_bytes(normalized):
                 raise RealT2IntegrationError("provider instrument changed within attempt")
+        if event.source.data_kind is DataKind.BBO:
+            # This runs synchronously at admission.  A later BBO cannot replace a
+            # bound evaluation BBO, even if the global focal is selected at cutoff.
+            for observation in self.observations:
+                setup_id = observation.structural.formal_setup_id
+                if setup_id in self.first_source_bound_bbo:
+                    continue
+                binding = select_focal_causal_bbo(
+                    admissions=tuple(self.admissions),
+                    focal=observation,
+                    side=position_side_for_focal(observation),
+                    evaluation_admission_hash=event.admission_hash,
+                )
+                if binding is not None:
+                    self.first_source_bound_bbo[setup_id] = binding
         if event.source.data_kind is not DataKind.BAR:
             return
         if event.source.event_context.endswith("-1-MINUTE-LAST-EXTERNAL"):
@@ -528,6 +545,12 @@ class RealT2StrategyCoordinator:
     @property
     def focal(self) -> FormalSetupObservation | None:
         return select_focal_formal_setup(self.observations)
+
+    def source_bound_bbo_for(
+        self, focal: FormalSetupObservation
+    ) -> CausalBboBinding | None:
+        """Return the immutable causal BBO frozen at admission time."""
+        return self.first_source_bound_bbo.get(focal.structural.formal_setup_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -919,6 +942,16 @@ class CausalBboBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class ExitTriggerBinding:
+    """First source-bound causal exit event; absent is truthfully not evaluable."""
+
+    admission: AdmittedEvent
+    executable_price: Decimal
+    reason: str
+    semantic_hash: str
+
+
+@dataclass(frozen=True, slots=True)
 class FundingHistoryAssessment:
     state: str
     source_hash: str | None
@@ -1053,7 +1086,9 @@ def select_focal_causal_bbo(
     admissions: Sequence[AdmittedEvent],
     focal: FormalSetupObservation,
     side: PositionSide,
+    evaluation_admission_hash: str,
 ) -> CausalBboBinding | None:
+    """Bind the exact current evaluation BBO; never select at cutoff hindsight."""
     frozen = FROZEN_BY_MARKET[focal.structural.market_id]
     eligible = tuple(
         event
@@ -1070,17 +1105,13 @@ def select_focal_causal_bbo(
             > focal.structural.formal_setup_admission_ordinal
         )
         and event.admission_ts >= focal.structural.formal_setup_admission_ts
+        and event.admission_hash == evaluation_admission_hash
     )
+    if len(eligible) > 1:
+        raise RealT2IntegrationError("evaluation BBO identity is ambiguous")
     if not eligible:
         return None
-    admission = max(
-        eligible,
-        key=lambda item: (
-            item.admission_ordinal,
-            item.admission_ts,
-            item.admission_hash,
-        ),
-    )
+    admission = eligible[0]
     bid = _decimal(admission.source.payload, "bid_price")
     ask = _decimal(admission.source.payload, "ask_price")
     bid_size = _decimal(admission.source.payload, "bid_size")
@@ -1090,6 +1121,92 @@ def select_focal_causal_bbo(
     if side is PositionSide.LONG:
         return CausalBboBinding(admission, ask, ask_size)
     return CausalBboBinding(admission, bid, bid_size)
+
+
+def select_first_exit_trigger(
+    *,
+    admissions: Sequence[AdmittedEvent],
+    focal: FormalSetupObservation,
+    side: PositionSide,
+    entry_binding: CausalBboBinding,
+    entry_executable_price: Decimal,
+    candidate: CandidateConfig,
+) -> ExitTriggerBinding | None:
+    """Use frozen AP0/WC0/X0 semantics over only post-entry causal BBOs."""
+    decision = focal.structural.strategy_decision()
+    stop = decision.structural_stop
+    target = decision.target_reference
+    if stop is None or target is None or target.price <= 0:
+        return None
+    if candidate.exit_policy.value != "X0":
+        raise RealT2IntegrationError("Task5D exit selector only accepts frozen X0")
+    winner = False
+    ordered = sorted(
+        admissions,
+        key=lambda item: (
+            item.admission_ordinal,
+            item.admission_ts,
+            item.admission_hash,
+        ),
+    )
+    for event in ordered:
+        if event.admission_ordinal <= entry_binding.admission.admission_ordinal:
+            continue
+        if (
+            event.source.data_kind is not DataKind.BBO
+            or event.source.market_id != focal.structural.market_id
+            or event.source.instrument_id != entry_binding.admission.source.instrument_id
+            or event.continuity_epoch != focal.continuity_epoch
+            or event.admission_epoch != focal.admission_epoch
+            or event.continuity_state is not EvidenceState.COMPLETE
+            or event.out_of_order
+        ):
+            continue
+        bid = _decimal(event.source.payload, "bid_price")
+        ask = _decimal(event.source.payload, "ask_price")
+        executable = bid if side is PositionSide.LONG else ask
+        if executable <= 0:
+            raise RealT2IntegrationError("exit trigger BBO is invalid")
+        progress = (
+            (executable - entry_executable_price) / entry_executable_price
+            if side is PositionSide.LONG
+            else (entry_executable_price - executable) / entry_executable_price
+        ) * Decimal("10000")
+        winner = winner or winner_confirmed(
+            candidate=candidate,
+            favorable_progress_bps=progress,
+            persistence_seconds=0,
+            fresh_favorable_structure=False,
+            favorable_flow_price_response=False,
+        )
+        protective = executable <= stop if side is PositionSide.LONG else executable >= stop
+        target_hit = (
+            winner
+            and (
+                executable >= target.price
+                if side is PositionSide.LONG
+                else executable <= target.price
+            )
+        )
+        if exit_triggered(
+            candidate=candidate,
+            fixed_r_reference_hit=target_hit,
+            structural_deterioration=False,
+            giveback_ratio=Decimal("0"),
+            protective_stop_hit=protective,
+            thesis_invalid=False,
+        ):
+            reason = "AP0_PROTECTIVE_STOP" if protective else "X0_TARGET_AFTER_WC0"
+            semantic_hash = sha256_hex(canonical_json_bytes({
+                "entry_bbo_admission_hash": entry_binding.admission.admission_hash,
+                "exit_bbo_admission_hash": event.admission_hash,
+                "structural_decision_hash": focal.structural.decision_hash,
+                "candidate_config": candidate.model_dump(mode="json"),
+                "reason": reason,
+                "executable_price": str(executable),
+            }))
+            return ExitTriggerBinding(event, executable, reason, semantic_hash)
+    return None
 
 
 def assess_public_funding_history(
