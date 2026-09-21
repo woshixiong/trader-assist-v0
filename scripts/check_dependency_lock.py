@@ -85,16 +85,21 @@ def _verify_direct_pins(
         raise SystemExit("pilot lock must contain only the exact authorized rc5 Linux wheel")
     if optional_typesafe != (DECISION_MODEL_TYPESAFE_REQUIREMENT,):
         raise SystemExit(
-            "decision-model-typesafe optional dependency must contain only the exact typesafe-sdk 0.7.0 pin"
+            "decision-model-typesafe optional dependency must contain only the exact "
+            "typesafe-sdk 0.7.0 pin"
         )
     typesafe_name, typesafe_version = _pin(DECISION_MODEL_TYPESAFE_REQUIREMENT)
     if typesafe.get(typesafe_name, (None, None))[0] != typesafe_version:
-        raise SystemExit("TypeSafe decision-model lock does not contain the exact accepted typesafe-sdk pin")
+        raise SystemExit(
+            "TypeSafe decision-model lock does not contain the exact accepted "
+            "typesafe-sdk pin"
+        )
     shared = sorted(set(dev) & set(typesafe))
     mismatched_shared = [name for name in shared if dev[name] != typesafe[name]]
     if mismatched_shared:
         raise SystemExit(
-            "TypeSafe decision-model lock conflicts with the accepted dev closure: " + ", ".join(mismatched_shared)
+            "TypeSafe decision-model lock conflicts with the accepted dev closure: "
+            + ", ".join(mismatched_shared)
         )
 
 
@@ -160,7 +165,8 @@ def main() -> int:
         _verify_installed(dev, typesafe)
     print(
         "dependency locks: complete, hashed, and consistent "
-        f"({len(runtime)} runtime, {len(dev)} CI/dev, {len(pilot)} pilot, {len(typesafe)} TypeSafe decision-model adapter)"
+        f"({len(runtime)} runtime, {len(dev)} CI/dev, {len(pilot)} pilot, "
+        f"{len(typesafe)} TypeSafe decision-model adapter)"
     )
     return 0
 
