@@ -271,12 +271,18 @@ class RealT2StrategyCoordinator:
     def __init__(
         self, *, registry_markets: Mapping[str, RegistryMarket],
         open_structural_package: StructuralPackageOpener,
+        clock_start_ns: int,
+        cutoff_ns: int,
         clock_ns: Callable[[], int] = time.time_ns,
     ) -> None:
         if set(registry_markets) != set(FROZEN_BY_MARKET):
             raise RealT2IntegrationError("all exact frozen markets are required")
         self.registry_markets = dict(registry_markets)
+        if cutoff_ns - clock_start_ns != REAL_T2_ACQUISITION_NS:
+            raise RealT2IntegrationError("Real-T2 cutoff must remain exactly 14400 seconds")
         self.open_structural_package = open_structural_package
+        self.clock_start_ns = clock_start_ns
+        self.cutoff_ns = cutoff_ns
         self.clock_ns = clock_ns
         self.package_manifest = _strategy_package()
         self.evaluators: dict[str, PilotStrategyEvaluator] = {}
@@ -284,10 +290,13 @@ class RealT2StrategyCoordinator:
         self.observations: list[FormalSetupObservation] = []
         self.provider_instruments: dict[str, dict[str, object]] = {}
         self.admissions: list[AdmittedEvent] = []
+        self.last_5m_ts_event: dict[str, int] = {}
 
     def observe_admitted_event(
         self, event: AdmittedEvent, provider_instrument: object | None = None
     ) -> None:
+        if event.admission_ts < self.clock_start_ns or event.admission_ts >= self.cutoff_ns:
+            return
         self.admissions.append(event)
         if provider_instrument is not None:
             to_dict = getattr(provider_instrument, "to_dict", None)
@@ -309,6 +318,12 @@ class RealT2StrategyCoordinator:
         strategy_input = admitted_external_5m_to_strategy_input(
             event, strategy_package_hash=self.package_manifest.manifest_hash
         )
+        previous = self.last_5m_ts_event.get(event.source.market_id)
+        if previous is not None and event.source.ts_event != previous + 5 * ONE_MINUTE_NS:
+            raise RealT2IntegrationError(
+                "missing/conflicting 5m sequence cannot be synthetically repaired"
+            )
+        self.last_5m_ts_event[event.source.market_id] = event.source.ts_event
         if provider_instrument is None:
             raise RealT2IntegrationError("5m Strategy input lacks provider-native instrument")
         tick = _provider_tick(provider_instrument)
@@ -659,6 +674,7 @@ def replay_frozen_structural_source(
     package = _strategy_package()
     evaluators: dict[str, PilotStrategyEvaluator] = {}
     observed: list[StructuralSourceEvidence] = []
+    last_5m_ts_event: dict[str, int] = {}
     ordered = tuple(sorted(admissions, key=lambda e: e.admission_ordinal))
     ordinals = [e.admission_ordinal for e in ordered]
     if ordinals != sorted(set(ordinals)):
@@ -672,6 +688,12 @@ def replay_frozen_structural_source(
         strategy_input = admitted_external_5m_to_strategy_input(
             event, strategy_package_hash=package.manifest_hash
         )
+        previous = last_5m_ts_event.get(event.source.market_id)
+        if previous is not None and event.source.ts_event != previous + 5 * ONE_MINUTE_NS:
+            raise RealT2IntegrationError(
+                "rooted 5m sequence has a gap/conflict; synthetic repair is prohibited"
+            )
+        last_5m_ts_event[event.source.market_id] = event.source.ts_event
         tick = provider_minimum_ticks[event.source.market_id]
         if not tick.is_finite() or tick <= 0:
             raise RealT2IntegrationError("rooted provider-native minimum tick is invalid")
