@@ -45,6 +45,18 @@ class PublicDataError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True)
+class PublicApiResponse:
+    """Exact public HTTP response bytes paired with the parsed provider value."""
+
+    parsed: object
+    raw_bytes: bytes
+
+    @property
+    def raw_sha256(self) -> str:
+        return sha256_hex(self.raw_bytes)
+
+
 _MAX_PUBLIC_EVIDENCE_AGE_MS = 10_000
 
 
@@ -92,7 +104,8 @@ class HyperliquidPublicClient:
     post: HttpPost = _default_post
     timeout_seconds: float = 15.0
 
-    def request(self, payload: Mapping[str, object]) -> object:
+    def request_with_raw(self, payload: Mapping[str, object]) -> PublicApiResponse:
+        """Return exact transport bytes without reserializing provider evidence."""
         request_type = payload.get("type")
         if request_type not in _ALLOWED_TYPES or not self._is_supported_shape(payload):
             raise PublicDataError("public request is outside the approved market-data surface")
@@ -102,9 +115,13 @@ class HyperliquidPublicClient:
             self.timeout_seconds,
         )
         try:
-            return json.loads(raw)
+            parsed = json.loads(raw)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise PublicDataError("official public API returned invalid JSON") from exc
+        return PublicApiResponse(parsed=parsed, raw_bytes=raw)
+
+    def request(self, payload: Mapping[str, object]) -> object:
+        return self.request_with_raw(payload).parsed
 
     @staticmethod
     def _is_supported_shape(payload: Mapping[str, object]) -> bool:
@@ -143,11 +160,14 @@ class HyperliquidPublicClient:
             payload["dex"] = dex
         return self.request(payload)
 
-    def metadata_and_context(self, dex: str) -> object:
+    def metadata_and_context_with_raw(self, dex: str) -> PublicApiResponse:
         payload: dict[str, object] = {"type": "metaAndAssetCtxs"}
         if dex != "":
             payload["dex"] = dex
-        return self.request(payload)
+        return self.request_with_raw(payload)
+
+    def metadata_and_context(self, dex: str) -> object:
+        return self.metadata_and_context_with_raw(dex).parsed
 
     def all_perp_metas(self) -> object:
         return self.request({"type": "allPerpMetas"})
