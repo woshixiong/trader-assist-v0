@@ -300,3 +300,13 @@ def test_public_one_minute_provider_accepts_only_closed_provider_bars(tmp_path: 
     assert bars[0].source_id == "hyperliquid-public-candleSnapshot-1m"
     provider.unsubscribe_1m(market_id=market.identity.market_id)
     assert provider.subscribed_market_ids == set()
+
+
+def test_request_with_raw_preserves_exact_http_bytes_without_reserialization() -> None:
+    raw = b'{ "universe" : [1,2] }\n'
+    client = HyperliquidPublicClient(post=lambda *_: raw)
+    response = client.request_with_raw({"type": "meta"})
+    assert response.raw_bytes == raw
+    assert response.parsed == {"universe": [1, 2]}
+    assert response.raw_sha256 == sha256_hex(raw)
+    assert json.dumps(response.parsed, separators=(",", ":")).encode() != raw
