@@ -577,7 +577,7 @@ class DecisionResult:
         error_class: str,
         model_identity: ModelIdentity | None = None,
         input_fit: InputFitEvidence | None = None,
-    ) -> "DecisionResult":
+    ) -> DecisionResult:
         if status is ModelInvocationStatus.SUCCESS:
             raise ValueError("failure_for cannot construct SUCCESS")
         identity = model_identity or ModelIdentity(
