@@ -2301,13 +2301,25 @@ def test_r3_e_blocked_send_times_out_without_an_orphan_coordinator(
         )
         snapshot = runtime._market_data.strategy_snapshot(shifted_now)
         assert snapshot.active_context is not None
-        assert shifted_now - snapshot.active_context.evidence.received_at <= timedelta(seconds=15)
+        assert (
+            shifted_now - snapshot.active_context.evidence.received_at
+            <= timedelta(seconds=15)
+        )
         assert snapshot.candles_5m
-        assert shifted_now.timestamp() * 1000 - snapshot.candles_5m[-1].close_time_ms <= 390_000
+        assert (
+            shifted_now.timestamp() * 1000 - snapshot.candles_5m[-1].close_time_ms
+            <= 390_000
+        )
         assert snapshot.candles_15m
-        assert shifted_now.timestamp() * 1000 - snapshot.candles_15m[-1].close_time_ms <= 990_000
+        assert (
+            shifted_now.timestamp() * 1000 - snapshot.candles_15m[-1].close_time_ms
+            <= 990_000
+        )
         assert snapshot.metadata is not None
-        assert shifted_now - snapshot.metadata.evidence.received_at <= timedelta(hours=24)
+        assert (
+            shifted_now - snapshot.metadata.evidence.received_at
+            <= timedelta(hours=24)
+        )
         assert snapshot.quality.state is DataQualityState.READY
         assert runtime.health_state is RuntimeHealthState.READY
         websocket = _ControlledWebSocket(clock=clock, post_plans=[_ControlledPost(candle)])
