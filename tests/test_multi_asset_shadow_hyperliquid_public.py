@@ -390,4 +390,3 @@ def test_funding_history_rejects_reverse_window_before_transport() -> None:
             start_ms=2_000,
             end_ms=1_000,
         )
-
