@@ -123,28 +123,81 @@ OPENCODE_FREE_STATE=AVAILABLE|DEGRADED|UNAVAILABLE
 
 Current user policy until explicitly changed:
 
-- GitHub/provider-native/deterministic surfaces remain first for deterministic control-plane work.
-- When a semantic coding Writer is genuinely required and usable Codex quota is available, **Codex is the primary semantic Writer**.
-- Within Codex, choose model and reasoning independently for task difficulty/consequence; strongest/max reasoning is not the default.
-- If Codex quota is insufficient for the required stage, Engineering Control does **not** infer fallback authority. The user supplies a bounded fallback authorization/selection before another semantic executor is used.
-- Accepted alternatives such as the user's GLM/GRM 5.3, DeepSeek V4 Pro, Trae/OpenCode or later approved routes remain fallbacks/task-specific selections, not automatic replacements.
+- GitHub/provider-native/deterministic surfaces remain first for deterministic/mechanical control-plane work; no semantic model is required.
+- A **frozen bounded semantic** task uses a fresh ordinary ChatGPT Writer as the routine first-class default when all bounded-semantic predicates in §4 pass. This route no longer requires routine per-task fallback approval merely because Codex quota exists.
+- An **open/material semantic** task uses Codex by default when Codex is available and allowed by the current task/authority contract.
+- A **high-consequence/ambiguous** task uses the strongest appropriate accepted route; strongest/max reasoning is still selected for actual consequence/difficulty rather than by habit.
+- User manual override remains always available. A current explicit user selection is honored unless it lacks a mandatory capability or violates safety/authority.
+- Codex quota/capacity state constrains Codex availability but never changes the task's execution class and never silently authorizes a different non-default route.
+- Accepted alternatives such as the user's GLM/GRM 5.3, DeepSeek V4 Pro, Trae/OpenCode or later approved routes remain task-specific selections/exceptions, not silent replacements.
 - Unexpected Codex capacity/quota interruption after dispatch preserves the exact checkpoint/evidence and is an expected capacity pause, not a semantic failure. Resume the exact session/thread when recoverable; otherwise continue from the durable checkpoint. Do not restart the original semantic task from scratch and do not silently switch executor.
 - Temporary free/discounted models are opportunistic only and do not become durable routing dependencies.
 
-## 4. Surface-first routing and task classes
+## 4. Surface-first routing and universal execution classes
 
-Router selection is **surface-first**, then model-fit. Quota health never promotes a task to Codex.
+Router selection is **surface-first**, then semantic-open-ness/consequence, then model fit. File count and quota state do not define the class.
 
-Default priority:
+Engineering Control must freeze exactly one class and the reason **before Writer dispatch**:
 
 ```text
-1 AUTHORITATIVE GITHUB / PROVIDER-NATIVE / DETERMINISTIC TOOL
-2 ENGINEERING CONTROL DIRECT ACTION WHEN NO CODING AGENT IS NEEDED
-3 CODEX WHEN A SEMANTIC CODING WRITER IS REQUIRED AND THE USER'S CODEX ROUTE IS AVAILABLE
-4 ACCEPTED NON-CODEX SEMANTIC WRITER ONLY BY EXPLICIT BOUNDED USER SELECTION/FALLBACK AUTHORITY OR A TASK-SPECIFIC USER OVERRIDE
+DETERMINISTIC_MECHANICAL
+-> MODEL_REQUIRED=NO
+-> GitHub / Actions / provider-native deterministic tooling
+
+FROZEN_BOUNDED_SEMANTIC
+-> ROUTINE_DEFAULT=FRESH_ORDINARY_CHATGPT_WRITER
+-> ROOT_CAUSE_OR_DIRECTION_FROZEN=YES
+-> IMPLEMENTATION_SEMANTICS_EFFECTIVELY_BOUNDED=YES
+-> NARROW_EXPLICIT_WRITE_ALLOWLIST=YES
+-> NEW_ARCHITECTURE_PROVIDER_DEPENDENCY_CHOICE=NO
+-> DECISIVE_ACCEPTANCE_TESTS_ALREADY_SPECIFIED=YES
+-> NEW_ROOT_CAUSE_OR_SCOPE_EXPANSION=>STOP_AND_RETURN_TO_ENGINEERING_CONTROL
+
+OPEN_MATERIAL_SEMANTIC
+-> CODEX_DEFAULT_WHEN_AVAILABLE_AND_ALLOWED
+
+HIGH_CONSEQUENCE_AMBIGUOUS
+-> STRONGEST_APPROPRIATE_ACCEPTED_ROUTE
+
+USER_MANUAL_OVERRIDE
+-> ALWAYS_PRESERVED
 ```
 
-Codex quota never creates work and never moves deterministic work into Codex. But once a semantic Writer is actually required, healthy/usable Codex is the user's default semantic route unless the user selects another route. Engineering Control classifies the task and applies this order.
+This classifier changes only executor routing. It does not change Task freeze -> Writer -> CI -> independent Review -> retained user gate, Task Packet semantics, exact-head CI, Review independence, runtime/deployment/trading authority or any other state-machine gate.
+
+A Review FAIL does not enter a special repair router. Engineering Control first creates a **new bounded development task** from the finding, freezes its scope/root cause/acceptance contract as applicable, and then runs this same universal classifier.
+
+Codex quota never creates work and never moves deterministic or frozen-bounded work into Codex merely because capacity is available.
+
+### 4.0A Codex Desktop / managed-worktree pre-model deterministic gate
+
+For any Codex Desktop/local managed-worktree semantic launch, the deterministic controller/runner must complete this gate **before model invocation**:
+
+```text
+1 FRESHEN_OR_VERIFY origin/main (or the frozen canonical remote-tracking ref)
+2 REQUIRE remote-tracking ref == frozen exact base
+3 REQUIRE frozen exact tree == canonical expected tree when bound
+4 CREATE_OR_REALIGN a CLEAN managed worktree from the exact frozen commit
+5 REQUIRE managed-worktree HEAD == frozen exact base
+6 REQUIRE managed worktree clean
+7 ONLY THEN launch the semantic model
+```
+
+A stale local branch label is never proof of canonical main. Clean exact-base realignment before semantic start is execution-surface recovery, not semantic repair and does not consume semantic repair budget. Dirty/ambiguous worktrees fail closed; no silent reset. This must be enforced by the controller/runner prelaunch surface, not merely written into the Writer prompt.
+
+### 4.0B Terminal result egress freshness
+
+Before any Writer / Reviewer / executor writes a terminal result or blocker:
+
+```text
+FRESH_READ_CURRENT_GITHUB_TASK_PR_STATE=REQUIRED
+
+IF_CANONICAL_STATE_ALREADY_ADVANCED_EXTERNALLY
+-> WRITE_IDEMPOTENT_RECONCILIATION
+-> DO_NOT_WRITE_STALE_BLOCKER_OR_STALE_TERMINAL_STATE
+```
+
+A local executor checkpoint is not proof of the current canonical GitHub state.
 
 ### 4.1 Provider-native asynchronous semantic route
 
@@ -173,55 +226,55 @@ CODEX=NO
 
 Use OpenCode/another model only when the operation itself genuinely needs model interpretation; do not invoke a model merely to run commands.
 
-### T1 — LOW-RISK BOUNDED CODING
+### T1 — LOW-RISK / FROZEN BOUNDED CODING
 
-Frozen scope, simple logic, decisive validation, low blast radius.
+Frozen scope, frozen root cause/direction, effectively bounded implementation semantics, decisive validation and low blast radius normally map to `FROZEN_BOUNDED_SEMANTIC`.
 
 Preferred routes:
 - Engineering Control direct GitHub edit only for governance/docs, Issue/PR metadata, workflow metadata or mechanical configuration whose semantics are already frozen and deterministically checkable;
-- application/source semantic logic requires an accepted semantic Writer by default;
-- when semantic coding is required and Codex is available, use the frozen Codex route; use another accepted Writer only under current bounded user selection/fallback authority.
+- application/source semantic logic uses a fresh ordinary ChatGPT Writer by routine default when every bounded-semantic predicate is satisfied;
+- discovery of a new root cause, architecture/provider/dependency choice or write-surface expansion immediately stops the bounded Writer and returns control.
 
 ```text
-CODEX_DEFAULT_FOR_REQUIRED_SEMANTIC_CODING=YES_WHEN_AVAILABLE
+FROZEN_BOUNDED_SEMANTIC_DEFAULT=FRESH_ORDINARY_CHATGPT_WRITER
 ```
 
 ### T2 — MATERIAL NORMAL ENGINEERING
 
-Normal feature implementation, meaningful bug fix, bounded multi-file implementation or nontrivial refactor.
+Normal feature implementation, meaningful bug fix, bounded multi-file implementation or nontrivial refactor is classified by what semantic decisions remain, not by file count.
 
-First use GitHub/Engineering Control for all control-plane discovery, exact-state work and validation setup. If a semantic Writer is required and the user's Codex route is available, Codex is the default semantic Writer. A non-Codex semantic Writer requires an explicit bounded user selection/fallback authorization or another current user override.
+First use GitHub/Engineering Control for all control-plane discovery, exact-state work and validation setup.
 
-Known non-Codex fits remain useful only after that fallback/selection gate:
-- Opus-class accepted routes: large-codebase comprehension, debugging and refactoring;
-- GLM/GRM 5.3: highly constrained complete packets and long implement/test loops;
-- DeepSeek V4 Pro: broad repo investigation and larger-context root-cause work.
+- If root cause/direction and implementation semantics are already frozen enough to satisfy every `FROZEN_BOUNDED_SEMANTIC` predicate, use the ordinary ChatGPT bounded Writer default.
+- If the Writer must still decide architecture, root cause, cross-layer semantics, recovery/concurrency/security/authority design, dependency/provider choice or substantial implementation direction/continuity, classify `OPEN_MATERIAL_SEMANTIC` and use Codex by default when available/allowed.
+- Accepted alternatives such as GLM/GRM 5.3, DeepSeek V4 Pro, Trae/OpenCode or later approved routes remain valid under a current task-specific selection/exception or user override; no silent substitution.
 
 ```text
 HEALTHY_CODEX_QUOTA_ALONE_DOES_NOT_CREATE_WORK=YES
-REQUIRED_SEMANTIC_CODING_PLUS_USABLE_CODEX=>CODEX_DEFAULT=YES
+OPEN_MATERIAL_SEMANTIC_PLUS_USABLE_ALLOWED_CODEX=>CODEX_DEFAULT=YES
 ```
 
 ### T3 — COMPLEX / HIGH-CONSEQUENCE ENGINEERING
 
-State machines, recovery, concurrency, durable authority, cross-layer semantics, difficult root cause or production-critical logic.
+State machines, recovery, concurrency, durable authority, cross-layer semantics, difficult unresolved root cause or production-critical logic normally classify as `HIGH_CONSEQUENCE_AMBIGUOUS` while material ambiguity remains.
 
-Use the strongest appropriate accepted semantic route for the exact task while preserving the user's executor priority. When semantic coding is required and Codex is available, Codex remains the default executor; select the Codex model/reasoning level for the consequence/difficulty. Non-Codex alternatives remain valid only under explicit bounded user selection/fallback authority.
+Use the strongest appropriate accepted semantic route for the exact task while preserving current user authority and executor constraints. If analysis reduces the work to a genuinely frozen bounded semantic core, Engineering Control may re-freeze that resulting task and classify it normally; consequence is not erased merely by reducing file count.
 
-If the task can be decomposed into deterministic control-plane work plus one narrow semantic core, perform the deterministic work outside Codex and send only that core plus compact authority to the selected Writer.
+If the task can be decomposed into deterministic control-plane work plus one narrow semantic core, perform the deterministic work outside the model route and send only that core plus compact authority to the selected Writer.
 
 ### T4 — INDEPENDENT REVIEW / ADJUDICATION
 
 Default final adjudicator:
 
 ```text
-SURFACE=STRONGEST_APPROPRIATE_ACCEPTED_FRESH_INDEPENDENT_REVIEW_SURFACE
+SURFACE=FRESH_ORDINARY_CHATGPT_WINDOW
 CONTEXT=FRESH_SEPARATE_FROM_CONTROL_AND_IMPLEMENTATION
 PERMISSION=READ_ONLY
-ORDINARY_CHATGPT_NEW_WINDOW=ACCEPTED_FALLBACK
-PROVIDER_NATIVE_REVIEWER_AGENT=ALLOWED_AFTER_INDEPENDENT_ACCEPTANCE
-MODEL=STRONGEST_APPROPRIATE_ACCEPTED_REVIEW_MODEL
-REASONING=HIGHEST_APPROPRIATE
+MODEL=CURRENT_STRONGEST_APPROPRIATE_ORDINARY_CHATGPT_MODEL
+CURRENT_PROFILE=GPT-5.6_SOL
+REASONING=HIGH_OR_HIGHEST_APPROPRIATE
+ORDINARY_CHATGPT_NEW_WINDOW=ROUTINE_DEFAULT
+PROVIDER_NATIVE_OR_CODEX_REVIEWER=EXPLICIT_TASK_SPECIFIC_EXCEPTION_OR_OPT_IN
 ```
 
 If exact GitHub artifacts/diffs and exact-head CI are sufficient, review them directly from the accepted independent surface. Do not spend model quota to reproduce evidence already canonically available. Automation never permits Writer-context reuse or a weaker-than-appropriate reviewer solely for convenience.
@@ -233,24 +286,28 @@ Quota state constrains availability; it does not define task class.
 ### CODEX_QUOTA_STATE=HEALTHY
 
 ```text
-T0 -> deterministic/GitHub
-T1/T2/T3 -> if semantic coding Writer is required, Codex by default; model/reasoning right-sized
-T4 -> strongest appropriate accepted fresh independent Reviewer; ordinary ChatGPT new window is fallback
+DETERMINISTIC_MECHANICAL -> deterministic/GitHub
+FROZEN_BOUNDED_SEMANTIC -> fresh ordinary ChatGPT Writer
+OPEN_MATERIAL_SEMANTIC -> Codex default, model/reasoning right-sized
+HIGH_CONSEQUENCE_AMBIGUOUS -> strongest appropriate accepted route
+T4 -> fresh ordinary ChatGPT independent Reviewer by routine default
 ```
 
 ### CODEX_QUOTA_STATE=CONSTRAINED
 
-Do not silently substitute executor. Engineering Control identifies whether the remaining semantic stage can still use Codex within the available quota. If not, preserve the checkpoint and request/consume an explicit bounded user fallback selection.
+Quota does not reclassify the task. `FROZEN_BOUNDED_SEMANTIC` continues to use its ordinary ChatGPT default. For an `OPEN_MATERIAL_SEMANTIC` or Codex-selected high-consequence task, Engineering Control determines whether the frozen Codex route remains viable; otherwise preserve the checkpoint and require a current task-specific alternative selection / user override rather than silently substituting.
 
 ```text
-T0 -> deterministic/GitHub
-T1/T2/T3 -> CODEX if still viable; otherwise USER_AUTHORIZED_FALLBACK_REQUIRED
-T4 -> accepted fresh independent Reviewer
+DETERMINISTIC_MECHANICAL -> deterministic/GitHub
+FROZEN_BOUNDED_SEMANTIC -> fresh ordinary ChatGPT Writer
+OPEN_MATERIAL_SEMANTIC -> CODEX if viable; otherwise EXPLICIT_TASK_SPECIFIC_ALTERNATIVE_REQUIRED
+HIGH_CONSEQUENCE_AMBIGUOUS -> strongest currently authorized appropriate route; no silent downgrade
+T4 -> fresh ordinary ChatGPT independent Reviewer by routine default
 ```
 
 ### CODEX_QUOTA_STATE=EXHAUSTED
 
-Use GitHub/deterministic surfaces for non-semantic work. A semantic Writer waits for explicit bounded user fallback authorization/selection; exhaustion alone does not authorize another executor. T4 remains the strongest appropriate accepted fresh independent Reviewer surface and is not silently coupled to the Writer's quota state.
+Use GitHub/deterministic surfaces for non-semantic work. `FROZEN_BOUNDED_SEMANTIC` remains eligible for its ordinary ChatGPT default because that route is class-based rather than a Codex fallback. An open/material or high-consequence task that was frozen for Codex preserves its checkpoint and requires a current task-specific alternative selection / user override before switching executor. T4 remains the fresh ordinary ChatGPT routine default and is not coupled to Writer quota state.
 
 Resource telemetry informs future routing but never creates work merely to consume remaining quota.
 
@@ -346,16 +403,21 @@ Hermes must expose checkpointed run state sufficient for human takeover. It must
 QUALITY_FIRST=YES
 HUMAN_RELAY_IS_A_COST=YES
 QUOTA_STATE_IS_ROUTING_INPUT=YES
-CODEX_PRIMARY_FOR_REQUIRED_SEMANTIC_CODING_WHEN_AVAILABLE=YES
-NON_CODEX_SEMANTIC_FALLBACK_REQUIRES_BOUNDED_USER_AUTHORITY=YES
-GLM_5_3_ACCEPTED_FALLBACK_WRITER=YES
-DEEPSEEK_V4_PRO_ACCEPTED_FALLBACK_WRITER=YES
+UNIVERSAL_EXECUTION_CLASSIFICATION_BEFORE_WRITER_DISPATCH=YES
+DETERMINISTIC_MECHANICAL_MODEL_REQUIRED=NO
+FROZEN_BOUNDED_SEMANTIC_DEFAULT_ORDINARY_CHATGPT_WRITER=YES
+OPEN_MATERIAL_SEMANTIC_CODEX_DEFAULT_WHEN_AVAILABLE_AND_ALLOWED=YES
+HIGH_CONSEQUENCE_AMBIGUOUS_STRONGEST_APPROPRIATE_ROUTE=YES
+REVIEW_FAIL_NEW_TASK_THEN_UNIVERSAL_CLASSIFICATION=YES
+CODEX_DESKTOP_PRE_MODEL_EXACT_BASE_WORKTREE_GATE=REQUIRED
+TERMINAL_RESULT_EGRESS_FRESH_CANONICAL_READ=REQUIRED
+GLM_5_3_ACCEPTED_TASK_SPECIFIC_WRITER=YES
+DEEPSEEK_V4_PRO_ACCEPTED_TASK_SPECIFIC_WRITER=YES
 NO_UNIVERSAL_OPUS_VS_GLM_VS_V4PRO_RANKING=YES
 USER_OVERRIDE_PRESERVED=YES
 ONE_PRIMARY_WRITER_PER_SHARED_AUTHORITY_STAGE=YES
-T4_FINAL_REVIEW_STRONGEST_ACCEPTED_INDEPENDENT_SURFACE_DEFAULT=YES
-T4_ORDINARY_CHATGPT_NEW_WINDOW_FALLBACK=YES
-T4_PROVIDER_NATIVE_REVIEWER_ALLOWED_AFTER_INDEPENDENT_ACCEPTANCE=YES
+T4_FINAL_REVIEW_FRESH_ORDINARY_CHATGPT_DEFAULT=YES
+T4_PROVIDER_NATIVE_OR_CODEX_REVIEWER_TASK_SPECIFIC_EXCEPTION=YES
 T4_WRITER_OR_CONTROL_CONTEXT_REUSE=PROHIBITED
 T4_LOCAL_EVIDENCE_BUNDLE_BEFORE_WEAKER_LOCAL_FINAL_REVIEW=YES
 WRITER_PASS_NE_INDEPENDENT_ACCEPTANCE=YES

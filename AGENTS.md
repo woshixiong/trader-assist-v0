@@ -122,9 +122,37 @@ M2_SEMANTIC_WRITER
 = semantic implementation / repair only
 
 M3_AUTHORITY_REVIEW
-= fresh strong independent reviewer
-= high / sufficient-high reasoning
+= fresh ordinary ChatGPT independent reviewer by routine default
+= high / highest appropriate reasoning
 ```
+
+Before every Writer dispatch, Engineering Control / Router freezes exactly one execution class:
+
+```text
+DETERMINISTIC_MECHANICAL
+-> MODEL_REQUIRED=NO
+-> GitHub / Actions / provider-native deterministic tooling
+
+FROZEN_BOUNDED_SEMANTIC
+-> fresh ordinary ChatGPT Writer by routine default
+-> root cause / direction frozen
+-> implementation semantics effectively bounded
+-> narrow explicit write allowlist
+-> no new architecture / provider / dependency choice
+-> decisive acceptance tests already specified
+-> new root cause / scope expansion => STOP and return to Engineering Control
+
+OPEN_MATERIAL_SEMANTIC
+-> Codex default when available and allowed by the current Router
+
+HIGH_CONSEQUENCE_AMBIGUOUS
+-> strongest appropriate accepted route
+
+USER_MANUAL_OVERRIDE
+-> always preserved; no silent substitution
+```
+
+This classification selects only the execution surface. It does not alter the engineering state machine, Task Packet semantics, exact-head CI, independent Review, or retained user gates. A Review FAIL creates a new bounded development task which is classified through this same universal rule; there is no separate repair-routing taxonomy.
 
 M0 owns routine reads and waits including live-main SHA, PR state/Draft/base/head/tree, changed paths, mergeability metadata, CI run/job state and conclusions, artifact IDs/names/digests, hashes, allowlists and typed terminal-result extraction.
 
@@ -141,6 +169,8 @@ NEW_CHAT_NE_NEW_CONTROL_CONTEXT=YES
 ```
 
 After a Writer publishes an exact head, checkpoint at `CI_PENDING` and stop semantic polling. A healthy all-green terminal transition may mechanically advance to `REVIEW_NEEDED`; wake one fresh M3 Reviewer directly. Wake Engineering Control only for a material decision/exception such as a new root cause, semantic or ambiguous CI failure, non-mechanical identity/scope/authority drift, repair-budget exhaustion, material Review finding, retained user gate or context-integrity risk.
+
+For any managed Codex Desktop/local worktree, the controller/runner owns a **pre-model deterministic exact-base gate** before semantic tokens are spent: freshen/verify `origin/main` (or the frozen canonical remote-tracking ref), require it to equal the frozen exact base, verify the bound exact tree when supplied, create or deterministically realign a **clean** managed worktree from the exact frozen commit, require worktree HEAD to equal that base and require a clean worktree. A stale local branch label is not proof. Dirty/ambiguous state fails closed. This is prelaunch execution control, not a Writer-prompt reminder.
 
 A new chat/window does not invalidate a still-valid Control Capsule/governance attestation. When the governance epoch, task binding and exact authority identity remain unchanged, fresh-check identity metadata and exact locators only; do not reread full governance/history merely because the conversation surface changed.
 
@@ -271,9 +301,11 @@ REMOTE_EXECUTION_CREDENTIAL_AUTHORITY_MUST_BE_EXPLICIT=YES
 
 ## 6. Review and task ownership
 
-Authority-bearing final independent adjudication **requires a fresh independent review context/agent** that did not control or implement the candidate stage. Engineering Control and the semantic Writer may perform self-check/readiness work, but their PASS cannot become independent acceptance. The accepted fallback is a new ordinary ChatGPT review window. An independently accepted provider-native Reviewer Agent may instead be used when its route is frozen and it proves fresh context, read-only review permissions, direct exact-canonical-evidence access, no inheritance of Writer/Supervisor/Engineering-Control conclusions as facts, and idempotent result egress through an accepted direct or lossless transport surface. Independence is a role/context/authority property; a different model vendor is not required by itself.
+Authority-bearing final independent adjudication **requires a fresh independent review context/agent** that did not control or implement the candidate stage. Engineering Control and the semantic Writer may perform self-check/readiness work, but their PASS cannot become independent acceptance. The routine default is a **new ordinary ChatGPT review window** using the current strongest appropriate ordinary ChatGPT model (currently GPT-5.6 Sol) with High / highest appropriate reasoning, read-only authority and direct exact GitHub evidence. A provider-native or Codex reviewer route is an explicit task-specific exception / opt-in only; if selected, it must prove fresh context, read-only review permissions, direct exact-canonical-evidence access, no inheritance of Writer/Supervisor/Engineering-Control conclusions as facts, and idempotent result egress through an accepted direct or lossless transport surface. Independence is a role/context/authority property; a different model vendor is not required by itself.
 
 The reviewer receives a compact Review Manifest: exact target identity, exact changed scope/diff, frozen acceptance criteria, required safety boundaries, decisive CI/artifact/source locators, and any explicitly untrusted prior conclusions. If GitHub evidence is sufficient, review exact GitHub head/diff + exact-head CI directly. Do not reload full Issue/PR history or the full governance corpus by default; use targeted canonical reads only for concrete unknowns/conflicts. If local evidence is needed, prefer deterministic hash-manifested evidence/review bundles rather than downgrading the final Reviewer to a weaker local coding model.
+
+Before any Writer / Reviewer / executor writes a terminal result or blocker, it must fresh-read the current canonical GitHub task/PR state. If another control surface already advanced the state, write only an idempotent reconciliation against that live state; do not emit a stale blocker or stale terminal state from a local checkpoint.
 
 For execution/validation, prefer an authoritative GitHub/provider-native remote surface over user-operated local emulation when it provides equal or higher claim fidelity, exact identity/evidence, and lower human relay. This preference never creates credential/private-API authority and never overrides a genuinely local or target-host-specific claim boundary.
 

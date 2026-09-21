@@ -540,7 +540,7 @@ REQUIRE_WORKTREE_CLEAN
 ONLY_THEN_START_SEMANTIC_MODEL
 ```
 
-A stale local branch label is not proof of canonical main. A clean deterministic realignment to the frozen exact commit is execution-surface recovery, not semantic repair; a dirty/ambiguous worktree fails closed and returns to control.
+A stale local branch label is not proof of canonical main. For managed Codex Desktop/local worktrees this is a **pre-model deterministic launch gate**, owned by Engineering Control / the stable runner rather than by a semantic Writer prompt: freshen/verify `origin/main` (or the frozen canonical remote-tracking ref), require it to equal the frozen exact base, require the bound exact tree when supplied, create or deterministically realign a clean managed worktree from the exact frozen commit, require worktree HEAD to equal the frozen base and require the worktree to remain clean. Only then may the semantic model start. A clean deterministic realignment to the frozen exact commit is execution-surface recovery, not semantic repair; a dirty/ambiguous worktree fails closed and returns to control.
 
 Task-specific variation must normally be represented as packet/manifest/allowlist/acceptance data consumed by the stable runner, not by generating another large shell/Python launcher. A new/custom execution program requires an explicit exception proving the stable runner cannot safely express the required mechanics and must itself pass the Generated Command + tool-change/review gates.
 
@@ -1112,7 +1112,7 @@ Where a selected specialized operator/handoff contract is stricter, such as a lo
 
 ### 10.5 Authority-bearing review context and idempotent result egress
 
-One authority-bearing independent Review uses a fresh independent review context/agent and that context retires after final result egress. The Reviewer must not have controlled or implemented the candidate stage, must not inherit Writer/Supervisor/Engineering-Control PASS conclusions as facts, and must operate under the accepted review permission/evidence contract. A new ordinary ChatGPT review window remains an accepted fallback. An independently accepted provider-native Reviewer Agent may be authority-bearing when its frozen route enforces the same or stronger independence properties. A second unrelated authority-bearing Review starts fresh.
+One authority-bearing independent Review uses a fresh independent review context/agent and that context retires after final result egress. The Reviewer must not have controlled or implemented the candidate stage, must not inherit Writer/Supervisor/Engineering-Control PASS conclusions as facts, and must operate under the accepted review permission/evidence contract. The routine default is a **new ordinary ChatGPT review window** using the current strongest appropriate ordinary ChatGPT model with High / highest appropriate reasoning and read-only authority. A provider-native or Codex reviewer route is an explicit task-specific exception / opt-in and may be authority-bearing only when its frozen route enforces the same or stronger independence properties. A second unrelated authority-bearing Review starts fresh.
 
 The compact Review Manifest contains only exact target/base/head/tree, exact changed scope/diff, frozen acceptance criteria, decisive evidence locators, exact upstream identity when applicable, required safety/authority boundaries and the output contract. Full history/governance/source inventory is not default input.
 
@@ -1157,11 +1157,51 @@ TERMINAL_VERDICT_ONLY_REQUIRES_EXISTING_EXACT_FULL_RESULT=YES
 STRICT_READ_ONLY_REVIEW_ALLOWED_WITH_ALTERNATE_EXACT_DIRECT_RESULT_SURFACE=YES
 ```
 
+Terminal result freshness is broader than Review idempotency. Before any Writer, Reviewer or executor emits a terminal result or blocker:
+
+```text
+FRESH_READ_CURRENT_GITHUB_TASK_PR_STATE=REQUIRED
+LOCAL_CHECKPOINT_NE_CURRENT_CANONICAL_STATE=YES_POSSIBLE
+
+IF_CANONICAL_STATE_ALREADY_ADVANCED_EXTERNALLY
+-> WRITE_IDEMPOTENT_RECONCILIATION
+-> DO_NOT_WRITE_STALE_BLOCKER_OR_STALE_TERMINAL_STATE
+```
+
 ---
 
 ## 11. Model/executor/tool routing — general rules
 
 Detailed model capabilities and current model names live in task-conditional Router/profile files; this constitution owns the durable routing principles.
+
+Engineering Control / Router classifies every task **before Writer dispatch** into exactly one execution class:
+
+```text
+DETERMINISTIC_MECHANICAL
+-> MODEL_REQUIRED=NO
+-> authoritative GitHub / Actions / provider-native deterministic tooling
+
+FROZEN_BOUNDED_SEMANTIC
+-> fresh ordinary ChatGPT Writer by routine default
+-> root cause / direction frozen
+-> implementation semantics effectively bounded
+-> narrow explicit write allowlist
+-> no new architecture / provider / dependency choice
+-> decisive acceptance tests already specified
+-> new root cause / scope expansion => STOP and return to Engineering Control
+
+OPEN_MATERIAL_SEMANTIC
+-> Codex default when available and allowed by current Router
+
+HIGH_CONSEQUENCE_AMBIGUOUS
+-> strongest appropriate accepted route
+
+USER_MANUAL_OVERRIDE=ALWAYS_AVAILABLE
+```
+
+This classification is executor routing only. It does not alter Task freeze -> Writer -> CI -> independent Review -> retained user gate, nor Task Packet semantics, exact-head requirements, Review independence, runtime/deployment/trading authority or any other state-machine gate.
+
+A Review FAIL does not create a special repair route. Engineering Control converts the finding into a new bounded development task and runs this same universal classification from the beginning.
 
 Before every model-backed launch freeze:
 
@@ -1194,7 +1234,7 @@ ONE_PRIMARY_WRITER_PER_SHARED_AUTHORITY_STAGE=YES
 WRITER_SELF_PASS_IS_NOT_INDEPENDENT_ACCEPTANCE
 ENGINEERING_CONTROL_SELF_PASS_IS_NOT_INDEPENDENT_ACCEPTANCE
 FINAL_INDEPENDENT_REVIEW_REQUIRES_FRESH_INDEPENDENT_CONTEXT=YES
-T4_DEFAULT=STRONGEST_APPROPRIATE_ACCEPTED_FRESH_INDEPENDENT_REVIEW_SURFACE
+T4_DEFAULT=FRESH_ORDINARY_CHATGPT_INDEPENDENT_REVIEW_WINDOW
 ```
 
 Quota, points, free availability and wall-clock time are routing inputs, never authority to lower required quality.
@@ -1442,20 +1482,34 @@ A canonical exact GitHub ref/head already proven through the control plane must 
 
 Use the cheapest sufficient **authoritative** execution surface. Cost never overrides correctness, fidelity or safety, but a scarce model executor is not used for deterministic work merely because quota is available.
 
-Default order:
+Default routing:
 
 ```text
-AUTHORITATIVE_GITHUB_CONNECTOR / GITHUB_ACTIONS / PROVIDER_NATIVE / DETERMINISTIC_TOOL
--> ENGINEERING_CONTROL DIRECT READ/WRITE WHEN NO CODING AGENT IS NEEDED
--> CODEX WHEN A SEMANTIC CODING WRITER IS REQUIRED AND THE USER'S CODEX ROUTE IS AVAILABLE
--> ACCEPTED NON-CODEX SEMANTIC WRITER ONLY WITH EXPLICIT BOUNDED USER SELECTION/FALLBACK AUTHORITY
+DETERMINISTIC_MECHANICAL
+-> AUTHORITATIVE_GITHUB_CONNECTOR / GITHUB_ACTIONS / PROVIDER_NATIVE / DETERMINISTIC_TOOL
+-> MODEL_REQUIRED=NO
+
+FROZEN_BOUNDED_SEMANTIC
+-> FRESH_ORDINARY_CHATGPT_WRITER
+-> ordinary ChatGPT is a first-class default route; no routine per-task fallback approval is required
+
+OPEN_MATERIAL_SEMANTIC
+-> CODEX_DEFAULT_WHEN_AVAILABLE_AND_ALLOWED
+
+HIGH_CONSEQUENCE_AMBIGUOUS
+-> STRONGEST_APPROPRIATE_ACCEPTED_ROUTE
+
+ENGINEERING_CONTROL_DIRECT
+-> allowed when no separate coding agent is needed and the current governance/task contract permits direct mutation
 ```
 
 Permanent rules:
 
 ```text
 HEALTHY_CODEX_QUOTA_ALONE_DOES_NOT_CREATE_WORK=YES
-REQUIRED_SEMANTIC_CODING_PLUS_USABLE_CODEX=>CODEX_DEFAULT=YES
+FROZEN_BOUNDED_SEMANTIC_DEFAULT_ORDINARY_CHATGPT_WRITER=YES
+OPEN_MATERIAL_SEMANTIC_PLUS_USABLE_ALLOWED_CODEX=>CODEX_DEFAULT=YES
+HIGH_CONSEQUENCE_AMBIGUOUS=>STRONGEST_APPROPRIATE_ACCEPTED_ROUTE
 CODEX_QUOTA_FAILURE_DOES_NOT_AUTHORIZE_EXECUTOR_FALLBACK=YES
 CODEX_FOR_GITHUB_STATUS_DIFF_ARTIFACT_CI_EVIDENCE=NO_BY_DEFAULT
 CODEX_FOR_FULL_REPOSITORY_TEST_SUITE=NO_BY_DEFAULT
@@ -1753,7 +1807,7 @@ Independent Review inspects the actual exact object:
 - integrity-bound dirty-worktree review packet; or
 - exact delta against an independently accepted fingerprint.
 
-Authority-bearing independent review requires a **fresh independent review context/agent** that did not control or implement the candidate stage. The Engineering Control context, Desktop/other Supervisor, semantic Writer and any self-review may perform readiness work only; their PASS cannot become independent acceptance. The Reviewer route must enforce read-only review authority, direct access to the exact canonical target/evidence, no inheritance of prior PASS conclusions as facts, and an independently produced verdict. A new ordinary ChatGPT review window is an accepted fallback rather than a mandatory UI boundary. An independently accepted provider-native Reviewer Agent may serve as the authority-bearing reviewer under the same contract.
+Authority-bearing independent review requires a **fresh independent review context/agent** that did not control or implement the candidate stage. The Engineering Control context, Desktop/other Supervisor, semantic Writer and any self-review may perform readiness work only; their PASS cannot become independent acceptance. The Reviewer route must enforce read-only review authority, direct access to the exact canonical target/evidence, no inheritance of prior PASS conclusions as facts, and an independently produced verdict. A new ordinary ChatGPT review window is the routine default final-review surface. Provider-native or Codex reviewer routes remain explicit task-specific exceptions / opt-ins under the same or stronger contract.
 
 The reviewer receives a compact Review Manifest containing:
 
@@ -1955,6 +2009,14 @@ RAW_EVIDENCE_OVERRIDES_INTERMEDIARY_SUMMARY=YES
 USER_AS_ROUTINE_MESSAGE_BUS=PROHIBITED
 ACTIVE_TASK_OWNERSHIP_UNTIL_TERMINAL_DISPOSITION=YES
 NO_SILENT_MODEL_EXECUTOR_FALLBACK=YES
+EXECUTION_CLASSIFICATION_BEFORE_WRITER_DISPATCH=REQUIRED
+FROZEN_BOUNDED_SEMANTIC_DEFAULT_ORDINARY_CHATGPT_WRITER=YES
+OPEN_MATERIAL_SEMANTIC_CODEX_DEFAULT_WHEN_AVAILABLE_AND_ALLOWED=YES
+HIGH_CONSEQUENCE_AMBIGUOUS_STRONGEST_APPROPRIATE_ROUTE=YES
+REVIEW_FAIL_CREATES_NEW_TASK_THEN_UNIVERSAL_CLASSIFICATION=YES
+CODEX_DESKTOP_PRE_MODEL_EXACT_BASE_WORKTREE_GATE=REQUIRED
+TERMINAL_RESULT_EGRESS_FRESH_CANONICAL_READ=REQUIRED
+T4_ROUTINE_DEFAULT_FRESH_ORDINARY_CHATGPT=YES
 WRITER_PASS_NE_INDEPENDENT_ACCEPTANCE=YES
 CLAIM_BASED_STAGE_SUCCESS=REQUIRED
 PROGRESSIVE_REPRESENTATIVE_PROOF=REQUIRED

@@ -161,19 +161,21 @@ DeepSeek V4 Pro:
 - `governance/DEEPSEEK_HARNESS_MANDATORY_USAGE_RULES_V1_2026-08-18.md`
 - `governance/DEEPSEEK_HARNESS_NATIVE_HEADLESS_ONE_PASTE_WORKFLOW_V1_2026-08-20.md`
 
-Router V2 freezes requested role/executor/provider/model/reasoning/tool/session/resource state. No silent substitution/fallback/retry/resume. Requested-vs-actual required-identity mismatch is a Router incident.
+Router V2 freezes the universal Engineering-Control execution class plus requested role/executor/provider/model/reasoning/tool/session/resource state. The routine class mapping is: deterministic/mechanical -> zero model; frozen bounded semantic -> fresh ordinary ChatGPT Writer; open/material semantic -> Codex default when available/allowed; high-consequence/ambiguous -> strongest appropriate accepted route. User manual override remains preserved. No silent substitution/fallback/retry/resume. Requested-vs-actual required-identity mismatch is a Router incident.
 
 ## 5. Independent T4 review
 
 Default final adjudicator:
 
 ```text
-SURFACE=FRESH_ACCEPTED_INDEPENDENT_REVIEW_CONTEXT
-MODEL=STRONGEST_APPROPRIATE_ACCEPTED_REVIEW_MODEL
-REASONING=HIGHEST_APPROPRIATE
+SURFACE=FRESH_ORDINARY_CHATGPT_WINDOW
+MODEL=CURRENT_STRONGEST_APPROPRIATE_ORDINARY_CHATGPT_MODEL
+CURRENT_PROFILE=GPT-5.6_SOL
+REASONING=HIGH_OR_HIGHEST_APPROPRIATE
+PERMISSION=READ_ONLY
 WRITER_OR_ENGINEERING_CONTROL_CONTEXT=PROHIBITED_FOR_INDEPENDENT_ACCEPTANCE
-ORDINARY_CHATGPT_NEW_WINDOW=ACCEPTED_FALLBACK
-PROVIDER_NATIVE_REVIEWER_AGENT=ALLOWED_AFTER_INDEPENDENT_TOOL_ROUTE_ACCEPTANCE
+ORDINARY_CHATGPT_NEW_WINDOW=ROUTINE_DEFAULT
+PROVIDER_NATIVE_OR_CODEX_REVIEWER=EXPLICIT_TASK_SPECIFIC_EXCEPTION_OR_OPT_IN
 ```
 
 The handoff is a compact Review Manifest, not an Engineering-Control conclusion dump. It contains exact target identity, changed scope/diff, frozen acceptance criteria, required safety boundaries, decisive evidence locators and any explicitly untrusted prior conclusions.
@@ -182,7 +184,9 @@ If exact GitHub artifacts + exact-head CI are sufficient, the fresh Reviewer rea
 
 If local evidence is required, prefer deterministic evidence generation -> hash-manifested review bundle -> exact delivery to the fresh independent Reviewer. Use `.agents/skills/trade-os-independent-review-bundle` when applicable.
 
-Writer self-review, Supervisor self-review and Engineering-Control self-review never become independent acceptance. A provider-native Reviewer Agent is authority-bearing only when its accepted route enforces fresh context, read-only review authority, direct exact-canonical-evidence access, no inheritance of prior PASS conclusions as facts, and idempotent result egress through an accepted direct or lossless transport surface.
+Writer self-review, Supervisor self-review and Engineering-Control self-review never become independent acceptance. Provider-native or Codex reviewer routes are non-routine task-specific exceptions / opt-ins and are authority-bearing only when the accepted route enforces fresh context, read-only review authority, direct exact-canonical-evidence access, no inheritance of prior PASS conclusions as facts, and idempotent result egress through an accepted direct or lossless transport surface.
+
+Before terminal Writer / Reviewer / executor result egress, fresh-read the current canonical GitHub task/PR state. If it already advanced elsewhere, reconcile idempotently and do not write stale local state.
 
 One authority-bearing Review uses one fresh Reviewer context/agent, which retires after result egress. A repaired or materially changed head receives a new fresh Reviewer context. If proof collection threatens context integrity, freeze a bounded evidence-verification checkpoint and adjudicate in a fresh context. Authority-bearing result writeback is idempotent: derive the deterministic Review Result Key, fresh-read before write, and consume an existing matching result instead of duplicating it.
 
