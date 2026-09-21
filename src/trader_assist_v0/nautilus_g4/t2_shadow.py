@@ -502,8 +502,25 @@ def rederive_rooted_t2(
     from trader_assist_v0.vnext_g4.evaluator import evaluate_participation
     from trader_assist_v0.vnext_g4.reporting import CostProvenance, ThesisOutcome
 
+    from trader_assist_v0.nautilus_g4.t2_acquisition import (
+        REAL_T2_TASK_ID,
+        StructuralSourceEvidence,
+        raw_response_sha256,
+        replay_frozen_structural_source,
+    )
+
     structural_artifact = _one(root, T2SourceRole.STRUCTURAL_SOURCE)
-    structural = cast(StrategyDecision, _parse(structural_artifact, StrategyDecision))
+    strict_real_t2 = root.task_id == REAL_T2_TASK_ID
+    structural_claim = (
+        cast(StructuralSourceEvidence, _parse(structural_artifact, StructuralSourceEvidence))
+        if strict_real_t2
+        else None
+    )
+    structural = (
+        None
+        if strict_real_t2
+        else cast(StrategyDecision, _parse(structural_artifact, StrategyDecision))
+    )
     prospective_artifact = _one(
         root, T2SourceRole.PROSPECTIVE_ECONOMIC_CANDIDATE_IDENTITY
     )
