@@ -18,6 +18,7 @@ from trader_assist_v0.nautilus_g4.t2_shadow import (
     CanonicalAcceptanceExpectation,
     RoleBoundSourceArtifact,
     RootedT2Rederivation,
+    SourceReference,
     T2ArtifactCandidate,
     T2SourceRole,
     T2SourceRootSnapshot,
@@ -38,8 +39,19 @@ REQUIRES_NAUTILUS = pytest.mark.skipif(
 )
 
 
-def artifact(role: T2SourceRole, name: str, raw: bytes | None = None) -> RoleBoundSourceArtifact:
-    return RoleBoundSourceArtifact.create(role=role, name=name, exact_bytes=raw or name.encode())
+def artifact(
+    role: T2SourceRole,
+    name: str,
+    raw: bytes | None = None,
+    *,
+    references: tuple[SourceReference, ...] = (),
+) -> RoleBoundSourceArtifact:
+    return RoleBoundSourceArtifact.create(
+        role=role,
+        name=name,
+        exact_bytes=raw or name.encode(),
+        references=references,
+    )
 
 
 def minimal_root(*, head: str = PROJECT_GIT_OID, tree: str = "a" * 40) -> T2SourceRootSnapshot:
@@ -223,7 +235,6 @@ def _build_real_fixture(catalog_path: Path) -> RealFixture:
     from trader_assist_v0.vnext_g4.contracts import (
         AttemptStop,
         CandidateConfig,
-        CandidateManifest,
         EntryActivation,
         EvidenceArtifactHash,
         ExecutionModelConfig,
@@ -231,6 +242,7 @@ def _build_real_fixture(catalog_path: Path) -> RealFixture:
         G4RunManifest,
         OrderPrimitive,
         PositionSide,
+        ProspectiveEconomicCandidateIdentity,
         ReentryPolicy,
         RestartReferenceEvidence,
         RestartReferenceKind,
@@ -461,17 +473,19 @@ def _build_real_fixture(catalog_path: Path) -> RealFixture:
     config = CandidateConfig(
         entry_activation=EntryActivation.EA0,
         attempt_stop=AttemptStop.AP0,
-        room_to_cost_k=Decimal("2"),
+        room_to_cost_k=Decimal("3"),
         reentry_policy=ReentryPolicy.NO_REENTRY_REFERENCE,
         winner_confirmation=WinnerConfirmation.WC0,
-        winner_progress_bps=Decimal("3"),
-        exit_policy=ExitPolicy.X1,
+        winner_progress_bps=Decimal("10"),
+        exit_policy=ExitPolicy.X0,
         comparison_role="REFERENCE",
     )
-    selected = CandidateManifest.create(
-        candidate_id="reference",
-        structural_component_manifest_hash=structural_artifact.artifact_hash,
+    prospective = ProspectiveEconomicCandidateIdentity.create(
+        candidate_id="TASK5D_PHASE0C_TECHNICAL_REFERENCE_V1",
         config=config,
+    )
+    selected = prospective.materialize_candidate_manifest(
+        structural_component_manifest_hash=structural_artifact.artifact_hash
     )
     execution_model = ExecutionModelConfig(
         book_type="L1_MBP",
@@ -561,8 +575,22 @@ def _build_real_fixture(catalog_path: Path) -> RealFixture:
         T2SourceRole.E4_PIT_SNAPSHOT, "e4-pit", _json_bytes(pit_snapshot)
     )
     g4_artifact = artifact(T2SourceRole.G4_RUN_MANIFEST, "g4-run", _json_bytes(g4))
+    prospective_artifact = artifact(
+        T2SourceRole.PROSPECTIVE_ECONOMIC_CANDIDATE_IDENTITY,
+        "prospective-candidate",
+        _json_bytes(prospective),
+    )
     selected_artifact = artifact(
-        T2SourceRole.SELECTED_CANDIDATE, "selected", _json_bytes(selected)
+        T2SourceRole.SELECTED_CANDIDATE,
+        "selected",
+        _json_bytes(selected),
+        references=(
+            SourceReference(
+                role=prospective_artifact.role,
+                name=prospective_artifact.name,
+                artifact_hash=prospective_artifact.artifact_hash,
+            ),
+        ),
     )
     validation_artifact = artifact(
         T2SourceRole.VALIDATION_REFERENCE, "validation", _json_bytes(validation)
@@ -572,6 +600,7 @@ def _build_real_fixture(catalog_path: Path) -> RealFixture:
         e4_pit,
         g4_artifact,
         selected_artifact,
+        prospective_artifact,
         validation_artifact,
         structural_artifact,
         artifact(T2SourceRole.CAUSAL_LINEAGE, "lineage", _json_bytes(lineage)),
@@ -648,6 +677,7 @@ def _replace_declared_role_artifact(
         T2SourceRole.E4_RUN_MANIFEST: "e4_run_manifest_hash",
         T2SourceRole.E4_PIT_SNAPSHOT: "e4_pit_snapshot_hash",
         T2SourceRole.G4_RUN_MANIFEST: "g4_run_manifest_hash",
+        T2SourceRole.SELECTED_CANDIDATE: "selected_candidate_hash",
     }
     values = root.model_dump(mode="python", exclude={"source_root_hash"})
     values["artifacts"] = (
@@ -656,6 +686,222 @@ def _replace_declared_role_artifact(
     )
     values[field_by_role[role]] = replacement.artifact_hash
     return T2SourceRootSnapshot.create(**values)
+
+
+def _prospective_artifact(root: T2SourceRootSnapshot) -> RoleBoundSourceArtifact:
+    return next(
+        item
+        for item in root.artifacts
+        if item.role is T2SourceRole.PROSPECTIVE_ECONOMIC_CANDIDATE_IDENTITY
+    )
+
+
+def _selected_artifact(root: T2SourceRootSnapshot) -> RoleBoundSourceArtifact:
+    return next(
+        item for item in root.artifacts if item.role is T2SourceRole.SELECTED_CANDIDATE
+    )
+
+
+def _replace_selected_and_prospective(
+    root: T2SourceRootSnapshot,
+    *,
+    selected: RoleBoundSourceArtifact,
+    prospective: RoleBoundSourceArtifact | None,
+) -> T2SourceRootSnapshot:
+    values = root.model_dump(mode="python", exclude={"source_root_hash"})
+    values["artifacts"] = (
+        *(
+            item
+            for item in root.artifacts
+            if item.role
+            not in {
+                T2SourceRole.SELECTED_CANDIDATE,
+                T2SourceRole.PROSPECTIVE_ECONOMIC_CANDIDATE_IDENTITY,
+            }
+        ),
+        selected,
+        *((prospective,) if prospective is not None else ()),
+    )
+    values["selected_candidate_hash"] = selected.artifact_hash
+    return T2SourceRootSnapshot.create(**values)
+
+
+@REQUIRES_NAUTILUS
+def test_t04_prospective_identity_is_rooted_and_selected_candidate_references_it(
+    real_fixture: RealFixture,
+) -> None:
+    prospective = _prospective_artifact(real_fixture.root)
+    selected = _selected_artifact(real_fixture.root)
+    assert tuple(
+        item
+        for item in real_fixture.root.artifacts
+        if item.role is T2SourceRole.PROSPECTIVE_ECONOMIC_CANDIDATE_IDENTITY
+    ) == (prospective,)
+    assert SourceReference(
+        role=prospective.role,
+        name=prospective.name,
+        artifact_hash=prospective.artifact_hash,
+    ) in selected.references
+
+
+@REQUIRES_NAUTILUS
+def test_t04_prospective_identity_is_required_before_participation(
+    real_fixture: RealFixture, tmp_path: Path
+) -> None:
+    selected = _selected_artifact(real_fixture.root)
+    unreferenced = artifact(
+        T2SourceRole.SELECTED_CANDIDATE,
+        selected.name,
+        selected.exact_bytes(),
+    )
+    root = _replace_selected_and_prospective(
+        real_fixture.root, selected=unreferenced, prospective=None
+    )
+    with pytest.raises(ValueError, match="requires exactly one PROSPECTIVE_ECONOMIC"):
+        rederive_rooted_t2(root=root, catalog_path=tmp_path)
+
+
+@REQUIRES_NAUTILUS
+def test_t04_selected_candidate_requires_exact_prospective_edge(
+    real_fixture: RealFixture, tmp_path: Path
+) -> None:
+    selected = _selected_artifact(real_fixture.root)
+    unreferenced = artifact(
+        T2SourceRole.SELECTED_CANDIDATE,
+        selected.name,
+        selected.exact_bytes(),
+    )
+    root = _replace_selected_and_prospective(
+        real_fixture.root,
+        selected=unreferenced,
+        prospective=_prospective_artifact(real_fixture.root),
+    )
+    with pytest.raises(ValueError, match="does not reference the exact prospective"):
+        rederive_rooted_t2(root=root, catalog_path=tmp_path)
+
+
+@pytest.mark.parametrize("mismatch", ("candidate_id", "config"))
+@REQUIRES_NAUTILUS
+def test_t04_prospective_economic_mismatch_fails_closed(
+    real_fixture: RealFixture,
+    tmp_path: Path,
+    mismatch: str,
+) -> None:
+    from trader_assist_v0.vnext_g4.contracts import (
+        CandidateConfig,
+        ProspectiveEconomicCandidateIdentity,
+    )
+
+    current_artifact = _prospective_artifact(real_fixture.root)
+    current = ProspectiveEconomicCandidateIdentity.model_validate_json(
+        current_artifact.exact_bytes()
+    )
+    if mismatch == "candidate_id":
+        changed = ProspectiveEconomicCandidateIdentity.create(
+            candidate_id="different-prospective-candidate",
+            config=current.config,
+        )
+    else:
+        changed_config = CandidateConfig.model_validate(
+            {**current.config.model_dump(mode="python"), "room_to_cost_k": Decimal("2")}
+        )
+        changed = ProspectiveEconomicCandidateIdentity.create(
+            candidate_id=current.candidate_id,
+            config=changed_config,
+        )
+    changed_artifact = artifact(
+        T2SourceRole.PROSPECTIVE_ECONOMIC_CANDIDATE_IDENTITY,
+        current_artifact.name,
+        _json_bytes(changed),
+    )
+    selected = _selected_artifact(real_fixture.root)
+    rewired_selected = artifact(
+        T2SourceRole.SELECTED_CANDIDATE,
+        selected.name,
+        selected.exact_bytes(),
+        references=(
+            SourceReference(
+                role=changed_artifact.role,
+                name=changed_artifact.name,
+                artifact_hash=changed_artifact.artifact_hash,
+            ),
+        ),
+    )
+    root = _replace_selected_and_prospective(
+        real_fixture.root,
+        selected=rewired_selected,
+        prospective=changed_artifact,
+    )
+    with pytest.raises(ValueError, match="not the exact source-bound prospective"):
+        rederive_rooted_t2(root=root, catalog_path=tmp_path)
+
+
+@REQUIRES_NAUTILUS
+def test_t04_prospective_version_tamper_fails_closed(
+    real_fixture: RealFixture, tmp_path: Path
+) -> None:
+    current_artifact = _prospective_artifact(real_fixture.root)
+    raw = json.loads(current_artifact.exact_bytes())
+    raw["strategy_version"] = "TA_VNEXT_E4_C1_2026-09-11"
+    changed_artifact = artifact(
+        T2SourceRole.PROSPECTIVE_ECONOMIC_CANDIDATE_IDENTITY,
+        current_artifact.name,
+        canonical_json_bytes(raw),
+    )
+    selected = _selected_artifact(real_fixture.root)
+    rewired_selected = artifact(
+        T2SourceRole.SELECTED_CANDIDATE,
+        selected.name,
+        selected.exact_bytes(),
+        references=(
+            SourceReference(
+                role=changed_artifact.role,
+                name=changed_artifact.name,
+                artifact_hash=changed_artifact.artifact_hash,
+            ),
+        ),
+    )
+    root = _replace_selected_and_prospective(
+        real_fixture.root,
+        selected=rewired_selected,
+        prospective=changed_artifact,
+    )
+    with pytest.raises(ValidationError, match="strategy_version"):
+        rederive_rooted_t2(root=root, catalog_path=tmp_path)
+
+
+@REQUIRES_NAUTILUS
+def test_t04_selected_candidate_cannot_bind_another_structural_hash(
+    real_fixture: RealFixture, tmp_path: Path
+) -> None:
+    from trader_assist_v0.vnext_g4.contracts import ProspectiveEconomicCandidateIdentity
+
+    prospective_artifact = _prospective_artifact(real_fixture.root)
+    prospective = ProspectiveEconomicCandidateIdentity.model_validate_json(
+        prospective_artifact.exact_bytes()
+    )
+    wrong = prospective.materialize_candidate_manifest(
+        structural_component_manifest_hash="f" * 64
+    )
+    selected = artifact(
+        T2SourceRole.SELECTED_CANDIDATE,
+        "selected",
+        _json_bytes(wrong),
+        references=(
+            SourceReference(
+                role=prospective_artifact.role,
+                name=prospective_artifact.name,
+                artifact_hash=prospective_artifact.artifact_hash,
+            ),
+        ),
+    )
+    root = _replace_selected_and_prospective(
+        real_fixture.root,
+        selected=selected,
+        prospective=prospective_artifact,
+    )
+    with pytest.raises(ValueError, match="not the exact source-bound prospective"):
+        rederive_rooted_t2(root=root, catalog_path=tmp_path)
 
 
 @REQUIRES_NAUTILUS

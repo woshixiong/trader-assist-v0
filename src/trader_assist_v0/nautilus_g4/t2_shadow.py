@@ -49,6 +49,9 @@ class T2SourceRole(StrEnum):
     E4_LIFECYCLE = "E4_LIFECYCLE"
     E4_CONTINUITY = "E4_CONTINUITY_CHECKPOINT_PROCESS_SEGMENT_EVIDENCE"
     STRUCTURAL_SOURCE = "STRUCTURAL_SOURCE_ARTIFACT"
+    PROSPECTIVE_ECONOMIC_CANDIDATE_IDENTITY = (
+        "PROSPECTIVE_ECONOMIC_CANDIDATE_IDENTITY"
+    )
     CAUSAL_LINEAGE = "CAUSAL_LINEAGE"
     RESTART_REFERENCE = "RESTART_REFERENCE_EVIDENCE"
     RESTART_REFERENCE_SOURCE = "RESTART_REFERENCE_SOURCE"
@@ -491,6 +494,7 @@ def rederive_rooted_t2(
         G4RunManifest,
         ParticipationDecision,
         PositionSide,
+        ProspectiveEconomicCandidateIdentity,
         RestartReferenceEvidence,
         ValidationReference,
     )
@@ -499,6 +503,13 @@ def rederive_rooted_t2(
 
     structural_artifact = _one(root, T2SourceRole.STRUCTURAL_SOURCE)
     structural = cast(StrategyDecision, _parse(structural_artifact, StrategyDecision))
+    prospective_artifact = _one(
+        root, T2SourceRole.PROSPECTIVE_ECONOMIC_CANDIDATE_IDENTITY
+    )
+    prospective = cast(
+        ProspectiveEconomicCandidateIdentity,
+        _parse(prospective_artifact, ProspectiveEconomicCandidateIdentity),
+    )
     e4_manifest = cast(
         RunManifest, _parse(_one(root, T2SourceRole.E4_RUN_MANIFEST), RunManifest)
     )
@@ -507,9 +518,24 @@ def rederive_rooted_t2(
         _parse(_one(root, T2SourceRole.E4_PIT_SNAPSHOT), PitUniverseSnapshot),
     )
     lineage = cast(CausalLineage, _parse(_one(root, T2SourceRole.CAUSAL_LINEAGE), CausalLineage))
-    candidate = cast(
-        CandidateManifest, _parse(_one(root, T2SourceRole.SELECTED_CANDIDATE), CandidateManifest)
+    candidate_artifact = _one(root, T2SourceRole.SELECTED_CANDIDATE)
+    candidate = cast(CandidateManifest, _parse(candidate_artifact, CandidateManifest))
+    expected_prospective_reference = SourceReference(
+        role=prospective_artifact.role,
+        name=prospective_artifact.name,
+        artifact_hash=prospective_artifact.artifact_hash,
     )
+    if expected_prospective_reference not in candidate_artifact.references:
+        raise ValueError(
+            "selected candidate does not reference the exact prospective economic identity"
+        )
+    expected_candidate = prospective.materialize_candidate_manifest(
+        structural_component_manifest_hash=structural_artifact.artifact_hash
+    )
+    if candidate != expected_candidate:
+        raise ValueError(
+            "selected candidate is not the exact source-bound prospective materialization"
+        )
     g4 = cast(G4RunManifest, _parse(_one(root, T2SourceRole.G4_RUN_MANIFEST), G4RunManifest))
     if (
         not hmac.compare_digest(e4_manifest.pit_snapshot_hash, pit_snapshot.snapshot_hash)
