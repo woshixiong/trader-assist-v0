@@ -581,15 +581,33 @@ def rederive_rooted_t2(
         raise ValueError("rooted selected candidate is not a member of the rooted G4 run")
     if candidate.structural_component_manifest_hash != structural_artifact.artifact_hash:
         raise ValueError("selected candidate does not bind the exact structural source bytes")
-    if (
-        structural.market_id != lineage.market_id
-        or structural.market_event_id != lineage.formal_setup_id
-    ):
-        raise ValueError("structural decision and lineage do not form one causal unit")
+    if not strict_real_t2:
+        assert structural is not None
+        if (
+            structural.market_id != lineage.market_id
+            or structural.market_event_id != lineage.formal_setup_id
+        ):
+            raise ValueError("structural decision and lineage do not form one causal unit")
 
-    expression = cast(
-        MarketExpression, _parse(_one(root, T2SourceRole.MARKET_EXPRESSION), MarketExpression)
+    expression_artifacts = (
+        _many(root, T2SourceRole.MARKET_EXPRESSION)
+        if strict_real_t2
+        else (_one(root, T2SourceRole.MARKET_EXPRESSION),)
     )
+    expressions = tuple(
+        cast(MarketExpression, _parse(item, MarketExpression))
+        for item in expression_artifacts
+    )
+    expression = next(
+        (
+            item for item in expressions
+            if item.market_id == lineage.market_id
+            and item.instrument_id == lineage.instrument_id
+        ),
+        None,
+    )
+    if expression is None:
+        raise ValueError("rooted MarketExpression for focal lineage is absent")
     admissions = tuple(
         sorted(
             (
