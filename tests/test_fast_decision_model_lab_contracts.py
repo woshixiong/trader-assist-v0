@@ -5,6 +5,7 @@ from dataclasses import replace
 import pytest
 
 from trader_assist_v0.fast_decision_model_lab.contracts import (
+    STATE_SCHEMA_VERSION,
     ChoiceDistribution,
     DecisionArm,
     DecisionRequest,
@@ -14,7 +15,6 @@ from trader_assist_v0.fast_decision_model_lab.contracts import (
     ModelInvocationStatus,
     ModelTarget,
     NormalizedUsage,
-    STATE_SCHEMA_VERSION,
 )
 from trader_assist_v0.fast_decision_model_lab.evidence import DecisionEvidenceKey
 from trader_assist_v0.fast_decision_model_lab.questions import (
