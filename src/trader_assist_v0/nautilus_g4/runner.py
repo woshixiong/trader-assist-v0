@@ -206,9 +206,15 @@ class ProviderOrderLegEvidence(BaseModel):
     def verify_fill_binding(self) -> Self:
         if self.fill.client_order_id != self.client_order_id:
             raise ValueError("provider leg fill does not bind its submitted order")
-        if _decimal_quantity(self.fill.last_qty, label="provider leg fill quantity") != _decimal_quantity(
-            self.quantity, label="provider leg submitted quantity"
-        ):
+        fill_quantity = _decimal_quantity(
+            self.fill.last_qty,
+            label="provider leg fill quantity",
+        )
+        submitted_quantity = _decimal_quantity(
+            self.quantity,
+            label="provider leg submitted quantity",
+        )
+        if fill_quantity != submitted_quantity:
             raise ValueError("provider leg fill quantity does not equal submitted quantity")
         return self
 
@@ -631,6 +637,7 @@ class _ExecutionLedger:
         }
         if any(value is None for value in values.values()):
             raise RuntimeError("provider OrderFilled is missing required public fields")
+        position_id = getattr(event, "position_id", None)
         fill = ProviderFillEvidence(
             client_order_id=str(values["client_order_id"]),
             venue_order_id=str(values["venue_order_id"]),
@@ -641,11 +648,7 @@ class _ExecutionLedger:
             ts_event=int(str(values["ts_event"])),
             ts_init=int(str(values["ts_init"])),
             provider_event_type=f"{type(event).__module__}.{type(event).__qualname__}",
-            position_id=(
-                None
-                if getattr(event, "position_id", None) is None
-                else str(getattr(event, "position_id"))
-            ),
+            position_id=None if position_id is None else str(position_id),
         )
         self.fills.append(fill)
         if len(self.fills) != 1:
@@ -816,9 +819,15 @@ class _RoundTripExecutionLedger:
         if self.entry_fill is None or self.exit_submission is not None:
             raise RuntimeError("round-trip exit requires exactly one entry fill")
         self.exit_submission = (str(client_order_id), str(quantity))
-        if _decimal_quantity(self.entry_submission[1], label="entry submission quantity") != _decimal_quantity(
-            self.exit_submission[1], label="exit submission quantity"
-        ):
+        entry_quantity = _decimal_quantity(
+            self.entry_submission[1],
+            label="entry submission quantity",
+        )
+        exit_quantity = _decimal_quantity(
+            self.exit_submission[1],
+            label="exit submission quantity",
+        )
+        if entry_quantity != exit_quantity:
             raise RuntimeError("round-trip exit quantity differs from entry")
 
     def fill(self, event: object, *, provider_fill_type: type[object]) -> None:
@@ -836,16 +845,17 @@ class _RoundTripExecutionLedger:
         }
         if any(value is None for value in values.values()):
             raise RuntimeError("round-trip fill lacks required provider fields")
+        position_id = getattr(event, "position_id", None)
         fill = ProviderFillEvidence(
-            **{key: str(value) for key, value in values.items() if key not in {"ts_event", "ts_init"}},
+            **{
+                key: str(value)
+                for key, value in values.items()
+                if key not in {"ts_event", "ts_init"}
+            },
             ts_event=int(str(values["ts_event"])),
             ts_init=int(str(values["ts_init"])),
             provider_event_type=f"{type(event).__module__}.{type(event).__qualname__}",
-            position_id=(
-                None
-                if getattr(event, "position_id", None) is None
-                else str(getattr(event, "position_id"))
-            ),
+            position_id=None if position_id is None else str(position_id),
         )
         if self.entry_submission and fill.client_order_id == self.entry_submission[0]:
             if self.entry_fill is not None:
@@ -1613,10 +1623,18 @@ def execute_provider_native_round_trip_state(
         exit_order_id, exit_quantity = ledger.exit_submission
         quantity = intent.technical_quantity.quantity
         if (
-            _decimal_quantity(entry_quantity, label="entry submission quantity") != quantity
-            or _decimal_quantity(exit_quantity, label="exit submission quantity") != quantity
-            or _decimal_quantity(ledger.entry_fill.last_qty, label="entry fill quantity") != quantity
-            or _decimal_quantity(ledger.exit_fill.last_qty, label="exit fill quantity") != quantity
+            _decimal_quantity(
+                entry_quantity, label="entry submission quantity"
+            ) != quantity
+            or _decimal_quantity(
+                exit_quantity, label="exit submission quantity"
+            ) != quantity
+            or _decimal_quantity(
+                ledger.entry_fill.last_qty, label="entry fill quantity"
+            ) != quantity
+            or _decimal_quantity(
+                ledger.exit_fill.last_qty, label="exit fill quantity"
+            ) != quantity
         ):
             raise RuntimeError("round-trip quantity does not equal canonical technical quantity")
         cache = node.get_engine_cache(config.id)

@@ -483,10 +483,10 @@ def rederive_rooted_t2(
         project_native_replay,
     )
     from trader_assist_v0.nautilus_g4.runner import (
-        ProviderExecutionRecord,
-        ProviderRoundTripExecutionRecord,
         execute_provider_native_round_trip_state,
         execute_provider_native_state,
+        ProviderExecutionRecord,
+        ProviderRoundTripExecutionRecord,
         provider_execution_semantic_hash,
         provider_round_trip_semantic_hash,
         provider_round_trip_state_semantic_source_hash,

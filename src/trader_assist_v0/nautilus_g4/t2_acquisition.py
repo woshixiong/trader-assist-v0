@@ -48,7 +48,6 @@ from trader_assist_v0.nautilus_pilot.strategy_package import (
     PilotStrategyEvaluator,
     StrategyPackageManifest,
 )
-from trader_assist_v0.vnext_g4.evaluator import exit_triggered, winner_confirmed
 from trader_assist_v0.vnext_g4.contracts import (
     CandidateConfig,
     CandidateManifest,
@@ -63,6 +62,7 @@ from trader_assist_v0.vnext_g4.contracts import (
     RestartReferenceKind,
     ValidationReference,
 )
+from trader_assist_v0.vnext_g4.evaluator import exit_triggered, winner_confirmed
 
 REAL_T2_TASK_ID = "PILOT_TASK5D_PHASE0E_R_REAL_T2_INTEGRATION_R1"
 REAL_T2_ACQUISITION_SECONDS = 14_400
