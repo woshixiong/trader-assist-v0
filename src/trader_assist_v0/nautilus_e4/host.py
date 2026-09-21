@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Protocol, Self, cast
 
 from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
 
-from .capture import SubscriptionPolicy, recover_capture_session
+from .capture import CaptureSession, SubscriptionPolicy, recover_capture_session
 from .contracts import (
     NAUTILUS_VERSION,
     AdmittedEvent,
