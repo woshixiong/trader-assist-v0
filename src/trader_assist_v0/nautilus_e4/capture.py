@@ -395,17 +395,20 @@ class CaptureSession:
         thesis_id: str,
         market_id: str,
         expression_id: str,
-        state_ts: int,
+        created_ts: int,
+        active_valid_ts: int,
     ) -> EvidenceState:
         """Open source-bound lifecycle evidence from an admitted Formal Setup."""
+        if active_valid_ts <= created_ts:
+            raise ValueError("ACTIVE_VALID observed time must follow THESIS_CREATED")
         if self.policy.tier(market_id) not in {CaptureTier.WATCH, CaptureTier.ACTIONABLE}:
             raise ValueError("Structural lifecycle requires Watch/Actionable policy")
         if package_id in self._packages or opportunity_id in self._lifecycle_ids:
             raise ValueError("duplicate Opportunity/Thesis/package authority")
         buffer = tuple(self._prebuffers[market_id])
-        cutoff = state_ts - PRE_DECISION_RETENTION_NS
+        cutoff = created_ts - PRE_DECISION_RETENTION_NS
         available = tuple(
-            item for item in buffer if cutoff <= item.admission_ts <= state_ts
+            item for item in buffer if cutoff <= item.admission_ts <= created_ts
         )
         watch_started = self._watch_started.get(market_id)
         bbo = self.ledger.bbo_validity(market_id=market_id, expression_id=expression_id)
@@ -444,7 +447,7 @@ class CaptureSession:
             expression_id=expression_id,
             kind=LifecycleKind.OPPORTUNITY,
             status=LifecycleStatus.ACTIVE,
-            state_ts=state_ts,
+            state_ts=created_ts,
             reason_codes=("FORMAL_SETUP_ADMITTED",),
             decision_state=None,
             evidence_state=state,
@@ -458,12 +461,27 @@ class CaptureSession:
             expression_id=expression_id,
             kind=LifecycleKind.THESIS,
             status=LifecycleStatus.ACTIVE,
-            state_ts=state_ts,
+            state_ts=created_ts,
             reason_codes=("THESIS_CREATED",),
             decision_state=None,
             evidence_state=state,
             _persist_checkpoint=False,
         )
+        if state is EvidenceState.COMPLETE:
+            self.record_lifecycle(
+                object_id=thesis_id,
+                parent_id=opportunity.object_id,
+                package_id=package_id,
+                market_id=market_id,
+                expression_id=expression_id,
+                kind=LifecycleKind.THESIS,
+                status=LifecycleStatus.ACTIVE,
+                state_ts=active_valid_ts,
+                reason_codes=("ACTIVE_VALID",),
+                decision_state=None,
+                evidence_state=state,
+                _persist_checkpoint=False,
+            )
         self._persist_if_configured(reason="STRUCTURAL_LIFECYCLE_OPENED")
         return state
 
