@@ -3,9 +3,9 @@ from __future__ import annotations
 from dataclasses import replace
 
 from trader_assist_v0.fast_decision_model_lab.contracts import (
+    STATE_SCHEMA_VERSION,
     DecisionRequest,
     ModelTarget,
-    STATE_SCHEMA_VERSION,
 )
 from trader_assist_v0.fast_decision_model_lab.questions import model_native_question_pack
 from trader_assist_v0.fast_decision_model_lab.serialization import (
