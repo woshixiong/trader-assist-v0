@@ -219,7 +219,8 @@ class NautilusE4CaptureStrategy(Strategy):
         thesis_id: str,
         market_id: str,
         expression_id: str,
-        state_ts: int,
+        created_ts: int,
+        active_valid_ts: int,
     ) -> EvidenceState:
         return self._session.open_structural_package(
             package_id=package_id,
@@ -227,7 +228,8 @@ class NautilusE4CaptureStrategy(Strategy):
             thesis_id=thesis_id,
             market_id=market_id,
             expression_id=expression_id,
-            state_ts=state_ts,
+            created_ts=created_ts,
+            active_valid_ts=active_valid_ts,
         )
 
     def _observe_admission(self, outcome: object) -> None:
