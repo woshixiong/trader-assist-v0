@@ -23,6 +23,7 @@ jobs:
           cache-dependency-path: |
             requirements-runtime.lock
             requirements-dev.lock
+            requirements-jev.lock
       - name: Hashed locked install
         run: |
           python -m venv /tmp/trader-assist-v0-venv
@@ -34,6 +35,12 @@ jobs:
           /tmp/trader-assist-v0-venv/bin/python -m pip check
       - name: Runtime dependency audit
         run: /tmp/trader-assist-v0-venv/bin/pip-audit --strict -r requirements-runtime.lock
+      - name: JEV hashed locked install
+        run: |
+          /tmp/trader-assist-v0-venv/bin/python -m pip install --require-hashes -r requirements-jev.lock
+          /tmp/trader-assist-v0-venv/bin/python scripts/check_dependency_lock.py --verify-jev-installed
+          /tmp/trader-assist-v0-venv/bin/python -m pip check
+          /tmp/trader-assist-v0-venv/bin/pip-audit --strict -r requirements-jev.lock
       - name: Compile
         run: /tmp/trader-assist-v0-venv/bin/python -m compileall -q src scripts tests
       - name: Schema drift

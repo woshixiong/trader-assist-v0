@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PILOT_REQUIREMENT = "nautilus-trader==2.0.0rc5"
 PILOT_WHEEL_SHA256 = "eab45fafd2312deda1236554c49a9798bfc76bc8465af864878e2f70189ebebe"
+JEV_REQUIREMENT = "typesafe-sdk==0.7.0"
 PIN_RE = re.compile(r"^[A-Za-z0-9_.-]+==[A-Za-z0-9_.!+-]+$")
 LOCK_RE = re.compile(
     r"^(?P<name>[A-Za-z0-9_.-]+)==(?P<version>[A-Za-z0-9_.!+-]+) "
@@ -52,13 +53,15 @@ def _verify_direct_pins(
     runtime: dict[str, tuple[str, str]],
     dev: dict[str, tuple[str, str]],
     pilot: dict[str, tuple[str, str]],
+    jev: dict[str, tuple[str, str]],
 ) -> None:
     data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     project = tuple(data["project"]["dependencies"])
     optional_dev = tuple(data["project"]["optional-dependencies"]["dev"])
     optional_pilot = tuple(data["project"]["optional-dependencies"]["nautilus-pilot"])
+    optional_jev = tuple(data["project"]["optional-dependencies"]["jev"])
     build = tuple(data["build-system"]["requires"])
-    for requirement in (*project, *optional_dev, *optional_pilot, *build):
+    for requirement in (*project, *optional_dev, *optional_pilot, *optional_jev, *build):
         if not PIN_RE.fullmatch(requirement):
             raise SystemExit(f"pyproject dependency is not exactly pinned: {requirement}")
     missing_runtime = [
@@ -80,17 +83,26 @@ def _verify_direct_pins(
     expected_pilot = {_pin(PILOT_REQUIREMENT)[0]: (_pin(PILOT_REQUIREMENT)[1], PILOT_WHEEL_SHA256)}
     if pilot != expected_pilot:
         raise SystemExit("pilot lock must contain only the exact authorized rc5 Linux wheel")
+    if optional_jev != (JEV_REQUIREMENT,):
+        raise SystemExit(
+            "jev optional dependency must contain only the exact typesafe-sdk 0.7.0 pin"
+        )
+    jev_name, jev_version = _pin(JEV_REQUIREMENT)
+    if jev.get(jev_name, (None, None))[0] != jev_version:
+        raise SystemExit("JEV lock does not contain the exact accepted typesafe-sdk pin")
+    shared = sorted(set(dev) & set(jev))
+    mismatched_shared = [name for name in shared if dev[name] != jev[name]]
+    if mismatched_shared:
+        raise SystemExit(
+            "JEV lock conflicts with the accepted dev closure: " + ", ".join(mismatched_shared)
+        )
 
 
 def _verify_runtime_subset(
     runtime: dict[str, tuple[str, str]],
     dev: dict[str, tuple[str, str]],
 ) -> None:
-    mismatches = [
-        name
-        for name, entry in runtime.items()
-        if dev.get(name) != entry
-    ]
+    mismatches = [name for name, entry in runtime.items() if dev.get(name) != entry]
     if mismatches:
         raise SystemExit(
             "runtime lock is not an exact hashed subset of dev lock: " + ", ".join(mismatches)
@@ -99,18 +111,18 @@ def _verify_runtime_subset(
 
 def _verify_installed(
     dev: dict[str, tuple[str, str]],
-    pilot: dict[str, tuple[str, str]] | None = None,
+    extra: dict[str, tuple[str, str]] | None = None,
 ) -> None:
     installed: dict[str, str] = {}
     for distribution in distributions():
         name = distribution.metadata.get("Name")
         if name:
             installed[_normalized_name(name)] = distribution.version
-    expected = dev if pilot is None else {**dev, **pilot}
+    expected = dev if extra is None else {**dev, **extra}
     expected_names = set(expected) | {"trader-assist-v0"}
     actual_names = set(installed)
     missing = sorted(expected_names - actual_names)
-    extra = sorted(actual_names - expected_names)
+    extra_names = sorted(actual_names - expected_names)
     wrong_versions = sorted(
         name
         for name, (version, _digest) in expected.items()
@@ -119,8 +131,8 @@ def _verify_installed(
     failures: list[str] = []
     if missing:
         failures.append("missing installed distributions: " + ", ".join(missing))
-    if extra:
-        failures.append("unlocked installed distributions: " + ", ".join(extra))
+    if extra_names:
+        failures.append("unlocked installed distributions: " + ", ".join(extra_names))
     if wrong_versions:
         failures.append("installed version mismatch: " + ", ".join(wrong_versions))
     if failures:
@@ -132,19 +144,23 @@ def main() -> int:
     installed_mode = parser.add_mutually_exclusive_group()
     installed_mode.add_argument("--verify-installed", action="store_true")
     installed_mode.add_argument("--verify-pilot-installed", action="store_true")
+    installed_mode.add_argument("--verify-jev-installed", action="store_true")
     args = parser.parse_args()
     runtime = _read_lock("requirements-runtime.lock")
     dev = _read_lock("requirements-dev.lock")
     pilot = _read_lock("requirements-nautilus-pilot.lock")
-    _verify_direct_pins(runtime, dev, pilot)
+    jev = _read_lock("requirements-jev.lock")
+    _verify_direct_pins(runtime, dev, pilot, jev)
     _verify_runtime_subset(runtime, dev)
     if args.verify_installed:
         _verify_installed(dev)
     if args.verify_pilot_installed:
         _verify_installed(dev, pilot)
+    if args.verify_jev_installed:
+        _verify_installed(dev, jev)
     print(
         "dependency locks: complete, hashed, and consistent "
-        f"({len(runtime)} runtime, {len(dev)} CI/dev, {len(pilot)} pilot)"
+        f"({len(runtime)} runtime, {len(dev)} CI/dev, {len(pilot)} pilot, {len(jev)} JEV)"
     )
     return 0
 

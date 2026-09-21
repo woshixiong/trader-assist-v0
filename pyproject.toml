@@ -24,6 +24,9 @@ dev = [
 nautilus-pilot = [
   "nautilus-trader==2.0.0rc5",
 ]
+jev = [
+  "typesafe-sdk==0.7.0",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/trader_assist_v0"]
