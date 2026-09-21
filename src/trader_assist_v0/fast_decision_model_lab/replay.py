@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from .contracts import (
+    STATE_SCHEMA_VERSION,
     DecisionRequest,
     DecisionResult,
     ModelTarget,
     QuestionPack,
-    STATE_SCHEMA_VERSION,
 )
 from .model import DecisionBatch, DecisionBatchResult, build_batch_result
 from .serialization import canonical_sha256
