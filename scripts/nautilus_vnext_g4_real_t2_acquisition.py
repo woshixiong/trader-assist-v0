@@ -267,7 +267,9 @@ def run_single_attempt(*, evidence_root: Path, result_path: Path, expected_head:
                 materialization=item,
                 provider_instrument=native,
             )
-            target = metadata_dir / f"{item.identity.ordinal:02d}-{item.identity.provider_coin}.json"
+            target = metadata_dir / (
+                f"{item.identity.ordinal:02d}-{item.identity.provider_coin}.json"
+            )
             target.write_bytes(document)
             metadata_names.append(str(target.relative_to(evidence_root)))
 
