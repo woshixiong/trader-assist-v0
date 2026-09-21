@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from decimal import Decimal
 
 import pytest
 
@@ -16,13 +15,13 @@ from trader_assist_v0.nautilus_g4.t2_acquisition import (
     FROZEN_MARKETS,
     PHASE0C_MARKET_SET_HASH,
     REAL_T2_ACQUISITION_SECONDS,
+    FormalSetupObservation,
     RealT2IntegrationError,
+    StructuralSourceEvidence,
     admitted_external_5m_to_strategy_input,
     expected_external_bar_type,
     materialize_fixed_markets_from_public_metadata,
     select_focal_formal_setup,
-    StructuralSourceEvidence,
-    FormalSetupObservation,
 )
 from trader_assist_v0.nautilus_pilot.strategy_package import StrategyPackageManifest
 
