@@ -488,6 +488,7 @@ def rederive_rooted_t2(
         provider_state_semantic_source_hash,
     )
     from trader_assist_v0.vnext_g4.contracts import (
+        TASK5D_PHASE0C_PROSPECTIVE_ECONOMIC_CANDIDATE_HASH,
         CandidateManifest,
         CausalLineage,
         DerivationStatus,
@@ -496,7 +497,6 @@ def rederive_rooted_t2(
         PositionSide,
         ProspectiveEconomicCandidateIdentity,
         RestartReferenceEvidence,
-        TASK5D_PHASE0C_PROSPECTIVE_ECONOMIC_CANDIDATE_HASH,
         ValidationReference,
     )
     from trader_assist_v0.vnext_g4.evaluator import evaluate_participation

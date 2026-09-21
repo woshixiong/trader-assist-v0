@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from trader_assist_v0.vnext_g4.contracts import (
+    TASK5D_PHASE0C_PROSPECTIVE_ECONOMIC_CANDIDATE_HASH,
     AttemptStop,
     CandidateConfig,
     CandidateManifest,
@@ -22,7 +23,6 @@ from trader_assist_v0.vnext_g4.contracts import (
     PositionSide,
     ProspectiveEconomicCandidateIdentity,
     ReentryPolicy,
-    TASK5D_PHASE0C_PROSPECTIVE_ECONOMIC_CANDIDATE_HASH,
     TechnicalOrderQuantity,
     ValidationReference,
     WinnerConfirmation,
