@@ -8,10 +8,10 @@ from typesafe_sdk import RetryPolicy
 
 from trader_assist_v0.fast_decision_model_lab.adapters.typesafe import TypeSafeAdapter
 from trader_assist_v0.fast_decision_model_lab.contracts import (
+    STATE_SCHEMA_VERSION,
     DecisionRequest,
     ModelInvocationStatus,
     ModelTarget,
-    STATE_SCHEMA_VERSION,
 )
 from trader_assist_v0.fast_decision_model_lab.questions import model_native_question_pack
 
