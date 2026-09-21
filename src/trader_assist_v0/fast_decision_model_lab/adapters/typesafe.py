@@ -136,7 +136,7 @@ class TypeSafeAdapter:
         self._client_factory = client_factory
         self._clients: list[_AsyncClient] = []
 
-    async def __aenter__(self) -> "TypeSafeAdapter":
+    async def __aenter__(self) -> TypeSafeAdapter:
         return self
 
     async def __aexit__(
