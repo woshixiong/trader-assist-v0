@@ -2,7 +2,7 @@
 
 **Status:** CANONICAL GOVERNANCE CANDIDATE  
 **Effective date:** 2026-09-01  
-**Last material amendment candidate:** 2026-09-10  
+**Last material amendment candidate:** 2026-09-21  
 **Repository:** `woshixiong/trader-assist-v0`  
 **Authority intent:** on independent acceptance and merge, this file becomes the **single project-wide normative engineering ruleset**. Task-specific Product / Strategy / Operations / Security authority and narrow executor/tool/deployment contracts may be stricter in their own domain, but they must not become competing engineering constitutions.
 

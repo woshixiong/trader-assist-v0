@@ -2,7 +2,7 @@
 
 **Status:** ACTIVE CHECKLIST CANDIDATE  
 **Effective date:** 2026-08-17  
-**Last material amendment candidate:** 2026-09-17  
+**Last material amendment candidate:** 2026-09-21  
 **Normative owner:** `UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V2_2026-09-01.md`
 
 This file is an **execution checklist and record schema**, not a second engineering constitution. If this checklist and Unified V2 conflict, Unified V2 governs.
