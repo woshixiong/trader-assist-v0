@@ -20,13 +20,13 @@ def canonical_value(value: object) -> object:
         return value.value
     if isinstance(value, Mapping):
         return {str(key): canonical_value(value[key]) for key in sorted(value, key=str)}
-    if isinstance(value, (tuple, list)):
+    if isinstance(value, tuple | list):
         return [canonical_value(item) for item in value]
     if isinstance(value, float):
         if not math.isfinite(value):
             raise ValueError("canonical serialization rejects non-finite floats")
         return value
-    if value is None or isinstance(value, (str, int, bool)):
+    if value is None or isinstance(value, str | int | bool):
         return value
     raise TypeError(f"unsupported canonical value type: {type(value).__name__}")
 
