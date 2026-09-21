@@ -1143,7 +1143,7 @@ Before writeback, fresh-read the canonical target thread and search for the same
 ONE_AUTHORITY_BEARING_REVIEW_PER_FRESH_CONTEXT=YES
 REVIEW_CONTEXT_RETIRES_AFTER_RESULT_EGRESS=YES
 FIXED_REVIEW_UI_REQUIRED=NO
-ORDINARY_CHATGPT_NEW_WINDOW_ACCEPTED_FALLBACK=YES
+ORDINARY_CHATGPT_NEW_WINDOW_ROUTINE_DEFAULT=YES
 PROVIDER_NATIVE_INDEPENDENT_REVIEWER_ALLOWED_AFTER_ACCEPTANCE=YES
 REVIEW_CONTEXT_BUDGET_GATE=REQUIRED
 AUTHORITY_BEARING_REVIEW_RESULT_DIRECT_CONTROLLER_READABLE=REQUIRED
@@ -1195,9 +1195,9 @@ OPEN_MATERIAL_SEMANTIC
 
 HIGH_CONSEQUENCE_AMBIGUOUS
 -> strongest appropriate accepted route
-
-USER_MANUAL_OVERRIDE=ALWAYS_AVAILABLE
 ```
+
+Manual override is orthogonal to execution classification, remains always preserved, never creates a fifth execution class, and never permits silent model/executor substitution.
 
 This classification is executor routing only. It does not alter Task freeze -> Writer -> CI -> independent Review -> retained user gate, nor Task Packet semantics, exact-head requirements, Review independence, runtime/deployment/trading authority or any other state-machine gate.
 

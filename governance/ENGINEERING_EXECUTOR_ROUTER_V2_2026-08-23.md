@@ -67,7 +67,12 @@ ROUTER_REASONING_OR_EQUIVALENT=
 ROUTER_WEB_SEARCH_OR_TOOL_STATE=
 ROUTER_SESSION_POLICY=
 ROUTER_RESOURCE_STATE=
-ROUTER_SELECTION_CLASS=DETERMINISTIC|BOUNDED_SEMANTIC|HIGH_COMPLEXITY_SEMANTIC|INDEPENDENT_REVIEW
+EXECUTION_CLASS=
+  DETERMINISTIC_MECHANICAL
+  | FROZEN_BOUNDED_SEMANTIC
+  | OPEN_MATERIAL_SEMANTIC
+  | HIGH_CONSEQUENCE_AMBIGUOUS
+USER_MANUAL_OVERRIDE_APPLIED=YES|NO
 ```
 
 Where the execution surface exposes the information, collect the actual launch/runtime identity without asking the user to inspect raw logs:
@@ -158,10 +163,9 @@ OPEN_MATERIAL_SEMANTIC
 
 HIGH_CONSEQUENCE_AMBIGUOUS
 -> STRONGEST_APPROPRIATE_ACCEPTED_ROUTE
-
-USER_MANUAL_OVERRIDE
--> ALWAYS_PRESERVED
 ```
+
+Manual override is orthogonal to execution classification, remains always preserved, never creates a fifth execution class, and never permits silent model/executor substitution.
 
 This classifier changes only executor routing. It does not change Task freeze -> Writer -> CI -> independent Review -> retained user gate, Task Packet semantics, exact-head CI, Review independence, runtime/deployment/trading authority or any other state-machine gate.
 

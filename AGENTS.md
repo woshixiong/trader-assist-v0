@@ -147,10 +147,9 @@ OPEN_MATERIAL_SEMANTIC
 
 HIGH_CONSEQUENCE_AMBIGUOUS
 -> strongest appropriate accepted route
-
-USER_MANUAL_OVERRIDE
--> always preserved; no silent substitution
 ```
+
+Manual override is orthogonal to execution classification, remains always preserved, never creates a fifth execution class, and never permits silent model/executor substitution.
 
 This classification selects only the execution surface. It does not alter the engineering state machine, Task Packet semantics, exact-head CI, independent Review, or retained user gates. A Review FAIL creates a new bounded development task which is classified through this same universal rule; there is no separate repair-routing taxonomy.
 
