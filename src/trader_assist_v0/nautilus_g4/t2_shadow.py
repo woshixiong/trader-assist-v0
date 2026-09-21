@@ -755,18 +755,59 @@ def rederive_rooted_t2(
         raise ValueError("rooted selected candidate does not produce TAKE")
 
     wire_artifact = _one(root, T2SourceRole.PROVIDER_INSTRUMENT_WIRE)
-    wire = json.loads(wire_artifact.exact_bytes())
     from nautilus_trader.model import CryptoPerpetual
 
-    provider_instrument = CryptoPerpetual.from_dict(wire)
-    child_wire = provider_instrument.to_dict()
-    if canonical_json_bytes(wire) != canonical_json_bytes(child_wire):
-        raise ValueError("provider instrument public wire does not round-trip exactly")
-    wire_hash = sha256_hex(canonical_json_bytes(wire))
-    metadata_artifact = _one(root, T2SourceRole.INSTRUMENT_METADATA)
-    metadata = json.loads(metadata_artifact.exact_bytes())
-    if metadata.get("provider_wire_hash") != wire_hash:
-        raise ValueError("instrument metadata does not bind the rooted provider wire")
+    if strict_real_t2:
+        raw_wire = wire_artifact.exact_bytes()
+        wire_hash = raw_response_sha256(raw_wire)
+        metadata = metadata_by_market.get(lineage.market_id)
+        if metadata is None:
+            raise ValueError("focal instrument metadata is absent")
+        if metadata.get("raw_provider_response_sha256") != wire_hash:
+            raise ValueError("instrument metadata does not bind exact raw provider HTTP bytes")
+        try:
+            parsed_wire = json.loads(raw_wire)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("raw provider HTTP bytes are not JSON evidence") from exc
+        normalized = metadata.get("provider_instrument")
+        if not isinstance(normalized, dict):
+            raise ValueError("instrument metadata lacks provider-native normalized object")
+        provider_instrument = CryptoPerpetual.from_dict(normalized)
+        if canonical_json_bytes(provider_instrument.to_dict()) != canonical_json_bytes(normalized):
+            raise ValueError("provider-native instrument metadata does not round-trip")
+        if str(provider_instrument.id) != lineage.instrument_id:
+            raise ValueError("provider-native instrument id conflicts with focal lineage")
+        if int(provider_instrument.size_precision) != registry.size_decimals:
+            raise ValueError("provider-native size precision conflicts with RegistryMarket")
+        if Decimal(str(provider_instrument.price_increment)) != Decimal(
+            str(metadata.get("provider_minimum_tick"))
+        ):
+            raise ValueError("provider-native minimum tick conflicts with rooted metadata")
+        if Decimal(str(provider_instrument.size_increment)) != Decimal(
+            str(metadata.get("provider_size_increment"))
+        ):
+            raise ValueError("provider-native size increment conflicts with rooted metadata")
+        if not isinstance(parsed_wire, list) or len(parsed_wire) != 2:
+            raise ValueError("raw provider wire is not exact metaAndAssetCtxs response")
+        raw_meta = parsed_wire[0]
+        if not isinstance(raw_meta, dict) or not isinstance(raw_meta.get("universe"), list):
+            raise ValueError("raw provider meta universe is invalid")
+        matches = [
+            item for item in raw_meta["universe"]
+            if isinstance(item, dict) and item.get("name") == expression.provider_coin
+        ]
+        if len(matches) != 1 or matches[0].get("szDecimals") != registry.size_decimals:
+            raise ValueError("raw provider metadata conflicts with focal RegistryMarket")
+    else:
+        wire = json.loads(wire_artifact.exact_bytes())
+        provider_instrument = CryptoPerpetual.from_dict(wire)
+        child_wire = provider_instrument.to_dict()
+        if canonical_json_bytes(wire) != canonical_json_bytes(child_wire):
+            raise ValueError("provider instrument public wire does not round-trip exactly")
+        wire_hash = sha256_hex(canonical_json_bytes(wire))
+        metadata = metadata_by_market.get(lineage.market_id)
+        if metadata is None or metadata.get("provider_wire_hash") != wire_hash:
+            raise ValueError("instrument metadata does not bind the rooted provider wire")
     quantity = Decimal(str(provider_instrument.size_increment))
     size_decimals = int(provider_instrument.size_precision)
     side = PositionSide.LONG if structural.side.value == "LONG" else PositionSide.SHORT
