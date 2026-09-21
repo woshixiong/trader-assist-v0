@@ -246,7 +246,7 @@ def select_focal_formal_setup(
 class StructuralPackageOpener(Protocol):
     def __call__(
         self, *, package_id: str, opportunity_id: str, thesis_id: str,
-        market_id: str, expression_id: str, state_ts: int
+        market_id: str, expression_id: str, created_ts: int, active_valid_ts: int
     ) -> EvidenceState: ...
 
 
@@ -341,9 +341,12 @@ class RealT2StrategyCoordinator:
             "formal_setup": structural.formal_setup_id,
             "decision": structural.decision_hash,
         }))
-        state_ts = self.clock_ns()
-        if state_ts <= admission.admission_ts:
-            raise RealT2IntegrationError("structural lifecycle time must follow admission")
+        created_ts = self.clock_ns()
+        active_valid_ts = self.clock_ns()
+        if created_ts <= admission.admission_ts or active_valid_ts <= created_ts:
+            raise RealT2IntegrationError(
+                "structural lifecycle observed times must strictly follow admission"
+            )
         package_id, opportunity_id, thesis_id = (
             f"task5d-{seed[:32]}", f"opportunity-{seed[:32]}", f"thesis-{seed[:32]}"
         )
@@ -353,7 +356,8 @@ class RealT2StrategyCoordinator:
             thesis_id=thesis_id,
             market_id=admission.source.market_id,
             expression_id=admission.source.expression_id,
-            state_ts=state_ts,
+            created_ts=created_ts,
+            active_valid_ts=active_valid_ts,
         )
         self.observations.append(FormalSetupObservation(
             structural=structural,
