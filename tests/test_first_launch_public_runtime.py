@@ -2282,6 +2282,15 @@ def test_r3_e_blocked_send_times_out_without_an_orphan_coordinator(
         clock = _ReceiptClock(datetime.fromtimestamp((int(candle["T"]) + 4_000) / 1000, tz=UTC))
         monkeypatch.setattr(_SCRIPT_MODULE, "_utc_now", clock.utc_now)
         monkeypatch.setattr(_SCRIPT_MODULE, "_monotonic_now", clock.monotonic_now)
+        shifted_now = clock.utc_now()
+        shifted_monotonic = clock.monotonic_now()
+        runtime.accept_public_frame(
+            frame_text=_context_frame(),
+            now=shifted_now,
+            received_at=shifted_now,
+            received_monotonic=shifted_monotonic,
+        )
+        assert runtime.health_state is RuntimeHealthState.READY
         websocket = _ControlledWebSocket(clock=clock, post_plans=[_ControlledPost(candle)])
         shutdown_event = asyncio.Event()
 
