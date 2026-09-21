@@ -211,6 +211,8 @@ def run_single_attempt(*, evidence_root: Path, result_path: Path, expected_head:
         coordinator = RealT2StrategyCoordinator(
             registry_markets=registry,
             open_structural_package=strategy.open_structural_package,
+            clock_start_ns=start_ns,
+            cutoff_ns=start_ns + REAL_T2_ACQUISITION_NS,
         )
         strategy.set_admitted_event_observer(coordinator.observe_admitted_event)
         node.add_strategy(strategy)
