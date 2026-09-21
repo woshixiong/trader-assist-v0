@@ -22,6 +22,7 @@ from trader_assist_v0.vnext_g4.contracts import (
     PositionSide,
     ProspectiveEconomicCandidateIdentity,
     ReentryPolicy,
+    TASK5D_PHASE0C_PROSPECTIVE_ECONOMIC_CANDIDATE_HASH,
     TechnicalOrderQuantity,
     ValidationReference,
     WinnerConfirmation,
@@ -101,7 +102,7 @@ def test_phase0c_prospective_identity_binds_exact_economic_candidate() -> None:
         candidate_id="TASK5D_PHASE0C_TECHNICAL_REFERENCE_V1",
         config=config,
     )
-    expected_hash = "5176739d9ac0b2384675dd077781be187d25458bb3ea00bdc25b5366419ef1e2"
+    expected_hash = TASK5D_PHASE0C_PROSPECTIVE_ECONOMIC_CANDIDATE_HASH
     assert prospective.prospective_candidate_hash == expected_hash
     assert ProspectiveEconomicCandidateIdentity.model_validate_json(
         prospective.model_dump_json()

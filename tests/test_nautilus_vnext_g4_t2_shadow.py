@@ -814,11 +814,19 @@ def test_t04_prospective_economic_mismatch_fails_closed(
         current_artifact.name,
         _json_bytes(changed),
     )
+    structural_artifact = next(
+        item
+        for item in real_fixture.root.artifacts
+        if item.role is T2SourceRole.STRUCTURAL_SOURCE
+    )
+    matching_selected = changed.materialize_candidate_manifest(
+        structural_component_manifest_hash=structural_artifact.artifact_hash
+    )
     selected = _selected_artifact(real_fixture.root)
     rewired_selected = artifact(
         T2SourceRole.SELECTED_CANDIDATE,
         selected.name,
-        selected.exact_bytes(),
+        _json_bytes(matching_selected),
         references=(
             SourceReference(
                 role=changed_artifact.role,
@@ -832,7 +840,7 @@ def test_t04_prospective_economic_mismatch_fails_closed(
         selected=rewired_selected,
         prospective=changed_artifact,
     )
-    with pytest.raises(ValueError, match="not the exact source-bound prospective"):
+    with pytest.raises(ValueError, match="does not match the frozen Phase 0C identity"):
         rederive_rooted_t2(root=root, catalog_path=tmp_path)
 
 

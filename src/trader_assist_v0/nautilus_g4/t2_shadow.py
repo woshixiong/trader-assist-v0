@@ -496,6 +496,7 @@ def rederive_rooted_t2(
         PositionSide,
         ProspectiveEconomicCandidateIdentity,
         RestartReferenceEvidence,
+        TASK5D_PHASE0C_PROSPECTIVE_ECONOMIC_CANDIDATE_HASH,
         ValidationReference,
     )
     from trader_assist_v0.vnext_g4.evaluator import evaluate_participation
@@ -510,6 +511,13 @@ def rederive_rooted_t2(
         ProspectiveEconomicCandidateIdentity,
         _parse(prospective_artifact, ProspectiveEconomicCandidateIdentity),
     )
+    if not hmac.compare_digest(
+        prospective.prospective_candidate_hash,
+        TASK5D_PHASE0C_PROSPECTIVE_ECONOMIC_CANDIDATE_HASH,
+    ):
+        raise ValueError(
+            "rooted prospective candidate does not match the frozen Phase 0C identity"
+        )
     e4_manifest = cast(
         RunManifest, _parse(_one(root, T2SourceRole.E4_RUN_MANIFEST), RunManifest)
     )
