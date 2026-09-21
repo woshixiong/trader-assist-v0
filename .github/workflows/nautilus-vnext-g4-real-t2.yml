@@ -1,0 +1,53 @@
+name: Nautilus VNext G4 Real T2 Acquisition
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_head:
+        description: Exact reviewed implementation head to acquire against
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nautilus-vnext-g4-real-t2-single-prospective-attempt
+  cancel-in-progress: false
+
+jobs:
+  acquire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 255
+    steps:
+      - name: Checkout exact requested head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.expected_head }}
+          persist-credentials: false
+      - name: Reject non-exact checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ inputs.expected_head }}"
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install exact project
+        run: python -m pip install -e .
+      - name: Run single fixed 14400-second public-only attempt
+        env:
+          E4_EXACT_HEAD: ${{ inputs.expected_head }}
+        run: |
+          python scripts/nautilus_vnext_g4_real_t2_acquisition.py \
+            --evidence-root artifacts/task5d-real-t2 \
+            --result-path artifacts/task5d-real-t2-result.json \
+            --expected-head "${{ inputs.expected_head }}"
+      - name: Upload immutable attempt evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: task5d-real-t2-${{ inputs.expected_head }}
+          path: artifacts/
+          if-no-files-found: error
