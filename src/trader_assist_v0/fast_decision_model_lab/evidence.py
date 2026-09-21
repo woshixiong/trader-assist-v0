@@ -30,7 +30,7 @@ class DecisionEvidenceKey:
     @classmethod
     def from_request_result(
         cls, request: DecisionRequest, result: DecisionResult
-    ) -> "DecisionEvidenceKey":
+    ) -> DecisionEvidenceKey:
         if result.invocation_id != request.invocation_id:
             raise ValueError("request/result invocation identity mismatch")
         return cls(
