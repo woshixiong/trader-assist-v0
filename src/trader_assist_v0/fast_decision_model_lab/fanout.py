@@ -23,7 +23,7 @@ async def _invoke_one(plan: InvocationPlan) -> DecisionResult:
     started = time.time_ns()
     try:
         result = await plan.adapter.invoke(plan.request)
-    except Exception as error:  # noqa: BLE001
+    except Exception as error:
         finished = time.time_ns()
         return DecisionResult.failure_for(
             plan.request,
