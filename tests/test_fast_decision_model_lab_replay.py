@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import replace
+from datetime import UTC, datetime
+
+import pytest
+
 from trader_assist_v0.fast_decision_model_lab.contracts import (
     STATE_SCHEMA_VERSION,
     ChoiceDistribution,
@@ -11,9 +16,13 @@ from trader_assist_v0.fast_decision_model_lab.contracts import (
     ModelTarget,
     NormalizedUsage,
 )
+from trader_assist_v0.fast_decision_model_lab.experiment import ExperimentRecordV0
 from trader_assist_v0.fast_decision_model_lab.model import DecisionBatch, build_batch_result
 from trader_assist_v0.fast_decision_model_lab.questions import model_native_question_pack
-from trader_assist_v0.fast_decision_model_lab.replay import replay_recorded_results
+from trader_assist_v0.fast_decision_model_lab.replay import (
+    ReplayArtifactV0,
+    replay_recorded_results,
+)
 
 
 def _request(name: str) -> DecisionRequest:
@@ -85,3 +94,49 @@ def test_completion_order_and_replay_are_canonical() -> None:
     assert first.batch_hash == second.batch_hash
     replayed = replay_recorded_results((a, b), (rb, ra))
     assert replayed.batch_hash == first.batch_hash
+
+
+def test_replay_artifact_identity_is_stable_and_snapshots_evidence() -> None:
+    evidence = {"b": [2, 3], "a": 1}
+    experiment = ExperimentRecordV0(
+        experiment_id="experiment-1",
+        timestamp=datetime(2026, 9, 22, tzinfo=UTC),
+        state_hash="sha256:state",
+        model_identity=ModelIdentity("provider", "requested", "returned"),
+        decision_event_id="event-1",
+        request_identity="sha256:request",
+        result_identity="sha256:result",
+    )
+    first = ReplayArtifactV0(
+        experiment_record=experiment,
+        evidence_payload=evidence,
+        input_identity="sha256:input",
+    )
+    second = ReplayArtifactV0(
+        experiment_record=experiment,
+        evidence_payload={"a": 1, "b": [2, 3]},
+        input_identity="sha256:input",
+    )
+
+    evidence["a"] = 99
+    assert first.replay_identity == second.replay_identity
+    assert first.evidence_payload == {"a": 1, "b": [2, 3]}
+
+
+def test_experiment_factory_reuses_full_model_output_identity_contract() -> None:
+    request = _request("a")
+    result = _result(request, 20)
+    ExperimentRecordV0.from_request_result(
+        experiment_id="experiment-1",
+        timestamp=datetime(2026, 9, 22, tzinfo=UTC),
+        request=request,
+        result=result,
+    )
+
+    with pytest.raises(ValueError, match="identity mismatch"):
+        ExperimentRecordV0.from_request_result(
+            experiment_id="experiment-1",
+            timestamp=datetime(2026, 9, 22, tzinfo=UTC),
+            request=request,
+            result=replace(result, data_cutoff_ns=result.data_cutoff_ns + 1),
+        )
