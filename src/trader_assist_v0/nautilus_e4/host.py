@@ -17,10 +17,12 @@ from typing import TYPE_CHECKING, Any, Protocol, Self, cast
 
 from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
 
-from .capture import SubscriptionPolicy, recover_capture_session
+from .capture import CaptureSession, SubscriptionPolicy, recover_capture_session
 from .contracts import (
     NAUTILUS_VERSION,
+    AdmittedEvent,
     DataKind,
+    EvidenceState,
     MarketExpression,
     PitUniverseSnapshot,
     RunManifest,
@@ -37,8 +39,12 @@ if TYPE_CHECKING:
 
         def __init__(self, *args: object, **kwargs: object) -> None: ...
 
+    class _InstrumentCache(Protocol):
+        def instrument(self, instrument_id: object) -> object | None: ...
+
     class Strategy:
         clock: Any
+        cache: _InstrumentCache
 
         def __init__(self, config: StrategyConfig | None = None) -> None: ...
 
@@ -65,6 +71,12 @@ class SocketStateChangedLike(Protocol):
     venue: object
     endpoint: object
     state: object
+
+
+class AdmittedEventObserver(Protocol):
+    def __call__(
+        self, event: AdmittedEvent, provider_instrument: object | None = None
+    ) -> None: ...
 
 
 class LiveNodeHandleLike(Protocol):
@@ -191,6 +203,51 @@ class NautilusE4CaptureStrategy(Strategy):
             for data_kind in (DataKind.BBO, DataKind.TRADE)
         }
         self._session.await_continuity(required_streams=self._continuity_streams)
+        self._admitted_event_observer: AdmittedEventObserver | None = None
+
+    def set_admitted_event_observer(
+        self, observer: AdmittedEventObserver | None
+    ) -> None:
+        """Attach one synchronous composition observer; E4 remains admission owner."""
+        self._admitted_event_observer = observer
+
+    @property
+    def capture_session(self) -> CaptureSession:
+        """Read-only composition access to the existing E4 semantic owner."""
+        return self._session
+
+    def open_structural_package(
+        self,
+        *,
+        package_id: str,
+        opportunity_id: str,
+        thesis_id: str,
+        market_id: str,
+        expression_id: str,
+        created_ts: int,
+        active_valid_ts: int,
+    ) -> EvidenceState:
+        return self._session.open_structural_package(
+            package_id=package_id,
+            opportunity_id=opportunity_id,
+            thesis_id=thesis_id,
+            market_id=market_id,
+            expression_id=expression_id,
+            created_ts=created_ts,
+            active_valid_ts=active_valid_ts,
+        )
+
+    def _observe_admission(self, outcome: object) -> None:
+        observer = self._admitted_event_observer
+        event = getattr(outcome, "event", None)
+        if observer is None or event is None:
+            return
+        from nautilus_trader.model import InstrumentId
+
+        provider_instrument = self.cache.instrument(
+            InstrumentId.from_str(event.source.instrument_id)
+        )
+        observer(event, provider_instrument)
 
     @property
     def capture_health(self) -> dict[str, object]:
@@ -307,7 +364,10 @@ class NautilusE4CaptureStrategy(Strategy):
             true_network_receive_ts=None,
             payload=payload,
         )
-        self._session.ingest(source, admission_ts=max(tick.ts_init, self.clock.timestamp_ns()))
+        outcome = self._session.ingest(
+            source, admission_ts=max(tick.ts_init, self.clock.timestamp_ns())
+        )
+        self._observe_admission(outcome)
 
     def on_trade(self, tick: TradeTick) -> None:
         expression = self._expression_for(tick)
@@ -326,7 +386,10 @@ class NautilusE4CaptureStrategy(Strategy):
             true_network_receive_ts=None,
             payload={"price": str(tick.price), "size": str(tick.size)},
         )
-        self._session.ingest(source, admission_ts=max(tick.ts_init, self.clock.timestamp_ns()))
+        outcome = self._session.ingest(
+            source, admission_ts=max(tick.ts_init, self.clock.timestamp_ns())
+        )
+        self._observe_admission(outcome)
 
     def on_bar(self, bar: Bar) -> None:
         expression = self._expression_for(bar)
@@ -352,7 +415,10 @@ class NautilusE4CaptureStrategy(Strategy):
                 "finalized": True,
             },
         )
-        self._session.ingest(source, admission_ts=max(bar.ts_init, self.clock.timestamp_ns()))
+        outcome = self._session.ingest(
+            source, admission_ts=max(bar.ts_init, self.clock.timestamp_ns())
+        )
+        self._observe_admission(outcome)
         self._session.persist_durable_evidence(reason="FINALIZED_BAR_CALLBACK_ADMITTED")
 
     def on_socket_state(self, event: SocketStateChangedLike) -> None:

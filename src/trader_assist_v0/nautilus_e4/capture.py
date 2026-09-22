@@ -387,6 +387,104 @@ class CaptureSession:
         self._persist_if_configured(reason="ACTIONABLE_LIFECYCLE_OPENED")
         return state
 
+    def open_structural_package(
+        self,
+        *,
+        package_id: str,
+        opportunity_id: str,
+        thesis_id: str,
+        market_id: str,
+        expression_id: str,
+        created_ts: int,
+        active_valid_ts: int,
+    ) -> EvidenceState:
+        """Open source-bound lifecycle evidence from an admitted Formal Setup."""
+        if active_valid_ts <= created_ts:
+            raise ValueError("ACTIVE_VALID observed time must follow THESIS_CREATED")
+        if self.policy.tier(market_id) not in {CaptureTier.WATCH, CaptureTier.ACTIONABLE}:
+            raise ValueError("Structural lifecycle requires Watch/Actionable policy")
+        if package_id in self._packages or opportunity_id in self._lifecycle_ids:
+            raise ValueError("duplicate Opportunity/Thesis/package authority")
+        buffer = tuple(self._prebuffers[market_id])
+        cutoff = created_ts - PRE_DECISION_RETENTION_NS
+        available = tuple(
+            item for item in buffer if cutoff <= item.admission_ts <= created_ts
+        )
+        watch_started = self._watch_started.get(market_id)
+        bbo = self.ledger.bbo_validity(market_id=market_id, expression_id=expression_id)
+        complete = (
+            watch_started is not None
+            and watch_started[0] <= cutoff
+            and watch_started[1] == self.ledger.continuity_epoch
+            and bbo.valid
+            and bbo.continuity_epoch == self.ledger.continuity_epoch
+            and all(item.continuity_state is EvidenceState.COMPLETE for item in available)
+        )
+        state = (
+            EvidenceState.COMPLETE
+            if complete
+            else EvidenceState.PRE_DECISION_WINDOW_INCOMPLETE
+        )
+        if not complete:
+            self._missingness[state.value] += 1
+        self._queue_durable(available)
+        self._flush_if_full(force=True)
+        package = _PackageState(
+            market_id=market_id,
+            expression_id=expression_id,
+            opportunity_id=opportunity_id,
+            thesis_id=thesis_id,
+            predecision_state=state,
+            tail=TailStatus(package_id=package_id),
+        )
+        self._packages[package_id] = package
+        self._market_packages[market_id].add(package_id)
+        opportunity = self.record_lifecycle(
+            object_id=opportunity_id,
+            parent_id=None,
+            package_id=package_id,
+            market_id=market_id,
+            expression_id=expression_id,
+            kind=LifecycleKind.OPPORTUNITY,
+            status=LifecycleStatus.ACTIVE,
+            state_ts=created_ts,
+            reason_codes=("FORMAL_SETUP_ADMITTED",),
+            decision_state=None,
+            evidence_state=state,
+            _persist_checkpoint=False,
+        )
+        self.record_lifecycle(
+            object_id=thesis_id,
+            parent_id=opportunity.object_id,
+            package_id=package_id,
+            market_id=market_id,
+            expression_id=expression_id,
+            kind=LifecycleKind.THESIS,
+            status=LifecycleStatus.ACTIVE,
+            state_ts=created_ts,
+            reason_codes=("THESIS_CREATED",),
+            decision_state=None,
+            evidence_state=state,
+            _persist_checkpoint=False,
+        )
+        if state is EvidenceState.COMPLETE:
+            self.record_lifecycle(
+                object_id=thesis_id,
+                parent_id=opportunity.object_id,
+                package_id=package_id,
+                market_id=market_id,
+                expression_id=expression_id,
+                kind=LifecycleKind.THESIS,
+                status=LifecycleStatus.ACTIVE,
+                state_ts=active_valid_ts,
+                reason_codes=("ACTIVE_VALID",),
+                decision_state=None,
+                evidence_state=state,
+                _persist_checkpoint=False,
+            )
+        self._persist_if_configured(reason="STRUCTURAL_LIFECYCLE_OPENED")
+        return state
+
     def record_lifecycle(
         self,
         *,

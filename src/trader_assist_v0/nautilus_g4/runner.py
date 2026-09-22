@@ -8,7 +8,7 @@ from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Protocol, Self
+from typing import TYPE_CHECKING, Any, Literal, Protocol, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -44,6 +44,7 @@ if TYPE_CHECKING:
             instrument_id: object,
             order_side: object,
             quantity: object,
+            reduce_only: bool = False,
         ) -> _MechanicalOrder: ...
 
     class _NautilusStrategyConfig:
@@ -187,6 +188,35 @@ class ProviderFillEvidence(BaseModel):
     ts_event: int = Field(ge=0)
     ts_init: int = Field(ge=0)
     provider_event_type: str = Field(min_length=1)
+    position_id: str | None = None
+
+
+class ProviderOrderLegEvidence(BaseModel):
+    """One submitted provider-native leg, bound to its observed fill."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    client_order_id: str = Field(min_length=1)
+    side: Literal["BUY", "SELL"]
+    quantity: str = Field(min_length=1)
+    reduce_only: bool
+    fill: ProviderFillEvidence
+
+    @model_validator(mode="after")
+    def verify_fill_binding(self) -> Self:
+        if self.fill.client_order_id != self.client_order_id:
+            raise ValueError("provider leg fill does not bind its submitted order")
+        fill_quantity = _decimal_quantity(
+            self.fill.last_qty,
+            label="provider leg fill quantity",
+        )
+        submitted_quantity = _decimal_quantity(
+            self.quantity,
+            label="provider leg submitted quantity",
+        )
+        if fill_quantity != submitted_quantity:
+            raise ValueError("provider leg fill quantity does not equal submitted quantity")
+        return self
 
 
 class ProviderExecutionRecord(BaseModel):
@@ -244,6 +274,95 @@ class ProviderExecutionRecord(BaseModel):
     @classmethod
     def create(cls, **values: object) -> Self:
         digest = sha256_hex(_PROVIDER_EXECUTION_DOMAIN + canonical_json_bytes(values))
+        return cls.model_validate({**values, "evidence_hash": digest})
+
+
+_PROVIDER_ROUND_TRIP_DOMAIN = (
+    b"trader-assist-v0/nautilus-g4/provider-round-trip-execution/v1\0"
+)
+_PROVIDER_ROUND_TRIP_SEMANTIC_DOMAIN = (
+    b"trader-assist-v0/nautilus-g4/provider-round-trip-semantic/v1\0"
+)
+
+
+class ProviderRoundTripExecutionRecord(BaseModel):
+    """Immutable two-leg evidence minted by one rc5 NETTING BacktestNode."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["PROVIDER_ROUND_TRIP_EXECUTION_STATE_V1"] = (
+        "PROVIDER_ROUND_TRIP_EXECUTION_STATE_V1"
+    )
+    projection_hash: Sha256Hex
+    ordered_source_admission_hashes: tuple[Sha256Hex, ...] = Field(min_length=2)
+    order_intent_hash: Sha256Hex
+    entry_trigger_admission_hash: Sha256Hex
+    exit_trigger_admission_hash: Sha256Hex
+    entry_trigger: TriggerQuoteEvidence
+    exit_trigger: TriggerQuoteEvidence
+    provider_instrument_id: str
+    provider_instrument_type: str
+    entry: ProviderOrderLegEvidence
+    exit: ProviderOrderLegEvidence
+    terminal_provider_state: ProviderStateProjection
+    same_position_proven: Literal[True] = True
+    event_count: int = Field(ge=2)
+    quote_tick_count: int = Field(ge=2)
+    trade_tick_count: int = Field(ge=0)
+    bar_count: int = Field(ge=0)
+    submitted_order_count: Literal[2] = 2
+    fill_count: Literal[2] = 2
+    open_position_count: Literal[0] = 0
+    account_count: Literal[1] = 1
+    simulation_only: Literal[True] = True
+    private_api: Literal[False] = False
+    signing: Literal[False] = False
+    exchange_write: Literal[False] = False
+    live_venue_submitted: Literal[False] = False
+    real_t2_credit: Literal[False] = False
+    g4_promotion: Literal[False] = False
+    authoritative_provider_runtime: Literal[False] = False
+    evidence_hash: Sha256Hex
+
+    def identity_payload(self) -> dict[str, object]:
+        return self.model_dump(mode="json", exclude={"evidence_hash"})
+
+    @model_validator(mode="after")
+    def verify_identity(self) -> Self:
+        expected = sha256_hex(
+            _PROVIDER_ROUND_TRIP_DOMAIN
+            + canonical_json_bytes(self.identity_payload())
+        )
+        if not hmac.compare_digest(self.evidence_hash, expected):
+            raise ValueError("evidence_hash does not bind provider round-trip evidence")
+        if self.entry.reduce_only:
+            raise ValueError("entry order cannot be reduce_only")
+        if not self.exit.reduce_only:
+            raise ValueError("round-trip exit must be reduce_only")
+        if self.entry.side == self.exit.side:
+            raise ValueError("round-trip orders must have opposite sides")
+        entry_quantity = _decimal_quantity(self.entry.quantity, label="entry quantity")
+        exit_quantity = _decimal_quantity(self.exit.quantity, label="exit quantity")
+        if entry_quantity != exit_quantity:
+            raise ValueError("round-trip exit quantity must equal entry quantity")
+        entry_position = self.entry.fill.position_id
+        exit_position = self.exit.fill.position_id
+        if (entry_position is None) != (exit_position is None):
+            raise ValueError("round-trip provider position identity is incomplete")
+        if entry_position is not None and entry_position != exit_position:
+            raise ValueError("round-trip legs bind different provider positions")
+        state = self.terminal_provider_state
+        if (state.order_count, state.filled_order_count, state.position_count) != (2, 2, 0):
+            raise ValueError("round-trip terminal provider state is not exactly flat")
+        return self
+
+    @classmethod
+    def create(cls, **values: object) -> Self:
+        normalized = cast(
+            ProviderRoundTripExecutionRecord,
+            cls.model_construct(**cast(Any, values)),
+        ).identity_payload()
+        digest = sha256_hex(_PROVIDER_ROUND_TRIP_DOMAIN + canonical_json_bytes(normalized))
         return cls.model_validate({**values, "evidence_hash": digest})
 
 
@@ -318,6 +437,82 @@ def provider_execution_semantic_hash(record: ProviderExecutionRecord) -> Sha256H
     return sha256_hex(_PROVIDER_EXECUTION_SEMANTIC_DOMAIN + canonical_json_bytes(payload))
 
 
+def provider_round_trip_semantic_hash(
+    record: ProviderRoundTripExecutionRecord,
+) -> Sha256Hex:
+    """Hash the two provider-native legs without generated order identities."""
+    if type(record) is not ProviderRoundTripExecutionRecord:
+        raise TypeError("exact ProviderRoundTripExecutionRecord is required")
+    validated = ProviderRoundTripExecutionRecord.model_validate(
+        record.model_dump(mode="python")
+    )
+    payload = {
+        "schema_version": "PROVIDER_ROUND_TRIP_EXECUTION_SEMANTIC_V1",
+        "projection_hash": validated.projection_hash,
+        "ordered_source_admission_hashes": validated.ordered_source_admission_hashes,
+        "order_intent_hash": validated.order_intent_hash,
+        "entry_trigger_admission_hash": validated.entry_trigger_admission_hash,
+        "exit_trigger_admission_hash": validated.exit_trigger_admission_hash,
+        "entry_trigger": validated.entry_trigger.model_dump(mode="json"),
+        "exit_trigger": validated.exit_trigger.model_dump(mode="json"),
+        "provider_instrument_id": validated.provider_instrument_id,
+        "provider_instrument_type": validated.provider_instrument_type,
+        "entry": {
+            "side": validated.entry.side,
+            "quantity": validated.entry.quantity,
+            "reduce_only": validated.entry.reduce_only,
+            "fill": validated.entry.fill.model_dump(
+                mode="json", exclude={"client_order_id", "venue_order_id", "trade_id", "event_id"}
+            ),
+        },
+        "exit": {
+            "side": validated.exit.side,
+            "quantity": validated.exit.quantity,
+            "reduce_only": validated.exit.reduce_only,
+            "fill": validated.exit.fill.model_dump(
+                mode="json", exclude={"client_order_id", "venue_order_id", "trade_id", "event_id"}
+            ),
+        },
+        "terminal_provider_state_source_hash": sha256_hex(
+            _PROVIDER_STATE_SEMANTIC_DOMAIN
+            + canonical_json_bytes(validated.terminal_provider_state.model_dump(mode="json"))
+        ),
+        "same_position_proven": validated.same_position_proven,
+        "event_count": validated.event_count,
+        "quote_tick_count": validated.quote_tick_count,
+        "trade_tick_count": validated.trade_tick_count,
+        "bar_count": validated.bar_count,
+        "submitted_order_count": validated.submitted_order_count,
+        "fill_count": validated.fill_count,
+        "open_position_count": validated.open_position_count,
+        "account_count": validated.account_count,
+        "simulation_only": validated.simulation_only,
+        "private_api": validated.private_api,
+        "signing": validated.signing,
+        "exchange_write": validated.exchange_write,
+        "live_venue_submitted": validated.live_venue_submitted,
+        "real_t2_credit": validated.real_t2_credit,
+        "g4_promotion": validated.g4_promotion,
+        "authoritative_provider_runtime": validated.authoritative_provider_runtime,
+    }
+    return sha256_hex(_PROVIDER_ROUND_TRIP_SEMANTIC_DOMAIN + canonical_json_bytes(payload))
+
+
+def provider_round_trip_state_semantic_source_hash(
+    record: ProviderRoundTripExecutionRecord,
+) -> Sha256Hex:
+    """Hash the provider-owned terminal flat state of an exact round trip."""
+    if type(record) is not ProviderRoundTripExecutionRecord:
+        raise TypeError("exact ProviderRoundTripExecutionRecord is required")
+    validated = ProviderRoundTripExecutionRecord.model_validate(
+        record.model_dump(mode="python")
+    )
+    return sha256_hex(
+        _PROVIDER_STATE_SEMANTIC_DOMAIN
+        + canonical_json_bytes(validated.terminal_provider_state.model_dump(mode="json"))
+    )
+
+
 class ProviderExecutionEvidence:
     """Capability minted only from a completed, genuine rc5 BacktestNode run."""
 
@@ -335,6 +530,33 @@ class ProviderExecutionEvidence:
 
     @property
     def record(self) -> ProviderExecutionRecord:
+        return self._record
+
+    @property
+    def authoritative_provider_runtime(self) -> Literal[True]:
+        return True
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._record, name)
+
+
+class ProviderRoundTripExecutionEvidence:
+    """Non-serializable capability minted only after a flat native round trip."""
+
+    __slots__ = ("_node", "_record")
+    _node: object
+    _record: ProviderRoundTripExecutionRecord
+
+    def __new__(cls, *_args: object, **_kwargs: object) -> Self:
+        raise TypeError(
+            "ProviderRoundTripExecutionEvidence is minted only from one completed BacktestNode run"
+        )
+
+    def __setattr__(self, _name: str, _value: object) -> None:
+        raise TypeError("ProviderRoundTripExecutionEvidence is immutable")
+
+    @property
+    def record(self) -> ProviderRoundTripExecutionRecord:
         return self._record
 
     @property
@@ -420,6 +642,7 @@ class _ExecutionLedger:
         }
         if any(value is None for value in values.values()):
             raise RuntimeError("provider OrderFilled is missing required public fields")
+        position_id = getattr(event, "position_id", None)
         fill = ProviderFillEvidence(
             client_order_id=str(values["client_order_id"]),
             venue_order_id=str(values["venue_order_id"]),
@@ -430,6 +653,7 @@ class _ExecutionLedger:
             ts_event=int(str(values["ts_event"])),
             ts_init=int(str(values["ts_init"])),
             provider_event_type=f"{type(event).__module__}.{type(event).__qualname__}",
+            position_id=None if position_id is None else str(position_id),
         )
         self.fills.append(fill)
         if len(self.fills) != 1:
@@ -579,6 +803,180 @@ class ProviderExecutionStrategy(_NautilusStrategy):
         _EXECUTION_LEDGERS[self._ledger_key].record_fill(
             event,
             provider_fill_type=_NautilusOrderFilled,
+        )
+
+
+@dataclass(slots=True)
+class _RoundTripExecutionLedger:
+    entry_trigger_identity: dict[str, object]
+    exit_trigger_identity: dict[str, object]
+    entry_submission: tuple[str, str] | None = None
+    exit_submission: tuple[str, str] | None = None
+    entry_fill: ProviderFillEvidence | None = None
+    exit_fill: ProviderFillEvidence | None = None
+
+    def submit_entry(self, *, client_order_id: object, quantity: object) -> None:
+        if self.entry_submission is not None or self.exit_submission is not None:
+            raise RuntimeError("round-trip entry submission is not first and unique")
+        self.entry_submission = (str(client_order_id), str(quantity))
+
+    def submit_exit(self, *, client_order_id: object, quantity: object) -> None:
+        if (
+            self.entry_fill is None
+            or self.entry_submission is None
+            or self.exit_submission is not None
+        ):
+            raise RuntimeError("round-trip exit requires exactly one entry fill")
+        self.exit_submission = (str(client_order_id), str(quantity))
+        entry_quantity = _decimal_quantity(
+            self.entry_submission[1],
+            label="entry submission quantity",
+        )
+        exit_quantity = _decimal_quantity(
+            self.exit_submission[1],
+            label="exit submission quantity",
+        )
+        if entry_quantity != exit_quantity:
+            raise RuntimeError("round-trip exit quantity differs from entry")
+
+    def fill(self, event: object, *, provider_fill_type: type[object]) -> None:
+        if not isinstance(event, provider_fill_type):
+            raise TypeError("round-trip fill is not provider-native OrderFilled")
+        values = {
+            "client_order_id": getattr(event, "client_order_id", None),
+            "venue_order_id": getattr(event, "venue_order_id", None),
+            "trade_id": getattr(event, "trade_id", None),
+            "event_id": getattr(event, "event_id", None),
+            "last_qty": getattr(event, "last_qty", None),
+            "last_px": getattr(event, "last_px", None),
+            "ts_event": getattr(event, "ts_event", None),
+            "ts_init": getattr(event, "ts_init", None),
+        }
+        if any(value is None for value in values.values()):
+            raise RuntimeError("round-trip fill lacks required provider fields")
+        position_id = getattr(event, "position_id", None)
+        fill = ProviderFillEvidence(
+            **{
+                key: str(value)
+                for key, value in values.items()
+                if key not in {"ts_event", "ts_init"}
+            },
+            ts_event=int(str(values["ts_event"])),
+            ts_init=int(str(values["ts_init"])),
+            provider_event_type=f"{type(event).__module__}.{type(event).__qualname__}",
+            position_id=None if position_id is None else str(position_id),
+        )
+        if self.entry_submission and fill.client_order_id == self.entry_submission[0]:
+            if self.entry_fill is not None:
+                raise RuntimeError("round-trip entry produced multiple fills")
+            self.entry_fill = fill
+            return
+        if self.exit_submission and fill.client_order_id == self.exit_submission[0]:
+            if self.exit_fill is not None:
+                raise RuntimeError("round-trip exit produced multiple fills")
+            self.exit_fill = fill
+            return
+        raise RuntimeError("round-trip fill does not bind either submitted order")
+
+
+_ROUND_TRIP_EXECUTION_LEDGERS: dict[str, _RoundTripExecutionLedger] = {}
+
+
+class ProviderRoundTripExecutionStrategyConfig(_NautilusStrategyConfig):
+    """Only provider execution wiring for the frozen two-leg state transition."""
+
+    _CUSTOM_FIELDS = (
+        "ledger_key",
+        "instrument_id",
+        "entry_side",
+        "technical_quantity",
+        *(f"entry_trigger_{name}" for name in _TRIGGER_FIELDS[1:]),
+        *(f"exit_trigger_{name}" for name in _TRIGGER_FIELDS[1:]),
+    )
+    ledger_key: object
+    instrument_id: object
+    entry_side: object
+    technical_quantity: object
+
+    def __new__(cls, *args: object, **kwargs: object) -> Self:
+        for key in cls._CUSTOM_FIELDS:
+            kwargs.pop(key, None)
+        return super().__new__(cls, *args, **kwargs)
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__()
+        for key in self._CUSTOM_FIELDS:
+            value = kwargs.get(key)
+            if value is None:
+                raise ValueError(f"round-trip strategy config lacks {key}")
+            setattr(self, key, value)
+
+
+class ProviderRoundTripExecutionStrategy(_NautilusStrategy):
+    """One-node explicit entry -> reduce-only exit provider hook."""
+
+    def __init__(self, config: ProviderRoundTripExecutionStrategyConfig) -> None:
+        super().__init__(config)
+        from nautilus_trader.model import InstrumentId
+
+        self._ledger_key = str(config.ledger_key)
+        self._instrument_id = InstrumentId.from_str(str(config.instrument_id))
+        self._entry_side = str(config.entry_side)
+        self._quantity = _decimal_quantity(config.technical_quantity, label="technical quantity")
+        self._entry_trigger = {
+            "instrument_id": str(config.instrument_id),
+            **{name: getattr(config, f"entry_trigger_{name}") for name in _TRIGGER_FIELDS[1:]},
+        }
+        self._exit_trigger = {
+            "instrument_id": str(config.instrument_id),
+            **{name: getattr(config, f"exit_trigger_{name}") for name in _TRIGGER_FIELDS[1:]},
+        }
+        if self._entry_trigger == self._exit_trigger:
+            raise ValueError("round-trip entry and exit triggers must be distinct")
+        if self._ledger_key not in _ROUND_TRIP_EXECUTION_LEDGERS:
+            raise RuntimeError("round-trip strategy has no exact execution ledger")
+
+    def on_start(self) -> None:
+        self.subscribe_quotes(self._instrument_id)
+
+    def _submit(self, *, side: str, reduce_only: bool) -> None:
+        from nautilus_trader.model import OrderSide
+
+        instrument = self.cache.instrument(self._instrument_id)
+        if instrument is None:
+            raise RuntimeError("provider instrument is absent from Strategy cache")
+        quantity = instrument.make_qty(float(self._quantity))
+        if _decimal_quantity(quantity, label="provider quantity") != self._quantity:
+            raise RuntimeError("provider make_qty changed technical quantity semantics")
+        order = self.order_factory.market(
+            instrument_id=self._instrument_id,
+            order_side=OrderSide.BUY if side == "BUY" else OrderSide.SELL,
+            quantity=quantity,
+            reduce_only=reduce_only,
+        )
+        ledger = _ROUND_TRIP_EXECUTION_LEDGERS[self._ledger_key]
+        if reduce_only:
+            ledger.submit_exit(client_order_id=order.client_order_id, quantity=quantity)
+        else:
+            ledger.submit_entry(client_order_id=order.client_order_id, quantity=quantity)
+        self.submit_order(order)
+
+    def on_quote(self, tick: object) -> None:
+        identity = _quote_identity(tick)
+        ledger = _ROUND_TRIP_EXECUTION_LEDGERS[self._ledger_key]
+        if identity == self._entry_trigger:
+            if ledger.entry_submission is not None:
+                raise RuntimeError("round-trip entry trigger observed more than once")
+            self._submit(side=self._entry_side, reduce_only=False)
+        elif identity == self._exit_trigger:
+            if ledger.exit_submission is not None:
+                raise RuntimeError("round-trip exit trigger observed more than once")
+            opposite = "SELL" if self._entry_side == "BUY" else "BUY"
+            self._submit(side=opposite, reduce_only=True)
+
+    def on_order_filled(self, event: object) -> None:
+        _ROUND_TRIP_EXECUTION_LEDGERS[self._ledger_key].fill(
+            event, provider_fill_type=_NautilusOrderFilled
         )
 
 
@@ -1034,6 +1432,289 @@ def execute_provider_native_state(
     finally:
         node.dispose()
         _EXECUTION_LEDGERS.pop(ledger_key, None)
+    return evidence
+
+
+def _assert_flat_round_trip_state(
+    *,
+    cache: object,
+    portfolio: object,
+    venue: object,
+    entry_order_id: str,
+    exit_order_id: str,
+    instrument_id: str,
+    technical_quantity: Decimal,
+) -> ProviderStateProjection:
+    state = project_provider_native_state(cache, portfolio, venue=venue)
+    if (
+        state.order_count,
+        state.filled_order_count,
+        state.position_count,
+        state.account_count,
+    ) != (2, 2, 0, 1):
+        raise RuntimeError("round-trip provider state is not exactly two fills and flat")
+    orders_method = getattr(cache, "orders", None)
+    positions_method = getattr(cache, "positions", None)
+    if not callable(orders_method) or not callable(positions_method):
+        raise RuntimeError("round-trip provider Cache state is unavailable")
+    orders = tuple(_as_collection(orders_method(), name="orders"))
+    positions = tuple(_as_collection(positions_method(), name="positions"))
+    if positions:
+        raise RuntimeError("round-trip has residual open provider position")
+    by_id = {str(getattr(order, "client_order_id", "")): order for order in orders}
+    if set(by_id) != {entry_order_id, exit_order_id}:
+        raise RuntimeError("round-trip Cache orders do not equal the two submitted orders")
+    for order in by_id.values():
+        if str(_optional_attr(order, "status") or "") != "FILLED":
+            raise RuntimeError("round-trip provider order is not FILLED")
+        if _decimal_quantity(
+            _optional_attr(order, "filled_qty"), label="round-trip filled quantity"
+        ) != technical_quantity:
+            raise RuntimeError("round-trip provider fill quantity drifted")
+        if str(getattr(order, "instrument_id", "")) != instrument_id:
+            raise RuntimeError("round-trip provider order has wrong instrument")
+    return state
+
+
+def execute_provider_native_round_trip_state(
+    *,
+    projection: NativeReplayProjection,
+    intent: HypotheticalOrderIntent,
+    entry_trigger_admission_hash: str,
+    exit_trigger_admission_hash: str,
+    provider_instrument: object,
+    catalog_path: str | Path,
+) -> ProviderRoundTripExecutionEvidence:
+    """Run one provider-native NETTING entry/exit state transition.
+
+    This intentionally does not compose ``execute_provider_native_state``.  One
+    BacktestNode owns both orders and the only position from entry through its
+    verified flat terminal state.
+    """
+    from nautilus_trader.backtest import BacktestNode
+    from nautilus_trader.config import (
+        BacktestDataConfig,
+        BacktestEngineConfig,
+        BacktestRunConfig,
+        BacktestVenueConfig,
+    )
+    from nautilus_trader.model import (
+        AccountType,
+        BookType,
+        CryptoPerpetual,
+        Currency,
+        OmsType,
+        TraderId,
+    )
+    from nautilus_trader.trading import ImportableStrategyConfig
+
+    assert_backtest_node_catalog_surface()
+    _, entry_trigger, entry_side, quantity_text = _validate_execution_inputs(
+        projection=projection,
+        intent=intent,
+        trigger_admission_hash=entry_trigger_admission_hash,
+        provider_instrument=provider_instrument,
+    )
+    _, exit_trigger, _, exit_quantity_text = _validate_execution_inputs(
+        projection=projection,
+        intent=intent,
+        trigger_admission_hash=exit_trigger_admission_hash,
+        provider_instrument=provider_instrument,
+    )
+    identity = projection.identity
+    entry_index = identity.ordered_source_admission_hashes.index(
+        entry_trigger_admission_hash
+    )
+    exit_index = identity.ordered_source_admission_hashes.index(
+        exit_trigger_admission_hash
+    )
+    if entry_index >= exit_index:
+        raise ValueError("round-trip exit trigger must be causally after entry trigger")
+    if quantity_text != exit_quantity_text:
+        raise RuntimeError("round-trip provider quantity changed between legs")
+    catalog_root = Path(catalog_path)
+    _persist_and_reload_projection(
+        catalog_path=catalog_root,
+        provider_instrument=provider_instrument,
+        projection=projection,
+    )
+    if not isinstance(provider_instrument, CryptoPerpetual):
+        raise TypeError("provider instrument must be provider-native CryptoPerpetual")
+    provider_instrument_id = provider_instrument.id
+    timestamps = tuple(int(str(_required_attr(event, "ts_init"))) for event in projection.events)
+    catalog_path_text = str(catalog_root)
+    data: list[BacktestDataConfig] = []
+    for data_type, count in (
+        ("QuoteTick", identity.quote_tick_count),
+        ("TradeTick", identity.trade_tick_count),
+        ("Bar", identity.bar_count),
+    ):
+        if count:
+            data.append(
+                BacktestDataConfig(
+                    data_type=data_type,
+                    catalog_path=catalog_path_text,
+                    instrument_id=provider_instrument_id,
+                    start_time=min(timestamps),
+                    end_time=max(timestamps) + 1,
+                )
+            )
+    quote_currency = _optional_attr(provider_instrument, "quote_currency")
+    venue = _optional_attr(provider_instrument_id, "venue")
+    if quote_currency is None or venue is None:
+        raise ValueError("provider CryptoPerpetual lacks public venue/currency identity")
+    venue_config = BacktestVenueConfig(
+        name=str(venue),
+        oms_type=OmsType.NETTING,
+        account_type=AccountType.MARGIN,
+        book_type=BookType.L1_MBP,
+        base_currency=Currency.from_str(str(quote_currency)),
+        starting_balances=[f"1_000_000 {quote_currency}"],
+    )
+    config = BacktestRunConfig(
+        venues=[venue_config],
+        data=data,
+        engine=BacktestEngineConfig(
+            trader_id=TraderId(f"R2RT-{identity.projection_hash[:14]}"),
+            bypass_logging=True,
+            run_analysis=False,
+        ),
+        dispose_on_completion=False,
+    )
+    ledger_key = sha256_hex(
+        canonical_json_bytes(
+            {
+                "projection_hash": identity.projection_hash,
+                "order_intent_hash": intent.order_intent_hash,
+                "entry_trigger_admission_hash": entry_trigger_admission_hash,
+                "exit_trigger_admission_hash": exit_trigger_admission_hash,
+            }
+        )
+    )
+    if ledger_key in _ROUND_TRIP_EXECUTION_LEDGERS:
+        raise RuntimeError("round-trip provider execution identity is already active")
+    entry_config = entry_trigger.model_dump(
+        mode="python", exclude={"native_event_hash", "instrument_id"}
+    )
+    exit_config = exit_trigger.model_dump(
+        mode="python", exclude={"native_event_hash", "instrument_id"}
+    )
+    strategy_config = ImportableStrategyConfig(
+        strategy_path=(
+            "trader_assist_v0.nautilus_g4.runner:ProviderRoundTripExecutionStrategy"
+        ),
+        config_path=(
+            "trader_assist_v0.nautilus_g4.runner:ProviderRoundTripExecutionStrategyConfig"
+        ),
+        config={
+            "ledger_key": ledger_key,
+            "instrument_id": identity.instrument_id,
+            "entry_side": entry_side,
+            "technical_quantity": quantity_text,
+            **{f"entry_trigger_{name}": value for name, value in entry_config.items()},
+            **{f"exit_trigger_{name}": value for name, value in exit_config.items()},
+        },
+    )
+    _ROUND_TRIP_EXECUTION_LEDGERS[ledger_key] = _RoundTripExecutionLedger(
+        entry_trigger_identity=_quote_identity(projection.events[entry_index]),
+        exit_trigger_identity=_quote_identity(projection.events[exit_index]),
+    )
+    node = BacktestNode(configs=[config])
+    try:
+        node.build()
+        node.add_strategy_from_config(config.id, strategy_config)
+        node.run()
+        ledger = _ROUND_TRIP_EXECUTION_LEDGERS[ledger_key]
+        if (
+            ledger.entry_submission is None
+            or ledger.exit_submission is None
+            or ledger.entry_fill is None
+            or ledger.exit_fill is None
+        ):
+            raise RuntimeError("round-trip did not produce two submitted full-fill legs")
+        entry_order_id, entry_quantity = ledger.entry_submission
+        exit_order_id, exit_quantity = ledger.exit_submission
+        quantity = intent.technical_quantity.quantity
+        if (
+            _decimal_quantity(
+                entry_quantity, label="entry submission quantity"
+            ) != quantity
+            or _decimal_quantity(
+                exit_quantity, label="exit submission quantity"
+            ) != quantity
+            or _decimal_quantity(
+                ledger.entry_fill.last_qty, label="entry fill quantity"
+            ) != quantity
+            or _decimal_quantity(
+                ledger.exit_fill.last_qty, label="exit fill quantity"
+            ) != quantity
+        ):
+            raise RuntimeError("round-trip quantity does not equal canonical technical quantity")
+        cache = node.get_engine_cache(config.id)
+        portfolio = node.get_engine_portfolio(config.id)
+        if cache is None or portfolio is None:
+            raise RuntimeError("BacktestNode did not retain public Cache/Portfolio state")
+        terminal_state = _assert_flat_round_trip_state(
+            cache=cache,
+            portfolio=portfolio,
+            venue=venue,
+            entry_order_id=entry_order_id,
+            exit_order_id=exit_order_id,
+            instrument_id=identity.instrument_id,
+            technical_quantity=quantity,
+        )
+        record = ProviderRoundTripExecutionRecord.create(
+            projection_hash=identity.projection_hash,
+            ordered_source_admission_hashes=identity.ordered_source_admission_hashes,
+            order_intent_hash=intent.order_intent_hash,
+            entry_trigger_admission_hash=entry_trigger_admission_hash,
+            exit_trigger_admission_hash=exit_trigger_admission_hash,
+            entry_trigger=entry_trigger.model_dump(mode="json"),
+            exit_trigger=exit_trigger.model_dump(mode="json"),
+            provider_instrument_id=identity.instrument_id,
+            provider_instrument_type=(
+                f"{type(provider_instrument).__module__}."
+                f"{type(provider_instrument).__qualname__}"
+            ),
+            entry=ProviderOrderLegEvidence(
+                client_order_id=entry_order_id,
+                side=entry_side,
+                quantity=entry_quantity,
+                reduce_only=False,
+                fill=ledger.entry_fill,
+            ).model_dump(mode="json"),
+            exit=ProviderOrderLegEvidence(
+                client_order_id=exit_order_id,
+                side="SELL" if entry_side == "BUY" else "BUY",
+                quantity=exit_quantity,
+                reduce_only=True,
+                fill=ledger.exit_fill,
+            ).model_dump(mode="json"),
+            terminal_provider_state=terminal_state.model_dump(mode="json"),
+            same_position_proven=True,
+            event_count=identity.event_count,
+            quote_tick_count=identity.quote_tick_count,
+            trade_tick_count=identity.trade_tick_count,
+            bar_count=identity.bar_count,
+            submitted_order_count=2,
+            fill_count=2,
+            open_position_count=0,
+            account_count=terminal_state.account_count,
+            simulation_only=True,
+            private_api=False,
+            signing=False,
+            exchange_write=False,
+            live_venue_submitted=False,
+            real_t2_credit=False,
+            g4_promotion=False,
+            authoritative_provider_runtime=False,
+        )
+        evidence = object.__new__(ProviderRoundTripExecutionEvidence)
+        object.__setattr__(evidence, "_record", record)
+        object.__setattr__(evidence, "_node", node)
+    finally:
+        node.dispose()
+        _ROUND_TRIP_EXECUTION_LEDGERS.pop(ledger_key, None)
     return evidence
 
 

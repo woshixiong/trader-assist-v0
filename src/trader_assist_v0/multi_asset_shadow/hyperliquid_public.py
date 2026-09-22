@@ -37,12 +37,32 @@ if TYPE_CHECKING:
 
 INFO_URL = "https://api.hyperliquid.xyz/info"
 _ALLOWED_TYPES = frozenset(
-    {"perpDexs", "allPerpMetas", "meta", "metaAndAssetCtxs", "candleSnapshot", "l2Book"}
+    {
+        "perpDexs",
+        "allPerpMetas",
+        "meta",
+        "metaAndAssetCtxs",
+        "candleSnapshot",
+        "l2Book",
+        "fundingHistory",
+    }
 )
 
 
 class PublicDataError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class PublicApiResponse:
+    """Exact public HTTP response bytes paired with the parsed provider value."""
+
+    parsed: object
+    raw_bytes: bytes
+
+    @property
+    def raw_sha256(self) -> str:
+        return sha256_hex(self.raw_bytes)
 
 
 _MAX_PUBLIC_EVIDENCE_AGE_MS = 10_000
@@ -92,7 +112,8 @@ class HyperliquidPublicClient:
     post: HttpPost = _default_post
     timeout_seconds: float = 15.0
 
-    def request(self, payload: Mapping[str, object]) -> object:
+    def request_with_raw(self, payload: Mapping[str, object]) -> PublicApiResponse:
+        """Return exact transport bytes without reserializing provider evidence."""
         request_type = payload.get("type")
         if request_type not in _ALLOWED_TYPES or not self._is_supported_shape(payload):
             raise PublicDataError("public request is outside the approved market-data surface")
@@ -102,9 +123,13 @@ class HyperliquidPublicClient:
             self.timeout_seconds,
         )
         try:
-            return json.loads(raw)
+            parsed = json.loads(raw)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise PublicDataError("official public API returned invalid JSON") from exc
+        return PublicApiResponse(parsed=parsed, raw_bytes=raw)
+
+    def request(self, payload: Mapping[str, object]) -> object:
+        return self.request_with_raw(payload).parsed
 
     @staticmethod
     def _is_supported_shape(payload: Mapping[str, object]) -> bool:
@@ -127,8 +152,29 @@ class HyperliquidPublicClient:
                 and isinstance(request["endTime"], int)
             )
         if request_type == "l2Book":
-            return set(payload) <= {"type", "coin", "nSigFigs", "mantissa"} and isinstance(
-                payload.get("coin"), str
+            return set(payload) <= {
+                "type", "coin", "nSigFigs", "mantissa"
+            } and isinstance(payload.get("coin"), str)
+        if request_type == "fundingHistory":
+            if set(payload) != {
+                "type",
+                "coin",
+                "startTime",
+                "endTime",
+            }:
+                return False
+            coin = payload["coin"]
+            start_time = payload["startTime"]
+            end_time = payload["endTime"]
+            return (
+                isinstance(coin, str)
+                and bool(coin)
+                and isinstance(start_time, int)
+                and not isinstance(start_time, bool)
+                and isinstance(end_time, int)
+                and not isinstance(end_time, bool)
+                and start_time >= 0
+                and end_time >= start_time
             )
         return False
 
@@ -143,11 +189,14 @@ class HyperliquidPublicClient:
             payload["dex"] = dex
         return self.request(payload)
 
-    def metadata_and_context(self, dex: str) -> object:
+    def metadata_and_context_with_raw(self, dex: str) -> PublicApiResponse:
         payload: dict[str, object] = {"type": "metaAndAssetCtxs"}
         if dex != "":
             payload["dex"] = dex
-        return self.request(payload)
+        return self.request_with_raw(payload)
+
+    def metadata_and_context(self, dex: str) -> object:
+        return self.metadata_and_context_with_raw(dex).parsed
 
     def all_perp_metas(self) -> object:
         return self.request({"type": "allPerpMetas"})
@@ -167,6 +216,27 @@ class HyperliquidPublicClient:
 
     def l2_book(self, *, coin: str) -> object:
         return self.request({"type": "l2Book", "coin": coin})
+
+    def funding_history_with_raw(
+        self, *, coin: str, start_ms: int, end_ms: int
+    ) -> PublicApiResponse:
+        return self.request_with_raw(
+            {
+                "type": "fundingHistory",
+                "coin": coin,
+                "startTime": start_ms,
+                "endTime": end_ms,
+            }
+        )
+
+    def funding_history(
+        self, *, coin: str, start_ms: int, end_ms: int
+    ) -> object:
+        return self.funding_history_with_raw(
+            coin=coin,
+            start_ms=start_ms,
+            end_ms=end_ms,
+        ).parsed
 
     def liquidity_assessment(
         self, *, market_id: str, coin: str, side: Side, response: object

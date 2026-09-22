@@ -483,9 +483,26 @@ def rederive_rooted_t2(
         project_native_replay,
     )
     from trader_assist_v0.nautilus_g4.runner import (
+        ProviderExecutionEvidence,
+        ProviderExecutionRecord,
+        ProviderRoundTripExecutionEvidence,
+        ProviderRoundTripExecutionRecord,
+        execute_provider_native_round_trip_state,
         execute_provider_native_state,
         provider_execution_semantic_hash,
+        provider_round_trip_semantic_hash,
+        provider_round_trip_state_semantic_source_hash,
         provider_state_semantic_source_hash,
+    )
+    from trader_assist_v0.nautilus_g4.t2_acquisition import (
+        REAL_T2_TASK_ID,
+        CausalBboBinding,
+        FormalSetupObservation,
+        StructuralSourceEvidence,
+        raw_response_sha256,
+        replay_frozen_structural_source,
+        select_first_exit_trigger,
+        validate_task5d_validation_artifacts,
     )
     from trader_assist_v0.vnext_g4.contracts import (
         TASK5D_PHASE0C_PROSPECTIVE_ECONOMIC_CANDIDATE_HASH,
@@ -502,10 +519,26 @@ def rederive_rooted_t2(
     from trader_assist_v0.vnext_g4.evaluator import evaluate_participation
     from trader_assist_v0.vnext_g4.reporting import CostProvenance, ThesisOutcome
 
+    strict_real_t2 = root.task_id == REAL_T2_TASK_ID
+    execution: ProviderExecutionEvidence | ProviderRoundTripExecutionEvidence
+    if strict_real_t2:
+        prospective_artifact = _one(
+            root, T2SourceRole.PROSPECTIVE_ECONOMIC_CANDIDATE_IDENTITY
+        )
     structural_artifact = _one(root, T2SourceRole.STRUCTURAL_SOURCE)
-    structural = cast(StrategyDecision, _parse(structural_artifact, StrategyDecision))
-    prospective_artifact = _one(
-        root, T2SourceRole.PROSPECTIVE_ECONOMIC_CANDIDATE_IDENTITY
+    if not strict_real_t2:
+        prospective_artifact = _one(
+            root, T2SourceRole.PROSPECTIVE_ECONOMIC_CANDIDATE_IDENTITY
+        )
+    structural_claim = (
+        cast(StructuralSourceEvidence, _parse(structural_artifact, StructuralSourceEvidence))
+        if strict_real_t2
+        else None
+    )
+    structural = (
+        None
+        if strict_real_t2
+        else cast(StrategyDecision, _parse(structural_artifact, StrategyDecision))
     )
     prospective = cast(
         ProspectiveEconomicCandidateIdentity,
@@ -544,7 +577,8 @@ def rederive_rooted_t2(
         raise ValueError(
             "selected candidate is not the exact source-bound prospective materialization"
         )
-    g4 = cast(G4RunManifest, _parse(_one(root, T2SourceRole.G4_RUN_MANIFEST), G4RunManifest))
+    g4_artifact = _one(root, T2SourceRole.G4_RUN_MANIFEST)
+    g4 = cast(G4RunManifest, _parse(g4_artifact, G4RunManifest))
     if (
         not hmac.compare_digest(e4_manifest.pit_snapshot_hash, pit_snapshot.snapshot_hash)
         or not hmac.compare_digest(e4_manifest.pit_snapshot_id, pit_snapshot.snapshot_id)
@@ -564,24 +598,132 @@ def rederive_rooted_t2(
         raise ValueError("rooted selected candidate is not a member of the rooted G4 run")
     if candidate.structural_component_manifest_hash != structural_artifact.artifact_hash:
         raise ValueError("selected candidate does not bind the exact structural source bytes")
-    if (
-        structural.market_id != lineage.market_id
-        or structural.market_event_id != lineage.formal_setup_id
-    ):
-        raise ValueError("structural decision and lineage do not form one causal unit")
+    if not strict_real_t2:
+        assert structural is not None
+        if (
+            structural.market_id != lineage.market_id
+            or structural.market_event_id != lineage.formal_setup_id
+        ):
+            raise ValueError("structural decision and lineage do not form one causal unit")
 
-    expression = cast(
-        MarketExpression, _parse(_one(root, T2SourceRole.MARKET_EXPRESSION), MarketExpression)
+    expression_artifacts = (
+        _many(root, T2SourceRole.MARKET_EXPRESSION)
+        if strict_real_t2
+        else (_one(root, T2SourceRole.MARKET_EXPRESSION),)
+    )
+    expressions = tuple(
+        cast(MarketExpression, _parse(item, MarketExpression))
+        for item in expression_artifacts
+    )
+    expression = next(
+        (
+            item for item in expressions
+            if item.market_id == lineage.market_id
+            and item.instrument_id == lineage.instrument_id
+        ),
+        None,
+    )
+    if expression is None:
+        raise ValueError("rooted MarketExpression for focal lineage is absent")
+    admission_artifacts = _many(root, T2SourceRole.E4_ADMISSION)
+    admission_pairs = tuple(
+        (item, cast(AdmittedEvent, _parse(item, AdmittedEvent)))
+        for item in admission_artifacts
     )
     admissions = tuple(
         sorted(
-            (
-                cast(AdmittedEvent, _parse(item, AdmittedEvent))
-                for item in _many(root, T2SourceRole.E4_ADMISSION)
+            (event for _, event in admission_pairs),
+            key=lambda item: (
+                item.admission_ordinal,
+                item.admission_ts,
+                item.admission_hash,
             ),
-            key=lambda item: (item.admission_ordinal, item.admission_ts, item.admission_hash),
         )
     )
+    admission_artifact_by_hash = {
+        event.admission_hash: artifact
+        for artifact, event in admission_pairs
+    }
+    if len(admission_artifact_by_hash) != len(admission_pairs):
+        raise ValueError(
+            "rooted E4 admission artifacts contain duplicate identities"
+        )
+    registry_artifacts = (
+        _many(root, T2SourceRole.REGISTRY_MARKET)
+        if strict_real_t2
+        else (_one(root, T2SourceRole.REGISTRY_MARKET),)
+    )
+    registries = tuple(
+        cast(RegistryMarket, _parse(item, RegistryMarket)) for item in registry_artifacts
+    )
+    registry_by_market = {item.identity.market_id: item for item in registries}
+    if len(registry_by_market) != len(registries):
+        raise ValueError("rooted RegistryMarket identities are duplicated")
+    metadata_artifacts = (
+        _many(root, T2SourceRole.INSTRUMENT_METADATA)
+        if strict_real_t2
+        else (_one(root, T2SourceRole.INSTRUMENT_METADATA),)
+    )
+    metadata_docs = tuple(
+        json.loads(item.exact_bytes()) for item in metadata_artifacts
+    )
+    metadata_by_market: dict[str, dict[str, object]] = {}
+    metadata_artifact_by_market: dict[str, RoleBoundSourceArtifact] = {}
+    if strict_real_t2:
+        metadata_by_market = {
+            str(item.get("market_id")): item
+            for item in metadata_docs
+            if isinstance(item, dict)
+            and isinstance(item.get("market_id"), str)
+        }
+        metadata_artifact_by_market = {
+            str(doc.get("market_id")): artifact
+            for artifact, doc in zip(
+                metadata_artifacts, metadata_docs, strict=True
+            )
+            if isinstance(doc, dict)
+            and isinstance(doc.get("market_id"), str)
+        }
+        if len(metadata_by_market) != len(metadata_docs):
+            raise ValueError(
+                "rooted instrument metadata identities are duplicated/invalid"
+            )
+        if len(expressions) != 20 or len(registries) != 20 or len(metadata_docs) != 20:
+            raise ValueError("Task5D root must retain exact 20-market source boundary")
+        provider_ticks: dict[str, Decimal] = {}
+        for market_id, registry_item in registry_by_market.items():
+            doc = metadata_by_market.get(market_id)
+            if doc is None or doc.get("registry_metadata_hash") != registry_item.metadata_hash:
+                raise ValueError("instrument metadata does not bind RegistryMarket")
+            try:
+                tick = Decimal(str(doc["provider_minimum_tick"]))
+            except (KeyError, ValueError) as exc:
+                raise ValueError("instrument metadata lacks provider-native minimum tick") from exc
+            if not tick.is_finite() or tick <= 0:
+                raise ValueError("provider-native minimum tick is invalid")
+            provider_ticks[market_id] = tick
+        replayed = replay_frozen_structural_source(
+            admissions=admissions,
+            registry_markets=registry_by_market,
+            provider_minimum_ticks=provider_ticks,
+        )
+        assert structural_claim is not None
+        if structural_claim != replayed:
+            raise ValueError(
+                "rooted structural source is not the globally selected replayed Formal Setup"
+            )
+        structural = structural_claim.strategy_decision()
+        if (
+            structural.market_id != lineage.market_id
+            or structural.market_event_id != lineage.formal_setup_id
+            or structural_claim.formal_setup_admission_ordinal
+            != lineage.formal_setup_admission_ordinal
+            or structural_claim.formal_setup_admission_ts
+            != lineage.formal_setup_admission_ts
+        ):
+            raise ValueError("replayed structural focal identity conflicts with causal lineage")
+    assert structural is not None
+
     bbo = tuple(
         item
         for item in admissions
@@ -589,14 +731,50 @@ def rederive_rooted_t2(
         and item.source.market_id == lineage.market_id
         and item.source.expression_id == expression.expression_id
         and item.source.instrument_id == lineage.instrument_id
+        and item.continuity_epoch == lineage.continuity_epoch
+        and item.admission_epoch == lineage.admission_epoch
         and item.continuity_state is EvidenceState.COMPLETE
         and not item.out_of_order
     )
     if not bbo:
-        raise ValueError("complete rooted evidence has no causally eligible BBO")
-    current_bbo = max(
-        bbo, key=lambda item: (item.admission_ordinal, item.admission_ts, item.admission_hash)
-    )
+        raise ValueError(
+            "complete rooted evidence has no causally eligible BBO"
+        )
+    validation_source_artifact: RoleBoundSourceArtifact | None = None
+    if strict_real_t2:
+        validation_source_artifact = _one(
+            root, T2SourceRole.VALIDATION_SOURCE
+        )
+        validation_document = json.loads(
+            validation_source_artifact.exact_bytes()
+        )
+        binding = (
+            validation_document.get("attempt_binding")
+            if isinstance(validation_document, dict)
+            else None
+        )
+        if not isinstance(binding, dict):
+            raise ValueError(
+                "Task5D Validation source lacks attempt binding"
+            )
+        bound_bbo_hash = binding.get("focal_bbo_admission_hash")
+        matched_bbo = tuple(
+            item for item in bbo if item.admission_hash == bound_bbo_hash
+        )
+        if len(matched_bbo) != 1:
+            raise ValueError(
+                "Task5D Validation source does not bind one causal BBO"
+            )
+        current_bbo = matched_bbo[0]
+    else:
+        current_bbo = max(
+            bbo,
+            key=lambda item: (
+                item.admission_ordinal,
+                item.admission_ts,
+                item.admission_hash,
+            ),
+        )
     lifecycle = tuple(
         sorted(
             (
@@ -619,17 +797,68 @@ def rederive_rooted_t2(
             ),
         )
     )
+    validation_artifact = _one(
+        root, T2SourceRole.VALIDATION_REFERENCE
+    )
     validation = cast(
         ValidationReference,
-        _parse(_one(root, T2SourceRole.VALIDATION_REFERENCE), ValidationReference),
+        _parse(validation_artifact, ValidationReference),
     )
     supplement = cast(
         EvaluatorSupplementEvidence,
         _parse(_one(root, T2SourceRole.EVALUATOR_SUPPLEMENT), EvaluatorSupplementEvidence),
     )
-    registry = cast(
-        RegistryMarket, _parse(_one(root, T2SourceRole.REGISTRY_MARKET), RegistryMarket)
-    )
+    registry = registry_by_market.get(lineage.market_id)
+    if registry is None:
+        raise ValueError("rooted RegistryMarket for focal lineage is absent")
+    if strict_real_t2:
+        if (
+            registry.asset_class.value != "CRYPTO"
+            or registry.identity.dex != "MAIN"
+            or registry.is_hip3
+            or registry.timeframe_profile != "FAST_5M"
+            or registry.market_status != "ACTIVE"
+            or expression.instrument_metadata_hash != registry.metadata_hash
+        ):
+            raise ValueError(
+                "focal RegistryMarket is not exact source-bound MAIN perp metadata"
+            )
+        focal_metadata_artifact = metadata_artifact_by_market.get(
+            lineage.market_id
+        )
+        bbo_artifact = admission_artifact_by_hash.get(
+            current_bbo.admission_hash
+        )
+        if (
+            validation_source_artifact is None
+            or focal_metadata_artifact is None
+            or bbo_artifact is None
+        ):
+            raise ValueError(
+                "Task5D Validation source dependency is absent"
+            )
+        try:
+            validate_task5d_validation_artifacts(
+                validation_source_artifact=validation_source_artifact,
+                validation_reference_artifact=validation_artifact,
+                validation=validation,
+                exact_source_git_head=root.exact_source_git_head,
+                exact_source_git_tree=root.exact_source_git_tree,
+                focal_market_id=lineage.market_id,
+                focal_instrument_id=lineage.instrument_id,
+                focal_bbo_admission_hash=current_bbo.admission_hash,
+                instrument_metadata_version=(
+                    expression.instrument_metadata_version
+                ),
+                instrument_metadata_artifact=focal_metadata_artifact,
+                e4_admission_artifact=bbo_artifact,
+                prospective_candidate_artifact=prospective_artifact,
+                g4_run_manifest_artifact=g4_artifact,
+            )
+        except ValueError as exc:
+            raise ValueError(
+                "Task5D Validation source cross-binding failed"
+            ) from exc
     admission = derive_evaluation_admission(
         candidate_room_to_cost_k=candidate.config.room_to_cost_k,
         lineage=lineage,
@@ -649,18 +878,62 @@ def rederive_rooted_t2(
         raise ValueError("rooted selected candidate does not produce TAKE")
 
     wire_artifact = _one(root, T2SourceRole.PROVIDER_INSTRUMENT_WIRE)
-    wire = json.loads(wire_artifact.exact_bytes())
     from nautilus_trader.model import CryptoPerpetual
 
-    provider_instrument = CryptoPerpetual.from_dict(wire)
-    child_wire = provider_instrument.to_dict()
-    if canonical_json_bytes(wire) != canonical_json_bytes(child_wire):
-        raise ValueError("provider instrument public wire does not round-trip exactly")
-    wire_hash = sha256_hex(canonical_json_bytes(wire))
-    metadata_artifact = _one(root, T2SourceRole.INSTRUMENT_METADATA)
-    metadata = json.loads(metadata_artifact.exact_bytes())
-    if metadata.get("provider_wire_hash") != wire_hash:
-        raise ValueError("instrument metadata does not bind the rooted provider wire")
+    if strict_real_t2:
+        raw_wire = wire_artifact.exact_bytes()
+        wire_hash = raw_response_sha256(raw_wire)
+        metadata = metadata_by_market.get(lineage.market_id)
+        if metadata is None:
+            raise ValueError("focal instrument metadata is absent")
+        if metadata.get("raw_provider_response_sha256") != wire_hash:
+            raise ValueError("instrument metadata does not bind exact raw provider HTTP bytes")
+        try:
+            parsed_wire = json.loads(raw_wire)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("raw provider HTTP bytes are not JSON evidence") from exc
+        normalized = metadata.get("provider_instrument")
+        if not isinstance(normalized, dict):
+            raise ValueError("instrument metadata lacks provider-native normalized object")
+        provider_instrument = CryptoPerpetual.from_dict(normalized)
+        if canonical_json_bytes(provider_instrument.to_dict()) != canonical_json_bytes(normalized):
+            raise ValueError("provider-native instrument metadata does not round-trip")
+        if str(provider_instrument.id) != lineage.instrument_id:
+            raise ValueError("provider-native instrument id conflicts with focal lineage")
+        if int(provider_instrument.size_precision) != registry.size_decimals:
+            raise ValueError("provider-native size precision conflicts with RegistryMarket")
+        if Decimal(str(provider_instrument.price_increment)) != Decimal(
+            str(metadata.get("provider_minimum_tick"))
+        ):
+            raise ValueError("provider-native minimum tick conflicts with rooted metadata")
+        if Decimal(str(provider_instrument.size_increment)) != Decimal(
+            str(metadata.get("provider_size_increment"))
+        ):
+            raise ValueError("provider-native size increment conflicts with rooted metadata")
+        if not isinstance(parsed_wire, list) or len(parsed_wire) != 2:
+            raise ValueError("raw provider wire is not exact metaAndAssetCtxs response")
+        raw_meta = parsed_wire[0]
+        if not isinstance(raw_meta, dict) or not isinstance(raw_meta.get("universe"), list):
+            raise ValueError("raw provider meta universe is invalid")
+        matches = [
+            item for item in raw_meta["universe"]
+            if isinstance(item, dict) and item.get("name") == expression.provider_coin
+        ]
+        if len(matches) != 1 or matches[0].get("szDecimals") != registry.size_decimals:
+            raise ValueError("raw provider metadata conflicts with focal RegistryMarket")
+    else:
+        wire = json.loads(wire_artifact.exact_bytes())
+        provider_instrument = CryptoPerpetual.from_dict(wire)
+        child_wire = provider_instrument.to_dict()
+        if canonical_json_bytes(wire) != canonical_json_bytes(child_wire):
+            raise ValueError("provider instrument public wire does not round-trip exactly")
+        wire_hash = sha256_hex(canonical_json_bytes(wire))
+        metadata = metadata_docs[0]
+        if (
+            not isinstance(metadata, dict)
+            or metadata.get("provider_wire_hash") != wire_hash
+        ):
+            raise ValueError("instrument metadata does not bind the rooted provider wire")
     quantity = Decimal(str(provider_instrument.size_increment))
     size_decimals = int(provider_instrument.size_precision)
     side = PositionSide.LONG if structural.side.value == "LONG" else PositionSide.SHORT
@@ -704,22 +977,72 @@ def rederive_rooted_t2(
         expression_id=expression.expression_id,
         instrument_id=lineage.instrument_id,
     )
-    execution = execute_provider_native_state(
-        projection=projection,
-        intent=intent,
-        trigger_admission_hash=current_bbo.admission_hash,
-        provider_instrument=provider_instrument,
-        catalog_path=catalog_path,
-    )
-    record = execution.record
+    if strict_real_t2:
+        entry_binding = CausalBboBinding(
+            admission=current_bbo,
+            executable_price=intent.executable_price,
+            opposite_l1_size=opposite,
+        )
+        if structural_claim is None:
+            raise ValueError("round-trip exit requires exact rooted structural source")
+        exit_trigger = select_first_exit_trigger(
+            admissions=admissions,
+            focal=FormalSetupObservation(
+                structural=structural_claim,
+                package_id=lineage.activation_sequence_id,
+                opportunity_id=lineage.activation_sequence_id,
+                thesis_id=lineage.thesis_id,
+                continuity_epoch=lineage.continuity_epoch,
+                admission_epoch=lineage.admission_epoch,
+            ),
+            side=side,
+            entry_binding=entry_binding,
+            entry_executable_price=intent.executable_price,
+            candidate=candidate.config,
+        )
+        if exit_trigger is None:
+            raise ValueError("rooted TAKE has no causal provider-native exit before cutoff")
+        execution = execute_provider_native_round_trip_state(
+            projection=projection,
+            intent=intent,
+            entry_trigger_admission_hash=current_bbo.admission_hash,
+            exit_trigger_admission_hash=exit_trigger.admission.admission_hash,
+            provider_instrument=provider_instrument,
+            catalog_path=catalog_path,
+        )
+        record: ProviderExecutionRecord | ProviderRoundTripExecutionRecord = execution.record
+    else:
+        execution = execute_provider_native_state(
+            projection=projection,
+            intent=intent,
+            trigger_admission_hash=current_bbo.admission_hash,
+            provider_instrument=provider_instrument,
+            catalog_path=catalog_path,
+        )
+        record = execution.record
     expected_side = "BUY" if side is PositionSide.LONG else "SELL"
-    if (
-        record.projection_hash != projection.identity.projection_hash
-        or record.order_intent_hash != intent.order_intent_hash
-        or record.trigger_admission_hash != current_bbo.admission_hash
-        or record.submitted_side != expected_side
-        or Decimal(record.submitted_technical_quantity) != quantity
-    ):
+    valid_execution = (
+        record.projection_hash == projection.identity.projection_hash
+        and record.order_intent_hash == intent.order_intent_hash
+    )
+    if strict_real_t2:
+        assert exit_trigger is not None
+        round_trip_record = cast(ProviderRoundTripExecutionRecord, record)
+        valid_execution = valid_execution and (
+            round_trip_record.entry_trigger_admission_hash == current_bbo.admission_hash
+            and round_trip_record.exit_trigger_admission_hash
+            == exit_trigger.admission.admission_hash
+            and round_trip_record.entry.side == expected_side
+            and Decimal(round_trip_record.entry.quantity) == quantity
+        )
+    else:
+        single_leg_record = cast(ProviderExecutionRecord, record)
+        valid_execution = valid_execution and (
+            single_leg_record.trigger_admission_hash == current_bbo.admission_hash
+            and single_leg_record.submitted_side == expected_side
+            and Decimal(single_leg_record.submitted_technical_quantity) == quantity
+        )
+    if not valid_execution:
         raise ValueError("provider execution does not cross-bind the canonical causal unit")
     outcome_artifact = _one(root, T2SourceRole.THESIS_OUTCOME)
     outcome = cast(ThesisOutcome, _parse(outcome_artifact, ThesisOutcome))
@@ -731,7 +1054,13 @@ def rederive_rooted_t2(
         raise ValueError("rooted outcome decision is not TAKE")
     if outcome.order_intent_hash != intent.order_intent_hash:
         raise ValueError("rooted outcome does not bind the canonical OrderIntent")
-    provider_state_hash = provider_state_semantic_source_hash(record)
+    provider_state_hash = (
+        provider_round_trip_state_semantic_source_hash(
+            cast(ProviderRoundTripExecutionRecord, record)
+        )
+        if strict_real_t2
+        else provider_state_semantic_source_hash(cast(ProviderExecutionRecord, record))
+    )
     if outcome.provider_state_source_hash != provider_state_hash:
         raise ValueError("rooted outcome does not bind the fresh provider state")
     rooted_costs = {item.artifact_hash for item in _many(root, T2SourceRole.COST_SOURCE)}
@@ -761,7 +1090,11 @@ def rederive_rooted_t2(
         ),
         order_intent_hash=intent.order_intent_hash,
         replay_projection_hash=projection.identity.projection_hash,
-        provider_execution_semantic_hash=provider_execution_semantic_hash(record),
+        provider_execution_semantic_hash=(
+            provider_round_trip_semantic_hash(cast(ProviderRoundTripExecutionRecord, record))
+            if strict_real_t2
+            else provider_execution_semantic_hash(cast(ProviderExecutionRecord, record))
+        ),
         provider_state_source_hash=provider_state_hash,
         provider_instrument_wire_hash=wire_hash,
         thesis_outcome_hash=outcome_artifact.artifact_hash,

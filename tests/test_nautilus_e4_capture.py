@@ -776,3 +776,40 @@ def test_teardown_flushes_established_evidence_and_cannot_erase_it() -> None:
     session.interrupt(reason="APPLICATION_STOP")
     assert sink.events == before
     assert session.tail_statuses["pkg-001"].evidence_state is EvidenceState.INTERRUPTED
+
+
+def test_structural_package_opens_without_participation_decision_and_uses_observed_times() -> None:
+    session = _session()
+    created_ts = BASE + 2_000_000_000
+    active_valid_ts = created_ts + 1
+    state = session.open_structural_package(
+        package_id="structural-pkg",
+        opportunity_id="structural-opportunity",
+        thesis_id="structural-thesis",
+        market_id=MARKET_A,
+        expression_id="expr-ETH",
+        created_ts=created_ts,
+        active_valid_ts=active_valid_ts,
+    )
+    assert state is EvidenceState.PRE_DECISION_WINDOW_INCOMPLETE
+    opportunity, thesis = session.lifecycle_records[-2:]
+    assert opportunity.reason_codes == ("FORMAL_SETUP_ADMITTED",)
+    assert thesis.reason_codes == ("THESIS_CREATED",)
+    assert opportunity.decision_state is None
+    assert thesis.decision_state is None
+    assert opportunity.state_ts == created_ts
+    assert thesis.state_ts == created_ts
+
+
+def test_structural_package_rejects_synthetic_nonincreasing_active_valid_time() -> None:
+    session = _session()
+    with pytest.raises(ValueError, match="observed time"):
+        session.open_structural_package(
+            package_id="structural-pkg",
+            opportunity_id="structural-opportunity",
+            thesis_id="structural-thesis",
+            market_id=MARKET_A,
+            expression_id="expr-ETH",
+            created_ts=BASE + 2_000_000_000,
+            active_valid_ts=BASE + 2_000_000_000,
+        )
