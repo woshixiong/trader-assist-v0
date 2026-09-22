@@ -24,8 +24,15 @@ from trader_assist_v0.nautilus_e4.host import (
     build_public_data_node,
 )
 from trader_assist_v0.nautilus_e4.safety import assert_public_only
+from trader_assist_v0.nautilus_g4.catalog_bridge import (
+    admit_hypothetical_order_intent,
+    project_native_replay,
+)
+from trader_assist_v0.nautilus_g4.runner import (
+    execute_provider_native_round_trip_state,
+    provider_round_trip_state_semantic_source_hash,
+)
 from trader_assist_v0.nautilus_g4.t2_acquisition import (
-    CausalBboBinding,
     PHASE0C_MARKET_SET_HASH,
     REAL_T2_ACQUISITION_NS,
     REAL_T2_ACQUISITION_SECONDS,
@@ -38,22 +45,14 @@ from trader_assist_v0.nautilus_g4.t2_acquisition import (
     derive_restart_pivot_source,
     expected_external_bar_type,
     frozen_task5d_prospective_candidate,
-    materialize_fixed_markets_from_public_metadata,
     materialize_evaluator_supplement,
+    materialize_fixed_markets_from_public_metadata,
     materialize_restart_reference,
     materialize_task5d_g4_manifest,
     materialize_task5d_validation_source,
     position_side_for_focal,
     provider_instrument_metadata_document,
     select_first_exit_trigger,
-)
-from trader_assist_v0.nautilus_g4.catalog_bridge import (
-    admit_hypothetical_order_intent,
-    project_native_replay,
-)
-from trader_assist_v0.nautilus_g4.runner import (
-    execute_provider_native_round_trip_state,
-    provider_round_trip_state_semantic_source_hash,
 )
 from trader_assist_v0.nautilus_g4.t2_shadow import (
     RoleBoundSourceArtifact,
@@ -750,27 +749,47 @@ def run_single_attempt(*, evidence_root: Path, result_path: Path, expected_head:
         )
         spread_artifact, spread = _cost_source(
             name="executable-bbo-crossing",
-            payload={"entry_bbo": causal_bbo.admission.admission_hash, "exit_bbo": exit_trigger.admission.admission_hash, "round_trip": round_trip_payload},
+            payload={
+                "entry_bbo": causal_bbo.admission.admission_hash,
+                "exit_bbo": exit_trigger.admission.admission_hash,
+                "round_trip": round_trip_payload,
+            },
             provenance=CostProvenance.NOT_APPLICABLE,
             amount_bps=None,
         )
         slippage_total = entry_adverse + exit_adverse
         slippage_artifact, slippage = _cost_source(
             name="two-leg-provider-fill-slippage",
-            payload={"entry_reference": str(intent.executable_price), "exit_reference": str(exit_trigger.executable_price), "round_trip": round_trip_payload},
-            provenance=(CostProvenance.PROVEN_ZERO if slippage_total == 0 else CostProvenance.MODELLED),
+            payload={
+                "entry_reference": str(intent.executable_price),
+                "exit_reference": str(exit_trigger.executable_price),
+                "round_trip": round_trip_payload,
+            },
+            provenance=(
+                CostProvenance.PROVEN_ZERO if slippage_total == 0 else CostProvenance.MODELLED
+            ),
             amount_bps=slippage_total,
         )
         impact_artifact, impact = _cost_source(
             name="exact-l1-size-and-flat-state",
-            payload={"entry_bbo": causal_bbo.admission.admission_hash, "exit_bbo": exit_trigger.admission.admission_hash, "round_trip": round_trip_payload},
+            payload={
+                "entry_bbo": causal_bbo.admission.admission_hash,
+                "exit_bbo": exit_trigger.admission.admission_hash,
+                "round_trip": round_trip_payload,
+            },
             provenance=CostProvenance.PROVEN_ZERO,
             amount_bps=Decimal("0"),
         )
         shortfall_artifact, shortfall = _cost_source(
             name="entry-provider-fill-shortfall",
-            payload={"entry_reference": str(intent.executable_price), "entry_fill": str(entry_fill), "round_trip": round_trip_payload},
-            provenance=(CostProvenance.PROVEN_ZERO if entry_adverse == 0 else CostProvenance.MODELLED),
+            payload={
+                "entry_reference": str(intent.executable_price),
+                "entry_fill": str(entry_fill),
+                "round_trip": round_trip_payload,
+            },
+            provenance=(
+                CostProvenance.PROVEN_ZERO if entry_adverse == 0 else CostProvenance.MODELLED
+            ),
             amount_bps=entry_adverse,
         )
         funding_response = HyperliquidPublicClient().funding_history_with_raw(
@@ -817,7 +836,17 @@ def run_single_attempt(*, evidence_root: Path, result_path: Path, expected_head:
             references=(
                 _reference(lineage_artifact),
                 _reference(validation.validation_reference_artifact),
-                *tuple(_reference(item) for item in (fee_artifact, spread_artifact, slippage_artifact, impact_artifact, funding_artifact, shortfall_artifact)),
+                *tuple(
+                    _reference(item)
+                    for item in (
+                        fee_artifact,
+                        spread_artifact,
+                        slippage_artifact,
+                        impact_artifact,
+                        funding_artifact,
+                        shortfall_artifact,
+                    )
+                ),
             ),
         )
         source_artifacts = (

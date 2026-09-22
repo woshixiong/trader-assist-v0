@@ -493,9 +493,9 @@ def rederive_rooted_t2(
         provider_state_semantic_source_hash,
     )
     from trader_assist_v0.nautilus_g4.t2_acquisition import (
+        REAL_T2_TASK_ID,
         CausalBboBinding,
         FormalSetupObservation,
-        REAL_T2_TASK_ID,
         StructuralSourceEvidence,
         raw_response_sha256,
         replay_frozen_structural_source,
