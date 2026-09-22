@@ -67,6 +67,46 @@ Possible executors remain governed by existing routing:
 
 No automatic override of user-selected executor.
 
+### 7. Executor Launch Configuration Disclosure
+Before providing any execution prompt or launcher command, the Engineering Control window must first provide an explicit configuration block.
+
+Required fields:
+
+```text
+EXECUTION_SURFACE:
+- Ordinary ChatGPT Writer
+- Codex
+- Other approved executor
+
+REPOSITORY:
+<repository>
+
+BRANCH:
+<branch name>
+
+EXECUTION_CLASS:
+<M0/M1/M2/M3 classification>
+
+MODEL:
+<exact available model identifier/version when applicable>
+
+REASONING_LEVEL:
+<Low/Medium/High/Extra High or provider equivalent>
+
+MODE:
+<implementation/review/research/etc>
+
+PERMISSIONS:
+<allowed capabilities>
+
+FORBIDDEN_ACTIONS:
+<explicit boundaries>
+```
+
+The word "Codex" alone is not sufficient model identification when a specific model/version selector exists. The same rule applies to ordinary ChatGPT windows: the launch prompt must explicitly state that it is intended for a normal GPT window and must identify the expected model/reasoning configuration when relevant.
+
+This requirement exists to prevent execution interruptions caused by missing environment information and to ensure the user can configure the correct execution surface before starting work.
+
 ## Compatibility
 This proposal does not change:
 - Unified Engineering Governance authority;
