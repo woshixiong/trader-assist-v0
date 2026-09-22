@@ -5,15 +5,15 @@ Proposal only. No authority model changes.
 
 ## Version Alias
 
-This workflow optimization proposal is referenced operationally as:
+Operational alias:
 
 `V4`
 
-The V4 alias is a human communication shortcut only. The canonical GitHub document remains the source of truth.
+Canonical GitHub document remains source of truth.
 
 ## Objective
 
-Optimize engineering workflow continuity while preserving existing governance boundaries.
+Optimize engineering workflow continuity while preserving governance boundaries.
 
 ## Core Rules
 
@@ -39,11 +39,7 @@ Authorized stages continue automatically until:
 
 ### 3. Context Minimization
 
-Normal windows receive only:
-- Bootstrap pointer;
-- Current state;
-- Task Packet;
-- Relevant authority.
+Normal windows receive only required canonical state.
 
 Executors receive only:
 - Task Packet;
@@ -53,68 +49,75 @@ Executors receive only:
 
 ### 4. Execution Handoff Format
 
-Before every launcher prompt, provide only the information required for execution.
+Before every launcher:
 
-For ordinary ChatGPT:
+Ordinary ChatGPT:
 - specify new window or existing window;
-- provide the prompt.
+- provide prompt.
 
-For Codex:
+Codex:
 - model;
 - reasoning level;
-- new Session or existing Session;
+- session choice;
 - repository;
 - branch;
-- provide the prompt.
+- provide prompt.
 
 Do not include unnecessary internal explanations.
 
-Executor identity, model identity, and session identity must remain separate.
-
 ### 5. Session Selection Requirement
 
-Engineering Control must choose whether execution continues in an existing session or starts a new session.
-
-Session selection must preserve:
-- Codex token efficiency and context reuse;
-- ordinary ChatGPT workflow continuity;
+Engineering Control selects new or existing session according to:
+- Codex context/token efficiency;
+- ordinary ChatGPT continuity;
 - reviewer independence.
-
-Review tasks should normally use a fresh independent window.
 
 ### 6. Review Handoff Lifecycle
 
-Before requesting review:
+Before review:
 
 1. Write canonical review target and evidence to GitHub.
-2. State the required review window type.
-3. Provide a short review launcher immediately.
-4. Include @GitHub at the beginning of every generated engineering window prompt.
-5. Reviewer reads GitHub canonical state directly.
+2. State required window type.
+3. Provide short launcher immediately.
+4. Include @GitHub in generated engineering prompts.
+5. Reviewer reads GitHub canonical state.
 6. Reviewer writes result back to GitHub.
-7. Engineering Control verifies review object before continuing.
-
-No manual context relay is required when GitHub contains the canonical information.
+7. Engineering Control verifies review object.
 
 ### 7. GitHub Capability Initialization Pattern
 
-All generated engineering window prompts begin with:
+Generated engineering window prompts begin with:
 
 `@GitHub`
 
-The first action in a new engineering window is a capability check:
+First action:
 
 `Check available GitHub capability.`
 
-The window must establish that GitHub capability is available before executing GitHub-dependent work.
+Capability availability must be established before GitHub-dependent execution.
 
-Applies to:
-- implementation windows;
-- review windows;
-- research windows;
-- validation windows.
+### 8. CI Watch And Post-Review Progression
 
-This step initializes capability usage. It does not expand authority or bypass permission boundaries.
+When a PR enters CI pending state after required review:
+
+The authorized Engineering Control window should periodically check:
+- PR state;
+- exact HEAD;
+- CI checks;
+- required validation evidence.
+
+When all required checks pass and no authority gate remains:
+
+Engineering Control may automatically continue:
+
+CI PASS
+→ make PR ready for review
+→ merge preparation
+→ merge execution only when existing merge authority rules allow it.
+
+No user polling should be required for states already covered by granted authority.
+
+Merge/deployment/runtime authority boundaries remain unchanged.
 
 ## Compatibility
 
@@ -130,9 +133,10 @@ No changes to:
 Validate:
 - ordinary GPT execution;
 - Codex execution;
-- new versus existing session selection;
+- session selection;
 - review handoff;
 - review result retrieval;
+- CI monitoring;
 - authority boundary handling.
 
 Success criteria:
