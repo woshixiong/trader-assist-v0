@@ -96,11 +96,17 @@ Before requesting review:
 
 No manual context relay is required when GitHub contains the canonical information.
 
-### 7. GitHub Capability Bootstrap
+### 7. GitHub Capability Initialization Pattern
 
 All generated engineering window prompts begin with:
 
 `@GitHub`
+
+The first action in a new engineering window is a capability check:
+
+`Check available GitHub capability.`
+
+The window must establish that GitHub capability is available before executing GitHub-dependent work.
 
 Applies to:
 - implementation windows;
@@ -108,7 +114,7 @@ Applies to:
 - research windows;
 - validation windows.
 
-@GitHub initializes capability discovery only. It does not expand authority.
+This step initializes capability usage. It does not expand authority or bypass permission boundaries.
 
 ## Compatibility
 
