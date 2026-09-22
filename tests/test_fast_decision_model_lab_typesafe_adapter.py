@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -8,12 +9,19 @@ from typesafe_sdk import RetryPolicy
 
 from trader_assist_v0.fast_decision_model_lab.adapters.typesafe import TypeSafeAdapter
 from trader_assist_v0.fast_decision_model_lab.contracts import (
+    DECISION_REQUEST_SCHEMA_VERSION,
+    DECISION_RESPONSE_SCHEMA_VERSION,
     STATE_SCHEMA_VERSION,
+    DecisionEventModelOutput,
     DecisionRequest,
     ModelInvocationStatus,
     ModelTarget,
 )
 from trader_assist_v0.fast_decision_model_lab.questions import model_native_question_pack
+from trader_assist_v0.fast_decision_model_lab.serialization import (
+    canonical_roundtrip,
+    canonical_sha256,
+)
 
 
 def _request() -> DecisionRequest:
@@ -92,8 +100,25 @@ def test_typesafe_adapter_zero_retry_deadline_and_complete_probabilities() -> No
             result = await adapter.invoke(_request())
             assert result.status is ModelInvocationStatus.SUCCESS
             assert result.model_identity.returned_model_or_checkpoint_id == "returned-model"
+            assert _request().request_schema_version == DECISION_REQUEST_SCHEMA_VERSION
+            assert result.response_schema_version == DECISION_RESPONSE_SCHEMA_VERSION
+            assert result.provider_response is not None
+            assert result.provider_response.provider_schema_version == (
+                "TYPESAFE_SYSTEM_ONE_RESPONSE_V0"
+            )
+            captured = json.loads(result.provider_response.canonical_payload_json)
+            assert captured["model"] == "returned-model"
+            assert set(captured["choices"]["ENTRY_ACTION_NOW"]["probabilities"]) == {
+                "LONG_ENTRY",
+                "SHORT_ENTRY",
+                "WAIT",
+                "PASS",
+            }
             labels = tuple(label for label, _ in result.choices[0][1].probabilities)
             assert labels == _request().question_pack.questions[0].allowed_labels
+            output = DecisionEventModelOutput(_request(), result)
+            assert output.execution_authority == "NONE"
+            assert canonical_sha256(output) == canonical_sha256(canonical_roundtrip(output))
 
     asyncio.run(run())
     assert created[0].constructor_retry == 0
