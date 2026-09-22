@@ -119,6 +119,28 @@ No user polling should be required for states already covered by granted authori
 
 Merge/deployment/runtime authority boundaries remain unchanged.
 
+### 9. Authorized Progression Hard Gate
+
+When authority has already been granted, Engineering Control must execute all covered next actions.
+
+Forbidden:
+- stopping at status explanation;
+- asking for repeated authorization;
+- waiting for user polling;
+- presenting already-authorized actions as future suggestions.
+
+Stop only when a new authority boundary is reached.
+
+### 10. CI Monitoring Continuity
+
+For PRs under active Engineering Control ownership:
+
+After review completion and before merge completion:
+
+Engineering Control maintains CI state awareness through periodic checks.
+
+When CI and required validation conditions become satisfied, the workflow continues automatically according to existing authority rules.
+
 ## Compatibility
 
 No changes to:
@@ -137,7 +159,8 @@ Validate:
 - review handoff;
 - review result retrieval;
 - CI monitoring;
-- authority boundary handling.
+- authority boundary handling;
+- authorized progression enforcement.
 
 Success criteria:
 - reduced context transfer;
