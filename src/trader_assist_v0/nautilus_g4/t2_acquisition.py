@@ -1136,7 +1136,8 @@ def select_first_exit_trigger(
     decision = focal.structural.strategy_decision()
     stop = decision.structural_stop
     target = decision.target_reference
-    if stop is None or target is None or target.price <= 0:
+    target_price = None if target is None else target.price
+    if stop is None or target_price is None or target_price <= 0:
         return None
     if candidate.exit_policy.value != "X0":
         raise RealT2IntegrationError("Task5D exit selector only accepts frozen X0")
@@ -1183,9 +1184,9 @@ def select_first_exit_trigger(
         target_hit = (
             winner
             and (
-                executable >= target.price
+                executable >= target_price
                 if side is PositionSide.LONG
-                else executable <= target.price
+                else executable <= target_price
             )
         )
         if exit_triggered(

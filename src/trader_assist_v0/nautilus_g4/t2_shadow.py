@@ -483,7 +483,9 @@ def rederive_rooted_t2(
         project_native_replay,
     )
     from trader_assist_v0.nautilus_g4.runner import (
+        ProviderExecutionEvidence,
         ProviderExecutionRecord,
+        ProviderRoundTripExecutionEvidence,
         ProviderRoundTripExecutionRecord,
         execute_provider_native_round_trip_state,
         execute_provider_native_state,
@@ -518,6 +520,7 @@ def rederive_rooted_t2(
     from trader_assist_v0.vnext_g4.reporting import CostProvenance, ThesisOutcome
 
     strict_real_t2 = root.task_id == REAL_T2_TASK_ID
+    execution: ProviderExecutionEvidence | ProviderRoundTripExecutionEvidence
     if strict_real_t2:
         prospective_artifact = _one(
             root, T2SourceRole.PROSPECTIVE_ECONOMIC_CANDIDATE_IDENTITY
@@ -1023,6 +1026,7 @@ def rederive_rooted_t2(
         and record.order_intent_hash == intent.order_intent_hash
     )
     if strict_real_t2:
+        assert exit_trigger is not None
         round_trip_record = cast(ProviderRoundTripExecutionRecord, record)
         valid_execution = valid_execution and (
             round_trip_record.entry_trigger_admission_hash == current_bbo.admission_hash

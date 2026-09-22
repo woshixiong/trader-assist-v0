@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 
@@ -42,6 +43,7 @@ from trader_assist_v0.nautilus_g4.t2_acquisition import (
     materialize_task5d_g4_manifest,
     materialize_task5d_validation_source,
     provider_instrument_metadata_document,
+    select_first_exit_trigger,
     select_focal_causal_bbo,
     select_focal_formal_setup,
 )
@@ -569,6 +571,39 @@ def test_missing_bbo_is_not_evaluable_and_not_synthesized() -> None:
             focal=_focal_for_validation(),
             side=PositionSide.LONG,
             evaluation_admission_hash="0" * 64,
+        )
+        is None
+    )
+
+
+def test_missing_target_price_fails_closed_for_exit_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    focal = _focal_for_validation()
+    entry = _bbo_for_validation(ordinal=2)
+    entry_binding = select_focal_causal_bbo(
+        admissions=(entry,),
+        focal=focal,
+        side=PositionSide.LONG,
+        evaluation_admission_hash=entry.admission_hash,
+    )
+    assert entry_binding is not None
+    monkeypatch.setattr(
+        StructuralSourceEvidence,
+        "strategy_decision",
+        lambda _self: SimpleNamespace(
+            structural_stop=Decimal("99"),
+            target_reference=SimpleNamespace(price=None),
+        ),
+    )
+    assert (
+        select_first_exit_trigger(
+            admissions=(_bbo_for_validation(ordinal=3),),
+            focal=focal,
+            side=PositionSide.LONG,
+            entry_binding=entry_binding,
+            entry_executable_price=entry_binding.executable_price,
+            candidate=frozen_task5d_prospective_candidate().config,
         )
         is None
     )

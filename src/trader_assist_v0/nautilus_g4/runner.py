@@ -8,7 +8,7 @@ from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Protocol, Self
+from typing import TYPE_CHECKING, Any, Literal, Protocol, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -358,7 +358,10 @@ class ProviderRoundTripExecutionRecord(BaseModel):
 
     @classmethod
     def create(cls, **values: object) -> Self:
-        normalized = cls.model_construct(**values).identity_payload()
+        normalized = cast(
+            ProviderRoundTripExecutionRecord,
+            cls.model_construct(**cast(Any, values)),
+        ).identity_payload()
         digest = sha256_hex(_PROVIDER_ROUND_TRIP_DOMAIN + canonical_json_bytes(normalized))
         return cls.model_validate({**values, "evidence_hash": digest})
 
@@ -541,6 +544,8 @@ class ProviderRoundTripExecutionEvidence:
     """Non-serializable capability minted only after a flat native round trip."""
 
     __slots__ = ("_node", "_record")
+    _node: object
+    _record: ProviderRoundTripExecutionRecord
 
     def __new__(cls, *_args: object, **_kwargs: object) -> Self:
         raise TypeError(
@@ -816,7 +821,11 @@ class _RoundTripExecutionLedger:
         self.entry_submission = (str(client_order_id), str(quantity))
 
     def submit_exit(self, *, client_order_id: object, quantity: object) -> None:
-        if self.entry_fill is None or self.exit_submission is not None:
+        if (
+            self.entry_fill is None
+            or self.entry_submission is None
+            or self.exit_submission is not None
+        ):
             raise RuntimeError("round-trip exit requires exactly one entry fill")
         self.exit_submission = (str(client_order_id), str(quantity))
         entry_quantity = _decimal_quantity(
@@ -884,6 +893,10 @@ class ProviderRoundTripExecutionStrategyConfig(_NautilusStrategyConfig):
         *(f"entry_trigger_{name}" for name in _TRIGGER_FIELDS[1:]),
         *(f"exit_trigger_{name}" for name in _TRIGGER_FIELDS[1:]),
     )
+    ledger_key: object
+    instrument_id: object
+    entry_side: object
+    technical_quantity: object
 
     def __new__(cls, *args: object, **kwargs: object) -> Self:
         for key in cls._CUSTOM_FIELDS:

@@ -59,7 +59,7 @@ from trader_assist_v0.nautilus_g4.t2_shadow import (
     SourceReference,
     T2SourceRole,
 )
-from trader_assist_v0.vnext_g4.contracts import CausalLineage
+from trader_assist_v0.vnext_g4.contracts import CausalLineage, ParticipationDecision
 from trader_assist_v0.vnext_g4.reporting import CostComponent, CostProvenance, ThesisOutcome
 
 _GIT_OID = re.compile(r"^[0-9a-f]{40}$")
@@ -703,7 +703,7 @@ def run_single_attempt(*, evidence_root: Path, result_path: Path, expected_head:
             events=tuple(coordinator.admissions),
             market_id=focal.structural.market_id,
             expression_id=focal_market.expression.expression_id,
-            instrument_id=focal.structural.instrument_id,
+            instrument_id=focal_market.expression.instrument_id,
         )
         exit_trigger = select_first_exit_trigger(
             admissions=coordinator.admissions,
@@ -820,7 +820,7 @@ def run_single_attempt(*, evidence_root: Path, result_path: Path, expected_head:
             market_id=lineage.market_id,
             provider_state_source_hash=provider_round_trip_state_semantic_source_hash(round_trip),
             order_intent_hash=intent.order_intent_hash,
-            decision="TAKE",
+            decision=ParticipationDecision.TAKE,
             attempt_count=1,
             fee=fee,
             spread=spread,
