@@ -73,39 +73,44 @@ Before providing any execution prompt or launcher command, the Engineering Contr
 Required fields:
 
 ```text
-EXECUTION_SURFACE:
-- Ordinary ChatGPT Writer
-- Codex
-- Other approved executor
-
-REPOSITORY:
-<repository>
-
-BRANCH:
-<branch name>
-
-EXECUTION_CLASS:
-<M0/M1/M2/M3 classification>
-
-MODEL:
-<exact available model identifier/version when applicable>
-
-REASONING_LEVEL:
-<Low/Medium/High/Extra High or provider equivalent>
-
-MODE:
-<implementation/review/research/etc>
-
-PERMISSIONS:
-<allowed capabilities>
-
-FORBIDDEN_ACTIONS:
-<explicit boundaries>
+EXECUTION_SURFACE
+REPOSITORY
+BRANCH
+EXECUTION_CLASS
+MODEL
+REASONING_LEVEL
+MODE
+PERMISSIONS
+FORBIDDEN_ACTIONS
 ```
 
-The word "Codex" alone is not sufficient model identification when a specific model/version selector exists. The same rule applies to ordinary ChatGPT windows: the launch prompt must explicitly state that it is intended for a normal GPT window and must identify the expected model/reasoning configuration when relevant.
+"Codex" alone is not sufficient when a specific model/version selector exists. Ordinary ChatGPT launch instructions must explicitly state that they are for an ordinary GPT window and include expected model/reasoning configuration when relevant.
 
-This requirement exists to prevent execution interruptions caused by missing environment information and to ensure the user can configure the correct execution surface before starting work.
+### 8. Canonical Review Handoff Optimization
+Review handoff must use GitHub as the durable source of truth.
+
+The proposal, implementation evidence, changed files, validation state and review requirements must already exist in canonical GitHub locations before requesting review.
+
+The user should not be required to copy a long review prompt containing information already stored in GitHub.
+
+Default review handoff format:
+
+1. Provide a short reviewer launcher.
+2. Include only:
+   - repository;
+   - PR/commit locator;
+   - reviewer role;
+   - review objective;
+   - required output format.
+3. Reviewer performs fresh GitHub reads to load canonical evidence.
+
+Long context transfer is prohibited by default when equivalent canonical GitHub evidence exists.
+
+This reduces:
+- context duplication;
+- user relay overhead;
+- stale prompt risk;
+- reviewer dependency on chat history.
 
 ## Compatibility
 This proposal does not change:
@@ -121,6 +126,7 @@ Required validation scenarios:
 PASS:
 - ordinary GPT execution;
 - Codex execution;
+- short review handoff from GitHub canonical state;
 - Review APPROVE;
 - Review REQUEST_CHANGES;
 - user authority gate.
