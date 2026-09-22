@@ -4,7 +4,7 @@ import json
 import sqlite3
 from collections.abc import Iterator
 from os import PathLike
-from typing import Any
+from typing import Any, cast
 
 from .experiment import ExperimentEvidenceV0, ExperimentRecordV0
 from .outcome import EvaluationResult, OutcomeRecord
@@ -226,10 +226,13 @@ class SQLiteDecisionEvidenceLedger:
             "fdml_evaluations",
         }:
             raise ValueError("unsupported evidence table")
-        return self._connection.execute(
-            f"SELECT * FROM {table} WHERE experiment_id = ?",
-            (experiment_id,),
-        ).fetchone()
+        return cast(
+            sqlite3.Row | None,
+            self._connection.execute(
+                f"SELECT * FROM {table} WHERE experiment_id = ?",
+                (experiment_id,),
+            ).fetchone(),
+        )
 
     @staticmethod
     def _validated_payload(row: sqlite3.Row) -> dict[str, Any]:
