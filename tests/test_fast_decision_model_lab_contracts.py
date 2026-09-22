@@ -8,6 +8,7 @@ from trader_assist_v0.fast_decision_model_lab.contracts import (
     STATE_SCHEMA_VERSION,
     ChoiceDistribution,
     DecisionArm,
+    DecisionEventModelOutput,
     DecisionRequest,
     DecisionResult,
     InputFitEvidence,
@@ -15,6 +16,7 @@ from trader_assist_v0.fast_decision_model_lab.contracts import (
     ModelInvocationStatus,
     ModelTarget,
     NormalizedUsage,
+    ProviderResponseCapture,
 )
 from trader_assist_v0.fast_decision_model_lab.evidence import DecisionEvidenceKey
 from trader_assist_v0.fast_decision_model_lab.questions import (
@@ -29,6 +31,7 @@ from trader_assist_v0.fast_decision_model_lab.questions import (
     model_native_question_pack,
     strategy_informed_question_pack,
 )
+from trader_assist_v0.fast_decision_model_lab.serialization import canonical_sha256
 
 
 def _target(name: str = "a", provider: str = "fake-a") -> ModelTarget:
@@ -96,6 +99,11 @@ def _success(request: DecisionRequest) -> DecisionResult:
         latency_ms=0.00001,
         usage=NormalizedUsage(input_tokens=10, output_tokens=2),
         input_fit=InputFitEvidence(state_truncated=False),
+        provider_response=ProviderResponseCapture.from_payload(
+            provider=request.model_target.provider,
+            provider_schema_version="FAKE_RESPONSE_V0",
+            payload={"choices": {name: distribution.selected for name, distribution in choices}},
+        ),
     )
 
 
@@ -151,3 +159,35 @@ def test_required_status_vocabulary_and_evidence_identity() -> None:
     informed_key = DecisionEvidenceKey.from_request_result(informed, _success(informed))
     assert native_key.evidence_key_hash != informed_key.evidence_key_hash
     assert native_key.model_target_id == informed_key.model_target_id
+
+
+def test_provider_response_capture_is_canonical_and_mutation_sensitive() -> None:
+    first = ProviderResponseCapture.from_payload(
+        provider="fake-a",
+        provider_schema_version="FAKE_RESPONSE_V0",
+        payload={"b": 2, "a": {"selected": "WAIT"}},
+    )
+    reordered = ProviderResponseCapture.from_payload(
+        provider="fake-a",
+        provider_schema_version="FAKE_RESPONSE_V0",
+        payload={"a": {"selected": "WAIT"}, "b": 2},
+    )
+    changed = ProviderResponseCapture.from_payload(
+        provider="fake-a",
+        provider_schema_version="FAKE_RESPONSE_V0",
+        payload={"a": {"selected": "PASS"}, "b": 2},
+    )
+    assert first == reordered
+    assert first.payload_sha256 != changed.payload_sha256
+    assert canonical_sha256(first) != canonical_sha256(changed)
+
+
+def test_decision_event_output_is_research_only_and_identity_bound() -> None:
+    request = _request()
+    output = DecisionEventModelOutput(request, _success(request))
+    assert output.output_kind == "RESEARCH_MODEL_OBSERVATION"
+    assert output.execution_authority == "NONE"
+    with pytest.raises(ValueError, match="may not grant execution authority"):
+        replace(output, execution_authority="LONG")
+    with pytest.raises(ValueError, match="identity mismatch"):
+        replace(output, response=replace(output.response, snapshot_hash="different"))

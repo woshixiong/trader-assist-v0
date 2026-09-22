@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final, Protocol, runtime_checkable
 
 STATE_SCHEMA_VERSION: Final = "STATE_SCHEMA_V0"
+DECISION_REQUEST_SCHEMA_VERSION: Final = "DECISION_REQUEST_V0"
+DECISION_RESPONSE_SCHEMA_VERSION: Final = "DECISION_RESPONSE_V0"
+DECISION_EVENT_MODEL_OUTPUT_SCHEMA_VERSION: Final = "DECISION_EVENT_MODEL_OUTPUT_V0"
+RESEARCH_MODEL_OBSERVATION: Final = "RESEARCH_MODEL_OBSERVATION"
+NO_EXECUTION_AUTHORITY: Final = "NONE"
 MODEL_DEADLINE_SECONDS: Final = 3.0
 L2_MAX_AGE_SECONDS: Final = 2.0
 SNAPSHOT_TO_PUBLICATION_MAX_SECONDS: Final = 5.0
@@ -476,6 +482,43 @@ class NormalizedUsage:
 
 
 @dataclass(frozen=True, slots=True)
+class ProviderResponseCapture:
+    provider: str
+    provider_schema_version: str
+    canonical_payload_json: str
+    payload_sha256: str
+
+    def __post_init__(self) -> None:
+        from .serialization import canonical_json, canonical_sha256
+
+        _non_empty("provider", self.provider)
+        _non_empty("provider_schema_version", self.provider_schema_version)
+        _non_empty("canonical_payload_json", self.canonical_payload_json)
+        _non_empty("payload_sha256", self.payload_sha256)
+        try:
+            payload = json.loads(self.canonical_payload_json)
+        except json.JSONDecodeError as error:
+            raise ValueError("provider response capture must contain valid JSON") from error
+        if canonical_json(payload) != self.canonical_payload_json:
+            raise ValueError("provider response capture JSON must be canonical")
+        if canonical_sha256(payload) != self.payload_sha256:
+            raise ValueError("provider response capture hash does not match its payload")
+
+    @classmethod
+    def from_payload(
+        cls, *, provider: str, provider_schema_version: str, payload: object
+    ) -> ProviderResponseCapture:
+        from .serialization import canonical_json, canonical_sha256
+
+        return cls(
+            provider=provider,
+            provider_schema_version=provider_schema_version,
+            canonical_payload_json=canonical_json(payload),
+            payload_sha256=canonical_sha256(payload),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class DecisionRequest:
     decision_event_id: str
     invocation_id: str
@@ -490,6 +533,7 @@ class DecisionRequest:
     experiment_config_id: str
     model_target: ModelTarget
     deadline_seconds: float = MODEL_DEADLINE_SECONDS
+    request_schema_version: str = DECISION_REQUEST_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         for name, value in (
@@ -507,6 +551,10 @@ class DecisionRequest:
             raise ValueError(f"state_schema_version must be {STATE_SCHEMA_VERSION}")
         if self.question_pack.arm is not self.arm:
             raise ValueError("question pack arm must equal request arm")
+        if self.request_schema_version != DECISION_REQUEST_SCHEMA_VERSION:
+            raise ValueError(
+                f"request_schema_version must be {DECISION_REQUEST_SCHEMA_VERSION}"
+            )
         if not math.isfinite(self.deadline_seconds) or self.deadline_seconds <= 0:
             raise ValueError("deadline_seconds must be finite and positive")
 
@@ -533,6 +581,8 @@ class DecisionResult:
     input_fit: InputFitEvidence
     error_code: str | None = None
     error_class: str | None = None
+    provider_response: ProviderResponseCapture | None = None
+    response_schema_version: str = DECISION_RESPONSE_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         for name, value in (
@@ -552,6 +602,15 @@ class DecisionResult:
             raise ValueError("response_ts_ns must be at or after request_ts_ns")
         if not math.isfinite(self.latency_ms) or self.latency_ms < 0:
             raise ValueError("latency_ms must be finite and non-negative")
+        if self.response_schema_version != DECISION_RESPONSE_SCHEMA_VERSION:
+            raise ValueError(
+                f"response_schema_version must be {DECISION_RESPONSE_SCHEMA_VERSION}"
+            )
+        if (
+            self.provider_response is not None
+            and self.provider_response.provider != self.model_identity.provider
+        ):
+            raise ValueError("provider response capture must match model identity provider")
         names = [name for name, _ in self.choices]
         if len(names) != len(set(names)):
             raise ValueError("result question names must be unique")
@@ -577,6 +636,7 @@ class DecisionResult:
         error_class: str,
         model_identity: ModelIdentity | None = None,
         input_fit: InputFitEvidence | None = None,
+        provider_response: ProviderResponseCapture | None = None,
     ) -> DecisionResult:
         if status is ModelInvocationStatus.SUCCESS:
             raise ValueError("failure_for cannot construct SUCCESS")
@@ -606,7 +666,42 @@ class DecisionResult:
             input_fit=input_fit or InputFitEvidence(state_truncated=False),
             error_code=error_code,
             error_class=error_class,
+            provider_response=provider_response,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionEventModelOutput:
+    request: DecisionRequest
+    response: DecisionResult
+    schema_version: str = DECISION_EVENT_MODEL_OUTPUT_SCHEMA_VERSION
+    output_kind: str = RESEARCH_MODEL_OBSERVATION
+    execution_authority: str = NO_EXECUTION_AUTHORITY
+
+    def __post_init__(self) -> None:
+        if self.schema_version != DECISION_EVENT_MODEL_OUTPUT_SCHEMA_VERSION:
+            raise ValueError(
+                f"schema_version must be {DECISION_EVENT_MODEL_OUTPUT_SCHEMA_VERSION}"
+            )
+        if self.output_kind != RESEARCH_MODEL_OBSERVATION:
+            raise ValueError(f"output_kind must be {RESEARCH_MODEL_OBSERVATION}")
+        if self.execution_authority != NO_EXECUTION_AUTHORITY:
+            raise ValueError("decision-model output may not grant execution authority")
+        request = self.request
+        response = self.response
+        if (
+            response.decision_event_id != request.decision_event_id
+            or response.invocation_id != request.invocation_id
+            or response.snapshot_id != request.snapshot_id
+            or response.snapshot_hash != request.snapshot_hash
+            or response.data_cutoff_ns != request.data_cutoff_ns
+            or response.model_target != request.model_target
+            or response.arm is not request.arm
+            or response.question_pack_id != request.question_pack.question_pack_id
+            or response.question_pack_version != request.question_pack.version
+            or response.experiment_config_id != request.experiment_config_id
+        ):
+            raise ValueError("decision-event model output request/response identity mismatch")
 
 
 @runtime_checkable

@@ -23,11 +23,13 @@ from ..contracts import (
     ModelIdentity,
     ModelInvocationStatus,
     NormalizedUsage,
+    ProviderResponseCapture,
 )
 
 TYPESAFE_API_KEY_ENV = "TYPESAFE_API_KEY"
 TYPESAFE_SDK_PACKAGE = "typesafe-sdk"
 TYPESAFE_SDK_VERSION = "0.7.0"
+TYPESAFE_RESPONSE_SCHEMA_VERSION = "TYPESAFE_SYSTEM_ONE_RESPONSE_V0"
 
 
 class _ChoiceLike(Protocol):
@@ -130,6 +132,37 @@ def _extract_choices(
     return tuple(normalized)
 
 
+def _capture_response(
+    response: _ResponseLike, request: DecisionRequest
+) -> ProviderResponseCapture:
+    payload = {
+        "calibration_config_id": getattr(response, "calibration_config_id", None),
+        "checkpoint_revision": getattr(response, "checkpoint_revision", None),
+        "choices": {
+            question.name: {
+                "choice": response.choices[question.name].choice,
+                "probabilities": dict(response.choices[question.name].probabilities),
+            }
+            for question in request.question_pack.questions
+            if question.name in response.choices
+        },
+        "device": getattr(response, "device", None),
+        "model": response.model,
+        "runtime": getattr(response, "runtime", None),
+        "runtime_version": getattr(response, "runtime_version", None),
+        "state_truncated": bool(getattr(response, "state_truncated", False)),
+        "usage": {
+            "input_tokens": response.usage.input_tokens,
+            "output_tokens": response.usage.output_tokens,
+        },
+    }
+    return ProviderResponseCapture.from_payload(
+        provider=request.model_target.provider,
+        provider_schema_version=TYPESAFE_RESPONSE_SCHEMA_VERSION,
+        payload=payload,
+    )
+
+
 class TypeSafeAdapter:
     def __init__(self, *, client_factory: ClientFactory = _official_client_factory) -> None:
         self._retry = RetryPolicy(max_retries=0)
@@ -178,6 +211,7 @@ class TypeSafeAdapter:
             sdk_package=TYPESAFE_SDK_PACKAGE,
             sdk_version=TYPESAFE_SDK_VERSION,
         )
+        provider_response: ProviderResponseCapture | None = None
         try:
             async with asyncio.timeout(request.deadline_seconds):
                 response = await client.system_one(
@@ -187,6 +221,7 @@ class TypeSafeAdapter:
                     retry=self._retry,
                     timeout=request.deadline_seconds,
                 )
+            provider_response = _capture_response(response, request)
             choices = _extract_choices(response, request)
             state_truncated = bool(getattr(response, "state_truncated", False))
             finished = time.time_ns()
@@ -217,6 +252,7 @@ class TypeSafeAdapter:
                     error_class="InputFitValidationError",
                     model_identity=model_identity,
                     input_fit=input_fit,
+                    provider_response=provider_response,
                 )
             return DecisionResult(
                 decision_event_id=request.decision_event_id,
@@ -240,6 +276,7 @@ class TypeSafeAdapter:
                     output_tokens=response.usage.output_tokens,
                 ),
                 input_fit=input_fit,
+                provider_response=provider_response,
             )
         except (TypeSafeAPITimeoutError, TimeoutError):
             finished = time.time_ns()
@@ -273,6 +310,7 @@ class TypeSafeAdapter:
                 error_code="TYPESAFE_PROVIDER_ERROR",
                 error_class=type(error).__name__,
                 model_identity=identity,
+                provider_response=provider_response,
             )
         except (KeyError, ValueError) as error:
             finished = time.time_ns()
@@ -284,4 +322,5 @@ class TypeSafeAdapter:
                 error_code="TYPESAFE_NORMALIZATION_ERROR",
                 error_class=type(error).__name__,
                 model_identity=identity,
+                provider_response=provider_response,
             )
