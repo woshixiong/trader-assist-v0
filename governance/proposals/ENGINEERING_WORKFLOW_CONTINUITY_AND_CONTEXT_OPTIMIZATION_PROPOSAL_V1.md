@@ -51,52 +51,44 @@ Executors receive only:
 - validation contract;
 - evidence contract.
 
-### 4. Executor Configuration Disclosure
+### 4. Execution Handoff Format
 
-Before every launcher prompt provide:
+Before every launcher prompt, provide only the information required for execution.
 
-- EXECUTION_SURFACE
-- SESSION_TYPE
-- REPOSITORY
-- BRANCH
-- EXECUTION_CLASS
-- MODEL
-- REASONING_LEVEL
-- MODE
-- PERMISSIONS
-- FORBIDDEN_ACTIONS
+For ordinary ChatGPT:
+- specify new window or existing window;
+- provide the prompt.
 
-Executor identity, model identity, and session identity must be separated.
+For Codex:
+- model;
+- reasoning level;
+- new Session or existing Session;
+- repository;
+- branch;
+- provide the prompt.
+
+Do not include unnecessary internal explanations.
+
+Executor identity, model identity, and session identity must remain separate.
 
 ### 5. Session Selection Requirement
 
-Before generating any new execution or review window prompt, Engineering Control must explicitly state:
+Engineering Control must choose whether execution continues in an existing session or starts a new session.
 
-- whether to use a new window/session or continue the existing session;
-- the reason for that choice;
-- the expected context/caching impact.
+Session selection must preserve:
+- Codex token efficiency and context reuse;
+- ordinary ChatGPT workflow continuity;
+- reviewer independence.
 
-Rules:
-
-Codex:
-- session choice must consider token budget;
-- repository context loading;
-- existing cache/context usefulness.
-
-Ordinary ChatGPT:
-- session choice must consider workflow continuity;
-- existing task context;
-- role isolation requirements.
-
-Review tasks should normally use a fresh independent window to preserve reviewer independence unless a specific governance reason requires otherwise.
+Review tasks should normally use a fresh independent window.
 
 ### 6. Review Handoff Lifecycle
 
 Before requesting review:
 
 1. Write canonical review target and evidence to GitHub.
-2. State the required review window type before the launcher.
-3. Immediately provide a short review launcher.
+2. State the required review window type.
+3. Provide a short review launcher immediately.
 4. Include @GitHub at the beginning of every generated engineering window prompt.
 5. Reviewer reads GitHub canonical state directly.
 6. Reviewer writes result back to GitHub.
