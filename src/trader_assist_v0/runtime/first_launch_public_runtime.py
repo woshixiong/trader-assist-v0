@@ -903,6 +903,18 @@ class RestrictedPublicRuntime:
         self._publish_status_snapshot()
         return None
 
+    def refresh_readiness(self, *, now: datetime) -> None:
+        """Re-evaluate existing data-quality/readiness without trading authority.
+
+        This is a bounded wall-clock health tick only.  It reuses the existing
+        market-data freshness calculation and health transitions; it does not
+        run Strategy evaluation or create Signal/Formal/Shadow authority.
+        """
+        timestamp = self._validate_now(now)
+        if self._shutdown or self._connection_id == "":
+            return
+        self._try_promote_to_ready(now=timestamp)
+
     def _try_promote_to_ready(self, *, now: datetime) -> None:
         if self._health_state in _BLOCKING_HEALTH_STATES:
             return

@@ -838,6 +838,7 @@ async def _frame_loop(
                 recv_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await recv_task
+                runtime.refresh_readiness(now=_utc_now())
                 continue
             frame = recv_task.result()
             if isinstance(frame, bytes):

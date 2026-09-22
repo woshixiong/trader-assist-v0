@@ -31,6 +31,7 @@ from websockets.exceptions import ConnectionClosedOK
 
 from trader_assist_v0.first_launch.configuration import RiskConfiguration
 from trader_assist_v0.first_launch.market_data import (
+    DataQualityState,
     MarketDataError,
     RawEvidence,
     evidence_from_raw,
@@ -454,6 +455,40 @@ def test_full_warmup_to_ready(tmp_path: Path) -> None:
         assert runtime.acknowledged_subscriptions == frozenset(
             spec.identity for spec in REQUIRED_PUBLIC_SUBSCRIPTIONS
         )
+    finally:
+        store.close()
+
+
+def test_health_tick_rechecks_freshness_without_strategy_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, store, _, _ = _establish_ready(tmp_path)
+    try:
+        publications_before, outbox_before = _row_counts(store)
+        evaluated_before = runtime._last_evaluated_5m_identity
+
+        def _unexpected_evaluation(_now: datetime) -> object:
+            pytest.fail("health tick must not run Strategy evaluation")
+
+        monkeypatch.setattr(runtime, "_evaluate_new_closed_5m", _unexpected_evaluation)
+
+        # The existing rule is strictly "> 15s", so the boundary remains READY.
+        runtime.refresh_readiness(now=NOW + timedelta(seconds=15))
+        assert runtime.health_state is RuntimeHealthState.READY
+        assert _row_counts(store) == (publications_before, outbox_before)
+        assert runtime._last_evaluated_5m_identity == evaluated_before
+
+        # One second later the existing active-context rule is stale and READY
+        # must be withdrawn without any application market-data frame.
+        runtime.refresh_readiness(now=NOW + timedelta(seconds=16))
+        assert runtime.health_state is RuntimeHealthState.NOT_READY
+        status_snapshot = json.loads(
+            runtime.config.status_snapshot_path.read_text(encoding="utf-8")
+        )
+        assert status_snapshot["state"] == "NOT_READY"
+        assert status_snapshot["last_active_context_at"] == NOW.isoformat()
+        assert _row_counts(store) == (publications_before, outbox_before)
+        assert runtime._last_evaluated_5m_identity == evaluated_before
     finally:
         store.close()
 
@@ -2248,6 +2283,45 @@ def test_r3_e_blocked_send_times_out_without_an_orphan_coordinator(
         clock = _ReceiptClock(datetime.fromtimestamp((int(candle["T"]) + 4_000) / 1000, tz=UTC))
         monkeypatch.setattr(_SCRIPT_MODULE, "_utc_now", clock.utc_now)
         monkeypatch.setattr(_SCRIPT_MODULE, "_monotonic_now", clock.monotonic_now)
+        shifted_now = clock.utc_now()
+        shifted_monotonic = clock.monotonic_now()
+        runtime.accept_public_frame(
+            frame_text=_context_frame(),
+            now=shifted_now,
+            received_at=shifted_now,
+            received_monotonic=shifted_monotonic,
+        )
+        runtime.recover_public_snapshot(
+            raw_5m=_snapshot_json([_candle_obj(i) for i in range(64)]),
+            raw_15m=_snapshot_json(
+                [_candle_obj(i, interval="15m") for i in range(1, 21)]
+            ),
+            raw_metadata=_metadata_json(),
+            now=shifted_now,
+        )
+        snapshot = runtime._market_data.strategy_snapshot(shifted_now)
+        assert snapshot.active_context is not None
+        assert (
+            shifted_now - snapshot.active_context.evidence.received_at
+            <= timedelta(seconds=15)
+        )
+        assert snapshot.candles_5m
+        assert (
+            shifted_now.timestamp() * 1000 - snapshot.candles_5m[-1].close_time_ms
+            <= 390_000
+        )
+        assert snapshot.candles_15m
+        assert (
+            shifted_now.timestamp() * 1000 - snapshot.candles_15m[-1].close_time_ms
+            <= 990_000
+        )
+        assert snapshot.metadata is not None
+        assert (
+            shifted_now - snapshot.metadata.evidence.received_at
+            <= timedelta(hours=24)
+        )
+        assert snapshot.quality.state is DataQualityState.READY
+        assert runtime.health_state is RuntimeHealthState.READY
         websocket = _ControlledWebSocket(clock=clock, post_plans=[_ControlledPost(candle)])
         shutdown_event = asyncio.Event()
 
@@ -2414,6 +2488,48 @@ def _ack_and_context_frames() -> list[str]:
     """Return 3 ack frames + 1 context frame to reach READY."""
     acks = [_ack_frame(spec.subscription) for spec in REQUIRED_PUBLIC_SUBSCRIPTIONS]
     return [*acks, _context_frame("100")]
+
+
+def test_frame_loop_no_frame_tick_withdraws_stale_ready(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, store, _, _ = _establish_ready(tmp_path)
+    shutdown_event = asyncio.Event()
+    websocket = _FakeWebSocket([], shutdown_event=shutdown_event)
+    stale_now = NOW + timedelta(seconds=16)
+    monkeypatch.setattr(_SCRIPT_MODULE, "_utc_now", lambda: stale_now)
+    publications_before, outbox_before = _row_counts(store)
+
+    async def exercise() -> None:
+        task = asyncio.create_task(
+            _SCRIPT_MODULE._frame_loop(
+                runtime=runtime,
+                websocket=websocket,
+                recover_snapshot=_recovery_frames,
+                reconnecting=False,
+                shutdown_event=shutdown_event,
+                status=lambda _message: None,
+            )
+        )
+        try:
+            # The transport's existing one-second no-frame wait owns the bound.
+            for _ in range(200):
+                if runtime.health_state is RuntimeHealthState.NOT_READY:
+                    break
+                await asyncio.sleep(0.01)
+            assert runtime.health_state is RuntimeHealthState.NOT_READY
+            status_snapshot = json.loads(
+                runtime.config.status_snapshot_path.read_text(encoding="utf-8")
+            )
+            assert status_snapshot["state"] == "NOT_READY"
+            assert _row_counts(store) == (publications_before, outbox_before)
+        finally:
+            await _stop_frame_loop(task, websocket, shutdown_event)
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        store.close()
 
 
 def test_ga05_first_connection_reaches_ready_via_transport_loop(tmp_path: Path) -> None:
