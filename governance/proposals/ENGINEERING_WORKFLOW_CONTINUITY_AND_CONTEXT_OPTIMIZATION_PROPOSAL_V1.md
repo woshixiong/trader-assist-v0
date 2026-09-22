@@ -56,6 +56,7 @@ Executors receive only:
 Before every launcher prompt provide:
 
 - EXECUTION_SURFACE
+- SESSION_TYPE
 - REPOSITORY
 - BRANCH
 - EXECUTION_CLASS
@@ -65,22 +66,45 @@ Before every launcher prompt provide:
 - PERMISSIONS
 - FORBIDDEN_ACTIONS
 
-Executor identity and model identity must be separated.
+Executor identity, model identity, and session identity must be separated.
 
-### 5. Review Handoff Lifecycle
+### 5. Session Selection Requirement
+
+Before generating any new execution or review window prompt, Engineering Control must explicitly state:
+
+- whether to use a new window/session or continue the existing session;
+- the reason for that choice;
+- the expected context/caching impact.
+
+Rules:
+
+Codex:
+- session choice must consider token budget;
+- repository context loading;
+- existing cache/context usefulness.
+
+Ordinary ChatGPT:
+- session choice must consider workflow continuity;
+- existing task context;
+- role isolation requirements.
+
+Review tasks should normally use a fresh independent window to preserve reviewer independence unless a specific governance reason requires otherwise.
+
+### 6. Review Handoff Lifecycle
 
 Before requesting review:
 
 1. Write canonical review target and evidence to GitHub.
-2. Immediately provide a short review launcher.
-3. Include @GitHub at the beginning of every generated engineering window prompt.
-4. Reviewer reads GitHub canonical state directly.
-5. Reviewer writes result back to GitHub.
-6. Engineering Control verifies review object before continuing.
+2. State the required review window type before the launcher.
+3. Immediately provide a short review launcher.
+4. Include @GitHub at the beginning of every generated engineering window prompt.
+5. Reviewer reads GitHub canonical state directly.
+6. Reviewer writes result back to GitHub.
+7. Engineering Control verifies review object before continuing.
 
 No manual context relay is required when GitHub contains the canonical information.
 
-### 6. GitHub Capability Bootstrap
+### 7. GitHub Capability Bootstrap
 
 All generated engineering window prompts begin with:
 
@@ -108,6 +132,7 @@ No changes to:
 Validate:
 - ordinary GPT execution;
 - Codex execution;
+- new versus existing session selection;
 - review handoff;
 - review result retrieval;
 - authority boundary handling.
