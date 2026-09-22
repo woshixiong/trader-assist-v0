@@ -95,7 +95,7 @@ The user should not be required to copy a long review prompt containing informat
 
 Default review handoff format:
 
-1. Provide a short reviewer launcher.
+1. Provide a short reviewer launcher immediately when review boundary is reached.
 2. Include only:
    - repository;
    - PR/commit locator;
@@ -103,14 +103,35 @@ Default review handoff format:
    - review objective;
    - required output format.
 3. Reviewer performs fresh GitHub reads to load canonical evidence.
+4. Reviewer writes review result back to GitHub.
+5. Engineering Control verifies the GitHub review object before continuing.
 
 Long context transfer is prohibited by default when equivalent canonical GitHub evidence exists.
 
-This reduces:
-- context duplication;
-- user relay overhead;
-- stale prompt risk;
-- reviewer dependency on chat history.
+### 9. GitHub Capability Bootstrap Requirement
+All generated prompts that create new engineering windows must begin with:
+
+```text
+@GitHub
+```
+
+This applies to:
+- implementation windows;
+- review windows;
+- research windows;
+- validation windows;
+- any other engineering execution surface requiring GitHub interaction.
+
+The purpose is to ensure the new window initializes with the GitHub connection path required to access canonical engineering state.
+
+The @GitHub marker does not grant additional authority. Authority remains defined by the execution role, permissions, and governance rules included in the launcher.
+
+Generated launchers must still explicitly define:
+- repository;
+- branch or review target;
+- execution surface;
+- permissions;
+- authority boundary.
 
 ## Compatibility
 This proposal does not change:
