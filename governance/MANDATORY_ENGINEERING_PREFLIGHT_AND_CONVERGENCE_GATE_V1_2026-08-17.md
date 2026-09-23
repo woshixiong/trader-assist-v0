@@ -3,9 +3,9 @@
 **Status:** ACTIVE CHECKLIST CANDIDATE  
 **Effective date:** 2026-08-17  
 **Last material amendment candidate:** 2026-09-21  
-**Normative owner:** `UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V2_2026-09-01.md`
+**Normative owner:** `ENGINEERING_GOVERNANCE_V4_CONSOLIDATED_FINAL.md`
 
-This file is an **execution checklist and record schema**, not a second engineering constitution. If this checklist and Unified V2 conflict, Unified V2 governs.
+This file is an **execution checklist and record schema**, not a second engineering constitution. If this checklist and V4 conflict, V4 governs.
 
 Use the full checklist for every MATERIAL engineering task before Writer dispatch. Mechanical exact-state work may use a shortened form; if it exposes a material decision, reclassify immediately.
 
@@ -189,7 +189,7 @@ AND LOCAL_GIT_TRANSPORT_PROCEDURE_LOADED != YES
 => LOCAL_GIT_TRANSPORT_GATE=FAIL
 ```
 
-`AUTHORITATIVE_REMOTE_PUBLICATION_SURFACE_CHECKED=YES` means the routing check has been resolved; it does not assert that a remote write surface exists. If an equal-or-higher-fidelity authoritative remote publication surface is available, apply Unified V2's remote-execution preference before selecting another user-local publication attempt. A proven-unhealthy local route cannot receive `LOCAL_GIT_TRANSPORT_GATE=PASS` merely because HTTPS remains the project default.
+`AUTHORITATIVE_REMOTE_PUBLICATION_SURFACE_CHECKED=YES` means the routing check has been resolved; it does not assert that a remote write surface exists. If an equal-or-higher-fidelity authoritative remote publication surface is available, apply V4's remote-execution preference before selecting another user-local publication attempt. A proven-unhealthy local route cannot receive `LOCAL_GIT_TRANSPORT_GATE=PASS` merely because HTTPS remains the project default.
 
 Hard enforcement:
 

@@ -2,10 +2,10 @@
 
 **Status:** SPECIALIZED METHOD CANDIDATE  
 **Effective date:** 2026-09-13  
-**Normative owner:** `UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V2_2026-09-01.md`  
+**Normative owner:** `ENGINEERING_GOVERNANCE_V4_CONSOLIDATED_FINAL.md`
 **Research ancestry:** Issue #170, including MVSF V1 RC2 and its independent re-review PASS.  
 
-This document is a narrow, reusable method for deciding **what to trade, where to trade it, and whether the route is suitable for Human or Quant use**. It is subordinate to Unified V2 and does not create a competing project-wide engineering constitution.
+This document is a narrow, reusable method for deciding **what to trade, where to trade it, and whether the route is suitable for Human or Quant use**. It is subordinate to V4 and does not create a competing project-wide engineering constitution.
 
 It grants no production Universe change, venue migration, account/capital action, credential/private-API authority, wallet/signing, exchange write/order authority, deployment, Mark Ready or merge authority.
 
@@ -1189,7 +1189,7 @@ OWNERSHIP_CONFLICT_EMERGES_WITH_STRATEGY / ENGINEERING / OPERATIONS
 
 A normal change in which asset or venue ranks highest does not require changing the framework.
 
-Any material change to this durable method must follow current Unified V2 research, preflight, exact-artifact, independent-review and publication gates.
+Any material change to this durable method must follow current V4 research, preflight, exact-artifact, independent-review and publication gates.
 
 ---
 

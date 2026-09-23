@@ -2,7 +2,7 @@
 
 **Status:** TASK-CONDITIONAL PROCEDURE CANDIDATE  
 **Effective date:** 2026-09-16  
-**Normative owner:** `UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V2_2026-09-01.md`
+**Normative owner:** `ENGINEERING_GOVERNANCE_V4_CONSOLIDATED_FINAL.md`
 
 This procedure operationalizes two already-established project-wide invariants for GitHub publication work.
 
@@ -11,7 +11,7 @@ This procedure operationalizes two already-established project-wide invariants f
 1. project-generated local Git commands must use the simplest mature/provider-native reliable transport compatible with the current environment; and
 2. independently reviewed Pull Requests must reach an explicit terminal disposition rather than remain indefinitely open or draft.
 
-It is subordinate to Unified V2. It does not create Mark Ready, merge, deployment/runtime/cloud, credential/private-API outside the bounded GitHub authentication route, wallet/signing, exchange-write, Testnet/Mainnet, real-capital or autonomous-trading authority.
+It is subordinate to V4. It does not create Mark Ready, merge, deployment/runtime/cloud, credential/private-API outside the bounded GitHub authentication route, wallet/signing, exchange-write, Testnet/Mainnet, real-capital or autonomous-trading authority.
 
 ---
 
@@ -118,7 +118,7 @@ AND LOCAL_GIT_TRANSPORT_PROCEDURE_LOADED != YES
 => LOCAL_GIT_TRANSPORT_GATE=FAIL
 ```
 
-`AUTHORITATIVE_REMOTE_PUBLICATION_SURFACE_CHECKED=YES` means the routing check has been resolved; it does not mean an authoritative remote write surface necessarily exists. If an equal-or-higher-fidelity authoritative remote publication surface is available, apply Unified V2's remote-execution preference before selecting another user-local publication attempt. If the local path is already proven unhealthy, the local gate cannot PASS merely because HTTPS remains the project default.
+`AUTHORITATIVE_REMOTE_PUBLICATION_SURFACE_CHECKED=YES` means the routing check has been resolved; it does not mean an authoritative remote write surface necessarily exists. If an equal-or-higher-fidelity authoritative remote publication surface is available, apply V4's remote-execution preference before selecting another user-local publication attempt. If the local path is already proven unhealthy, the local gate cannot PASS merely because HTTPS remains the project default.
 
 Hard enforcement:
 
@@ -144,7 +144,7 @@ AND KNOWN_TRANSPORT_INCIDENT_NONREGRESSION != PASS
 => COMMAND_DELIVERY=PROHIBITED
 ```
 
-A local transport-health check must protect a real publication invariant. Do not create repeated speculative network probes merely to earn `PASS`; fresh provider/control-plane identity and an already-proven unhealthy local path are routing evidence. A provider-native connector identity check must not be redundantly re-proved through lower-reliability local `gh api` before semantic start unless the local result protects a distinct source invariant. When an authoritative connected GitHub surface can perform the same bounded mutation at equal or higher fidelity with less human relay, apply the Unified V2 remote-execution preference before requiring another local publication attempt.
+A local transport-health check must protect a real publication invariant. Do not create repeated speculative network probes merely to earn `PASS`; fresh provider/control-plane identity and an already-proven unhealthy local path are routing evidence. A provider-native connector identity check must not be redundantly re-proved through lower-reliability local `gh api` before semantic start unless the local result protects a distinct source invariant. When an authoritative connected GitHub surface can perform the same bounded mutation at equal or higher fidelity with less human relay, apply the V4 remote-execution preference before requiring another local publication attempt.
 
 ### 1.4 Checkpoint-aware fallback ladder
 
@@ -179,7 +179,7 @@ The 2026-09-17 R3 incident is a permanent nonregression case: local Git HTTPS fa
 
 ## 2. Reviewed Pull Request terminal-disposition discipline
 
-Unified V2 already requires explicit bounded-task disposition and separate user Mark Ready / merge authority. For GitHub Pull Requests, operationalize that invariant as:
+V4 already requires explicit bounded-task disposition and separate user Mark Ready / merge authority. For GitHub Pull Requests, operationalize that invariant as:
 
 ```text
 INDEPENDENT_REVIEW_COMPLETED
@@ -262,13 +262,13 @@ This procedure applies to:
 
 It does not replace:
 
-- Unified V2 project-wide engineering governance;
+- V4 project-wide engineering governance;
 - Generated Command reliability requirements;
 - Tool onboarding/change acceptance for material auth/tool changes;
 - task-specific Product / Strategy / Operations / Security authority;
 - any retained user authority gate.
 
-When this procedure conflicts with Unified V2 or a stricter current authority, the stricter/higher-precedence authority governs.
+When this procedure conflicts with V4 or a stricter current authority, the stricter/higher-precedence authority governs.
 
 ---
 

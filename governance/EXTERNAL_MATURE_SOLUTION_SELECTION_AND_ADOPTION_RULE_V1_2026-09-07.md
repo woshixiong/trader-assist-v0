@@ -2,10 +2,10 @@
 
 **Status:** TASK-CONDITIONAL PROCEDURE CANDIDATE  
 **Effective date:** 2026-09-07  
-**Normative owner:** `UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V2_2026-09-01.md`  
+**Normative owner:** `ENGINEERING_GOVERNANCE_V4_CONSOLIDATED_FINAL.md`
 **Scope:** selection, rejection, composition, bounded customization, adoption, migration, upgrade and re-evaluation of provider-native, standard/official, mature maintained external frameworks, libraries, SDKs, platforms, services and infrastructure components.
 
-This procedure operationalizes the project-wide mature-solution invariants in Unified V2. It is not a second engineering constitution. Unified V2 governs if there is any conflict.
+This procedure operationalizes the project-wide mature-solution invariants in V4. It is not a second engineering constitution. V4 governs if there is any conflict.
 
 It grants no implementation, Mark Ready, merge, deployment, runtime/cloud mutation, credential/private-API, wallet/signing, exchange-write, order-submission or autonomous-trading authority.
 
@@ -1183,7 +1183,7 @@ ORDER_SUBMISSION_OR_CANCELLATION
 AUTONOMOUS_TRADING
 ```
 
-Those remain governed by Unified V2 and explicit current user authority.
+Those remain governed by V4 and explicit current user authority.
 
 ---
 

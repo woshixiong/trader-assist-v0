@@ -43,6 +43,8 @@ jobs:
           /tmp/trader-assist-v0-venv/bin/pip-audit --strict -r requirements-decision-model-typesafe.lock
       - name: Compile
         run: /tmp/trader-assist-v0-venv/bin/python -m compileall -q src scripts tests
+      - name: V4 governance consistency
+        run: /tmp/trader-assist-v0-venv/bin/python scripts/check_v4_governance.py
       - name: Schema drift
         run: /tmp/trader-assist-v0-venv/bin/python scripts/export_schemas.py --check
       - name: Secret scan

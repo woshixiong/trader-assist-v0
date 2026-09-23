@@ -1,0 +1,82 @@
+{
+  "schema_version": "1.0.0",
+  "governance_version": "V4",
+  "status": "ACTIVE",
+  "repository": "woshixiong/trader-assist-v0",
+  "sole_project_wide_constitution": "governance/ENGINEERING_GOVERNANCE_V4_CONSOLIDATED_FINAL.md",
+  "entrypoints": [
+    "AGENTS.md",
+    "governance/PROJECT_RULES_INDEX.md",
+    "governance/CHATGPT_PROJECT_GOVERNANCE_BRIDGE_V4_CORE_ENFORCEMENT_2026-09-23.md"
+  ],
+  "active_checklists": [
+    "governance/MANDATORY_ENGINEERING_PREFLIGHT_AND_CONVERGENCE_GATE_V1_2026-08-17.md"
+  ],
+  "active_subordinate_procedures": [
+    "governance/PROJECT_RESEARCH_EVIDENCE_DECISION_METHOD_V1_2026-08-16.md",
+    "governance/EXTERNAL_MATURE_SOLUTION_SELECTION_AND_ADOPTION_RULE_V1_2026-09-07.md",
+    "governance/GENERATED_COMMAND_RELIABILITY_AND_OPERATOR_EFFICIENCY_RULE_V1_2026-08-30.md",
+    "governance/GITHUB_LOCAL_TRANSPORT_AND_REVIEWED_PR_CLOSEOUT_PROCEDURE_V1_2026-09-16.md",
+    "governance/ENGINEERING_TOOL_ONBOARDING_AND_CHANGE_ACCEPTANCE_RULE_V1_2026-08-23.md",
+    "governance/FINALSHELL_TARGET_HOST_DEPLOYMENT_WORKFLOW_V1_2026-08-26.md",
+    "governance/TRADING_BEHAVIOR_AND_EDGE_REVIEW_PROCEDURE_V1_2026-09-06.md",
+    "governance/TRADING_BEHAVIOR_REVIEW_AND_EXPERIMENT_LIFECYCLE_V1_2026-09-13.md",
+    "governance/MARKET_AND_VENUE_SELECTION_FRAMEWORK_V1_2026-09-13.md"
+  ],
+  "active_skills": [
+    ".agents/skills/trade-os-v4-bootstrap/SKILL.md",
+    ".agents/skills/trade-os-v4-development/SKILL.md",
+    ".agents/skills/trade-os-v4-ci/SKILL.md",
+    ".agents/skills/trade-os-v4-review/SKILL.md"
+  ],
+  "codex": {
+    "config": ".codex/config.toml",
+    "main_writer_model": "gpt-5.6-sol",
+    "main_writer_reasoning": "medium",
+    "web_search": "disabled",
+    "agents": {
+      "explorer": ".codex/agents/explorer.toml",
+      "code_reviewer": ".codex/agents/code-reviewer.toml"
+    },
+    "pre_tool_hook": ".codex/hooks/pre_tool_use_policy.py"
+  },
+  "deterministic_tools": {
+    "bootstrap": "scripts/control/v4_bootstrap.py",
+    "governance_consistency": "scripts/check_v4_governance.py"
+  },
+  "historical_or_superseded": [
+    "governance/UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V2_2026-09-01.md",
+    "governance/ENGINEERING_EXECUTOR_ROUTER_V2_2026-08-23.md",
+    "governance/ENGINEERING_EXECUTOR_SELECTION_AND_TOOL_PROFILE_ROUTING_V1_2026-08-20.md",
+    "governance/CURRENT_TOOLING_EXECUTOR_PRIORITY_V1_2026-08-18.md",
+    "governance/CODEX_CLI_ENGINEERING_USAGE_PROFILE_V2_2026-08-23.md",
+    "CODEX.md"
+  ],
+  "compatibility_skills_not_on_mandatory_route": [
+    ".agents/skills/trade-os-writer-preflight/SKILL.md",
+    ".agents/skills/trade-os-local-gates/SKILL.md",
+    ".agents/skills/trade-os-evidence/SKILL.md",
+    ".agents/skills/trade-os-result-packet/SKILL.md",
+    ".agents/skills/trade-os-ci-terminal-wait/SKILL.md",
+    ".agents/skills/trade-os-independent-review-bundle/SKILL.md",
+    ".agents/skills/trade-os-local-task-runner/SKILL.md"
+  ],
+  "routing_branches": {
+    "A": "DETERMINISTIC_MECHANICAL_ZERO_MODEL",
+    "B": "FRESH_ORDINARY_CHATGPT_BOUNDED_WRITER",
+    "C": "CODEX_LARGE_COHERENT_PACKAGE",
+    "D": "ENGINEERING_CONTROL_UNRESOLVED_HIGH_CONSEQUENCE"
+  },
+  "protected_actions": [
+    "MARK_READY",
+    "MERGE",
+    "BRANCH_DELETION",
+    "DEPLOYMENT",
+    "PRODUCTION_RUNTIME_OR_CLOUD_MUTATION",
+    "SERVICE_START_RESTART_ENABLE_REBOOT",
+    "CREDENTIAL_OR_PRIVATE_API",
+    "WALLET_OR_SIGNING",
+    "EXCHANGE_WRITE_OR_ORDER_ACTION",
+    "AUTONOMOUS_OR_REAL_CAPITAL_TRADING"
+  ]
+}

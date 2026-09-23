@@ -1,5 +1,9 @@
 # Trader Assist / Trade OS — Unified Engineering Governance and Execution Standard V2
 
+> **HISTORICAL / SUPERSEDED BY V4.** This file is preserved as source and
+> rationale only. It is not active authority and cannot override
+> `governance/ENGINEERING_GOVERNANCE_V4_CONSOLIDATED_FINAL.md`.
+
 **Status:** CANONICAL GOVERNANCE CANDIDATE  
 **Effective date:** 2026-09-01  
 **Last material amendment candidate:** 2026-09-21  
