@@ -281,10 +281,12 @@ def check_transport_nonregression(root: Path) -> None:
             "SSL_ERROR_SYSCALL",
             "DEFAULT=KEEP_SAME_EXECUTION_ROUTE",
             "IDEMPOTENT_READ_RETRY_BUDGET=2_TO_3",
-            "SAFE_IDEMPOTENT_WRITE_RETRY=ALLOWED_AFTER_PROVEN_NO_MUTATION_OR_UNCHANGED_READBACK",
+            "SAFE_IDEMPOTENT_WRITE_RETRY="
+            "ALLOWED_AFTER_PROVEN_NO_MUTATION_OR_UNCHANGED_READBACK",
             "AMBIGUOUS_MUTATION_WITHOUT_READBACK=FAIL_CLOSED",
             "PREMATURE_SURFACE_SWITCH=PROHIBITED",
-            "CONNECTED_PROVIDER_GITHUB_RECOVERY=AFTER_RETRY_BUDGET_EXHAUSTION_OR_PERSISTENT_FAILURE_WHEN_AVAILABLE",
+            "CONNECTED_PROVIDER_GITHUB_RECOVERY="
+            "AFTER_RETRY_BUDGET_EXHAUSTION_OR_PERSISTENT_FAILURE_WHEN_AVAILABLE",
             "--insecure-storage",
         ),
         "GitHub local transport",
@@ -294,7 +296,8 @@ def check_transport_nonregression(root: Path) -> None:
         (
             "TRANSIENT_NETWORK_TLS_HTTP_KEEP_SAME_ROUTE_DEFAULT=YES",
             "IDEMPOTENT_READ_TRANSPORT_RETRY_BUDGET=2_TO_3",
-            "SAFE_IDEMPOTENT_WRITE_TRANSPORT_RETRY_REQUIRES_NO_MUTATION_OR_UNCHANGED_READBACK=YES",
+            "SAFE_IDEMPOTENT_WRITE_TRANSPORT_RETRY_REQUIRES_"
+            "NO_MUTATION_OR_UNCHANGED_READBACK=YES",
             "AMBIGUOUS_MUTATION_WITHOUT_READBACK_FAIL_CLOSED=YES",
             "PREMATURE_EXECUTION_SURFACE_SWITCH_ON_TRANSIENT_TRANSPORT=PROHIBITED",
             "KNOWN_LIBRESSL_PUSH_FAILURE_LOCAL_RETRY=BOUNDED_WHEN_MUTATION_STATE_SAFE",
@@ -339,7 +342,11 @@ def check_transport_nonregression(root: Path) -> None:
         "do not retry semantic work, push, credentials, or Codex",
         "routes to accepted connected-provider recovery rather than repeated local push",
     )
-    retained = [phrase for phrase in banned if phrase in active_transport_text or phrase in normalized]
+    retained = [
+        phrase
+        for phrase in banned
+        if phrase in active_transport_text or phrase in normalized
+    ]
     if retained:
         raise CheckFailure(
             "active transport text retains premature-switch or blanket-retry prohibition: "

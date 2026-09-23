@@ -93,11 +93,15 @@ def test_rules_index_rejects_unconditional_internal_code_review(
     with pytest.raises(checker.CheckFailure, match="unconditional"):
         checker.check_index(tmp_path)
 
+TRANSPORT_PROCEDURE = (
+    "governance/"
+    "GITHUB_LOCAL_TRANSPORT_AND_REVIEWED_PR_CLOSEOUT_PROCEDURE_V1_2026-09-16.md"
+)
 TRANSPORT_POLICY_PATHS = (
     "governance/ENGINEERING_GOVERNANCE_V4_CONSOLIDATED_FINAL.md",
     "governance/CHATGPT_PROJECT_GOVERNANCE_BRIDGE_V4_CORE_ENFORCEMENT_2026-09-23.md",
     "docs/engineering/CODEX_V4_OPERATING_GUIDE.md",
-    "governance/GITHUB_LOCAL_TRANSPORT_AND_REVIEWED_PR_CLOSEOUT_PROCEDURE_V1_2026-09-16.md",
+    TRANSPORT_PROCEDURE,
     "governance/PROJECT_RULES_INDEX.md",
 )
 
@@ -117,10 +121,7 @@ def test_transport_nonregression_rejects_blanket_push_retry_prohibition(
     tmp_path: Path,
 ) -> None:
     _copy_transport_policy_files(tmp_path)
-    procedure = (
-        tmp_path
-        / "governance/GITHUB_LOCAL_TRANSPORT_AND_REVIEWED_PR_CLOSEOUT_PROCEDURE_V1_2026-09-16.md"
-    )
+    procedure = tmp_path / TRANSPORT_PROCEDURE
     procedure.write_text(
         procedure.read_text(encoding="utf-8") + "\nLOCAL_PUSH_RETRY=PROHIBITED\n",
         encoding="utf-8",
@@ -133,10 +134,7 @@ def test_transport_nonregression_rejects_missing_ambiguous_write_fail_closed(
     tmp_path: Path,
 ) -> None:
     _copy_transport_policy_files(tmp_path)
-    procedure = (
-        tmp_path
-        / "governance/GITHUB_LOCAL_TRANSPORT_AND_REVIEWED_PR_CLOSEOUT_PROCEDURE_V1_2026-09-16.md"
-    )
+    procedure = tmp_path / TRANSPORT_PROCEDURE
     text_value = procedure.read_text(encoding="utf-8").replace(
         "AMBIGUOUS_MUTATION_WITHOUT_READBACK=FAIL_CLOSED",
         "AMBIGUOUS_MUTATION_WITHOUT_READBACK=RETRY",
