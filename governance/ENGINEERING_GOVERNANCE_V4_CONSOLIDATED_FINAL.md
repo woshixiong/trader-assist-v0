@@ -654,9 +654,19 @@ route is HTTPS + GitHub CLI browser OAuth + system credential storage +
 `workflow` scope before a real push; successful auth/API/read/dry-run checks do
 not prove that scope. If GitHub identity, required OAuth scopes, and the exact
 local checkpoint are already proven but a real HTTPS push fails with the known
-LibreSSL `SSL_ERROR_SYSCALL` class, do not retry semantic work, local push, or
-credentials. Preserve the exact offline checkpoint and route publication
-through the accepted connected-provider GitHub recovery surface when available.
+LibreSSL `SSL_ERROR_SYSCALL` class, classify it as transport instability:
+never rerun semantic work or weaken/reauthenticate credentials merely to cure
+transport. Preserve the exact checkpoint and keep the same execution route for
+a small bounded retry before switching surfaces. Idempotent reads normally get
+2-3 attempts. A failed write may be retried on the same route only when
+canonical evidence proves the prior attempt did not mutate remote state, or
+canonical readback proves the target is unchanged and the exact write is
+safe/idempotent. If a write may have succeeded, read back first; if mutation
+state remains ambiguous and readback is unavailable, fail closed. Force or
+history-rewriting writes remain prohibited unless separately and explicitly
+authorized. Switch to connected-provider recovery only after the retry budget
+is exhausted or the route is proven persistently unusable, when that recovery
+surface is available.
 
 Human-executed commands are engineered artifacts. When a local operator route
 is genuinely necessary, prefer one safe contiguous paste or a reviewed
@@ -880,9 +890,14 @@ KNOWN_COMMAND_INCIDENT_NONREGRESSION_GATE=REQUIRED
 LOCAL_GIT_AUTH_ROUTE=HTTPS_GH_BROWSER_OAUTH_SYSTEM_KEYRING_SETUP_GIT
 WORKFLOW_PATH_MUTATION_REQUIRES_VERIFIED_WORKFLOW_SCOPE=YES
 AUTH_API_READ_DRY_RUN_NE_WORKFLOW_SCOPE_PROOF=YES
+TRANSIENT_NETWORK_TLS_HTTP_KEEP_SAME_ROUTE_DEFAULT=YES
+IDEMPOTENT_READ_TRANSPORT_RETRY_BUDGET=2_TO_3
+SAFE_IDEMPOTENT_WRITE_TRANSPORT_RETRY_REQUIRES_NO_MUTATION_OR_UNCHANGED_READBACK=YES
+AMBIGUOUS_MUTATION_WITHOUT_READBACK_FAIL_CLOSED=YES
+PREMATURE_EXECUTION_SURFACE_SWITCH_ON_TRANSIENT_TRANSPORT=PROHIBITED
 KNOWN_LIBRESSL_PUSH_FAILURE_PRESERVES_CHECKPOINT=YES
-KNOWN_LIBRESSL_PUSH_FAILURE_LOCAL_RETRY=PROHIBITED
-KNOWN_LIBRESSL_PUSH_FAILURE_CONNECTED_PROVIDER_RECOVERY=WHEN_AVAILABLE
+KNOWN_LIBRESSL_PUSH_FAILURE_LOCAL_RETRY=BOUNDED_WHEN_MUTATION_STATE_SAFE
+KNOWN_LIBRESSL_PUSH_FAILURE_CONNECTED_PROVIDER_RECOVERY=AFTER_RETRY_BUDGET_OR_PERSISTENT_FAILURE_WHEN_AVAILABLE
 OPERATOR_TRANSPORT_MUST_REDUCE_COMPLEXITY_NOT_REENCODE_IT=YES
 INTERACTIVE_SHELL_PARSE_ASSUMPTIONS_MUST_BE_PROVEN_OR_AVOIDED=YES
 CLI_INVOCATION_CONTRACT_PROOF=REQUIRED_FOR_MATERIAL_VERSIONED_CLI

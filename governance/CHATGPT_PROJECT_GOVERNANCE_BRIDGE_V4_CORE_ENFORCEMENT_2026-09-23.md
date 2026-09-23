@@ -78,6 +78,18 @@ egress failure is not semantic task failure. Read durable state and resume the
 existing checkpoint. Do not restart or semantically rerun merely because output
 was interrupted.
 
+For confidently classified transient network/TLS/HTTP transport instability,
+keep the same executor, credential surface, and execution route first. Retry
+idempotent reads only within a small bounded budget, normally 2-3 attempts.
+Never rerun semantic work or reauthenticate/weaken credentials merely to cure
+transport. A write may be retried on the same route only when canonical evidence
+proves no remote mutation, or canonical readback proves the target is unchanged
+and the exact write is safe/idempotent. If mutation may have succeeded, read
+back first; if mutation remains ambiguous and readback is unavailable, fail
+closed. Switch execution surfaces only after the retry budget is exhausted or
+the current route is persistently unusable. Force/history-rewriting writes
+still require separate explicit authority.
+
 ## CI and review
 
 ```text

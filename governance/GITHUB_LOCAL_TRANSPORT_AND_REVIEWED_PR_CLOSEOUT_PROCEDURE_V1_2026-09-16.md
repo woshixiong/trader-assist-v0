@@ -165,7 +165,7 @@ AND KNOWN_TRANSPORT_INCIDENT_NONREGRESSION != PASS
 => COMMAND_DELIVERY=PROHIBITED
 ```
 
-A local transport-health check must protect a real publication invariant. Do not create repeated speculative network probes merely to earn `PASS`; fresh provider/control-plane identity and an already-proven unhealthy local path are routing evidence. A provider-native connector identity check must not be redundantly re-proved through lower-reliability local `gh api` before semantic start unless the local result protects a distinct source invariant. When an authoritative connected GitHub surface can perform the same bounded mutation at equal or higher fidelity with less human relay, apply the V4 remote-execution preference before requiring another local publication attempt.
+A local transport-health check must protect a real publication invariant. Do not create repeated speculative network probes merely to earn `PASS`; fresh provider/control-plane identity and an already-proven unhealthy local path are routing evidence. A provider-native connector identity check must not be redundantly re-proved through lower-reliability local `gh api` before semantic start unless the local result protects a distinct source invariant. When an authoritative connected GitHub surface can perform the same bounded mutation at equal or higher fidelity with less human relay, use it after the same-route bounded retry policy below is satisfied or when the local route is already proven persistently unusable. Do not switch execution surfaces merely because one transient transport attempt failed.
 
 ### 1.5 Checkpoint-aware fallback ladder
 
@@ -174,21 +174,40 @@ After a semantic Writer/action has completed, publication transport failure is a
 Use this ladder:
 
 ```text
-SEMANTIC_CHECKPOINT_NOT_YET_COMPLETE
--> use accepted HTTPS + GitHub CLI route when LOCAL_GIT_TRANSPORT_GATE=PASS
--> otherwise select an authoritative safe publication surface before semantic mutation when practical
+TRANSIENT_NETWORK_TLS_HTTP_FAILURE=CONFIDENTLY_CLASSIFIED
+-> DEFAULT=KEEP_SAME_EXECUTION_ROUTE
+-> SEMANTIC_RERUN=PROHIBITED
+-> CREDENTIAL_REAUTH_OR_WEAKENING=PROHIBITED
+-> IDEMPOTENT_READ_RETRY_BUDGET=2_TO_3
+-> PREMATURE_SURFACE_SWITCH=PROHIBITED
 
-SEMANTIC_CHECKPOINT_ALREADY_COMPLETE
-AND LOCAL_GITHUB_TLS_OR_API_PATH_PROVEN_UNRELIABLE
+SAFE_IDEMPOTENT_WRITE_FAILURE
+AND CANONICAL_EVIDENCE_PROVES_NO_MUTATION
+-> SAFE_IDEMPOTENT_WRITE_RETRY=ALLOWED_AFTER_PROVEN_NO_MUTATION_OR_UNCHANGED_READBACK
+-> SAME_ROUTE_BOUNDED_WRITE_RETRY=ALLOWED
+
+SAFE_IDEMPOTENT_WRITE_FAILURE
+AND MUTATION_MAY_HAVE_SUCCEEDED
+-> CANONICAL_READBACK=REQUIRED
+-> TARGET_STATE_UNCHANGED=REQUIRED_BEFORE_RETRY
+-> SAFE_IDEMPOTENT_WRITE_RETRY=ALLOWED_AFTER_PROVEN_NO_MUTATION_OR_UNCHANGED_READBACK
+
+MUTATION_STATE_AMBIGUOUS
+AND CANONICAL_READBACK_UNAVAILABLE
+-> AMBIGUOUS_MUTATION_WITHOUT_READBACK=FAIL_CLOSED
+-> BLIND_WRITE_RETRY=PROHIBITED
+
+RETRY_BUDGET_EXHAUSTED_OR_ROUTE_PERSISTENTLY_UNUSABLE
 AND AUTHORITATIVE_GITHUB_CONNECTOR_WRITE_SURFACE_AVAILABLE
 -> RERUN_SEMANTIC_ACTION=NO
--> LOOP_LOCAL_TRANSPORT_RETRIES=NO
+-> CONNECTED_PROVIDER_GITHUB_RECOVERY=AFTER_RETRY_BUDGET_EXHAUSTION_OR_PERSISTENT_FAILURE_WHEN_AVAILABLE
 -> PRESERVE_EXACT_HEAD_TREE_SCOPE_AND_HASH_EVIDENCE=YES
 -> OFFLINE_EXACT_ARTIFACT_EGRESS_WHEN_SOURCE_BYTES_ARE_LOCAL_ONLY
 -> CONNECTOR_PROVIDER_NATIVE_PUBLICATION
 -> VERIFY_TERMINAL_REMOTE_TREE_OR_EXACT_ARTIFACT
 
 AUTHORITATIVE_REMOTE_WRITE_SURFACE_UNAVAILABLE
+AND RETRY_BUDGET_EXHAUSTED_OR_ROUTE_PERSISTENTLY_UNUSABLE
 -> preserve checkpoint
 -> SAFE_STOP_AT_TRANSPORT_CAPABILITY_BOUNDARY
 -> do not weaken credentials, force semantics, or semantic identity merely to publish
@@ -200,7 +219,9 @@ The Issue #232 recurrence makes the push-side rule explicit. Once GitHub
 identity, required OAuth scopes (including `workflow` when applicable), and the
 exact local semantic checkpoint are PASS, a real HTTPS push that fails with
 `LibreSSL SSL_connect: SSL_ERROR_SYSCALL in connection to github.com:443` is an
-infrastructure/transport failure, not a semantic or credential failure:
+infrastructure/transport failure, not a semantic or credential failure. It
+preserves the route by default, but never authorizes blind repetition of an
+ambiguous mutation:
 
 ```text
 GITHUB_IDENTITY=PASS
@@ -208,18 +229,25 @@ REQUIRED_OAUTH_SCOPES=PASS
 LOCAL_CHECKPOINT=PASS
 KNOWN_LIBRESSL_PUSH_FAILURE=YES
 SEMANTIC_RETRY=PROHIBITED
-LOCAL_PUSH_RETRY=PROHIBITED
 CREDENTIAL_CHANGE_OR_WEAKENING=PROHIBITED
 CODEX_RESTART=PROHIBITED
 PRESERVE_EXACT_OFFLINE_CHECKPOINT=YES
-CONNECTED_PROVIDER_GITHUB_RECOVERY=REQUIRED_WHEN_AVAILABLE
+WRITE_MUTATION_STATE=CANONICAL_READBACK_REQUIRED_IF_NOT_PROVEN_NO_MUTATION
+LOCAL_PUSH_RETRY=BOUNDED_SAME_ROUTE_ONLY_WHEN_NO_MUTATION_OR_UNCHANGED_READBACK
+BLIND_AMBIGUOUS_WRITE_RETRY=PROHIBITED
+CONNECTED_PROVIDER_GITHUB_RECOVERY=AFTER_RETRY_BUDGET_EXHAUSTION_OR_PERSISTENT_FAILURE_WHEN_AVAILABLE
 ```
 
-Preserve exact head/tree/parent/scope evidence and, when local-only bytes exist,
-export one exact offline checkpoint artifact. Publication then uses the accepted
-connected-provider GitHub surface to create/update the task ref with normal
-non-force semantics and continue the existing Draft PR. Do not reconstruct or
-rerun semantic work merely because local HTTPS transport failed.
+Preserve exact head/tree/parent/scope evidence. If canonical evidence proves the
+failed push made no remote mutation, or canonical readback proves the target ref
+is unchanged, the exact same safe/idempotent push may receive a small bounded
+same-route retry. If readback shows the mutation already landed, reconcile and
+do not repeat it. If mutation state is ambiguous and canonical readback is
+unavailable, fail closed. When local-only bytes exist, export one exact offline
+checkpoint artifact. Switch publication to the accepted connected-provider
+GitHub surface only after the bounded retry budget is exhausted or the route is
+persistently unusable; never reconstruct or rerun semantic work merely because
+local HTTPS transport failed.
 
 ---
 

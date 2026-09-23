@@ -265,18 +265,95 @@ def check_transport_nonregression(root: Path) -> None:
         root,
         "governance/GITHUB_LOCAL_TRANSPORT_AND_REVIEWED_PR_CLOSEOUT_PROCEDURE_V1_2026-09-16.md",
     )
+    v4 = read_text(root, CANONICAL)
+    bridge = read_text(
+        root,
+        "governance/CHATGPT_PROJECT_GOVERNANCE_BRIDGE_V4_CORE_ENFORCEMENT_2026-09-23.md",
+    )
+    guide = read_text(root, "docs/engineering/CODEX_V4_OPERATING_GUIDE.md")
+    index = read_text(root, "governance/PROJECT_RULES_INDEX.md")
+
     require_contains(
         procedure,
         (
             "GH_WORKFLOW_SCOPE_VERIFIED=YES",
             "git push --dry-run",
             "SSL_ERROR_SYSCALL",
-            "LOCAL_PUSH_RETRY=PROHIBITED",
-            "CONNECTED_PROVIDER_GITHUB_RECOVERY=REQUIRED_WHEN_AVAILABLE",
+            "DEFAULT=KEEP_SAME_EXECUTION_ROUTE",
+            "IDEMPOTENT_READ_RETRY_BUDGET=2_TO_3",
+            "SAFE_IDEMPOTENT_WRITE_RETRY="
+            "ALLOWED_AFTER_PROVEN_NO_MUTATION_OR_UNCHANGED_READBACK",
+            "AMBIGUOUS_MUTATION_WITHOUT_READBACK=FAIL_CLOSED",
+            "PREMATURE_SURFACE_SWITCH=PROHIBITED",
+            "CONNECTED_PROVIDER_GITHUB_RECOVERY="
+            "AFTER_RETRY_BUDGET_EXHAUSTION_OR_PERSISTENT_FAILURE_WHEN_AVAILABLE",
             "--insecure-storage",
         ),
         "GitHub local transport",
     )
+    require_contains(
+        v4,
+        (
+            "TRANSIENT_NETWORK_TLS_HTTP_KEEP_SAME_ROUTE_DEFAULT=YES",
+            "IDEMPOTENT_READ_TRANSPORT_RETRY_BUDGET=2_TO_3",
+            "SAFE_IDEMPOTENT_WRITE_TRANSPORT_RETRY_REQUIRES_"
+            "NO_MUTATION_OR_UNCHANGED_READBACK=YES",
+            "AMBIGUOUS_MUTATION_WITHOUT_READBACK_FAIL_CLOSED=YES",
+            "PREMATURE_EXECUTION_SURFACE_SWITCH_ON_TRANSIENT_TRANSPORT=PROHIBITED",
+            "KNOWN_LIBRESSL_PUSH_FAILURE_LOCAL_RETRY=BOUNDED_WHEN_MUTATION_STATE_SAFE",
+        ),
+        "V4 transport",
+    )
+    bridge_normalized = " ".join(bridge.split())
+    require_contains(
+        bridge_normalized,
+        (
+            "transient network/TLS/HTTP transport instability",
+            "normally 2-3 attempts",
+            "readback is unavailable, fail closed",
+            "Switch execution surfaces only after the retry budget is exhausted",
+        ),
+        "Project Instruction bridge transport",
+    )
+    guide_normalized = " ".join(guide.split())
+    require_contains(
+        guide_normalized,
+        (
+            "keep the same route for a small bounded transport retry",
+            "Idempotent reads normally get 2-3 attempts.",
+            "ambiguous mutation without available readback fails closed",
+        ),
+        "Codex operating guide transport",
+    )
+    require_contains(
+        index,
+        (
+            "same-route bounded retry first",
+            "Ambiguous mutation without readback fails closed",
+            "only after the retry budget is exhausted",
+        ),
+        "Rules Index transport",
+    )
+
+    active_transport_text = "\n".join((procedure, v4, bridge, guide, index))
+    normalized = " ".join(active_transport_text.split())
+    banned = (
+        "LOCAL_PUSH_RETRY=PROHIBITED",
+        "KNOWN_LIBRESSL_PUSH_FAILURE_LOCAL_RETRY=PROHIBITED",
+        "do not retry semantic work, local push, or credentials",
+        "do not retry semantic work, push, credentials, or Codex",
+        "routes to accepted connected-provider recovery rather than repeated local push",
+    )
+    retained = [
+        phrase
+        for phrase in banned
+        if phrase in active_transport_text or phrase in normalized
+    ]
+    if retained:
+        raise CheckFailure(
+            "active transport text retains premature-switch or blanket-retry prohibition: "
+            + ", ".join(retained)
+        )
 
 
 def check_skills(root: Path) -> None:
