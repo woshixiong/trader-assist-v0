@@ -304,8 +304,9 @@ def check_transport_nonregression(root: Path) -> None:
         ),
         "V4 transport",
     )
+    bridge_normalized = " ".join(bridge.split())
     require_contains(
-        bridge,
+        bridge_normalized,
         (
             "transient network/TLS/HTTP transport instability",
             "normally 2-3 attempts",
@@ -314,12 +315,13 @@ def check_transport_nonregression(root: Path) -> None:
         ),
         "Project Instruction bridge transport",
     )
+    guide_normalized = " ".join(guide.split())
     require_contains(
-        guide,
+        guide_normalized,
         (
-            "keep the same\nroute for a small bounded transport retry",
+            "keep the same route for a small bounded transport retry",
             "Idempotent reads normally get 2-3 attempts.",
-            "ambiguous mutation without available\nreadback fails closed",
+            "ambiguous mutation without available readback fails closed",
         ),
         "Codex operating guide transport",
     )
