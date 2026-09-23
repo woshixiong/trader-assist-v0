@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
@@ -211,8 +213,8 @@ class HumanApprovalLedger:
             )
 
     def display(self, package: StrategyOrderPackage) -> StrategyOrderPackage:
-        payload = self._validated_payload(package)
-        with self._connection:
+        with self._mutation():
+            payload = self._validated_payload(package)
             row = self._connection.execute(
                 "SELECT package_hash, parent_strategy_order_id, payload_json "
                 "FROM l1_packages WHERE package_id = ?",
@@ -247,39 +249,42 @@ class HumanApprovalLedger:
         return package
 
     def record_baseline(self, package: StrategyOrderPackage, *, server_ms: int) -> WorkflowEvidence:
-        self._require_displayed(package)
-        return self._evidence(
-            "baseline:" + package.package_id,
-            package,
-            EvidenceStream.STRATEGY_BASELINE_SHADOW,
-            server_ms,
-        )
+        with self._mutation():
+            self._require_displayed(package)
+            return self._evidence(
+                "baseline:" + package.package_id,
+                package,
+                EvidenceStream.STRATEGY_BASELINE_SHADOW,
+                server_ms,
+            )
 
     def record_future_live_boundary(
         self, package: StrategyOrderPackage, *, server_ms: int
     ) -> WorkflowEvidence:
         """Reserve the distinct future child identity without submission authority."""
-        self._require_displayed(package)
-        return self._evidence(
-            "future-live:" + package.package_id,
-            package,
-            EvidenceStream.FUTURE_LIVE_EXECUTION,
-            server_ms,
-        )
+        with self._mutation():
+            self._require_displayed(package)
+            return self._evidence(
+                "future-live:" + package.package_id,
+                package,
+                EvidenceStream.FUTURE_LIVE_EXECUTION,
+                server_ms,
+            )
 
     def arm(
         self, package: StrategyOrderPackage, *, action_key: str, server_ms: int
     ) -> ApprovalState:
-        self._require_displayed(package)
-        self._require_fresh(package, server_ms)
-        return self._event(
-            action_key,
-            package,
-            "ARMED",
-            ApprovalMode.PREAUTHORIZED_ARMED,
-            server_ms,
-            {"activation_opportunity_id": package.activation_opportunity_id},
-        )
+        with self._mutation():
+            self._require_displayed(package)
+            self._require_fresh(package, server_ms)
+            return self._event(
+                action_key,
+                package,
+                "ARMED",
+                ApprovalMode.PREAUTHORIZED_ARMED,
+                server_ms,
+                {"activation_opportunity_id": package.activation_opportunity_id},
+            )
 
     def activate(
         self,
@@ -289,25 +294,27 @@ class HumanApprovalLedger:
         server_ms: int,
         activation_opportunity_id: str | None,
     ) -> ApprovalState:
-        self._require_displayed(package)
-        self._require_fresh(package, server_ms)
-        retained = self._retained_event_state(
-            action_key,
-            package,
-            "ACTIVATED",
-            ApprovalMode.PREAUTHORIZED_ARMED,
-            server_ms,
-            {"activation_opportunity_id": activation_opportunity_id}
-            if activation_opportunity_id is not None
-            else None,
-        )
-        if retained is not None:
-            return retained
-        prior = self.state(package, server_ms=server_ms)
-        if prior is ApprovalState.PREAUTHORIZED_ARMED:
-            if activation_opportunity_id != package.activation_opportunity_id:
-                raise L1ContractError("preauthorization requires its exact activation opportunity")
-            with self._connection:
+        with self._mutation():
+            self._require_displayed(package)
+            self._require_fresh(package, server_ms)
+            retained = self._retained_event_state(
+                action_key,
+                package,
+                "ACTIVATED",
+                ApprovalMode.PREAUTHORIZED_ARMED,
+                server_ms,
+                {"activation_opportunity_id": activation_opportunity_id}
+                if activation_opportunity_id is not None
+                else None,
+            )
+            if retained is not None:
+                return retained
+            prior = self.state(package, server_ms=server_ms)
+            if prior is ApprovalState.PREAUTHORIZED_ARMED:
+                if activation_opportunity_id != package.activation_opportunity_id:
+                    raise L1ContractError(
+                        "preauthorization requires its exact activation opportunity"
+                    )
                 self._event(
                     action_key,
                     package,
@@ -322,58 +329,78 @@ class HumanApprovalLedger:
                     EvidenceStream.HUMAN_WORKFLOW_SHADOW,
                     server_ms,
                 )
-            return ApprovalState.ACTIVATED
-        if prior in {ApprovalState.DRAFT, ApprovalState.AWAITING_HUMAN_APPROVAL}:
-            self._event(
-                action_key,
-                package,
-                "ACTIVATION_OPEN",
-                ApprovalMode.POST_ACTIVATION,
-                server_ms,
-                {"activation_opportunity_id": activation_opportunity_id}
-                if activation_opportunity_id is not None
-                else None,
-            )
-            return ApprovalState.AWAITING_HUMAN_APPROVAL
-        raise L1ContractError("activation authority is already consumed")
+                return ApprovalState.ACTIVATED
+            if prior in {ApprovalState.DRAFT, ApprovalState.AWAITING_HUMAN_APPROVAL}:
+                self._event(
+                    action_key,
+                    package,
+                    "ACTIVATION_OPEN",
+                    ApprovalMode.POST_ACTIVATION,
+                    server_ms,
+                    {"activation_opportunity_id": activation_opportunity_id}
+                    if activation_opportunity_id is not None
+                    else None,
+                )
+                return ApprovalState.AWAITING_HUMAN_APPROVAL
+            raise L1ContractError("activation authority is already consumed")
 
     def approve_post_activation(
         self, package: StrategyOrderPackage, *, action_key: str, server_ms: int
     ) -> ApprovalState:
-        self._require_displayed(package)
-        self._require_fresh(package, server_ms)
-        retained = self._retained_event_state(
-            action_key,
-            package,
-            "ACTIVATED",
-            ApprovalMode.POST_ACTIVATION,
-            server_ms,
-            None,
-        )
-        if retained is not None:
-            return retained
-        if self.state(package, server_ms=server_ms) is not ApprovalState.AWAITING_HUMAN_APPROVAL:
-            raise L1ContractError("post-activation approval requires an open activation")
-        with self._connection:
+        with self._mutation():
+            self._require_displayed(package)
+            self._require_fresh(package, server_ms)
+            retained = self._retained_event_state(
+                action_key,
+                package,
+                "ACTIVATED",
+                ApprovalMode.POST_ACTIVATION,
+                server_ms,
+                None,
+            )
+            if retained is not None:
+                return retained
+            if (
+                self.state(package, server_ms=server_ms)
+                is not ApprovalState.AWAITING_HUMAN_APPROVAL
+            ):
+                raise L1ContractError("post-activation approval requires an open activation")
             self._event(action_key, package, "ACTIVATED", ApprovalMode.POST_ACTIVATION, server_ms)
             self._evidence(
                 "workflow:" + action_key, package, EvidenceStream.HUMAN_WORKFLOW_SHADOW, server_ms
             )
-        return ApprovalState.ACTIVATED
+            return ApprovalState.ACTIVATED
 
     def supersede(
         self, old: StrategyOrderPackage, new: StrategyOrderPackage, *, server_ms: int
     ) -> None:
-        self._require_displayed(old)
-        self.display(new)
-        self._event(
-            "supersede:" + old.package_id + ":" + new.package_id,
-            old,
-            "SUPERSEDED",
-            None,
-            server_ms,
-            {"replacement": new.package_id},
-        )
+        with self._mutation():
+            self._require_displayed(old)
+            self.display(new)
+            self._event(
+                "supersede:" + old.package_id + ":" + new.package_id,
+                old,
+                "SUPERSEDED",
+                None,
+                server_ms,
+                {"replacement": new.package_id},
+            )
+
+    @contextmanager
+    def _mutation(self) -> Iterator[None]:
+        """Commit one public authority transition, including nested public calls."""
+        owner = not self._connection.in_transaction
+        if owner:
+            self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            yield
+        except BaseException:
+            if owner:
+                self._connection.rollback()
+            raise
+        else:
+            if owner:
+                self._connection.commit()
 
     def state(self, package: StrategyOrderPackage, *, server_ms: int) -> ApprovalState:
         self._require_displayed(package)

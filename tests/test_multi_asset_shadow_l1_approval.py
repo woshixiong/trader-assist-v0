@@ -84,9 +84,10 @@ def test_preauthorized_activation_is_single_use_idempotent_and_zero_write() -> N
     assert row[0] == "NOT_SUBMITTED"
 
 
-def test_exact_displayed_hash_expiry_supersession_and_restart_gap_fail_closed() -> None:
+def test_exact_displayed_hash_expiry_supersession_and_restart_gap_fail_closed(tmp_path) -> None:
     package = _package(expires=120)
-    ledger = HumanApprovalLedger(sqlite3.connect(":memory:"))
+    path = tmp_path / "approval.sqlite"
+    ledger = HumanApprovalLedger(sqlite3.connect(path))
     ledger.display(package)
     with pytest.raises(L1ContractError, match="expired"):
         ledger.arm(package, action_key="late", server_ms=120)
@@ -114,6 +115,107 @@ def test_exact_displayed_hash_expiry_supersession_and_restart_gap_fail_closed() 
         ),
     )
     assert ledger.state(replacement, server_ms=116) is ApprovalState.AMBIGUOUS_RESTART
+
+
+def test_file_backed_public_mutations_survive_close_and_reopen(tmp_path) -> None:
+    path = tmp_path / "durable.sqlite"
+    package = _package()
+    ledger = HumanApprovalLedger(sqlite3.connect(path))
+    ledger.display(package)
+    ledger.record_baseline(package, server_ms=101)
+    ledger.record_future_live_boundary(package, server_ms=102)
+    ledger.arm(package, action_key="arm", server_ms=105)
+    ledger._connection.close()
+
+    reopened = HumanApprovalLedger(sqlite3.connect(path))
+    assert reopened.state(package, server_ms=106) is ApprovalState.PREAUTHORIZED_ARMED
+    assert (
+        reopened._connection.execute("SELECT COUNT(*) FROM l1_workflow_evidence").fetchone()[0] == 2
+    )
+    assert (
+        reopened.activate(
+            package,
+            action_key="activate",
+            server_ms=110,
+            activation_opportunity_id=package.activation_opportunity_id,
+        )
+        is ApprovalState.ACTIVATED
+    )
+    reopened._connection.close()
+
+    final = HumanApprovalLedger(sqlite3.connect(path))
+    assert final.state(package, server_ms=111) is ApprovalState.ACTIVATED
+    assert final._connection.execute("SELECT COUNT(*) FROM l1_workflow_evidence").fetchone()[0] == 3
+
+
+def test_post_activation_and_idempotency_are_durable_across_restart(tmp_path) -> None:
+    path = tmp_path / "post-activation.sqlite"
+    package = _package()
+    ledger = HumanApprovalLedger(sqlite3.connect(path))
+    ledger.display(package)
+    ledger.activate(
+        package,
+        action_key="open",
+        server_ms=110,
+        activation_opportunity_id=package.activation_opportunity_id,
+    )
+    ledger._connection.close()
+
+    reopened = HumanApprovalLedger(sqlite3.connect(path))
+    assert reopened.state(package, server_ms=110) is ApprovalState.AWAITING_HUMAN_APPROVAL
+    assert (
+        reopened.approve_post_activation(package, action_key="approve", server_ms=111)
+        is ApprovalState.ACTIVATED
+    )
+    reopened._connection.close()
+
+    final = HumanApprovalLedger(sqlite3.connect(path))
+    assert (
+        final.approve_post_activation(package, action_key="approve", server_ms=111)
+        is ApprovalState.ACTIVATED
+    )
+    with pytest.raises(L1ContractError, match="conflicts"):
+        final.approve_post_activation(package, action_key="approve", server_ms=112)
+
+
+def test_supersede_is_one_durable_transaction_and_rolls_back_on_failure(
+    tmp_path, monkeypatch
+) -> None:
+    path = tmp_path / "supersede.sqlite"
+    old = _package()
+    new = StrategyOrderPackage.create(
+        parent_strategy_order_id="strategy-order-1",
+        strategy_version="three-setup-2",
+        parameter_version="params-2",
+        created_server_ms=110,
+        expires_server_ms=220,
+        activation_opportunity_id="activation-opportunity-2",
+        legs=(PackageLeg("btc", "LONG", Decimal("0.1"), Decimal("20"), Decimal("5")),),
+    )
+    ledger = HumanApprovalLedger(sqlite3.connect(path))
+    ledger.display(old)
+    original_event = ledger._event
+
+    def fail_supersede(*args, **kwargs):
+        if args[2] == "SUPERSEDED":
+            raise L1ContractError("injected supersede failure")
+        return original_event(*args, **kwargs)
+
+    monkeypatch.setattr(ledger, "_event", fail_supersede)
+    with pytest.raises(L1ContractError, match="injected"):
+        ledger.supersede(old, new, server_ms=111)
+    ledger._connection.close()
+
+    reopened = HumanApprovalLedger(sqlite3.connect(path))
+    assert reopened.state(old, server_ms=112) is ApprovalState.DRAFT
+    with pytest.raises(L1ContractError, match="displayed"):
+        reopened.state(new, server_ms=112)
+    reopened.supersede(old, new, server_ms=111)
+    reopened._connection.close()
+
+    final = HumanApprovalLedger(sqlite3.connect(path))
+    assert final.state(old, server_ms=112) is ApprovalState.SUPERSEDED
+    assert final.state(new, server_ms=112) is ApprovalState.DRAFT
 
 
 def test_forged_package_payload_cannot_reuse_a_displayed_id_or_hash() -> None:
