@@ -86,6 +86,7 @@ class StrategyOrderPackage:
     created_server_ms: int
     expires_server_ms: int
     authority_mode: AuthorityMode
+    activation_opportunity_id: str
     legs: tuple[PackageLeg, ...]
     package_id: str
     package_hash: str
@@ -99,10 +100,16 @@ class StrategyOrderPackage:
         parameter_version: str,
         created_server_ms: int,
         expires_server_ms: int,
+        activation_opportunity_id: str,
         authority_mode: AuthorityMode = AuthorityMode.ZERO_WRITE,
         legs: tuple[PackageLeg, ...],
     ) -> StrategyOrderPackage:
-        if not parent_strategy_order_id or not strategy_version or not parameter_version:
+        if (
+            not parent_strategy_order_id
+            or not strategy_version
+            or not parameter_version
+            or not activation_opportunity_id
+        ):
             raise L1ContractError("package parent and version identity are required")
         if created_server_ms < 0 or expires_server_ms <= created_server_ms:
             raise L1ContractError("package expiry must follow its server creation time")
@@ -116,6 +123,7 @@ class StrategyOrderPackage:
             "created_server_ms": created_server_ms,
             "expires_server_ms": expires_server_ms,
             "authority_mode": authority_mode.value,
+            "activation_opportunity_id": activation_opportunity_id,
             "legs": [leg.canonical() for leg in legs],
         }
         package_hash = sha256_hex(
@@ -132,6 +140,7 @@ class StrategyOrderPackage:
             created_server_ms=created_server_ms,
             expires_server_ms=expires_server_ms,
             authority_mode=authority_mode,
+            activation_opportunity_id=activation_opportunity_id,
             legs=legs,
             package_id=package_id,
             package_hash=package_hash,
@@ -146,6 +155,7 @@ class StrategyOrderPackage:
             "created_server_ms": self.created_server_ms,
             "expires_server_ms": self.expires_server_ms,
             "authority_mode": self.authority_mode.value,
+            "activation_opportunity_id": self.activation_opportunity_id,
             "legs": [leg.canonical() for leg in self.legs],
         }
 
@@ -201,14 +211,19 @@ class HumanApprovalLedger:
             )
 
     def display(self, package: StrategyOrderPackage) -> StrategyOrderPackage:
-        payload = json.dumps(package.canonical_payload(), sort_keys=True, separators=(",", ":"))
+        payload = self._validated_payload(package)
         with self._connection:
             row = self._connection.execute(
-                "SELECT package_hash, payload_json FROM l1_packages WHERE package_id = ?",
+                "SELECT package_hash, parent_strategy_order_id, payload_json "
+                "FROM l1_packages WHERE package_id = ?",
                 (package.package_id,),
             ).fetchone()
             if row is not None:
-                if row["package_hash"] != package.package_hash or row["payload_json"] != payload:
+                if (
+                    row["package_hash"] != package.package_hash
+                    or row["parent_strategy_order_id"] != package.parent_strategy_order_id
+                    or row["payload_json"] != payload
+                ):
                     raise L1ContractError(
                         "package identity conflicts with retained displayed package"
                     )
@@ -258,19 +273,48 @@ class HumanApprovalLedger:
         self._require_displayed(package)
         self._require_fresh(package, server_ms)
         return self._event(
-            action_key, package, "ARMED", ApprovalMode.PREAUTHORIZED_ARMED, server_ms
+            action_key,
+            package,
+            "ARMED",
+            ApprovalMode.PREAUTHORIZED_ARMED,
+            server_ms,
+            {"activation_opportunity_id": package.activation_opportunity_id},
         )
 
     def activate(
-        self, package: StrategyOrderPackage, *, action_key: str, server_ms: int
+        self,
+        package: StrategyOrderPackage,
+        *,
+        action_key: str,
+        server_ms: int,
+        activation_opportunity_id: str | None,
     ) -> ApprovalState:
         self._require_displayed(package)
         self._require_fresh(package, server_ms)
+        retained = self._retained_event_state(
+            action_key,
+            package,
+            "ACTIVATED",
+            ApprovalMode.PREAUTHORIZED_ARMED,
+            server_ms,
+            {"activation_opportunity_id": activation_opportunity_id}
+            if activation_opportunity_id is not None
+            else None,
+        )
+        if retained is not None:
+            return retained
         prior = self.state(package, server_ms=server_ms)
         if prior is ApprovalState.PREAUTHORIZED_ARMED:
+            if activation_opportunity_id != package.activation_opportunity_id:
+                raise L1ContractError("preauthorization requires its exact activation opportunity")
             with self._connection:
                 self._event(
-                    action_key, package, "ACTIVATED", ApprovalMode.PREAUTHORIZED_ARMED, server_ms
+                    action_key,
+                    package,
+                    "ACTIVATED",
+                    ApprovalMode.PREAUTHORIZED_ARMED,
+                    server_ms,
+                    {"activation_opportunity_id": activation_opportunity_id},
                 )
                 self._evidence(
                     "workflow:" + action_key,
@@ -281,16 +325,33 @@ class HumanApprovalLedger:
             return ApprovalState.ACTIVATED
         if prior in {ApprovalState.DRAFT, ApprovalState.AWAITING_HUMAN_APPROVAL}:
             self._event(
-                action_key, package, "ACTIVATION_OPEN", ApprovalMode.POST_ACTIVATION, server_ms
+                action_key,
+                package,
+                "ACTIVATION_OPEN",
+                ApprovalMode.POST_ACTIVATION,
+                server_ms,
+                {"activation_opportunity_id": activation_opportunity_id}
+                if activation_opportunity_id is not None
+                else None,
             )
             return ApprovalState.AWAITING_HUMAN_APPROVAL
-        return prior
+        raise L1ContractError("activation authority is already consumed")
 
     def approve_post_activation(
         self, package: StrategyOrderPackage, *, action_key: str, server_ms: int
     ) -> ApprovalState:
         self._require_displayed(package)
         self._require_fresh(package, server_ms)
+        retained = self._retained_event_state(
+            action_key,
+            package,
+            "ACTIVATED",
+            ApprovalMode.POST_ACTIVATION,
+            server_ms,
+            None,
+        )
+        if retained is not None:
+            return retained
         if self.state(package, server_ms=server_ms) is not ApprovalState.AWAITING_HUMAN_APPROVAL:
             raise L1ContractError("post-activation approval requires an open activation")
         with self._connection:
@@ -337,11 +398,38 @@ class HumanApprovalLedger:
         return ApprovalState.DRAFT
 
     def _require_displayed(self, package: StrategyOrderPackage) -> None:
+        payload = self._validated_payload(package)
         row = self._connection.execute(
-            "SELECT package_hash FROM l1_packages WHERE package_id = ?", (package.package_id,)
+            "SELECT package_hash, parent_strategy_order_id, payload_json "
+            "FROM l1_packages WHERE package_id = ?",
+            (package.package_id,),
         ).fetchone()
-        if row is None or row["package_hash"] != package.package_hash:
+        if (
+            row is None
+            or row["package_hash"] != package.package_hash
+            or row["parent_strategy_order_id"] != package.parent_strategy_order_id
+            or row["payload_json"] != payload
+        ):
             raise L1ContractError("exact displayed package/hash binding is required")
+
+    @staticmethod
+    def _validated_payload(package: StrategyOrderPackage) -> str:
+        """Recompute both identities; never trust caller-supplied id/hash fields."""
+        try:
+            payload = package.canonical_payload()
+            canonical_payload = canonical_json_bytes(payload)
+            expected_hash = sha256_hex(b"trader-assist-v0/l1-package/v1\0" + canonical_payload)
+            expected_id = sha256_hex(
+                b"trader-assist-v0/l1-package-id/v1\0"
+                + canonical_json_bytes(
+                    {"parent": package.parent_strategy_order_id, "hash": expected_hash}
+                )
+            )
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise L1ContractError("package canonical payload is invalid") from exc
+        if package.package_hash != expected_hash or package.package_id != expected_id:
+            raise L1ContractError("package id/hash does not bind canonical payload")
+        return canonical_payload.decode("utf-8")
 
     @staticmethod
     def _require_fresh(package: StrategyOrderPackage, server_ms: int) -> None:
@@ -355,7 +443,7 @@ class HumanApprovalLedger:
         kind: str,
         mode: ApprovalMode | None,
         server_ms: int,
-        extra: dict[str, str] | None = None,
+        extra: dict[str, str | None] | None = None,
     ) -> ApprovalState:
         payload = json.dumps(extra or {}, sort_keys=True, separators=(",", ":"))
         row = self._connection.execute(
@@ -380,6 +468,28 @@ class HumanApprovalLedger:
         self._connection.execute(
             "INSERT INTO l1_approval_events VALUES (?, ?, ?, ?, ?, ?, ?)", (action_key, *expected)
         )
+        return self.state(package, server_ms=server_ms)
+
+    def _retained_event_state(
+        self,
+        action_key: str,
+        package: StrategyOrderPackage,
+        kind: str,
+        mode: ApprovalMode,
+        server_ms: int,
+        extra: dict[str, str | None] | None,
+    ) -> ApprovalState | None:
+        payload = json.dumps(extra or {}, sort_keys=True, separators=(",", ":"))
+        row = self._connection.execute(
+            "SELECT package_id, package_hash, event_kind, approval_mode, server_ms, "
+            "payload_json FROM l1_approval_events WHERE action_key = ?",
+            (action_key,),
+        ).fetchone()
+        if row is None:
+            return None
+        expected = (package.package_id, package.package_hash, kind, mode.value, server_ms, payload)
+        if tuple(row) != expected:
+            raise L1ContractError("duplicate human action conflicts with retained idempotency key")
         return self.state(package, server_ms=server_ms)
 
     def _evidence(
