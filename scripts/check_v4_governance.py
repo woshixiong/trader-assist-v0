@@ -78,7 +78,11 @@ def check_single_constitution(root: Path) -> None:
         ),
         "V4",
     )
-    active_files = ("AGENTS.md", "governance/PROJECT_RULES_INDEX.md", *manifest_list(manifest, "entrypoints"))
+    active_files = (
+        "AGENTS.md",
+        "governance/PROJECT_RULES_INDEX.md",
+        *manifest_list(manifest, "entrypoints"),
+    )
     banned = (
         "Unified V2 remains the sole project-wide normative engineering constitution",
         "UNIFIED_V2_REMAINS_SINGLE_PROJECT_WIDE_ENGINEERING_CONSTITUTION=YES",
@@ -321,7 +325,12 @@ def checks() -> tuple[tuple[str, Callable[[Path], None]], ...]:
         ),
         (
             "CODE_REVIEWER_READ_ONLY",
-            lambda root: check_agent(root, ".codex/agents/code-reviewer.toml", "gpt-5.6-terra", "medium"),
+            lambda root: check_agent(
+                root,
+                ".codex/agents/code-reviewer.toml",
+                "gpt-5.6-terra",
+                "medium",
+            ),
         ),
         ("MODEL_ROUTING_POLICY", check_model_routing),
         ("GITHUB_TRANSPORT_NONREGRESSION", check_transport_nonregression),
