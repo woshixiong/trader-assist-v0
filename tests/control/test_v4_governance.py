@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "check_v4_governance.py"
 SPEC = importlib.util.spec_from_file_location("check_v4_governance", SCRIPT)
@@ -49,3 +51,44 @@ def test_post_checkpoint_model_and_transport_rules_are_enforced() -> None:
     checker.check_agent(
         ROOT, ".codex/agents/code-reviewer.toml", "gpt-5.6-terra", "medium"
     )
+
+
+
+def test_active_subordinate_rejects_superseded_current_authority(
+    tmp_path: Path,
+) -> None:
+    governance = tmp_path / "governance"
+    governance.mkdir()
+    relative = "governance/procedure.md"
+    manifest = {"active_subordinate_procedures": [relative]}
+    (governance / "procedure.md").write_text(
+        "**Authority:** subordinate to "
+        "`UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V1_2026-08-17.md`.\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(checker.CheckFailure, match="superseded authority"):
+        checker.check_active_subordinate_authority(tmp_path, manifest)
+
+
+def test_rules_index_rejects_unconditional_internal_code_review(
+    tmp_path: Path,
+) -> None:
+    governance = tmp_path / "governance"
+    governance.mkdir()
+    required = [
+        checker.MANIFEST,
+        checker.CANONICAL,
+        *checker.SKILLS,
+        "conditional read-only internal Code Reviewer",
+        "runtime-verifiable against the frozen route",
+        "Otherwise skip it",
+        "never inherit\n  or fall back to Sol/High",
+        "Independent Review remains mandatory",
+        "required read-only Code Reviewer for",
+    ]
+    (governance / "PROJECT_RULES_INDEX.md").write_text(
+        "\n".join(required),
+        encoding="utf-8",
+    )
+    with pytest.raises(checker.CheckFailure, match="unconditional"):
+        checker.check_index(tmp_path)
