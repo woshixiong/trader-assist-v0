@@ -3,9 +3,9 @@
 **Status:** TASK-CONDITIONAL PROCEDURE CANDIDATE  
 **Effective date:** 2026-08-16  
 **Last material amendment candidate:** 2026-09-10  
-**Normative owner:** `UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V2_2026-09-01.md`
+**Normative owner:** `ENGINEERING_GOVERNANCE_V4_CONSOLIDATED_FINAL.md`
 
-This file is a reusable **procedure and output template** for material direction-setting research. It does not create a second project-wide engineering authority. Unified V2 governs if there is any conflict.
+This file is a reusable **procedure and output template** for material direction-setting research. It does not create a second project-wide engineering authority. V4 governs if there is any conflict.
 
 Use this procedure when a task materially sets or changes product, strategy, engineering route, architecture, provider, framework, tool, migration, optimization or other direction on which meaningful engineering time/risk will depend.
 
@@ -390,6 +390,6 @@ Do not:
 
 ## 4. Authority boundary
 
-Research conclusions do not independently authorize implementation, commit/push, Mark Ready, merge, deployment, runtime/cloud mutation, credential/private API, wallet/signing, exchange write/order submission or trading action. Those remain governed by Unified V2 and current user/domain authority.
+Research conclusions do not independently authorize implementation, commit/push, Mark Ready, merge, deployment, runtime/cloud mutation, credential/private API, wallet/signing, exchange write/order submission or trading action. Those remain governed by V4 and current user/domain authority.
 
-A custom commodity implementation additionally requires the explicit current user authority defined by Unified V2 and the external mature-solution selection rule.
+A custom commodity implementation additionally requires the explicit current user authority defined by V4 and the external mature-solution selection rule.

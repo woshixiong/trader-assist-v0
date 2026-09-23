@@ -1,10 +1,27 @@
 # Trader Assist / Trade OS — Project Rules Index
 
-This file is the **canonical navigation index**, not a duplicate constitution. Live GitHub/code/exact artifacts override stale chat or historical PR narrative.
+This is the human navigation index. It is not a second constitution. Exact
+GitHub objects and the active manifest override stale chat/history.
 
-## 1. Authority loading model
+## 1. Active authority graph
 
-Engineering Control uses this index to resolve the bounded authority graph. For material work it fresh-checks live GitHub identity, applicable Unified V2 sections, current Product / Strategy / Operations / Security authority, the Mandatory Preflight checklist and only specialized procedures that actually apply.
+Machine-readable map:
+
+- `governance/ACTIVE_GOVERNANCE_MANIFEST.json`
+
+Sole active project-wide engineering constitution:
+
+- `governance/ENGINEERING_GOVERNANCE_V4_CONSOLIDATED_FINAL.md`
+
+Entry layers:
+
+- `AGENTS.md` — compact repository router;
+- `governance/CHATGPT_PROJECT_GOVERNANCE_BRIDGE_V4_CORE_ENFORCEMENT_2026-09-23.md`
+  — final ChatGPT Project Instruction reference.
+
+Execution checklist derived from V4:
+
+- `governance/MANDATORY_ENGINEERING_PREFLIGHT_AND_CONVERGENCE_GATE_V1_2026-08-17.md`
 
 Required material gates:
 
@@ -13,260 +30,173 @@ PROJECT_ENGINEERING_RULESET_PREFLIGHT=PASS
 ENGINEERING_PREFLIGHT_GATE=PASS
 ```
 
-After freeze, the downstream Writer consumes the exact Task Packet, its bound preflight/governance attestation, normalized required authority assertions with provenance locators, affected code/tests and the selected executor profile. It does not recursively reload this index, full Unified V2, full preflight or full Issue history unless an actual conflict/unknown requires a targeted canonical read.
+The Writer consumes the exact frozen packet and bound attestation. It does not
+reload broad governance/history unless a concrete missing fact or conflict
+requires a targeted read. Governance-maintenance tasks may read the exact
+corpus they change.
 
-The same progressive-disclosure rule applies to Engineering Control and independent review: begin from the current Control Capsule/manifest plus fresh live identity, not from the complete chat transcript or full Issue history. Missing material context triggers targeted canonical retrieval; unresolved uncertainty fails closed. Chat history is not canonical project state.
+## 2. Execution route
 
-Engineering Control binds the applicable authority-file SHAs into a governance epoch. A full core-governance read is required on the first material action in a fresh control context, governance-epoch drift or a concrete authority conflict. With an unchanged epoch, reuse the exact bound governance/preflight attestation and read only changed/needed authority. Fresh live repository/main/Issue/PR/head/CI checks remain required.
-
-Unified V2 remains the sole project-wide normative engineering constitution.
-
-### 1.1 User phrase “统一规则”
-
-When the user asks to **“往统一规则里增加内容”**, **“把这条加入统一规则”**, **“add this to the unified rules”**, or equivalent, route the request through the governance-maintenance rule in Unified V2 and the shorthand in `AGENTS.md`.
-
-Default destination:
+Engineering Control selects internally:
 
 ```text
-DURABLE_PROJECT_WIDE_ENGINEERING_INVARIANT -> UNIFIED V2
+A deterministic/mechanical -> zero-model tools
+B small/frozen/quick semantic -> fresh ordinary ChatGPT Writer
+C large/coherent/multi-step coding -> Codex package
+D unresolved architecture/security/authority/high consequence -> Control
 ```
 
-Do not mechanically append task-specific procedure, model/tool configuration, deployment mechanics or incident detail to V2. Keep narrow details in the applicable specialized procedure/contract and promote only the reusable project-wide invariant into V2 when needed.
+Large Codex packages use deterministic bootstrap, Plan-only, automatic
+boundary check, one Goal, implementation/validation/bounded repair, conditional
+read-only internal Code Review, Draft PR, and zero-model CI. Routine Codex
+implementation defaults to Terra/Medium. Explorer is Luna/Low and internal Code
+Review is Terra/Medium only when the actual child model/reasoning is verifiable
+at runtime; otherwise the child is skipped with no parent/default Sol/High
+fallback. Sol/Medium is an explicit Engineering Control semantic escalation.
 
-Do not create another project-wide governance authority by default. A genuinely new specialized procedure/contract must be narrow, independently maintainable, indexed here, explicitly subordinate to V2 and non-duplicative.
+The user is not asked to select the executor or Plan versus Goal. Every context
+works to its true ability/authority boundary without routine confirmation or
+human message relay.
 
-## 2. Direction-setting research
+## 3. Active V4 skills
 
-When the task materially sets or changes research/product/strategy/engineering/architecture/tool/provider direction, use:
+Load only the applicable phase:
+
+- `.agents/skills/trade-os-v4-bootstrap/SKILL.md`
+- `.agents/skills/trade-os-v4-development/SKILL.md`
+- `.agents/skills/trade-os-v4-ci/SKILL.md`
+- `.agents/skills/trade-os-v4-review/SKILL.md`
+
+Older skills are compatibility/history and are not on the mandatory route.
+
+## 4. Conditional subordinate procedures
+
+These files implement narrow V4 domains and do not compete with it.
+
+### 4.1 Direction-setting research
 
 - `governance/PROJECT_RESEARCH_EVIDENCE_DECISION_METHOD_V1_2026-08-16.md`
 
-It operationalizes the V2 three-stage method:
+Use for material research/product/strategy/engineering/architecture/tool or
+provider direction-setting. Preserve independent analysis -> external/mature
+evidence -> synthesis.
 
-```text
-INDEPENDENT ANALYSIS
--> EXTERNAL / MATURE EVIDENCE
--> SYNTHESIS / DECISION
-```
-
-It is a procedure/reference; Unified V2 owns the normative rule.
-
-### 2.1 External mature solution selection / adoption
-
-Whenever a material task selects, rejects, composes, customizes, adopts, upgrades or re-evaluates a provider-native, standard/official or mature maintained external framework, library, SDK, platform, service or infrastructure component, or proposes project-owned commodity infrastructure, also use:
+### 4.2 Mature external capability
 
 - `governance/EXTERNAL_MATURE_SOLUTION_SELECTION_AND_ADOPTION_RULE_V1_2026-09-07.md`
 
-This specialized procedure operationalizes the Unified V2 `MATURE_CAPABILITY_NO_REBUILD_GATE`. It standardizes capability classification, Stage 0 no-product-code audit, candidate discovery/authentication, P0 hard gates, evidence confidence, quality/total-burden comparison, decision-stability checks, One-Blocker Tiny Spike, modular composition, bounded customization, adoption controls, re-evaluation and the explicit-user-authority gate for any custom commodity exception.
+Use whenever selecting, rejecting, composing, customizing, adopting,
+upgrading, or re-evaluating a mature external capability, or proposing
+project-owned commodity infrastructure.
 
-It is subordinate to Unified V2 and does not choose a specific framework by itself.
+### 4.3 Human-executed command or launcher
 
-### 2.2 Recurring discretionary trading behavior / edge review
+- `governance/GENERATED_COMMAND_RELIABILITY_AND_OPERATOR_EFFICIENCY_RULE_V1_2026-08-30.md`
 
-For weekly or periodic review of the user's manual/discretionary trading behavior, edge, session/regime dependence, execution errors, fees, MAE/MFE, and week-over-week behavioral improvement, use:
+Use before delivering a nontrivial operator command.
+
+### 4.4 Local Git publication and reviewed-PR closeout
+
+- `governance/GITHUB_LOCAL_TRANSPORT_AND_REVIEWED_PR_CLOSEOUT_PROCEDURE_V1_2026-09-16.md`
+
+Use for user-local Git transport or terminal disposition of an independently
+reviewed PR. Local publication uses HTTPS + GitHub CLI browser OAuth + system
+credential storage + `gh auth setup-git`; workflow-path mutation requires an
+explicitly verified `workflow` OAuth scope. The known LibreSSL
+`SSL_ERROR_SYSCALL` publication failure preserves the semantic checkpoint and
+routes to accepted connected-provider recovery rather than repeated local push,
+credential weakening, or semantic retry. It creates no Mark Ready or merge
+authority.
+
+### 4.5 Tool onboarding or material tool change
+
+- `governance/ENGINEERING_TOOL_ONBOARDING_AND_CHANGE_ACCEPTANCE_RULE_V1_2026-08-23.md`
+
+Use for a new executor/operator/orchestrator or material configuration,
+permission, session, or routing change.
+
+### 4.6 Target-host deployment / FinalShell
+
+- `governance/FINALSHELL_TARGET_HOST_DEPLOYMENT_WORKFLOW_V1_2026-08-26.md`
+- current Operations authority and exact release/task identity.
+
+FinalShell is an operator surface, never deployment/runtime authority.
+
+### 4.7 Trading behavior and experiments
 
 - `governance/TRADING_BEHAVIOR_AND_EDGE_REVIEW_PROCEDURE_V1_2026-09-06.md`
 - `governance/TRADING_BEHAVIOR_REVIEW_AND_EXPERIMENT_LIFECYCLE_V1_2026-09-13.md`
 
-Short-horizon weekly/stage targets are tracked in one lightweight GitHub record:
+These govern private-data-safe discretionary behavior review and the lifecycle
+of weekly experiments. They grant no trading authority.
 
-- Issue #171 — `Trading Behavior — Weekly Optimization Log`
-
-The lifecycle rule separates durable repository principles from tunable weekly experiments. Routine weekly targets are appended as dated comments to Issue #171 and do **not** require a new governance file / branch / PR / independent review / merge by default. A weekly item moves into repository authority only after the lifecycle promotion gate is satisfied.
-
-The dated week-beginning-2026-09-07 baseline embedded in §13 of the parent procedure is historical experiment evidence after 2026-09-14; it is not the current active weekly target set. Current weekly targets come from the latest applicable Issue #171 comment.
-
-These are narrow task-conditional research/review procedures, not project-wide engineering governance and not trading authority. The parent procedure standardizes UTC+08:00 time normalization, flat-to-flat episode reconstruction, Korea/US opening-regime analysis, Macro × US Open interaction analysis, stop-discipline/rapid-reentry diagnostics, fee/friction analysis, MAE/MFE integration, evidence labels, deduplicated counterfactuals, and week-over-week comparison. Raw private/account trade data remains outside Git history.
-
-### 2.3 Market / instrument and venue selection
-
-For recurring selection of **what to trade, where to trade it, and whether the exact route is suitable for Human or Quant use**, use:
+### 4.8 Market and venue selection
 
 - `governance/MARKET_AND_VENUE_SELECTION_FRAMEWORK_V1_2026-09-13.md`
 
-This narrow specialized method is subordinate to Unified V2. It governs global market discovery, non-authoritative candidate-underlying shortlists, venue-expression qualification, execution/stop/fee/margin/liquidation/capital economics, Human/Quant fit, final Universe/route construction, switching hysteresis and recurring reselection.
+This owns recurring underlying/expression qualification and Human/Quant route
+fit, not production Universe changes, venue migration, account actions, or
+exchange writes.
 
-Important ownership boundaries:
+### 4.9 Local Task Runner / Hermes / alternate executors
 
-```text
-STRATEGY_RESEARCH
--> owns Strategy Demand Profile + Strategy economics/evidence
+Load an accepted narrow profile only when V4 Engineering Control explicitly
+selects that route. Historical Router V2 or old priority/profile documents do
+not select an active route by themselves.
 
-MARKET_AND_VENUE_SELECTION
--> owns recurring underlying/expression qualification + Human/Quant Universe + route map
+## 5. Active Codex project surfaces
 
-ENGINEERING
--> owns approved Registry/runtime implementation + provider/history/Trading-Freshness/realistic-scale/adapter qualification
-```
+- `.codex/config.toml` — trusted-project Writer defaults and declarations;
+- `.codex/agents/explorer.toml` — optional read-only Explorer;
+- `.codex/agents/code-reviewer.toml` — conditional read-only internal Code Reviewer
+  profile; use it only when the actual spawned child model/reasoning are
+  runtime-verifiable against the frozen route. Otherwise skip it; never inherit
+  or fall back to Sol/High;
+- `.codex/hooks/pre_tool_use_policy.py` — minimal hard guard for clear
+  destructive/main-history commands;
+- `scripts/control/v4_bootstrap.py` — deterministic exact-base/binding check;
+- `scripts/check_v4_governance.py` — active-governance consistency checker.
 
-Economic qualification never bypasses Issue #102 provider-budget, history/replay, Trading-Freshness or realistic-scale gates. The MVSF method grants no production Universe change, venue migration, account/capital action or exchange-write authority.
+Final authority-bearing review is not a Codex subagent. Final fresh
+ordinary-ChatGPT Independent Review remains mandatory with exact GitHub evidence,
+whether or not the conditional internal Codex Code Review ran.
 
-## 3. Human-executed commands / launchers
+## 6. Project/program snapshots
 
-For every nontrivial human-executed Terminal/shell/launcher command use:
+`governance/PROJECT_STATE.json` and
+`governance/V0_FAST_LAUNCH_PROGRAM.json` are state/program snapshots. Current
+GitHub Issue/PR/code/CI and accepted domain authority override stale snapshots.
 
-- `governance/GENERATED_COMMAND_RELIABILITY_AND_OPERATOR_EFFICIENCY_RULE_V1_2026-08-30.md`
+## 7. Historical/superseded layer
 
-It operationalizes V2 command rules: environment evidence, exact CLI invocation contract, canonical validation commands, platform fidelity, false-gate prevention, file-backed execution, checkpoint/resume, command repair budget and evidence egress.
+The active manifest owns the complete classification. In particular:
 
-It is a specialized procedure/incident catalogue; Unified V2 owns the project-wide invariant.
-
-### 3.1 GitHub local transport / reviewed-PR closeout
-
-For user-local Git transport for this repository, generated local Git publication commands, or the terminal disposition of an independently reviewed Pull Request, use:
-
-- `governance/GITHUB_LOCAL_TRANSPORT_AND_REVIEWED_PR_CLOSEOUT_PROCEDURE_V1_2026-09-16.md`
-
-This narrow procedure is subordinate to Unified V2. It canonizes the accepted project-local HTTPS + GitHub CLI + system credential-store route, deprecates SSH-over-443 as the default local Git path for this project, and operationalizes the existing V2 requirement that reviewed work reach an explicit terminal disposition.
-
-It does not create credential-scope, Mark Ready, merge, deployment/runtime/cloud, exchange-write or trading authority. A reviewed PR that is accepted after final PASS still requires current retained user authority for Mark Ready and merge; a REPLAN / REJECT / SUPERSEDED PR must be explicitly closed or superseded rather than left indefinitely open/draft.
-
-## 4. Model-backed routing
-
-For any model-backed project invocation read:
-
+- `governance/UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V2_2026-09-01.md`
+  — historical/superseded source material;
 - `governance/ENGINEERING_EXECUTOR_ROUTER_V2_2026-08-23.md`
+  — historical/superseded routing rationale;
+- `CODEX.md`, old executor priorities/profiles, prior workflow proposals, and
+  old Trade OS skills — history/compatibility unless an exact current V4 task
+  invokes a narrow still-valid procedure.
 
-Then load **only the selected route's profile**.
+Historical records remain useful rationale but cannot override V4 and do not
+enter the mandatory loading path.
 
-### Codex
+## 8. Review and CI
 
-- `governance/CODEX_CLI_ENGINEERING_USAGE_PROFILE_V2_2026-08-23.md`
-- `governance/CODEX_CURRENT_MODEL_PROFILE.md`
-- repo `.codex/config.toml`
-- relevant `.agents/skills/` only when their phase applies.
-
-### OpenCode
-
-- `governance/OPENCODE_ENGINEERING_USAGE_PROFILE_V1_2026-08-23.md`
-
-If Local Task Runner V0 is selected and compatible:
-
-- `governance/LOCAL_TASK_RUNNER_V0_ENGINEERING_USAGE_PROFILE_V1_2026-08-24.md`
-- `governance/LOCAL_TASK_RUNNER_V0_OPERATOR_OBSERVABILITY_GUIDE_V1_2026-08-24.md`
-- `.agents/skills/trade-os-local-task-runner/SKILL.md`
-
-### Trae
-
-GLM:
-- `governance/TRAE_GLM_ENGINEERING_USAGE_PROFILE_V1_2026-08-20.md`
-- `governance/TRAE_GLM_CURRENT_MODEL_PROFILE.md`
-
-DeepSeek V4 Pro:
-- `governance/TRAE_DEEPSEEK_V4_PRO_CURRENT_MODEL_PROFILE.md`
-
-### DeepSeek Harness
-
-- `governance/ENGINEERING_EXECUTOR_POOL_AND_DEEPSEEK_HARNESS_PROFILE_V1_2026-08-18.md`
-- `governance/DEEPSEEK_HARNESS_MANDATORY_USAGE_RULES_V1_2026-08-18.md`
-- `governance/DEEPSEEK_HARNESS_NATIVE_HEADLESS_ONE_PASTE_WORKFLOW_V1_2026-08-20.md`
-
-Router V2 freezes the universal Engineering-Control execution class plus requested role/executor/provider/model/reasoning/tool/session/resource state. The routine class mapping is: deterministic/mechanical -> zero model; frozen bounded semantic -> fresh ordinary ChatGPT Writer; open/material semantic -> Codex default when available/allowed; high-consequence/ambiguous -> strongest appropriate accepted route. User manual override remains preserved. No silent substitution/fallback/retry/resume. Requested-vs-actual required-identity mismatch is a Router incident.
-
-## 5. Independent T4 review
-
-Default final adjudicator:
+Codex Code Review is read-only implementation-quality review and not
+independent acceptance. Final independent review is fresh ordinary ChatGPT,
+read-only, exact-head, and authority-bearing.
 
 ```text
-SURFACE=FRESH_ORDINARY_CHATGPT_WINDOW
-MODEL=CURRENT_STRONGEST_APPROPRIATE_ORDINARY_CHATGPT_MODEL
-CURRENT_PROFILE=GPT-5.6_SOL
-REASONING=HIGH_OR_HIGHEST_APPROPRIATE
-PERMISSION=READ_ONLY
-WRITER_OR_ENGINEERING_CONTROL_CONTEXT=PROHIBITED_FOR_INDEPENDENT_ACCEPTANCE
-ORDINARY_CHATGPT_NEW_WINDOW=ROUTINE_DEFAULT
-PROVIDER_NATIVE_OR_CODEX_REVIEWER=EXPLICIT_TASK_SPECIFIC_EXCEPTION_OR_OPT_IN
+MODEL_MEDIATED_CI_POLLING=PROHIBITED
+CI_WAIT_OWNER=GITHUB_OR_DETERMINISTIC_TOOL
+COMMENT_ONLY_REVIEW_FALLBACK=REQUIRED_WHEN_NATIVE_SELF_APPROVAL_UNAVAILABLE
 ```
 
-The handoff is a compact Review Manifest, not an Engineering-Control conclusion dump. It contains exact target identity, changed scope/diff, frozen acceptance criteria, required safety boundaries, decisive evidence locators and any explicitly untrusted prior conclusions.
+## 9. Retained user gates
 
-If exact GitHub artifacts + exact-head CI are sufficient, the fresh Reviewer reads them directly through the accepted canonical surface. Default reviewer loading is delta/targeted: exact target -> exact diff -> acceptance contract -> decisive CI/artifact -> only necessary upstream/canonical history. Full Issue/PR history and full governance reload are prohibited by default.
-
-If local evidence is required, prefer deterministic evidence generation -> hash-manifested review bundle -> exact delivery to the fresh independent Reviewer. Use `.agents/skills/trade-os-independent-review-bundle` when applicable.
-
-Writer self-review, Supervisor self-review and Engineering-Control self-review never become independent acceptance. Provider-native or Codex reviewer routes are non-routine task-specific exceptions / opt-ins and are authority-bearing only when the accepted route enforces fresh context, read-only review authority, direct exact-canonical-evidence access, no inheritance of prior PASS conclusions as facts, and idempotent result egress through an accepted direct or lossless transport surface.
-
-Before terminal Writer / Reviewer / executor result egress, fresh-read the current canonical GitHub task/PR state. If it already advanced elsewhere, reconcile idempotently and do not write stale local state.
-
-One authority-bearing Review uses one fresh Reviewer context/agent, which retires after result egress. A repaired or materially changed head receives a new fresh Reviewer context. If proof collection threatens context integrity, freeze a bounded evidence-verification checkpoint and adjudicate in a fresh context. Authority-bearing result writeback is idempotent: derive the deterministic Review Result Key, fresh-read before write, and consume an existing matching result instead of duplicating it.
-
-## 6. Tool onboarding / material tool change
-
-For a new engineering executor/operator/orchestrator or a material configuration/permission/session/routing change read:
-
-- `governance/ENGINEERING_TOOL_ONBOARDING_AND_CHANGE_ACCEPTANCE_RULE_V1_2026-08-23.md`
-
-A tool requires exact identity, representative capability/safety evidence, independent acceptance and separate user activation before accepted routine project use. When the specialized Tool-Onboarding rule's strict `PILOT_ONLY_QUALIFICATION_CANARY` conditions hold, one explicitly user-activated, reversible, nonproduction real-task canary may precede full acceptance solely to acquire representative evidence; it is not accepted infrastructure. Material tool changes require re-acceptance.
-
-The mature-solution/build-vs-buy gate in Unified V2 and the external mature-solution selection procedure apply before custom commodity tooling.
-
-## 7. Hermes
-
-When Hermes is selected read:
-
-- `governance/HERMES_EXECUTION_OPERATOR_CONTRACT_V1_2026-08-16.md`
-- `governance/HERMES_TOOLING_V2_INSERTION_PLAN_2026-08-23.md`
-- `schemas/control/lossless-task-packet-v1.schema.json`
-- route-specific Hermes profile when applicable.
-
-Hermes transports/executes frozen authority; it does not choose architecture/model/reasoning, infer missing authority or perform independent adjudication. Multi-step runs must be checkpointed and human-recoverable.
-
-## 8. Target-host deployment / FinalShell
-
-For deployment, redeployment, release installation or target-host qualification through FinalShell read:
-
-- `governance/FINALSHELL_TARGET_HOST_DEPLOYMENT_WORKFLOW_V1_2026-08-26.md`
-- current accepted Operations runbook/authority
-- current release/task Issue and exact release identity.
-
-Default operator route remains:
-
-```text
-MACOS CREATES ONE EXACT-RELEASE ARTIFACT/FOLDER
--> FINALSHELL SFTP UPLOAD
--> ONE CONTIGUOUS BLOCK IN ALREADY-CONNECTED SERVER TERMINAL
--> EVIDENCE RETURN
-```
-
-FinalShell is an operator surface, not deployment/runtime authority.
-
-## 9. Shared procedural skills
-
-Load only when applicable:
-
-```text
-.agents/skills/trade-os-writer-preflight
-.agents/skills/trade-os-local-gates
-.agents/skills/trade-os-evidence
-.agents/skills/trade-os-result-packet
-.agents/skills/trade-os-independent-review-bundle
-.agents/skills/trade-os-local-task-runner
-```
-
-Skills provide on-demand procedure, not new authority.
-
-## 10. Project state / product program
-
-`governance/PROJECT_STATE.json` and `governance/V0_FAST_LAUNCH_PROGRAM.json` are state/program snapshots. When stale relative to live GitHub Issue/PR/code/CI, the live evidence and current domain authority govern.
-
-## 11. Historical / superseded engineering governance
-
-After Unified V2 is independently accepted and merged:
-
-- `governance/UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V1_2026-08-17.md` = historical / superseded;
-- the separate Issue #139 Holistic Method proposal = incorporated into V2, not an additional constitution;
-- `PROJECT_RESEARCH_EVIDENCE_DECISION_METHOD_V1_2026-08-16.md` = task-conditional procedure/reference, not separate project-wide authority;
-- `GENERATED_COMMAND_RELIABILITY_AND_OPERATOR_EFFICIENCY_RULE_V1_2026-08-30.md` = task-conditional procedure/incident catalogue, not separate project-wide authority;
-- `ENGINEERING_EXECUTOR_SELECTION_AND_TOOL_PROFILE_ROUTING_V1_2026-08-20.md` = historical/salvage after Router V2;
-- `CURRENT_TOOLING_EXECUTOR_PRIORITY_V1_2026-08-18.md` = historical sequencing only;
-- `CODEX.md` = historical compatibility/stale task state, not instruction authority;
-- Draft PR #117 = salvage/history input, not a competing constitution.
-
-Historical decisions remain useful rationale but do not enter the mandatory read path unless a current task explicitly needs that history.
-
-## 12. User-retained authority gates
-
-No engineering governance, Task Packet, Writer result, CI result or Review implicitly authorizes:
+The following require separate explicit current user authority:
 
 ```text
 MARK_READY
@@ -279,7 +209,5 @@ CREDENTIAL_PRIVATE_API
 WALLET_SIGNING_NONCE
 EXCHANGE_WRITE
 ORDER_SUBMISSION_OR_CANCELLATION
-AUTONOMOUS_TRADING
+AUTONOMOUS_OR_REAL_CAPITAL_TRADING
 ```
-
-These always require explicit current user authority.

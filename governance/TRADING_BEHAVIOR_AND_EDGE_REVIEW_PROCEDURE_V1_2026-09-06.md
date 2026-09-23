@@ -2,7 +2,7 @@
 
 **Status:** TASK-CONDITIONAL PROCEDURE CANDIDATE  
 **Effective date:** 2026-09-06  
-**Normative owner:** `UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V2_2026-09-01.md`  
+**Normative owner:** `ENGINEERING_GOVERNANCE_V4_CONSOLIDATED_FINAL.md`
 **Scope:** recurring review of the user's discretionary/manual trading behavior and edge from official trade records plus approved market-path evidence.
 
 This is a narrow research/review procedure. It does **not** create trading authority, strategy authority, exchange-write authority, sizing authority, or autonomous-trading authority. It does not replace current Product / Strategy / Risk decisions. When this procedure conflicts with a newer explicit user instruction or a current accepted domain authority, the newer/higher authority governs.

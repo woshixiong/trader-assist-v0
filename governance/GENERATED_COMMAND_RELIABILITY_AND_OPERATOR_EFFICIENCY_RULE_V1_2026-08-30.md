@@ -2,11 +2,11 @@
 
 **Status:** TASK-CONDITIONAL PROCEDURE CANDIDATE  
 **Effective date:** 2026-08-30  
-**Normative owner:** `UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V2_2026-09-01.md`
+**Normative owner:** `ENGINEERING_GOVERNANCE_V4_CONSOLIDATED_FINAL.md`
 
-This file operationalizes the Unified V2 rules for project-generated commands, launchers, one-paste Terminal blocks, local automation, target-host execution and evidence-return workflows. It is also the compact incident catalogue for command-generation failures.
+This file operationalizes the V4 rules for project-generated commands, launchers, one-paste Terminal blocks, local automation, target-host execution and evidence-return workflows. It is also the compact incident catalogue for command-generation failures.
 
-It does **not** create a competing project-wide constitution. Unified V2 governs conflicts.
+It does **not** create a competing project-wide constitution. V4 governs conflicts.
 
 Use this procedure before presenting any nontrivial human-executed engineering command.
 
@@ -521,7 +521,7 @@ Do not issue the next mutation/retry until the class and resume checkpoint are e
 
 ## 11. Compact incident catalogue
 
-These incidents are retained as rationale/examples; the normative lessons live in Unified V2.
+These incidents are retained as rationale/examples; the normative lessons live in V4.
 
 | Incident | Failure class | Durable lesson |
 | --- | --- | --- |
@@ -545,7 +545,7 @@ These incidents are retained as rationale/examples; the normative lessons live i
 | S1 attempt #2 sampled `RuntimeHealth` only after graceful teardown had cleared connection/ACK/data-ready state and treated normalized `SHUTDOWN` values as evidence live readiness never occurred | wrapper/harness observation-phase mismatch | ephemeral state evidence must be captured in the authoritative lifecycle phase or preserved by teardown-surviving monotonic evidence; post-teardown normalization cannot negate prior readiness |
 | R3 publication local Git HTTPS failed with LibreSSL `SSL_ERROR_SYSCALL`, then authenticated `gh api` failed with EOF after earlier read success | local transport health / checkpoint publication failure | prior connectivity/auth success is not mutation-path health proof; after a completed semantic checkpoint stop local retry loops and prefer exact artifact egress + authoritative remote publication when available |
 
-A reusable new lesson should update Unified V2 or this narrow procedure rather than relying on chat memory.
+A reusable new lesson should update V4 or this narrow procedure rather than relying on chat memory.
 
 When a newly observed incident matches an existing row or durable class, explicitly mark it as a **known-class recurrence**. Recurrence is evidence that the preventive gate was not operationally enforced; do not mislabel it as a novel edge case merely because the exact command text differs.
 

@@ -1,9 +1,33 @@
-# Trader Assist stable Codex defaults.
-# Model/reasoning/sandbox/approval remain task-local Router decisions.
+#:schema https://developers.openai.com/codex/config-schema.json
+# Trader Assist V4 trusted-project defaults. Routine Codex implementation uses
+# Terra/Medium. Sol/Medium is an explicit Engineering Control escalation only.
+# Child-agent profile files express requested intent, not proof of runtime identity.
+model = "gpt-5.6-terra"
+model_reasoning_effort = "medium"
 service_tier = "default"
 model_verbosity = "low"
 model_reasoning_summary = "none"
 web_search = "disabled"
+sandbox_mode = "workspace-write"
+approval_policy = "on-request"
 
 [agents]
 enabled = true
+max_concurrent_threads_per_session = 2
+
+[agents.explorer]
+description = "Optional read-only repository explorer for bounded evidence gathering."
+config_file = "./agents/explorer.toml"
+
+[agents.code_reviewer]
+description = "Read-only implementation-quality reviewer; not final independent acceptance."
+config_file = "./agents/code-reviewer.toml"
+
+[[hooks.PreToolUse]]
+matcher = "^Bash$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = '/usr/bin/python3 "$(git rev-parse --show-toplevel)/.codex/hooks/pre_tool_use_policy.py"'
+timeout = 10
+statusMessage = "Checking protected Git operations"

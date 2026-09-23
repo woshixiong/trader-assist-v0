@@ -1,5 +1,9 @@
 # Trader Assist / Trade OS — Engineering Executor Router V2
 
+> **HISTORICAL / SUPERSEDED BY V4.** This file is preserved as routing
+> rationale only. Active routing is owned by
+> `governance/ENGINEERING_GOVERNANCE_V4_CONSOLIDATED_FINAL.md`.
+
 **Status:** HOLISTIC-CONVERGENCE GOVERNANCE CANDIDATE  
 **Effective date:** 2026-08-23  
 **Repository:** `woshixiong/trader-assist-v0`

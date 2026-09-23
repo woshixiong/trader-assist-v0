@@ -3,7 +3,7 @@
 **Status:** SPECIALIZED CANONICAL OPERATIONS WORKFLOW  
 **Effective date:** 2026-08-26  
 **Repository:** `woshixiong/trader-assist-v0`  
-**Authority:** subordinate to explicit current user authority, current Product/Strategy/Security/Operations authority, and `UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V1_2026-08-17.md`.
+**Authority:** subordinate to explicit current user authority, current Product/Strategy/Security/Operations authority, the active manifest, and `governance/ENGINEERING_GOVERNANCE_V4_CONSOLIDATED_FINAL.md`.
 
 ## 1. Purpose
 
@@ -45,6 +45,8 @@ These invariants apply whenever the user is operating the current Linux target h
 ## 3. Canonical authority and precedence
 
 Before preparing any deployment package, the controlling Engineering/Operations role must fresh-check live GitHub and current narrow-domain authority.
+
+This workflow is an active subordinate V4 procedure. In any conflict, the active V4 authority graph and current narrow-domain authority govern. Current deployment/runtime authorization remains a separate explicit user gate and is never inferred from this workflow.
 
 At minimum verify:
 
