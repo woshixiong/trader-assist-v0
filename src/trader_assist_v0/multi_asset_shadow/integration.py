@@ -3561,6 +3561,7 @@ class MultiAssetShadowCoordinator:
             ),
             "side": decision.side.value,
             "approval_status": "APPROVED",
+            "formalization_status": "STRATEGY_ELIGIBLE",
             "tier": market.tier.value,
             "confirmed_at": _timestamp(confirmed_at),
             "provenance_id": provenance.record_id,
