@@ -102,11 +102,14 @@ Use before delivering a nontrivial operator command.
 Use for user-local Git transport or terminal disposition of an independently
 reviewed PR. Local publication uses HTTPS + GitHub CLI browser OAuth + system
 credential storage + `gh auth setup-git`; workflow-path mutation requires an
-explicitly verified `workflow` OAuth scope. The known LibreSSL
-`SSL_ERROR_SYSCALL` publication failure preserves the semantic checkpoint and
-routes to accepted connected-provider recovery rather than repeated local push,
-credential weakening, or semantic retry. It creates no Mark Ready or merge
-authority.
+explicitly verified `workflow` OAuth scope. For confidently classified
+transient LibreSSL/EOF/HTTP failures, preserve the semantic checkpoint and use
+same-route bounded retry first: idempotent reads normally get 2-3 attempts, and
+a write is retried only after proven no-mutation or unchanged canonical
+readback. Ambiguous mutation without readback fails closed; semantic rerun and
+credential weakening remain prohibited. Switch to connected-provider recovery
+only after the retry budget is exhausted or the route is persistently unusable.
+It creates no Mark Ready or merge authority.
 
 ### 4.5 Tool onboarding or material tool change
 

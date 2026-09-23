@@ -91,9 +91,16 @@ verify the active OAuth credential includes `workflow` before the real push;
 `gh auth status`, `gh api user`, `git ls-remote`, and `git push --dry-run` are not
 scope proof. If identity, required scopes, and the exact local checkpoint are
 already PASS but real HTTPS push fails with the known LibreSSL
-`SSL_ERROR_SYSCALL` class, do not retry semantic work, push, credentials, or
-Codex. Preserve the exact offline checkpoint and use the accepted connected
-GitHub publication surface.
+`SSL_ERROR_SYSCALL` class, preserve the semantic checkpoint and keep the same
+route for a small bounded transport retry before switching surfaces. Do not
+rerun semantic work, restart Codex, or reauthenticate/weaken credentials merely
+to cure transport. Idempotent reads normally get 2-3 attempts. Retry a failed
+write only when canonical evidence proves no mutation, or canonical readback
+proves the target is unchanged and the exact write is safe/idempotent. If the
+write may have succeeded, read back first; ambiguous mutation without available
+readback fails closed. Use the accepted connected GitHub publication surface
+only after the retry budget is exhausted or the local route is persistently
+unusable.
 
 ## After merge
 
