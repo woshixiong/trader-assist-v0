@@ -99,6 +99,34 @@ def check_single_constitution(root: Path) -> None:
             raise CheckFailure(f"missing historical banner: {historical}")
 
 
+def check_active_subordinate_authority(
+    root: Path,
+    manifest: dict[str, object],
+) -> None:
+    superseded = (
+        "UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V1_2026-08-17.md",
+        "UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V2_2026-09-01.md",
+    )
+    authority_markers = (
+        "authority",
+        "normative owner",
+        "subordinate",
+        "governs if",
+        "govern if",
+    )
+    for relative in manifest_list(manifest, "active_subordinate_procedures"):
+        preamble = read_text(root, relative).splitlines()[:40]
+        for line in preamble:
+            lowered = line.lower()
+            if not any(marker in lowered for marker in authority_markers):
+                continue
+            if any(old in line for old in superseded):
+                raise CheckFailure(
+                    "active subordinate procedure retains superseded authority: "
+                    f"{relative}"
+                )
+
+
 def check_manifest(root: Path) -> None:
     manifest = load_manifest(root)
     if manifest.get("status") != "ACTIVE" or manifest.get("governance_version") != "V4":
@@ -123,6 +151,7 @@ def check_manifest(root: Path) -> None:
     for item in paths:
         if not (root / str(item)).is_file():
             raise CheckFailure(f"manifest path does not exist: {item}")
+    check_active_subordinate_authority(root, manifest)
 
 
 def check_router(root: Path) -> None:
@@ -143,7 +172,22 @@ def check_router(root: Path) -> None:
 
 def check_index(root: Path) -> None:
     index = read_text(root, "governance/PROJECT_RULES_INDEX.md")
-    require_contains(index, (MANIFEST, CANONICAL, *SKILLS), "Rules Index")
+    require_contains(
+        index,
+        (
+            MANIFEST,
+            CANONICAL,
+            *SKILLS,
+            "conditional read-only internal Code Reviewer",
+            "runtime-verifiable against the frozen route",
+            "Otherwise skip it",
+            "never inherit\n  or fall back to Sol/High",
+            "Independent Review remains mandatory",
+        ),
+        "Rules Index",
+    )
+    if "required read-only Code Reviewer for" in index:
+        raise CheckFailure("Rules Index makes internal Code Review unconditional")
 
 
 def load_toml(root: Path, relative: str) -> dict[str, object]:
@@ -260,8 +304,15 @@ def check_bootstrap_surface(root: Path) -> None:
             "worktree HEAD mismatch",
             "worktree is dirty or ambiguous",
             "preflight binding mismatch",
+            "execution-surface mismatch",
+            "provider mismatch",
             "model mismatch",
             "reasoning mismatch",
+            "web-search mismatch",
+            "tool-state mismatch",
+            "session-policy mismatch",
+            "resource-state mismatch",
+            "worktree-policy mismatch",
         ),
         "V4 bootstrap",
     )
