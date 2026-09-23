@@ -15,12 +15,19 @@ BLOCKED_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         "git reset --hard is prohibited in the trusted project",
     ),
     (
-        re.compile(r"(?:^|[;&|]\s*)git\s+clean\s+-[^\s;&|]*f[^\s;&|]*(?:\s|$)"),
+        re.compile(
+            r"(?:^|[;&|]\s*)git\s+clean\b[^\n;&|]*"
+            r"(?:--force|-(?!-)[^\s;&|]*f[^\s;&|]*)(?:\s|$)"
+        ),
         "forced git clean is prohibited in the trusted project",
     ),
     (
         re.compile(r"(?:^|[;&|]\s*)git\s+push\b[^\n;&|]*(?:--force(?:-with-lease)?|-f)(?:\s|$)"),
         "force-push is prohibited",
+    ),
+    (
+        re.compile(r"(?:^|[;&|]\s*)git\s+push\b[^\n;&|]*\s\+[^\s;&|]+(?:\s|$)"),
+        "force-push refspec is prohibited",
     ),
     (
         re.compile(
