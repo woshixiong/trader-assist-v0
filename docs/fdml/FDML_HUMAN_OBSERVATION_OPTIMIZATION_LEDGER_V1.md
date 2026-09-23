@@ -234,3 +234,157 @@ NEXT_TRIGGER=SUFFICIENT_LIVE_FDML_DATA + LABEL/OUTCOME QUALITY REVIEW + TARGET_H
   5. Benchmark candidate local inference on the actual AWS target host.
   6. If the route remains favorable, create a separately governed model-training/adaptation task and champion/challenger Shadow qualification.
 - Resolution / follow-up: OPEN. This record is a future-iteration basis only; it does not authorize model training, deployment, runtime/cloud mutation, provider replacement, or trading execution.
+
+
+### FDML-HO-20260923-002
+
+- Timestamp: 2026-09-23
+- Market: N/A — long-term model-development direction
+- Related decision_event_id / signal_id: NONE
+- Model / arm: Future open/self-hosted FDML model family; Jev remains first-live incumbent
+- Category: FEATURE_IDEA, SIGNAL_QUALITY, COST, HUMAN_USEFULNESS
+- Priority: P2
+- Status: TODO
+- What FDML showed: Provider-neutral contracts, same-snapshot multi-model fan-out, evidence/outcome linkage and deterministic export already give FDML the correct base for later project-specific model training and champion/challenger validation.
+- Data/signal age and validity, if known: N/A
+- Shadow entry/reference price, if known: N/A
+- What the user observed: The current priority is to bring the two active systems online and accumulate more real data. Further detailed model-training research should pause until those systems are producing usable evidence. The other active Nautilus/Trade OS program is expected to generate additional project-owned causal research data that may later be useful as training or evaluation input for a specialised fast-decision model.
+- What the user did, if any: Confirmed the high-level long-term direction and requested that the model-training approach and principles be preliminarily frozen for later reuse.
+- What happened afterward: GitHub review of Issue #163 confirms that the Nautilus program already plans project-owned canonical research data, chronological OOS/walk-forward evidence, Forward Shadow, Champion/Challenger evaluation, MAE/MFE, after-cost metrics, BBO evidence, Strategy/Policy version identity, Opportunity/Attempt linkage, and data portability. These are potentially high-value future model-training/evaluation inputs if exported through an explicit versioned training-data contract.
+- Why this matters: Combining FDML decision snapshots/outcomes with Nautilus/Trade OS causal market, strategy and forward-shadow evidence could create a substantially richer domain dataset than FDML alone, while preserving model/provider independence.
+
+#### High-level direction freeze
+
+```text
+CURRENT_PRIORITY=
+  1. LAUNCH_EXISTING_FDML
+  2. LAUNCH_EXISTING_NAUTILUS/TRADE_OS_PATH
+  3. ACCUMULATE_REAL_FORWARD_DATA
+
+DETAILED_MODEL_TRAINING_RESEARCH_NOW=PAUSE
+TRAINING_INFRASTRUCTURE_NOW=NO
+HIGH_FREQUENCY_MODEL_MONITORING=NO
+MODEL_SCREENING=PERIODIC_STAGE_BASED
+
+FIRST_LIVE_FDML_MODEL=JEV
+LONG_TERM_TARGET=
+  STABLE_OPEN_BASE_MODEL
+  -> PROJECT_DOMAIN_ADAPTATION / FINE_TUNING
+  -> CHAMPION_CHALLENGER_SHADOW
+  -> SELF_HOSTED_INFERENCE
+  -> PROJECT_MAINTAINED_MODEL
+```
+
+#### Future candidate data sources
+
+Use only data with explicit provenance and version identity. Candidate sources include:
+
+1. **FDML-native data**
+   - immutable state/snapshot payloads;
+   - model decisions and full probability distributions;
+   - model identity/runtime/calibration metadata;
+   - causal forward outcomes;
+   - MFE/MAE / first-passage / WAIT-PASS opportunity evidence;
+   - data-quality/failure evidence;
+   - human qualitative annotations where deliberately promoted into a training label.
+
+2. **Nautilus / Trade OS research data**
+   - project-owned canonical research data from the Nautilus program;
+   - Strategy/Policy/parameter version identity;
+   - Champion/Challenger Forward Shadow decisions;
+   - Opportunity / Thesis / Attempt linkage where defined;
+   - BBO / executable-price / after-cost evidence;
+   - MAE/MFE and forward market path;
+   - chronological OOS / walk-forward evidence;
+   - hypothetical order lifecycle and execution-state evidence where causally valid.
+
+Do not blindly concatenate the two stores. Build a future versioned training-data contract that explicitly maps source records into one training example schema.
+
+#### Preliminary training principles — frozen direction, not final algorithm
+
+1. **Do not train from scratch by default.**
+   - Start from a fitting open fast-decision / System-1 style base model.
+   - Re-run mature-solution screening at the time of selection.
+
+2. **Prefer domain adaptation over generic scaling.**
+   - The target is a small/fast model specialised for project trading decisions, not a general-purpose LLM.
+
+3. **Training labels must be causally defined.**
+   - Primary supervision/reward should come from later market outcomes, versioned project Strategy semantics and deliberately accepted human/domain labels.
+   - Jev outputs may be used as teacher/distillation data only when explicitly identified; they are not ground truth.
+
+4. **No silent leakage between training and evaluation.**
+   - Use chronological train / validation / test partitioning.
+   - Preserve a genuinely later forward set that was unavailable during model and threshold selection.
+   - Nearby observations from the same event/regime must not be split across train/test in a way that leaks future context.
+
+5. **Calibration is a separate acceptance dimension.**
+   - Train the decision model and fit/verify probability calibration on appropriately separate data.
+   - Evaluate Brier/ECE/reliability/selective accuracy in addition to directional/classification accuracy.
+
+6. **Model-native training route first.**
+   - When a base model is selected, use its best validated training/adaptation method if it fits the project.
+   - PEFT/LoRA, full fine-tuning, RLCD or another method must remain implementation choices, not prematurely fixed architecture.
+
+7. **Stage-based retraining, not continuous uncontrolled learning.**
+   - Freeze each dataset/model/calibration epoch.
+   - Retrain only at explicit stage boundaries after enough new data or a material hypothesis change.
+   - Never mutate the live model silently from recent outcomes.
+
+8. **Champion/challenger before replacement.**
+   - A newly trained open model first runs Shadow against Jev/other incumbent models on the same immutable snapshots.
+   - Promotion requires prospective project-domain evidence, not an in-sample or public-benchmark win.
+
+9. **Full reproducibility and lineage.**
+   Preserve at minimum:
+   - base model / upstream revision;
+   - license;
+   - weight/checkpoint digest;
+   - training code/config;
+   - dataset manifest + hashes;
+   - feature/state/question/label/reward schema versions;
+   - random seed where applicable;
+   - training runtime/hardware;
+   - calibration config;
+   - validation manifest;
+   - final deployment artifact digest.
+
+10. **Separate training compute from live inference.**
+    - Heavy training should use bounded temporary GPU capacity rather than the always-on trading host.
+    - Production inference should be benchmarked on the actual AWS target environment and use the smallest sufficient CPU/GPU footprint.
+
+11. **Keep source-project authority separate.**
+    - Nautilus/Trade OS remains authoritative for its own Strategy/infrastructure/research evidence.
+    - FDML remains authoritative for its model experiment/evidence semantics.
+    - Future training datasets may consume versioned exports from both; the training pipeline must not become a second authoritative trading-state owner.
+
+12. **No automatic model promotion or autonomous trading authority.**
+    - Model training and promotion never imply exchange-write, deployment, runtime activation or real-capital authority.
+
+#### Re-open trigger
+
+Detailed model-selection / training research should restart only when at least one is true:
+
+```text
+FDML_REAL_FORWARD_DATA_SUFFICIENT_FOR_FIRST_DATASET_AUDIT
+OR
+NAUTILUS/TRADING_RESEARCH_DATA_EXPORT_IS_STABLE_ENOUGH_FOR_JOINING
+OR
+A_NEW_OPEN_FAST_DECISION_MODEL_MATERIALLY_CHANGES_THE_CANDIDATE_SET
+```
+
+At that point, run a fresh independent research cycle for:
+- data sufficiency and label quality;
+- candidate open base models;
+- exact training objective/algorithm;
+- AWS training/inference economics;
+- leakage controls and forward validation;
+- champion/challenger promotion threshold.
+
+- Evidence / screenshots / GitHub locators: Issue #163 (Nautilus transition master plan; Track S/Track D and project-owned research-data direction); Issue #216 (FDML); PR #230; FDML-HO-20260923-001.
+- Action / TODO:
+  1. Do not start new model-training or MLOps work now.
+  2. Focus engineering effort on getting FDML and Nautilus/Trade OS online and collecting forward data.
+  3. Preserve versioned/exportable evidence in both projects.
+  4. Re-open model-training research only after the trigger above.
+- Resolution / follow-up: OPEN / DEFERRED BY DESIGN. High-level direction and safeguards are frozen; detailed model choice, dataset contract and training algorithm remain intentionally deferred.
