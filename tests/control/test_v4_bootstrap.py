@@ -61,7 +61,10 @@ def arguments(repository: Path) -> argparse.Namespace:
             governance_epoch, task_hash, exact_base, surface
         ),
         control_capsule_ref="ISSUE_232_COMMENT_5789214494",
-        execution_surface=surface,
+        requested_execution_surface=surface,
+        actual_execution_surface=surface,
+        requested_provider="OPENAI",
+        actual_provider="OPENAI",
         project_ruleset_preflight="PASS",
         engineering_preflight="PASS",
         semantic_readiness="PASS",
@@ -71,6 +74,14 @@ def arguments(repository: Path) -> argparse.Namespace:
         actual_reasoning="MEDIUM",
         requested_web_search="DISABLED",
         actual_web_search="DISABLED",
+        requested_tool_state="GITHUB_CONNECTED",
+        actual_tool_state="GITHUB_CONNECTED",
+        requested_session_policy="FRESH_ORDINARY_CHATGPT_WRITER",
+        actual_session_policy="FRESH_ORDINARY_CHATGPT_WRITER",
+        requested_resource_state="NORMAL",
+        actual_resource_state="NORMAL",
+        requested_worktree_policy="EXACT_BASE_CLEAN",
+        actual_worktree_policy="EXACT_BASE_CLEAN",
         output="json",
     )
 
@@ -80,6 +91,12 @@ def test_exact_base_bootstrap_passes(repository: Path) -> None:
     assert evidence.result == "PASS"
     assert evidence.worktree_clean is True
     assert evidence.exact_base == git(repository, "rev-parse", "HEAD")
+    assert evidence.execution_surface == "CODEX_DESKTOP"
+    assert evidence.provider == "OPENAI"
+    assert evidence.tool_state == "GITHUB_CONNECTED"
+    assert evidence.session_policy == "FRESH_ORDINARY_CHATGPT_WRITER"
+    assert evidence.resource_state == "NORMAL"
+    assert evidence.worktree_policy == "EXACT_BASE_CLEAN"
 
 
 def test_dirty_worktree_is_rejected(repository: Path) -> None:
@@ -114,4 +131,28 @@ def test_model_reasoning_and_pass_attestations_fail_closed(repository: Path) -> 
     args = arguments(repository)
     args.engineering_preflight = "FAIL"
     with pytest.raises(bootstrap.BootstrapError, match="ENGINEERING_PREFLIGHT"):
+        bootstrap.verify(args)
+
+
+@pytest.mark.parametrize(
+    ("field", "observed", "message"),
+    [
+        ("actual_execution_surface", "OTHER_SURFACE", "execution-surface mismatch"),
+        ("actual_provider", "OTHER_PROVIDER", "provider mismatch"),
+        ("actual_web_search", "ENABLED", "web-search mismatch"),
+        ("actual_tool_state", "OTHER_TOOL_STATE", "tool-state mismatch"),
+        ("actual_session_policy", "OTHER_SESSION", "session-policy mismatch"),
+        ("actual_resource_state", "DEGRADED", "resource-state mismatch"),
+        ("actual_worktree_policy", "OTHER_POLICY", "worktree-policy mismatch"),
+    ],
+)
+def test_complete_route_identity_mismatches_fail_closed(
+    repository: Path,
+    field: str,
+    observed: str,
+    message: str,
+) -> None:
+    args = arguments(repository)
+    setattr(args, field, observed)
+    with pytest.raises(bootstrap.BootstrapError, match=message):
         bootstrap.verify(args)
