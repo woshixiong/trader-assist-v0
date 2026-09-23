@@ -148,15 +148,18 @@ not select an active route by themselves.
 
 - `.codex/config.toml` — trusted-project Writer defaults and declarations;
 - `.codex/agents/explorer.toml` — optional read-only Explorer;
-- `.codex/agents/code-reviewer.toml` — required read-only Code Reviewer for
-  large Codex packages;
+- `.codex/agents/code-reviewer.toml` — conditional read-only internal Code Reviewer
+  profile; use it only when the actual spawned child model/reasoning are
+  runtime-verifiable against the frozen route. Otherwise skip it; never inherit
+  or fall back to Sol/High;
 - `.codex/hooks/pre_tool_use_policy.py` — minimal hard guard for clear
   destructive/main-history commands;
 - `scripts/control/v4_bootstrap.py` — deterministic exact-base/binding check;
 - `scripts/check_v4_governance.py` — active-governance consistency checker.
 
-Final authority-bearing review is not a Codex subagent. It remains a fresh
-ordinary ChatGPT context with exact GitHub evidence.
+Final authority-bearing review is not a Codex subagent. Final fresh
+ordinary-ChatGPT Independent Review remains mandatory with exact GitHub evidence,
+whether or not the conditional internal Codex Code Review ran.
 
 ## 6. Project/program snapshots
 
