@@ -25,6 +25,7 @@ class EvaluationResult(BaseModel):
     """Deterministic evaluation output for a recorded prediction."""
 
     experiment_id: str
+    evaluation_window: int = Field(gt=0)
     prediction: Prediction
     actual_outcome: ActualOutcome
     correctness: bool
@@ -56,9 +57,12 @@ def evaluate_prediction(
     strategy, or model dependencies.
     """
 
+    if experiment_id != outcome.experiment_id:
+        raise ValueError("evaluation experiment does not match the outcome identity")
     actual = classify_outcome(outcome.price_change)
     return EvaluationResult(
         experiment_id=experiment_id,
+        evaluation_window=outcome.evaluation_window,
         prediction=prediction,
         actual_outcome=actual,
         correctness=prediction == actual,
