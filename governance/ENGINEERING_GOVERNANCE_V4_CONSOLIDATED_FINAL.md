@@ -211,6 +211,21 @@ Engineering Control escalation.
 Concrete model IDs belong in current configuration/profile or a bound package,
 not in permanent capability-class rules.
 
+For Codex child agents, the requested profile is never proof of the actual child
+runtime identity. A child may be used only when the surface can verify the
+actual spawned model and reasoning against the frozen route. If it cannot,
+do not spawn that child. Never inherit or fall back to the parent/default
+flagship profile merely to preserve a child stage. Internal Code Review may be
+skipped when its child identity is unverifiable; final authority-bearing review
+still requires a fresh ordinary ChatGPT context.
+
+```text
+SUBAGENT_MODEL_REASONING_MUST_BE_RUNTIME_VERIFIABLE=YES
+UNVERIFIED_SUBAGENT_MODEL_INHERITANCE=PROHIBITED
+FALLBACK_TO_PARENT_SOL_HIGH=PROHIBITED
+SILENT_REVIEWER_PROFILE_FALLBACK=PROHIBITED
+```
+
 ### 3.4 Concurrency
 
 ```text
@@ -236,7 +251,8 @@ DEVELOPMENT_PACKAGE_FREEZE
 -> PACKAGE_BOUNDARY_CHECK
 -> PACKAGE_SCOPED GOAL
 -> EDIT / FOCUSED TEST / OBSERVE / REPAIR / REPEAT
--> READ_ONLY CODE REVIEW
+-> READ_ONLY CODE REVIEW WHEN CHILD IDENTITY IS RUNTIME-VERIFIED
+   (OTHERWISE SKIP INTERNAL CHILD; NO FALLBACK)
 -> FINAL LOCAL VALIDATION
 -> COMMIT / PUSH / DRAFT PR
 -> CI_PENDING
@@ -546,10 +562,14 @@ failed run/job/step and the minimum decisive excerpt.
 
 ### 11.1 Codex Code Review
 
-Large Codex packages require a fresh read-only Code Reviewer before final
-publication/handoff. It reviews exact diff/head for correctness, regression,
-scope, authority, safety, and missing decisive tests. It cannot edit and its
-PASS is not independent acceptance.
+Large Codex packages use a fresh read-only Code Reviewer before final
+publication/handoff only when the actual spawned child model and reasoning are
+runtime-verifiable against the frozen internal-review route. If that identity
+cannot be proven, skip the Codex child reviewer; do not silently inherit or
+fall back to the parent/default Sol/High profile. When used, it reviews exact
+diff/head for correctness, regression, scope, authority, safety, and missing
+decisive tests. It cannot edit and its PASS is not independent acceptance.
+Skipping this internal child never skips final Independent Review.
 
 Ordinary in-scope findings return to the same Writer for the bounded repair.
 New architecture, security, scope, dependency, authority, or root cause returns
@@ -625,6 +645,18 @@ EXACT CANDIDATE
 -> USER MERGE AUTHORITY
 -> REQUIRED LIVE-MAIN / POST-MERGE VERIFICATION
 ```
+
+When user-local Git publication is selected for this repository, the mature
+route is HTTPS + GitHub CLI browser OAuth + system credential storage +
+`gh auth setup-git`. Manual PATs, plaintext credentials, and
+`--insecure-storage` are prohibited. If changed paths include
+`.github/workflows/**`, the active OAuth credential must explicitly prove the
+`workflow` scope before a real push; successful auth/API/read/dry-run checks do
+not prove that scope. If GitHub identity, required OAuth scopes, and the exact
+local checkpoint are already proven but a real HTTPS push fails with the known
+LibreSSL `SSL_ERROR_SYSCALL` class, do not retry semantic work, local push, or
+credentials. Preserve the exact offline checkpoint and route publication
+through the accepted connected-provider GitHub recovery surface when available.
 
 Human-executed commands are engineered artifacts. When a local operator route
 is genuinely necessary, prefer one safe contiguous paste or a reviewed
@@ -759,6 +791,10 @@ ABILITY_BOUNDARY_CONTINUATION=REQUIRED
 ROUTINE_USER_CONFIRMATION=PROHIBITED
 USER_AS_ROUTINE_MESSAGE_BUS=PROHIBITED
 NO_SILENT_MODEL_EXECUTOR_REASONING_SURFACE_CHANGE=YES
+SUBAGENT_MODEL_REASONING_MUST_BE_RUNTIME_VERIFIABLE=YES
+UNVERIFIED_SUBAGENT_MODEL_INHERITANCE=PROHIBITED
+FALLBACK_TO_PARENT_SOL_HIGH=PROHIBITED
+SILENT_REVIEWER_PROFILE_FALLBACK=PROHIBITED
 NO_HIDDEN_SEMANTIC_RETRY=YES
 ONE_PRIMARY_WRITER_PER_SHARED_AUTHORITY_STAGE=YES
 MATERIAL_WRITER_REQUIRES_PROJECT_RULESET_PREFLIGHT_PASS=YES
@@ -841,6 +877,12 @@ EXACT_RELEASE_STAGED_ARTIFACT_SEPARATION=REQUIRED
 PERSISTED_STATE_COPY_MUST_FOLLOW_COMPONENT_DURABILITY_SEMANTICS=YES
 MACOS_OPERATOR_ONE_PASTE_DEFAULT=YES_WHEN_LOCAL_OPERATOR_ROUTE_REQUIRED
 KNOWN_COMMAND_INCIDENT_NONREGRESSION_GATE=REQUIRED
+LOCAL_GIT_AUTH_ROUTE=HTTPS_GH_BROWSER_OAUTH_SYSTEM_KEYRING_SETUP_GIT
+WORKFLOW_PATH_MUTATION_REQUIRES_VERIFIED_WORKFLOW_SCOPE=YES
+AUTH_API_READ_DRY_RUN_NE_WORKFLOW_SCOPE_PROOF=YES
+KNOWN_LIBRESSL_PUSH_FAILURE_PRESERVES_CHECKPOINT=YES
+KNOWN_LIBRESSL_PUSH_FAILURE_LOCAL_RETRY=PROHIBITED
+KNOWN_LIBRESSL_PUSH_FAILURE_CONNECTED_PROVIDER_RECOVERY=WHEN_AVAILABLE
 OPERATOR_TRANSPORT_MUST_REDUCE_COMPLEXITY_NOT_REENCODE_IT=YES
 INTERACTIVE_SHELL_PARSE_ASSUMPTIONS_MUST_BE_PROVEN_OR_AVOIDED=YES
 CLI_INVOCATION_CONTRACT_PROOF=REQUIRED_FOR_MATERIAL_VERSIONED_CLI

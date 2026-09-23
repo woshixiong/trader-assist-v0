@@ -26,6 +26,8 @@ def test_required_smoke_labels_are_unique() -> None:
         "CODEX_CONFIG_PARSE",
         "EXPLORER_READ_ONLY",
         "CODE_REVIEWER_READ_ONLY",
+        "MODEL_ROUTING_POLICY",
+        "GITHUB_TRANSPORT_NONREGRESSION",
         "SKILL_DISCOVERY",
         "EXACT_BASE_BOOTSTRAP",
         "DIRTY_WORKTREE_REJECTION",
@@ -36,3 +38,14 @@ def test_required_smoke_labels_are_unique() -> None:
         "ORDINARY_CHATGPT_WRITER_BRANCH",
         "PROTECTED_ACTION_GATE",
     ]
+
+
+def test_post_checkpoint_model_and_transport_rules_are_enforced() -> None:
+    checker.check_model_routing(ROOT)
+    checker.check_transport_nonregression(ROOT)
+    checker.check_agent(
+        ROOT, ".codex/agents/explorer.toml", "gpt-5.6-luna", "low"
+    )
+    checker.check_agent(
+        ROOT, ".codex/agents/code-reviewer.toml", "gpt-5.6-terra", "medium"
+    )

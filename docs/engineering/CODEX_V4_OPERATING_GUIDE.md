@@ -12,11 +12,15 @@ credential, exchange-write, or trading authority.
 2. Review and trust the exact project hook definition when Codex prompts after
    it changes. The hook is hash-bound and skipped until trusted.
 3. Confirm `.codex/config.toml` loads these normal defaults:
-   - main Writer: `gpt-5.6-sol`, Medium;
+   - routine main Writer: `gpt-5.6-terra`, Medium;
+   - hard semantic escalation: `gpt-5.6-sol`, Medium, only when explicitly rebound by Engineering Control;
    - web search: disabled;
    - Writer sandbox: workspace-write;
-   - Explorer: `gpt-5.6-luna`, High, read-only;
-   - Code Reviewer: `gpt-5.6-sol`, High, read-only.
+   - Explorer request: `gpt-5.6-luna`, Low, read-only;
+   - internal Code Reviewer request: `gpt-5.6-terra`, Medium, read-only.
+   Child-agent profile files are requests, not proof. Spawn Explorer or Code
+   Reviewer only when the actual child model/reasoning is verifiable at runtime;
+   otherwise skip that child and never fall back to the parent/default Sol/High.
 4. Do not duplicate project rules in global `~/.codex` configuration.
 
 ## Package lifecycle
@@ -64,8 +68,10 @@ to make the check pass.
 
 ## Review and CI
 
-The `code_reviewer` agent is read-only implementation-quality review. It cannot
-be the final authority-bearing Reviewer.
+The `code_reviewer` agent is read-only implementation-quality review and may
+run only when its actual Terra/Medium child identity is runtime-verifiable. If
+that identity cannot be proven, skip it rather than silently falling back to
+Sol/High. It cannot be the final authority-bearing Reviewer.
 
 After Draft PR publication, checkpoint the exact head at `CI_PENDING` and use
 provider-native/deterministic CI waiting. Do not keep a semantic model active to
@@ -75,6 +81,19 @@ Reviewer with exact GitHub evidence and High reasoning.
 If GitHub rejects native self-approval, write the complete canonical result as
 `REVIEW_SUBMISSION_MODE=COMMENT_ONLY`. This preserves review evidence but does
 not create an independent GitHub identity.
+
+## Local Git publication nonregression
+
+The accepted user-local route is HTTPS + GitHub CLI browser OAuth + macOS system
+credential storage + `gh auth setup-git`. No manual PAT, plaintext token, or
+`--insecure-storage` route is allowed. When `.github/workflows/**` changes,
+verify the active OAuth credential includes `workflow` before the real push;
+`gh auth status`, `gh api user`, `git ls-remote`, and `git push --dry-run` are not
+scope proof. If identity, required scopes, and the exact local checkpoint are
+already PASS but real HTTPS push fails with the known LibreSSL
+`SSL_ERROR_SYSCALL` class, do not retry semantic work, push, credentials, or
+Codex. Preserve the exact offline checkpoint and use the accepted connected
+GitHub publication surface.
 
 ## After merge
 

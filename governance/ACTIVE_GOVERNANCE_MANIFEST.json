@@ -31,14 +31,30 @@
   ],
   "codex": {
     "config": ".codex/config.toml",
-    "main_writer_model": "gpt-5.6-sol",
+    "main_writer_model": "gpt-5.6-terra",
     "main_writer_reasoning": "medium",
     "web_search": "disabled",
     "agents": {
       "explorer": ".codex/agents/explorer.toml",
       "code_reviewer": ".codex/agents/code-reviewer.toml"
     },
-    "pre_tool_hook": ".codex/hooks/pre_tool_use_policy.py"
+    "pre_tool_hook": ".codex/hooks/pre_tool_use_policy.py",
+    "hard_semantic_escalation_model": "gpt-5.6-sol",
+    "hard_semantic_escalation_reasoning": "medium",
+    "subagent_runtime_identity_verification_required": true,
+    "silent_subagent_fallback_prohibited": true,
+    "agent_profiles": {
+      "explorer": {
+        "model": "gpt-5.6-luna",
+        "reasoning": "low",
+        "runtime_identity_verification_required": true
+      },
+      "code_reviewer": {
+        "model": "gpt-5.6-terra",
+        "reasoning": "medium",
+        "runtime_identity_verification_required": true
+      }
+    }
   },
   "deterministic_tools": {
     "bootstrap": "scripts/control/v4_bootstrap.py",

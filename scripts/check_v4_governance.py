@@ -47,9 +47,26 @@ def load_manifest(root: Path) -> dict[str, object]:
     return value
 
 
+def manifest_str(manifest: dict[str, object], key: str) -> str:
+    value = manifest.get(key)
+    if not isinstance(value, str) or not value:
+        raise CheckFailure(f"manifest {key} must be a non-empty string")
+    return value
+
+
+def manifest_list(manifest: dict[str, object], key: str) -> tuple[str, ...]:
+    value = manifest.get(key)
+    if not isinstance(value, list) or not value:
+        raise CheckFailure(f"manifest {key} must be a non-empty list")
+    strings = tuple(item for item in value if isinstance(item, str))
+    if len(strings) != len(value):
+        raise CheckFailure(f"manifest {key} must contain only strings")
+    return strings
+
+
 def check_single_constitution(root: Path) -> None:
     manifest = load_manifest(root)
-    if manifest.get("sole_project_wide_constitution") != CANONICAL:
+    if manifest_str(manifest, "sole_project_wide_constitution") != CANONICAL:
         raise CheckFailure("manifest canonical constitution mismatch")
     v4 = read_text(root, CANONICAL)
     require_contains(
@@ -61,7 +78,7 @@ def check_single_constitution(root: Path) -> None:
         ),
         "V4",
     )
-    active_files = ("AGENTS.md", "governance/PROJECT_RULES_INDEX.md", *manifest["entrypoints"])
+    active_files = ("AGENTS.md", "governance/PROJECT_RULES_INDEX.md", *manifest_list(manifest, "entrypoints"))
     banned = (
         "Unified V2 remains the sole project-wide normative engineering constitution",
         "UNIFIED_V2_REMAINS_SINGLE_PROJECT_WIDE_ENGINEERING_CONSTITUTION=YES",
@@ -91,16 +108,14 @@ def check_manifest(root: Path) -> None:
         "protected_actions",
     )
     for key in required_lists:
-        value = manifest.get(key)
-        if not isinstance(value, list) or not value:
-            raise CheckFailure(f"manifest {key} must be a non-empty list")
-    paths = [
-        manifest["sole_project_wide_constitution"],
-        *manifest["entrypoints"],
-        *manifest["active_checklists"],
-        *manifest["active_subordinate_procedures"],
-        *manifest["active_skills"],
-    ]
+        manifest_list(manifest, key)
+    paths = (
+        manifest_str(manifest, "sole_project_wide_constitution"),
+        *manifest_list(manifest, "entrypoints"),
+        *manifest_list(manifest, "active_checklists"),
+        *manifest_list(manifest, "active_subordinate_procedures"),
+        *manifest_list(manifest, "active_skills"),
+    )
     for item in paths:
         if not (root / str(item)).is_file():
             raise CheckFailure(f"manifest path does not exist: {item}")
@@ -139,7 +154,7 @@ def load_toml(root: Path, relative: str) -> dict[str, object]:
 def check_codex_config(root: Path) -> None:
     config = load_toml(root, ".codex/config.toml")
     expected = {
-        "model": "gpt-5.6-sol",
+        "model": "gpt-5.6-terra",
         "model_reasoning_effort": "medium",
         "web_search": "disabled",
         "sandbox_mode": "workspace-write",
@@ -158,12 +173,12 @@ def check_codex_config(root: Path) -> None:
         raise CheckFailure("PreToolUse hook declaration missing")
 
 
-def check_agent(root: Path, relative: str, model: str) -> None:
+def check_agent(root: Path, relative: str, model: str, reasoning: str) -> None:
     agent = load_toml(root, relative)
     if agent.get("model") != model:
         raise CheckFailure(f"{relative} model mismatch")
-    if agent.get("model_reasoning_effort") != "high":
-        raise CheckFailure(f"{relative} reasoning must be high")
+    if agent.get("model_reasoning_effort") != reasoning:
+        raise CheckFailure(f"{relative} reasoning must be {reasoning}")
     if agent.get("sandbox_mode") != "read-only":
         raise CheckFailure(f"{relative} must be read-only")
     instructions = agent.get("developer_instructions")
@@ -171,10 +186,60 @@ def check_agent(root: Path, relative: str, model: str) -> None:
         raise CheckFailure(f"{relative} lacks explicit no-edit boundary")
 
 
+def check_model_routing(root: Path) -> None:
+    v4 = read_text(root, CANONICAL)
+    require_contains(
+        v4,
+        (
+            "SUBAGENT_MODEL_REASONING_MUST_BE_RUNTIME_VERIFIABLE=YES",
+            "UNVERIFIED_SUBAGENT_MODEL_INHERITANCE=PROHIBITED",
+            "FALLBACK_TO_PARENT_SOL_HIGH=PROHIBITED",
+            "SILENT_REVIEWER_PROFILE_FALLBACK=PROHIBITED",
+        ),
+        "subagent runtime identity",
+    )
+    manifest = load_manifest(root)
+    codex = manifest.get("codex")
+    if not isinstance(codex, dict):
+        raise CheckFailure("manifest codex object missing")
+    if codex.get("main_writer_model") != "gpt-5.6-terra":
+        raise CheckFailure("routine Codex Writer must default to Terra")
+    if codex.get("hard_semantic_escalation_model") != "gpt-5.6-sol":
+        raise CheckFailure("hard semantic escalation must bind Sol explicitly")
+    if codex.get("subagent_runtime_identity_verification_required") is not True:
+        raise CheckFailure("subagent runtime identity verification must be required")
+    if codex.get("silent_subagent_fallback_prohibited") is not True:
+        raise CheckFailure("silent subagent fallback must be prohibited")
+
+
+def check_transport_nonregression(root: Path) -> None:
+    procedure = read_text(
+        root,
+        "governance/GITHUB_LOCAL_TRANSPORT_AND_REVIEWED_PR_CLOSEOUT_PROCEDURE_V1_2026-09-16.md",
+    )
+    require_contains(
+        procedure,
+        (
+            "GH_WORKFLOW_SCOPE_VERIFIED=YES",
+            "git push --dry-run",
+            "SSL_ERROR_SYSCALL",
+            "LOCAL_PUSH_RETRY=PROHIBITED",
+            "CONNECTED_PROVIDER_GITHUB_RECOVERY=REQUIRED_WHEN_AVAILABLE",
+            "--insecure-storage",
+        ),
+        "GitHub local transport",
+    )
+
+
 def check_skills(root: Path) -> None:
     expected = {
         SKILLS[0]: ("trade-os-v4-bootstrap", "PRE_MODEL", "CONTROL_CAPSULE_REF"),
-        SKILLS[1]: ("trade-os-v4-development", "PLAN_BOUNDARY_CHECK=PASS", "CI_PENDING"),
+        SKILLS[1]: (
+            "trade-os-v4-development",
+            "PLAN_BOUNDARY_CHECK=PASS",
+            "CI_PENDING",
+            "SUBAGENT_MODEL_REASONING_MUST_BE_RUNTIME_VERIFIABLE=YES",
+        ),
         SKILLS[2]: ("trade-os-v4-ci", "MODEL_REQUIRED=NO", "MODEL_MEDIATED_CI_POLLING=PROHIBITED"),
         SKILLS[3]: ("trade-os-v4-review", "COMMENT_ONLY", "fresh ordinary ChatGPT"),
     }
@@ -238,7 +303,7 @@ def check_protected_actions(root: Path) -> None:
         "EXCHANGE_WRITE_OR_ORDER_ACTION",
         "AUTONOMOUS_OR_REAL_CAPITAL_TRADING",
     }
-    protected = set(str(item) for item in manifest["protected_actions"])
+    protected = set(manifest_list(manifest, "protected_actions"))
     if not required <= protected:
         raise CheckFailure("protected-action manifest is incomplete")
 
@@ -252,12 +317,14 @@ def checks() -> tuple[tuple[str, Callable[[Path], None]], ...]:
         ("CODEX_CONFIG_PARSE", check_codex_config),
         (
             "EXPLORER_READ_ONLY",
-            lambda root: check_agent(root, ".codex/agents/explorer.toml", "gpt-5.6-luna"),
+            lambda root: check_agent(root, ".codex/agents/explorer.toml", "gpt-5.6-luna", "low"),
         ),
         (
             "CODE_REVIEWER_READ_ONLY",
-            lambda root: check_agent(root, ".codex/agents/code-reviewer.toml", "gpt-5.6-sol"),
+            lambda root: check_agent(root, ".codex/agents/code-reviewer.toml", "gpt-5.6-terra", "medium"),
         ),
+        ("MODEL_ROUTING_POLICY", check_model_routing),
+        ("GITHUB_TRANSPORT_NONREGRESSION", check_transport_nonregression),
         ("SKILL_DISCOVERY", check_skills),
         ("EXACT_BASE_BOOTSTRAP", check_bootstrap_surface),
         ("DIRTY_WORKTREE_REJECTION", check_bootstrap_surface),

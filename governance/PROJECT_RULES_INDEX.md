@@ -47,8 +47,12 @@ D unresolved architecture/security/authority/high consequence -> Control
 ```
 
 Large Codex packages use deterministic bootstrap, Plan-only, automatic
-boundary check, one Goal, implementation/validation/bounded repair, read-only
-Code Review, Draft PR, and zero-model CI.
+boundary check, one Goal, implementation/validation/bounded repair, conditional
+read-only internal Code Review, Draft PR, and zero-model CI. Routine Codex
+implementation defaults to Terra/Medium. Explorer is Luna/Low and internal Code
+Review is Terra/Medium only when the actual child model/reasoning is verifiable
+at runtime; otherwise the child is skipped with no parent/default Sol/High
+fallback. Sol/Medium is an explicit Engineering Control semantic escalation.
 
 The user is not asked to select the executor or Plan versus Goal. Every context
 works to its true ability/authority boundary without routine confirmation or
@@ -96,7 +100,13 @@ Use before delivering a nontrivial operator command.
 - `governance/GITHUB_LOCAL_TRANSPORT_AND_REVIEWED_PR_CLOSEOUT_PROCEDURE_V1_2026-09-16.md`
 
 Use for user-local Git transport or terminal disposition of an independently
-reviewed PR. It creates no Mark Ready or merge authority.
+reviewed PR. Local publication uses HTTPS + GitHub CLI browser OAuth + system
+credential storage + `gh auth setup-git`; workflow-path mutation requires an
+explicitly verified `workflow` OAuth scope. The known LibreSSL
+`SSL_ERROR_SYSCALL` publication failure preserves the semantic checkpoint and
+routes to accepted connected-provider recovery rather than repeated local push,
+credential weakening, or semantic retry. It creates no Mark Ready or merge
+authority.
 
 ### 4.5 Tool onboarding or material tool change
 

@@ -58,6 +58,15 @@ D UNRESOLVED ARCHITECTURE / SECURITY / AUTHORITY / HIGH-CONSEQUENCE AMBIGUITY
   -> Engineering Control resolves and refreezes before implementation
 ```
 
+Current Codex routing is cost-aware and fail-closed: routine Codex implementation
+uses Terra/Medium; Sol/Medium is reserved for explicit Engineering Control
+semantic escalation. Explorer requests Luna/Low and internal Code Review requests
+Terra/Medium, but either child may run only when its actual spawned model and
+reasoning are runtime-verifiable. An unverifiable child is skipped; it never
+inherits or silently falls back to the parent/default Sol/High profile. Final
+authority-bearing Independent Review remains fresh ordinary ChatGPT with High
+reasoning.
+
 One coherent shared-authority stage has one primary Writer. Use subagents only
 for necessary, genuinely separable work. CI polling is never an agent role.
 

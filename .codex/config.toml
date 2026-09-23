@@ -1,7 +1,8 @@
 #:schema https://developers.openai.com/codex/config-schema.json
-# Trader Assist V4 trusted-project defaults. A frozen task may select stricter
-# values, but no actor may silently substitute a different route.
-model = "gpt-5.6-sol"
+# Trader Assist V4 trusted-project defaults. Routine Codex implementation uses
+# Terra/Medium. Sol/Medium is an explicit Engineering Control escalation only.
+# Child-agent profile files express requested intent, not proof of runtime identity.
+model = "gpt-5.6-terra"
 model_reasoning_effort = "medium"
 service_tier = "default"
 model_verbosity = "low"

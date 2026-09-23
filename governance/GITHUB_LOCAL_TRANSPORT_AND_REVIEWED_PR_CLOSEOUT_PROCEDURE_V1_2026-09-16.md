@@ -50,7 +50,28 @@ When `gh auth login --git-protocol https --web` is required, normal browser OAut
 
 A material expansion of GitHub credential scopes remains a separate authority/change decision. Do not silently add `workflow`, repo-wide administration or other scopes merely to bypass a rejected operation; first determine whether the existing GitHub connector/provider-native path already has the required bounded permission.
 
-### 1.2 Generated-command routing
+### 1.2 Workflow-path OAuth scope preflight
+
+If the changed-path set contains `.github/workflows/**`, a real user-local push
+requires explicit proof that the active GitHub CLI browser-OAuth credential has
+`workflow` scope:
+
+```text
+WORKFLOW_PATH_MUTATION=YES
+GH_WORKFLOW_SCOPE_REQUIRED=YES
+GH_WORKFLOW_SCOPE_VERIFIED=YES
+```
+
+A successful `gh auth status`, `gh api user`, `git ls-remote`, or
+`git push --dry-run` proves neither workflow-scope sufficiency nor permission to
+mutate workflow files. Scope verification must inspect the active OAuth
+credential scopes before the real push. If `workflow` is absent, fail closed;
+request separate authority before any scope expansion. Once authorized, the
+preferred bounded repair is `gh auth refresh --hostname github.com --scopes workflow`
+followed by `gh auth setup-git --hostname github.com`. Do not create manual PATs,
+duplicate OAuth tokens, plaintext credentials, or use `--insecure-storage`.
+
+### 1.3 Generated-command routing
 
 For this repository, future user-local `git fetch`, `git pull`, `git push`, `git ls-remote` and equivalent generated commands should use the HTTPS project remote by default.
 
@@ -65,7 +86,7 @@ NO_FORCE_AS_NORMAL_PUBLICATION_ROUTE
 
 Transport reliability never weakens branch/ref/merge authority rules.
 
-### 1.3 Mandatory applicability and transport-health gate
+### 1.4 Mandatory applicability and transport-health gate
 
 Any bounded task that will generate or execute user-local Git publication for this repository must load this procedure before the **publication command** is delivered.
 
@@ -146,7 +167,7 @@ AND KNOWN_TRANSPORT_INCIDENT_NONREGRESSION != PASS
 
 A local transport-health check must protect a real publication invariant. Do not create repeated speculative network probes merely to earn `PASS`; fresh provider/control-plane identity and an already-proven unhealthy local path are routing evidence. A provider-native connector identity check must not be redundantly re-proved through lower-reliability local `gh api` before semantic start unless the local result protects a distinct source invariant. When an authoritative connected GitHub surface can perform the same bounded mutation at equal or higher fidelity with less human relay, apply the V4 remote-execution preference before requiring another local publication attempt.
 
-### 1.4 Checkpoint-aware fallback ladder
+### 1.5 Checkpoint-aware fallback ladder
 
 After a semantic Writer/action has completed, publication transport failure is an evidence/publication-tail failure unless evidence proves the semantic checkpoint itself is corrupt. Never consume another semantic Writer attempt merely to recover transport.
 
@@ -174,6 +195,31 @@ AUTHORITATIVE_REMOTE_WRITE_SURFACE_UNAVAILABLE
 ```
 
 The 2026-09-17 R3 incident is a permanent nonregression case: local Git HTTPS failed with LibreSSL `SSL_ERROR_SYSCALL`, and authenticated `gh api` later failed with EOF after earlier read success. That pattern is classified as `LOCAL_GIT_HTTPS_LIBRESSL_OR_API_EOF_AFTER_PRIOR_SUCCESS`; it proves that earlier connectivity/authentication success alone is not a later mutation-path health proof.
+
+The Issue #232 recurrence makes the push-side rule explicit. Once GitHub
+identity, required OAuth scopes (including `workflow` when applicable), and the
+exact local semantic checkpoint are PASS, a real HTTPS push that fails with
+`LibreSSL SSL_connect: SSL_ERROR_SYSCALL in connection to github.com:443` is an
+infrastructure/transport failure, not a semantic or credential failure:
+
+```text
+GITHUB_IDENTITY=PASS
+REQUIRED_OAUTH_SCOPES=PASS
+LOCAL_CHECKPOINT=PASS
+KNOWN_LIBRESSL_PUSH_FAILURE=YES
+SEMANTIC_RETRY=PROHIBITED
+LOCAL_PUSH_RETRY=PROHIBITED
+CREDENTIAL_CHANGE_OR_WEAKENING=PROHIBITED
+CODEX_RESTART=PROHIBITED
+PRESERVE_EXACT_OFFLINE_CHECKPOINT=YES
+CONNECTED_PROVIDER_GITHUB_RECOVERY=REQUIRED_WHEN_AVAILABLE
+```
+
+Preserve exact head/tree/parent/scope evidence and, when local-only bytes exist,
+export one exact offline checkpoint artifact. Publication then uses the accepted
+connected-provider GitHub surface to create/update the task ref with normal
+non-force semantics and continue the existing Draft PR. Do not reconstruct or
+rerun semantic work merely because local HTTPS transport failed.
 
 ---
 
