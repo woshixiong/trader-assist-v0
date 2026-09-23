@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -135,9 +136,8 @@ def test_integrity_validation_detects_tampering(tmp_path) -> None:
             ("forged", "experiment-1"),
         )
 
-    with SQLiteDecisionEvidenceLedger(path) as ledger:
-        with pytest.raises(LedgerIntegrityError, match="identity"):
-            ledger.validate_integrity()
+    with pytest.raises(LedgerIntegrityError, match="append-only triggers"):
+        SQLiteDecisionEvidenceLedger(path)
 
 
 def test_integrity_validation_detects_linkage_tampering(tmp_path) -> None:
@@ -153,9 +153,8 @@ def test_integrity_validation_detects_linkage_tampering(tmp_path) -> None:
             ("forged", "experiment-1"),
         )
 
-    with SQLiteDecisionEvidenceLedger(path) as ledger:
-        with pytest.raises(LedgerIntegrityError):
-            ledger.validate_integrity()
+    with pytest.raises(LedgerIntegrityError, match="append-only triggers"):
+        SQLiteDecisionEvidenceLedger(path)
 
 
 def test_multiple_windows_survive_restart_and_fail_closed_on_conflict(tmp_path) -> None:
@@ -222,16 +221,24 @@ def _create_legacy_database(path, *, ambiguous: bool = False) -> None:
                 experiment_id TEXT PRIMARY KEY, record_json TEXT NOT NULL,
                 record_identity TEXT NOT NULL UNIQUE,
                 experiment_record_identity TEXT NOT NULL,
-                UNIQUE (experiment_id, record_identity)
+                UNIQUE (experiment_id, record_identity),
+                FOREIGN KEY (experiment_id, experiment_record_identity)
+                    REFERENCES fdml_experiments(experiment_id, record_identity)
             );
             CREATE TABLE fdml_outcomes (
                 experiment_id TEXT PRIMARY KEY, record_json TEXT NOT NULL,
                 record_identity TEXT NOT NULL UNIQUE, experiment_record_identity TEXT NOT NULL,
-                evidence_identity TEXT NOT NULL
+                evidence_identity TEXT NOT NULL,
+                FOREIGN KEY (experiment_id, experiment_record_identity)
+                    REFERENCES fdml_experiments(experiment_id, record_identity),
+                FOREIGN KEY (experiment_id, evidence_identity)
+                    REFERENCES fdml_evidence(experiment_id, record_identity)
             );
             CREATE TABLE fdml_evaluations (
                 experiment_id TEXT PRIMARY KEY, record_json TEXT NOT NULL,
-                record_identity TEXT NOT NULL UNIQUE, outcome_identity TEXT NOT NULL
+                record_identity TEXT NOT NULL UNIQUE, outcome_identity TEXT NOT NULL,
+                FOREIGN KEY (experiment_id, outcome_identity)
+                    REFERENCES fdml_outcomes(experiment_id, record_identity)
             );
             """
         )
@@ -270,6 +277,37 @@ def _create_legacy_database(path, *, ambiguous: bool = False) -> None:
         )
 
 
+def _legacy_snapshot(path):
+    with sqlite3.connect(path) as connection:
+        schema = tuple(
+            connection.execute(
+                "SELECT type, name, tbl_name, sql FROM sqlite_master "
+                "WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name"
+            )
+        )
+        rows = tuple(
+            tuple(connection.execute(f"SELECT * FROM {table} ORDER BY experiment_id"))
+            for table in (
+                "fdml_experiments",
+                "fdml_evidence",
+                "fdml_outcomes",
+                "fdml_evaluations",
+            )
+        )
+        return schema, rows, connection.execute("PRAGMA user_version").fetchone()[0]
+
+
+def _rewrite_legacy_evaluation_payload(path, mutate) -> None:
+    with sqlite3.connect(path) as connection:
+        row = connection.execute("SELECT record_json FROM fdml_evaluations").fetchone()
+        payload = json.loads(row[0])
+        mutate(payload)
+        connection.execute(
+            "UPDATE fdml_evaluations SET record_json = ?, record_identity = ?",
+            (canonical_json(payload), canonical_sha256(payload)),
+        )
+
+
 def test_legacy_migration_is_transactional_and_rebinds_exact_window(tmp_path) -> None:
     path = tmp_path / "legacy.sqlite"
     _create_legacy_database(path)
@@ -293,3 +331,94 @@ def test_ambiguous_legacy_mapping_preserves_database_and_stops(tmp_path) -> None
         assert "evaluation_window" not in {
             row[1] for row in connection.execute("PRAGMA table_info(fdml_outcomes)")
         }
+
+
+def test_migration_rolls_back_after_v2_ddl_before_first_copy(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "legacy.sqlite"
+    _create_legacy_database(path)
+    before = _legacy_snapshot(path)
+    original = SQLiteDecisionEvidenceLedger._create_migration_tables
+
+    def create_then_fail(ledger) -> None:
+        original(ledger)
+        raise LedgerIntegrityError("injected before copy")
+
+    monkeypatch.setattr(SQLiteDecisionEvidenceLedger, "_create_migration_tables", create_then_fail)
+    with pytest.raises(LedgerIntegrityError, match="before copy"):
+        SQLiteDecisionEvidenceLedger(path)
+    assert _legacy_snapshot(path) == before
+
+
+def test_migration_rolls_back_after_post_rename_integrity_failure(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "legacy.sqlite"
+    _create_legacy_database(path)
+    before = _legacy_snapshot(path)
+
+    def fail_integrity(_ledger) -> bool:
+        raise LedgerIntegrityError("injected post-rename integrity failure")
+
+    monkeypatch.setattr(SQLiteDecisionEvidenceLedger, "validate_integrity", fail_integrity)
+    with pytest.raises(LedgerIntegrityError, match="post-rename"):
+        SQLiteDecisionEvidenceLedger(path)
+    assert _legacy_snapshot(path) == before
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    (
+        lambda payload: payload.update({"unexpected": "value"}),
+        lambda payload: payload.update({"evaluation_window": 60}),
+    ),
+)
+def test_legacy_evaluation_ambiguous_payload_is_preserved_and_rejected(tmp_path, mutate) -> None:
+    path = tmp_path / "legacy.sqlite"
+    _create_legacy_database(path)
+    _rewrite_legacy_evaluation_payload(path, mutate)
+    before = _legacy_snapshot(path)
+    with pytest.raises(LedgerIntegrityError, match="unsupported field set"):
+        SQLiteDecisionEvidenceLedger(path)
+    assert _legacy_snapshot(path) == before
+
+
+def test_partial_v2_like_schema_is_rejected_without_version_stamp(tmp_path) -> None:
+    path = tmp_path / "partial.sqlite"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "CREATE TABLE fdml_outcomes (experiment_id TEXT, evaluation_window INTEGER)"
+        )
+    with pytest.raises(LedgerIntegrityError, match="partial or ambiguous"):
+        SQLiteDecisionEvidenceLedger(path)
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 0
+
+
+def test_v2_like_schema_with_wrong_composite_key_is_rejected(tmp_path) -> None:
+    path = tmp_path / "malformed.sqlite"
+    with sqlite3.connect(path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE fdml_experiments (
+                experiment_id TEXT PRIMARY KEY, record_json TEXT NOT NULL,
+                record_identity TEXT NOT NULL UNIQUE
+            );
+            CREATE TABLE fdml_evidence (
+                experiment_id TEXT PRIMARY KEY, record_json TEXT NOT NULL,
+                record_identity TEXT NOT NULL UNIQUE,
+                experiment_record_identity TEXT NOT NULL
+            );
+            CREATE TABLE fdml_outcomes (
+                experiment_id TEXT PRIMARY KEY, evaluation_window INTEGER NOT NULL,
+                record_json TEXT NOT NULL, record_identity TEXT NOT NULL UNIQUE,
+                experiment_record_identity TEXT NOT NULL, evidence_identity TEXT NOT NULL
+            );
+            CREATE TABLE fdml_evaluations (
+                experiment_id TEXT PRIMARY KEY, evaluation_window INTEGER NOT NULL,
+                record_json TEXT NOT NULL, record_identity TEXT NOT NULL UNIQUE,
+                outcome_identity TEXT NOT NULL
+            );
+            """
+        )
+    with pytest.raises(LedgerIntegrityError, match="columns or primary key"):
+        SQLiteDecisionEvidenceLedger(path)
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 0

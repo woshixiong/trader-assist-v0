@@ -12,6 +12,9 @@ from .serialization import canonical_json, canonical_sha256
 
 SCHEMA_VERSION = 2
 
+LEGACY_OUTCOME_FIELDS = frozenset(OutcomeRecord.model_fields)
+LEGACY_EVALUATION_FIELDS = frozenset(EvaluationResult.model_fields) - {"evaluation_window"}
+
 
 class LedgerError(RuntimeError):
     """Base error for deterministic FDML ledger failures."""
@@ -69,15 +72,33 @@ class SQLiteDecisionEvidenceLedger:
         return tuple(row["name"] for row in connection.execute(f"PRAGMA table_info({table})"))
 
     def _initialize_schema(self) -> None:
-        if not self._table_exists(self._connection, "fdml_outcomes"):
+        tables = {
+            table
+            for table in (
+                "fdml_experiments",
+                "fdml_evidence",
+                "fdml_outcomes",
+                "fdml_evaluations",
+            )
+            if self._table_exists(self._connection, table)
+        }
+        if not tables:
             with self._connection:
                 self._create_current_schema()
+                self._validate_current_schema()
                 self._connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             return
+        if tables != {
+            "fdml_experiments",
+            "fdml_evidence",
+            "fdml_outcomes",
+            "fdml_evaluations",
+        }:
+            raise LedgerIntegrityError("partial or ambiguous FDML schema")
         columns = self._table_columns(self._connection, "fdml_outcomes")
         if "evaluation_window" in columns:
+            self._validate_current_schema()
             with self._connection:
-                self._create_current_schema()
                 self._connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             return
         self._migrate_legacy_schema()
@@ -149,7 +170,9 @@ class SQLiteDecisionEvidenceLedger:
             )
 
     @staticmethod
-    def _legacy_payload(row: sqlite3.Row) -> dict[str, Any]:
+    def _legacy_payload(
+        row: sqlite3.Row, expected_fields: frozenset[str] | None = None
+    ) -> dict[str, Any]:
         try:
             payload = json.loads(row["record_json"])
         except (json.JSONDecodeError, TypeError) as error:
@@ -162,7 +185,125 @@ class SQLiteDecisionEvidenceLedger:
             raise LedgerIntegrityError("legacy ledger identity does not match its payload")
         if payload.get("experiment_id") != row["experiment_id"]:
             raise LedgerIntegrityError("legacy ledger experiment linkage is inconsistent")
+        if expected_fields is not None and frozenset(payload) != expected_fields:
+            raise LedgerIntegrityError("legacy ledger payload has an unsupported field set")
         return payload
+
+    def _validate_current_schema(self) -> None:
+        expected_columns = {
+            "fdml_experiments": (
+                ("experiment_id", "TEXT", 0, 1),
+                ("record_json", "TEXT", 1, 0),
+                ("record_identity", "TEXT", 1, 0),
+            ),
+            "fdml_evidence": (
+                ("experiment_id", "TEXT", 0, 1),
+                ("record_json", "TEXT", 1, 0),
+                ("record_identity", "TEXT", 1, 0),
+                ("experiment_record_identity", "TEXT", 1, 0),
+            ),
+            "fdml_outcomes": (
+                ("experiment_id", "TEXT", 1, 1),
+                ("evaluation_window", "INTEGER", 1, 2),
+                ("record_json", "TEXT", 1, 0),
+                ("record_identity", "TEXT", 1, 0),
+                ("experiment_record_identity", "TEXT", 1, 0),
+                ("evidence_identity", "TEXT", 1, 0),
+            ),
+            "fdml_evaluations": (
+                ("experiment_id", "TEXT", 1, 1),
+                ("evaluation_window", "INTEGER", 1, 2),
+                ("record_json", "TEXT", 1, 0),
+                ("record_identity", "TEXT", 1, 0),
+                ("outcome_identity", "TEXT", 1, 0),
+            ),
+        }
+        for table, expected in expected_columns.items():
+            actual = tuple(
+                (row["name"], row["type"], row["notnull"], row["pk"])
+                for row in self._connection.execute(f"PRAGMA table_info({table})")
+            )
+            if actual != expected:
+                raise LedgerIntegrityError("current FDML schema columns or primary key are invalid")
+        expected_foreign_keys = {
+            (
+                "fdml_evidence",
+                ("experiment_id", "experiment_record_identity"),
+                "fdml_experiments",
+                ("experiment_id", "record_identity"),
+            ),
+            (
+                "fdml_outcomes",
+                ("experiment_id", "experiment_record_identity"),
+                "fdml_experiments",
+                ("experiment_id", "record_identity"),
+            ),
+            (
+                "fdml_outcomes",
+                ("experiment_id", "evidence_identity"),
+                "fdml_evidence",
+                ("experiment_id", "record_identity"),
+            ),
+            (
+                "fdml_evaluations",
+                ("experiment_id", "evaluation_window", "outcome_identity"),
+                "fdml_outcomes",
+                ("experiment_id", "evaluation_window", "record_identity"),
+            ),
+        }
+        actual_foreign_keys: set[tuple[str, tuple[str, ...], str, tuple[str, ...]]] = set()
+        for table in expected_columns:
+            grouped: dict[int, list[sqlite3.Row]] = {}
+            for row in self._connection.execute(f"PRAGMA foreign_key_list({table})"):
+                grouped.setdefault(row["id"], []).append(row)
+            for rows in grouped.values():
+                ordered = sorted(rows, key=lambda row: row["seq"])
+                actual_foreign_keys.add(
+                    (
+                        table,
+                        tuple(row["from"] for row in ordered),
+                        ordered[0]["table"],
+                        tuple(row["to"] for row in ordered),
+                    )
+                )
+        if actual_foreign_keys != expected_foreign_keys:
+            raise LedgerIntegrityError("current FDML schema foreign keys are invalid")
+        for table in expected_columns:
+            trigger_names = {f"{table}_no_update", f"{table}_no_delete"}
+            rows = self._connection.execute(
+                "SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ?",
+                (table,),
+            ).fetchall()
+            if {row["name"] for row in rows} != trigger_names or any(
+                "fdml evidence ledger is append-only" not in row["sql"] for row in rows
+            ):
+                raise LedgerIntegrityError("current FDML schema append-only triggers are invalid")
+        for table in ("fdml_outcomes", "fdml_evaluations"):
+            sql = self._connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+            ).fetchone()[0]
+            if "CHECK (evaluation_window > 0)" not in sql:
+                raise LedgerIntegrityError("current FDML schema window constraint is invalid")
+        required_unique = {
+            "fdml_experiments": (("record_identity",), ("experiment_id", "record_identity")),
+            "fdml_evidence": (("record_identity",), ("experiment_id", "record_identity")),
+            "fdml_outcomes": (
+                ("record_identity",),
+                ("experiment_id", "evaluation_window", "record_identity"),
+            ),
+            "fdml_evaluations": (("record_identity",),),
+        }
+        for table, required in required_unique.items():
+            actual_unique = {
+                tuple(
+                    row["name"]
+                    for row in self._connection.execute(f"PRAGMA index_info({index['name']})")
+                )
+                for index in self._connection.execute(f"PRAGMA index_list({table})")
+                if index["unique"]
+            }
+            if not set(required) <= actual_unique:
+                raise LedgerIntegrityError("current FDML schema unique constraints are invalid")
 
     def _migrate_legacy_schema(self) -> None:
         expected_outcome_columns = (
@@ -191,14 +332,14 @@ class SQLiteDecisionEvidenceLedger:
         migrated_evaluations: list[tuple[sqlite3.Row, EvaluationResult, str]] = []
         outcomes_by_identity: dict[tuple[str, str], OutcomeRecord] = {}
         for row in outcomes:
-            payload = self._legacy_payload(row)
+            payload = self._legacy_payload(row, LEGACY_OUTCOME_FIELDS)
             try:
-                outcome = OutcomeRecord.model_validate(payload)
+                outcome = OutcomeRecord.model_validate_json(row["record_json"], strict=True)
             except (TypeError, ValueError) as error:
                 raise LedgerIntegrityError("invalid legacy outcome record") from error
             outcomes_by_identity[(outcome.experiment_id, row["record_identity"])] = outcome
         for row in evaluations:
-            payload = self._legacy_payload(row)
+            payload = self._legacy_payload(row, LEGACY_EVALUATION_FIELDS)
             linked_outcome = outcomes_by_identity.get(
                 (row["experiment_id"], row["outcome_identity"])
             )
@@ -206,81 +347,90 @@ class SQLiteDecisionEvidenceLedger:
                 raise LedgerIntegrityError("legacy evaluation cannot map exactly to an outcome")
             payload["evaluation_window"] = linked_outcome.evaluation_window
             try:
-                evaluation = EvaluationResult.model_validate(payload)
+                evaluation = EvaluationResult.model_validate_json(
+                    canonical_json(payload), strict=True
+                )
             except (TypeError, ValueError) as error:
                 raise LedgerIntegrityError("invalid legacy evaluation record") from error
             migrated_evaluations.append(
                 (row, evaluation, canonical_json(_pydantic_payload(evaluation)))
             )
         try:
-            with self._connection:
+            self._connection.execute("BEGIN IMMEDIATE")
+            self._create_migration_tables()
+            for row in outcomes:
+                outcome = outcomes_by_identity[(row["experiment_id"], row["record_identity"])]
                 self._connection.execute(
-                    "CREATE TABLE fdml_outcomes_v2 ("
-                    "experiment_id TEXT NOT NULL, evaluation_window INTEGER NOT NULL "
-                    "CHECK (evaluation_window > 0), record_json TEXT NOT NULL, "
-                    "record_identity TEXT NOT NULL UNIQUE, "
-                    "experiment_record_identity TEXT NOT NULL, "
-                    "evidence_identity TEXT NOT NULL, "
-                    "PRIMARY KEY (experiment_id, evaluation_window), "
-                    "UNIQUE (experiment_id, evaluation_window, record_identity), "
-                    "FOREIGN KEY (experiment_id, experiment_record_identity) "
-                    "REFERENCES fdml_experiments(experiment_id, record_identity), "
-                    "FOREIGN KEY (experiment_id, evidence_identity) "
-                    "REFERENCES fdml_evidence(experiment_id, record_identity))"
+                    "INSERT INTO fdml_outcomes_v2 VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        row["experiment_id"],
+                        outcome.evaluation_window,
+                        row["record_json"],
+                        row["record_identity"],
+                        row["experiment_record_identity"],
+                        row["evidence_identity"],
+                    ),
                 )
+            for row, evaluation, record_json in migrated_evaluations:
                 self._connection.execute(
-                    "CREATE TABLE fdml_evaluations_v2 ("
-                    "experiment_id TEXT NOT NULL, evaluation_window INTEGER NOT NULL "
-                    "CHECK (evaluation_window > 0), record_json TEXT NOT NULL, "
-                    "record_identity TEXT NOT NULL UNIQUE, outcome_identity TEXT NOT NULL, "
-                    "PRIMARY KEY (experiment_id, evaluation_window), "
-                    "FOREIGN KEY (experiment_id, evaluation_window, outcome_identity) "
-                    "REFERENCES fdml_outcomes_v2("
-                    "experiment_id, evaluation_window, record_identity))"
+                    "INSERT INTO fdml_evaluations_v2 VALUES (?, ?, ?, ?, ?)",
+                    (
+                        row["experiment_id"],
+                        evaluation.evaluation_window,
+                        record_json,
+                        evaluation_identity(evaluation),
+                        row["outcome_identity"],
+                    ),
                 )
-                for row in outcomes:
-                    outcome = outcomes_by_identity[(row["experiment_id"], row["record_identity"])]
-                    self._connection.execute(
-                        "INSERT INTO fdml_outcomes_v2 VALUES (?, ?, ?, ?, ?, ?)",
-                        (
-                            row["experiment_id"],
-                            outcome.evaluation_window,
-                            row["record_json"],
-                            row["record_identity"],
-                            row["experiment_record_identity"],
-                            row["evidence_identity"],
-                        ),
-                    )
-                for row, evaluation, record_json in migrated_evaluations:
-                    self._connection.execute(
-                        "INSERT INTO fdml_evaluations_v2 VALUES (?, ?, ?, ?, ?)",
-                        (
-                            row["experiment_id"],
-                            evaluation.evaluation_window,
-                            record_json,
-                            evaluation_identity(evaluation),
-                            row["outcome_identity"],
-                        ),
-                    )
-                self._connection.execute("DROP TABLE fdml_evaluations")
-                self._connection.execute("DROP TABLE fdml_outcomes")
-                self._connection.execute("ALTER TABLE fdml_outcomes_v2 RENAME TO fdml_outcomes")
-                self._connection.execute(
-                    "ALTER TABLE fdml_evaluations_v2 RENAME TO fdml_evaluations"
-                )
-                if self._connection.execute("SELECT COUNT(*) FROM fdml_outcomes").fetchone()[
-                    0
-                ] != len(outcomes):
-                    raise LedgerIntegrityError("legacy migration outcome row count changed")
-                if self._connection.execute("SELECT COUNT(*) FROM fdml_evaluations").fetchone()[
-                    0
-                ] != len(evaluations):
-                    raise LedgerIntegrityError("legacy migration evaluation row count changed")
-                self._create_append_only_triggers()
-                self._connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-        except sqlite3.DatabaseError as error:
+            self._connection.execute("DROP TABLE fdml_evaluations")
+            self._connection.execute("DROP TABLE fdml_outcomes")
+            self._connection.execute("ALTER TABLE fdml_outcomes_v2 RENAME TO fdml_outcomes")
+            self._connection.execute("ALTER TABLE fdml_evaluations_v2 RENAME TO fdml_evaluations")
+            if self._connection.execute("SELECT COUNT(*) FROM fdml_outcomes").fetchone()[0] != len(
+                outcomes
+            ):
+                raise LedgerIntegrityError("legacy migration outcome row count changed")
+            if self._connection.execute("SELECT COUNT(*) FROM fdml_evaluations").fetchone()[
+                0
+            ] != len(evaluations):
+                raise LedgerIntegrityError("legacy migration evaluation row count changed")
+            self._create_append_only_triggers()
+            self._validate_current_schema()
+            self.validate_integrity()
+            self._connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            self._connection.commit()
+        except (LedgerIntegrityError, sqlite3.DatabaseError) as error:
+            if self._connection.in_transaction:
+                self._connection.rollback()
+            if isinstance(error, LedgerIntegrityError):
+                raise
             raise LedgerIntegrityError("legacy migration failed without committing") from error
-        self.validate_integrity()
+
+    def _create_migration_tables(self) -> None:
+        self._connection.execute(
+            "CREATE TABLE fdml_outcomes_v2 ("
+            "experiment_id TEXT NOT NULL, evaluation_window INTEGER NOT NULL "
+            "CHECK (evaluation_window > 0), record_json TEXT NOT NULL, "
+            "record_identity TEXT NOT NULL UNIQUE, "
+            "experiment_record_identity TEXT NOT NULL, "
+            "evidence_identity TEXT NOT NULL, "
+            "PRIMARY KEY (experiment_id, evaluation_window), "
+            "UNIQUE (experiment_id, evaluation_window, record_identity), "
+            "FOREIGN KEY (experiment_id, experiment_record_identity) "
+            "REFERENCES fdml_experiments(experiment_id, record_identity), "
+            "FOREIGN KEY (experiment_id, evidence_identity) "
+            "REFERENCES fdml_evidence(experiment_id, record_identity))"
+        )
+        self._connection.execute(
+            "CREATE TABLE fdml_evaluations_v2 ("
+            "experiment_id TEXT NOT NULL, evaluation_window INTEGER NOT NULL "
+            "CHECK (evaluation_window > 0), record_json TEXT NOT NULL, "
+            "record_identity TEXT NOT NULL UNIQUE, outcome_identity TEXT NOT NULL, "
+            "PRIMARY KEY (experiment_id, evaluation_window), "
+            "FOREIGN KEY (experiment_id, evaluation_window, outcome_identity) "
+            "REFERENCES fdml_outcomes_v2("
+            "experiment_id, evaluation_window, record_identity))"
+        )
 
     def _append(
         self,
