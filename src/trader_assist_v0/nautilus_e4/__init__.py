@@ -36,6 +36,7 @@ from .contracts import (
     strategy_history_state,
 )
 from .guard import evaluate_entry_guard
+from .markettruth import BoundedMarketTruthHandoff, MarketTruthHandoffHealth, MarketTruthRef
 
 __all__ = [
     "CAPTURE_SCHEMA_VERSION",
@@ -50,6 +51,7 @@ __all__ = [
     "AdmittedEvent",
     "ApprovalProvenance",
     "ApprovalTimingMode",
+    "BoundedMarketTruthHandoff",
     "CaptureSession",
     "CaptureTier",
     "DataKind",
@@ -62,6 +64,8 @@ __all__ = [
     "LifecycleRecord",
     "LifecycleStatus",
     "MarketExpression",
+    "MarketTruthHandoffHealth",
+    "MarketTruthRef",
     "PitUniverseSnapshot",
     "RunManifest",
     "SourceEvent",

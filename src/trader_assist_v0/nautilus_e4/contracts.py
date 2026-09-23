@@ -64,6 +64,7 @@ class CaptureTier(StrEnum):
 
 class DataKind(StrEnum):
     BBO = "BBO"
+    DEPTH10 = "DEPTH10"
     TRADE = "TRADE"
     BAR = "BAR"
     CONTEXT = "CONTEXT"
