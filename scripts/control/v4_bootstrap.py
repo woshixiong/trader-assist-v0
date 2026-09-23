@@ -31,9 +31,14 @@ class BootstrapEvidence:
     preflight_binding_key: str
     control_capsule_ref: str
     execution_surface: str
+    provider: str
     model: str
     reasoning: str
     web_search: str
+    tool_state: str
+    session_policy: str
+    resource_state: str
+    worktree_policy: str
     worktree_clean: bool
     result: str = "PASS"
 
@@ -145,27 +150,45 @@ def verify(args: argparse.Namespace) -> BootstrapEvidence:
         args.governance_epoch,
         args.task_packet_hash,
         args.exact_base,
-        args.execution_surface,
+        args.requested_execution_surface,
     )
     if expected_key != args.preflight_binding_key:
         raise BootstrapError(
             "preflight binding mismatch: packet/governance/base/surface are not bound together"
         )
 
-    if args.requested_model != args.actual_model:
-        raise BootstrapError(
-            f"model mismatch: requested {args.requested_model}, observed {args.actual_model}"
-        )
-    if args.requested_reasoning != args.actual_reasoning:
-        raise BootstrapError(
-            "reasoning mismatch: "
-            f"requested {args.requested_reasoning}, observed {args.actual_reasoning}"
-        )
-    if args.requested_web_search != args.actual_web_search:
-        raise BootstrapError(
-            "web-search mismatch: "
-            f"requested {args.requested_web_search}, observed {args.actual_web_search}"
-        )
+    route_identity = (
+        (
+            "execution-surface mismatch",
+            args.requested_execution_surface,
+            args.actual_execution_surface,
+        ),
+        ("provider mismatch", args.requested_provider, args.actual_provider),
+        ("model mismatch", args.requested_model, args.actual_model),
+        ("reasoning mismatch", args.requested_reasoning, args.actual_reasoning),
+        ("web-search mismatch", args.requested_web_search, args.actual_web_search),
+        ("tool-state mismatch", args.requested_tool_state, args.actual_tool_state),
+        (
+            "session-policy mismatch",
+            args.requested_session_policy,
+            args.actual_session_policy,
+        ),
+        (
+            "resource-state mismatch",
+            args.requested_resource_state,
+            args.actual_resource_state,
+        ),
+        (
+            "worktree-policy mismatch",
+            args.requested_worktree_policy,
+            args.actual_worktree_policy,
+        ),
+    )
+    for message, requested, actual in route_identity:
+        if requested != actual:
+            raise BootstrapError(
+                f"{message}: requested {requested}, observed {actual}"
+            )
 
     return BootstrapEvidence(
         repository=str(repository),
@@ -177,10 +200,15 @@ def verify(args: argparse.Namespace) -> BootstrapEvidence:
         governance_epoch=args.governance_epoch,
         preflight_binding_key=expected_key,
         control_capsule_ref=args.control_capsule_ref,
-        execution_surface=args.execution_surface,
+        execution_surface=args.actual_execution_surface,
+        provider=args.actual_provider,
         model=args.actual_model,
         reasoning=args.actual_reasoning,
         web_search=args.actual_web_search,
+        tool_state=args.actual_tool_state,
+        session_policy=args.actual_session_policy,
+        resource_state=args.actual_resource_state,
+        worktree_policy=args.actual_worktree_policy,
         worktree_clean=True,
     )
 
@@ -197,7 +225,14 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--governance-epoch", required=True)
     result.add_argument("--preflight-binding-key", required=True)
     result.add_argument("--control-capsule-ref", required=True)
-    result.add_argument("--execution-surface", required=True)
+    result.add_argument(
+        "--execution-surface",
+        dest="requested_execution_surface",
+        required=True,
+    )
+    result.add_argument("--actual-execution-surface", required=True)
+    result.add_argument("--requested-provider", required=True)
+    result.add_argument("--actual-provider", required=True)
     result.add_argument("--project-ruleset-preflight", required=True)
     result.add_argument("--engineering-preflight", required=True)
     result.add_argument("--semantic-readiness", required=True)
@@ -207,6 +242,14 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--actual-reasoning", required=True)
     result.add_argument("--requested-web-search", required=True)
     result.add_argument("--actual-web-search", required=True)
+    result.add_argument("--requested-tool-state", required=True)
+    result.add_argument("--actual-tool-state", required=True)
+    result.add_argument("--requested-session-policy", required=True)
+    result.add_argument("--actual-session-policy", required=True)
+    result.add_argument("--requested-resource-state", required=True)
+    result.add_argument("--actual-resource-state", required=True)
+    result.add_argument("--requested-worktree-policy", required=True)
+    result.add_argument("--actual-worktree-policy", required=True)
     result.add_argument("--output", choices=("text", "json"), default="text")
     return result
 
