@@ -33,8 +33,7 @@ from .safety import assert_public_only
 from .storage import EvidenceStore
 
 if TYPE_CHECKING:
-    from nautilus_trader.model import Bar, QuoteTick, TradeTick
-    from nautilus_trader.model.data import OrderBookDepth10
+    from nautilus_trader.model import Bar, BookType, OrderBookDepth10, QuoteTick, TradeTick
 
     class StrategyConfig:
         def __new__(cls, *args: object, **kwargs: object) -> Self: ...
@@ -56,7 +55,9 @@ if TYPE_CHECKING:
 
         def subscribe_trades(self, instrument_id: object) -> None: ...
 
-        def subscribe_book_depth10(self, instrument_id: object) -> None: ...
+        def subscribe_book_depth10(
+            self, instrument_id: object, book_type: object
+        ) -> None: ...
 
         def subscribe_socket_state(
             self,
@@ -66,8 +67,7 @@ if TYPE_CHECKING:
         ) -> None: ...
 
 else:
-    from nautilus_trader.model import Bar, QuoteTick, TradeTick
-    from nautilus_trader.model.data import OrderBookDepth10
+    from nautilus_trader.model import Bar, BookType, OrderBookDepth10, QuoteTick, TradeTick
     from nautilus_trader.trading import Strategy, StrategyConfig
 
 
@@ -352,7 +352,7 @@ class NautilusE4CaptureStrategy(Strategy):
             instrument_id = InstrumentId.from_str(by_market[market_id].instrument_id)
             self.subscribe_quotes(instrument_id)
             self.subscribe_trades(instrument_id)
-            self.subscribe_book_depth10(instrument_id)
+            self.subscribe_book_depth10(instrument_id, BookType.L2_MBP)
             self._registered_depth10_streams.add((market_id, DataKind.DEPTH10))
         self._session.await_continuity(required_streams=self._continuity_streams)
 
@@ -406,7 +406,7 @@ class NautilusE4CaptureStrategy(Strategy):
         )
         self._observe_admission(outcome)
 
-    def on_book_depth10(self, depth: OrderBookDepth10) -> None:
+    def on_book_depth(self, depth: OrderBookDepth10) -> None:
         """Admit native rc5 Depth10 and fan out only immutable top-of-book facts."""
         expression = self._expression_for(depth)
         bid, ask = depth.bids[0], depth.asks[0]
