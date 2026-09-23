@@ -26,7 +26,10 @@ def event(command: str) -> dict[str, object]:
     [
         "git reset --hard HEAD^",
         "git clean -fdx",
+        "git clean -d -f",
+        "git clean -d --force",
         "git push --force origin feature",
+        "git push origin +HEAD:feature",
         "git push origin HEAD:main",
         "git branch -D main",
         "rm -rf /",
@@ -41,7 +44,9 @@ def test_clear_destructive_or_main_history_commands_are_blocked(command: str) ->
     "command",
     [
         "git status --short",
+        "git clean -d -n",
         "git push origin codex/issue-232-v4-consolidation",
+        "git push origin HEAD:feature",
         "git diff --check",
         "rm -rf /tmp/specific-v4-fixture",
     ],
