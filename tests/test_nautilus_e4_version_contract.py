@@ -284,19 +284,23 @@ def _depth10(*, instrument_id: str, ts_event: int, ts_init: int) -> OrderBookDep
         bids=[
             BookOrder(
                 side=OrderSide.BUY,
-                price=Price.from_str("1999.00"),
-                size=Quantity.from_str("2.0"),
-                order_id=1,
+                price=Price.from_str(f"{1999 - index}.00"),
+                size=Quantity.from_str(f"{2 + index}.0"),
+                order_id=index + 1,
             )
+            for index in range(10)
         ],
         asks=[
             BookOrder(
                 side=OrderSide.SELL,
-                price=Price.from_str("2001.00"),
-                size=Quantity.from_str("3.0"),
-                order_id=2,
+                price=Price.from_str(f"{2001 + index}.00"),
+                size=Quantity.from_str(f"{3 + index}.0"),
+                order_id=index + 11,
             )
+            for index in range(10)
         ],
+        bid_counts=[1] * 10,
+        ask_counts=[1] * 10,
         flags=0,
         sequence=ts_event,
         ts_event=ts_event,
