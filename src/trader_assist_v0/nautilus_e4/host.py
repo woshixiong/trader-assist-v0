@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 import resource
-from dataclasses import replace
+from collections.abc import Callable
 from importlib.metadata import version
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, Self, cast
@@ -29,7 +29,14 @@ from .contracts import (
     RunManifest,
     SourceEvent,
 )
-from .markettruth import MARKETTRUTH_TOPIC, MarketTruthFanoutHealth, MarketTruthRef
+from .markettruth import (
+    MARKETTRUTH_TOPIC,
+    Depth10PublicationGate,
+    MarketTruthFanout,
+    MarketTruthFanoutHealth,
+    MarketTruthRef,
+    MarketTruthSubscriber,
+)
 from .safety import assert_public_only
 from .storage import EvidenceStore
 
@@ -68,6 +75,10 @@ if TYPE_CHECKING:
         ) -> None: ...
 
         def publish_message(self, topic: str, message: object) -> None: ...
+
+        def subscribe_topic(
+            self, topic: str, handler: Callable[[object], None], priority: int = 0
+        ) -> None: ...
 
 else:
     from nautilus_trader.model import Bar, BookType, OrderBookDepth10, QuoteTick, TradeTick
@@ -193,7 +204,9 @@ class NautilusE4CaptureStrategy(Strategy):
         self._bar_types = config.bar_types
         self._registered_bar_streams: set[tuple[str, DataKind]] = set()
         self._registered_depth10_streams: set[tuple[str, DataKind]] = set()
-        self._markettruth_fanout_health = MarketTruthFanoutHealth()
+        self._markettruth_fanout = MarketTruthFanout()
+        self._depth10_gate = Depth10PublicationGate()
+        self._markettruth_subscribers: list[MarketTruthSubscriber] = []
         self._store = EvidenceStore(Path(config.evidence_root))
         if not self._store.manifest_path.exists():
             self._store.initialize(self._manifest, self._snapshot)
@@ -229,7 +242,15 @@ class NautilusE4CaptureStrategy(Strategy):
     @property
     def markettruth_fanout_health(self) -> MarketTruthFanoutHealth:
         """Truthful health for the synchronous native component topic."""
-        return self._markettruth_fanout_health
+        return self._markettruth_fanout.health
+
+    def subscribe_markettruth(
+        self, handler: Callable[[MarketTruthRef], None], *, priority: int = 0
+    ) -> None:
+        """Register a bounded project handler with observable typed failure."""
+        subscriber = MarketTruthSubscriber(handler, self._markettruth_fanout)
+        self._markettruth_subscribers.append(subscriber)
+        self.subscribe_topic(MARKETTRUTH_TOPIC, subscriber, priority=priority)
 
     def open_structural_package(
         self,
@@ -270,7 +291,7 @@ class NautilusE4CaptureStrategy(Strategy):
         usage = resource.getrusage(resource.RUSAGE_SELF)
         return {
             **health,
-            "markettruth_fanout": self._markettruth_fanout_health.__dict__,
+            "markettruth_fanout": self._markettruth_fanout.health.__dict__,
             "resource_max_rss_native_units": usage.ru_maxrss,
             "resource_user_cpu_seconds": usage.ru_utime,
             "resource_system_cpu_seconds": usage.ru_stime,
@@ -417,10 +438,8 @@ class NautilusE4CaptureStrategy(Strategy):
         """Admit native rc5 Depth10 and fan out only immutable top-of-book facts."""
         expression = self._expression_for(depth)
         if not depth.bids or not depth.asks:
-            self._markettruth_fanout_health = replace(
-                self._markettruth_fanout_health,
-                state="DEGRADED",
-                last_publish_error="INCOMPLETE_DEPTH10",
+            self._markettruth_fanout.record_subscriber_failure(
+                ValueError("INCOMPLETE_DEPTH10")
             )
             return
         bid, ask = depth.bids[0], depth.asks[0]
@@ -446,11 +465,17 @@ class NautilusE4CaptureStrategy(Strategy):
             source, admission_ts=max(depth.ts_init, self.clock.timestamp_ns())
         )
         event = outcome.event
-        if (
-            event is not None
-            and not event.out_of_order
-            and self._session.ledger.health.value == "HEALTHY"
-        ):
+        if event is not None:
+            rejection = self._depth10_gate.admit(
+                market_id=event.source.market_id,
+                ts_event=event.source.ts_event,
+                ts_init=event.source.ts_init,
+                admission_ts=event.admission_ts,
+                continuity_complete=event.continuity_state is EvidenceState.COMPLETE,
+            )
+        else:
+            rejection = "DEPTH10_DUPLICATE"
+        if event is not None and rejection is None:
             markettruth = MarketTruthRef.create(
                 market_id=event.source.market_id,
                 instrument_id=event.source.instrument_id,
@@ -460,27 +485,10 @@ class NautilusE4CaptureStrategy(Strategy):
                 bid_price=payload["bid_price"], bid_size=payload["bid_size"],
                 ask_price=payload["ask_price"], ask_size=payload["ask_size"],
             )
-            try:
-                self.publish_message(MARKETTRUTH_TOPIC, markettruth)
-            except Exception as exc:
-                self._markettruth_fanout_health = replace(
-                    self._markettruth_fanout_health,
-                    state="DEGRADED",
-                    publish_error_count=self._markettruth_fanout_health.publish_error_count + 1,
-                    last_publish_error=type(exc).__name__,
-                )
-            else:
-                self._markettruth_fanout_health = replace(
-                    self._markettruth_fanout_health,
-                    state="HEALTHY",
-                    published_count=self._markettruth_fanout_health.published_count + 1,
-                    last_publish_error=None,
-                )
-        elif event is not None:
-            self._markettruth_fanout_health = replace(
-                self._markettruth_fanout_health,
-                state="DEGRADED",
-                last_publish_error="DEPTH10_NOT_CURRENT_OR_CONTINUOUS",
+            self._markettruth_fanout.publish(self.publish_message, markettruth)
+        else:
+            self._markettruth_fanout.record_subscriber_failure(
+                ValueError(rejection or "DEPTH10_REJECTED")
             )
         self._observe_admission(outcome)
 
