@@ -582,3 +582,37 @@ def test_runtime_checkpoint_is_atomic_hash_bound_and_identity_bound(tmp_path: Pa
     store.runtime_checkpoint_path.write_text(json.dumps(raw))
     with pytest.raises(ValueError, match="checkpoint hash"):
         store.load_runtime_checkpoint(manifest)
+
+
+def test_storage_health_is_read_only_and_excludes_its_own_health_artifact(
+    tmp_path: Path,
+) -> None:
+    snapshot, manifest = _identity()
+    store = EvidenceStore(tmp_path)
+    store.initialize(manifest, snapshot)
+    before = store.storage_health()
+    (tmp_path / "capture-health-resource-freshness.json").write_bytes(b"self-report")
+    after = store.storage_health()
+
+    assert before["retained_events"] == {
+        "causal_admissions": 0,
+        "lifecycle_records": 0,
+        "process_segments": 0,
+        "total": 0,
+    }
+    assert after["retained_bytes"] == before["retained_bytes"]
+    assert after["retention_policy"] == "APPEND_ONLY_NO_AUTOMATIC_PRUNE"
+    assert after["self_counting_excluded_artifact"] == "capture-health-resource-freshness.json"
+    assert after["filesystem_headroom_bytes"] >= 0
+    assert after["write_rate"]["interval"] == "since_evidence_store_instrumentation_start"
+
+
+def test_storage_health_reopen_does_not_claim_historical_rate(tmp_path: Path) -> None:
+    snapshot, manifest = _identity()
+    first = EvidenceStore(tmp_path)
+    first.initialize(manifest, snapshot)
+    reopened = EvidenceStore(tmp_path)
+    health = reopened.storage_health()
+
+    assert health["write_rate"]["bytes_per_second"] >= 0
+    assert health["write_rate"]["interval"] == "since_evidence_store_instrumentation_start"

@@ -7,7 +7,6 @@ book fact derived from one admitted native Depth10 update.
 
 from __future__ import annotations
 
-from collections import deque
 from dataclasses import dataclass
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -38,36 +37,14 @@ class MarketTruthRef(BaseModel):
         return cls.model_validate({**values, "ref_hash": digest})
 
 
+MARKETTRUTH_TOPIC = "app.trader_assist.markettruth.v1"
+
+
 @dataclass(frozen=True)
-class MarketTruthHandoffHealth:
-    queued: int
-    capacity: int
-    dropped: int
-
-
-class BoundedMarketTruthHandoff:
-    """A capture-safe, bounded best-effort handoff for downstream readers."""
-
-    def __init__(self, *, capacity: int = 256) -> None:
-        if capacity < 1:
-            raise ValueError("MarketTruth handoff capacity must be positive")
-        self._capacity = capacity
-        self._items: deque[MarketTruthRef] = deque()
-        self._dropped = 0
-
-    def offer(self, item: MarketTruthRef) -> None:
-        if len(self._items) == self._capacity:
-            self._items.popleft()
-            self._dropped += 1
-        self._items.append(item)
-
-    def drain(self) -> tuple[MarketTruthRef, ...]:
-        items = tuple(self._items)
-        self._items.clear()
-        return items
-
-    @property
-    def health(self) -> MarketTruthHandoffHealth:
-        return MarketTruthHandoffHealth(
-            queued=len(self._items), capacity=self._capacity, dropped=self._dropped
-        )
+class MarketTruthFanoutHealth:
+    state: str = "HEALTHY"
+    transport: str = "NAUTILUS_MESSAGEBUS_SYNC_TOPIC"
+    published_count: int = 0
+    publish_error_count: int = 0
+    last_publish_error: str | None = None
+    native_internal_queue_pressure: str = "NOT_APPLICABLE_SYNC_IN_PROCESS_TOPIC"

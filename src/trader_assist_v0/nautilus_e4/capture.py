@@ -725,7 +725,7 @@ class CaptureSession:
         self._flush_if_full(force=True, checkpoint_reason=reason)
 
     def health_summary(self) -> dict[str, object]:
-        return {
+        health = {
             "capture_counts": dict(sorted(self._counts.items())),
             "missingness_counts": dict(sorted(self._missingness.items())),
             "duplicates": self.ledger.duplicate_count,
@@ -746,6 +746,9 @@ class CaptureSession:
             "max_admission_lag_ns": self._max_admission_lag_ns,
             "provider_subscription_headroom": "NOT_OBSERVABLE_IN_CURRENT_RC4_CALLBACK_SEAM",
         }
+        if self.evidence_store is not None:
+            health["storage"] = self.evidence_store.storage_health()
+        return health
 
     def operational_artifacts(
         self, *, health_overrides: dict[str, object] | None = None

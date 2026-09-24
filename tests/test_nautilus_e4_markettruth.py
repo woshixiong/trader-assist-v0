@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from trader_assist_v0.nautilus_e4.markettruth import (
-    BoundedMarketTruthHandoff,
+    MARKETTRUTH_TOPIC,
+    MarketTruthFanoutHealth,
     MarketTruthRef,
 )
 
@@ -27,13 +30,18 @@ def test_markettruth_ref_is_immutable_and_hash_bound() -> None:
     assert first.bid_price == "1999.0"
 
 
-def test_bounded_handoff_drops_oldest_without_blocking_capture() -> None:
-    handoff = BoundedMarketTruthHandoff(capacity=2)
-    handoff.offer(_truth(1))
-    handoff.offer(_truth(2))
-    handoff.offer(_truth(3))
-    assert [item.source_event_id for item in handoff.drain()] == [
-        "native-depth10-2",
-        "native-depth10-3",
-    ]
-    assert handoff.health.dropped == 1
+def test_native_fanout_contract_is_versioned_and_truthful() -> None:
+    health = MarketTruthFanoutHealth()
+    assert MARKETTRUTH_TOPIC == "app.trader_assist.markettruth.v1"
+    assert health.transport == "NAUTILUS_MESSAGEBUS_SYNC_TOPIC"
+    assert health.native_internal_queue_pressure == "NOT_APPLICABLE_SYNC_IN_PROCESS_TOPIC"
+
+
+def test_host_uses_native_topic_without_project_shared_deque() -> None:
+    source = (Path(__file__).parents[1] / "src/trader_assist_v0/nautilus_e4/host.py").read_text()
+    assert "self.publish_message(MARKETTRUTH_TOPIC, markettruth)" in source
+    assert "BoundedMarketTruthHandoff" not in source
+    assert "collections.deque" not in source
+    assert "DataKind.DEPTH10" in source
+    assert 'last_publish_error="INCOMPLETE_DEPTH10"' in source
+    assert 'last_publish_error="DEPTH10_NOT_CURRENT_OR_CONTINUOUS"' in source
