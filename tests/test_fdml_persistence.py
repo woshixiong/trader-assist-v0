@@ -229,6 +229,7 @@ def _create_legacy_database(path, *, ambiguous: bool = False) -> None:
                 experiment_id TEXT PRIMARY KEY, record_json TEXT NOT NULL,
                 record_identity TEXT NOT NULL UNIQUE, experiment_record_identity TEXT NOT NULL,
                 evidence_identity TEXT NOT NULL,
+                UNIQUE (experiment_id, record_identity),
                 FOREIGN KEY (experiment_id, experiment_record_identity)
                     REFERENCES fdml_experiments(experiment_id, record_identity),
                 FOREIGN KEY (experiment_id, evidence_identity)
@@ -242,6 +243,12 @@ def _create_legacy_database(path, *, ambiguous: bool = False) -> None:
             );
             """
         )
+        for table in ("fdml_experiments", "fdml_evidence", "fdml_outcomes", "fdml_evaluations"):
+            for action in ("UPDATE", "DELETE"):
+                connection.execute(
+                    f"CREATE TRIGGER {table}_no_{action.lower()} BEFORE {action} ON {table} "
+                    "BEGIN SELECT RAISE(ABORT, 'fdml evidence ledger is append-only'); END"
+                )
         experiment = evidence.experiment_record
         connection.execute(
             "INSERT INTO fdml_experiments VALUES (?, ?, ?)",
@@ -299,12 +306,17 @@ def _legacy_snapshot(path):
 
 def _rewrite_legacy_evaluation_payload(path, mutate) -> None:
     with sqlite3.connect(path) as connection:
+        connection.execute("DROP TRIGGER fdml_evaluations_no_update")
         row = connection.execute("SELECT record_json FROM fdml_evaluations").fetchone()
         payload = json.loads(row[0])
         mutate(payload)
         connection.execute(
             "UPDATE fdml_evaluations SET record_json = ?, record_identity = ?",
             (canonical_json(payload), canonical_sha256(payload)),
+        )
+        connection.execute(
+            "CREATE TRIGGER fdml_evaluations_no_update BEFORE UPDATE ON fdml_evaluations "
+            "BEGIN SELECT RAISE(ABORT, 'fdml evidence ledger is append-only'); END"
         )
 
 
@@ -318,6 +330,26 @@ def test_legacy_migration_is_transactional_and_rebinds_exact_window(tmp_path) ->
         assert outcome is not None and evaluation is not None
         assert evaluation.evaluation_window == outcome.evaluation_window == 5
         assert ledger.validate_integrity() is True
+
+
+@pytest.mark.parametrize("mutation", ("missing_trigger", "inert_trigger", "extra_index"))
+def test_nonexact_legacy_schema_fails_closed_before_migration(tmp_path, mutation) -> None:
+    path = tmp_path / "legacy.sqlite"
+    _create_legacy_database(path)
+    with sqlite3.connect(path) as connection:
+        if mutation == "extra_index":
+            connection.execute("CREATE INDEX legacy_extra ON fdml_outcomes(evidence_identity)")
+        else:
+            connection.execute("DROP TRIGGER fdml_outcomes_no_update")
+            if mutation == "inert_trigger":
+                connection.execute(
+                    "CREATE TRIGGER fdml_outcomes_no_update BEFORE UPDATE ON fdml_outcomes "
+                    "BEGIN SELECT 1; END"
+                )
+    before = _legacy_snapshot(path)
+    with pytest.raises(LedgerIntegrityError, match="legacy FDML schema exact descriptor"):
+        SQLiteDecisionEvidenceLedger(path)
+    assert _legacy_snapshot(path) == before
 
 
 def test_ambiguous_legacy_mapping_preserves_database_and_stops(tmp_path) -> None:

@@ -71,6 +71,30 @@ CURRENT_V2_TABLES = (
     "fdml_evaluations",
 )
 
+LEGACY_TABLE_SQL = (
+    CURRENT_V2_TABLE_SQL[0],
+    CURRENT_V2_TABLE_SQL[1],
+    """
+    CREATE TABLE fdml_outcomes (
+        experiment_id TEXT PRIMARY KEY, record_json TEXT NOT NULL,
+        record_identity TEXT NOT NULL UNIQUE, experiment_record_identity TEXT NOT NULL,
+        evidence_identity TEXT NOT NULL, UNIQUE (experiment_id, record_identity),
+        FOREIGN KEY (experiment_id, experiment_record_identity)
+            REFERENCES fdml_experiments(experiment_id, record_identity),
+        FOREIGN KEY (experiment_id, evidence_identity)
+            REFERENCES fdml_evidence(experiment_id, record_identity)
+    )
+    """,
+    """
+    CREATE TABLE fdml_evaluations (
+        experiment_id TEXT PRIMARY KEY, record_json TEXT NOT NULL,
+        record_identity TEXT NOT NULL UNIQUE, outcome_identity TEXT NOT NULL,
+        FOREIGN KEY (experiment_id, outcome_identity)
+            REFERENCES fdml_outcomes(experiment_id, record_identity)
+    )
+    """,
+)
+
 LEGACY_OUTCOME_FIELDS = frozenset(OutcomeRecord.model_fields)
 LEGACY_EVALUATION_FIELDS = frozenset(EvaluationResult.model_fields) - {"evaluation_window"}
 
@@ -253,11 +277,13 @@ class SQLiteDecisionEvidenceLedger:
         return tuple(tables)
 
     @classmethod
-    def _expected_schema_descriptor(cls) -> tuple[object, ...]:
+    def _expected_schema_descriptor(
+        cls, table_sql: tuple[str, ...] = CURRENT_V2_TABLE_SQL
+    ) -> tuple[object, ...]:
         reference = sqlite3.connect(":memory:")
         reference.row_factory = sqlite3.Row
         try:
-            reference.executescript(";\n".join(CURRENT_V2_TABLE_SQL) + ";")
+            reference.executescript(";\n".join(table_sql) + ";")
             for table in CURRENT_V2_TABLES:
                 for action in ("UPDATE", "DELETE"):
                     reference.execute(
@@ -292,7 +318,15 @@ class SQLiteDecisionEvidenceLedger:
         if self._schema_descriptor(self._connection) != self._expected_schema_descriptor():
             raise LedgerIntegrityError("current FDML schema exact descriptor is invalid")
 
+    def _validate_legacy_schema(self) -> None:
+        if self._schema_descriptor(self._connection) != self._expected_schema_descriptor(
+            LEGACY_TABLE_SQL
+        ):
+            raise LedgerIntegrityError("legacy FDML schema exact descriptor is invalid")
+
     def _migrate_legacy_schema(self) -> None:
+        # Nothing may repair or stamp legacy state before this exact comparison.
+        self._validate_legacy_schema()
         expected_outcome_columns = (
             "experiment_id",
             "record_json",
