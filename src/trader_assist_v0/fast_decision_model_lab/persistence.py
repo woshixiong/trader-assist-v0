@@ -12,6 +12,65 @@ from .serialization import canonical_json, canonical_sha256
 
 SCHEMA_VERSION = 2
 
+# This is the single project-owned definition of the durable v2 contract.  We
+# deliberately retain the table DDL in the descriptor: SQLite's reduced PRAGMA
+# views do not expose every behaviour-bearing clause (notably FK timing).
+CURRENT_V2_TABLE_SQL = (
+    """
+    CREATE TABLE fdml_experiments (
+        experiment_id TEXT PRIMARY KEY,
+        record_json TEXT NOT NULL,
+        record_identity TEXT NOT NULL UNIQUE,
+        UNIQUE (experiment_id, record_identity)
+    )
+    """,
+    """
+    CREATE TABLE fdml_evidence (
+        experiment_id TEXT PRIMARY KEY,
+        record_json TEXT NOT NULL,
+        record_identity TEXT NOT NULL UNIQUE,
+        experiment_record_identity TEXT NOT NULL,
+        UNIQUE (experiment_id, record_identity),
+        FOREIGN KEY (experiment_id, experiment_record_identity)
+            REFERENCES fdml_experiments(experiment_id, record_identity)
+    )
+    """,
+    """
+    CREATE TABLE fdml_outcomes (
+        experiment_id TEXT NOT NULL,
+        evaluation_window INTEGER NOT NULL CHECK (evaluation_window > 0),
+        record_json TEXT NOT NULL,
+        record_identity TEXT NOT NULL UNIQUE,
+        experiment_record_identity TEXT NOT NULL,
+        evidence_identity TEXT NOT NULL,
+        PRIMARY KEY (experiment_id, evaluation_window),
+        UNIQUE (experiment_id, evaluation_window, record_identity),
+        FOREIGN KEY (experiment_id, experiment_record_identity)
+            REFERENCES fdml_experiments(experiment_id, record_identity),
+        FOREIGN KEY (experiment_id, evidence_identity)
+            REFERENCES fdml_evidence(experiment_id, record_identity)
+    )
+    """,
+    """
+    CREATE TABLE fdml_evaluations (
+        experiment_id TEXT NOT NULL,
+        evaluation_window INTEGER NOT NULL CHECK (evaluation_window > 0),
+        record_json TEXT NOT NULL,
+        record_identity TEXT NOT NULL UNIQUE,
+        outcome_identity TEXT NOT NULL,
+        PRIMARY KEY (experiment_id, evaluation_window),
+        FOREIGN KEY (experiment_id, evaluation_window, outcome_identity)
+            REFERENCES fdml_outcomes(experiment_id, evaluation_window, record_identity)
+    )
+    """,
+)
+CURRENT_V2_TABLES = (
+    "fdml_experiments",
+    "fdml_evidence",
+    "fdml_outcomes",
+    "fdml_evaluations",
+)
+
 LEGACY_OUTCOME_FIELDS = frozenset(OutcomeRecord.model_fields)
 LEGACY_EVALUATION_FIELDS = frozenset(EvaluationResult.model_fields) - {"evaluation_window"}
 
@@ -106,51 +165,7 @@ class SQLiteDecisionEvidenceLedger:
         self._migrate_legacy_schema()
 
     def _create_current_schema(self) -> None:
-        self._connection.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS fdml_experiments (
-                experiment_id TEXT PRIMARY KEY,
-                record_json TEXT NOT NULL,
-                record_identity TEXT NOT NULL UNIQUE,
-                UNIQUE (experiment_id, record_identity)
-            );
-            CREATE TABLE IF NOT EXISTS fdml_evidence (
-                experiment_id TEXT PRIMARY KEY,
-                record_json TEXT NOT NULL,
-                record_identity TEXT NOT NULL UNIQUE,
-                experiment_record_identity TEXT NOT NULL,
-                UNIQUE (experiment_id, record_identity),
-                FOREIGN KEY (experiment_id, experiment_record_identity)
-                    REFERENCES fdml_experiments(experiment_id, record_identity)
-            );
-            CREATE TABLE IF NOT EXISTS fdml_outcomes (
-                experiment_id TEXT NOT NULL,
-                evaluation_window INTEGER NOT NULL CHECK (evaluation_window > 0),
-                record_json TEXT NOT NULL,
-                record_identity TEXT NOT NULL UNIQUE,
-                experiment_record_identity TEXT NOT NULL,
-                evidence_identity TEXT NOT NULL,
-                PRIMARY KEY (experiment_id, evaluation_window),
-                UNIQUE (experiment_id, evaluation_window, record_identity),
-                FOREIGN KEY (experiment_id, experiment_record_identity)
-                    REFERENCES fdml_experiments(experiment_id, record_identity),
-                FOREIGN KEY (experiment_id, evidence_identity)
-                    REFERENCES fdml_evidence(experiment_id, record_identity)
-            );
-            CREATE TABLE IF NOT EXISTS fdml_evaluations (
-                experiment_id TEXT NOT NULL,
-                evaluation_window INTEGER NOT NULL CHECK (evaluation_window > 0),
-                record_json TEXT NOT NULL,
-                record_identity TEXT NOT NULL UNIQUE,
-                outcome_identity TEXT NOT NULL,
-                PRIMARY KEY (experiment_id, evaluation_window),
-                FOREIGN KEY (experiment_id, evaluation_window, outcome_identity)
-                    REFERENCES fdml_outcomes(
-                        experiment_id, evaluation_window, record_identity
-                    )
-            );
-            """
-        )
+        self._connection.executescript(";\n".join(CURRENT_V2_TABLE_SQL) + ";")
         self._create_append_only_triggers()
 
     def _create_append_only_triggers(self) -> None:
@@ -173,7 +188,9 @@ class SQLiteDecisionEvidenceLedger:
 
     @staticmethod
     def _normalise_schema_sql(sql: str) -> str:
-        return " ".join(sql.replace(";", "").split()).upper()
+        # ALTER TABLE may quote the renamed owned table.  Identifier quoting is
+        # not semantic here; retain every other DDL token exactly normalized.
+        return " ".join(sql.replace(";", "").replace('"', "").split()).upper()
 
     @classmethod
     def _expected_trigger_sql(cls, table: str, action: str) -> str:
@@ -181,6 +198,75 @@ class SQLiteDecisionEvidenceLedger:
             f"CREATE TRIGGER {table}_no_{action.lower()} BEFORE {action} ON {table} "
             "BEGIN SELECT RAISE(ABORT, 'fdml evidence ledger is append-only'); END"
         )
+
+    @classmethod
+    def _schema_descriptor(cls, connection: sqlite3.Connection) -> tuple[object, ...]:
+        """Return the complete v2 semantic schema fingerprint from SQLite.
+
+        Normalized owned DDL captures clauses that PRAGMAs omit; structural
+        facts ensure independently-created indexes and constraints are neither
+        silently substituted nor added beside the canonical schema.
+        """
+        tables: list[object] = []
+        for table in CURRENT_V2_TABLES:
+            sql_row = connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+            ).fetchone()
+            if sql_row is None or sql_row[0] is None:
+                tables.append((table, None))
+                continue
+            columns = tuple(
+                (row["cid"], row["name"], row["type"], row["notnull"], row["dflt_value"], row["pk"])
+                for row in connection.execute(f"PRAGMA table_info({table})")
+            )
+            foreign_keys = tuple(
+                (
+                    row["id"], row["seq"], row["table"], row["from"], row["to"],
+                    row["on_update"], row["on_delete"], row["match"],
+                )
+                for row in connection.execute(f"PRAGMA foreign_key_list({table})")
+            )
+            indexes = []
+            for index in connection.execute(f"PRAGMA index_list({table})"):
+                index_name = index["name"]
+                key_columns = tuple(
+                    (row["seqno"], row["cid"], row["name"], row["desc"], row["coll"], row["key"])
+                    for row in connection.execute(f"PRAGMA index_xinfo({index_name})")
+                )
+                indexes.append(
+                    (index["seq"], index["unique"], index["origin"], index["partial"], key_columns)
+                )
+            triggers = tuple(
+                (row["name"], cls._normalise_schema_sql(row["sql"]))
+                for row in connection.execute(
+                    "SELECT name, sql FROM sqlite_master "
+                    "WHERE type = 'trigger' AND tbl_name = ? ORDER BY name",
+                    (table,),
+                )
+            )
+            tables.append(
+                (
+                    table, cls._normalise_schema_sql(sql_row[0]), columns, foreign_keys,
+                    tuple(indexes), triggers,
+                )
+            )
+        return tuple(tables)
+
+    @classmethod
+    def _expected_schema_descriptor(cls) -> tuple[object, ...]:
+        reference = sqlite3.connect(":memory:")
+        reference.row_factory = sqlite3.Row
+        try:
+            reference.executescript(";\n".join(CURRENT_V2_TABLE_SQL) + ";")
+            for table in CURRENT_V2_TABLES:
+                for action in ("UPDATE", "DELETE"):
+                    reference.execute(
+                        f"CREATE TRIGGER {table}_no_{action.lower()} BEFORE {action} ON {table} "
+                        "BEGIN SELECT RAISE(ABORT, 'fdml evidence ledger is append-only'); END"
+                    )
+            return cls._schema_descriptor(reference)
+        finally:
+            reference.close()
 
     @staticmethod
     def _legacy_payload(
@@ -203,158 +289,8 @@ class SQLiteDecisionEvidenceLedger:
         return payload
 
     def _validate_current_schema(self) -> None:
-        expected_columns = {
-            "fdml_experiments": (
-                ("experiment_id", "TEXT", 0, 1),
-                ("record_json", "TEXT", 1, 0),
-                ("record_identity", "TEXT", 1, 0),
-            ),
-            "fdml_evidence": (
-                ("experiment_id", "TEXT", 0, 1),
-                ("record_json", "TEXT", 1, 0),
-                ("record_identity", "TEXT", 1, 0),
-                ("experiment_record_identity", "TEXT", 1, 0),
-            ),
-            "fdml_outcomes": (
-                ("experiment_id", "TEXT", 1, 1),
-                ("evaluation_window", "INTEGER", 1, 2),
-                ("record_json", "TEXT", 1, 0),
-                ("record_identity", "TEXT", 1, 0),
-                ("experiment_record_identity", "TEXT", 1, 0),
-                ("evidence_identity", "TEXT", 1, 0),
-            ),
-            "fdml_evaluations": (
-                ("experiment_id", "TEXT", 1, 1),
-                ("evaluation_window", "INTEGER", 1, 2),
-                ("record_json", "TEXT", 1, 0),
-                ("record_identity", "TEXT", 1, 0),
-                ("outcome_identity", "TEXT", 1, 0),
-            ),
-        }
-        for table, expected in expected_columns.items():
-            actual = tuple(
-                (row["name"], row["type"], row["notnull"], row["pk"])
-                for row in self._connection.execute(f"PRAGMA table_info({table})")
-            )
-            if actual != expected:
-                raise LedgerIntegrityError("current FDML schema columns or primary key are invalid")
-            if any(
-                row["dflt_value"] is not None
-                for row in self._connection.execute(f"PRAGMA table_info({table})")
-            ):
-                raise LedgerIntegrityError("current FDML schema defaults are invalid")
-        expected_foreign_keys = {
-            (
-                "fdml_evidence",
-                ("experiment_id", "experiment_record_identity"),
-                "fdml_experiments",
-                ("experiment_id", "record_identity"),
-                "NO ACTION",
-                "NO ACTION",
-                "NONE",
-            ),
-            (
-                "fdml_outcomes",
-                ("experiment_id", "experiment_record_identity"),
-                "fdml_experiments",
-                ("experiment_id", "record_identity"),
-                "NO ACTION",
-                "NO ACTION",
-                "NONE",
-            ),
-            (
-                "fdml_outcomes",
-                ("experiment_id", "evidence_identity"),
-                "fdml_evidence",
-                ("experiment_id", "record_identity"),
-                "NO ACTION",
-                "NO ACTION",
-                "NONE",
-            ),
-            (
-                "fdml_evaluations",
-                ("experiment_id", "evaluation_window", "outcome_identity"),
-                "fdml_outcomes",
-                ("experiment_id", "evaluation_window", "record_identity"),
-                "NO ACTION",
-                "NO ACTION",
-                "NONE",
-            ),
-        }
-        actual_foreign_keys: set[tuple[object, ...]] = set()
-        for table in expected_columns:
-            grouped: dict[int, list[sqlite3.Row]] = {}
-            for row in self._connection.execute(f"PRAGMA foreign_key_list({table})"):
-                grouped.setdefault(row["id"], []).append(row)
-            for rows in grouped.values():
-                ordered = sorted(rows, key=lambda row: row["seq"])
-                actual_foreign_keys.add(
-                    (
-                        table,
-                        tuple(row["from"] for row in ordered),
-                        ordered[0]["table"],
-                        tuple(row["to"] for row in ordered),
-                        ordered[0]["on_update"],
-                        ordered[0]["on_delete"],
-                        ordered[0]["match"],
-                    )
-                )
-        if actual_foreign_keys != expected_foreign_keys:
-            raise LedgerIntegrityError("current FDML schema foreign keys are invalid")
-        for table in expected_columns:
-            trigger_names = {f"{table}_no_update", f"{table}_no_delete"}
-            rows = self._connection.execute(
-                "SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ?",
-                (table,),
-            ).fetchall()
-            actual_triggers = {row["name"]: self._normalise_schema_sql(row["sql"]) for row in rows}
-            expected_triggers = {
-                f"{table}_no_update": self._expected_trigger_sql(table, "UPDATE"),
-                f"{table}_no_delete": self._expected_trigger_sql(table, "DELETE"),
-            }
-            if set(actual_triggers) != trigger_names or actual_triggers != expected_triggers:
-                raise LedgerIntegrityError("current FDML schema append-only triggers are invalid")
-        for table in ("fdml_outcomes", "fdml_evaluations"):
-            sql = self._connection.execute(
-                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
-            ).fetchone()[0]
-            if sql.count("CHECK") != 1 or "CHECK (evaluation_window > 0)" not in sql:
-                raise LedgerIntegrityError("current FDML schema window constraint is invalid")
-        for table in ("fdml_experiments", "fdml_evidence"):
-            sql = self._connection.execute(
-                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
-            ).fetchone()[0]
-            if "CHECK" in sql.upper() or "DEFAULT" in sql.upper():
-                raise LedgerIntegrityError("current FDML schema has an unexpected constraint")
-        required_unique = {
-            "fdml_experiments": (
-                ("experiment_id",),
-                ("record_identity",),
-                ("experiment_id", "record_identity"),
-            ),
-            "fdml_evidence": (
-                ("experiment_id",),
-                ("record_identity",),
-                ("experiment_id", "record_identity"),
-            ),
-            "fdml_outcomes": (
-                ("experiment_id", "evaluation_window"),
-                ("record_identity",),
-                ("experiment_id", "evaluation_window", "record_identity"),
-            ),
-            "fdml_evaluations": (("experiment_id", "evaluation_window"), ("record_identity",)),
-        }
-        for table, required in required_unique.items():
-            actual_unique = {
-                tuple(
-                    row["name"]
-                    for row in self._connection.execute(f"PRAGMA index_info({index['name']})")
-                )
-                for index in self._connection.execute(f"PRAGMA index_list({table})")
-                if index["unique"]
-            }
-            if actual_unique != set(required):
-                raise LedgerIntegrityError("current FDML schema unique constraints are invalid")
+        if self._schema_descriptor(self._connection) != self._expected_schema_descriptor():
+            raise LedgerIntegrityError("current FDML schema exact descriptor is invalid")
 
     def _migrate_legacy_schema(self) -> None:
         expected_outcome_columns = (
@@ -458,30 +394,14 @@ class SQLiteDecisionEvidenceLedger:
             raise LedgerIntegrityError("legacy migration failed without committing") from error
 
     def _create_migration_tables(self) -> None:
-        self._connection.execute(
-            "CREATE TABLE fdml_outcomes_v2 ("
-            "experiment_id TEXT NOT NULL, evaluation_window INTEGER NOT NULL "
-            "CHECK (evaluation_window > 0), record_json TEXT NOT NULL, "
-            "record_identity TEXT NOT NULL UNIQUE, "
-            "experiment_record_identity TEXT NOT NULL, "
-            "evidence_identity TEXT NOT NULL, "
-            "PRIMARY KEY (experiment_id, evaluation_window), "
-            "UNIQUE (experiment_id, evaluation_window, record_identity), "
-            "FOREIGN KEY (experiment_id, experiment_record_identity) "
-            "REFERENCES fdml_experiments(experiment_id, record_identity), "
-            "FOREIGN KEY (experiment_id, evidence_identity) "
-            "REFERENCES fdml_evidence(experiment_id, record_identity))"
+        outcomes_sql = CURRENT_V2_TABLE_SQL[2].replace(
+            "CREATE TABLE fdml_outcomes", "CREATE TABLE fdml_outcomes_v2"
         )
-        self._connection.execute(
-            "CREATE TABLE fdml_evaluations_v2 ("
-            "experiment_id TEXT NOT NULL, evaluation_window INTEGER NOT NULL "
-            "CHECK (evaluation_window > 0), record_json TEXT NOT NULL, "
-            "record_identity TEXT NOT NULL UNIQUE, outcome_identity TEXT NOT NULL, "
-            "PRIMARY KEY (experiment_id, evaluation_window), "
-            "FOREIGN KEY (experiment_id, evaluation_window, outcome_identity) "
-            "REFERENCES fdml_outcomes_v2("
-            "experiment_id, evaluation_window, record_identity))"
-        )
+        evaluations_sql = CURRENT_V2_TABLE_SQL[3].replace(
+            "CREATE TABLE fdml_evaluations", "CREATE TABLE fdml_evaluations_v2"
+        ).replace("REFERENCES fdml_outcomes", "REFERENCES fdml_outcomes_v2")
+        self._connection.execute(outcomes_sql)
+        self._connection.execute(evaluations_sql)
 
     def _append(
         self,

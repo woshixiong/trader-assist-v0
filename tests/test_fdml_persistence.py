@@ -136,7 +136,7 @@ def test_integrity_validation_detects_tampering(tmp_path) -> None:
             ("forged", "experiment-1"),
         )
 
-    with pytest.raises(LedgerIntegrityError, match="append-only triggers"):
+    with pytest.raises(LedgerIntegrityError, match="exact descriptor"):
         SQLiteDecisionEvidenceLedger(path)
 
 
@@ -153,7 +153,7 @@ def test_integrity_validation_detects_linkage_tampering(tmp_path) -> None:
             ("forged", "experiment-1"),
         )
 
-    with pytest.raises(LedgerIntegrityError, match="append-only triggers"):
+    with pytest.raises(LedgerIntegrityError, match="exact descriptor"):
         SQLiteDecisionEvidenceLedger(path)
 
 
@@ -419,7 +419,7 @@ def test_v2_like_schema_with_wrong_composite_key_is_rejected(tmp_path) -> None:
             """
         )
         connection.execute("PRAGMA user_version = 2")
-    with pytest.raises(LedgerIntegrityError, match="columns or primary key"):
+    with pytest.raises(LedgerIntegrityError, match="exact descriptor"):
         SQLiteDecisionEvidenceLedger(path)
     with sqlite3.connect(path) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
@@ -467,7 +467,7 @@ def test_current_schema_rejects_extra_unique_and_trigger_behavior(tmp_path) -> N
         connection.execute(
             "CREATE UNIQUE INDEX extra_window_blocker ON fdml_outcomes(experiment_id)"
         )
-    with pytest.raises(LedgerIntegrityError, match="unique constraints"):
+    with pytest.raises(LedgerIntegrityError, match="exact descriptor"):
         SQLiteDecisionEvidenceLedger(path)
 
     path = tmp_path / "trigger.sqlite"
@@ -478,7 +478,7 @@ def test_current_schema_rejects_extra_unique_and_trigger_behavior(tmp_path) -> N
             "CREATE TRIGGER fdml_outcomes_no_update BEFORE UPDATE ON fdml_outcomes "
             "BEGIN SELECT 'fdml evidence ledger is append-only'; END"
         )
-    with pytest.raises(LedgerIntegrityError, match="append-only triggers"):
+    with pytest.raises(LedgerIntegrityError, match="exact descriptor"):
         SQLiteDecisionEvidenceLedger(path)
 
 
@@ -487,7 +487,7 @@ def test_current_schema_rejects_missing_or_extra_trigger(tmp_path) -> None:
     _create_exact_v2_database(path)
     with sqlite3.connect(path) as connection:
         connection.execute("DROP TRIGGER fdml_outcomes_no_delete")
-    with pytest.raises(LedgerIntegrityError, match="append-only triggers"):
+    with pytest.raises(LedgerIntegrityError, match="exact descriptor"):
         SQLiteDecisionEvidenceLedger(path)
 
 
@@ -503,7 +503,7 @@ def test_current_schema_rejects_fk_action_and_extra_check(tmp_path) -> None:
             for statement in statements
         ],
     )
-    with pytest.raises(LedgerIntegrityError, match="foreign keys"):
+    with pytest.raises(LedgerIntegrityError, match="exact descriptor"):
         SQLiteDecisionEvidenceLedger(path)
 
     path = tmp_path / "check.sqlite"
@@ -517,7 +517,7 @@ def test_current_schema_rejects_fk_action_and_extra_check(tmp_path) -> None:
             for statement in statements
         ],
     )
-    with pytest.raises(LedgerIntegrityError, match="window constraint"):
+    with pytest.raises(LedgerIntegrityError, match="exact descriptor"):
         SQLiteDecisionEvidenceLedger(path)
 
     path = tmp_path / "extra-trigger.sqlite"
@@ -526,5 +526,67 @@ def test_current_schema_rejects_fk_action_and_extra_check(tmp_path) -> None:
         connection.execute(
             "CREATE TRIGGER behavior_change AFTER INSERT ON fdml_outcomes BEGIN SELECT 1; END"
         )
-    with pytest.raises(LedgerIntegrityError, match="append-only triggers"):
+    with pytest.raises(LedgerIntegrityError, match="exact descriptor"):
         SQLiteDecisionEvidenceLedger(path)
+
+
+def test_fresh_and_legacy_migrated_v2_converge_to_one_descriptor(tmp_path) -> None:
+    fresh = tmp_path / "fresh.sqlite"
+    legacy = tmp_path / "legacy.sqlite"
+    _create_exact_v2_database(fresh)
+    _create_legacy_database(legacy)
+    with SQLiteDecisionEvidenceLedger(legacy):
+        pass
+    with sqlite3.connect(fresh) as fresh_connection, sqlite3.connect(legacy) as legacy_connection:
+        fresh_connection.row_factory = sqlite3.Row
+        legacy_connection.row_factory = sqlite3.Row
+        assert SQLiteDecisionEvidenceLedger._schema_descriptor(
+            fresh_connection
+        ) == SQLiteDecisionEvidenceLedger._schema_descriptor(legacy_connection)
+
+
+@pytest.mark.parametrize(
+    "name, mutate",
+    (
+        (
+            "deferred_fk",
+            lambda statements: [
+                statement.replace(
+                    "REFERENCES fdml_evidence(experiment_id, record_identity)",
+                    "REFERENCES fdml_evidence(experiment_id, record_identity) "
+                    "DEFERRABLE INITIALLY DEFERRED",
+                )
+                for statement in statements
+            ],
+        ),
+        (
+            "partial_unique",
+            lambda statements: [
+                statement.replace(
+                    "record_identity TEXT NOT NULL UNIQUE", "record_identity TEXT NOT NULL"
+                )
+                for statement in statements
+            ]
+            + [
+                "CREATE UNIQUE INDEX partial_identity ON fdml_outcomes(record_identity) "
+                "WHERE record_identity <> ''"
+            ],
+        ),
+        (
+            "extra_non_unique_index",
+            lambda statements: [
+                *statements,
+                "CREATE INDEX extra_index ON fdml_outcomes(evaluation_window COLLATE NOCASE DESC)",
+            ],
+        ),
+    ),
+)
+def test_current_schema_descriptor_rejects_unrepresented_v3_semantic_attacks(
+    tmp_path, name, mutate
+) -> None:
+    path = tmp_path / f"{name}.sqlite"
+    _clone_v2_schema(path, mutate)
+    before = _legacy_snapshot(path)
+    with pytest.raises(LedgerIntegrityError, match="exact descriptor"):
+        SQLiteDecisionEvidenceLedger(path)
+    assert _legacy_snapshot(path) == before
