@@ -1,0 +1,36 @@
+{
+  "schema_version": "2.0.0-draft",
+  "governance_version": "VNext-DRAFT",
+  "status": "PREPARATION_ONLY",
+  "repository": "woshixiong/trader-assist-v0",
+  "activation_rule": "Never activate until migration validation passes and human approves transition",
+  "constitution": "governance/ENGINEERING_GOVERNANCE_VNEXT_DRAFT.md",
+  "entrypoints": [
+    "AGENTS.md",
+    "governance/PROJECT_RULES_INDEX.md",
+    "ACTIVE_GOVERNANCE_MANIFEST.json"
+  ],
+  "runtime_layers": {
+    "governance": "constitution_and_manifest",
+    "procedures": "triggered_only",
+    "execution": "controller_codex_deterministic_tools"
+  },
+  "codex_policy": {
+    "route": "controller_selected",
+    "subagents": "optional_only_when_value_is_proven",
+    "deterministic_work": "zero_model_preferred",
+    "quota_optimization": "required"
+  },
+  "human_gates": [
+    "final_review_authority",
+    "make_ready_merge_authority"
+  ],
+  "status_machine": {
+    "required_handoff_fields": [
+      "DECISION",
+      "NEXT_DESTINATION",
+      "NEXT_ACTION",
+      "COPY_PASTE_COMMAND_OR_PROMPT"
+    ]
+  }
+}
