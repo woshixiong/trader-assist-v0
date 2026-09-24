@@ -490,9 +490,10 @@ def test_exact_rc5_markettruth_recovery_and_subscriber_failure_composition(
     try:
         node.add_strategy(strategy)
         strategy.subscribe_markettruth(received.append)
+        base_ns = strategy.clock.timestamp_ns()
 
         strategy.on_book_depth(_depth10(
-            instrument_id=INSTRUMENT_ID, ts_event=10, ts_init=10
+            instrument_id=INSTRUMENT_ID, ts_event=base_ns + 1, ts_init=base_ns + 1
         ))
         assert len(received) == 1
         assert received[0].instrument_id == INSTRUMENT_ID
@@ -503,12 +504,12 @@ def test_exact_rc5_markettruth_recovery_and_subscriber_failure_composition(
         strategy.on_quote(quote)
         strategy.on_trade(trade)
         strategy.on_book_depth(_depth10(
-            instrument_id=INSTRUMENT_ID, ts_event=20, ts_init=20
+            instrument_id=INSTRUMENT_ID, ts_event=base_ns + 2, ts_init=base_ns + 2
         ))
         assert len(received) == 1  # reconnect-completing event was GAPPED
 
         strategy.on_book_depth(_depth10(
-            instrument_id=INSTRUMENT_ID, ts_event=21, ts_init=21
+            instrument_id=INSTRUMENT_ID, ts_event=base_ns + 3, ts_init=base_ns + 3
         ))
         assert len(received) == 2
 
@@ -517,7 +518,7 @@ def test_exact_rc5_markettruth_recovery_and_subscriber_failure_composition(
 
         strategy.subscribe_markettruth(fail)
         strategy.on_book_depth(_depth10(
-            instrument_id=INSTRUMENT_ID, ts_event=22, ts_init=22
+            instrument_id=INSTRUMENT_ID, ts_event=base_ns + 4, ts_init=base_ns + 4
         ))
         assert len(received) == 3
         assert strategy.markettruth_fanout_health.state == "DEGRADED"
