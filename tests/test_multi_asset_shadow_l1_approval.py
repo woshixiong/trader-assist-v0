@@ -323,6 +323,21 @@ def test_public_mutations_reject_caller_owned_transactions_before_writing(
     assert not connection.in_transaction
 
 
+def test_construction_rejects_a_caller_owned_transaction_without_committing_it() -> None:
+    connection = sqlite3.connect(":memory:")
+    connection.execute("CREATE TABLE caller_sentinel (value TEXT NOT NULL)")
+    connection.execute("BEGIN")
+    connection.execute("INSERT INTO caller_sentinel VALUES ('caller-owned')")
+
+    with pytest.raises(L1ContractError, match="caller-owned SQLite transaction"):
+        HumanApprovalLedger(connection)
+
+    assert connection.in_transaction
+    assert connection.execute("SELECT value FROM caller_sentinel").fetchone()[0] == "caller-owned"
+    connection.rollback()
+    assert connection.execute("SELECT COUNT(*) FROM caller_sentinel").fetchone()[0] == 0
+
+
 def test_forged_package_payload_cannot_reuse_a_displayed_id_or_hash() -> None:
     package = _package()
     ledger = HumanApprovalLedger(sqlite3.connect(":memory:"))

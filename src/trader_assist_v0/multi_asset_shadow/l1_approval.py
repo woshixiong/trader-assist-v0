@@ -183,6 +183,8 @@ class HumanApprovalLedger:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
         self._connection.row_factory = sqlite3.Row
+        if self._connection.in_transaction:
+            raise L1ContractError("caller-owned SQLite transaction is not supported")
         # SQLite's connection-wide ``in_transaction`` cannot identify a nested
         # ledger mutation: it is also true for a transaction owned by our
         # caller.  Keep that ownership boundary locally instead.
