@@ -204,6 +204,7 @@ def test_supersede_is_one_durable_transaction_and_rolls_back_on_failure(
     monkeypatch.setattr(ledger, "_event", fail_supersede)
     with pytest.raises(L1ContractError, match="injected"):
         ledger.supersede(old, new, server_ms=111)
+    assert ledger._mutation_depth == 0
     ledger._connection.close()
 
     reopened = HumanApprovalLedger(sqlite3.connect(path))
@@ -211,11 +212,115 @@ def test_supersede_is_one_durable_transaction_and_rolls_back_on_failure(
     with pytest.raises(L1ContractError, match="displayed"):
         reopened.state(new, server_ms=112)
     reopened.supersede(old, new, server_ms=111)
+    assert reopened._mutation_depth == 0
     reopened._connection.close()
 
     final = HumanApprovalLedger(sqlite3.connect(path))
     assert final.state(old, server_ms=112) is ApprovalState.SUPERSEDED
     assert final.state(new, server_ms=112) is ApprovalState.DRAFT
+
+
+@pytest.mark.parametrize(
+    ("prepare", "mutation"),
+    [
+        (
+            lambda ledger, package: None,
+            lambda ledger, package: ledger.display(package),
+        ),
+        (
+            lambda ledger, package: ledger.display(package),
+            lambda ledger, package: ledger.record_baseline(package, server_ms=101),
+        ),
+        (
+            lambda ledger, package: ledger.display(package),
+            lambda ledger, package: ledger.record_future_live_boundary(package, server_ms=101),
+        ),
+        (
+            lambda ledger, package: ledger.display(package),
+            lambda ledger, package: ledger.arm(package, action_key="arm", server_ms=101),
+        ),
+        (
+            lambda ledger, package: ledger.display(package),
+            lambda ledger, package: ledger.activate(
+                package,
+                action_key="activate",
+                server_ms=101,
+                activation_opportunity_id=package.activation_opportunity_id,
+            ),
+        ),
+        (
+            lambda ledger, package: (
+                ledger.display(package),
+                ledger.activate(
+                    package,
+                    action_key="open",
+                    server_ms=101,
+                    activation_opportunity_id=package.activation_opportunity_id,
+                ),
+            ),
+            lambda ledger, package: ledger.approve_post_activation(
+                package, action_key="approve", server_ms=102
+            ),
+        ),
+        (
+            lambda ledger, package: ledger.display(package),
+            lambda ledger, package: ledger.supersede(
+                package,
+                StrategyOrderPackage.create(
+                    parent_strategy_order_id="strategy-order-1",
+                    strategy_version="three-setup-2",
+                    parameter_version="params-2",
+                    created_server_ms=110,
+                    expires_server_ms=220,
+                    activation_opportunity_id="activation-opportunity-2",
+                    legs=(
+                        PackageLeg("btc", "LONG", Decimal("0.1"), Decimal("20"), Decimal("5")),
+                    ),
+                ),
+                server_ms=111,
+            ),
+        ),
+    ],
+    ids=(
+        "display",
+        "record-baseline",
+        "record-future-live-boundary",
+        "arm",
+        "activate",
+        "approve-post-activation",
+        "supersede",
+    ),
+)
+@pytest.mark.parametrize("finish", ("commit", "rollback"))
+def test_public_mutations_reject_caller_owned_transactions_before_writing(
+    prepare, mutation, finish
+) -> None:
+    """Ledger writes never borrow, commit, or roll back a caller transaction."""
+    connection = sqlite3.connect(":memory:")
+    ledger = HumanApprovalLedger(connection)
+    package = _package()
+    prepare(ledger, package)
+    before = tuple(
+        connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        for table in ("l1_packages", "l1_approval_events", "l1_workflow_evidence")
+    )
+    connection.execute("CREATE TABLE caller_sentinel (value TEXT NOT NULL)")
+    connection.execute("BEGIN")
+    connection.execute("INSERT INTO caller_sentinel VALUES ('caller-owned')")
+
+    with pytest.raises(L1ContractError, match="caller-owned SQLite transaction"):
+        mutation(ledger, package)
+
+    assert connection.in_transaction
+    assert connection.execute("SELECT value FROM caller_sentinel").fetchone()[0] == "caller-owned"
+    after = tuple(
+        connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        for table in ("l1_packages", "l1_approval_events", "l1_workflow_evidence")
+    )
+    assert after == before
+    assert ledger._mutation_depth == 0
+    getattr(connection, finish)()
+    assert not connection.in_transaction
 
 
 def test_forged_package_payload_cannot_reuse_a_displayed_id_or_hash() -> None:

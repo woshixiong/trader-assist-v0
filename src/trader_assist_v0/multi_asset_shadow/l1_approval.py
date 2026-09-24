@@ -183,6 +183,10 @@ class HumanApprovalLedger:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
         self._connection.row_factory = sqlite3.Row
+        # SQLite's connection-wide ``in_transaction`` cannot identify a nested
+        # ledger mutation: it is also true for a transaction owned by our
+        # caller.  Keep that ownership boundary locally instead.
+        self._mutation_depth = 0
         with self._connection:
             self._connection.executescript(
                 """
@@ -389,18 +393,27 @@ class HumanApprovalLedger:
     @contextmanager
     def _mutation(self) -> Iterator[None]:
         """Commit one public authority transition, including nested public calls."""
-        owner = not self._connection.in_transaction
-        if owner:
+        outermost = self._mutation_depth == 0
+        if outermost:
+            if self._connection.in_transaction:
+                raise L1ContractError("caller-owned SQLite transaction is not supported")
             self._connection.execute("BEGIN IMMEDIATE")
+        self._mutation_depth += 1
         try:
             yield
         except BaseException:
-            if owner:
+            if outermost:
                 self._connection.rollback()
             raise
         else:
-            if owner:
-                self._connection.commit()
+            if outermost:
+                try:
+                    self._connection.commit()
+                except BaseException:
+                    self._connection.rollback()
+                    raise
+        finally:
+            self._mutation_depth -= 1
 
     def state(self, package: StrategyOrderPackage, *, server_ms: int) -> ApprovalState:
         self._require_displayed(package)
