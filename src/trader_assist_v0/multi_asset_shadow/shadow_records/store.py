@@ -704,8 +704,15 @@ class EvidenceStore:
         elif record.record_type == "shadow_order":
             signal = self._linked_payload(payload["signal_id"])
             plan = self._linked_payload(payload["plan_id"])
-            if signal.get("approval_status") != "APPROVED":
-                raise RecordError("shadow order requires an approved formal signal")
+            # ``approval_status`` is a historical strategy-formalization field,
+            # never Human authorization. New records use the unambiguous field;
+            # legacy rows remain readable.
+            eligible = signal.get("formalization_status") == "STRATEGY_ELIGIBLE" or (
+                signal.get("formalization_status") is None
+                and signal.get("approval_status") == "APPROVED"
+            )
+            if not eligible:
+                raise RecordError("shadow order requires strategy formalization eligibility")
             if plan.get("signal_id") != payload["signal_id"]:
                 raise RecordError("shadow order plan does not match signal")
         elif record.record_type in {

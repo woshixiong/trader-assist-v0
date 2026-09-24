@@ -299,6 +299,9 @@ class FormalSignal(ImmutableRecord):
 
     @classmethod
     def validate_payload(cls, payload: Mapping[str, object]) -> None:
+        formalization_status = payload.get("formalization_status")
+        if formalization_status is not None and formalization_status != "STRATEGY_ELIGIBLE":
+            raise RecordError("formal_signal formalization_status is invalid")
         if payload.get("setup_family") not in {
             "SWEEP_RECLAIM",
             "BREAKOUT_RETEST",
