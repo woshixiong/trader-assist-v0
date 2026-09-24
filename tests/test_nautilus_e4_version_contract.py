@@ -29,7 +29,10 @@ from nautilus_trader.model import (
     BarAggregation,
     BarSpecification,
     BarType,
+    BookOrder,
     InstrumentId,
+    OrderBookDepth10,
+    OrderSide,
     Price,
     PriceType,
     Quantity,
@@ -60,6 +63,8 @@ from trader_assist_v0.nautilus_e4.storage import EvidenceStore
 
 INSTRUMENT_ID = "ETH-USD-PERP.HYPERLIQUID"
 MARKET_ID = sha256_hex(b"HYPERLIQUID|MAIN|ETH")
+SECOND_INSTRUMENT_ID = "BTC-USD-PERP.HYPERLIQUID"
+SECOND_MARKET_ID = sha256_hex(b"HYPERLIQUID|MAIN|BTC")
 _MANIFEST_DOMAIN = b"trader-assist-v0/e4/run-manifest/v1\0"
 
 
@@ -191,6 +196,49 @@ def _capture_strategy(root: Path) -> NautilusE4CaptureStrategy:
     )
 
 
+def _two_market_capture_strategy(root: Path) -> NautilusE4CaptureStrategy:
+    expression, _snapshot, manifest = _capture_identity()
+    second = MarketExpression(
+        market_id=SECOND_MARKET_ID,
+        dex="MAIN",
+        provider_coin="BTC",
+        instrument_id=SECOND_INSTRUMENT_ID,
+        expression_id="exact-current-btc",
+        instrument_metadata_version="EXACT_CURRENT_CONSTRUCTIVE_TEST_V1",
+        instrument_metadata_hash=sha256_hex(b"EXACT_CURRENT_BTC"),
+    )
+    snapshot = PitUniverseSnapshot.create(observed_at_ns=1, expressions=(expression, second))
+    rebound_manifest = RunManifest.create(
+        run_id="exact-current-two-market",
+        git_sha=manifest.git_sha,
+        git_tree=manifest.git_tree,
+        snapshot=snapshot,
+        process_epoch="process-real-two-market",
+        continuity_epoch="continuity-real-two-market",
+        admission_epoch="admission-real-two-market",
+        capture_configuration={"expressions": [
+            expression.model_dump(mode="json"), second.model_dump(mode="json")
+        ]},
+        subscription_policy={
+            "discovery": [MARKET_ID, SECOND_MARKET_ID],
+            "watch": [MARKET_ID, SECOND_MARKET_ID],
+            "actionable": [],
+        },
+        trial_ledger_id="exact-current-two-market-v1",
+    )
+    return build_capture_strategy(
+        manifest=rebound_manifest,
+        snapshot=snapshot,
+        policy=SubscriptionPolicy(
+            discovery=frozenset({MARKET_ID, SECOND_MARKET_ID}),
+            watch=frozenset({MARKET_ID, SECOND_MARKET_ID}),
+            actionable=frozenset(),
+        ),
+        bar_types=(_external_minute_bar_type(INSTRUMENT_ID),),
+        evidence_root=root,
+    )
+
+
 def _real_nautilus_events() -> tuple[QuoteTick, TradeTick, Bar]:
     instrument_id = InstrumentId.from_str(INSTRUMENT_ID)
     quote = QuoteTick(
@@ -227,6 +275,33 @@ def _real_nautilus_events() -> tuple[QuoteTick, TradeTick, Bar]:
         ts_init=1_000_000_005,
     )
     return quote, trade, bar
+
+
+def _depth10(*, instrument_id: str, ts_event: int, ts_init: int) -> OrderBookDepth10:
+    native_instrument = InstrumentId.from_str(instrument_id)
+    return OrderBookDepth10(
+        instrument_id=native_instrument,
+        bids=[
+            BookOrder(
+                side=OrderSide.BUY,
+                price=Price.from_str("1999.00"),
+                size=Quantity.from_str("2.0"),
+                order_id=1,
+            )
+        ],
+        asks=[
+            BookOrder(
+                side=OrderSide.SELL,
+                price=Price.from_str("2001.00"),
+                size=Quantity.from_str("3.0"),
+                order_id=2,
+            )
+        ],
+        flags=0,
+        sequence=ts_event,
+        ts_event=ts_event,
+        ts_init=ts_init,
+    )
 
 
 def test_exact_current_public_data_live_node_surfaces() -> None:
@@ -399,6 +474,81 @@ def test_constructive_exact_current_objects_drive_typed_identity_and_real_bar_ca
     assert finalized.ts_event == bar.ts_event
     assert finalized.ts_init == bar.ts_init
     assert finalized.payload["finalized"] is True
+
+
+def test_exact_rc5_markettruth_recovery_and_subscriber_failure_composition(
+    tmp_path: Path,
+) -> None:
+    """Exercise native rc5 component topic delivery through the real E4 callback."""
+    strategy = _capture_strategy(tmp_path)
+    node = build_public_data_node()
+    received = []
+    try:
+        node.add_strategy(strategy)
+        strategy.subscribe_markettruth(received.append)
+
+        strategy.on_book_depth(_depth10(
+            instrument_id=INSTRUMENT_ID, ts_event=10, ts_init=10
+        ))
+        assert len(received) == 1
+        assert received[0].instrument_id == INSTRUMENT_ID
+
+        strategy.capture_session.disconnect(reason="TEST_GAP")
+        strategy.capture_session.reconnect(required_streams=strategy._continuity_streams)
+        quote, trade, _bar = _real_nautilus_events()
+        strategy.on_quote(quote)
+        strategy.on_trade(trade)
+        strategy.on_book_depth(_depth10(
+            instrument_id=INSTRUMENT_ID, ts_event=20, ts_init=20
+        ))
+        assert len(received) == 1  # reconnect-completing event was GAPPED
+
+        strategy.on_book_depth(_depth10(
+            instrument_id=INSTRUMENT_ID, ts_event=21, ts_init=21
+        ))
+        assert len(received) == 2
+
+        def fail(_message: object) -> None:
+            raise RuntimeError("subscriber failure")
+
+        strategy.subscribe_markettruth(fail)
+        strategy.on_book_depth(_depth10(
+            instrument_id=INSTRUMENT_ID, ts_event=22, ts_init=22
+        ))
+        assert len(received) == 3
+        assert strategy.markettruth_fanout_health.state == "DEGRADED"
+        assert strategy.markettruth_fanout_health.last_publish_error == "SUBSCRIBER_RuntimeError"
+    finally:
+        node.dispose()
+
+
+def test_exact_rc5_markettruth_depth10_currentness_is_cross_market_isolated(
+    tmp_path: Path,
+) -> None:
+    strategy = _two_market_capture_strategy(tmp_path)
+    node = build_public_data_node()
+    received = []
+    try:
+        node.add_strategy(strategy)
+        strategy.subscribe_markettruth(received.append)
+        now = strategy.clock.timestamp_ns()
+        strategy.on_quote(
+            QuoteTick(
+                instrument_id=InstrumentId.from_str(INSTRUMENT_ID),
+                bid_price=Price.from_str("1999.00"),
+                ask_price=Price.from_str("2001.00"),
+                bid_size=Quantity.from_str("2.0"),
+                ask_size=Quantity.from_str("3.0"),
+                ts_event=now + 100,
+                ts_init=now + 100,
+            )
+        )
+        strategy.on_book_depth(_depth10(
+            instrument_id=SECOND_INSTRUMENT_ID, ts_event=now, ts_init=now
+        ))
+        assert [item.instrument_id for item in received] == [SECOND_INSTRUMENT_ID]
+    finally:
+        node.dispose()
 
 
 def test_legacy_rc4_manifest_is_readable_but_active_rc5_runtime_fails_closed(
