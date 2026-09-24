@@ -1,0 +1,10 @@
+{
+  "status": "candidate",
+  "active_governance": "V4",
+  "candidate_governance": "ENGINEERING_GOVERNANCE_VNEXT.md",
+  "activation_requires": [
+    "qualification_pass",
+    "human_approval"
+  ],
+  "source_of_truth": "github"
+}
