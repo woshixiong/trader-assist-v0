@@ -97,10 +97,12 @@ class SQLiteDecisionEvidenceLedger:
             raise LedgerIntegrityError("partial or ambiguous FDML schema")
         columns = self._table_columns(self._connection, "fdml_outcomes")
         if "evaluation_window" in columns:
+            if self._connection.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
+                raise LedgerIntegrityError("current FDML schema has an unsupported user version")
             self._validate_current_schema()
-            with self._connection:
-                self._connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             return
+        if self._connection.execute("PRAGMA user_version").fetchone()[0] != 0:
+            raise LedgerIntegrityError("legacy FDML schema has an unsupported user version")
         self._migrate_legacy_schema()
 
     def _create_current_schema(self) -> None:
@@ -170,6 +172,17 @@ class SQLiteDecisionEvidenceLedger:
             )
 
     @staticmethod
+    def _normalise_schema_sql(sql: str) -> str:
+        return " ".join(sql.replace(";", "").split()).upper()
+
+    @classmethod
+    def _expected_trigger_sql(cls, table: str, action: str) -> str:
+        return cls._normalise_schema_sql(
+            f"CREATE TRIGGER {table}_no_{action.lower()} BEFORE {action} ON {table} "
+            "BEGIN SELECT RAISE(ABORT, 'fdml evidence ledger is append-only'); END"
+        )
+
+    @staticmethod
     def _legacy_payload(
         row: sqlite3.Row, expected_fields: frozenset[str] | None = None
     ) -> dict[str, Any]:
@@ -225,33 +238,50 @@ class SQLiteDecisionEvidenceLedger:
             )
             if actual != expected:
                 raise LedgerIntegrityError("current FDML schema columns or primary key are invalid")
+            if any(
+                row["dflt_value"] is not None
+                for row in self._connection.execute(f"PRAGMA table_info({table})")
+            ):
+                raise LedgerIntegrityError("current FDML schema defaults are invalid")
         expected_foreign_keys = {
             (
                 "fdml_evidence",
                 ("experiment_id", "experiment_record_identity"),
                 "fdml_experiments",
                 ("experiment_id", "record_identity"),
+                "NO ACTION",
+                "NO ACTION",
+                "NONE",
             ),
             (
                 "fdml_outcomes",
                 ("experiment_id", "experiment_record_identity"),
                 "fdml_experiments",
                 ("experiment_id", "record_identity"),
+                "NO ACTION",
+                "NO ACTION",
+                "NONE",
             ),
             (
                 "fdml_outcomes",
                 ("experiment_id", "evidence_identity"),
                 "fdml_evidence",
                 ("experiment_id", "record_identity"),
+                "NO ACTION",
+                "NO ACTION",
+                "NONE",
             ),
             (
                 "fdml_evaluations",
                 ("experiment_id", "evaluation_window", "outcome_identity"),
                 "fdml_outcomes",
                 ("experiment_id", "evaluation_window", "record_identity"),
+                "NO ACTION",
+                "NO ACTION",
+                "NONE",
             ),
         }
-        actual_foreign_keys: set[tuple[str, tuple[str, ...], str, tuple[str, ...]]] = set()
+        actual_foreign_keys: set[tuple[object, ...]] = set()
         for table in expected_columns:
             grouped: dict[int, list[sqlite3.Row]] = {}
             for row in self._connection.execute(f"PRAGMA foreign_key_list({table})"):
@@ -264,6 +294,9 @@ class SQLiteDecisionEvidenceLedger:
                         tuple(row["from"] for row in ordered),
                         ordered[0]["table"],
                         tuple(row["to"] for row in ordered),
+                        ordered[0]["on_update"],
+                        ordered[0]["on_delete"],
+                        ordered[0]["match"],
                     )
                 )
         if actual_foreign_keys != expected_foreign_keys:
@@ -274,24 +307,42 @@ class SQLiteDecisionEvidenceLedger:
                 "SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ?",
                 (table,),
             ).fetchall()
-            if {row["name"] for row in rows} != trigger_names or any(
-                "fdml evidence ledger is append-only" not in row["sql"] for row in rows
-            ):
+            actual_triggers = {row["name"]: self._normalise_schema_sql(row["sql"]) for row in rows}
+            expected_triggers = {
+                f"{table}_no_update": self._expected_trigger_sql(table, "UPDATE"),
+                f"{table}_no_delete": self._expected_trigger_sql(table, "DELETE"),
+            }
+            if set(actual_triggers) != trigger_names or actual_triggers != expected_triggers:
                 raise LedgerIntegrityError("current FDML schema append-only triggers are invalid")
         for table in ("fdml_outcomes", "fdml_evaluations"):
             sql = self._connection.execute(
                 "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
             ).fetchone()[0]
-            if "CHECK (evaluation_window > 0)" not in sql:
+            if sql.count("CHECK") != 1 or "CHECK (evaluation_window > 0)" not in sql:
                 raise LedgerIntegrityError("current FDML schema window constraint is invalid")
+        for table in ("fdml_experiments", "fdml_evidence"):
+            sql = self._connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+            ).fetchone()[0]
+            if "CHECK" in sql.upper() or "DEFAULT" in sql.upper():
+                raise LedgerIntegrityError("current FDML schema has an unexpected constraint")
         required_unique = {
-            "fdml_experiments": (("record_identity",), ("experiment_id", "record_identity")),
-            "fdml_evidence": (("record_identity",), ("experiment_id", "record_identity")),
+            "fdml_experiments": (
+                ("experiment_id",),
+                ("record_identity",),
+                ("experiment_id", "record_identity"),
+            ),
+            "fdml_evidence": (
+                ("experiment_id",),
+                ("record_identity",),
+                ("experiment_id", "record_identity"),
+            ),
             "fdml_outcomes": (
+                ("experiment_id", "evaluation_window"),
                 ("record_identity",),
                 ("experiment_id", "evaluation_window", "record_identity"),
             ),
-            "fdml_evaluations": (("record_identity",),),
+            "fdml_evaluations": (("experiment_id", "evaluation_window"), ("record_identity",)),
         }
         for table, required in required_unique.items():
             actual_unique = {
@@ -302,7 +353,7 @@ class SQLiteDecisionEvidenceLedger:
                 for index in self._connection.execute(f"PRAGMA index_list({table})")
                 if index["unique"]
             }
-            if not set(required) <= actual_unique:
+            if actual_unique != set(required):
                 raise LedgerIntegrityError("current FDML schema unique constraints are invalid")
 
     def _migrate_legacy_schema(self) -> None:

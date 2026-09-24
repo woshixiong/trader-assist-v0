@@ -418,7 +418,113 @@ def test_v2_like_schema_with_wrong_composite_key_is_rejected(tmp_path) -> None:
             );
             """
         )
+        connection.execute("PRAGMA user_version = 2")
     with pytest.raises(LedgerIntegrityError, match="columns or primary key"):
         SQLiteDecisionEvidenceLedger(path)
     with sqlite3.connect(path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 0
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+
+
+def _create_exact_v2_database(path) -> None:
+    with SQLiteDecisionEvidenceLedger(path):
+        pass
+
+
+def _clone_v2_schema(path, mutate) -> None:
+    source = path.with_name("source.sqlite")
+    _create_exact_v2_database(source)
+    with sqlite3.connect(source) as connection:
+        statements = [
+            row[0]
+            for row in connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type IN ('table', 'trigger') "
+                "AND name NOT LIKE 'sqlite_%' "
+                "ORDER BY CASE type WHEN 'table' THEN 0 ELSE 1 END, name"
+            )
+        ]
+    with sqlite3.connect(path) as connection:
+        connection.executescript(";\n".join(mutate(statements)) + ";")
+        connection.execute("PRAGMA user_version = 2")
+
+
+def test_exact_v2_schema_requires_exact_user_version(tmp_path) -> None:
+    path = tmp_path / "current.sqlite"
+    _create_exact_v2_database(path)
+    with SQLiteDecisionEvidenceLedger(path):
+        pass
+    with sqlite3.connect(path) as connection:
+        connection.execute("PRAGMA user_version = 9")
+    with pytest.raises(LedgerIntegrityError, match="unsupported user version"):
+        SQLiteDecisionEvidenceLedger(path)
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 9
+
+
+def test_current_schema_rejects_extra_unique_and_trigger_behavior(tmp_path) -> None:
+    path = tmp_path / "current.sqlite"
+    _create_exact_v2_database(path)
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "CREATE UNIQUE INDEX extra_window_blocker ON fdml_outcomes(experiment_id)"
+        )
+    with pytest.raises(LedgerIntegrityError, match="unique constraints"):
+        SQLiteDecisionEvidenceLedger(path)
+
+    path = tmp_path / "trigger.sqlite"
+    _create_exact_v2_database(path)
+    with sqlite3.connect(path) as connection:
+        connection.execute("DROP TRIGGER fdml_outcomes_no_update")
+        connection.execute(
+            "CREATE TRIGGER fdml_outcomes_no_update BEFORE UPDATE ON fdml_outcomes "
+            "BEGIN SELECT 'fdml evidence ledger is append-only'; END"
+        )
+    with pytest.raises(LedgerIntegrityError, match="append-only triggers"):
+        SQLiteDecisionEvidenceLedger(path)
+
+
+def test_current_schema_rejects_missing_or_extra_trigger(tmp_path) -> None:
+    path = tmp_path / "trigger.sqlite"
+    _create_exact_v2_database(path)
+    with sqlite3.connect(path) as connection:
+        connection.execute("DROP TRIGGER fdml_outcomes_no_delete")
+    with pytest.raises(LedgerIntegrityError, match="append-only triggers"):
+        SQLiteDecisionEvidenceLedger(path)
+
+
+def test_current_schema_rejects_fk_action_and_extra_check(tmp_path) -> None:
+    path = tmp_path / "fk.sqlite"
+    _clone_v2_schema(
+        path,
+        lambda statements: [
+            statement.replace(
+                "REFERENCES fdml_evidence(experiment_id, record_identity)",
+                "REFERENCES fdml_evidence(experiment_id, record_identity) ON DELETE CASCADE",
+            )
+            for statement in statements
+        ],
+    )
+    with pytest.raises(LedgerIntegrityError, match="foreign keys"):
+        SQLiteDecisionEvidenceLedger(path)
+
+    path = tmp_path / "check.sqlite"
+    _clone_v2_schema(
+        path,
+        lambda statements: [
+            statement.replace(
+                "evidence_identity TEXT NOT NULL,",
+                "evidence_identity TEXT NOT NULL CHECK (evidence_identity != ''),",
+            )
+            for statement in statements
+        ],
+    )
+    with pytest.raises(LedgerIntegrityError, match="window constraint"):
+        SQLiteDecisionEvidenceLedger(path)
+
+    path = tmp_path / "extra-trigger.sqlite"
+    _create_exact_v2_database(path)
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "CREATE TRIGGER behavior_change AFTER INSERT ON fdml_outcomes BEGIN SELECT 1; END"
+        )
+    with pytest.raises(LedgerIntegrityError, match="append-only triggers"):
+        SQLiteDecisionEvidenceLedger(path)
