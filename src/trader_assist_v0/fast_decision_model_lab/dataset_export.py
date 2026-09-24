@@ -24,6 +24,7 @@ EXPORT_FIELDS = (
 )
 
 LEDGER_LINK_FIELDS = (
+    "evaluation_window",
     "decision_event_id",
     "request_identity",
     "result_identity",
@@ -62,6 +63,8 @@ def build_ledger_export_record(
             raise ValueError("evaluation export requires its linked outcome")
         if evaluation.experiment_id != experiment.experiment_id:
             raise ValueError("evaluation does not belong to the experiment")
+        if evaluation.evaluation_window != outcome.evaluation_window:
+            raise ValueError("evaluation does not bind the outcome evaluation window")
     return {
         "experiment_id": experiment.experiment_id,
         "state_hash": experiment.state_hash,
@@ -70,6 +73,7 @@ def build_ledger_export_record(
         "confidence": confidence,
         "outcome": None if outcome is None else outcome.model_dump(mode="json"),
         "evaluation": None if evaluation is None else evaluation.model_dump(mode="json"),
+        "evaluation_window": None if outcome is None else outcome.evaluation_window,
         "decision_event_id": experiment.decision_event_id,
         "request_identity": experiment.request_identity,
         "result_identity": experiment.result_identity,
@@ -78,9 +82,7 @@ def build_ledger_export_record(
         "experiment_schema_version": experiment.schema_version,
         "validation_metadata": evidence.validation_metadata,
         "outcome_identity": None if outcome is None else outcome_identity(outcome),
-        "evaluation_identity": (
-            None if evaluation is None else evaluation_identity(evaluation)
-        ),
+        "evaluation_identity": (None if evaluation is None else evaluation_identity(evaluation)),
     }
 
 
