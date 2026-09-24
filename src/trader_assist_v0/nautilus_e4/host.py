@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import resource
+from dataclasses import replace
 from importlib.metadata import version
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, Self, cast
@@ -28,11 +29,12 @@ from .contracts import (
     RunManifest,
     SourceEvent,
 )
+from .markettruth import MARKETTRUTH_TOPIC, MarketTruthFanoutHealth, MarketTruthRef
 from .safety import assert_public_only
 from .storage import EvidenceStore
 
 if TYPE_CHECKING:
-    from nautilus_trader.model import Bar, QuoteTick, TradeTick
+    from nautilus_trader.model import Bar, BookType, OrderBookDepth10, QuoteTick, TradeTick
 
     class StrategyConfig:
         def __new__(cls, *args: object, **kwargs: object) -> Self: ...
@@ -54,6 +56,10 @@ if TYPE_CHECKING:
 
         def subscribe_trades(self, instrument_id: object) -> None: ...
 
+        def subscribe_book_depth10(
+            self, instrument_id: object, book_type: object
+        ) -> None: ...
+
         def subscribe_socket_state(
             self,
             client_id: object | None = None,
@@ -61,8 +67,10 @@ if TYPE_CHECKING:
             priority: int | None = None,
         ) -> None: ...
 
+        def publish_message(self, topic: str, message: object) -> None: ...
+
 else:
-    from nautilus_trader.model import Bar, QuoteTick, TradeTick
+    from nautilus_trader.model import Bar, BookType, OrderBookDepth10, QuoteTick, TradeTick
     from nautilus_trader.trading import Strategy, StrategyConfig
 
 
@@ -184,6 +192,8 @@ class NautilusE4CaptureStrategy(Strategy):
         )
         self._bar_types = config.bar_types
         self._registered_bar_streams: set[tuple[str, DataKind]] = set()
+        self._registered_depth10_streams: set[tuple[str, DataKind]] = set()
+        self._markettruth_fanout_health = MarketTruthFanoutHealth()
         self._store = EvidenceStore(Path(config.evidence_root))
         if not self._store.manifest_path.exists():
             self._store.initialize(self._manifest, self._snapshot)
@@ -200,7 +210,7 @@ class NautilusE4CaptureStrategy(Strategy):
         self._continuity_streams: set[tuple[str, DataKind]] = {
             (market_id, data_kind)
             for market_id in self._policy.watch | self._policy.actionable
-            for data_kind in (DataKind.BBO, DataKind.TRADE)
+            for data_kind in (DataKind.BBO, DataKind.TRADE, DataKind.DEPTH10)
         }
         self._session.await_continuity(required_streams=self._continuity_streams)
         self._admitted_event_observer: AdmittedEventObserver | None = None
@@ -215,6 +225,11 @@ class NautilusE4CaptureStrategy(Strategy):
     def capture_session(self) -> CaptureSession:
         """Read-only composition access to the existing E4 semantic owner."""
         return self._session
+
+    @property
+    def markettruth_fanout_health(self) -> MarketTruthFanoutHealth:
+        """Truthful health for the synchronous native component topic."""
+        return self._markettruth_fanout_health
 
     def open_structural_package(
         self,
@@ -255,6 +270,7 @@ class NautilusE4CaptureStrategy(Strategy):
         usage = resource.getrusage(resource.RUSAGE_SELF)
         return {
             **health,
+            "markettruth_fanout": self._markettruth_fanout_health.__dict__,
             "resource_max_rss_native_units": usage.ru_maxrss,
             "resource_user_cpu_seconds": usage.ru_utime,
             "resource_system_cpu_seconds": usage.ru_stime,
@@ -268,6 +284,7 @@ class NautilusE4CaptureStrategy(Strategy):
         rich_markets = self._policy.watch | self._policy.actionable
         expected_quotes = {(market_id, DataKind.BBO) for market_id in rich_markets}
         expected_trades = {(market_id, DataKind.TRADE) for market_id in rich_markets}
+        expected_depth10 = {(market_id, DataKind.DEPTH10) for market_id in rich_markets}
         persisted_finalized_bars = {
             (item.source.market_id, item.source.data_kind)
             for item in self._store.load_admissions()
@@ -276,6 +293,7 @@ class NautilusE4CaptureStrategy(Strategy):
         }
         quote_observed = bool(expected_quotes) and expected_quotes <= observed
         trade_observed = bool(expected_trades) and expected_trades <= observed
+        depth10_observed = bool(expected_depth10) and expected_depth10 <= observed
         bar_subscription_registered = bool(self._registered_bar_streams)
         finalized_bar_callback_observed = (
             bar_subscription_registered and self._registered_bar_streams <= observed
@@ -288,6 +306,7 @@ class NautilusE4CaptureStrategy(Strategy):
             (
                 quote_observed,
                 trade_observed,
+                depth10_observed,
                 bar_subscription_registered,
                 finalized_bar_callback_observed,
                 finalized_bar_evidence_persisted,
@@ -314,6 +333,7 @@ class NautilusE4CaptureStrategy(Strategy):
             ],
             "quote_observed": quote_observed,
             "trade_observed": trade_observed,
+            "depth10_observed": depth10_observed,
             "bar_subscription_registered": bar_subscription_registered,
             "finalized_bar_callback_observed": finalized_bar_callback_observed,
             "finalized_bar_evidence_persisted": finalized_bar_evidence_persisted,
@@ -339,6 +359,8 @@ class NautilusE4CaptureStrategy(Strategy):
             instrument_id = InstrumentId.from_str(by_market[market_id].instrument_id)
             self.subscribe_quotes(instrument_id)
             self.subscribe_trades(instrument_id)
+            self.subscribe_book_depth10(instrument_id, BookType.L2_MBP)
+            self._registered_depth10_streams.add((market_id, DataKind.DEPTH10))
         self._session.await_continuity(required_streams=self._continuity_streams)
 
     def on_quote(self, tick: QuoteTick) -> None:
@@ -391,6 +413,77 @@ class NautilusE4CaptureStrategy(Strategy):
         )
         self._observe_admission(outcome)
 
+    def on_book_depth(self, depth: OrderBookDepth10) -> None:
+        """Admit native rc5 Depth10 and fan out only immutable top-of-book facts."""
+        expression = self._expression_for(depth)
+        if not depth.bids or not depth.asks:
+            self._markettruth_fanout_health = replace(
+                self._markettruth_fanout_health,
+                state="DEGRADED",
+                last_publish_error="INCOMPLETE_DEPTH10",
+            )
+            return
+        bid, ask = depth.bids[0], depth.asks[0]
+        payload = {
+            "bid_price": str(bid.price), "bid_size": str(bid.size),
+            "ask_price": str(ask.price), "ask_size": str(ask.size),
+            "native_depth": 10,
+        }
+        source = SourceEvent.create(
+            market_id=expression.market_id,
+            expression_id=expression.expression_id,
+            provider_id="NAUTILUS_HYPERLIQUID",
+            instrument_id=expression.instrument_id,
+            data_kind=DataKind.DEPTH10,
+            source_event_id="depth10:" + sha256_hex(canonical_json_bytes(payload)),
+            native_trade_id=None,
+            provider_aggressor_side=None,
+            event_context=f"native-depth10:{depth.ts_event}",
+            ts_event=depth.ts_event, ts_init=depth.ts_init,
+            true_network_receive_ts=None, payload=payload,
+        )
+        outcome = self._session.ingest(
+            source, admission_ts=max(depth.ts_init, self.clock.timestamp_ns())
+        )
+        event = outcome.event
+        if (
+            event is not None
+            and not event.out_of_order
+            and self._session.ledger.health.value == "HEALTHY"
+        ):
+            markettruth = MarketTruthRef.create(
+                market_id=event.source.market_id,
+                instrument_id=event.source.instrument_id,
+                source_event_id=event.source.source_event_id,
+                ts_event=event.source.ts_event, ts_init=event.source.ts_init,
+                continuity_epoch=event.continuity_epoch,
+                bid_price=payload["bid_price"], bid_size=payload["bid_size"],
+                ask_price=payload["ask_price"], ask_size=payload["ask_size"],
+            )
+            try:
+                self.publish_message(MARKETTRUTH_TOPIC, markettruth)
+            except Exception as exc:
+                self._markettruth_fanout_health = replace(
+                    self._markettruth_fanout_health,
+                    state="DEGRADED",
+                    publish_error_count=self._markettruth_fanout_health.publish_error_count + 1,
+                    last_publish_error=type(exc).__name__,
+                )
+            else:
+                self._markettruth_fanout_health = replace(
+                    self._markettruth_fanout_health,
+                    state="HEALTHY",
+                    published_count=self._markettruth_fanout_health.published_count + 1,
+                    last_publish_error=None,
+                )
+        elif event is not None:
+            self._markettruth_fanout_health = replace(
+                self._markettruth_fanout_health,
+                state="DEGRADED",
+                last_publish_error="DEPTH10_NOT_CURRENT_OR_CONTINUOUS",
+            )
+        self._observe_admission(outcome)
+
     def on_bar(self, bar: Bar) -> None:
         expression = self._expression_for(bar)
         source = SourceEvent.create(
@@ -435,13 +528,17 @@ class NautilusE4CaptureStrategy(Strategy):
         self._session.persist_runtime_checkpoint(reason="GRACEFUL_STOP")
         self._session.write_operational_artifacts(health_overrides=self.capture_health)
 
-    def _expression_for(self, event: QuoteTick | TradeTick | Bar) -> MarketExpression:
+    def _expression_for(
+        self, event: QuoteTick | TradeTick | Bar | OrderBookDepth10
+    ) -> MarketExpression:
         if isinstance(event, QuoteTick):
             instrument_id = str(event.instrument_id)
         elif isinstance(event, TradeTick):
             instrument_id = str(event.instrument_id)
         elif isinstance(event, Bar):
             instrument_id = str(event.bar_type.instrument_id)
+        elif isinstance(event, OrderBookDepth10):
+            instrument_id = str(event.instrument_id)
         else:
             raise TypeError(f"unsupported provider event type: {type(event).__name__}")
         try:

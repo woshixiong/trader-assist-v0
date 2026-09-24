@@ -442,3 +442,14 @@ def test_probe_uses_live_node_strategy_and_handle_surfaces() -> None:
     assert "threading.Timer(args.run_seconds, handle.stop)" in source
     assert "node.trader" not in source
     assert "node.stop" not in source
+
+
+def test_depth10_uses_the_exact_rc5_public_strategy_binding() -> None:
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "src/trader_assist_v0/nautilus_e4/host.py").read_text(
+        encoding="utf-8"
+    )
+    assert "from nautilus_trader.model import Bar, BookType, OrderBookDepth10" in source
+    assert "subscribe_book_depth10(instrument_id, BookType.L2_MBP)" in source
+    assert "def on_book_depth(self, depth: OrderBookDepth10)" in source
+    assert "on_book_depth10" not in source
