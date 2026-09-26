@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import resource
+from collections.abc import Callable, Sequence
 from importlib.metadata import version
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, Self, cast
@@ -28,11 +29,20 @@ from .contracts import (
     RunManifest,
     SourceEvent,
 )
+from .markettruth import (
+    MARKETTRUTH_TOPIC,
+    Depth10PublicationGate,
+    MarketTruthFanout,
+    MarketTruthFanoutHealth,
+    MarketTruthRef,
+    MarketTruthSubscriber,
+)
 from .safety import assert_public_only
 from .storage import EvidenceStore
+from .warmup import HistoricalWarmup, WarmupReadiness, WarmupStream
 
 if TYPE_CHECKING:
-    from nautilus_trader.model import Bar, QuoteTick, TradeTick
+    from nautilus_trader.model import Bar, OrderBookDepth10, QuoteTick, TradeTick
 
     class StrategyConfig:
         def __new__(cls, *args: object, **kwargs: object) -> Self: ...
@@ -54,6 +64,24 @@ if TYPE_CHECKING:
 
         def subscribe_trades(self, instrument_id: object) -> None: ...
 
+        def subscribe_book_depth10(self, instrument_id: object, book_type: object) -> None: ...
+
+        def request_bars(
+            self,
+            bar_type: object,
+            start: object,
+            end: object,
+            limit: int | None = None,
+            client_id: object | None = None,
+            params: dict[str, object] | None = None,
+        ) -> str: ...
+
+        def publish_message(self, topic: str, message: object) -> None: ...
+
+        def subscribe_topic(
+            self, topic: str, handler: Callable[[object], None], priority: int = 0
+        ) -> None: ...
+
         def subscribe_socket_state(
             self,
             client_id: object | None = None,
@@ -62,7 +90,7 @@ if TYPE_CHECKING:
         ) -> None: ...
 
 else:
-    from nautilus_trader.model import Bar, QuoteTick, TradeTick
+    from nautilus_trader.model import Bar, OrderBookDepth10, QuoteTick, TradeTick
     from nautilus_trader.trading import Strategy, StrategyConfig
 
 
@@ -74,9 +102,7 @@ class SocketStateChangedLike(Protocol):
 
 
 class AdmittedEventObserver(Protocol):
-    def __call__(
-        self, event: AdmittedEvent, provider_instrument: object | None = None
-    ) -> None: ...
+    def __call__(self, event: AdmittedEvent, provider_instrument: object | None = None) -> None: ...
 
 
 class LiveNodeHandleLike(Protocol):
@@ -184,6 +210,11 @@ class NautilusE4CaptureStrategy(Strategy):
         )
         self._bar_types = config.bar_types
         self._registered_bar_streams: set[tuple[str, DataKind]] = set()
+        self._registered_depth10_streams: set[tuple[str, DataKind]] = set()
+        self._markettruth_fanout = MarketTruthFanout()
+        self._depth10_gate = Depth10PublicationGate()
+        self._markettruth_subscribers: list[MarketTruthSubscriber] = []
+        self._warmup: HistoricalWarmup | None = None
         self._store = EvidenceStore(Path(config.evidence_root))
         if not self._store.manifest_path.exists():
             self._store.initialize(self._manifest, self._snapshot)
@@ -200,14 +231,12 @@ class NautilusE4CaptureStrategy(Strategy):
         self._continuity_streams: set[tuple[str, DataKind]] = {
             (market_id, data_kind)
             for market_id in self._policy.watch | self._policy.actionable
-            for data_kind in (DataKind.BBO, DataKind.TRADE)
+            for data_kind in (DataKind.BBO, DataKind.TRADE, DataKind.DEPTH10)
         }
         self._session.await_continuity(required_streams=self._continuity_streams)
         self._admitted_event_observer: AdmittedEventObserver | None = None
 
-    def set_admitted_event_observer(
-        self, observer: AdmittedEventObserver | None
-    ) -> None:
+    def set_admitted_event_observer(self, observer: AdmittedEventObserver | None) -> None:
         """Attach one synchronous composition observer; E4 remains admission owner."""
         self._admitted_event_observer = observer
 
@@ -215,6 +244,23 @@ class NautilusE4CaptureStrategy(Strategy):
     def capture_session(self) -> CaptureSession:
         """Read-only composition access to the existing E4 semantic owner."""
         return self._session
+
+    @property
+    def markettruth_fanout_health(self) -> MarketTruthFanoutHealth:
+        return self._markettruth_fanout.health
+
+    def subscribe_markettruth(
+        self, handler: Callable[[MarketTruthRef], None], *, priority: int = 0
+    ) -> None:
+        subscriber = MarketTruthSubscriber(handler, self._markettruth_fanout)
+        self._markettruth_subscribers.append(subscriber)
+        self.subscribe_topic(MARKETTRUTH_TOPIC, subscriber, priority=priority)
+
+    @property
+    def warmup_health(self) -> dict[str, object]:
+        if self._warmup is None:
+            return {"readiness": WarmupReadiness.NOT_READY.value, "reason": "NOT_STARTED"}
+        return self._warmup.health(self.clock.timestamp_ns())
 
     def open_structural_package(
         self,
@@ -255,6 +301,8 @@ class NautilusE4CaptureStrategy(Strategy):
         usage = resource.getrusage(resource.RUSAGE_SELF)
         return {
             **health,
+            "markettruth_fanout": self._markettruth_fanout.health.__dict__,
+            "historical_warmup": self.warmup_health,
             "resource_max_rss_native_units": usage.ru_maxrss,
             "resource_user_cpu_seconds": usage.ru_utime,
             "resource_system_cpu_seconds": usage.ru_stime,
@@ -268,6 +316,7 @@ class NautilusE4CaptureStrategy(Strategy):
         rich_markets = self._policy.watch | self._policy.actionable
         expected_quotes = {(market_id, DataKind.BBO) for market_id in rich_markets}
         expected_trades = {(market_id, DataKind.TRADE) for market_id in rich_markets}
+        expected_depth10 = {(market_id, DataKind.DEPTH10) for market_id in rich_markets}
         persisted_finalized_bars = {
             (item.source.market_id, item.source.data_kind)
             for item in self._store.load_admissions()
@@ -276,18 +325,19 @@ class NautilusE4CaptureStrategy(Strategy):
         }
         quote_observed = bool(expected_quotes) and expected_quotes <= observed
         trade_observed = bool(expected_trades) and expected_trades <= observed
+        depth10_observed = bool(expected_depth10) and expected_depth10 <= observed
         bar_subscription_registered = bool(self._registered_bar_streams)
         finalized_bar_callback_observed = (
             bar_subscription_registered and self._registered_bar_streams <= observed
         )
         finalized_bar_evidence_persisted = (
-            bar_subscription_registered
-            and self._registered_bar_streams <= persisted_finalized_bars
+            bar_subscription_registered and self._registered_bar_streams <= persisted_finalized_bars
         )
         provider_observation_pass = all(
             (
                 quote_observed,
                 trade_observed,
+                depth10_observed,
                 bar_subscription_registered,
                 finalized_bar_callback_observed,
                 finalized_bar_evidence_persisted,
@@ -314,6 +364,7 @@ class NautilusE4CaptureStrategy(Strategy):
             ],
             "quote_observed": quote_observed,
             "trade_observed": trade_observed,
+            "depth10_observed": depth10_observed,
             "bar_subscription_registered": bar_subscription_registered,
             "finalized_bar_callback_observed": finalized_bar_callback_observed,
             "finalized_bar_evidence_persisted": finalized_bar_evidence_persisted,
@@ -321,7 +372,7 @@ class NautilusE4CaptureStrategy(Strategy):
         }
 
     def on_start(self) -> None:
-        from nautilus_trader.model import BarType, InstrumentId
+        from nautilus_trader.model import BarType, BookType, InstrumentId
 
         by_market = {item.market_id: item for item in self._expressions.values()}
         self.subscribe_socket_state()
@@ -339,7 +390,118 @@ class NautilusE4CaptureStrategy(Strategy):
             instrument_id = InstrumentId.from_str(by_market[market_id].instrument_id)
             self.subscribe_quotes(instrument_id)
             self.subscribe_trades(instrument_id)
+            self.subscribe_book_depth10(instrument_id, BookType.L2_MBP)
+            self._registered_depth10_streams.add((market_id, DataKind.DEPTH10))
         self._session.await_continuity(required_streams=self._continuity_streams)
+        self._start_historical_warmup()
+
+    def _start_historical_warmup(self) -> None:
+        """Freeze one cutoff and ask Nautilus for explicit completed windows."""
+        from nautilus_trader.model import BarAggregation, BarType
+
+        prior = self._session.warmup_checkpoint
+        now_ns = self.clock.timestamp_ns()
+        cutoff_ns = now_ns if prior is None else prior.get("cutoff_ns")
+        if not isinstance(cutoff_ns, int) or cutoff_ns <= 0 or cutoff_ns > now_ns:
+            raise ValueError("invalid frozen historical warm-up cutoff")
+        streams: list[WarmupStream] = []
+        for raw in self._bar_types:
+            bar_type = BarType.from_str(raw)
+            if bar_type.spec.aggregation is not BarAggregation.MINUTE:
+                continue
+            minutes = bar_type.spec.step
+            if minutes not in (1, 5):
+                continue
+            streams.append(
+                WarmupStream.create(
+                    bar_type=raw,
+                    instrument_id=str(bar_type.instrument_id),
+                    minutes=minutes,
+                    cutoff_ns=cutoff_ns,
+                )
+            )
+        if prior is not None and set(prior.get("streams", {})) != {
+            stream.bar_type for stream in streams
+        }:
+            raise ValueError("warm-up checkpoint contradicts configured bar streams")
+        self._warmup = HistoricalWarmup(cutoff_ns, streams)
+        durable = self._store.load_admissions()
+        for stream in streams:
+            stream.reconstruct(durable)
+        self._save_warmup_state()
+        for stream in streams:
+            if stream.readiness is WarmupReadiness.READY:
+                continue
+            try:
+                request_id = self.request_bars(
+                    BarType.from_str(stream.bar_type),
+                    start=stream.start,
+                    end=stream.end,
+                )
+            except Exception as exc:
+                stream.fail(f"NATIVE_REQUEST_{type(exc).__name__}")
+            else:
+                stream.request_sent(request_id, now_ns)
+            self._save_warmup_state()
+
+    def _save_warmup_state(self) -> None:
+        if self._warmup is None:
+            return
+        self._session.save_warmup_checkpoint(self._warmup.health(self.clock.timestamp_ns()))
+
+    def on_historical_bars(self, bars: Sequence[Bar]) -> None:
+        """Native rc5 batch callback has bars but no callback request identity."""
+        warmup = self._warmup
+        if warmup is None:
+            raise RuntimeError("historical bars arrived before warm-up was initialized")
+        if not bars:
+            # rc5 supplies no stream identity for an empty batch. Outstanding
+            # streams remain NOT_READY and expire observably at their deadline.
+            return
+        raw_type = str(bars[0].bar_type)
+        stream = warmup.streams.get(raw_type)
+        if stream is None:
+            for pending in warmup.streams.values():
+                if pending.readiness is WarmupReadiness.NOT_READY:
+                    pending.fail("WRONG_HISTORICAL_STREAM")
+            self._save_warmup_state()
+            return
+        if stream.readiness is WarmupReadiness.READY:
+            return
+        if stream.reason != "AWAITING_NATIVE_RESPONSE":
+            return
+        stream.expire(self.clock.timestamp_ns())
+        if stream.reason != "AWAITING_NATIVE_RESPONSE":
+            self._save_warmup_state()
+            return
+        ordered = stream.validate(bars)
+        if not ordered:
+            self._save_warmup_state()
+            return
+        sources = tuple(self._bar_source(bar) for bar in ordered)
+        durable_payloads = {
+            item.source_identity: item.source.payload
+            for item in self._store.load_admissions()
+            if item.source.data_kind is DataKind.BAR
+        }
+        if any(
+            source.replay_identity in durable_payloads
+            and durable_payloads[source.replay_identity] != source.payload
+            for source in sources
+        ):
+            stream.fail("CONFLICTING_ECONOMIC_BAR")
+            self._save_warmup_state()
+            return
+        for bar, source in zip(ordered, sources, strict=True):
+            outcome = self._session.ingest(
+                source,
+                admission_ts=max(bar.ts_init, self.clock.timestamp_ns()),
+                historical=True,
+            )
+            self._observe_admission(outcome)
+        self._session.persist_durable_evidence(reason="COMPLETED_HISTORICAL_BARS_ADMITTED")
+        stream.mark_durable()
+        self._save_warmup_state()
 
     def on_quote(self, tick: QuoteTick) -> None:
         expression = self._expression_for(tick)
@@ -391,9 +553,83 @@ class NautilusE4CaptureStrategy(Strategy):
         )
         self._observe_admission(outcome)
 
-    def on_bar(self, bar: Bar) -> None:
-        expression = self._expression_for(bar)
+    def on_book_depth(self, depth: OrderBookDepth10) -> None:
+        """Admit native rc5 Depth10 and publish an immutable top-of-book fact."""
+        expression = self._expression_for(depth)
+        if not depth.bids or not depth.asks:
+            self._markettruth_fanout.record_subscriber_failure(ValueError("INCOMPLETE_DEPTH10"))
+            return
+        bid, ask = depth.bids[0], depth.asks[0]
+        payload = {
+            "bid_price": str(bid.price),
+            "bid_size": str(bid.size),
+            "ask_price": str(ask.price),
+            "ask_size": str(ask.size),
+            "native_depth": 10,
+        }
         source = SourceEvent.create(
+            market_id=expression.market_id,
+            expression_id=expression.expression_id,
+            provider_id="NAUTILUS_HYPERLIQUID",
+            instrument_id=expression.instrument_id,
+            data_kind=DataKind.DEPTH10,
+            source_event_id="depth10:" + sha256_hex(canonical_json_bytes(payload)),
+            native_trade_id=None,
+            provider_aggressor_side=None,
+            event_context=f"native-depth10:{depth.ts_event}",
+            ts_event=depth.ts_event,
+            ts_init=depth.ts_init,
+            true_network_receive_ts=None,
+            payload=payload,
+        )
+        decision_ts = self.clock.timestamp_ns()
+        outcome = self._session.ingest(
+            source, admission_ts=max(depth.ts_init, decision_ts)
+        )
+        event = outcome.event
+        rejection = (
+            "DEPTH10_DUPLICATE"
+            if event is None
+            else self._depth10_gate.admit(
+                market_id=event.source.market_id,
+                ts_event=event.source.ts_event,
+                ts_init=event.source.ts_init,
+                admission_ts=event.admission_ts,
+                continuity_complete=event.continuity_state is EvidenceState.COMPLETE,
+                decision_ts=decision_ts,
+            )
+        )
+        if event is not None and rejection is None:
+            markettruth = MarketTruthRef.create(
+                market_id=event.source.market_id,
+                instrument_id=event.source.instrument_id,
+                source_event_id=event.source.source_event_id,
+                ts_event=event.source.ts_event,
+                ts_init=event.source.ts_init,
+                continuity_epoch=event.continuity_epoch,
+                bid_price=payload["bid_price"],
+                bid_size=payload["bid_size"],
+                ask_price=payload["ask_price"],
+                ask_size=payload["ask_size"],
+            )
+            self._markettruth_fanout.publish(self.publish_message, markettruth)
+        else:
+            self._markettruth_fanout.record_subscriber_failure(
+                ValueError(rejection or "DEPTH10_REJECTED")
+            )
+        self._observe_admission(outcome)
+
+    def on_bar(self, bar: Bar) -> None:
+        source = self._bar_source(bar)
+        outcome = self._session.ingest(
+            source, admission_ts=max(bar.ts_init, self.clock.timestamp_ns())
+        )
+        self._observe_admission(outcome)
+        self._session.persist_durable_evidence(reason="FINALIZED_BAR_CALLBACK_ADMITTED")
+
+    def _bar_source(self, bar: Bar) -> SourceEvent:
+        expression = self._expression_for(bar)
+        return SourceEvent.create(
             market_id=expression.market_id,
             expression_id=expression.expression_id,
             provider_id="NAUTILUS_HYPERLIQUID",
@@ -415,11 +651,6 @@ class NautilusE4CaptureStrategy(Strategy):
                 "finalized": True,
             },
         )
-        outcome = self._session.ingest(
-            source, admission_ts=max(bar.ts_init, self.clock.timestamp_ns())
-        )
-        self._observe_admission(outcome)
-        self._session.persist_durable_evidence(reason="FINALIZED_BAR_CALLBACK_ADMITTED")
 
     def on_socket_state(self, event: SocketStateChangedLike) -> None:
         from nautilus_trader.adapters.hyperliquid import HYPERLIQUID_CLIENT_ID
@@ -435,13 +666,17 @@ class NautilusE4CaptureStrategy(Strategy):
         self._session.persist_runtime_checkpoint(reason="GRACEFUL_STOP")
         self._session.write_operational_artifacts(health_overrides=self.capture_health)
 
-    def _expression_for(self, event: QuoteTick | TradeTick | Bar) -> MarketExpression:
+    def _expression_for(
+        self, event: QuoteTick | TradeTick | Bar | OrderBookDepth10
+    ) -> MarketExpression:
         if isinstance(event, QuoteTick):
             instrument_id = str(event.instrument_id)
         elif isinstance(event, TradeTick):
             instrument_id = str(event.instrument_id)
         elif isinstance(event, Bar):
             instrument_id = str(event.bar_type.instrument_id)
+        elif isinstance(event, OrderBookDepth10):
+            instrument_id = str(event.instrument_id)
         else:
             raise TypeError(f"unsupported provider event type: {type(event).__name__}")
         try:
