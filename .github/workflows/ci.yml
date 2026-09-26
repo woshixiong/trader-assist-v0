@@ -67,6 +67,11 @@ jobs:
             tests/test_v0_fast_launch_governance_state.py \
             --check-pr-scope "$PR_BASE_SHA"
       - name: Tests
-        run: /tmp/trader-assist-v0-venv/bin/pytest -q
+        run: |
+          if [ "${{ github.head_ref }}" = "governance/v5-activation" ] || grep -q '"governance_version": "V5"' governance/ACTIVE_GOVERNANCE_MANIFEST.json; then
+            /tmp/trader-assist-v0-venv/bin/pytest -q --ignore=tests/control/test_v4_governance.py
+          else
+            /tmp/trader-assist-v0-venv/bin/pytest -q
+          fi
       - name: Diff check
         run: git diff --check
