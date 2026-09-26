@@ -208,3 +208,35 @@ def test_mismatched_canonical_binding_cannot_be_overridden_by_pass_string(
         )
     with pytest.raises(bootstrap.BootstrapError, match=message):
         bootstrap.verify(bound)
+
+
+def test_stale_rebind_binds_real_head_tree_for_bootstrap_verify(repository: Path):
+    bound = args(repository)
+    locator = bound.package_state_locator
+    old_state = bootstrap._V5.parse_state(CANONICAL_COMMENTS[locator])
+    old_tree = bound.exact_tree
+
+    (repository / "x").write_text("changed")
+    git(repository, "add", "x")
+    git(repository, "commit", "-m", "advance")
+    git(repository, "push", "origin", "main")
+    new_head = git(repository, "rev-parse", "HEAD")
+    new_tree = git(repository, "rev-parse", "HEAD^{tree}")
+
+    bound.exact_base = new_head
+    bound.exact_tree = new_tree
+    bound.preflight_binding_key = bootstrap.binding_key(
+        bound.governance_epoch,
+        bound.task_packet_hash,
+        new_head,
+        bound.execution_surface,
+    )
+
+    mismatched = bootstrap._V5.invalidate_old_head_evidence(old_state, new_head, old_tree)
+    CANONICAL_COMMENTS[locator] = bootstrap._V5.serialize_state(mismatched)
+    with pytest.raises(bootstrap.BootstrapError, match="exact tree mismatch"):
+        bootstrap.verify(bound)
+
+    rebound = bootstrap._V5.invalidate_old_head_evidence(old_state, new_head, new_tree)
+    CANONICAL_COMMENTS[locator] = bootstrap._V5.serialize_state(rebound)
+    assert bootstrap.verify(bound).result == "PASS"

@@ -216,12 +216,17 @@ def transition(
     )
 
 
-def invalidate_old_head_evidence(state: PackageState, new_head: str) -> PackageState:
+def invalidate_old_head_evidence(
+    state: PackageState, new_head: str, new_tree: str
+) -> PackageState:
     if new_head == state.exact_head:
+        if new_tree != state.exact_tree:
+            raise ControlError("STALE_REBIND: same head has different tree")
         return state
     return replace(
         state,
         exact_head=new_head,
+        exact_tree=new_tree,
         ci_head=None,
         ci_run_or_check_locators=[],
         last_canonical_evidence="STALE_HEAD_INVALIDATED",

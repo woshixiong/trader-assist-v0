@@ -178,12 +178,49 @@ def test_repair_continues_through_revalidation_publication_and_ci(repair_stage, 
     assert current.current_stage == controller.Stage.CI_WAIT
 
 
+def test_stale_rebind_atomically_updates_head_tree_and_invalidates_ci():
+    original = state(
+        revision=7,
+        current_stage="CI_WAIT",
+        resume_stage="CI_WAIT",
+        ci_head="e" * 40,
+        ci_run_or_check_locators=["run-1"],
+        semantic_repair_count=2,
+        retained_gates=["MARK_READY", "MERGE"],
+    )
+    stale = controller.invalidate_old_head_evidence(original, "1" * 40, "2" * 40)
+
+    assert stale.exact_head == "1" * 40
+    assert stale.exact_tree == "2" * 40
+    assert stale.ci_head is None
+    assert stale.ci_run_or_check_locators == []
+    assert stale.last_canonical_evidence == "STALE_HEAD_INVALIDATED"
+    assert stale.current_stage == controller.Stage.STALE_REBIND
+    assert stale.resume_stage == controller.Stage.STALE_REBIND
+    assert stale.next_allowed_transition == controller.Stage.LOCAL_VALIDATE
+    assert stale.revision == original.revision + 1
+    assert stale.semantic_repair_count == original.semantic_repair_count
+    assert stale.retained_gates == original.retained_gates
+
+
+def test_stale_rebind_same_head_same_tree_is_idempotent():
+    original = state(revision=4)
+    rebound = controller.invalidate_old_head_evidence(
+        original, original.exact_head, original.exact_tree
+    )
+    assert rebound is original
+
+
+def test_stale_rebind_same_head_different_tree_fails_closed():
+    original = state()
+    with pytest.raises(controller.ControlError, match="same head has different tree"):
+        controller.invalidate_old_head_evidence(original, original.exact_head, "0" * 40)
+
+
 def test_stale_rebind_requires_revalidation_then_can_publish():
     stale = controller.invalidate_old_head_evidence(
-        state(current_stage="CI_WAIT", resume_stage="CI_WAIT"), "1" * 40
+        state(current_stage="CI_WAIT", resume_stage="CI_WAIT"), "1" * 40, "2" * 40
     )
-    assert stale.current_stage == controller.Stage.STALE_REBIND
-    assert stale.ci_run_or_check_locators == []
     validated = controller.transition(
         stale, controller.Stage.LOCAL_VALIDATE, event_key="revalidate"
     )
