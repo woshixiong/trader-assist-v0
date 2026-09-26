@@ -92,6 +92,9 @@ NORMAL = {
     Stage.FINAL_REVIEW_READY: {Stage.FINAL_INDEPENDENT_REVIEW},
     Stage.FINAL_INDEPENDENT_REVIEW: {Stage.HUMAN_CLOSEOUT_GATE, Stage.STALE_REBIND},
     Stage.HUMAN_CLOSEOUT_GATE: {Stage.DONE},
+    Stage.REPAIR_1: {Stage.LOCAL_VALIDATE, Stage.CONTROL_REPLAN},
+    Stage.REPAIR_2: {Stage.LOCAL_VALIDATE, Stage.CONTROL_REPLAN},
+    Stage.STALE_REBIND: {Stage.LOCAL_VALIDATE, Stage.CONTROL_REPLAN},
 }
 
 
@@ -223,6 +226,8 @@ def invalidate_old_head_evidence(state: PackageState, new_head: str) -> PackageS
         ci_run_or_check_locators=[],
         last_canonical_evidence="STALE_HEAD_INVALIDATED",
         current_stage=Stage.STALE_REBIND,
+        resume_stage=Stage.STALE_REBIND,
+        next_allowed_transition=Stage.LOCAL_VALIDATE,
         revision=state.revision + 1,
     )
 
@@ -273,6 +278,10 @@ class CanonicalCommentStore:
         self, expected_revision: int, expected_stage: Stage, event_key: str, target: Stage
     ) -> PackageState:
         current = parse_state(self.read(self.comment_id))
+        # Delivery is at-least-once. A completed event is already canonical even
+        # when its duplicate carries the original pre-transition preconditions.
+        if event_key in current.completed_work:
+            return current
         if current.revision != expected_revision or current.current_stage != expected_stage:
             raise ControlError("canonical state revision/stage precondition failed")
         desired = transition(current, target, event_key=event_key)

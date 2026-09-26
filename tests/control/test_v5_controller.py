@@ -149,3 +149,47 @@ def test_pr_and_review_exact_head_validation():
             state(),
             set(),
         )
+
+
+def test_duplicate_delivery_ignores_original_preconditions_without_write():
+    canonical = controller.transition(state(), controller.Stage.PLAN, event_key="plan")
+    writes = []
+    store = controller.CanonicalCommentStore(
+        "1", lambda _: controller.serialize_state(canonical), lambda *_: writes.append(1)
+    )
+    duplicate = store.update(0, controller.Stage.CONTROL_FREEZE, "plan", controller.Stage.PLAN)
+    assert duplicate == canonical
+    assert writes == []
+
+
+@pytest.mark.parametrize(
+    ("repair_stage", "repair_count"),
+    [(controller.Stage.REPAIR_1, 1), (controller.Stage.REPAIR_2, 2)],
+)
+def test_repair_continues_through_revalidation_publication_and_ci(repair_stage, repair_count):
+    current = state(
+        current_stage=repair_stage,
+        resume_stage=repair_stage,
+        semantic_repair_count=repair_count,
+    )
+    current = controller.transition(current, controller.Stage.LOCAL_VALIDATE, event_key="validated")
+    current = controller.transition(current, controller.Stage.PUBLISH, event_key="publish")
+    current = controller.transition(current, controller.Stage.CI_WAIT, event_key="ci")
+    assert current.current_stage == controller.Stage.CI_WAIT
+
+
+def test_stale_rebind_requires_revalidation_then_can_publish():
+    stale = controller.invalidate_old_head_evidence(
+        state(current_stage="CI_WAIT", resume_stage="CI_WAIT"), "1" * 40
+    )
+    assert stale.current_stage == controller.Stage.STALE_REBIND
+    assert stale.ci_run_or_check_locators == []
+    validated = controller.transition(
+        stale, controller.Stage.LOCAL_VALIDATE, event_key="revalidate"
+    )
+    assert (
+        controller.transition(
+            validated, controller.Stage.PUBLISH, event_key="republish"
+        ).current_stage
+        == controller.Stage.PUBLISH
+    )
