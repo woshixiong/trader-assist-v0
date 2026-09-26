@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0.0",
   "governance_version": "V5",
-  "status": "POST_MERGE_QUALIFICATION",
+  "status": "ACTIVE",
   "repository": "woshixiong/trader-assist-v0",
   "candidate_branch": "governance/v5-activation",
   "frozen_base": "f17d436b222061ab2229d83f09f743182353fe11",
@@ -101,7 +101,7 @@
     "exact_head_ci": "PASS",
     "fresh_independent_review": "PASS",
     "project_instruction_replaced_with_version_agnostic_bridge": "PASS",
-    "first_real_nonproduction_v5_canary": "PENDING"
+    "first_real_nonproduction_v5_canary": "PASS"
   },
   "preserved_pending_v5_c_cleanup": [
     "governance/ENGINEERING_GOVERNANCE_V4_CONSOLIDATED_FINAL.md",

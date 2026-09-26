@@ -1,6 +1,6 @@
 # Trade OS — Codex V5 Operating Guide
 
-**Status:** V5 POST-MERGE QUALIFICATION GUIDE; FIRST REAL CANARY PENDING
+**Status:** V5 ACTIVE GUIDE; FIRST REAL CANARY PASSED
 
 This guide explains the intended operator experience. It is subordinate to the
 manifest-selected constitution and exact Development Package.
@@ -92,8 +92,8 @@ IMPLEMENT
 The controller is not an agent. Model-mediated CI polling is prohibited.
 
 The V5-B controller/bootstrap/validator is implemented and baseline-qualified.
-This guide now describes the runnable post-merge qualification workflow; the
-first real non-production end-to-end canary is still required before `ACTIVE`.
+This guide describes the runnable V5 workflow. The first real non-production
+end-to-end canary has passed and the manifest-selected lifecycle is `ACTIVE`.
 
 ## 4. Repair routing
 
@@ -155,14 +155,15 @@ CHANGED_OR_UNKNOWN_PREDICATE=>FAIL_CLOSED_WITHOUT_CONSUMING_AUTHORIZATION
 
 Merge never implies deployment/runtime/trading authority.
 
-## 8. Post-merge qualification boundary
+## 8. Active governance boundary
 
 The activation merge, V5-B controller/bootstrap/consistency validation, baseline
 CLI/GPT-6/permission/auto-review/network qualification, protected-action
-nonregression, exact-head CI, fresh Independent Review, and the version-agnostic
-Project Instruction bridge have passed.
+nonregression, exact-head CI, fresh Independent Review, version-agnostic Project
+Instruction bridge, and first real non-production V5 Development Package canary
+have passed.
 
-The remaining lifecycle gate is the first real non-production V5 Development
-Package canary. Until that canary passes, the manifest remains
-`POST_MERGE_QUALIFICATION` and must not claim `ACTIVE`. V5-C cleanup remains a
-separate later scope.
+The manifest-selected lifecycle is now `ACTIVE`. The lifecycle, same-thread
+resume, CI, review, protected-action, and transport rules above are unchanged.
+V5-C cleanup remains a separate later scope and does not block normal product
+development.

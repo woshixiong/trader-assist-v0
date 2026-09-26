@@ -1,13 +1,13 @@
 # Trader Assist / Trade OS — Codex Current Model Profile
 
-**Status:** V5 POST-MERGE QUALIFICATION
-**Runtime qualification:** BASELINE PASSED; END-TO-END CANARY PENDING
+**Status:** V5 ACTIVE
+**Runtime qualification:** BASELINE PASSED; FIRST REAL NON-PRODUCTION CANARY PASSED
 **Execution target:** Codex CLI only
 
-This profile records refreshable model/config intent and observed baseline V5
-qualification. The activation merge and baseline CLI/GPT-6/permission/tooling
-qualification have passed; the first real non-production end-to-end V5 canary
-remains pending before the manifest may truthfully claim ACTIVE.
+This profile records refreshable model/config intent and the current active V5
+qualification state. The activation merge, baseline CLI/GPT-6/permission/tooling
+qualification, and first real non-production end-to-end V5 canary have passed;
+the manifest may now truthfully claim ACTIVE.
 
 ## Current V5 routing
 
@@ -50,8 +50,8 @@ Current OpenAI model documentation exposes the frozen model IDs gpt-6-sol,
 gpt-6-luna, and gpt-6-astra and the required reasoning levels.
 
 Static syntax/contracts are only one input. Baseline local runtime identity,
-permission/auto-review/network behavior, and protected-action nonregression have
-also been qualified; the end-to-end package canary remains separate.
+permission/auto-review/network behavior, protected-action nonregression, and the
+first real non-production end-to-end package canary have all been qualified.
 
 ## CLI-only target and permission posture
 
@@ -75,7 +75,7 @@ nonregression without expanding authority.
 
 Normal engineering must not require danger-full-access.
 
-## Post-merge qualification boundary
+## Active governance boundary
 
 The manifest-selected post-merge route is fail-closed:
 
@@ -86,13 +86,15 @@ The manifest-selected post-merge route is fail-closed:
 - optional child routes remain optional and require verifiable actual identity;
 - exceptional gpt-6-astra remains Engineering-Control-only.
 
-The first real non-production V5 Development Package canary is still required
-before status may advance from POST_MERGE_QUALIFICATION to ACTIVE. That canary
-must exercise the end-to-end governed lifecycle and collect the telemetry below.
+The first real non-production V5 Development Package canary has passed, and
+the manifest may therefore truthfully remain `ACTIVE`. The current GPT-6 routing,
+fail-closed identity/permission rules, and protected-action boundaries are
+unchanged.
 
-## First real canary telemetry
+## Accepted first real canary telemetry
 
-On the first accepted non-production V5 package, collect observable:
+The accepted first real non-production V5 package is the lifecycle proof point.
+Retain observable telemetry, when exposed, for:
 
 - primary model and reasoning identity;
 - optional child identity or explicit skip reason;
