@@ -20,6 +20,24 @@ AGENTS.md
 Do not hard-code a governance version in the Project Instruction. The active
 manifest selects the current constitution and skills.
 
+Exact canonical object locators control routine retrieval shape:
+
+~~~text
+EXACT_COMMENT_LOCATOR_PRESENT=>READ_EXACT_COMMENT_ONLY
+FETCH_ALL_ISSUE_COMMENTS_WHEN_EXACT_COMMENT_KNOWN=PROHIBITED
+ROUTINE_TAKEOVER=>AGENTS+MANIFEST+SELECTED_CONSTITUTION+EXACT_PACKAGE_STATE+TRIGGERED_SKILL
+BROAD_ISSUE_OR_PR_HISTORY=>CONTROL_ESCALATION_ONLY
+~~~
+
+When an exact GitHub object locator exists, retrieve that object directly rather
+than enumerating its containing Issue/PR timeline. If the exact locator is
+missing/ambiguous, package state is incomplete/contradictory, live identity
+mismatches, changed paths are unauthorized, acceptance/architecture evidence is
+missing, CI failure needs diagnosis, a new architecture/security/authority/scope
+question appears, or review evidence is insufficient, expand only to the missing
+evidence first. Broad history is a last-resort Engineering Control escalation,
+not routine startup input.
+
 ## Operating contract
 
 1. Fresh-resolve current main/base/head/tree, task identity, scope, authority,

@@ -144,8 +144,45 @@ def check_documents(root: Path) -> None:
     )
     require(
         text(root, "governance/CHATGPT_PROJECT_GOVERNANCE_BRIDGE.md"),
-        ("SHARED_OUTER_LAUNCHER_STDIN=PROHIBITED", "REMOTE_DESKTOP_OFFLINE_OR_QUOTA_EXHAUSTED"),
+        (
+            "SHARED_OUTER_LAUNCHER_STDIN=PROHIBITED",
+            "REMOTE_DESKTOP_OFFLINE_OR_QUOTA_EXHAUSTED",
+            "EXACT_COMMENT_LOCATOR_PRESENT=>READ_EXACT_COMMENT_ONLY",
+            "FETCH_ALL_ISSUE_COMMENTS_WHEN_EXACT_COMMENT_KNOWN=PROHIBITED",
+            "BROAD_ISSUE_OR_PR_HISTORY=>CONTROL_ESCALATION_ONLY",
+        ),
         "bridge",
+    )
+    require(
+        text(root, ".agents/skills/trade-os-v5-bootstrap/SKILL.md"),
+        (
+            "EXACT_COMMENT_LOCATOR_PRESENT=>READ_EXACT_COMMENT_ONLY",
+            "FETCH_ALL_ISSUE_COMMENTS_WHEN_EXACT_COMMENT_KNOWN=PROHIBITED",
+            "BROAD_ISSUE_OR_PR_HISTORY=>CONTROL_ESCALATION_ONLY",
+        ),
+        "V5 bootstrap skill",
+    )
+    require(
+        text(root, ".agents/skills/trade-os-v5-review/SKILL.md"),
+        (
+            "PR_BOOTSTRAP=>METADATA_FIRST",
+            "PR_SCOPE=>LIST_ALL_CHANGED_FILENAMES_FIRST",
+            "FINAL_REVIEW=>REVIEW_EVERY_CHANGED_FILE",
+            "PR_PATCH_IO=>FETCH_PER_FILE_OR_BOUNDED_CHUNK",
+            "FULL_PR_TIMELINE=>NOT_ROUTINE_REVIEW_INPUT",
+            "CI_SUCCESS=>STATUS_AND_LOCATOR_ONLY",
+            "RAW_SUCCESS_LOG_INGESTION=PROHIBITED",
+            "CI_FAILURE=>MINIMUM_DECISIVE_FAILING_EVIDENCE_ONLY",
+        ),
+        "V5 review skill",
+    )
+    require(
+        text(root, ".agents/skills/trade-os-v5-handoff/SKILL.md"),
+        (
+            "EXACT_CANONICAL_LOCATOR_AVAILABLE=>HANDOFF_MUST_CARRY_EXACT_OBJECT",
+            "GENERIC_ISSUE_OR_PR_HISTORY_INSTRUCTION_WHEN_EXACT_LOCATOR_KNOWN=PROHIBITED",
+        ),
+        "V5 handoff skill",
     )
     require(
         text(root, "docs/engineering/CODEX_V5_OPERATING_GUIDE.md"),

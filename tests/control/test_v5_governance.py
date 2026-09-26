@@ -96,3 +96,46 @@ def test_protected_action_authority_cannot_change(monkeypatch: pytest.MonkeyPatc
     install(monkeypatch, value)
     with pytest.raises(checker.CheckFailure, match="protected-action authority changed"):
         checker.check_manifest(ROOT)
+
+
+@pytest.mark.parametrize(
+    ("path", "needle"),
+    [
+        (
+            "governance/CHATGPT_PROJECT_GOVERNANCE_BRIDGE.md",
+            "EXACT_COMMENT_LOCATOR_PRESENT=>READ_EXACT_COMMENT_ONLY",
+        ),
+        (
+            ".agents/skills/trade-os-v5-bootstrap/SKILL.md",
+            "FETCH_ALL_ISSUE_COMMENTS_WHEN_EXACT_COMMENT_KNOWN=PROHIBITED",
+        ),
+        (
+            ".agents/skills/trade-os-v5-review/SKILL.md",
+            "PR_SCOPE=>LIST_ALL_CHANGED_FILENAMES_FIRST",
+        ),
+        (
+            ".agents/skills/trade-os-v5-review/SKILL.md",
+            "FINAL_REVIEW=>REVIEW_EVERY_CHANGED_FILE",
+        ),
+        (
+            ".agents/skills/trade-os-v5-review/SKILL.md",
+            "PR_PATCH_IO=>FETCH_PER_FILE_OR_BOUNDED_CHUNK",
+        ),
+        (
+            ".agents/skills/trade-os-v5-handoff/SKILL.md",
+            "EXACT_CANONICAL_LOCATOR_AVAILABLE=>HANDOFF_MUST_CARRY_EXACT_OBJECT",
+        ),
+    ],
+)
+def test_context_io_document_invariants_are_required(
+    monkeypatch: pytest.MonkeyPatch, path: str, needle: str
+) -> None:
+    original_text = checker.text
+
+    def without_invariant(root: Path, requested: str) -> str:
+        value = original_text(root, requested)
+        return value.replace(needle, "REMOVED_CONTEXT_IO_INVARIANT") if requested == path else value
+
+    monkeypatch.setattr(checker, "text", without_invariant)
+    with pytest.raises(checker.CheckFailure):
+        checker.check_documents(ROOT)
