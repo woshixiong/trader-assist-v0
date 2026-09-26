@@ -56,7 +56,13 @@ from trader_assist_v0.nautilus_e4.host import (
     build_capture_strategy,
     build_public_data_node,
 )
+from trader_assist_v0.nautilus_e4.markettruth import MarketTruthRef
 from trader_assist_v0.nautilus_e4.storage import EvidenceStore
+from trader_assist_v0.nautilus_e4.warmup import (
+    MINUTE_NS,
+    HistoricalWarmup,
+    WarmupStream,
+)
 
 INSTRUMENT_ID = "ETH-USD-PERP.HYPERLIQUID"
 MARKET_ID = sha256_hex(b"HYPERLIQUID|MAIN|ETH")
@@ -74,9 +80,7 @@ def _installed_strategy_stub_methods() -> tuple[
         key=str,
     )
     assert stub_entries, "installed Nautilus distribution has no public .pyi files"
-    matches: list[
-        tuple[Path, dict[str, ast.FunctionDef | ast.AsyncFunctionDef]]
-    ] = []
+    matches: list[tuple[Path, dict[str, ast.FunctionDef | ast.AsyncFunctionDef]]] = []
     required = {"__init__", "subscribe_socket_state", "on_socket_state"}
     for entry in stub_entries:
         path = Path(dist.locate_file(entry))
@@ -84,9 +88,7 @@ def _installed_strategy_stub_methods() -> tuple[
             source = path.read_text(encoding="utf-8")
             tree = ast.parse(source, filename=str(path))
         except (OSError, UnicodeError, SyntaxError) as exc:
-            raise AssertionError(
-                f"cannot read/parse installed public stub {path}"
-            ) from exc
+            raise AssertionError(f"cannot read/parse installed public stub {path}") from exc
         for declaration in tree.body:
             if not isinstance(declaration, ast.ClassDef) or declaration.name != "Strategy":
                 continue
@@ -98,8 +100,7 @@ def _installed_strategy_stub_methods() -> tuple[
             if required <= methods.keys():
                 matches.append((path, methods))
     assert len(matches) == 1, (
-        "expected one installed public Strategy stub, found "
-        f"{[str(path) for path, _ in matches]}"
+        f"expected one installed public Strategy stub, found {[str(path) for path, _ in matches]}"
     )
     return matches[0]
 
@@ -286,10 +287,7 @@ def test_e4_provider_boundary_uses_only_supported_root_model_imports() -> None:
         Path(__file__),
     )
     model_root = "nautilus_trader.model"
-    forbidden = {
-        f"{model_root}.{leaf}"
-        for leaf in ("data", "enums", "identifiers", "objects")
-    }
+    forbidden = {f"{model_root}.{leaf}" for leaf in ("data", "enums", "identifiers", "objects")}
     offenders: list[str] = []
     for path in provider_files:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -368,6 +366,30 @@ def test_exact_current_strategy_market_data_and_socket_state_contract() -> None:
         assert obsolete not in source
 
 
+def test_exact_rc5_native_history_depth_and_messagebus_contract() -> None:
+    """Bind the planned seam to the installed rc5 public Strategy surface."""
+    assert version("nautilus-trader") == NAUTILUS_VERSION
+    for name in (
+        "request_bars",
+        "on_historical_bars",
+        "subscribe_book_depth10",
+        "on_book_depth",
+        "publish_message",
+        "subscribe_topic",
+    ):
+        assert callable(getattr(Strategy, name))
+    _path, methods = _installed_strategy_stub_methods()
+    assert {"self", "bar_type", "start", "end", "limit", "client_id", "params"} <= set(
+        _parameter_names(methods["request_bars"])
+    )
+    assert _parameter_names(methods["on_historical_bars"]) == ("self", "bars")
+    assert {"instrument_id", "book_type"} <= set(
+        _parameter_names(methods["subscribe_book_depth10"])
+    )
+    assert {"topic", "message"} <= set(_parameter_names(methods["publish_message"]))
+    assert {"topic", "handler", "priority"} <= set(_parameter_names(methods["subscribe_topic"]))
+
+
 def test_constructive_exact_current_objects_drive_typed_identity_and_real_bar_callback(
     tmp_path: Path,
 ) -> None:
@@ -399,6 +421,87 @@ def test_constructive_exact_current_objects_drive_typed_identity_and_real_bar_ca
     assert finalized.ts_event == bar.ts_event
     assert finalized.ts_init == bar.ts_init
     assert finalized.payload["finalized"] is True
+
+
+def test_native_historical_bar_batch_is_durable_without_live_continuity(
+    tmp_path: Path,
+) -> None:
+    strategy = _capture_strategy(tmp_path)
+    node = build_public_data_node()
+    try:
+        node.add_strategy(strategy)
+        raw = _external_minute_bar_type(INSTRUMENT_ID)
+        cutoff = strategy.clock.timestamp_ns() // MINUTE_NS * MINUTE_NS
+        stream = WarmupStream.create(
+            bar_type=raw, instrument_id=INSTRUMENT_ID, minutes=1, cutoff_ns=cutoff
+        )
+        strategy._warmup = HistoricalWarmup(cutoff, (stream,))
+        stream.request_sent("native-request-id", strategy.clock.timestamp_ns())
+        bar_type = BarType.from_str(raw)
+        bars = [
+            Bar(
+                bar_type=bar_type,
+                open=Price.from_str("100"),
+                high=Price.from_str("102"),
+                low=Price.from_str("99"),
+                close=Price.from_str("101"),
+                volume=Quantity.from_str("10"),
+                ts_event=opened,
+                ts_init=opened + MINUTE_NS,
+            )
+            for opened in range(stream.start_ns, stream.end_ns, MINUTE_NS)
+        ]
+        strategy.capture_session.disconnect(reason="TEST_SOCKET_LOSS")
+        strategy.capture_session.reconnect(required_streams={(MARKET_ID, DataKind.BAR)})
+        strategy.on_historical_bars(tuple(reversed(bars)))
+        assert strategy.warmup_health["readiness"] == "READY"
+        assert strategy.capture_session.health_summary()["continuity_requirements_remaining"] == 1
+        assert strategy.capture_session.observed_streams == frozenset()
+        strategy.on_bar(bars[-1])
+    finally:
+        node.dispose()
+    durable = EvidenceStore(tmp_path).load_admissions()
+    assert len(durable) == 15
+    reconstructed = WarmupStream.create(
+        bar_type=raw, instrument_id=INSTRUMENT_ID, minutes=1, cutoff_ns=cutoff
+    )
+    reconstructed.reconstruct(durable)
+    assert reconstructed.readiness.value == "READY"
+
+
+def test_native_messagebus_delivers_exact_immutable_ref_and_degrades_failure(
+    tmp_path: Path,
+) -> None:
+    strategy = _capture_strategy(tmp_path)
+    node = build_public_data_node()
+    try:
+        node.add_strategy(strategy)
+        received: list[MarketTruthRef] = []
+        strategy.subscribe_markettruth(received.append)
+
+        def fail(_ref: MarketTruthRef) -> None:
+            raise RuntimeError("subscriber failed")
+
+        strategy.subscribe_markettruth(fail)
+        ref = MarketTruthRef.create(
+            market_id=MARKET_ID,
+            instrument_id=INSTRUMENT_ID,
+            source_event_id="depth10:test",
+            ts_event=1,
+            ts_init=1,
+            continuity_epoch="epoch-1",
+            bid_price="100",
+            bid_size="1",
+            ask_price="101",
+            ask_size="1",
+        )
+        strategy._markettruth_fanout.publish(strategy.publish_message, ref)
+        assert received == [ref]
+        assert received[0] is ref
+        assert strategy.markettruth_fanout_health.state == "DEGRADED"
+        assert strategy.markettruth_fanout_health.last_publish_error == ("SUBSCRIBER_RuntimeError")
+    finally:
+        node.dispose()
 
 
 def test_legacy_rc4_manifest_is_readable_but_active_rc5_runtime_fails_closed(
@@ -434,9 +537,7 @@ def test_exact_current_external_minute_bar_type_round_trips_through_public_parse
 
 def test_probe_uses_live_node_strategy_and_handle_surfaces() -> None:
     root = Path(__file__).resolve().parents[1]
-    source = (root / "scripts/e4_nautilus_public_data_probe.py").read_text(
-        encoding="utf-8"
-    )
+    source = (root / "scripts/e4_nautilus_public_data_probe.py").read_text(encoding="utf-8")
     assert "node.add_strategy(strategy)" in source
     assert "handle = node.handle()" in source
     assert "threading.Timer(args.run_seconds, handle.stop)" in source

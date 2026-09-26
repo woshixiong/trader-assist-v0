@@ -222,6 +222,15 @@ class CaptureSession:
         self._continuity_requirements: set[tuple[str, DataKind]] = set()
         self._runtime_segment_index = runtime_segment_index
         self._checkpoint_sequence = checkpoint_sequence
+        self._warmup_checkpoint: dict[str, Any] | None = None
+
+    @property
+    def warmup_checkpoint(self) -> dict[str, Any] | None:
+        return None if self._warmup_checkpoint is None else deepcopy(self._warmup_checkpoint)
+
+    def save_warmup_checkpoint(self, state: dict[str, Any]) -> None:
+        self._warmup_checkpoint = deepcopy(state)
+        self._persist_if_configured(reason="HISTORICAL_WARMUP_STATE")
 
     @property
     def lifecycle_records(self) -> tuple[LifecycleRecord, ...]:
@@ -231,7 +240,12 @@ class CaptureSession:
     def tail_statuses(self) -> dict[str, TailStatus]:
         return {package_id: state.tail for package_id, state in self._packages.items()}
 
-    def ingest(self, source: SourceEvent, *, admission_ts: int) -> AdmissionOutcome:
+    def ingest(
+        self, source: SourceEvent, *, admission_ts: int, historical: bool = False
+    ) -> AdmissionOutcome:
+        """Admit one fact; historical acquisition has no live-continuity authority."""
+        if historical and source.data_kind is not DataKind.BAR:
+            raise ValueError("only bars can use historical admission")
         if not self.policy.permits(source.market_id, source.data_kind):
             raise ValueError("rich evidence is prohibited for a Discovery-only market")
         outcome = self.ledger.admit(source, admission_ts=admission_ts)
@@ -240,11 +254,12 @@ class CaptureSession:
             return outcome
         assert outcome.event is not None
         event = outcome.event
-        self._last_ts_init = source.ts_init
-        self._last_admission_ts = admission_ts
-        self._max_admission_lag_ns = max(
-            self._max_admission_lag_ns, admission_ts - source.ts_init
-        )
+        if not historical:
+            self._last_ts_init = source.ts_init
+            self._last_admission_ts = admission_ts
+            self._max_admission_lag_ns = max(
+                self._max_admission_lag_ns, admission_ts - source.ts_init
+            )
         self._counts[f"source:{source.data_kind.value}"] += 1
         self._counts[f"market:{source.market_id}"] += 1
         if event.out_of_order:
@@ -257,9 +272,10 @@ class CaptureSession:
                     event.continuity_epoch,
                 )
             self._append_prebuffer(event)
-        self._observed_streams.add((source.market_id, source.data_kind))
+        if not historical:
+            self._observed_streams.add((source.market_id, source.data_kind))
         continuity_restored = False
-        if self.ledger.health is StreamHealth.REESTABLISHING:
+        if not historical and self.ledger.health is StreamHealth.REESTABLISHING:
             self._continuity_requirements.discard((source.market_id, source.data_kind))
             if not self._continuity_requirements:
                 self.ledger.establish_continuity()
@@ -725,7 +741,7 @@ class CaptureSession:
         self._flush_if_full(force=True, checkpoint_reason=reason)
 
     def health_summary(self) -> dict[str, object]:
-        return {
+        health: dict[str, object] = {
             "capture_counts": dict(sorted(self._counts.items())),
             "missingness_counts": dict(sorted(self._missingness.items())),
             "duplicates": self.ledger.duplicate_count,
@@ -746,6 +762,9 @@ class CaptureSession:
             "max_admission_lag_ns": self._max_admission_lag_ns,
             "provider_subscription_headroom": "NOT_OBSERVABLE_IN_CURRENT_RC4_CALLBACK_SEAM",
         }
+        if self.evidence_store is not None:
+            health["storage"] = self.evidence_store.storage_health()
+        return health
 
     def operational_artifacts(
         self, *, health_overrides: dict[str, object] | None = None
@@ -895,6 +914,7 @@ class CaptureSession:
                     self._observed_streams, key=lambda item: (item[0], item[1].value)
                 )
             ],
+            "warmup": self.warmup_checkpoint,
         }
 
     def persist_runtime_checkpoint(self, *, reason: str) -> None:
@@ -1015,6 +1035,10 @@ class CaptureSession:
         # Probe/continuity observations are segment-local. Prior admitted facts
         # remain durable, but they cannot prove the new process is connected.
         session._observed_streams = set()
+        raw_warmup = checkpoint.get("warmup")
+        if raw_warmup is not None and not isinstance(raw_warmup, dict):
+            raise ValueError("warm-up checkpoint state must be an object")
+        session._warmup_checkpoint = deepcopy(raw_warmup)
         session._missingness[EvidenceState.INTERRUPTED.value] += interrupted_packages
         return session
 

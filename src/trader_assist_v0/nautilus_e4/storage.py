@@ -6,6 +6,7 @@ import hmac
 import json
 import os
 import tempfile
+import time
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any, Literal, Protocol, Self
@@ -106,6 +107,60 @@ class EvidenceStore:
         self.admission_columns_path = root / "causal-admission-columns.jsonl"
         self.runtime_checkpoint_path = root / "runtime-checkpoint.json"
         self.process_segments_path = root / "process-segments.jsonl"
+        self._instrumentation_started_monotonic = time.monotonic()
+        self._instrumentation_initial_bytes = self._retained_bytes()
+
+    def _canonical_artifact_paths(self) -> tuple[Path, ...]:
+        names = (
+            "run-manifest.json",
+            "pit-universe-snapshot.json",
+            "lifecycle.jsonl",
+            "causal-admission-columns.jsonl",
+            "runtime-checkpoint.json",
+            "process-segments.jsonl",
+            "capture-source-counts.json",
+            "causal-order-replay-proof.json",
+            "duplicate-gap-reconnect-prebuffer.json",
+            "missingness-not-evaluable-counts.json",
+            "catalog-semantic-round-trip.json",
+            "credential-negative-zero-write.json",
+        )
+        return tuple(self.root / name for name in names)
+
+    def _retained_bytes(self) -> int:
+        return sum(
+            path.stat().st_size for path in self._canonical_artifact_paths() if path.exists()
+        )
+
+    def storage_health(self) -> dict[str, object]:
+        """Read-only current accounting; rate never claims pre-open history."""
+        retained_bytes = self._retained_bytes()
+        elapsed = max(time.monotonic() - self._instrumentation_started_monotonic, 0.0)
+        admissions = len(self.load_admissions())
+        lifecycle = len(self.load_lifecycle())
+        segments = len(self.load_process_segments())
+        filesystem = os.statvfs(self.root)
+        return {
+            "retained_bytes": retained_bytes,
+            "retained_events": {
+                "causal_admissions": admissions,
+                "lifecycle_records": lifecycle,
+                "process_segments": segments,
+                "total": admissions + lifecycle + segments,
+            },
+            "write_rate": {
+                "interval": "since_evidence_store_instrumentation_start",
+                "elapsed_monotonic_seconds": elapsed,
+                "bytes_per_second": (
+                    0.0
+                    if elapsed == 0
+                    else max(retained_bytes - self._instrumentation_initial_bytes, 0) / elapsed
+                ),
+            },
+            "filesystem_headroom_bytes": filesystem.f_bavail * filesystem.f_frsize,
+            "retention_policy": "APPEND_ONLY_NO_AUTOMATIC_PRUNE",
+            "self_counting_excluded_artifact": "capture-health-resource-freshness.json",
+        }
 
     def initialize(self, manifest: RunManifest, snapshot: PitUniverseSnapshot) -> None:
         if manifest.pit_snapshot_hash != snapshot.snapshot_hash:
@@ -188,9 +243,7 @@ class EvidenceStore:
             self.runtime_checkpoint_path,
             self.process_segments_path,
         )
-        return {
-            path.name: sha256_hex(path.read_bytes()) for path in paths if path.exists()
-        }
+        return {path.name: sha256_hex(path.read_bytes()) for path in paths if path.exists()}
 
     def round_trip_proof(self) -> dict[str, object]:
         manifest = self.load_manifest()
@@ -206,9 +259,7 @@ class EvidenceStore:
             "admission_records": len(admissions),
             "source_identities": [item.source_identity for item in admissions],
             "causal_ordinals": [item.admission_ordinal for item in admissions],
-            "runtime_checkpoint_hash": (
-                None if checkpoint is None else checkpoint.checkpoint_hash
-            ),
+            "runtime_checkpoint_hash": (None if checkpoint is None else checkpoint.checkpoint_hash),
             "process_segment_count": len(segments),
             "readable": True,
             "deterministic": True,
@@ -298,9 +349,7 @@ class EvidenceStore:
                     {key: value for key, value in raw.items() if key != "record_hash"}
                 )
             )
-            if not isinstance(record_hash, str) or not hmac.compare_digest(
-                record_hash, expected
-            ):
+            if not isinstance(record_hash, str) or not hmac.compare_digest(record_hash, expected):
                 raise ValueError("process segment record hash mismatch")
             if records and raw.get("segment_index", -1) <= records[-1]["segment_index"]:
                 raise ValueError("process segment history is not strictly ordered")

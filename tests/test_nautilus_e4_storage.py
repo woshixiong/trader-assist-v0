@@ -59,9 +59,7 @@ def _identity() -> tuple[PitUniverseSnapshot, RunManifest]:
             "raw_storage": "NAUTILUS_PARQUET_DATA_CATALOG",
             "semantic_storage": "VERSIONED_PORTABLE_COLUMN_BATCHES",
         },
-        subscription_policy={
-            "discovery": [MARKET], "watch": [MARKET], "actionable": [MARKET]
-        },
+        subscription_policy={"discovery": [MARKET], "watch": [MARKET], "actionable": [MARKET]},
         trial_ledger_id="trial-v1",
     )
     return snapshot, manifest
@@ -403,9 +401,7 @@ def test_durable_recovery_restores_latest_fact_without_rewriting_history(
     history_after_terminal = store.lifecycle_path.read_bytes()
     assert history_after_terminal.startswith(history_before_restart)
 
-    thesis_facts = [
-        item for item in store.load_lifecycle() if item.object_id == "thesis-001"
-    ]
+    thesis_facts = [item for item in store.load_lifecycle() if item.object_id == "thesis-001"]
     assert thesis_facts == [created, active, terminal]
     assert len({item.record_hash for item in thesis_facts}) == 3
 
@@ -542,9 +538,7 @@ def test_durable_restart_types_mid_30m_and_mid_6h_tails(
     assert tail.terminal_ts == terminal_ts
     assert tail.evidence_state is EvidenceState.INTERRUPTED
     assert tail.context_phase is TailPhase.INCOMPLETE
-    assert tail.micro_phase is (
-        TailPhase.COMPLETE if micro_complete else TailPhase.INCOMPLETE
-    )
+    assert tail.micro_phase is (TailPhase.COMPLETE if micro_complete else TailPhase.INCOMPLETE)
     assert "PROCESS_RESTART" in tail.reason_codes
 
 
@@ -582,3 +576,108 @@ def test_runtime_checkpoint_is_atomic_hash_bound_and_identity_bound(tmp_path: Pa
     store.runtime_checkpoint_path.write_text(json.dumps(raw))
     with pytest.raises(ValueError, match="checkpoint hash"):
         store.load_runtime_checkpoint(manifest)
+
+
+def test_historical_bar_dedupes_live_and_never_repairs_socket_continuity(
+    tmp_path: Path,
+) -> None:
+    snapshot, manifest = _identity()
+    store = EvidenceStore(tmp_path)
+    store.initialize(manifest, snapshot)
+    session = recover_capture_session(
+        manifest=manifest, policy=_policy(), raw_sink=None, evidence_store=store
+    )
+    source = SourceEvent.create(
+        market_id=MARKET,
+        expression_id="expr-ETH",
+        provider_id="NAUTILUS_HYPERLIQUID",
+        instrument_id="ETH-PERP.HYPERLIQUID",
+        data_kind=DataKind.BAR,
+        source_event_id=f"bar:ETH-PERP.HYPERLIQUID-1-MINUTE-LAST-EXTERNAL:{BASE}",
+        native_trade_id=None,
+        provider_aggressor_side=None,
+        event_context="ETH-PERP.HYPERLIQUID-1-MINUTE-LAST-EXTERNAL",
+        ts_event=BASE,
+        ts_init=BASE + 60_000_000_000,
+        true_network_receive_ts=None,
+        payload={
+            "open": "100",
+            "high": "102",
+            "low": "99",
+            "close": "101",
+            "volume": "10",
+            "finalized": True,
+        },
+    )
+    session.disconnect(reason="TEST_SOCKET_LOSS")
+    session.reconnect(required_streams={(MARKET, DataKind.BAR)})
+    assert session.ingest(source, admission_ts=source.ts_init, historical=True).event
+    assert session.ledger.health is StreamHealth.REESTABLISHING
+    assert session.observed_streams == frozenset()
+    assert session.health_summary()["continuity_requirements_remaining"] == 1
+    assert session.health_summary()["last_source_ts_init"] is None
+    assert session.health_summary()["max_admission_lag_ns"] == 0
+    session.persist_durable_evidence(reason="TEST_HISTORY")
+    session.save_warmup_checkpoint({"cutoff_ns": BASE + 60_000_000_000, "streams": {}})
+    assert session.ingest(source, admission_ts=source.ts_init + 1).duplicate
+    assert len(store.load_admissions()) == 1
+
+    restarted = recover_capture_session(
+        manifest=manifest, policy=_policy(), raw_sink=None, evidence_store=store
+    )
+    assert restarted.warmup_checkpoint == {"cutoff_ns": BASE + 60_000_000_000, "streams": {}}
+    assert restarted.ingest(source, admission_ts=source.ts_init + 2, historical=True).duplicate
+    assert len(store.load_admissions()) == 1
+    assert restarted.ledger.health is StreamHealth.REESTABLISHING
+
+
+def test_live_bar_before_history_is_one_economic_fact(tmp_path: Path) -> None:
+    snapshot, manifest = _identity()
+    store = EvidenceStore(tmp_path)
+    store.initialize(manifest, snapshot)
+    session = recover_capture_session(
+        manifest=manifest, policy=_policy(), raw_sink=None, evidence_store=store
+    )
+    source = _low_rate_event(1, DataKind.BAR)
+    assert session.ingest(source, admission_ts=source.ts_init).event
+    session.persist_durable_evidence(reason="LIVE_BAR")
+    assert session.ingest(source, admission_ts=source.ts_init + 10, historical=True).duplicate
+    assert len(store.load_admissions()) == 1
+
+
+def test_late_historical_bar_cannot_rewrite_committed_decision(tmp_path: Path) -> None:
+    _manifest, store, session = _open_durable_session(tmp_path)
+    committed = session.decision_commitment("pkg-001")
+    bar = _low_rate_event(0, DataKind.BAR)
+    assert session.ingest(bar, admission_ts=BASE + 3_000_000_000, historical=True).event
+    session.persist_durable_evidence(reason="LATE_HISTORICAL_BAR")
+    assert session.decision_commitment("pkg-001") == committed
+    assert any(item.source_identity == bar.replay_identity for item in store.load_admissions())
+
+
+def test_storage_health_accounts_retained_evidence_without_self_counting(
+    tmp_path: Path,
+) -> None:
+    snapshot, manifest = _identity()
+    store = EvidenceStore(tmp_path)
+    store.initialize(manifest, snapshot)
+    before = store.storage_health()
+    assert before["retention_policy"] == "APPEND_ONLY_NO_AUTOMATIC_PRUNE"
+    assert before["filesystem_headroom_bytes"] > 0
+    assert before["write_rate"]["interval"] == "since_evidence_store_instrumentation_start"
+    assert before["retained_events"]["causal_admissions"] == 0
+    store.write_operational_artifacts(
+        {
+            "capture-source-counts.json": {},
+            "causal-order-replay-proof.json": {},
+            "duplicate-gap-reconnect-prebuffer.json": {},
+            "missingness-not-evaluable-counts.json": {},
+            "catalog-semantic-round-trip.json": {},
+            "capture-health-resource-freshness.json": {},
+            "credential-negative-zero-write.json": {},
+        }
+    )
+    after = store.storage_health()
+    assert after["retained_bytes"] > before["retained_bytes"]
+    assert after["self_counting_excluded_artifact"] == "capture-health-resource-freshness.json"
+    assert after["write_rate"]["bytes_per_second"] >= 0
