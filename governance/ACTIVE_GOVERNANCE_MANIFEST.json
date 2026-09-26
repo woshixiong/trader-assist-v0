@@ -85,6 +85,11 @@
     "canonical_github_result_egress_required": true,
     "comment_only_fallback_when_native_self_approval_unavailable": true
   },
+  "execution_relay": {
+    "preferred": "REMOTE_DESKTOP_COMMANDER_WHEN_CONNECTED_AND_QUOTA_AVAILABLE",
+    "authority": "EXECUTION_TRANSPORT_ONLY",
+    "hard_dependency": false
+  },
   "deterministic_runtime": {
     "v5_bootstrap": "PENDING_V5_B",
     "v5_governance_consistency_validator": "PENDING_V5_B",

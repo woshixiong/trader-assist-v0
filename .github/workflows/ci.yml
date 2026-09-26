@@ -43,8 +43,13 @@ jobs:
           /tmp/trader-assist-v0-venv/bin/pip-audit --strict -r requirements-decision-model-typesafe.lock
       - name: Compile
         run: /tmp/trader-assist-v0-venv/bin/python -m compileall -q src scripts tests
-      - name: V4 governance consistency
-        run: /tmp/trader-assist-v0-venv/bin/python scripts/check_v4_governance.py
+      - name: Governance consistency
+        run: |
+          if [ "${{ github.head_ref }}" = "governance/v5-activation" ] || grep -q '"governance_version": "V5"' governance/ACTIVE_GOVERNANCE_MANIFEST.json; then
+            /tmp/trader-assist-v0-venv/bin/python scripts/check_v5_governance.py
+          else
+            /tmp/trader-assist-v0-venv/bin/python scripts/check_v4_governance.py
+          fi
       - name: Schema drift
         run: /tmp/trader-assist-v0-venv/bin/python scripts/export_schemas.py --check
       - name: Secret scan

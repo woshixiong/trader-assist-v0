@@ -15,6 +15,14 @@ NEXT_ACTION=
 COPY_PASTE_COMMAND_OR_PROMPT=
 ~~~
 
+~~~text
+MODEL_EXECUTOR_STDIN_SOURCE=EXPLICIT
+SHARED_OUTER_LAUNCHER_STDIN=PROHIBITED
+~~~
+
+Remote Desktop relay loss preserves the checkpoint and emits one exact manual
+Terminal command or blocks; it never changes authority or consumes repair.
+
 Before emitting a terminal result or blocker, fresh-read the canonical task/PR
 state and reconcile any already-advanced state idempotently.
 

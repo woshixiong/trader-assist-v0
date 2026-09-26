@@ -524,6 +524,36 @@ nonrepresentative proof.
 
 ## 14. Repository, publication, and transport discipline
 
+### 14.1 Explicit executor input and relay boundary
+
+~~~text
+MODEL_EXECUTOR_STDIN_SOURCE=EXPLICIT
+SHARED_OUTER_LAUNCHER_STDIN=PROHIBITED
+ONE_PASTE_AGENT_WORKFLOW=>FILE_BACKED_PHASE_SEPARATION
+PROMPT_IN_ARGV=>STDIN_CLOSED_OR_/dev/null
+PROMPT_VIA_STDIN=>DEDICATED_PROMPT_FILE_WITH_EXPLICIT_EOF
+REMOTE_DESKTOP_COMMANDER_STATUS=FORMAL_V5_EXECUTION_RELAY
+AUTHORITY_TYPE=EXECUTION_TRANSPORT_ONLY
+HARD_DEPENDENCY=NO
+~~~
+
+Remote Desktop Commander is the preferred local execution relay when connected
+and quota is available. It has no engineering or protected-action authority.
+If unavailable, preserve the exact canonical checkpoint and generate one exact
+human Terminal command or block; do not rerun semantic work, consume repair
+budget, or change package, thread, worktree, authority, or executor.
+
+Before a real local push containing `.github/workflows/**`, require:
+
+~~~text
+GH_WORKFLOW_SCOPE_REQUIRED=YES
+GH_WORKFLOW_SCOPE_VERIFIED=YES
+~~~
+
+`gh auth status`, API reads, fetch, ls-remote, and dry-run do not prove this
+scope. Missing proof pauses at current human credential/scope authority; never
+silently refresh OAuth scopes and never count this as semantic failure.
+
 Normal engineering work:
 
 - never commits directly to main;

@@ -7,6 +7,18 @@ manifest-selected constitution and exact Development Package.
 
 ## 1. Target human/operator flow
 
+Remote Desktop Commander is the formal preferred local execution relay when
+connected and quota is available. It is execution transport only, never a
+correctness dependency or authority. Offline/quota exhaustion preserves the
+same checkpoint and yields one exact human Terminal command or a block.
+
+~~~text
+REMOTE_DESKTOP_COMMANDER_STATUS=FORMAL_V5_EXECUTION_RELAY
+ONE_EXACT_GENERATED_HUMAN_TERMINAL_COMMAND_OR_BLOCK=REQUIRED
+MODEL_EXECUTOR_STDIN_SOURCE=EXPLICIT
+SHARED_OUTER_LAUNCHER_STDIN=PROHIBITED
+~~~
+
 After Engineering Control freezes one Development Package and exact base, the
 target is one Terminal launch for the primary Codex thread.
 

@@ -8,6 +8,11 @@ description: Bind a Trade OS task to the exact manifest-selected governance, pac
 Thin adapter only. Authority lives in the manifest-selected constitution and
 exact Development Package/package-state.
 
+~~~text
+MODEL_EXECUTOR_STDIN_SOURCE=EXPLICIT
+SHARED_OUTER_LAUNCHER_STDIN=PROHIBITED
+~~~
+
 1. Fresh-read AGENTS.md, active manifest, selected constitution, and exact
    package-state/Issue/PR.
 2. Resolve exact main/base/head/tree and require the package binding to match.

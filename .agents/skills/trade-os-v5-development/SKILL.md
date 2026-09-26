@@ -7,6 +7,14 @@ description: Execute a frozen V5 development package through Plan-only, Pre-code
 
 Thin adapter only; do not duplicate the constitution.
 
+~~~text
+MODEL_EXECUTOR_STDIN_SOURCE=EXPLICIT
+SHARED_OUTER_LAUNCHER_STDIN=PROHIBITED
+~~~
+
+Before local publication containing `.github/workflows/**`, require current
+human-backed `GH_WORKFLOW_SCOPE_VERIFIED=YES`; do not silently refresh OAuth.
+
 1. Bootstrap exact package/base/runtime identity first.
 2. Run Plan-only with no product-source mutation.
 3. Persist the Plan and emit the complete fresh Pre-code Review prompt.

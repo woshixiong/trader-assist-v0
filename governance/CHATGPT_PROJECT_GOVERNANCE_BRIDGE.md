@@ -84,6 +84,18 @@ COMMENT_ONLY evidence mode and never misrepresent reviewer identity.
 
 ## Handoff contract
 
+Execution relays are transport only. Remote Desktop Commander is preferred
+when connected and quota is available, but is not a hard dependency or source
+of engineering/protected-action authority. Its offline/quota fallback preserves
+the exact canonical checkpoint and emits one exact human Terminal command or
+blocks without semantic rerun or repair-budget consumption.
+
+~~~text
+MODEL_EXECUTOR_STDIN_SOURCE=EXPLICIT
+SHARED_OUTER_LAUNCHER_STDIN=PROHIBITED
+REMOTE_DESKTOP_OFFLINE_OR_QUOTA_EXHAUSTED=>ONE_EXACT_GENERATED_HUMAN_TERMINAL_COMMAND_OR_BLOCK
+~~~
+
 At every expected stop emit:
 
 ~~~text
