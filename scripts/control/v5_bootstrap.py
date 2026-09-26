@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import re
+import subprocess
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -21,6 +23,70 @@ BootstrapError = _V4.BootstrapError
 binding_key = _V4.binding_key
 require_hex = _V4.require_hex
 run_git = _V4.run_git
+
+_V5_SPEC = importlib.util.spec_from_file_location(
+    "_v5_controller", Path(__file__).with_name("v5_controller.py")
+)
+assert _V5_SPEC and _V5_SPEC.loader
+_V5 = importlib.util.module_from_spec(_V5_SPEC)
+sys.modules[_V5_SPEC.name] = _V5
+_V5_SPEC.loader.exec_module(_V5)
+
+GITHUB_COMMENT = re.compile(
+    r"https://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/issues/\d+"
+    r"#issuecomment-(?P<comment_id>\d+)"
+)
+
+
+def read_canonical_comment(locator: str) -> str:
+    """Read the exact GitHub Issue comment; do not accept caller attestations."""
+    match = GITHUB_COMMENT.fullmatch(locator)
+    if match is None:
+        raise BootstrapError("canonical package-state locator is invalid")
+    result = subprocess.run(
+        [
+            "gh",
+            "api",
+            f"repos/{match['owner']}/{match['repo']}/issues/comments/{match['comment_id']}",
+            "--jq",
+            ".body",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        raise BootstrapError(f"canonical package-state read failed: {result.stderr[:240].strip()}")
+    return result.stdout
+
+
+def verify_canonical_state(args: argparse.Namespace, exact_tree: str) -> None:
+    if args.control_capsule_ref != args.package_state_locator:
+        raise BootstrapError("Control Capsule must bind the canonical V5 package-state record")
+    try:
+        state = _V5.parse_state(read_canonical_comment(args.package_state_locator))
+    except _V5.ControlError as exc:
+        raise BootstrapError(f"canonical package state is invalid: {exc}") from exc
+    bindings = (
+        ("package id", args.package_id, state.package_id),
+        ("governance epoch", args.governance_epoch, state.governance_epoch),
+        ("task packet hash", args.task_packet_hash, state.task_packet_hash),
+        ("exact main", args.exact_main, state.exact_main),
+        ("package base", args.package_base, state.exact_base),
+        ("exact head", args.exact_base, state.exact_head),
+        ("exact tree", exact_tree, state.exact_tree),
+        ("route", args.route, state.route),
+        ("Codex thread", args.codex_thread_id, state.codex_thread_id),
+        ("worktree", args.worktree_identity, state.worktree_identity),
+        ("PR", args.pr_number, state.pr_number),
+    )
+    for label, expected, observed in bindings:
+        if expected != observed:
+            raise BootstrapError(f"canonical package-state {label} mismatch")
+    if not state.last_canonical_evidence or not state.next_allowed_transition:
+        raise BootstrapError("canonical Control Capsule content is incomplete")
 
 
 @dataclass(frozen=True)
@@ -50,12 +116,7 @@ def verify(args: argparse.Namespace) -> V5BootstrapEvidence:
         require_hex(value, pattern, name)
     if not args.package_state_locator or not args.control_capsule_ref:
         raise BootstrapError("package-state locator and Control Capsule are required")
-    for name in (
-        "project_ruleset_preflight",
-        "engineering_preflight",
-        "semantic_readiness",
-        "package_state_verified",
-    ):
+    for name in ("project_ruleset_preflight", "engineering_preflight", "semantic_readiness"):
         if getattr(args, name) != "PASS":
             raise BootstrapError(f"{name.upper()} must equal PASS")
     if args.active_governance != "V4":
@@ -85,6 +146,7 @@ def verify(args: argparse.Namespace) -> V5BootstrapEvidence:
         raise BootstrapError("tree mismatch")
     if run_git(repository, "status", "--porcelain=v1"):
         raise BootstrapError("worktree is dirty or ambiguous")
+    verify_canonical_state(args, tree)
     if (
         binding_key(
             args.governance_epoch, args.task_packet_hash, args.exact_base, args.execution_surface
@@ -104,12 +166,6 @@ def verify(args: argparse.Namespace) -> V5BootstrapEvidence:
         ("resource state", args.requested_resource_state, args.actual_resource_state),
         ("worktree policy", args.requested_worktree_policy, args.actual_worktree_policy),
         ("stdin source", args.requested_stdin_source, args.actual_stdin_source),
-        (
-            "package-state locator",
-            args.package_state_locator,
-            args.actual_package_state_locator,
-        ),
-        ("Control Capsule", args.control_capsule_ref, args.actual_control_capsule_ref),
     )
     for label, requested, actual in pairs:
         if requested != actual:
@@ -145,7 +201,10 @@ def parser() -> argparse.ArgumentParser:
         "preflight-binding-key",
         "control-capsule-ref",
         "package-state-locator",
-        "actual-package-state-locator",
+        "package-id",
+        "exact-main",
+        "package-base",
+        "route",
         "expected-origin",
         "remote-ref",
         "execution-surface",
@@ -170,7 +229,6 @@ def parser() -> argparse.ArgumentParser:
         "actual-worktree-policy",
         "requested-stdin-source",
         "actual-stdin-source",
-        "actual-control-capsule-ref",
         "active-governance",
         "semantic-phase",
         "codex-thread-id",
@@ -180,11 +238,11 @@ def parser() -> argparse.ArgumentParser:
     ):
         p.add_argument("--" + key, required=True)
     p.add_argument("--exact-tree")
+    p.add_argument("--pr-number", required=True, type=int)
     p.add_argument("--freshen-remote", action="store_true")
     p.add_argument("--project-ruleset-preflight", required=True)
     p.add_argument("--engineering-preflight", required=True)
     p.add_argument("--semantic-readiness", required=True)
-    p.add_argument("--package-state-verified", required=True)
     p.add_argument("--resume-required", action="store_true")
     p.add_argument("--resume-verifiable", action="store_true")
     p.add_argument("--output", choices=("json", "text"), default="text")

@@ -17,6 +17,17 @@ bootstrap = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = bootstrap
 SPEC.loader.exec_module(bootstrap)
 
+CANONICAL_COMMENTS = {}
+
+
+@pytest.fixture(autouse=True)
+def canonical_comment_readback(monkeypatch):
+    monkeypatch.setattr(
+        bootstrap,
+        "read_canonical_comment",
+        lambda locator: CANONICAL_COMMENTS[locator],
+    )
+
 
 def git(path: Path, *args: str) -> str:
     return subprocess.run(
@@ -44,18 +55,21 @@ def args(repo: Path) -> argparse.Namespace:
     head = git(repo, "rev-parse", "HEAD")
     epoch = "a" * 64
     packet = "b" * 64
-    return argparse.Namespace(
+    locator = "https://github.com/example/repo/issues/250#issuecomment-1"
+    bound = argparse.Namespace(
         repository=str(repo),
         exact_base=head,
         exact_tree=git(repo, "rev-parse", "HEAD^{tree}"),
+        exact_main="c" * 40,
+        package_base="d" * 40,
+        package_id="V5-B",
+        route="C",
+        pr_number=251,
         task_packet_hash=packet,
         governance_epoch=epoch,
         preflight_binding_key=bootstrap.binding_key(epoch, packet, head, "CODEX_CLI"),
-        control_capsule_ref="issue",
-        actual_control_capsule_ref="issue",
-        package_state_locator="comment:1",
-        actual_package_state_locator="comment:1",
-        package_state_verified="PASS",
+        control_capsule_ref=locator,
+        package_state_locator=locator,
         expected_origin=git(repo, "config", "--get", "remote.origin.url"),
         remote_ref="origin/main",
         freshen_remote=True,
@@ -94,6 +108,33 @@ def args(repo: Path) -> argparse.Namespace:
         resume_verifiable=True,
         output="json",
     )
+    state = bootstrap._V5.PackageState(
+        schema_version="1",
+        revision=1,
+        package_id=bound.package_id,
+        governance_epoch=bound.governance_epoch,
+        task_packet_hash=bound.task_packet_hash,
+        exact_main=bound.exact_main,
+        exact_base=bound.package_base,
+        exact_head=bound.exact_base,
+        exact_tree=bound.exact_tree,
+        route=bound.route,
+        current_stage="REPAIR_2",
+        resume_stage="REPAIR_2",
+        codex_thread_id=bound.codex_thread_id,
+        worktree_identity=bound.worktree_identity,
+        pr_number=bound.pr_number,
+        ci_head=None,
+        ci_run_or_check_locators=[],
+        semantic_repair_count=2,
+        pause_class=None,
+        completed_work=[],
+        retained_gates=["MARK_READY", "MERGE"],
+        last_canonical_evidence=locator,
+        next_allowed_transition="LOCAL_VALIDATE",
+    )
+    CANONICAL_COMMENTS[locator] = bootstrap._V5.serialize_state(state)
+    return bound
 
 
 def test_v5_bootstrap_exact_identity(repository: Path):
@@ -111,9 +152,7 @@ def test_v5_bootstrap_rejects_resume_substitution(repository: Path):
     ("field", "value", "message"),
     [
         ("freshen_remote", False, "fresh remote"),
-        ("package_state_verified", "FAIL", "PACKAGE_STATE_VERIFIED"),
-        ("actual_package_state_locator", "comment:2", "package-state locator"),
-        ("actual_control_capsule_ref", "other", "Control Capsule"),
+        ("control_capsule_ref", "other", "Control Capsule"),
         ("actual_provider", "OTHER", "provider mismatch"),
         ("actual_stdin_source", "SHARED", "stdin source mismatch"),
     ],
@@ -134,4 +173,38 @@ def test_active_v4_repair2_route_precedence(repository: Path):
     assert bootstrap.verify(bound).model == "gpt-5.6-sol"
     bound.model = bound.actual_model = "gpt-6-sol"
     with pytest.raises(bootstrap.BootstrapError, match="active-V4 route precedence"):
+        bootstrap.verify(bound)
+
+
+def test_malformed_canonical_state_cannot_be_overridden_by_pass_string(repository: Path):
+    bound = args(repository)
+    bound.package_state_verified = "PASS"
+    CANONICAL_COMMENTS[bound.package_state_locator] = "not package state"
+    with pytest.raises(bootstrap.BootstrapError, match="canonical package state is invalid"):
+        bootstrap.verify(bound)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("task_packet_hash", "0" * 64, "task packet hash mismatch"),
+        ("governance_epoch", "0" * 64, "governance epoch mismatch"),
+        ("codex_thread_id", "other-thread", "Codex thread mismatch"),
+        ("pr_number", 999, "PR mismatch"),
+    ],
+)
+def test_mismatched_canonical_binding_cannot_be_overridden_by_pass_string(
+    repository: Path, field: str, value: object, message: str
+):
+    bound = args(repository)
+    bound.package_state_verified = "PASS"
+    setattr(bound, field, value)
+    if field in {"task_packet_hash", "governance_epoch"}:
+        bound.preflight_binding_key = bootstrap.binding_key(
+            bound.governance_epoch,
+            bound.task_packet_hash,
+            bound.exact_base,
+            bound.execution_surface,
+        )
+    with pytest.raises(bootstrap.BootstrapError, match=message):
         bootstrap.verify(bound)
