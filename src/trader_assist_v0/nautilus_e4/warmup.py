@@ -7,24 +7,16 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
-from typing import Protocol
+from typing import TYPE_CHECKING
 
 from .contracts import WARMUP_5M_BARS, AdmittedEvent, DataKind
+
+if TYPE_CHECKING:
+    from nautilus_trader.model import Bar
 
 FDML_REQUIRED_1M_BARS = 15
 HISTORICAL_RESPONSE_TIMEOUT_NS = 300_000_000_000
 MINUTE_NS = 60_000_000_000
-
-
-class HistoricalBarLike(Protocol):
-    bar_type: object
-    ts_event: int
-    ts_init: int
-    open: object
-    high: object
-    low: object
-    close: object
-    volume: object
 
 
 def _valid_ohlcv(
@@ -114,12 +106,12 @@ class WarmupStream:
         ):
             self.fail("NATIVE_RESPONSE_TIMEOUT")
 
-    def validate(self, bars: Sequence[HistoricalBarLike]) -> tuple[HistoricalBarLike, ...]:
+    def validate(self, bars: Sequence[Bar]) -> tuple[Bar, ...]:
         """Validate the whole native response before any causal admission."""
         if not bars:
             self.fail("EMPTY_NATIVE_RESPONSE")
             return ()
-        by_open: dict[int, HistoricalBarLike] = {}
+        by_open: dict[int, Bar] = {}
         for bar in bars:
             if str(bar.bar_type) != self.bar_type:
                 self.fail("WRONG_BAR_TYPE")
