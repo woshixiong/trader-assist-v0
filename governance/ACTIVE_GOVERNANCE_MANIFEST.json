@@ -1,14 +1,10 @@
 {
   "schema_version": "1.0.0",
   "governance_version": "V5",
-  "status": "CANDIDATE_PENDING_ACTIVATION",
+  "status": "POST_MERGE_QUALIFICATION",
   "repository": "woshixiong/trader-assist-v0",
   "candidate_branch": "governance/v5-activation",
   "frozen_base": "f17d436b222061ab2229d83f09f743182353fe11",
-  "main_governance_until_activation_merge": {
-    "version": "V4",
-    "constitution": "governance/ENGINEERING_GOVERNANCE_V4_CONSOLIDATED_FINAL.md"
-  },
   "sole_project_wide_constitution": "governance/ENGINEERING_GOVERNANCE_V5_CONSOLIDATED_FINAL.md",
   "entrypoints": [
     "AGENTS.md",
@@ -77,7 +73,7 @@
       }
     },
     "hook": ".codex/hooks/pre_tool_use_policy.py",
-    "runtime_qualification": "NOT_YET_PROVEN"
+    "runtime_qualification": "BASELINE_QUALIFIED"
   },
   "review": {
     "pre_code_review": "FRESH_ORDINARY_CHATGPT_HIGH",
@@ -91,20 +87,20 @@
     "hard_dependency": false
   },
   "deterministic_runtime": {
-    "v5_bootstrap": "PENDING_V5_B",
-    "v5_governance_consistency_validator": "PENDING_V5_B",
-    "v5_controller_and_package_state": "PENDING_V5_B",
-    "exact_head_ci_waiter": "PENDING_V5_B_RECONCILIATION"
+    "v5_bootstrap": "PASS",
+    "v5_governance_consistency_validator": "PASS",
+    "v5_controller_and_package_state": "PASS",
+    "exact_head_ci_waiter": "PASS"
   },
   "activation_requirements": {
-    "v5_b_controller_bootstrap_validator": "PENDING",
-    "cli_and_gpt6_runtime_identity_qualification": "NOT_YET_PROVEN",
-    "permission_auto_review_network_qualification": "NOT_YET_PROVEN",
-    "protected_action_nonregression": "PENDING",
-    "controller_and_failure_class_tests": "PENDING",
-    "exact_head_ci": "PENDING",
-    "fresh_independent_review": "PENDING",
-    "project_instruction_replaced_with_version_agnostic_bridge": "PENDING",
+    "v5_b_controller_bootstrap_validator": "PASS",
+    "cli_and_gpt6_runtime_identity_qualification": "PASS",
+    "permission_auto_review_network_qualification": "PASS",
+    "protected_action_nonregression": "PASS",
+    "controller_and_failure_class_tests": "PASS",
+    "exact_head_ci": "PASS",
+    "fresh_independent_review": "PASS",
+    "project_instruction_replaced_with_version_agnostic_bridge": "PASS",
     "first_real_nonproduction_v5_canary": "PENDING"
   },
   "preserved_pending_v5_c_cleanup": [
@@ -123,5 +119,10 @@
     "WALLET_OR_SIGNING",
     "EXCHANGE_WRITE_OR_ORDER_ACTION",
     "AUTONOMOUS_OR_REAL_CAPITAL_TRADING"
-  ]
+  ],
+  "activation_merge_evidence": {
+    "merge_commit": "07eaa624d24973a9fd48fd15957f3ee60550bc4e",
+    "reviewed_head": "7444ab6506ae740f1d151bb8fa8cb09f33215fd5",
+    "reviewed_tree": "a1bad58b29479a06d4c007d2bf63b5ac5cef0de5"
+  }
 }

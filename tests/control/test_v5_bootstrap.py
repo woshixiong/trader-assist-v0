@@ -17,11 +17,11 @@ bootstrap = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = bootstrap
 SPEC.loader.exec_module(bootstrap)
 
-CANONICAL_COMMENTS = {}
+CANONICAL_COMMENTS: dict[str, str] = {}
 
 
 @pytest.fixture(autouse=True)
-def canonical_comment_readback(monkeypatch):
+def canonical_comment_readback(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         bootstrap,
         "read_canonical_comment",
@@ -76,16 +76,16 @@ def args(repo: Path) -> argparse.Namespace:
         project_ruleset_preflight="PASS",
         engineering_preflight="PASS",
         semantic_readiness="PASS",
-        active_governance="V4",
-        semantic_phase="REPAIR_1",
+        active_governance="V5",
+        semantic_phase="IMPLEMENT",
         requested_executor="CODEX",
         actual_executor="CODEX",
         requested_provider="OPENAI",
         actual_provider="OPENAI",
         execution_surface="CODEX_CLI",
         actual_execution_surface="CODEX_CLI",
-        model="gpt-5.6-terra",
-        actual_model="gpt-5.6-terra",
+        model="gpt-6-sol",
+        actual_model="gpt-6-sol",
         reasoning="medium",
         actual_reasoning="medium",
         requested_web_search="DISABLED",
@@ -137,11 +137,11 @@ def args(repo: Path) -> argparse.Namespace:
     return bound
 
 
-def test_v5_bootstrap_exact_identity(repository: Path):
+def test_v5_bootstrap_exact_identity(repository: Path) -> None:
     assert bootstrap.verify(args(repository)).result == "PASS"
 
 
-def test_v5_bootstrap_rejects_resume_substitution(repository: Path):
+def test_v5_bootstrap_rejects_resume_substitution(repository: Path) -> None:
     value = args(repository)
     value.actual_codex_thread_id = "new"
     with pytest.raises(bootstrap.BootstrapError, match="PAUSED_CAPABILITY"):
@@ -159,24 +159,54 @@ def test_v5_bootstrap_rejects_resume_substitution(repository: Path):
 )
 def test_v5_bootstrap_rejects_incomplete_binding(
     repository: Path, field: str, value: object, message: str
-):
+) -> None:
     bound = args(repository)
     setattr(bound, field, value)
     with pytest.raises(bootstrap.BootstrapError, match=message):
         bootstrap.verify(bound)
 
 
-def test_active_v4_repair2_route_precedence(repository: Path):
+@pytest.mark.parametrize(
+    ("phase", "reasoning"),
+    [
+        ("PLAN", "medium"),
+        ("IMPLEMENT", "medium"),
+        ("REPAIR_1", "medium"),
+        ("REPAIR_2", "high"),
+    ],
+)
+def test_post_merge_v5_route(repository: Path, phase: str, reasoning: str) -> None:
     bound = args(repository)
-    bound.semantic_phase = "REPAIR_2"
-    bound.model = bound.actual_model = "gpt-5.6-sol"
-    assert bootstrap.verify(bound).model == "gpt-5.6-sol"
+    bound.semantic_phase = phase
     bound.model = bound.actual_model = "gpt-6-sol"
-    with pytest.raises(bootstrap.BootstrapError, match="active-V4 route precedence"):
+    bound.reasoning = bound.actual_reasoning = reasoning
+    evidence = bootstrap.verify(bound)
+    assert evidence.model == "gpt-6-sol"
+    assert evidence.reasoning == reasoning
+
+
+def test_v5_gpt56_route_fails_closed(repository: Path) -> None:
+    bound = args(repository)
+    bound.model = bound.actual_model = "gpt-5.6-terra"
+    with pytest.raises(bootstrap.BootstrapError, match="post-merge V5 route mismatch"):
         bootstrap.verify(bound)
 
 
-def test_malformed_canonical_state_cannot_be_overridden_by_pass_string(repository: Path):
+def test_post_merge_v5_rejects_v4_active_governance(repository: Path) -> None:
+    bound = args(repository)
+    bound.active_governance = "V4"
+    with pytest.raises(bootstrap.BootstrapError, match="active governance must be V5"):
+        bootstrap.verify(bound)
+
+
+def test_requested_actual_identity_mismatch_still_fails_closed(repository: Path) -> None:
+    bound = args(repository)
+    bound.actual_model = "gpt-6-luna"
+    with pytest.raises(bootstrap.BootstrapError, match="model mismatch"):
+        bootstrap.verify(bound)
+
+
+def test_malformed_canonical_state_cannot_be_overridden_by_pass_string(repository: Path) -> None:
     bound = args(repository)
     bound.package_state_verified = "PASS"
     CANONICAL_COMMENTS[bound.package_state_locator] = "not package state"
@@ -195,7 +225,7 @@ def test_malformed_canonical_state_cannot_be_overridden_by_pass_string(repositor
 )
 def test_mismatched_canonical_binding_cannot_be_overridden_by_pass_string(
     repository: Path, field: str, value: object, message: str
-):
+) -> None:
     bound = args(repository)
     bound.package_state_verified = "PASS"
     setattr(bound, field, value)
@@ -210,7 +240,7 @@ def test_mismatched_canonical_binding_cannot_be_overridden_by_pass_string(
         bootstrap.verify(bound)
 
 
-def test_stale_rebind_binds_real_head_tree_for_bootstrap_verify(repository: Path):
+def test_stale_rebind_binds_real_head_tree_for_bootstrap_verify(repository: Path) -> None:
     bound = args(repository)
     locator = bound.package_state_locator
     old_state = bootstrap._V5.parse_state(CANONICAL_COMMENTS[locator])

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed consistency check for the V5 candidate/active governance layer."""
+"""Fail-closed consistency check for the V5 governance lifecycle."""
 
 from __future__ import annotations
 
@@ -42,23 +42,71 @@ def manifest(root: Path) -> dict[str, object]:
 
 def check_manifest(root: Path) -> None:
     m = manifest(root)
-    if m.get("governance_version") != "V5" or m.get("status") not in {
-        "CANDIDATE_PENDING_ACTIVATION",
+    status = m.get("status")
+    if m.get("governance_version") != "V5" or status not in {
+        "PRE_MERGE_CANDIDATE",
+        "POST_MERGE_QUALIFICATION",
         "ACTIVE",
     }:
-        raise CheckFailure("manifest is not V5 candidate/active")
+        raise CheckFailure("manifest is not in a valid V5 lifecycle state")
     if m.get("sole_project_wide_constitution") != CANONICAL:
         raise CheckFailure("sole V5 constitution mismatch")
-    if m.get("status") == "CANDIDATE_PENDING_ACTIVATION" and not isinstance(
-        m.get("main_governance_until_activation_merge"), dict
-    ):
-        raise CheckFailure("candidate must retain V4 main authority")
-    main_governance = cast(dict[str, object], m.get("main_governance_until_activation_merge", {}))
-    if m.get("status") == "CANDIDATE_PENDING_ACTIVATION" and main_governance.get("version") != "V4":
-        raise CheckFailure("candidate must retain V4 main authority")
+
+    stale_main_authority = m.get("main_governance_until_activation_merge")
+    if status == "PRE_MERGE_CANDIDATE":
+        if not isinstance(stale_main_authority, dict):
+            raise CheckFailure("pre-merge candidate must retain V4 main authority")
+        main_governance = cast(dict[str, object], stale_main_authority)
+        if main_governance.get("version") != "V4":
+            raise CheckFailure("pre-merge candidate must retain V4 main authority")
+    elif stale_main_authority is not None:
+        raise CheckFailure("post-merge V5 state must not retain stale V4 main authority")
+
     codex = cast(dict[str, object], m.get("codex", {}))
-    if codex.get("runtime_qualification") != "NOT_YET_PROVEN":
-        raise CheckFailure("false runtime qualification claim")
+    expected_runtime = (
+        "NOT_YET_PROVEN" if status == "PRE_MERGE_CANDIDATE" else "BASELINE_QUALIFIED"
+    )
+    if codex.get("runtime_qualification") != expected_runtime:
+        raise CheckFailure("runtime qualification does not match V5 lifecycle state")
+
+    if status in {"POST_MERGE_QUALIFICATION", "ACTIVE"}:
+        evidence = m.get("activation_merge_evidence")
+        if evidence != {
+            "merge_commit": "07eaa624d24973a9fd48fd15957f3ee60550bc4e",
+            "reviewed_head": "7444ab6506ae740f1d151bb8fa8cb09f33215fd5",
+            "reviewed_tree": "a1bad58b29479a06d4c007d2bf63b5ac5cef0de5",
+        }:
+            raise CheckFailure("activation merge evidence mismatch")
+
+        deterministic = cast(dict[str, object], m.get("deterministic_runtime", {}))
+        required_runtime = {
+            "v5_bootstrap",
+            "v5_governance_consistency_validator",
+            "v5_controller_and_package_state",
+            "exact_head_ci_waiter",
+        }
+        if any(deterministic.get(key) != "PASS" for key in required_runtime):
+            raise CheckFailure("post-merge deterministic runtime qualification is incomplete")
+
+        activation = cast(dict[str, object], m.get("activation_requirements", {}))
+        passed = (
+            "v5_b_controller_bootstrap_validator",
+            "cli_and_gpt6_runtime_identity_qualification",
+            "permission_auto_review_network_qualification",
+            "protected_action_nonregression",
+            "controller_and_failure_class_tests",
+            "exact_head_ci",
+            "fresh_independent_review",
+            "project_instruction_replaced_with_version_agnostic_bridge",
+        )
+        if any(activation.get(key) != "PASS" for key in passed):
+            raise CheckFailure("post-merge activation prerequisite is not PASS")
+        canary = activation.get("first_real_nonproduction_v5_canary")
+        if status == "POST_MERGE_QUALIFICATION" and canary != "PENDING":
+            raise CheckFailure("qualification mode requires first V5 canary PENDING")
+        if status == "ACTIVE" and canary != "PASS":
+            raise CheckFailure("ACTIVE requires first V5 canary PASS")
+
     relay = m.get("execution_relay", {})
     if relay != {
         "preferred": "REMOTE_DESKTOP_COMMANDER_WHEN_CONNECTED_AND_QUOTA_AVAILABLE",
@@ -66,6 +114,21 @@ def check_manifest(root: Path) -> None:
         "hard_dependency": False,
     }:
         raise CheckFailure("execution relay metadata mismatch")
+
+    protected = [
+        "MARK_READY",
+        "MERGE",
+        "BRANCH_DELETION",
+        "DEPLOYMENT",
+        "PRODUCTION_RUNTIME_OR_CLOUD_MUTATION",
+        "SERVICE_START_RESTART_ENABLE_REBOOT",
+        "CREDENTIAL_OR_PRIVATE_API",
+        "WALLET_OR_SIGNING",
+        "EXCHANGE_WRITE_OR_ORDER_ACTION",
+        "AUTONOMOUS_OR_REAL_CAPITAL_TRADING",
+    ]
+    if m.get("protected_actions") != protected:
+        raise CheckFailure("protected-action authority changed")
 
 
 def check_documents(root: Path) -> None:

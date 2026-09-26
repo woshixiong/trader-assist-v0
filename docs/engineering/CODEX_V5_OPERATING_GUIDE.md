@@ -1,6 +1,6 @@
 # Trade OS — Codex V5 Operating Guide
 
-**Status:** V5 CANDIDATE GUIDE; V5-A DOES NOT ACTIVATE THIS WORKFLOW
+**Status:** V5 POST-MERGE QUALIFICATION GUIDE; FIRST REAL CANARY PENDING
 
 This guide explains the intended operator experience. It is subordinate to the
 manifest-selected constitution and exact Development Package.
@@ -73,8 +73,8 @@ SILENT_NEW_SEMANTIC_THREAD_SUBSTITUTION=PROHIBITED
 
 Default subagents=0.
 
-Implementation uses focused validation and the frozen package. After V5-B
-exists and is qualified, the deterministic controller owns routine middle
+Implementation uses focused validation and the frozen package. The
+baseline-qualified V5-B deterministic controller owns routine middle
 transitions:
 
 ~~~text
@@ -91,15 +91,18 @@ IMPLEMENT
 
 The controller is not an agent. Model-mediated CI polling is prohibited.
 
-V5-A has not implemented this controller/bootstrap/validator. Therefore this
-guide is not a runnable activation launcher yet.
+The V5-B controller/bootstrap/validator is implemented and baseline-qualified.
+This guide now describes the runnable post-merge qualification workflow; the
+first real non-production end-to-end canary is still required before `ACTIVE`.
 
 ## 4. Repair routing
 
 ~~~text
-INITIAL IMPLEMENTATION
-REPAIR 1 = normal frozen primary route
-REPAIR 2 = manifest-selected hard-root-cause route
+PLAN           = gpt-6-sol / medium
+IMPLEMENT      = gpt-6-sol / medium
+REPAIR 1       = gpt-6-sol / medium
+REPAIR 2       = gpt-6-sol / high
+GPT-5.6 V5 FALLBACK = PROHIBITED
 THIRD SEMANTIC FAILURE = Engineering Control replan
 ~~~
 
@@ -152,15 +155,14 @@ CHANGED_OR_UNKNOWN_PREDICATE=>FAIL_CLOSED_WITHOUT_CONSUMING_AUTHORIZATION
 
 Merge never implies deployment/runtime/trading authority.
 
-## 8. Activation dependency
+## 8. Post-merge qualification boundary
 
-V5-A supplies governance/config/skills/model maps only.
+The activation merge, V5-B controller/bootstrap/consistency validation, baseline
+CLI/GPT-6/permission/auto-review/network qualification, protected-action
+nonregression, exact-head CI, fresh Independent Review, and the version-agnostic
+Project Instruction bridge have passed.
 
-Still required before V5 activation include V5-B controller/bootstrap/
-consistency-validator/hook/tests, runtime CLI/GPT-6/permission qualification,
-failure-path simulations, exact-head CI, fresh Independent Review, the accepted
-Project Instruction replacement, later cleanup/index reconciliation, and the
-frozen non-production end-to-end canary requirement.
-
-Do not describe V5 as active merely because the candidate branch or Draft PR
-exists.
+The remaining lifecycle gate is the first real non-production V5 Development
+Package canary. Until that canary passes, the manifest remains
+`POST_MERGE_QUALIFICATION` and must not claim `ACTIVE`. V5-C cleanup remains a
+separate later scope.
