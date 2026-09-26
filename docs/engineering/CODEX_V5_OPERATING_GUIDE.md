@@ -46,8 +46,20 @@ The user does not choose among these routes.
 
 ## 3. Implementation and deterministic middle lifecycle
 
-On PASS, resume the same primary Codex thread/session when supported. Default
-subagents=0.
+On PASS, resume the exact same primary Codex thread/worktree. The same
+fail-closed rule applies to PLAN_REVISE. Exact resume is required, not
+best-effort. If exact resume is unavailable or cannot be verified, preserve the
+checkpoint and return PAUSED_CAPABILITY to Engineering Control; never silently
+start a new semantic Codex thread.
+
+~~~text
+PRE_CODE_PASS_SAME_THREAD_RESUME_REQUIRED=YES
+PLAN_REVISE_SAME_THREAD_RESUME_REQUIRED=YES
+EXACT_RESUME_UNAVAILABLE_OR_UNVERIFIABLE=>PAUSED_CAPABILITY/ENGINEERING_CONTROL
+SILENT_NEW_SEMANTIC_THREAD_SUBSTITUTION=PROHIBITED
+~~~
+
+Default subagents=0.
 
 Implementation uses focused validation and the frozen package. After V5-B
 exists and is qualified, the deterministic controller owns routine middle
@@ -110,8 +122,21 @@ A changed head invalidates the old review.
 ## 7. Conditional closeout
 
 On Final Review PASS, the review output returns a complete Engineering Control
-closeout prompt. Mark Ready and Merge remain separate current-human protected
-actions and occur only when the closeout context has valid current authority.
+closeout prompt. Mark Ready and Merge remain two distinct current-human
+protected actions. One current user message may conditionally authorize both.
+
+Engineering Control must fresh-verify the exact reviewed head, all required CI,
+and no drift against the frozen authorization predicates immediately before
+acting. If they all match, it must not ask for a second authorization. If any
+predicate changed or is unknown, it fails closed without performing either
+action and without consuming the conditional authorization.
+
+~~~text
+MARK_READY_AND_MERGE_REMAIN_PROTECTED_ACTIONS=YES
+ONE_CURRENT_USER_MESSAGE_MAY_CONDITIONALLY_AUTHORIZE_BOTH=YES
+SECOND_AUTHORIZATION_PROMPT_WHEN_FROZEN_PREDICATES_MATCH=PROHIBITED
+CHANGED_OR_UNKNOWN_PREDICATE=>FAIL_CLOSED_WITHOUT_CONSUMING_AUTHORIZATION
+~~~
 
 Merge never implies deployment/runtime/trading authority.
 

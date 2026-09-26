@@ -37,6 +37,20 @@ manifest selects the current constitution and skills.
 7. Durable decisions, package state, review results, and next actions belong in
    GitHub immediately.
 
+When the manifest-selected lifecycle routes Pre-code Review PASS or PLAN_REVISE
+back to Codex, the exact semantic thread/worktree resume is mandatory and
+fail-closed:
+
+~~~text
+PRE_CODE_PASS_SAME_THREAD_RESUME_REQUIRED=YES
+PLAN_REVISE_SAME_THREAD_RESUME_REQUIRED=YES
+EXACT_RESUME_UNAVAILABLE_OR_UNVERIFIABLE=>PAUSED_CAPABILITY/ENGINEERING_CONTROL
+SILENT_NEW_SEMANTIC_THREAD_SUBSTITUTION=PROHIBITED
+~~~
+
+Do not replace an unavailable or unverifiable exact resume with a fresh semantic
+thread.
+
 ## Engineering Control fresh-window takeover
 
 A new project chat instructed to become Engineering Control should bootstrap
@@ -89,6 +103,20 @@ Always require explicit current human authority for Mark Ready, merge, branch
 deletion, deployment, production/runtime/cloud mutation, service control,
 credential/private-API mutation, wallet/signing, exchange/order writes,
 autonomous trading, and real-capital action.
+
+Mark Ready and Merge remain distinct protected actions, but one current user
+message may conditionally authorize both after Final Review PASS. Engineering
+Control must fresh-verify the exact reviewed head, required CI, and no drift
+before acting. Matching frozen predicates prohibit a second authorization
+prompt. Changed or unknown predicates fail closed without consuming the
+conditional authorization.
+
+~~~text
+MARK_READY_AND_MERGE_REMAIN_PROTECTED_ACTIONS=YES
+ONE_CURRENT_USER_MESSAGE_MAY_CONDITIONALLY_AUTHORIZE_BOTH=YES
+SECOND_AUTHORIZATION_PROMPT_WHEN_FROZEN_PREDICATES_MATCH=PROHIBITED
+CHANGED_OR_UNKNOWN_PREDICATE=>FAIL_CLOSED_WITHOUT_CONSUMING_AUTHORIZATION
+~~~
 
 No prior approval, review, merge, package, automation, or governance rule
 implicitly grants a protected action.

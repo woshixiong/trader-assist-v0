@@ -240,6 +240,20 @@ FAIL + CONTROL_REPLAN
 -> return directly to Engineering Control for refreeze
 ~~~
 
+Same-thread resume is a fail-closed continuity invariant:
+
+~~~text
+PRE_CODE_PASS_SAME_THREAD_RESUME_REQUIRED=YES
+PLAN_REVISE_SAME_THREAD_RESUME_REQUIRED=YES
+EXACT_RESUME_UNAVAILABLE_OR_UNVERIFIABLE=>PAUSED_CAPABILITY/ENGINEERING_CONTROL
+SILENT_NEW_SEMANTIC_THREAD_SUBSTITUTION=PROHIBITED
+~~~
+
+For both PASS and PLAN_REVISE, the exact primary Codex thread and worktree must
+be resumed. If exact resume semantics are unavailable or cannot be verified,
+preserve the checkpoint, enter the capability-paused state, and return to
+Engineering Control. Never substitute a new semantic Codex thread silently.
+
 The user does not select the failure route.
 
 ---
@@ -447,8 +461,10 @@ Historical governance and old chat transcripts are not routine startup input.
 ## 11. Context, cache, and progressive disclosure
 
 Use stable instructions/tool definitions as the context prefix and append
-dynamic package state afterward. Preserve/resume the same primary Codex thread
-for Plan -> implementation -> Repair 1/2 when supported.
+dynamic package state afterward. Preserve/resume the same exact primary Codex
+thread and worktree for Plan -> implementation -> Repair 1/2. This continuity
+is mandatory and fail-closed; inability to verify exact resume pauses at the
+capability boundary rather than authorizing a fresh semantic thread.
 
 Load only the minimum active governance, exact package/manifest, affected
 code/tests, and triggered procedure needed for the current decision.
@@ -582,7 +598,7 @@ later stage. V5-A does not archive or delete them.
 
 ## 17. Protected human gates
 
-Separate explicit current human authority is always required for:
+Each protected action requires explicit current human authority:
 
 ~~~text
 MARK_READY
@@ -595,6 +611,21 @@ CREDENTIAL_OR_PRIVATE_API
 WALLET_OR_SIGNING
 EXCHANGE_WRITE_OR_ORDER_ACTION
 AUTONOMOUS_OR_REAL_CAPITAL_TRADING
+~~~
+
+Mark Ready and Merge remain two distinct protected actions. After Final Review
+PASS, one current user message may conditionally authorize both actions. Before
+acting, Engineering Control must fresh-verify the exact reviewed head, all
+required CI, and no drift against the frozen predicates. If every predicate
+matches, a second authorization prompt is prohibited. If any predicate changed
+or is unknown, fail closed without performing either action and without
+consuming that conditional authorization.
+
+~~~text
+MARK_READY_AND_MERGE_REMAIN_PROTECTED_ACTIONS=YES
+ONE_CURRENT_USER_MESSAGE_MAY_CONDITIONALLY_AUTHORIZE_BOTH=YES
+SECOND_AUTHORIZATION_PROMPT_WHEN_FROZEN_PREDICATES_MATCH=PROHIBITED
+CHANGED_OR_UNKNOWN_PREDICATE=>FAIL_CLOSED_WITHOUT_CONSUMING_AUTHORIZATION
 ~~~
 
 No package, controller, Writer, CI, Reviewer, or prior authorization can infer
