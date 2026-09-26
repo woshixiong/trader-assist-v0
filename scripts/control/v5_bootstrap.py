@@ -119,17 +119,18 @@ def verify(args: argparse.Namespace) -> V5BootstrapEvidence:
     for name in ("project_ruleset_preflight", "engineering_preflight", "semantic_readiness"):
         if getattr(args, name) != "PASS":
             raise BootstrapError(f"{name.upper()} must equal PASS")
-    if args.active_governance != "V4":
-        raise BootstrapError("active governance must remain V4 during V5-B")
+    if args.active_governance != "V5":
+        raise BootstrapError("active governance must be V5 for post-merge V5 packages")
     expected_route = {
-        "IMPLEMENT": ("gpt-5.6-terra", "medium"),
-        "REPAIR_1": ("gpt-5.6-terra", "medium"),
-        "REPAIR_2": ("gpt-5.6-sol", "medium"),
+        "PLAN": ("gpt-6-sol", "medium"),
+        "IMPLEMENT": ("gpt-6-sol", "medium"),
+        "REPAIR_1": ("gpt-6-sol", "medium"),
+        "REPAIR_2": ("gpt-6-sol", "high"),
     }
     if args.semantic_phase not in expected_route:
-        raise BootstrapError("unsupported active-V4 semantic phase")
+        raise BootstrapError("unsupported post-merge V5 semantic phase")
     if (args.model, args.reasoning) != expected_route[args.semantic_phase]:
-        raise BootstrapError("active-V4 route precedence mismatch")
+        raise BootstrapError("post-merge V5 route mismatch")
     if args.freshen_remote:
         _V4.freshen_remote(repository, args.remote_ref)
     else:

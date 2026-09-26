@@ -12,8 +12,10 @@ second constitution and cannot activate a candidate governance version.
 - Version-agnostic ChatGPT Project Instruction adapter:
   governance/CHATGPT_PROJECT_GOVERNANCE_BRIDGE.md
 
-On main, V4 remains authoritative until the separately qualified and
-independently accepted V5 activation merge.
+On main, V5 is now the manifest-selected governance/routing system after the
+accepted activation merge. Its lifecycle status remains
+`POST_MERGE_QUALIFICATION` until the required first real non-production V5
+canary passes; this is not yet a claim of fully `ACTIVE` V5.
 
 ## Narrow subordinate procedures
 
@@ -50,8 +52,9 @@ manifest-selected constitution.
 - Existing protected-action hook: .codex/hooks/pre_tool_use_policy.py
 - Operating guide: docs/engineering/CODEX_V5_OPERATING_GUIDE.md
 
-V5-A intentionally does not create the V5 controller, bootstrap, consistency
-validator, hook changes, or tests. Those remain V5-B.
+V5-B controller/bootstrap/consistency-validator and their focused tests are
+implemented and baseline-qualified. The next retained activation gate is the
+first real non-production end-to-end V5 canary.
 
 ## Progressive-disclosure skills
 
@@ -72,5 +75,7 @@ The backlog records process observations only and is never governance authority.
 
 ## Activation boundary
 
-V5 candidate files are not proof of runtime qualification and do not make V5
-active on main. V4/VNext files remain preserved until later authorized cleanup.
+`POST_MERGE_QUALIFICATION` means V5 is selected on main and baseline runtime /
+tooling qualification has passed, while the first real non-production V5 canary
+remains pending. Only a passing canary permits a later authorized transition to
+`ACTIVE`. V4/VNext files remain preserved until later authorized V5-C cleanup.
