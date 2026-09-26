@@ -1,3 +1,4 @@
+# mypy: disable-error-code="import-not-found"
 """Causal readiness for provider-native completed historical bars."""
 
 from __future__ import annotations
