@@ -1,136 +1,112 @@
 # Trader Assist / Trade OS — Codex Current Model Profile
 
-**Status:** REFRESHABLE MODEL-SPECIFIC GOVERNANCE CANDIDATE  
-**Last verified:** 2026-09-19  
-**Latest observed local Codex CLI:** `0.155.1`
+**Status:** FROZEN V5 INTENDED ROUTING CANDIDATE  
+**Runtime qualification:** NOT YET PROVEN  
+**Execution target:** Codex CLI only
 
-This file is refreshable current-state guidance. Durable workflow rules live in `CODEX_CLI_ENGINEERING_USAGE_PROFILE_V2_2026-08-23.md`.
+This profile records refreshable model/config intent for the V5 candidate. It
+does not prove that the user's installed CLI exposes or correctly enforces any
+model, reasoning, child-identity, approval, network, hook, or resume capability.
 
-The observed CLI version is telemetry, **not an exact-equality launch gate**. A launcher may require a specific version only when a task has a proven version-dependent semantic incompatibility. Otherwise verify the actual installed CLI identity and the exact required command/config capabilities. A newer compatible patch release must not trigger a false SAFE_STOP merely because this profile has not yet been refreshed.
+## Intended V5 routing
 
-**Scope:** this profile applies only after `ENGINEERING_EXECUTOR_ROUTER_V2` has selected `CODEX_CLI` for a semantic Writer stage. Labels such as `NORMAL_MATERIAL` or `HIGH_CONSEQUENCE` choose the Codex model/reasoning within that route; they do not create semantic work and do not override Router/user executor authority.
+~~~text
+PRIMARY PLAN + WRITER       gpt-6-sol / medium
+REPAIR 1                    gpt-6-sol / medium
+REPAIR 2 / HARD ROOT CAUSE  gpt-6-sol / high
+OPTIONAL EXPLORER           gpt-6-luna / low
+OPTIONAL INTERNAL REVIEW    gpt-6-luna / high
+EXCEPTIONAL CONTROL ANALYSIS
+                            gpt-6-astra / medium
+                            explicit Engineering Control escalation only
+PRE-CODE REVIEW             fresh ordinary ChatGPT / High
+FINAL INDEPENDENT REVIEW    fresh ordinary ChatGPT / High
+MECHANICAL / CI / STATUS    zero model
+~~~
 
-## Current family
+Default subagent count is zero. At most one optional child may run concurrently.
+Recursive delegation is prohibited by default. An optional child is skipped
+when actual spawned model/reasoning identity cannot be verified; there is no
+silent parent/default fallback.
 
-```text
-GPT_5_6_TERRA = normal material Codex Writer / quality-efficiency balance
-GPT_5_6_SOL   = difficult, complex, uncertain or high-consequence Codex Writer
-GPT_5_6_LUNA  = cost/high-volume specialist; small role in this project because free OpenCode covers many low-risk tasks
-GPT_5_3_CODEX = agentic-coding specialist / empirical alternative, not default Writer
-```
+## Static official-contract verification for V5-A
 
-Current OpenAI guidance describes Sol as the frontier option, Terra as the intelligence/cost balance, and Luna as efficient high-volume. Reasoning effort should be set intentionally rather than maximized by default.
+The repo config continues to reference the official Codex schema at:
 
-## Reasoning routing
+https://developers.openai.com/codex/config-schema.json
 
-```text
-NORMAL_MATERIAL:
-  Terra medium
+Current official Codex configuration documentation confirms the fields used by
+V5-A, including:
 
-DIFFICULT_BUT_BOUNDED:
-  Terra high
-  OR Sol medium/high when the quality requirement warrants model upgrade
+- model and model_reasoning_effort;
+- sandbox_mode = workspace-write;
+- approval_policy = on-request;
+- approvals_reviewer = user | auto_review;
+- agents.max_concurrent_threads_per_session, excluding the primary thread;
+- sandbox_workspace_write.network_access.
 
-HIGH_CONSEQUENCE / HARD_ROOT_CAUSE:
-  Sol high
+Current OpenAI model documentation exposes the frozen model IDs gpt-6-sol,
+gpt-6-luna, and gpt-6-astra and the required reasoning levels.
 
-EXTREME / ARCHITECTURAL / FRONTIER_DIFFICULTY:
-  Sol xhigh
+This verifies static syntax/contracts only. It is not local runtime
+qualification.
 
-MAX:
-  only after an explicit current-surface verification and a task-specific reason;
-  never because "material" alone implies maximum reasoning
-```
+## CLI-only target and permission posture
 
-When migrating/tuning, compare the current level with one level lower on representative real tasks; do not assume more reasoning always improves accepted work per quota.
+Future default V5 execution surface is Codex CLI, not Codex Desktop.
 
-## Task-local Engineering Control decision — mandatory
+Candidate repo defaults are:
 
-For every Codex Writer stage, Engineering Control/Router must explicitly decide and freeze before prompt/launch generation:
+~~~text
+sandbox_mode=workspace-write
+approval_policy=on-request
+approvals_reviewer=auto_review
+web_search=disabled
+workspace sandbox network_access=false
+~~~
 
-```text
-CODEX_MODEL=
-CODEX_REASONING_EFFORT=
-CODEX_WEB_SEARCH_REQUIRED=YES|NO
-CODEX_WEB_SEARCH_MODE=disabled|cached|indexed|live
-```
+The network setting preserves a restrictive default sandbox. The approved
+on-request path is expected to handle eligible GitHub lifecycle operations.
+Before activation, the actual installed CLI must prove that this combination
+can perform the frozen authorized lifecycle without human relay or protected
+authority expansion.
 
-Rules:
+Normal engineering must not require danger-full-access.
 
-- model and reasoning level are Engineering Control decisions based on task complexity/consequence and current quota state; the Codex Writer does not self-upgrade;
-- `CODEX_WEB_SEARCH_REQUIRED=NO` normally means `CODEX_WEB_SEARCH_MODE=disabled`;
-- if current external/provider/library facts are genuinely needed inside the Writer stage, Engineering Control may set Web Search to the verified current Codex mode that fits the task and must state this explicitly in the Task Packet/launch contract;
-- do not enable Web Search merely because it is available; do not disable it when the frozen task genuinely depends on current external evidence;
-- a required mid-stage model/reasoning/Web-Search shape change is normally a stage/session boundary because it changes execution/prefix/tool shape.
+## Activation qualification still required
 
-The current Codex source exposes top-level `web_search` modes `disabled`, `cached`, `indexed`, and `live`; the current task launcher must use only a mode verified in the installed Codex surface.
+Before V5 activation, observe and record:
 
-## Service tier
+- installed Codex CLI version and exact supported config surface;
+- gpt-6-sol availability and requested/actual reasoning identity;
+- gpt-6-luna availability and optional child identity verification;
+- gpt-6-astra availability only if an explicit Control escalation actually
+  depends on it;
+- thread/session resume capability;
+- workspace-write behavior;
+- on-request + auto_review behavior;
+- authorized GitHub network lifecycle behavior;
+- hook loading and protected-action nonregression;
+- no silent fallback to GPT-5.6 or another unbound model.
 
-```text
-DEFAULT_SERVICE_TIER=default
-FAST_OR_PRIORITY=OFF_BY_DEFAULT
-```
+If the primary GPT-6 route is unavailable or unverifiable, V5 activation fails
+closed. Static config is never enough to claim PASS.
 
-Fast/priority is a latency policy, not a quality upgrade. Enable only for a real time-critical need.
+## First real canary telemetry
 
-## Current local baseline
+On the first accepted non-production V5 package, collect observable:
 
-User audit on 2026-08-23 showed:
+- primary model and reasoning identity;
+- optional child identity or explicit skip reason;
+- input/output/cached-token metrics when exposed;
+- stable-prefix/cache reuse behavior;
+- thread resume success;
+- semantic Repair 1/Repair 2 usage;
+- transport retries/readbacks;
+- CI waiting model-token use, expected zero;
+- human relay count, target zero for routine SHA/log/CI/review state;
+- permission/auto-review interruptions;
+- context compaction events where exposed.
 
-```text
-codex-cli 0.149.0
-~/.codex/config.toml present
-model = gpt-5.6-terra
-model_reasoning_effort = high
-service_tier = default
-~/.codex/AGENTS.md absent
-~/.codex/AGENTS.override.md absent
-```
-
-V2 recommendation changes the user-level fallback reasoning from `high` to `medium`. Trader Assist task-specific upgrades should be explicit through Router-selected profiles/CLI flags.
-
-## Refresh rule
-
-When the current Codex model family/CLI changes:
-
-```text
-VERIFY codex --version
--> check current first-party Codex/model/config docs
--> verify exact model/reasoning/service-tier/Web-Search controls in the installed surface
--> compare with recent accepted Trader Assist evidence
--> update THIS FILE by default
-```
-
-Do not rewrite Router V2 or the stable Codex V2 core merely because a model/version label changed.
-
-## Validated local fallback path / retired assumptions — 2026-09-19
-
-This is current execution telemetry, not the preferred future architecture.
-
-```text
-ROLE=PROVEN_LOCAL_FILE_BACKED_CLI_FALLBACK_OR_RECOVERY
-CANONICAL_EVIDENCE=Issue_163_comment_5740747880
-KNOWN_GOOD_INVOCATION_FAMILY=codex config overrides + exec + frozen model/sandbox/json/output/cwd
-EXACT_PATCH_VERSION_REQUIRED=NO
-UNPROVEN_CONFIG_BYPASS_FLAG_REQUIRED=NO
-UNPROVEN_APPROVAL_FLAG_REQUIRED=NO
-LOCAL_GITHUB_PUBLICATION_REQUIRED_BEFORE_SEMANTIC_START=NO
-LOCAL_CANONICAL_PR_HEAD_OBJECT_REQUIRED_BEFORE_SEMANTIC_START=NO
-ONE_SEMANTIC_SESSION=YES
-IMMEDIATE_DURABLE_CHECKPOINT=YES
-```
-
-Retired unless capability/environment materially changes:
-
-```text
-STALE_EXACT_CODEX_PATCH_VERSION_GATE
-UNPROVEN_CONFIG_BYPASS_FLAG_REQUIREMENT
-UNPROVEN_APPROVAL_FLAG_INVOCATION
-LOCAL_CANONICAL_PR_HEAD_OBJECT_PRESENCE_AS_SEMANTIC_PREREQUISITE
-LOCAL_GITHUB_PUBLICATION_AS_SEMANTIC_START_PREREQUISITE
-DYNAMIC_LAUNCHER_REPAIR_CHAIN_AS_DEFAULT
-```
-
-Provider-native asynchronous/issue-centric execution remains the preferred experiment when fidelity, observability and recovery are sufficient. The proven local file-backed route remains fallback/recovery evidence, not a mandate to reproduce custom source-reconstruction mechanics.
-
+Use these measurements to update this refreshable profile/backlog without
+turning telemetry into a second constitution.

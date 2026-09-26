@@ -1,8 +1,7 @@
 #:schema https://developers.openai.com/codex/config-schema.json
-# Trader Assist V4 trusted-project defaults. Routine Codex implementation uses
-# Terra/Medium. Sol/Medium is an explicit Engineering Control escalation only.
-# Child-agent profile files express requested intent, not proof of runtime identity.
-model = "gpt-5.6-terra"
+# Trade OS V5 candidate repo defaults.
+# Static configuration does not prove local CLI/model/permission qualification.
+model = "gpt-6-sol"
 model_reasoning_effort = "medium"
 service_tier = "default"
 model_verbosity = "low"
@@ -10,17 +9,27 @@ model_reasoning_summary = "none"
 web_search = "disabled"
 sandbox_mode = "workspace-write"
 approval_policy = "on-request"
+approvals_reviewer = "auto_review"
+
+# Keep outbound network outside the default workspace sandbox. The on-request
+# approval path may authorize eligible network operations; V5 activation still
+# requires runtime qualification of the GitHub lifecycle path.
+[sandbox_workspace_write]
+network_access = false
 
 [agents]
 enabled = true
-max_concurrent_threads_per_session = 2
+# This limits optional spawned child threads, excluding the primary thread.
+# Governance default is zero children; one child is allowed only when explicitly
+# justified and runtime-verifiable.
+max_concurrent_threads_per_session = 1
 
 [agents.explorer]
-description = "Optional read-only repository explorer for bounded evidence gathering."
+description = "Optional read-only bounded repository explorer; never required."
 config_file = "./agents/explorer.toml"
 
 [agents.code_reviewer]
-description = "Read-only implementation-quality reviewer; not final independent acceptance."
+description = "Optional read-only implementation reviewer; never final independent acceptance."
 config_file = "./agents/code-reviewer.toml"
 
 [[hooks.PreToolUse]]
