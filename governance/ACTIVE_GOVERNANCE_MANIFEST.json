@@ -1,18 +1,21 @@
 {
   "schema_version": "1.0.0",
-  "governance_version": "V4",
-  "status": "ACTIVE",
+  "governance_version": "V5",
+  "status": "CANDIDATE_PENDING_ACTIVATION",
   "repository": "woshixiong/trader-assist-v0",
-  "sole_project_wide_constitution": "governance/ENGINEERING_GOVERNANCE_V4_CONSOLIDATED_FINAL.md",
+  "candidate_branch": "governance/v5-activation",
+  "frozen_base": "f17d436b222061ab2229d83f09f743182353fe11",
+  "main_governance_until_activation_merge": {
+    "version": "V4",
+    "constitution": "governance/ENGINEERING_GOVERNANCE_V4_CONSOLIDATED_FINAL.md"
+  },
+  "sole_project_wide_constitution": "governance/ENGINEERING_GOVERNANCE_V5_CONSOLIDATED_FINAL.md",
   "entrypoints": [
     "AGENTS.md",
     "governance/PROJECT_RULES_INDEX.md",
-    "governance/CHATGPT_PROJECT_GOVERNANCE_BRIDGE_V4_CORE_ENFORCEMENT_2026-09-23.md"
+    "governance/CHATGPT_PROJECT_GOVERNANCE_BRIDGE.md"
   ],
-  "active_checklists": [
-    "governance/MANDATORY_ENGINEERING_PREFLIGHT_AND_CONVERGENCE_GATE_V1_2026-08-17.md"
-  ],
-  "active_subordinate_procedures": [
+  "subordinate_procedures": [
     "governance/PROJECT_RESEARCH_EVIDENCE_DECISION_METHOD_V1_2026-08-16.md",
     "governance/EXTERNAL_MATURE_SOLUTION_SELECTION_AND_ADOPTION_RULE_V1_2026-09-07.md",
     "governance/GENERATED_COMMAND_RELIABILITY_AND_OPERATOR_EFFICIENCY_RULE_V1_2026-08-30.md",
@@ -24,65 +27,91 @@
     "governance/MARKET_AND_VENUE_SELECTION_FRAMEWORK_V1_2026-09-13.md"
   ],
   "active_skills": [
-    ".agents/skills/trade-os-v4-bootstrap/SKILL.md",
-    ".agents/skills/trade-os-v4-development/SKILL.md",
-    ".agents/skills/trade-os-v4-ci/SKILL.md",
-    ".agents/skills/trade-os-v4-review/SKILL.md"
+    ".agents/skills/trade-os-v5-bootstrap/SKILL.md",
+    ".agents/skills/trade-os-v5-development/SKILL.md",
+    ".agents/skills/trade-os-v5-ci/SKILL.md",
+    ".agents/skills/trade-os-v5-review/SKILL.md",
+    ".agents/skills/trade-os-v5-handoff/SKILL.md"
   ],
   "codex": {
+    "execution_surface": "CODEX_CLI",
     "config": ".codex/config.toml",
-    "main_writer_model": "gpt-5.6-terra",
-    "main_writer_reasoning": "medium",
-    "web_search": "disabled",
-    "agents": {
-      "explorer": ".codex/agents/explorer.toml",
-      "code_reviewer": ".codex/agents/code-reviewer.toml"
+    "primary": {
+      "model": "gpt-6-sol",
+      "reasoning": "medium"
     },
-    "pre_tool_hook": ".codex/hooks/pre_tool_use_policy.py",
-    "hard_semantic_escalation_model": "gpt-5.6-sol",
-    "hard_semantic_escalation_reasoning": "medium",
+    "repair_1": {
+      "model": "gpt-6-sol",
+      "reasoning": "medium"
+    },
+    "repair_2_hard_root_cause": {
+      "model": "gpt-6-sol",
+      "reasoning": "high"
+    },
+    "exceptional_control_analysis": {
+      "model": "gpt-6-astra",
+      "reasoning": "medium",
+      "authority": "ENGINEERING_CONTROL_EXPLICIT_ESCALATION_ONLY"
+    },
+    "web_search_default": "disabled",
+    "sandbox_mode": "workspace-write",
+    "approval_policy": "on-request",
+    "approvals_reviewer": "auto_review",
+    "default_subagents": 0,
+    "max_optional_concurrent_children": 1,
+    "recursive_subagent_delegation": false,
     "subagent_runtime_identity_verification_required": true,
     "silent_subagent_fallback_prohibited": true,
-    "agent_profiles": {
+    "agents": {
       "explorer": {
-        "model": "gpt-5.6-luna",
+        "config": ".codex/agents/explorer.toml",
+        "model": "gpt-6-luna",
         "reasoning": "low",
-        "runtime_identity_verification_required": true
+        "authority": "READ_ONLY_OPTIONAL"
       },
-      "code_reviewer": {
-        "model": "gpt-5.6-terra",
-        "reasoning": "medium",
-        "runtime_identity_verification_required": true
+      "internal_reviewer": {
+        "config": ".codex/agents/code-reviewer.toml",
+        "model": "gpt-6-luna",
+        "reasoning": "high",
+        "authority": "READ_ONLY_OPTIONAL_NON_FINAL"
       }
-    }
+    },
+    "hook": ".codex/hooks/pre_tool_use_policy.py",
+    "runtime_qualification": "NOT_YET_PROVEN"
   },
-  "deterministic_tools": {
-    "bootstrap": "scripts/control/v4_bootstrap.py",
-    "governance_consistency": "scripts/check_v4_governance.py"
+  "review": {
+    "pre_code_review": "FRESH_ORDINARY_CHATGPT_HIGH",
+    "final_independent_review": "FRESH_ORDINARY_CHATGPT_HIGH",
+    "canonical_github_result_egress_required": true,
+    "comment_only_fallback_when_native_self_approval_unavailable": true
   },
-  "historical_or_superseded": [
-    "governance/UNIFIED_ENGINEERING_GOVERNANCE_AND_EXECUTION_STANDARD_V2_2026-09-01.md",
-    "governance/ENGINEERING_EXECUTOR_ROUTER_V2_2026-08-23.md",
-    "governance/ENGINEERING_EXECUTOR_SELECTION_AND_TOOL_PROFILE_ROUTING_V1_2026-08-20.md",
-    "governance/CURRENT_TOOLING_EXECUTOR_PRIORITY_V1_2026-08-18.md",
-    "governance/CODEX_CLI_ENGINEERING_USAGE_PROFILE_V2_2026-08-23.md",
-    "CODEX.md"
+  "execution_relay": {
+    "preferred": "REMOTE_DESKTOP_COMMANDER_WHEN_CONNECTED_AND_QUOTA_AVAILABLE",
+    "authority": "EXECUTION_TRANSPORT_ONLY",
+    "hard_dependency": false
+  },
+  "deterministic_runtime": {
+    "v5_bootstrap": "PENDING_V5_B",
+    "v5_governance_consistency_validator": "PENDING_V5_B",
+    "v5_controller_and_package_state": "PENDING_V5_B",
+    "exact_head_ci_waiter": "PENDING_V5_B_RECONCILIATION"
+  },
+  "activation_requirements": {
+    "v5_b_controller_bootstrap_validator": "PENDING",
+    "cli_and_gpt6_runtime_identity_qualification": "NOT_YET_PROVEN",
+    "permission_auto_review_network_qualification": "NOT_YET_PROVEN",
+    "protected_action_nonregression": "PENDING",
+    "controller_and_failure_class_tests": "PENDING",
+    "exact_head_ci": "PENDING",
+    "fresh_independent_review": "PENDING",
+    "project_instruction_replaced_with_version_agnostic_bridge": "PENDING",
+    "first_real_nonproduction_v5_canary": "PENDING"
+  },
+  "preserved_pending_v5_c_cleanup": [
+    "governance/ENGINEERING_GOVERNANCE_V4_CONSOLIDATED_FINAL.md",
+    "governance/CHATGPT_PROJECT_GOVERNANCE_BRIDGE_V4_CORE_ENFORCEMENT_2026-09-23.md",
+    "VNext preparation/archive artifacts already present in the repository"
   ],
-  "compatibility_skills_not_on_mandatory_route": [
-    ".agents/skills/trade-os-writer-preflight/SKILL.md",
-    ".agents/skills/trade-os-local-gates/SKILL.md",
-    ".agents/skills/trade-os-evidence/SKILL.md",
-    ".agents/skills/trade-os-result-packet/SKILL.md",
-    ".agents/skills/trade-os-ci-terminal-wait/SKILL.md",
-    ".agents/skills/trade-os-independent-review-bundle/SKILL.md",
-    ".agents/skills/trade-os-local-task-runner/SKILL.md"
-  ],
-  "routing_branches": {
-    "A": "DETERMINISTIC_MECHANICAL_ZERO_MODEL",
-    "B": "FRESH_ORDINARY_CHATGPT_BOUNDED_WRITER",
-    "C": "CODEX_LARGE_COHERENT_PACKAGE",
-    "D": "ENGINEERING_CONTROL_UNRESOLVED_HIGH_CONSEQUENCE"
-  },
   "protected_actions": [
     "MARK_READY",
     "MERGE",
