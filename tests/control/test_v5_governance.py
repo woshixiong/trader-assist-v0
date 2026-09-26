@@ -24,12 +24,14 @@ def install(monkeypatch: pytest.MonkeyPatch, value: dict[str, Any]) -> None:
     monkeypatch.setattr(checker, "manifest", lambda _: value)
 
 
-def test_v5_post_merge_qualification_consistency() -> None:
+def test_v5_active_consistency() -> None:
     assert checker.run(ROOT) == []
 
 
 def test_qualification_requires_proven_prerequisites(monkeypatch: pytest.MonkeyPatch) -> None:
     value = manifest()
+    value["status"] = "POST_MERGE_QUALIFICATION"
+    value["activation_requirements"]["first_real_nonproduction_v5_canary"] = "PENDING"
     value["activation_requirements"]["exact_head_ci"] = "PENDING"
     install(monkeypatch, value)
     with pytest.raises(checker.CheckFailure, match="prerequisite"):
@@ -40,6 +42,8 @@ def test_qualification_rejects_stale_v4_until_merge_authority(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     value = manifest()
+    value["status"] = "POST_MERGE_QUALIFICATION"
+    value["activation_requirements"]["first_real_nonproduction_v5_canary"] = "PENDING"
     value["main_governance_until_activation_merge"] = {
         "version": "V4",
         "constitution": "governance/ENGINEERING_GOVERNANCE_V4_CONSOLIDATED_FINAL.md",
@@ -51,6 +55,8 @@ def test_qualification_rejects_stale_v4_until_merge_authority(
 
 def test_qualification_requires_canary_pending(monkeypatch: pytest.MonkeyPatch) -> None:
     value = manifest()
+    value["status"] = "POST_MERGE_QUALIFICATION"
+    value["activation_requirements"]["first_real_nonproduction_v5_canary"] = "PENDING"
     value["activation_requirements"]["first_real_nonproduction_v5_canary"] = "PASS"
     install(monkeypatch, value)
     with pytest.raises(checker.CheckFailure, match="canary PENDING"):
@@ -60,6 +66,7 @@ def test_qualification_requires_canary_pending(monkeypatch: pytest.MonkeyPatch) 
 def test_active_requires_canary_pass(monkeypatch: pytest.MonkeyPatch) -> None:
     value = manifest()
     value["status"] = "ACTIVE"
+    value["activation_requirements"]["first_real_nonproduction_v5_canary"] = "PENDING"
     install(monkeypatch, value)
     with pytest.raises(checker.CheckFailure, match="ACTIVE requires"):
         checker.check_manifest(ROOT)
@@ -73,7 +80,7 @@ def test_active_with_required_facts_pass_is_valid(monkeypatch: pytest.MonkeyPatc
     checker.check_manifest(ROOT)
 
 
-def test_runtime_qualification_must_match_post_merge_state(
+def test_runtime_qualification_must_match_active_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     value = manifest()
