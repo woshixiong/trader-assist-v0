@@ -28,8 +28,15 @@ state and reconcile any already-advanced state idempotently.
 
 The GitHub locator contains the durable detail. Chat remains compact. The
 copy-paste command/prompt must be complete and must carry the exact role, target,
-identity, scope/authority boundary, and required next operation so the user does
-not reconstruct state or choose a route already determined by evidence.
+identity, scope/authority boundary, required next operation, and exact canonical
+object locators for package state, plan/review result, CI, and next evidence when
+available. Never replace a known exact object locator with a generic instruction
+to read an Issue/PR history.
+
+~~~text
+EXACT_CANONICAL_LOCATOR_AVAILABLE=>HANDOFF_MUST_CARRY_EXACT_OBJECT
+GENERIC_ISSUE_OR_PR_HISTORY_INSTRUCTION_WHEN_EXACT_LOCATOR_KNOWN=PROHIBITED
+~~~
 
 For Pre-code PASS or PLAN_REVISE handoffs, target the exact same Codex
 thread/worktree. If exact resume is unavailable or unverifiable, emit

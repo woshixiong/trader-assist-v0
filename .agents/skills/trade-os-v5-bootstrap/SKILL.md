@@ -14,7 +14,17 @@ SHARED_OUTER_LAUNCHER_STDIN=PROHIBITED
 ~~~
 
 1. Fresh-read AGENTS.md, active manifest, selected constitution, and exact
-   package-state/Issue/PR.
+   package-state/Issue/PR. If an exact package-state/evidence comment locator is
+   present, read that exact comment directly; do not enumerate the containing
+   Issue/PR timeline to rediscover it.
+
+~~~text
+EXACT_COMMENT_LOCATOR_PRESENT=>READ_EXACT_COMMENT_ONLY
+FETCH_ALL_ISSUE_COMMENTS_WHEN_EXACT_COMMENT_KNOWN=PROHIBITED
+ROUTINE_TAKEOVER=>AGENTS+MANIFEST+SELECTED_CONSTITUTION+EXACT_PACKAGE_STATE+TRIGGERED_SKILL
+BROAD_ISSUE_OR_PR_HISTORY=>CONTROL_ESCALATION_ONLY
+~~~
+
 2. Resolve exact main/base/head/tree and require the package binding to match.
 3. Resolve role, route, scope, acceptance, execution surface, retained gates,
    and requested runtime identity.
@@ -24,6 +34,10 @@ SHARED_OUTER_LAUNCHER_STDIN=PROHIBITED
 6. Optional child identity must be runtime-verifiable or the child is skipped.
 7. Resume an existing exact checkpoint rather than redispatching completed work.
 8. Load only the narrow procedure triggered by the current task/stage.
+9. If an exact locator is missing/ambiguous, package state is incomplete or
+   contradictory, live identity mismatches, scope evidence is unauthorized or
+   incomplete, or review evidence is insufficient, expand to the minimum missing
+   evidence first. Broad history is Control escalation only.
 
 A new architecture, provider/dependency choice, security issue, authority
 conflict, scope expansion, or unresolved identity problem returns to Engineering

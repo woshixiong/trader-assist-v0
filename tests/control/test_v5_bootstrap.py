@@ -18,6 +18,7 @@ sys.modules[SPEC.name] = bootstrap
 SPEC.loader.exec_module(bootstrap)
 
 CANONICAL_COMMENTS: dict[str, str] = {}
+REAL_READ_CANONICAL_COMMENT = bootstrap.read_canonical_comment
 
 
 @pytest.fixture(autouse=True)
@@ -270,3 +271,31 @@ def test_stale_rebind_binds_real_head_tree_for_bootstrap_verify(repository: Path
     rebound = bootstrap._V5.invalidate_old_head_evidence(old_state, new_head, new_tree)
     CANONICAL_COMMENTS[locator] = bootstrap._V5.serialize_state(rebound)
     assert bootstrap.verify(bound).result == "PASS"
+
+
+def test_read_canonical_comment_uses_single_exact_comment_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        captured["command"] = command
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(command, 0, stdout="exact body\n", stderr="")
+
+    monkeypatch.setattr(bootstrap.subprocess, "run", fake_run)
+    body = REAL_READ_CANONICAL_COMMENT(
+        "https://github.com/example/repo/issues/256#issuecomment-12345"
+    )
+
+    assert body == "exact body\n"
+    assert captured["command"] == [
+        "gh",
+        "api",
+        "repos/example/repo/issues/comments/12345",
+        "--jq",
+        ".body",
+    ]
+    assert captured["stdin"] is subprocess.DEVNULL
+    assert captured["timeout"] == 30
+    assert "issues/256/comments" not in " ".join(captured["command"])
