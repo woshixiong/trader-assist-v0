@@ -1811,7 +1811,9 @@ class E4ThreeSetupRuntime:
             item for item in active.markets if item.lifecycle is MarketLifecycle.ACTIVE
         )
         if not active_members:
-            self._reconcile_registry(open_ms, active)
+            now_ms = int(self.clock().timestamp() * 1_000)
+            if not event.out_of_order and now_ms <= open_ms + 360_000:
+                self._reconcile_registry(open_ms, active)
             return
         if open_ms in self._processed or self.on_finalized_5m is None:
             return
@@ -1842,7 +1844,8 @@ class E4ThreeSetupRuntime:
         report = await self.on_finalized_5m(bars[-1], mode)
         if report.disposition.value != "DEFERRED_WAITING_FOR_PEERS":
             self._processed.add(open_ms)
-            self._reconcile_registry(open_ms, active)
+            if mode is BoundaryMode.LIVE_ACTIONABLE:
+                self._reconcile_registry(open_ms, active)
 
     def _reconcile_registry(self, open_ms: int, active: RegistryVersion) -> None:
         """Apply at most one exact E4-proven successor after the T domain lane."""

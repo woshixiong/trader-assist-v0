@@ -258,6 +258,10 @@ def test_exact_t_initial_bootstrap_requires_full_durable_e4_cohort(tmp_path: Pat
 
 
 def test_depth10_1000_gate_equivalence_and_bad_books(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    from trader_assist_v0.multi_asset_shadow.planning import CostModel, PlanInputs, make_plan
+
     markets, e4, domain, registry, projection = _setup(tmp_path)
     event = _depth_event(markets[0], ordinal=1)
     e4.append_admission_batch((event,))
@@ -277,6 +281,30 @@ def test_depth10_1000_gate_equivalence_and_bad_books(tmp_path: Path) -> None:
     )
     assert l2.levels == ((Decimal("100.1"), Decimal("10")), (Decimal("100.2"), Decimal("10")))
     assert expected.sufficient_depth
+    observed = assess_l2(
+        market_id=l2.market_id,
+        coin=l2.coin,
+        side=Side.LONG,
+        observed_at_ms=l2.observed_at_ms,
+        best_bid=l2.best_bid,
+        best_ask=l2.best_ask,
+        levels=l2.levels,
+        provenance_hash=l2.provenance_hash,
+    )
+    assert observed == expected
+    inputs = PlanInputs(
+        market_id=markets[0].identity.market_id,
+        side=Side.LONG,
+        ideal_entry_low=Decimal("100"),
+        ideal_entry_high=Decimal("101"),
+        chase_limit=Decimal("102"),
+        structural_stop=Decimal("99"),
+        structural_target=Decimal("105"),
+        liquidity=observed,
+        cost_model=CostModel("fixed", Decimal("1"), Decimal("1"), Decimal("2")),
+        now_ms=T + 301_000,
+    )
+    assert make_plan(inputs, bbo) == make_plan(replace(inputs, liquidity=expected), bbo)
     with pytest.raises(Exception, match="stale"):
         projection.current_depth(markets[0].identity.market_id, T + 320_000)
     crossed = _depth_event(markets[1], ordinal=2, asks=[["99", "10"]])
@@ -468,6 +496,57 @@ async def test_exact_t_missing_peer_waits_then_wakes_once(tmp_path: Path) -> Non
 
 
 @async_test
+async def test_late_context_cohort_never_replays_as_live_action(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    from trader_assist_v0.multi_asset_shadow.runtime import E4ThreeSetupRuntime
+
+    markets, e4, domain, registry, projection = _setup(tmp_path)
+    initial = tuple(_event(m, ordinal=i + 1) for i, m in enumerate(markets))
+    e4.append_admission_batch(initial)
+    for event in initial:
+        projection.accept(event)
+    registry.apply_initial_e4_witness(
+        registry.issue_initial_e4_witness(boundary_open_time_ms=T),
+        evidence_authority=projection,
+    )
+    now_ms = T + 700_000
+    projection.clock_ms = lambda: now_ms
+    runtime = E4ThreeSetupRuntime(
+        projection=projection,
+        registry=registry,
+        clock=lambda: datetime.fromtimestamp(now_ms / 1000, UTC),
+    )
+    wakes: list[tuple[int, str]] = []
+
+    async def on_boundary(bar: object, mode: object) -> object:
+        wakes.append((bar.open_time_ms, mode.value))
+        return SimpleNamespace(disposition=SimpleNamespace(value="PROCESSED"))
+
+    runtime.on_finalized_5m = on_boundary
+    late = tuple(_event(m, ordinal=i + 3, open_ms=T + 300_000) for i, m in enumerate(markets))
+    e4.append_admission_batch(late)
+    for event in late:
+        projection.accept(event)
+    for event in late:
+        await runtime._on_5m(event)
+    assert wakes == [(T + 300_000, "RECOVERY_CONTEXT_ONLY")]
+    now_ms = T + 901_000
+    current = tuple(_event(m, ordinal=i + 5, open_ms=T + 600_000) for i, m in enumerate(markets))
+    e4.append_admission_batch(current)
+    for event in current:
+        projection.accept(event)
+    for event in current:
+        await runtime._on_5m(event)
+    assert wakes == [
+        (T + 300_000, "RECOVERY_CONTEXT_ONLY"),
+        (T + 600_000, "LIVE_ACTIONABLE"),
+    ]
+    projection.close()
+    domain.close()
+
+
+@async_test
 async def test_domain_adapter_exception_is_observable_and_does_not_touch_e4(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -547,6 +626,10 @@ def test_scanner_semantics_equal_for_equivalent_e4_and_legacy_bars(tmp_path: Pat
 
     from trader_assist_v0.multi_asset_shadow.integration import MultiAssetShadowCoordinator
     from trader_assist_v0.multi_asset_shadow.models import ClosedBar
+    from trader_assist_v0.multi_asset_shadow.strategy_kernel.engine import (
+        StrategyEvaluationInput,
+        evaluate_strategy,
+    )
     from trader_assist_v0.multi_asset_shadow.strategy_kernel.scanner import (
         ScannerMarketInput,
         scan_cross_section,
@@ -615,6 +698,17 @@ def test_scanner_semantics_equal_for_equivalent_e4_and_legacy_bars(tmp_path: Pat
     assert replace(projected_scan.candidate, candidate_id="LINEAGE") == replace(
         legacy_scan.candidate, candidate_id="LINEAGE"
     )
+
+    def evaluate(bars: tuple[ClosedBar, ...]):
+        normalized = tuple(
+            replace(MultiAssetShadowCoordinator._strategy_bar(item), source_identity="FIXTURE")
+            for item in bars
+        )
+        return evaluate_strategy(
+            StrategyEvaluationInput(bars_5m=normalized, minimum_tick=Decimal("0.1"))
+        )
+
+    assert evaluate(projected) == evaluate(tuple(legacy))
     projection.close()
     domain.close()
 
@@ -704,6 +798,49 @@ def test_e4_warmup_and_continuity_incomplete_block_initial_registry(tmp_path: Pa
     with pytest.raises(RegistryError, match="incomplete"):
         registry.apply_initial_e4_witness(witness, evidence_authority=projection)
     assert registry.active() is None
+    projection.close()
+    domain.close()
+
+
+def test_e4_readiness_health_defects_then_future_cohort_recovery(tmp_path: Path) -> None:
+    markets, e4, domain, registry, projection = _setup(tmp_path)
+    initial = tuple(_event(m, ordinal=i + 1) for i, m in enumerate(markets))
+    e4.append_admission_batch(initial)
+    for event in initial:
+        projection.accept(event)
+    registry.apply_initial_e4_witness(
+        registry.issue_initial_e4_witness(boundary_open_time_ms=T),
+        evidence_authority=projection,
+    )
+    healthy = {
+        "stream_health": "HEALTHY",
+        "continuity_requirements_remaining": 0,
+        "storage_failures": 0,
+        "admitted_observer_failures": (),
+    }
+    projection._capture_health = lambda: healthy
+    projection._warmup_health = lambda: {"readiness": "READY"}
+    assert len(projection.readiness_snapshot().ready_market_ids) == 2
+    for defect in (
+        {"stream_health": "GAPPED"},
+        {"stream_health": "DISCONNECTED"},
+        {"continuity_requirements_remaining": 1},
+        {"admitted_observer_failures": ("domain",)},
+    ):
+        projection._capture_health = lambda defect=defect: healthy | defect
+        assert projection.readiness_snapshot().ready_market_ids == ()
+    projection._warmup_health = lambda: {"readiness": "NOT_READY"}
+    projection._capture_health = lambda: healthy
+    assert projection.readiness_snapshot().ready_market_ids == ()
+    projection._warmup_health = lambda: {"readiness": "READY"}
+    future = tuple(_event(m, ordinal=i + 3, open_ms=T + 300_000) for i, m in enumerate(markets))
+    e4.append_admission_batch(future)
+    for event in future:
+        projection.accept(event)
+    projection.clock_ms = lambda: T + 601_000
+    assert set(projection.readiness_snapshot().ready_market_ids) == {
+        m.identity.market_id for m in markets
+    }
     projection.close()
     domain.close()
 

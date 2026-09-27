@@ -573,6 +573,7 @@ class E4MarketTruthProjection:
             or health.get("stream_health") != "HEALTHY"
             or health.get("continuity_requirements_remaining") != 0
             or health.get("storage_failures") != 0
+            or health.get("admitted_observer_failures")
             or any(market_id in self._failed_markets for market_id in market_ids)
         ):
             return False
