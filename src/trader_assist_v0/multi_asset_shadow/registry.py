@@ -23,6 +23,7 @@ from .models import MarketLifecycle, RegistryMarket, RegistryVersion
 
 if TYPE_CHECKING:
     from .data import Closed5mAdmission, MultiAssetDataAuthority
+    from .e4_markettruth import E4MarketTruthProjection
 
 
 class RegistryError(ValueError):
@@ -48,6 +49,18 @@ class CohortWitness:
     expected_successor_version: str
     expected_successor_hash: str
     required_evidence_market_ids: frozenset[str]
+    _issuer: object = field(repr=False, compare=False)
+    _consumed: bool = field(default=False, repr=False, compare=False)
+
+
+@dataclass(frozen=True)
+class InitialE4BootstrapWitness:
+    """One-use initial activation under a complete shared E4 cohort."""
+
+    boundary_open_time_ms: int
+    pending_version: str
+    pending_hash: str
+    market_ids: frozenset[str]
     _issuer: object = field(repr=False, compare=False)
     _consumed: bool = field(default=False, repr=False, compare=False)
 
@@ -109,6 +122,74 @@ class MarketRegistryManager:
         # this manager instance, so reconstruction invalidates every old
         # witness without introducing durable capability state.
         self._cohort_witness_issuer = object()
+        self._e4_evidence_authority: object | None = None
+
+    def bind_e4_evidence_authority(self, authority: E4MarketTruthProjection) -> None:
+        """Seal one process-local E4 authority to this Registry composition."""
+        if self._e4_evidence_authority is not None or authority.registry is not self:
+            raise RegistryError("E4 evidence authority binding conflicts")
+        self._e4_evidence_authority = authority
+
+    def issue_initial_e4_witness(self, *, boundary_open_time_ms: int) -> InitialE4BootstrapWitness:
+        if self.active() is not None:
+            raise RegistryError("initial E4 witness requires no active Registry")
+        pending = self.pending_version()
+        if pending is None or boundary_open_time_ms < 0 or boundary_open_time_ms % 300_000:
+            raise RegistryError("initial E4 witness lacks pending identity or exact boundary")
+        self._assert_prior_validation(pending)
+        return InitialE4BootstrapWitness(
+            boundary_open_time_ms=boundary_open_time_ms,
+            pending_version=pending.version,
+            pending_hash=pending.content_hash,
+            market_ids=frozenset(m.identity.market_id for m in pending.markets),
+            _issuer=self._cohort_witness_issuer,
+        )
+
+    def apply_initial_e4_witness(
+        self, witness: InitialE4BootstrapWitness, *, evidence_authority: E4MarketTruthProjection
+    ) -> RegistryVersion:
+        if (
+            not isinstance(witness, InitialE4BootstrapWitness)
+            or witness._issuer is not self._cohort_witness_issuer
+        ):
+            raise RegistryError("initial E4 witness was not issued by this Registry")
+        if witness._consumed:
+            raise RegistryError("initial E4 witness was already consumed")
+        object.__setattr__(witness, "_consumed", True)
+        if (
+            evidence_authority is not self._e4_evidence_authority
+            or evidence_authority.registry is not self
+        ):
+            raise RegistryError("initial E4 witness requires the bound evidence authority")
+        if self.active() is not None:
+            raise RegistryError("initial E4 witness cannot replace active Registry")
+        pending = self.pending_version()
+        if (
+            pending is None
+            or pending.version != witness.pending_version
+            or pending.content_hash != witness.pending_hash
+            or frozenset(m.identity.market_id for m in pending.markets) != witness.market_ids
+            or not witness.market_ids
+        ):
+            raise RegistryError("initial E4 witness differs from live pending Registry")
+        if not evidence_authority.prove_initial_boundary_evidence(
+            boundary_open_time_ms=witness.boundary_open_time_ms,
+            market_ids=witness.market_ids,
+            pending_registry_version=witness.pending_version,
+            pending_registry_hash=witness.pending_hash,
+        ):
+            raise RegistryError("initial E4 cohort is incomplete")
+        _write_atomic(
+            self.pointer,
+            canonical_json_bytes(
+                {"version": pending.version, "content_hash": pending.content_hash}
+            ),
+        )
+        try:
+            self.pending.unlink()
+        except FileNotFoundError:
+            pass
+        return pending
 
     def _issue_cohort_witness(
         self,
@@ -307,7 +388,7 @@ class MarketRegistryManager:
         self,
         witness: CohortWitness,
         *,
-        evidence_authority: MultiAssetDataAuthority,
+        evidence_authority: MultiAssetDataAuthority | E4MarketTruthProjection,
     ) -> RegistryVersion:
         """Activate exactly the successor bound by one one-use cohort witness.
 
@@ -331,10 +412,14 @@ class MarketRegistryManager:
         if witness._consumed:
             raise RegistryError("cohort witness was already consumed")
         object.__setattr__(witness, "_consumed", True)
-        if not isinstance(evidence_authority, MultiAssetDataAuthority):
-            raise RegistryError(
-                "cohort witness evidence must be proven by the Data authority"
+        if not (
+            isinstance(evidence_authority, MultiAssetDataAuthority)
+            or (
+                evidence_authority is self._e4_evidence_authority
+                and getattr(evidence_authority, "registry", None) is self
             )
+        ):
+            raise RegistryError("cohort witness evidence must be proven by the Data authority")
         if not witness.required_evidence_market_ids:
             raise RegistryError("cohort witness requires a non-empty evidence cohort")
         active = self.active()
@@ -433,9 +518,7 @@ class MarketRegistryManager:
     ) -> RegistryVersion:
         """Normalize manager-owned candidate construction into RegistryError."""
         try:
-            return RegistryVersion.create(
-                version=version, created_at=created_at, markets=markets
-            )
+            return RegistryVersion.create(version=version, created_at=created_at, markets=markets)
         except ValueError as exc:
             raise RegistryError("registry candidate schema validation failed") from exc
 
@@ -476,9 +559,7 @@ class MarketRegistryManager:
                 {
                     "domain": _LIFECYCLE_SUCCESSOR_DOMAIN,
                     "base_registry_content_hash": active.content_hash,
-                    "target_markets": [
-                        market.model_dump(mode="json") for market in target_markets
-                    ],
+                    "target_markets": [market.model_dump(mode="json") for market in target_markets],
                 }
             )
         )
@@ -523,28 +604,20 @@ class MarketRegistryManager:
         if set(updates) - set(active_ids):
             raise RegistryError("market is not in active registry")
 
-        for parent_market, candidate_market in zip(
-            active.markets, candidate.markets, strict=True
-        ):
+        for parent_market, candidate_market in zip(active.markets, candidate.markets, strict=True):
             if candidate_market.identity != parent_market.identity:
                 raise RegistryError("automatic lifecycle successor changes market identity")
             if candidate_market.model_dump(
                 mode="python", exclude={"lifecycle"}
             ) != parent_market.model_dump(mode="python", exclude={"lifecycle"}):
-                raise RegistryError(
-                    "automatic lifecycle successor changes non-lifecycle metadata"
-                )
+                raise RegistryError("automatic lifecycle successor changes non-lifecycle metadata")
             requested = updates.get(parent_market.identity.market_id)
             expected = parent_market.lifecycle if requested is None else requested
             if not isinstance(expected, MarketLifecycle):
                 raise RegistryError("invalid market lifecycle target")
             if candidate_market.lifecycle != expected:
-                raise RegistryError(
-                    "automatic lifecycle successor conflicts with requested target"
-                )
-            if requested is not None and expected not in _LIFECYCLE_NEXT[
-                parent_market.lifecycle
-            ]:
+                raise RegistryError("automatic lifecycle successor conflicts with requested target")
+            if requested is not None and expected not in _LIFECYCLE_NEXT[parent_market.lifecycle]:
                 raise RegistryError(
                     "illegal market lifecycle transition: "
                     f"{parent_market.lifecycle.value} -> {expected.value}"
@@ -591,9 +664,7 @@ class MarketRegistryManager:
                 markets.append(market)
         if not found:
             raise RegistryError("market is not in active registry")
-        candidate = self._create_version(
-            version=version, created_at=now, markets=tuple(markets)
-        )
+        candidate = self._create_version(version=version, created_at=now, markets=tuple(markets))
         self.stage(candidate)
         return candidate
 
@@ -630,9 +701,7 @@ class MarketRegistryManager:
         if active is None:
             raise RegistryError("no active registry")
         markets = self._lifecycle_target_markets(active, updates)
-        version = self._automatic_lifecycle_version(
-            active=active, target_markets=markets
-        )
+        version = self._automatic_lifecycle_version(active=active, target_markets=markets)
         target = self.versions / f"{version}.json"
         if target.exists():
             candidate = self.load_version(version)
@@ -696,8 +765,6 @@ class MarketRegistryManager:
                 markets.append(update_market)
             else:
                 markets[existing] = update_market
-        candidate = self._create_version(
-            version=version, created_at=now, markets=tuple(markets)
-        )
+        candidate = self._create_version(version=version, created_at=now, markets=tuple(markets))
         self.stage(candidate)
         return candidate

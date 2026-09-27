@@ -235,6 +235,7 @@ class NautilusE4CaptureStrategy(Strategy):
         }
         self._session.await_continuity(required_streams=self._continuity_streams)
         self._admitted_event_observer: AdmittedEventObserver | None = None
+        self._admitted_observer_failures: list[dict[str, str]] = []
 
     def set_admitted_event_observer(self, observer: AdmittedEventObserver | None) -> None:
         """Attach one synchronous composition observer; E4 remains admission owner."""
@@ -288,12 +289,22 @@ class NautilusE4CaptureStrategy(Strategy):
         event = getattr(outcome, "event", None)
         if observer is None or event is None:
             return
-        from nautilus_trader.model import InstrumentId
+        try:
+            from nautilus_trader.model import InstrumentId
 
-        provider_instrument = self.cache.instrument(
-            InstrumentId.from_str(event.source.instrument_id)
-        )
-        observer(event, provider_instrument)
+            provider_instrument = self.cache.instrument(
+                InstrumentId.from_str(event.source.instrument_id)
+            )
+            observer(event, provider_instrument)
+        except Exception as exc:
+            failure = {
+                "market_id": event.source.market_id,
+                "admission_hash": event.admission_hash,
+                "error_type": type(exc).__name__,
+            }
+            self._admitted_observer_failures.append(failure)
+            self._admitted_observer_failures = self._admitted_observer_failures[-100:]
+            self._markettruth_fanout.record_subscriber_failure(exc)
 
     @property
     def capture_health(self) -> dict[str, object]:
@@ -302,6 +313,7 @@ class NautilusE4CaptureStrategy(Strategy):
         return {
             **health,
             "markettruth_fanout": self._markettruth_fanout.health.__dict__,
+            "admitted_observer_failures": tuple(self._admitted_observer_failures),
             "historical_warmup": self.warmup_health,
             "resource_max_rss_native_units": usage.ru_maxrss,
             "resource_user_cpu_seconds": usage.ru_utime,
@@ -498,6 +510,8 @@ class NautilusE4CaptureStrategy(Strategy):
                 admission_ts=max(bar.ts_init, self.clock.timestamp_ns()),
                 historical=True,
             )
+            # The domain observer can never see a bar that E4 cannot replay.
+            self._session.persist_durable_evidence(reason="HISTORICAL_BAR_ADMITTED")
             self._observe_admission(outcome)
         self._session.persist_durable_evidence(reason="COMPLETED_HISTORICAL_BARS_ADMITTED")
         stream.mark_durable()
@@ -566,6 +580,8 @@ class NautilusE4CaptureStrategy(Strategy):
             "ask_price": str(ask.price),
             "ask_size": str(ask.size),
             "native_depth": 10,
+            "bids": [[str(level.price), str(level.size)] for level in depth.bids],
+            "asks": [[str(level.price), str(level.size)] for level in depth.asks],
         }
         source = SourceEvent.create(
             market_id=expression.market_id,
@@ -583,9 +599,8 @@ class NautilusE4CaptureStrategy(Strategy):
             payload=payload,
         )
         decision_ts = self.clock.timestamp_ns()
-        outcome = self._session.ingest(
-            source, admission_ts=max(depth.ts_init, decision_ts)
-        )
+        outcome = self._session.ingest(source, admission_ts=max(depth.ts_init, decision_ts))
+        self._session.persist_durable_evidence(reason="DEPTH10_ADMITTED")
         event = outcome.event
         rejection = (
             "DEPTH10_DUPLICATE"
@@ -624,8 +639,8 @@ class NautilusE4CaptureStrategy(Strategy):
         outcome = self._session.ingest(
             source, admission_ts=max(bar.ts_init, self.clock.timestamp_ns())
         )
-        self._observe_admission(outcome)
         self._session.persist_durable_evidence(reason="FINALIZED_BAR_CALLBACK_ADMITTED")
+        self._observe_admission(outcome)
 
     def _bar_source(self, bar: Bar) -> SourceEvent:
         expression = self._expression_for(bar)
