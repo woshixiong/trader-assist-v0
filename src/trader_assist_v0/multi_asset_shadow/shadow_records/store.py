@@ -53,6 +53,8 @@ _TABLE_BY_TYPE = {
     "outcome_envelope": "outcome_envelopes",
     "outcome_transition": "outcome_transitions",
     "outcome_bar": "outcome_bars",
+    "e4_market_bar_ref": "e4_market_bar_refs",
+    "outcome_e4_bar_ref": "outcome_e4_bar_refs",
     "correlation_identifier": "correlation_identifiers",
     "notification_outbox_reference": "notification_outbox_references",
 }
@@ -72,6 +74,8 @@ _LINK_COLUMNS = {
     "outcome_envelope": ("signal_id", "shadow_order_id"),
     "outcome_transition": ("shadow_order_id",),
     "outcome_bar": (),
+    "e4_market_bar_ref": (),
+    "outcome_e4_bar_ref": (),
     "correlation_identifier": ("signal_id", "shadow_order_id"),
     "notification_outbox_reference": ("signal_id",),
 }
@@ -88,6 +92,8 @@ _CONTROLLED_WRITE_TYPES = frozenset(
         "outcome_envelope",
         "outcome_transition",
         "outcome_bar",
+        "e4_market_bar_ref",
+        "outcome_e4_bar_ref",
     }
 )
 
@@ -123,8 +129,7 @@ class EvidenceStore:
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'immutable_records'"
         ).fetchone()
         locator_exists = self._connection.execute(
-            "SELECT 1 FROM sqlite_master "
-            "WHERE type = 'table' AND name = 'outcome_recovery_locator'"
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'outcome_recovery_locator'"
         ).fetchone()
         if immutable_exists is not None and locator_exists is None:
             retained = int(
@@ -205,6 +210,12 @@ class EvidenceStore:
                     shadow_order_id TEXT NOT NULL REFERENCES shadow_orders(record_id)
                 ) STRICT;
                 CREATE TABLE IF NOT EXISTS outcome_bars (
+                    record_id TEXT PRIMARY KEY NOT NULL REFERENCES immutable_records(record_id)
+                ) STRICT;
+                CREATE TABLE IF NOT EXISTS e4_market_bar_refs (
+                    record_id TEXT PRIMARY KEY NOT NULL REFERENCES immutable_records(record_id)
+                ) STRICT;
+                CREATE TABLE IF NOT EXISTS outcome_e4_bar_refs (
                     record_id TEXT PRIMARY KEY NOT NULL REFERENCES immutable_records(record_id)
                 ) STRICT;
                 CREATE TABLE IF NOT EXISTS correlation_identifiers (
@@ -326,6 +337,16 @@ class EvidenceStore:
                         json_extract(payload_json, '$.canonical_hash')
                     )
                     WHERE record_type = 'outcome_bar';
+                CREATE UNIQUE INDEX IF NOT EXISTS immutable_e4_market_bar_slot
+                    ON immutable_records(
+                        json_extract(payload_json, '$.market_id'),
+                        json_extract(payload_json, '$.open_time_ms')
+                    ) WHERE record_type = 'e4_market_bar_ref';
+                CREATE UNIQUE INDEX IF NOT EXISTS immutable_outcome_e4_bar_slot
+                    ON immutable_records(
+                        json_extract(payload_json, '$.market_id'),
+                        json_extract(payload_json, '$.open_time_ms')
+                    ) WHERE record_type = 'outcome_e4_bar_ref';
                 """
             )
             row = self._connection.execute(

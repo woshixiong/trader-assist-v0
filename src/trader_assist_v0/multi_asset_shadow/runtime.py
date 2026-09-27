@@ -21,12 +21,13 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from websockets.asyncio.client import connect, process_exception
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
 from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
+from trader_assist_v0.nautilus_e4.contracts import AdmittedEvent
 
 from .cohort_finality import (
     Closed5mCohortFinality,
@@ -38,6 +39,10 @@ from .finality import FIVE_MINUTES_MS
 from .hyperliquid_public import HyperliquidPublicClient, PublicDataError
 from .models import ClosedBar, MarketLifecycle, RegistryMarket, RegistryVersion
 from .registry import MarketRegistryManager, RegistryError
+
+if TYPE_CHECKING:
+    from .bootstrap import BoundaryReport, OutcomeCadenceReport
+    from .e4_markettruth import E4MarketTruthProjection
 
 WS_URL = "wss://api.hyperliquid.xyz/ws"
 _MAX_RECONNECTS = 3
@@ -324,9 +329,7 @@ class MultiAssetPublicRuntime:
         self.health = RuntimeHealth()
         # Evidence-derived maintenance lane invoked by the barrier whether or
         # not the boundary produced new action (packet section 20).
-        self.on_maintenance_5m: (
-            Callable[[int], Awaitable[None] | object | None] | None
-        ) = None
+        self.on_maintenance_5m: Callable[[int], Awaitable[None] | object | None] | None = None
         # Replaceable provider-proof seam: no processed-boundary state, no
         # failure state, no lifecycle or Registry authority of its own.
         self._cohort_finality = Closed5mCohortFinality(
@@ -391,9 +394,9 @@ class MultiAssetPublicRuntime:
         # Hard new-activity gate on the production path: a boundary observed
         # older than the actionability ceiling is not exposed in
         # ready_market_ids at all, not merely in the convenience method.
-        within_action_ceiling = observed_at_ms - (
-            latest_open + _FIVE_MINUTES_MS
-        ) <= int(FRESHNESS_ACTION_CEILING_SECONDS * 1000)
+        within_action_ceiling = observed_at_ms - (latest_open + _FIVE_MINUTES_MS) <= int(
+            FRESHNESS_ACTION_CEILING_SECONDS * 1000
+        )
         ready = tuple(
             market.identity.market_id
             for market in active.markets
@@ -478,9 +481,7 @@ class MultiAssetPublicRuntime:
                 self._integrity_failed = True
                 raise
 
-    async def _reconcile_boundary(
-        self, boundary_open_ms: int, active: RegistryVersion
-    ) -> None:
+    async def _reconcile_boundary(self, boundary_open_ms: int, active: RegistryVersion) -> None:
         """CAPTURE R -> classify -> lanes -> action under R -> maintenance -> switch."""
         captured_version = active.version
         captured_hash = active.content_hash
@@ -491,8 +492,8 @@ class MultiAssetPublicRuntime:
         pending_at_start = self.registry.reconcile_pending()
         selected = self.selected_markets()
         observed_ms = int(self.clock().timestamp() * 1000)
-        deadline_ms = boundary_open_ms + _FIVE_MINUTES_MS + int(
-            BOUNDARY_ACTION_DEADLINE_SECONDS * 1000
+        deadline_ms = (
+            boundary_open_ms + _FIVE_MINUTES_MS + int(BOUNDARY_ACTION_DEADLINE_SECONDS * 1000)
         )
         within_deadline = observed_ms <= deadline_ms
 
@@ -518,9 +519,7 @@ class MultiAssetPublicRuntime:
         first_launch = not active_selected and any(
             market.lifecycle in _PRE_ACTIVE_ORDER for market in selected
         )
-        epoch_states = {
-            classes[market.identity.market_id] for market in active_selected
-        } & {
+        epoch_states = {classes[market.identity.market_id] for market in active_selected} & {
             RetainedBoundaryClass.CURRENT_EPOCH_FINALIZED,
             RetainedBoundaryClass.PREDECESSOR_CONTEXT_ONLY,
         }
@@ -534,9 +533,7 @@ class MultiAssetPublicRuntime:
 
         finalized_now: set[str] = set()
         if within_deadline and not self._integrity_failed:
-            await self._run_recovery_context_lane(
-                boundary_open_ms, selected, classes, first_launch
-            )
+            await self._run_recovery_context_lane(boundary_open_ms, selected, classes, first_launch)
             finalized_now = await self._run_live_finality_lane(
                 boundary_open_ms, selected, classes, first_launch, deadline_ms
             )
@@ -586,9 +583,7 @@ class MultiAssetPublicRuntime:
             if not needs_recovery:
                 continue
             try:
-                await self._warmup_market(
-                    market, recovery=True, target_open_ms=boundary_open_ms
-                )
+                await self._warmup_market(market, recovery=True, target_open_ms=boundary_open_ms)
             except asyncio.CancelledError:
                 raise
             except (DataRouteError, PublicDataError):
@@ -626,10 +621,7 @@ class MultiAssetPublicRuntime:
         finalized: set[str] = set()
         for market, result in zip(targets, results, strict=True):
             market_id = market.identity.market_id
-            if (
-                result.outcome is FinalityOutcome.FINALIZED
-                and result.confirmed_payload is not None
-            ):
+            if result.outcome is FinalityOutcome.FINALIZED and result.confirmed_payload is not None:
                 try:
                     # Durable validation/admission happens on the event-loop
                     # thread; the worker only carried raw provider transport.
@@ -656,8 +648,7 @@ class MultiAssetPublicRuntime:
     def _durable_boundary_row(self, market_id: str, boundary_open_ms: int) -> bool:
         """Confirm one exact-T durable row exists under the captured epoch."""
         row = self.authority.store.connection.execute(
-            "SELECT 1 FROM closed_bars "
-            "WHERE market_id=? AND interval='5m' AND open_time_ms=?",
+            "SELECT 1 FROM closed_bars WHERE market_id=? AND interval='5m' AND open_time_ms=?",
             (market_id, boundary_open_ms),
         ).fetchone()
         return row is not None
@@ -742,9 +733,7 @@ class MultiAssetPublicRuntime:
                 if transition is None:
                     # External/manual membership successor: preserve existing
                     # safe-boundary semantics through the same exact witness.
-                    evidence = frozenset(
-                        market.identity.market_id for market in active_selected
-                    )
+                    evidence = frozenset(market.identity.market_id for market in active_selected)
                     if evidence and self.authority.prove_boundary_evidence(
                         boundary_open_time_ms=boundary_open_ms,
                         market_ids=evidence,
@@ -800,10 +789,7 @@ class MultiAssetPublicRuntime:
     ) -> dict[str, MarketLifecycle]:
         """Pure deterministic lifecycle planner; no durable writes occur here."""
         selected_coins = {market.identity.coin for market in selected}
-        snapshot_ready = (
-            self.health.data_ready
-            and selected_coins <= self.health.acknowledgements
-        )
+        snapshot_ready = self.health.data_ready and selected_coins <= self.health.acknowledgements
 
         def blocked(market: RegistryMarket) -> bool:
             market_id = market.identity.market_id
@@ -823,9 +809,7 @@ class MultiAssetPublicRuntime:
             # stage advances, and markets ahead remain unchanged.
             if not members or any(blocked(market) or not current(market) for market in members):
                 return {}
-            minimum = min(
-                members, key=lambda market: _PRE_ACTIVE_ORDER[market.lifecycle]
-            ).lifecycle
+            minimum = min(members, key=lambda market: _PRE_ACTIVE_ORDER[market.lifecycle]).lifecycle
             if minimum is MarketLifecycle.WARMING:
                 return {
                     market.identity.market_id: MarketLifecycle.HISTORY_READY
@@ -856,9 +840,7 @@ class MultiAssetPublicRuntime:
                     if market.lifecycle is MarketLifecycle.HISTORY_READY
                     else MarketLifecycle.ACTIVE
                 )
-        if updates and any(
-            blocked(market) or not current(market) for market in active_selected
-        ):
+        if updates and any(blocked(market) or not current(market) for market in active_selected):
             # A Registry switch at T requires the current ACTIVE cohort to be
             # coherent at T (packet section 14).
             return {}
@@ -914,9 +896,7 @@ class MultiAssetPublicRuntime:
             expected_successor_hash=successor.content_hash,
             required_evidence_market_ids=evidence_market_ids,
         )
-        self.registry.apply_witness(
-            witness, evidence_authority=self.authority
-        )
+        self.registry.apply_witness(witness, evidence_authority=self.authority)
 
     def _window(self) -> tuple[int, int]:
         end_ms = int(self.clock().timestamp() * 1000)
@@ -969,8 +949,7 @@ class MultiAssetPublicRuntime:
         """Prove durable history ended exactly at one captured cohort target."""
         return (
             not self.authority.market_failed(market.identity.market_id)
-            and self.authority.store.last_open(market.identity.market_id)
-            == target_open_time_ms
+            and self.authority.store.last_open(market.identity.market_id) == target_open_time_ms
         )
 
     def _history_current(self, market: RegistryMarket) -> bool:
@@ -1100,20 +1079,14 @@ class MultiAssetPublicRuntime:
             if shutdown.is_set():
                 return False
             cohort = self._capture_cohort()
-            results = await self._warmup_all(
-                recovery=True, shutdown=shutdown, cohort=cohort
-            )
+            results = await self._warmup_all(recovery=True, shutdown=shutdown, cohort=cohort)
             if shutdown.is_set():
                 return False
             selected = self.selected_markets()
             if self._cohort_identity() != cohort.identity:
                 return False
             if len(results) != len(selected):
-                missing = tuple(
-                    item
-                    for item in selected
-                    if item.identity.market_id not in results
-                )
+                missing = tuple(item for item in selected if item.identity.market_id not in results)
                 if (
                     not anomaly_recovery_available
                     or not missing
@@ -1134,9 +1107,7 @@ class MultiAssetPublicRuntime:
                     return False
                 if self._cohort_identity() != cohort.identity:
                     return False
-                results = await self._warmup_all(
-                    recovery=True, shutdown=shutdown, cohort=cohort
-                )
+                results = await self._warmup_all(recovery=True, shutdown=shutdown, cohort=cohort)
                 if shutdown.is_set():
                     return False
                 selected = self.selected_markets()
@@ -1144,9 +1115,7 @@ class MultiAssetPublicRuntime:
                     return False
                 if len(results) != len(selected):
                     return False
-            if not all(
-                self._history_current_at(item, cohort.target_open_ms) for item in selected
-            ):
+            if not all(self._history_current_at(item, cohort.target_open_ms) for item in selected):
                 return False
             if self._latest_completed_open() == cohort.target_open_ms:
                 return True
@@ -1211,9 +1180,7 @@ class MultiAssetPublicRuntime:
             child = ticker if ticker in done else session_loop
             component = "barrier ticker" if child is ticker else "session loop"
             state = "was cancelled" if child.cancelled() else "returned normally"
-            raise RuntimeError(
-                f"RUNTIME_CRITICAL_CHILD_EXIT_UNEXPECTED: {component} {state}"
-            )
+            raise RuntimeError(f"RUNTIME_CRITICAL_CHILD_EXIT_UNEXPECTED: {component} {state}")
         finally:
             for child in (session_loop, ticker):
                 if not child.done():
@@ -1267,9 +1234,7 @@ class MultiAssetPublicRuntime:
                 self._expected_acks = set(expected_acks)
                 self.health.expected_acknowledgements = len(expected_acks)
                 self.health.ws_phase = "CONNECTED"
-                self._emit_session_event(
-                    "CONNECTION", connection_count=self.health.connections
-                )
+                self._emit_session_event("CONNECTION", connection_count=self.health.connections)
                 session.receiver_task = asyncio.create_task(
                     self._receive_session(session), name="hyperliquid-ws-receiver"
                 )
@@ -1404,9 +1369,7 @@ class MultiAssetPublicRuntime:
 
     def _bound_subscriptions(
         self,
-    ) -> tuple[
-        tuple[dict[str, object], ...], tuple[_SubscriptionProjection, ...]
-    ]:
+    ) -> tuple[tuple[dict[str, object], ...], tuple[_SubscriptionProjection, ...]]:
         registry = self.acquisition_registry()
         projections = tuple(
             sorted(
@@ -1429,9 +1392,7 @@ class MultiAssetPublicRuntime:
         _, identity = self._bound_subscriptions()
         return identity
 
-    def _require_current_subscription_identity(
-        self, session: _ConnectionSession
-    ) -> None:
+    def _require_current_subscription_identity(self, session: _ConnectionSession) -> None:
         current = self._current_subscription_identity()
         if current == session.subscription_identity:
             return
@@ -1534,12 +1495,8 @@ class MultiAssetPublicRuntime:
                     raise
                 except Exception as exc:
                     self.health.heartbeat_failures += 1
-                    self._emit_session_event(
-                        "HEARTBEAT_FAILURE", error_type=type(exc).__name__
-                    )
-                    self._fail_session(
-                        session, ReconnectRequired("application heartbeat failed")
-                    )
+                    self._emit_session_event("HEARTBEAT_FAILURE", error_type=type(exc).__name__)
+                    self._fail_session(session, ReconnectRequired("application heartbeat failed"))
                     return
                 self.health.heartbeat_sent += 1
                 self._emit_session_event(
@@ -1745,3 +1702,212 @@ class MultiAssetPublicRuntime:
             if len(self.health.callback_failures) > _MAX_CALLBACK_FAILURES:
                 del self.health.callback_failures[:-_MAX_CALLBACK_FAILURES]
             return None
+
+
+class E4ThreeSetupRuntime:
+    """Single consumer lane for E4 admissions; never opens provider transport."""
+
+    def __init__(
+        self,
+        *,
+        projection: E4MarketTruthProjection,
+        registry: MarketRegistryManager,
+        clock: Callable[[], datetime],
+        queue_size: int = 2_048,
+    ) -> None:
+        import asyncio
+
+        self.projection = projection
+        self.registry = registry
+        self.clock = clock
+        self._queue: asyncio.Queue[AdmittedEvent] = asyncio.Queue(maxsize=queue_size)
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self.on_finalized_5m: (
+            Callable[[ClosedBar, BoundaryMode], Awaitable[BoundaryReport]] | None
+        ) = None
+        self.on_maintenance_5m: Callable[[int], Awaitable[None]] | None = None
+        self.on_completed_1m: Callable[[], Awaitable[OutcomeCadenceReport]] | None = None
+        self.on_domain_error: Callable[[str, str, str], None] | None = None
+        self.on_reconnect: Callable[[int], None] | None = None
+        self.on_session_event: Callable[[str, dict[str, object]], None] | None = None
+        self._processed: set[int] = set()
+        self._maintained: set[int] = set()
+
+    def readiness_snapshot(self) -> RuntimeReadinessSnapshot:
+        return self.projection.readiness_snapshot()
+
+    def offer_admission(self, event: AdmittedEvent, _instrument: object | None = None) -> None:
+        loop = self._loop
+        if loop is None:
+            raise RuntimeError("E4 Three Setup consumer is not running")
+
+        def enqueue() -> None:
+            try:
+                self._queue.put_nowait(event)
+            except asyncio.QueueFull:
+                market_id = event.source.market_id
+                self.projection.fail_market(market_id)
+                if self.on_domain_error is not None:
+                    self.on_domain_error(market_id, event.admission_hash, "QUEUE_FULL")
+
+        loop.call_soon_threadsafe(enqueue)
+
+    async def run(self, shutdown: asyncio.Event) -> None:
+        self._loop = asyncio.get_running_loop()
+        try:
+            while not shutdown.is_set():
+                try:
+                    event = await asyncio.wait_for(self._queue.get(), timeout=1.0)
+                except TimeoutError:
+                    continue
+                try:
+                    interval = self.projection.accept(event)
+                    if interval == "5m":
+                        await self._on_5m(event)
+                    elif interval == "1m" and self.on_completed_1m is not None:
+                        report = await self.on_completed_1m()
+                        if report.failure is not None:
+                            self.projection.fail_market(event.source.market_id)
+                            if self.on_domain_error is not None:
+                                self.on_domain_error(
+                                    event.source.market_id,
+                                    event.admission_hash,
+                                    report.failure.error_type,
+                                )
+                except Exception as exc:
+                    market_id = event.source.market_id
+                    self.projection.fail_market(market_id)
+                    if self.on_domain_error is not None:
+                        self.on_domain_error(market_id, event.admission_hash, type(exc).__name__)
+                finally:
+                    self._queue.task_done()
+        finally:
+            self._loop = None
+
+    async def _on_5m(self, event: AdmittedEvent) -> None:
+        open_ms = event.source.ts_event // 1_000_000
+        self.registry.reconcile_pending()
+        if self.registry.active() is None:
+            pending = self.registry.pending_version()
+            if pending is not None:
+                from .registry import RegistryError
+
+                witness = self.registry.issue_initial_e4_witness(boundary_open_time_ms=open_ms)
+                try:
+                    self.registry.apply_initial_e4_witness(
+                        witness, evidence_authority=self.projection
+                    )
+                except RegistryError as exc:
+                    if "incomplete" not in str(exc):
+                        raise
+            return
+        if open_ms not in self._maintained and self.on_maintenance_5m is not None:
+            self._maintained.add(open_ms)
+            await self.on_maintenance_5m(open_ms)
+        active = self.registry.active()
+        if active is None:
+            return
+        active_members = tuple(
+            item for item in active.markets if item.lifecycle is MarketLifecycle.ACTIVE
+        )
+        if not active_members:
+            self._reconcile_registry(open_ms, active)
+            return
+        if open_ms in self._processed or self.on_finalized_5m is None:
+            return
+        now_ms = int(self.clock().timestamp() * 1_000)
+        mode = (
+            BoundaryMode.LIVE_ACTIONABLE
+            if event.out_of_order is False and now_ms <= open_ms + 360_000
+            else BoundaryMode.RECOVERY_CONTEXT_ONLY
+        )
+        readiness = self.readiness_snapshot()
+        active = self.registry.active()
+        if active is None:
+            return
+        required = {
+            item.identity.market_id
+            for item in active.markets
+            if item.lifecycle is MarketLifecycle.ACTIVE
+        }
+        if mode is BoundaryMode.LIVE_ACTIONABLE and not required.issubset(
+            readiness.ready_market_ids
+        ):
+            return
+        bars = self.projection.store.tail_bars(
+            event.source.market_id, at_or_before_ms=open_ms, limit=1
+        )
+        if not bars or bars[-1].open_time_ms != open_ms:
+            return
+        report = await self.on_finalized_5m(bars[-1], mode)
+        if report.disposition.value != "DEFERRED_WAITING_FOR_PEERS":
+            self._processed.add(open_ms)
+            self._reconcile_registry(open_ms, active)
+
+    def _reconcile_registry(self, open_ms: int, active: RegistryVersion) -> None:
+        """Apply at most one exact E4-proven successor after the T domain lane."""
+        selected_ids = frozenset(item.identity.market_id for item in active.markets)
+        active_ids = frozenset(
+            item.identity.market_id
+            for item in active.markets
+            if item.lifecycle is MarketLifecycle.ACTIVE
+        )
+        evidence_ids = active_ids or selected_ids
+        if not self.projection.prove_boundary_evidence(
+            boundary_open_time_ms=open_ms,
+            market_ids=evidence_ids,
+            base_registry_version=active.version,
+            base_registry_hash=active.content_hash,
+        ):
+            return
+        pending = self.registry.pending_version()
+        if pending is None:
+            pre_active = tuple(
+                item
+                for item in active.markets
+                if item.lifecycle
+                in (
+                    MarketLifecycle.WARMING,
+                    MarketLifecycle.HISTORY_READY,
+                    MarketLifecycle.SNAPSHOT_READY,
+                )
+            )
+            if not pre_active:
+                return
+            if not self.projection.prove_initial_boundary_evidence(
+                boundary_open_time_ms=open_ms,
+                market_ids=selected_ids,
+                pending_registry_version=active.version,
+                pending_registry_hash=active.content_hash,
+            ):
+                return
+            minimum = min(
+                pre_active,
+                key=lambda item: (
+                    MarketLifecycle.WARMING,
+                    MarketLifecycle.HISTORY_READY,
+                    MarketLifecycle.SNAPSHOT_READY,
+                ).index(item.lifecycle),
+            ).lifecycle
+            next_stage = {
+                MarketLifecycle.WARMING: MarketLifecycle.HISTORY_READY,
+                MarketLifecycle.HISTORY_READY: MarketLifecycle.SNAPSHOT_READY,
+                MarketLifecycle.SNAPSHOT_READY: MarketLifecycle.ACTIVE,
+            }[minimum]
+            updates = {
+                item.identity.market_id: next_stage
+                for item in pre_active
+                if item.lifecycle is minimum
+            }
+            pending = self.registry.ensure_lifecycle_successor(updates=updates, now=self.clock())
+            self.registry.request_apply(pending.version)
+            evidence_ids = selected_ids
+        witness = self.registry._issue_cohort_witness(
+            boundary_open_time_ms=open_ms,
+            base_registry_version=active.version,
+            base_registry_hash=active.content_hash,
+            expected_successor_version=pending.version,
+            expected_successor_hash=pending.content_hash,
+            required_evidence_market_ids=evidence_ids,
+        )
+        self.registry.apply_witness(witness, evidence_authority=self.projection)

@@ -17,6 +17,7 @@ from trader_assist_v0.nautilus_e4.contracts import (
     POST_TERMINAL_CONTEXT_NS,
     POST_TERMINAL_MICRO_NS,
     PRE_DECISION_RETENTION_NS,
+    AdmittedEvent,
     DataKind,
     DecisionState,
     EvidenceState,
@@ -813,3 +814,92 @@ def test_structural_package_rejects_synthetic_nonincreasing_active_valid_time() 
             created_ts=BASE + 2_000_000_000,
             active_valid_ts=BASE + 2_000_000_000,
         )
+
+
+def test_native_depth10_full_levels_preserve_top_ref() -> None:
+    """The host publishes the old top ref from one fully retained native book."""
+    pytest.importorskip("nautilus_trader")
+    from decimal import Decimal
+    from types import SimpleNamespace
+
+    from trader_assist_v0.nautilus_e4.host import NautilusE4CaptureStrategy
+
+    expression = _expression(MARKET_A, "ETH")
+    source_events: list[SourceEvent] = []
+    order: list[str] = []
+    published: list[object] = []
+
+    class Session:
+        def ingest(self, source: SourceEvent, *, admission_ts: int) -> object:
+            source_events.append(source)
+            event = AdmittedEvent.create(
+                schema_version="E4_CAPTURE_V1", process_epoch="process-1",
+                continuity_epoch="continuity-1", admission_epoch="admission-1",
+                admission_ordinal=1, admission_ts=admission_ts,
+                source_identity=source.replay_identity, out_of_order=False,
+                continuity_state=EvidenceState.COMPLETE, source=source,
+            )
+            return SimpleNamespace(event=event)
+
+        def persist_durable_evidence(self, *, reason: str) -> None:
+            order.append(reason)
+
+    class Fanout:
+        def publish(self, _publish: object, ref: object) -> None:
+            published.append(ref)
+
+        def record_subscriber_failure(self, error: Exception) -> None:
+            raise AssertionError(str(error))
+
+    fake = SimpleNamespace(
+        _expression_for=lambda _depth: expression,
+        _session=Session(), _depth10_gate=SimpleNamespace(admit=lambda **_: None),
+        _markettruth_fanout=Fanout(),
+        publish_message=lambda *_: None,
+        clock=SimpleNamespace(timestamp_ns=lambda: BASE + 100),
+        _observe_admission=lambda _outcome: order.append("domain"),
+    )
+    depth = SimpleNamespace(
+        bids=[SimpleNamespace(price=Decimal("100") - Decimal(i) / 10,
+                              size=Decimal("1")) for i in range(10)],
+        asks=[SimpleNamespace(price=Decimal("101") + Decimal(i) / 10,
+                              size=Decimal("1")) for i in range(10)],
+        ts_event=BASE, ts_init=BASE + 1,
+    )
+    NautilusE4CaptureStrategy.on_book_depth(fake, depth)
+    assert len(source_events) == 1 and len(published) == 1
+    assert len(source_events[0].payload["bids"]) == 10
+    assert len(source_events[0].payload["asks"]) == 10
+    assert source_events[0].payload["bid_price"] == "100"
+    assert published[0].bid_price == "100"
+    assert order == ["DEPTH10_ADMITTED", "domain"]
+
+
+def test_domain_observer_failure_is_observable_and_capture_continues() -> None:
+    pytest.importorskip("nautilus_trader")
+    from types import SimpleNamespace
+
+    from trader_assist_v0.nautilus_e4.host import NautilusE4CaptureStrategy
+
+    source = _event(1)
+    event = AdmittedEvent.create(
+        schema_version="E4_CAPTURE_V1", process_epoch="process-1",
+        continuity_epoch="continuity-1", admission_epoch="admission-1",
+        admission_ordinal=1, admission_ts=source.ts_init,
+        source_identity=source.replay_identity, out_of_order=False,
+        continuity_state=EvidenceState.COMPLETE, source=source,
+    )
+    failures: list[Exception] = []
+
+    def failing(_event: object, _instrument: object) -> None:
+        raise ValueError("domain adapter")
+
+    fake = SimpleNamespace(
+        _admitted_event_observer=failing,
+        _admitted_observer_failures=[],
+        _markettruth_fanout=SimpleNamespace(record_subscriber_failure=failures.append),
+        cache=SimpleNamespace(instrument=lambda _id: object()),
+    )
+    NautilusE4CaptureStrategy._observe_admission(fake, SimpleNamespace(event=event))
+    assert len(failures) == 1
+    assert fake._admitted_observer_failures[0]["admission_hash"] == event.admission_hash

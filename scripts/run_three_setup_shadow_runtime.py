@@ -16,6 +16,7 @@ from trader_assist_v0.multi_asset_shadow.production import (
     ThreeSetupProductionError,
     compose_three_setup_application,
     load_three_setup_config,
+    validate_three_setup_e4_identity,
 )
 from trader_assist_v0.runtime.first_launch_notification import HttpsWebhookTransport
 
@@ -36,6 +37,7 @@ async def _run(arguments: argparse.Namespace) -> None:
         arguments.notification_credential_file, timeout_seconds=10.0
     )
     if arguments.validate_only:
+        validate_three_setup_e4_identity(config)
         return
     application = compose_three_setup_application(
         config=config,

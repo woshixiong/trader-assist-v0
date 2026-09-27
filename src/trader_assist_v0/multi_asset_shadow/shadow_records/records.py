@@ -435,6 +435,45 @@ class OutcomeBarEvidence(ImmutableRecord):
     )
 
 
+class E4MarketBarReference(ImmutableRecord):
+    """Registry-bound 5m lineage only; E4 remains the OHLC owner."""
+
+    record_type = "e4_market_bar_ref"
+    required_fields = frozenset(
+        {
+            "market_id",
+            "open_time_ms",
+            "registry_version",
+            "registry_content_hash",
+            "e4_run_id",
+            "admission_hash",
+            "admission_ordinal",
+            "source_identity",
+        }
+    )
+
+
+class OutcomeE4BarReference(ImmutableRecord):
+    """One Outcome 1m lineage reference without market OHLC duplication."""
+
+    record_type = "outcome_e4_bar_ref"
+    required_fields = frozenset(
+        {
+            "market_id",
+            "open_time_ms",
+            "canonical_hash",
+            "e4_run_id",
+            "e4_root",
+            "admission_epoch",
+            "admission_hash",
+            "admission_ordinal",
+            "source_identity",
+            "continuity_epoch",
+            "process_epoch",
+        }
+    )
+
+
 class CorrelationIdentifier(ImmutableRecord):
     record_type = "correlation_identifier"
     required_fields = frozenset(
@@ -464,6 +503,8 @@ RECORD_TYPES: dict[str, type[ImmutableRecord]] = {
         OutcomeEnvelope,
         OutcomeTransitionEvidence,
         OutcomeBarEvidence,
+        E4MarketBarReference,
+        OutcomeE4BarReference,
         CorrelationIdentifier,
         NotificationOutboxReference,
     )

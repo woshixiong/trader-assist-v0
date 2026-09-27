@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
+from typing import TYPE_CHECKING, cast
 
 from .data import MultiAssetDataAuthority
 from .hyperliquid_public import (
@@ -22,6 +23,7 @@ from .hyperliquid_public import (
     PublicDataError,
 )
 from .integration import (
+    E4OneMinuteProvider,
     EvidenceOneMinuteProvider,
     EvidenceOutbox,
     EvidenceOutcomeAdapter,
@@ -39,9 +41,17 @@ from .notification_engine import NotificationKind, ScannerWatchNotificationView
 from .outcome_engine import FormalShadowOutcome, OutcomeEngine, OutcomeEngineError
 from .planning import CostModel, PlanningError, PlanRejection
 from .registry import MarketRegistryManager
-from .runtime import BoundaryMode, MultiAssetPublicRuntime, RuntimeReadinessSnapshot
+from .runtime import (
+    BoundaryMode,
+    E4ThreeSetupRuntime,
+    MultiAssetPublicRuntime,
+    RuntimeReadinessSnapshot,
+)
 from .shadow_records import EvidenceStore, FormalizationDispositionStatus
 from .strategy_kernel import ScannerChase, ScannerState
+
+if TYPE_CHECKING:
+    from .e4_markettruth import E4MarketTruthProjection, E4PlanningData
 
 _FIVE_MINUTES_MS = 300_000
 _MAX_FORMAL_ATTEMPTS = 3
@@ -111,14 +121,14 @@ class MultiAssetProductionBootstrap:
         self,
         *,
         registry: MarketRegistryManager,
-        data_authority: MultiAssetDataAuthority,
+        data_authority: MultiAssetDataAuthority | E4MarketTruthProjection,
         evidence: EvidenceStore,
         outbox: EvidenceOutbox,
         outcome_adapter: EvidenceOutcomeAdapter,
         outcome_engine: OutcomeEngine,
-        planning_data: HyperliquidPublicPlanningAdapter,
+        planning_data: HyperliquidPublicPlanningAdapter | E4PlanningData,
         coordinator: MultiAssetShadowCoordinator,
-        runtime: MultiAssetPublicRuntime,
+        runtime: MultiAssetPublicRuntime | E4ThreeSetupRuntime,
         clock: Callable[[], datetime],
         sleep: Callable[[float], Awaitable[None]],
     ) -> None:
@@ -193,6 +203,59 @@ class MultiAssetProductionBootstrap:
         )
         runtime.on_finalized_5m = application.on_finalized_5m
         runtime.on_maintenance_5m = application.on_maintenance_5m
+        return application
+
+    @classmethod
+    def compose_e4(
+        cls,
+        *,
+        registry: MarketRegistryManager,
+        projection: E4MarketTruthProjection,
+        evidence: EvidenceStore,
+        cost_model: CostModel,
+        release_sha: str,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> MultiAssetProductionBootstrap:
+        """Bind the mature domain to one E4 read authority without public REST/WS."""
+        from .e4_markettruth import E4PlanningData
+
+        outbox = EvidenceOutbox(evidence)
+        outcome_adapter = EvidenceOutcomeAdapter(evidence, e4_projection=projection)
+        outcome = outcome_adapter.restore_engine(
+            now_ms=_clock_ms(clock), provider=E4OneMinuteProvider(projection)
+        )
+        planning = E4PlanningData(projection)
+        runtime = E4ThreeSetupRuntime(projection=projection, registry=registry, clock=clock)
+        coordinator = MultiAssetShadowCoordinator(
+            registry=registry,
+            data_authority=projection,
+            evidence=evidence,
+            outbox=outbox,
+            outcome_engine=outcome,
+            outcome_adapter=outcome_adapter,
+            planning_data=planning,
+            cost_model=cost_model,
+            release_sha=release_sha,
+            runtime_readiness=runtime,
+            clock=clock,
+        )
+        application = cls(
+            registry=registry,
+            data_authority=projection,
+            evidence=evidence,
+            outbox=outbox,
+            outcome_adapter=outcome_adapter,
+            outcome_engine=outcome,
+            planning_data=planning,
+            coordinator=coordinator,
+            runtime=runtime,
+            clock=clock,
+            sleep=sleep,
+        )
+        runtime.on_finalized_5m = application.on_finalized_5m
+        runtime.on_maintenance_5m = application.on_maintenance_5m
+        runtime.on_completed_1m = application.advance_outcomes_async
         return application
 
     async def on_finalized_5m(self, bar: ClosedBar, mode: BoundaryMode) -> BoundaryReport:
@@ -489,9 +552,10 @@ class MultiAssetProductionBootstrap:
                     raise PublicDataError("Formal absolute boundary deadline expired")
                 now_ms = _clock_ms(self.clock)
                 if hasattr(self.planning_data, "fetch_raw_l2"):
+                    raw_planning = cast(HyperliquidPublicPlanningAdapter, self.planning_data)
                     try:
                         raw = await asyncio.wait_for(
-                            asyncio.to_thread(self.planning_data.fetch_raw_l2, market=market),
+                            asyncio.to_thread(raw_planning.fetch_raw_l2, market=market),
                             timeout=remaining,
                         )
                     except TimeoutError as exc:
@@ -508,7 +572,7 @@ class MultiAssetProductionBootstrap:
                             f"coin={market.identity.coin}"
                         )
                     self._validate_live_context(readiness, pending.source_open_time_ms, deadline_ms)
-                    self.planning_data.stage_raw_l2(market=market, response=raw, now_ms=now_ms)
+                    raw_planning.stage_raw_l2(market=market, response=raw, now_ms=now_ms)
                 result = self.coordinator.process_retained_formal_decision(
                     strategy_evaluation_id=pending.strategy_evaluation_id,
                     strategy_decision_id=pending.strategy_decision_id,
@@ -572,6 +636,10 @@ class MultiAssetProductionBootstrap:
         now_ms = _clock_ms(self.clock)
         provider = self.outcome_engine.provider
         if provider is None:
+            return self.advance_outcomes()
+        if isinstance(provider, EvidenceOneMinuteProvider) and isinstance(
+            provider.provider, E4OneMinuteProvider
+        ):
             return self.advance_outcomes()
         if not isinstance(provider, EvidenceOneMinuteProvider):
             return OutcomeCadenceReport(
@@ -695,14 +763,15 @@ class MultiAssetProductionBootstrap:
                         ),
                     )
                 async with semaphore:
-                    raw = await asyncio.to_thread(self.planning_data.fetch_raw_l2, market=market)
+                    raw_planning = cast(HyperliquidPublicPlanningAdapter, self.planning_data)
+                    raw = await asyncio.to_thread(raw_planning.fetch_raw_l2, market=market)
                 now_ms = _clock_ms(self.clock)
                 if now_ms > deadline_ms:
                     raise PublicDataError("late Scanner worker result discarded")
-                self.planning_data.stage_raw_l2(market=market, response=raw, now_ms=now_ms)
+                raw_planning.stage_raw_l2(market=market, response=raw, now_ms=now_ms)
                 return (
                     market.identity.market_id,
-                    self.planning_data.scanner_snapshot_from_staged(
+                    raw_planning.scanner_snapshot_from_staged(
                         market=market, now_ms=now_ms, btc_returns=btc_returns
                     ),
                 )
@@ -804,9 +873,7 @@ def _failure(stage: str, market_id: str | None, error: Exception) -> BoundaryFai
         market_id,
         type(error).__name__,
         str(error),
-        provider_coin=(
-            error.provider_coin if isinstance(error, ScannerMarketFailure) else None
-        ),
+        provider_coin=(error.provider_coin if isinstance(error, ScannerMarketFailure) else None),
         provider_provenance=(
             error.provider_provenance if isinstance(error, ScannerMarketFailure) else None
         ),

@@ -12,7 +12,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
 from trader_assist_v0.runtime.first_launch_notification import (
@@ -108,7 +108,7 @@ from .shadow_records import (
 from .shadow_records import (
     MarketEvent as EvidenceMarketEvent,
 )
-from .shadow_records.records import ImmutableRecord
+from .shadow_records.records import ImmutableRecord, OutcomeE4BarReference
 from .shadow_records.store import EvidenceQueryCounters
 from .strategy_continuation import (
     REPRESENTATION_VERSION,
@@ -160,6 +160,9 @@ from .strategy_kernel.scanner import (
     advance_scanner_candidate,
     classify_scanner_state,
 )
+
+if TYPE_CHECKING:
+    from .e4_markettruth import E4MarketTruthProjection
 
 
 class IntegrationError(ValueError):
@@ -980,9 +983,12 @@ def _record_ids(store: EvidenceStore, record_type: str) -> tuple[str, ...]:
 class EvidenceOutcomeAdapter(OutcomeSink):
     """Persist outcome snapshots and rebuild Formal 1m demand from Evidence."""
 
-    def __init__(self, store: EvidenceStore) -> None:
+    def __init__(
+        self, store: EvidenceStore, *, e4_projection: E4MarketTruthProjection | None = None
+    ) -> None:
         self._store = store
         self._engine: OutcomeEngine | None = None
+        self._e4_projection = e4_projection
 
     def bind_engine(self, engine: OutcomeEngine) -> None:
         """Bind the event-loop-owned live working set used for persistence checks."""
@@ -1020,7 +1026,9 @@ class EvidenceOutcomeAdapter(OutcomeSink):
             evaluated_at_ms=outcome.evaluated_at_ms,
             path_maturity_status=outcome.path_maturity_status.value,
             unresolved=outcome.unresolved,
-            outcome_source="ON_DEMAND_PUBLIC_1M",
+            outcome_source=(
+                "E4_ADMITTED_1M" if self._e4_projection is not None else "ON_DEMAND_PUBLIC_1M"
+            ),
             outcome_r=outcome_r,
             outcome_mfe=None if horizon_120 is None else _optional_decimal(horizon_120.mfe),
             outcome_mae=None if horizon_120 is None else _optional_decimal(horizon_120.mae),
@@ -1046,7 +1054,7 @@ class EvidenceOutcomeAdapter(OutcomeSink):
                 continue
             retained = self._store._connection.execute(
                 """SELECT 1 FROM immutable_records
-                   WHERE record_type = 'outcome_bar'
+                   WHERE record_type IN ('outcome_bar', 'outcome_e4_bar_ref')
                      AND json_extract(payload_json, '$.market_id') = ?
                      AND json_extract(payload_json, '$.open_time_ms') = ?
                      AND json_extract(payload_json, '$.canonical_hash') = ?
@@ -1103,9 +1111,13 @@ class EvidenceOutcomeAdapter(OutcomeSink):
             raise RecordError("retained Outcome typed-table identity is invalid")
         return tuple(record for record in values if isinstance(record, OutcomeEnvelope))
 
-    def _persist_provider_bars(
-        self, bars: tuple[OneMinuteBar, ...]
-    ) -> tuple[OutcomeBarEvidence, ...]:
+    def _persist_provider_bars(self, bars: tuple[OneMinuteBar, ...]) -> tuple[ImmutableRecord, ...]:
+        if self._e4_projection is not None:
+            records: tuple[ImmutableRecord, ...] = tuple(
+                self._e4_projection.outcome_reference(bar) for bar in bars
+            )
+            self._store._write_controlled(records)
+            return records
         records = tuple(
             OutcomeBarEvidence.create(
                 identity={
@@ -1121,9 +1133,10 @@ class EvidenceOutcomeAdapter(OutcomeSink):
         return records
 
     def _retained_transitions(self) -> tuple[OutcomeTransitionView, ...]:
-        if self._store._connection.execute(
-            "SELECT 1 FROM outcome_transitions LIMIT 1"
-        ).fetchone() is not None:
+        if (
+            self._store._connection.execute("SELECT 1 FROM outcome_transitions LIMIT 1").fetchone()
+            is not None
+        ):
             raise RecordError("retained Outcome transitions have no production authority")
         return ()
 
@@ -1142,12 +1155,17 @@ class EvidenceOutcomeAdapter(OutcomeSink):
                 else:
                     merged.append((start, end))
             for start, end in merged:
+                record_type_filter = (
+                    "record_type = 'outcome_bar'"
+                    if self._e4_projection is None
+                    else "record_type IN ('outcome_bar', 'outcome_e4_bar_ref')"
+                )
                 records = self._store._query_records(
                     "outcome.restore.bars_range",
-                    """SELECT record_id, record_type, canonical_hash,
+                    f"""SELECT record_id, record_type, canonical_hash,
                               identity_json, payload_json
                        FROM immutable_records
-                       WHERE record_type = 'outcome_bar'
+                       WHERE {record_type_filter}
                          AND json_extract(payload_json, '$.market_id') = ?
                          AND json_extract(payload_json, '$.open_time_ms') >= ?
                          AND json_extract(payload_json, '$.open_time_ms') < ?
@@ -1156,6 +1174,13 @@ class EvidenceOutcomeAdapter(OutcomeSink):
                     (market_id, start, end),
                 )
                 for record in records:
+                    if isinstance(record, OutcomeE4BarReference):
+                        if self._e4_projection is None:
+                            raise RecordError(
+                                "E4 Outcome reference lacks shared evidence authority"
+                            )
+                        values.append(self._e4_projection.resolve_outcome_reference(record))
+                        continue
                     if not isinstance(record, OutcomeBarEvidence):
                         raise RecordError("retained Outcome bar typed-table identity is invalid")
                     payload = record.payload
@@ -1335,6 +1360,26 @@ class EvidenceOneMinuteProvider:
         )
         self.adapter._persist_provider_bars(bars)
         return bars
+
+
+class E4OneMinuteProvider:
+    """Outcome recovery reads completed 1m bars from shared E4 evidence only."""
+
+    def __init__(self, projection: E4MarketTruthProjection) -> None:
+        self.projection = projection
+
+    def subscribe_1m(self, *, market_id: str) -> None:
+        del market_id
+
+    def unsubscribe_1m(self, *, market_id: str) -> None:
+        del market_id
+
+    def backfill_1m(
+        self, *, market_id: str, start_ms: int, end_ms: int
+    ) -> tuple[OneMinuteBar, ...]:
+        if start_ms < 0 or end_ms < start_ms or end_ms - start_ms > 4_096 * 60_000:
+            raise OutcomeEngineError("E4 1m recovery window is invalid")
+        return self.projection.one_minute_window(market_id, start_ms, end_ms)
 
 
 @dataclass(frozen=True)
@@ -1561,7 +1606,7 @@ class MultiAssetShadowCoordinator:
         self,
         *,
         registry: MarketRegistryManager,
-        data_authority: MultiAssetDataAuthority,
+        data_authority: MultiAssetDataAuthority | E4MarketTruthProjection,
         evidence: EvidenceStore,
         outbox: EvidenceOutbox,
         outcome_engine: OutcomeEngine,
@@ -2555,9 +2600,7 @@ class MultiAssetShadowCoordinator:
                     "latest_closed_5m_hash": retained[-1].canonical_hash,
                     "source_history_count": state.total_5m,
                     "source_history_commitment": state.source_history_commitment,
-                    "exact_wilder_atr_5m": None
-                    if exact_atr is None
-                    else _decimal(exact_atr),
+                    "exact_wilder_atr_5m": None if exact_atr is None else _decimal(exact_atr),
                     "bars": [
                         {
                             "open_time_ms": item.open_time_ms,
@@ -2871,9 +2914,10 @@ class MultiAssetShadowCoordinator:
         latest: dict[str, tuple[int, EvidenceCandidate]] = {}
         slots: set[tuple[str, int]] = set()
         lower_bound = before_boundary_open_time_ms - 13 * 300_000
-        records = list(self._evidence._query_records(
-            "candidate.progression_window",
-            """SELECT record_id, record_type, canonical_hash, identity_json, payload_json
+        records = list(
+            self._evidence._query_records(
+                "candidate.progression_window",
+                """SELECT record_id, record_type, canonical_hash, identity_json, payload_json
                FROM immutable_records
                WHERE record_type = 'candidate'
                  AND json_extract(payload_json, '$.live_authority') = 1
@@ -2881,8 +2925,9 @@ class MultiAssetShadowCoordinator:
                  AND json_extract(payload_json, '$.source_boundary_open_time_ms') >= ?
                  AND json_extract(payload_json, '$.source_boundary_open_time_ms') < ?
                ORDER BY json_extract(payload_json, '$.source_boundary_open_time_ms') DESC""",
-            (market_id, lower_bound, before_boundary_open_time_ms),
-        ))
+                (market_id, lower_bound, before_boundary_open_time_ms),
+            )
+        )
         predecessor = self._evidence._query_records(
             "candidate.progression_predecessor",
             """SELECT record_id, record_type, canonical_hash, identity_json, payload_json
@@ -2897,9 +2942,7 @@ class MultiAssetShadowCoordinator:
         )
         records.extend(predecessor)
         for record in records:
-            if (
-                not isinstance(record, EvidenceCandidate)
-            ):
+            if not isinstance(record, EvidenceCandidate):
                 continue
             boundary = int(record.payload.get("source_boundary_open_time_ms", -1))
             if boundary >= before_boundary_open_time_ms:
