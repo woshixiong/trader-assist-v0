@@ -349,13 +349,18 @@ def test_outcome_ref_restarts_without_ohlc_duplicate(tmp_path: Path) -> None:
 def test_active_entrypoint_never_constructs_legacy_market_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    import inspect
     import sys
     from types import ModuleType
 
+    from trader_assist_v0.multi_asset_shadow import bootstrap as legacy_bootstrap
+    from trader_assist_v0.multi_asset_shadow import data as legacy_data
+    from trader_assist_v0.multi_asset_shadow import hyperliquid_public as legacy_public
     from trader_assist_v0.multi_asset_shadow import production
     from trader_assist_v0.multi_asset_shadow.planning import CostModel
 
     markets, e4, domain, registry, projection = _setup(tmp_path)
+    del markets, registry
     projection.close()
     domain.close()
     root = tmp_path / "state"
@@ -368,9 +373,11 @@ def test_active_entrypoint_never_constructs_legacy_market_path(
         calls.append("legacy")
         raise AssertionError("legacy public market path reached")
 
-    monkeypatch.setattr(production, "HyperliquidPublicClient", forbidden)
-    monkeypatch.setattr(production, "ClosedBarStore", forbidden)
-    monkeypatch.setattr(production, "MultiAssetDataAuthority", forbidden)
+    monkeypatch.setattr(legacy_data, "ClosedBarStore", forbidden)
+    monkeypatch.setattr(legacy_data, "MultiAssetDataAuthority", forbidden)
+    monkeypatch.setattr(legacy_public, "HyperliquidPublicClient", forbidden)
+    monkeypatch.setattr(legacy_public, "OfficialMetadataValidator", forbidden)
+    monkeypatch.setattr(legacy_bootstrap.MultiAssetProductionBootstrap, "compose", forbidden)
 
     class Node:
         def add_strategy(self, strategy: object) -> None:
@@ -411,6 +418,14 @@ def test_active_entrypoint_never_constructs_legacy_market_path(
             "ETH-PERP.HYPERLIQUID-5-MINUTE-LAST-EXTERNAL",
         ),
     )
+    signature = inspect.signature(production.compose_three_setup_application)
+    assert "public_client" not in signature.parameters
+    with pytest.raises(TypeError, match="public_client"):
+        production.compose_three_setup_application(
+            config=config,
+            notification_adapter=object(),
+            public_client=object(),  # type: ignore[call-arg]
+        )
     application = production.compose_three_setup_application(
         config=config,
         notification_adapter=object(),
@@ -422,7 +437,6 @@ def test_active_entrypoint_never_constructs_legacy_market_path(
     assert not config.closed_bar_store_path.exists()
     application.bootstrap.close()
     application.projection.close()
-
 
 def test_restart_missing_e4_lineage_ref_fails_closed(tmp_path: Path) -> None:
     markets, e4, domain, registry, projection = _setup(tmp_path)

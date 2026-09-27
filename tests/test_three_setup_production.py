@@ -6,10 +6,12 @@ import asyncio
 import json
 import logging
 import sqlite3
+import sys
+import threading
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -31,12 +33,15 @@ from trader_assist_v0.multi_asset_shadow.notification_engine import (
     WebhookResponse,
 )
 from trader_assist_v0.multi_asset_shadow.registry import MarketRegistryManager
-from trader_assist_v0.multi_asset_shadow.runtime import BoundaryMode
 from trader_assist_v0.multi_asset_shadow.shadow_records import EvidenceStore
+from trader_assist_v0.nautilus_e4.contracts import (
+    MarketExpression,
+    PitUniverseSnapshot,
+    RunManifest,
+)
+from trader_assist_v0.nautilus_e4.storage import EvidenceStore as E4Store
 
 SHA = "a" * 40
-OFFICIAL_BTC_METADATA = {"name": "BTC", "szDecimals": 5, "maxLeverage": "40"}
-
 
 class Clock:
     def now(self) -> datetime:
@@ -68,82 +73,6 @@ class Webhook:
     def post(self, **_: object) -> WebhookResponse:
         self.calls += 1
         return WebhookResponse(204)
-
-
-class MutableClock:
-    def __init__(self, seconds: int) -> None:
-        self.seconds = seconds
-
-    def now(self) -> datetime:
-        return datetime.fromtimestamp(self.seconds, UTC)
-
-
-def _candle(index: int) -> dict[str, object]:
-    open_ms = index * 300_000
-    return {
-        "i": "5m",
-        "s": "BTC",
-        "t": open_ms,
-        "T": open_ms + 299_999,
-        "o": "100",
-        "h": "101",
-        "l": "99",
-        "c": "100",
-        "v": "10",
-    }
-
-
-class StartupPublicClient:
-    def __init__(self, clock: MutableClock) -> None:
-        self.clock = clock
-
-    def closed_candles(self, *, coin: str, interval: str, start_ms: int, end_ms: int) -> object:
-        assert coin == "BTC" and interval == "5m"
-        return [
-            _candle(index)
-            for index in range(start_ms // 300_000, end_ms // 300_000)
-        ]
-
-    def l2_book(self, *, coin: str) -> object:
-        assert coin == "BTC"
-        return {
-            "coin": coin,
-            "time": int(self.clock.now().timestamp() * 1000),
-            "levels": [
-                [{"px": "100", "sz": "100"}],
-                [{"px": "100.1", "sz": "100"}],
-            ],
-        }
-
-    def perp_dexes(self) -> object:
-        return [{}]
-
-    def all_perp_metas(self) -> object:
-        return [{"universe": [OFFICIAL_BTC_METADATA]}]
-
-
-class Socket:
-    def __init__(self, shutdown: asyncio.Event) -> None:
-        self.shutdown = shutdown
-        self.closed = False
-
-    async def send(self, _: str) -> None:
-        return None
-
-    async def recv(self) -> str:
-        self.shutdown.set()
-        return json.dumps(
-            {
-                "channel": "subscriptionResponse",
-                "data": {
-                    "method": "subscribe",
-                    "subscription": {"type": "candle", "coin": "BTC", "interval": "5m"},
-                },
-            }
-        )
-
-    async def close(self) -> None:
-        self.closed = True
 
 
 class FailingDispatcher:
@@ -193,6 +122,122 @@ def _market() -> RegistryMarket:
     )
 
 
+class E4Node:
+    def __init__(self) -> None:
+        self.strategy: object | None = None
+        self.started = threading.Event()
+        self.stopped = threading.Event()
+        self.disposed = False
+        self.run_calls = 0
+
+    def add_strategy(self, strategy: object) -> None:
+        self.strategy = strategy
+
+    def run(self) -> None:
+        self.run_calls += 1
+        self.started.set()
+        self.stopped.wait(timeout=2)
+
+    def handle(self) -> E4Node:
+        return self
+
+    def stop(self) -> None:
+        self.stopped.set()
+
+    def dispose(self) -> None:
+        self.disposed = True
+
+
+class E4Capture:
+    def __init__(self) -> None:
+        self.warmup_health = {"readiness": "READY"}
+        self.capture_health = {
+            "stream_health": "HEALTHY",
+            "continuity_requirements_remaining": 0,
+            "storage_failures": 0,
+            "admitted_observer_failures": (),
+        }
+        self.observer: object | None = None
+
+    def set_admitted_event_observer(self, observer: object) -> None:
+        self.observer = observer
+
+
+def _e4_composition_fixture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[production.ThreeSetupProductionConfig, E4Node, E4Capture]:
+    root = tmp_path / "state"
+    monkeypatch.setattr(production, "THREE_SETUP_STATE_ROOT", root)
+    monkeypatch.setattr(production, "THREE_SETUP_EVIDENCE_STORE_PATH", root / "evidence.sqlite")
+    monkeypatch.setattr(production, "THREE_SETUP_REGISTRY_ROOT", root / "registry")
+    monkeypatch.setattr(
+        production, "THREE_SETUP_CLOSED_BAR_STORE_PATH", root / "closed-bars.sqlite"
+    )
+    market = _market()
+    snapshot = PitUniverseSnapshot.create(
+        observed_at_ns=1_800_000_000_000,
+        expressions=(
+            MarketExpression(
+                market_id=market.identity.market_id,
+                dex="MAIN",
+                provider_coin=market.identity.coin,
+                instrument_id="BTC-PERP.HYPERLIQUID",
+                expression_id="expr-BTC",
+                instrument_metadata_version="v1",
+                instrument_metadata_hash=market.metadata_hash,
+            ),
+        ),
+    )
+    manifest = RunManifest.create(
+        run_id="ts5a-e4-production-test",
+        git_sha=SHA,
+        git_tree="b" * 40,
+        snapshot=snapshot,
+        process_epoch="process-1",
+        continuity_epoch="continuity-1",
+        admission_epoch="admission-1",
+        capture_configuration={"bar_types": ["1-MINUTE", "5-MINUTE"]},
+        subscription_policy={
+            "discovery": [market.identity.market_id],
+            "watch": [market.identity.market_id],
+            "actionable": [market.identity.market_id],
+        },
+        trial_ledger_id="ts5a-test",
+    )
+    e4 = E4Store(tmp_path / "e4")
+    e4.initialize(manifest, snapshot)
+    registry = MarketRegistryManager(root / "registry", metadata_validator=lambda _: True)
+    version = RegistryVersion.create(
+        version="three-setup-e4",
+        created_at=datetime(2026, 9, 27, tzinfo=UTC),
+        markets=(market,),
+    )
+    registry.stage(version)
+    registry.request_apply(version.version)
+    node = E4Node()
+    capture = E4Capture()
+    fake_host = ModuleType("trader_assist_v0.nautilus_e4.host")
+    fake_host.build_public_data_node = lambda: node  # type: ignore[attr-defined]
+    fake_host.build_capture_strategy = lambda **_kwargs: capture  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "trader_assist_v0.nautilus_e4.host", fake_host)
+    config = production.ThreeSetupProductionConfig(
+        release_sha=SHA,
+        evidence_store_path=root / "evidence.sqlite",
+        registry_root=root / "registry",
+        closed_bar_store_path=root / "closed-bars.sqlite",
+        cost_model=production.CostModel("cost-1", Decimal(), Decimal(), Decimal("2")),
+        notification_poll_seconds=1,
+        e4_evidence_root=tmp_path / "e4",
+        e4_manifest_path=e4.manifest_path,
+        e4_snapshot_path=e4.snapshot_path,
+        e4_bar_types=(
+            "BTC-PERP.HYPERLIQUID-1-MINUTE-LAST-EXTERNAL",
+            "BTC-PERP.HYPERLIQUID-5-MINUTE-LAST-EXTERNAL",
+        ),
+    )
+    return config, node, capture
+
+
 def test_fixed_manifest_config_is_canonical_and_rejects_legacy_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -214,164 +259,6 @@ def test_fixed_manifest_config_is_canonical_and_rejects_legacy_path(
         production.load_three_setup_config(path)
 
 
-def test_initial_pending_registry_composes_then_activates_only_from_provider_admission(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    root = tmp_path / "state"
-    monkeypatch.setattr(production, "THREE_SETUP_STATE_ROOT", root)
-    monkeypatch.setattr(production, "THREE_SETUP_EVIDENCE_STORE_PATH", root / "evidence.sqlite")
-    monkeypatch.setattr(production, "THREE_SETUP_REGISTRY_ROOT", root / "registry")
-    monkeypatch.setattr(
-        production, "THREE_SETUP_CLOSED_BAR_STORE_PATH", root / "closed-bars.sqlite"
-    )
-    config_path = tmp_path / "config.json"
-    config_path.write_bytes(canonical_json_bytes(_config_values()))
-    config = production.load_three_setup_config(config_path)
-    registry = MarketRegistryManager(config.registry_root, metadata_validator=lambda _: True)
-    version = RegistryVersion.create(
-        version="manual-40",
-        created_at=datetime(2026, 8, 16, tzinfo=UTC),
-        markets=(
-            _market().model_copy(
-                update={
-                    "lifecycle": MarketLifecycle.WARMING,
-                    "metadata_hash": sha256_hex(canonical_json_bytes(OFFICIAL_BTC_METADATA)),
-                }
-            ),
-        ),
-    )
-    registry.stage(version)
-    registry.request_apply(version.version)
-    pending = registry.pending_version()
-    assert registry.active() is None and pending is not None
-    pending_identity = (pending.version, pending.content_hash)
-
-    clock = MutableClock(seconds=64 * 300 + 3)
-    webhook = Webhook()
-    application = production.compose_three_setup_application(
-        config=config,
-        notification_adapter=WebhookDeliveryAdapter(
-            client=webhook, config=WebhookConfig(url="https://example.invalid/hook")
-        ),
-        public_client=StartupPublicClient(clock),  # type: ignore[arg-type]
-        clock=clock.now,
-    )
-    bootstrap = application.bootstrap
-    assert bootstrap.registry.active() is None
-    assert (current := bootstrap.registry.pending_version()) is not None
-    assert (current.version, current.content_hash) == pending_identity
-    immutable_count = bootstrap.evidence._connection.execute(
-        "SELECT COUNT(*) FROM immutable_records"
-    ).fetchone()[0]
-    outbox_count = bootstrap.evidence._connection.execute(
-        "SELECT COUNT(*) FROM notification_outbox"
-    ).fetchone()[0]
-    assert immutable_count == 0
-    assert outbox_count == 0
-    for table in (
-        "scanner_evidence",
-        "strategy_evaluations",
-        "formal_signals",
-        "plan_records",
-        "shadow_orders",
-    ):
-        count = bootstrap.evidence._connection.execute(
-            f"SELECT COUNT(*) FROM {table}"
-        ).fetchone()[0]
-        assert count == 0
-    assert bootstrap.data_authority.store.connection.execute(
-        "SELECT COUNT(*) FROM closed_bars"
-    ).fetchone()[0] == 0
-    assert webhook.calls == 0
-
-    # This public warmup is the existing MultiAssetDataAuthority path.  It is
-    # the first operation allowed to consume the provider admission capability.
-    warming = bootstrap.runtime.selected_markets()[0]
-    assert bootstrap.runtime.warmup(warming, start_ms=0, end_ms=64 * 300_000) == 64
-    active = bootstrap.registry.active()
-    assert active is not None and active.markets[0].lifecycle is MarketLifecycle.WARMING
-    assert bootstrap.registry.pending_version() is None
-    assert bootstrap.runtime._history_current(active.markets[0])
-
-    lifecycles = [active.markets[0].lifecycle]
-    for open_ms, snapshot_ready, expected in (
-        (64 * 300_000, False, MarketLifecycle.HISTORY_READY),
-        (65 * 300_000, True, MarketLifecycle.SNAPSHOT_READY),
-        (66 * 300_000, True, MarketLifecycle.ACTIVE),
-    ):
-        bootstrap.runtime.health.data_ready = snapshot_ready
-        bootstrap.runtime.health.acknowledgements = {active.markets[0].identity.coin}
-        clock.seconds = (open_ms + 303_000) // 1000
-        admitted = bootstrap.data_authority.admit_rest_history(
-            market=active.markets[0],
-            snapshot=[_candle(open_ms // 300_000)],
-            received_at=clock.now(),
-        )
-        assert len(admitted) == 1
-        # Lifecycle staging is owned solely by the cohort barrier: each
-        # boundary advances exactly one legal stage under the single owner.
-        asyncio.run(bootstrap.runtime.process_cohort_boundary(open_ms))
-        active = bootstrap.registry.active()
-        assert active is not None and active.markets[0].lifecycle is expected
-        lifecycles.append(active.markets[0].lifecycle)
-    assert lifecycles == [
-        MarketLifecycle.WARMING,
-        MarketLifecycle.HISTORY_READY,
-        MarketLifecycle.SNAPSHOT_READY,
-        MarketLifecycle.ACTIVE,
-    ]
-
-    bootstrap.runtime.health.data_ready = True
-    assert asyncio.run(bootstrap.reconcile()) == ()
-    # The activation boundary is bound to the prior lifecycle version.  The
-    # next provider-admitted close is the first legitimate ACTIVE boundary.
-    boundary = 67 * 300_000
-    clock.seconds = (boundary + 303_000) // 1000
-    admitted = bootstrap.data_authority.admit_rest_history(
-        market=active.markets[0],
-        snapshot=[_candle(boundary // 300_000)],
-        received_at=clock.now(),
-    )
-    assert len(admitted) == 1
-    bootstrap.coordinator.evaluate_finalized_market(
-        market_id=active.markets[0].identity.market_id,
-        source_open_time_ms=boundary,
-        evaluation_mode=BoundaryMode.LIVE_ACTIONABLE,
-    )
-    assert bootstrap.evidence._connection.execute(
-        "SELECT COUNT(*) FROM strategy_evaluations"
-    ).fetchone()[0] == 1
-
-    boundary += 300_000
-    clock.seconds = (boundary + 303_000) // 1000
-    admitted = bootstrap.data_authority.admit_rest_history(
-        market=active.markets[0],
-        snapshot=[_candle(boundary // 300_000)],
-        received_at=clock.now(),
-    )
-    assert len(admitted) == 1
-    report = asyncio.run(bootstrap.process_boundary(boundary, BoundaryMode.LIVE_ACTIONABLE))
-    assert report.failures == ()
-    assert report.evaluated_market_ids == (active.markets[0].identity.market_id,)
-    strategy_count = bootstrap.evidence._connection.execute(
-        "SELECT COUNT(*) FROM strategy_evaluations"
-    ).fetchone()[0]
-    assert strategy_count == 2
-    duplicate = asyncio.run(bootstrap.process_boundary(boundary, BoundaryMode.LIVE_ACTIONABLE))
-    assert duplicate.failures == ()
-    assert bootstrap.evidence._connection.execute(
-        "SELECT COUNT(*) FROM strategy_evaluations"
-    ).fetchone()[0] == strategy_count
-    assert webhook.calls == 0
-
-    bootstrap.close()
-    bootstrap.data_authority.store.close()
-    with pytest.raises(sqlite3.ProgrammingError):
-        bootstrap.evidence._connection.execute("SELECT 1")
-    with pytest.raises(sqlite3.ProgrammingError):
-        bootstrap.data_authority.store.connection.execute("SELECT 1")
-
-
 @pytest.mark.parametrize(
     "retained_work",
     ("scanner_evidence", "strategy_evaluation", "formal_signal", "notification_outbox"),
@@ -379,22 +266,7 @@ def test_initial_pending_registry_composes_then_activates_only_from_provider_adm
 def test_initial_pending_registry_rejects_retained_application_work(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, retained_work: str
 ) -> None:
-    root = tmp_path / "state"
-    monkeypatch.setattr(production, "THREE_SETUP_STATE_ROOT", root)
-    monkeypatch.setattr(production, "THREE_SETUP_EVIDENCE_STORE_PATH", root / "evidence.sqlite")
-    monkeypatch.setattr(production, "THREE_SETUP_REGISTRY_ROOT", root / "registry")
-    monkeypatch.setattr(
-        production, "THREE_SETUP_CLOSED_BAR_STORE_PATH", root / "closed-bars.sqlite"
-    )
-    config_path = tmp_path / "config.json"
-    config_path.write_bytes(canonical_json_bytes(_config_values()))
-    config = production.load_three_setup_config(config_path)
-    registry = MarketRegistryManager(config.registry_root, metadata_validator=lambda _: True)
-    version = RegistryVersion.create(
-        version="manual-40", created_at=datetime(2026, 8, 16, tzinfo=UTC), markets=(_market(),)
-    )
-    registry.stage(version)
-    registry.request_apply(version.version)
+    config, _node, _capture = _e4_composition_fixture(tmp_path, monkeypatch)
     evidence = EvidenceStore(config.evidence_store_path)
     with evidence._connection:
         if retained_work == "scanner_evidence":
@@ -422,77 +294,52 @@ def test_initial_pending_registry_rejects_retained_application_work(
             notification_adapter=WebhookDeliveryAdapter(
                 client=Webhook(), config=WebhookConfig(url="https://example.invalid/hook")
             ),
-            public_client=PublicClient(),  # type: ignore[arg-type]
             clock=Clock().now,
         )
-
 
 def test_real_composition_owns_one_dispatcher_and_shuts_down_cleanly(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    root = tmp_path / "state"
-    monkeypatch.setattr(production, "THREE_SETUP_STATE_ROOT", root)
-    monkeypatch.setattr(production, "THREE_SETUP_EVIDENCE_STORE_PATH", root / "evidence.sqlite")
-    monkeypatch.setattr(production, "THREE_SETUP_REGISTRY_ROOT", root / "registry")
-    monkeypatch.setattr(
-        production, "THREE_SETUP_CLOSED_BAR_STORE_PATH", root / "closed-bars.sqlite"
-    )
-    values = _config_values()
-    config_path = tmp_path / "config.json"
-    config_path.write_bytes(canonical_json_bytes(values))
-    config = production.load_three_setup_config(config_path)
-    registry = MarketRegistryManager(config.registry_root, metadata_validator=lambda _: True)
-    version = RegistryVersion.create(
-        version="three-setup", created_at=datetime(2026, 8, 16, tzinfo=UTC), markets=(_market(),)
-    )
-    registry.stage(version)
-    registry.request_apply(version.version)
-    closed = ClosedBarStore(config.closed_bar_store_path)
-    authority = MultiAssetDataAuthority(store=closed, registry=registry)
-    authority.admit_rest_history(
-        market=_market(),
-        snapshot=[
-            {
-                "i": "5m",
-                "s": "BTC",
-                "t": 300_000,
-                "T": 599_999,
-                "o": "100",
-                "h": "101",
-                "l": "99",
-                "c": "100",
-                "v": "10",
-            }
-        ],
-        received_at=datetime.fromtimestamp(600, UTC),
-    )
-    closed.close()
-    clock = Clock()
+    config, node, capture = _e4_composition_fixture(tmp_path, monkeypatch)
     application = production.compose_three_setup_application(
         config=config,
         notification_adapter=WebhookDeliveryAdapter(
             client=Webhook(), config=WebhookConfig(url="https://example.invalid/hook")
         ),
-        public_client=PublicClient(),  # type: ignore[arg-type]
-        clock=clock.now,
+        clock=Clock().now,
     )
-    shutdown = asyncio.Event()
-    socket = Socket(shutdown)
+    assert isinstance(application, production.E4ThreeSetupProductionApplication)
+    assert node.strategy is capture
+    assert capture.observer is not None
+    dispatcher_starts = 0
+    original_dispatch_loop = application._dispatch_loop
 
-    async def factory(_: str) -> Socket:
-        return socket
+    async def counted_dispatch_loop(shutdown: asyncio.Event) -> None:
+        nonlocal dispatcher_starts
+        dispatcher_starts += 1
+        await original_dispatch_loop(shutdown)
 
-    application.bootstrap.runtime.websocket_factory = factory
+    monkeypatch.setattr(application, "_dispatch_loop", counted_dispatch_loop)
+
+    async def exercise() -> None:
+        shutdown = asyncio.Event()
+        task = asyncio.create_task(application.run(shutdown))
+        started = await asyncio.wait_for(asyncio.to_thread(node.started.wait), timeout=1)
+        assert started
+        shutdown.set()
+        await task
+
     with caplog.at_level(logging.INFO, logger="trader_assist_v0.three_setup"):
-        asyncio.run(application.run(shutdown))
-    assert socket.closed
+        asyncio.run(exercise())
+    assert dispatcher_starts == 1
+    assert node.run_calls == 1
+    assert node.stopped.is_set() and node.disposed
     events = {json.loads(record.message)["event"] for record in caplog.records}
-    assert {"STARTUP", "RELEASE_IDENTITY", "REGISTRY_IDENTITY", "WARMUP", "SHUTDOWN"} <= events
+    assert {"STARTUP", "SHUTDOWN"} <= events
     with pytest.raises(sqlite3.ProgrammingError):
         application.bootstrap.evidence._connection.execute("SELECT 1")
     with pytest.raises(sqlite3.ProgrammingError):
-        application.bootstrap.data_authority.store.connection.execute("SELECT 1")
-
+        application.projection.store.connection.execute("SELECT 1")
 
 def test_systemd_execstart_targets_the_executable_three_setup_wrapper() -> None:
     root = Path(__file__).parents[1]
