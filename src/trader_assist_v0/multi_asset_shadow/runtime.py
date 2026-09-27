@@ -1832,10 +1832,18 @@ class E4ThreeSetupRuntime:
             for item in active.markets
             if item.lifecycle is MarketLifecycle.ACTIVE
         }
-        if mode is BoundaryMode.LIVE_ACTIONABLE and not required.issubset(
-            readiness.ready_market_ids
-        ):
-            return
+        if mode is BoundaryMode.LIVE_ACTIONABLE:
+            if (
+                readiness.latest_closed_5m_open_time_ms != open_ms
+                or not required.issubset(readiness.ready_market_ids)
+                or not self.projection.prove_boundary_evidence(
+                    boundary_open_time_ms=open_ms,
+                    market_ids=frozenset(required),
+                    base_registry_version=active.version,
+                    base_registry_hash=active.content_hash,
+                )
+            ):
+                return
         bars = self.projection.store.tail_bars(
             event.source.market_id, at_or_before_ms=open_ms, limit=1
         )

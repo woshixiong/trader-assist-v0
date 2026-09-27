@@ -144,6 +144,7 @@ def _event(
     open_ms: int = T,
     payload: dict | None = None,
     continuity: EvidenceState = EvidenceState.COMPLETE,
+    continuity_epoch: str = "continuity-1",
     out_of_order: bool = False,
 ) -> AdmittedEvent:
     step = 300_000 if interval == "5m" else 60_000
@@ -175,7 +176,7 @@ def _event(
     return AdmittedEvent.create(
         schema_version="E4_CAPTURE_V1",
         process_epoch="process-1",
-        continuity_epoch="continuity-1",
+        continuity_epoch=continuity_epoch,
         admission_epoch="admission-1",
         admission_ordinal=ordinal,
         admission_ts=source.ts_init,
@@ -542,6 +543,122 @@ async def test_late_context_cohort_never_replays_as_live_action(tmp_path: Path) 
         (T + 300_000, "RECOVERY_CONTEXT_ONLY"),
         (T + 600_000, "LIVE_ACTIONABLE"),
     ]
+    projection.close()
+    domain.close()
+
+
+@async_test
+async def test_mixed_continuity_exact_t_blocks_registry_and_live_then_future_recovers(
+    tmp_path: Path,
+) -> None:
+    from types import SimpleNamespace
+
+    from trader_assist_v0.multi_asset_shadow.runtime import E4ThreeSetupRuntime
+
+    markets, e4, domain, registry, projection = _setup(tmp_path)
+    initial = tuple(_event(m, ordinal=i + 1) for i, m in enumerate(markets))
+    e4.append_admission_batch(initial)
+    for event in initial:
+        projection.accept(event)
+    active = registry.apply_initial_e4_witness(
+        registry.issue_initial_e4_witness(boundary_open_time_ms=T),
+        evidence_authority=projection,
+    )
+    health = {
+        "stream_health": "HEALTHY",
+        "continuity_requirements_remaining": 0,
+        "storage_failures": 0,
+        "admitted_observer_failures": (),
+        "continuity_epoch": "continuity-2",
+    }
+    projection._capture_health = lambda: health
+    required = frozenset(m.identity.market_id for m in markets)
+    assert not projection.prove_boundary_evidence(
+        boundary_open_time_ms=T,
+        market_ids=required,
+        base_registry_version=active.version,
+        base_registry_hash=active.content_hash,
+    )
+    now_ms = T + 601_000
+    projection.clock_ms = lambda: now_ms
+    runtime = E4ThreeSetupRuntime(
+        projection=projection,
+        registry=registry,
+        clock=lambda: datetime.fromtimestamp(now_ms / 1000, UTC),
+    )
+    wakes: list[tuple[int, str]] = []
+
+    async def on_boundary(bar: object, mode: object) -> object:
+        wakes.append((bar.open_time_ms, mode.value))
+        return SimpleNamespace(disposition=SimpleNamespace(value="PROCESSED"))
+
+    runtime.on_finalized_5m = on_boundary
+    mixed = (
+        _event(markets[0], ordinal=3, open_ms=T + 300_000),
+        _event(
+            markets[1],
+            ordinal=4,
+            open_ms=T + 300_000,
+            continuity_epoch="continuity-2",
+        ),
+    )
+    e4.append_admission_batch(mixed)
+    for event in mixed:
+        assert event.continuity_state is EvidenceState.COMPLETE
+        assert not event.out_of_order
+        projection.accept(event)
+        await runtime._on_5m(event)
+    assert projection.readiness_snapshot().ready_market_ids == ()
+    assert not projection.prove_boundary_evidence(
+        boundary_open_time_ms=T + 300_000,
+        market_ids=required,
+        base_registry_version=active.version,
+        base_registry_hash=active.content_hash,
+    )
+    assert wakes == []
+    successor = registry.lifecycle_successor(
+        version="same-epoch-next",
+        updates={markets[0].identity.market_id: MarketLifecycle.DRAINING},
+        now=datetime(2026, 9, 27, tzinfo=UTC),
+    )
+    registry.request_apply(successor.version)
+    mixed_witness = registry._issue_cohort_witness(
+        boundary_open_time_ms=T + 300_000,
+        base_registry_version=active.version,
+        base_registry_hash=active.content_hash,
+        expected_successor_version=successor.version,
+        expected_successor_hash=successor.content_hash,
+        required_evidence_market_ids=required,
+    )
+    with pytest.raises(RegistryError, match="evidence cohort is not proven"):
+        registry.apply_witness(mixed_witness, evidence_authority=projection)
+    assert registry.active() == active
+
+    now_ms = T + 901_000
+    later = tuple(
+        _event(
+            m,
+            ordinal=i + 5,
+            open_ms=T + 600_000,
+            continuity_epoch="continuity-2",
+        )
+        for i, m in enumerate(markets)
+    )
+    e4.append_admission_batch(later)
+    for event in later:
+        projection.accept(event)
+        await runtime._on_5m(event)
+    assert projection.prove_boundary_evidence(
+        boundary_open_time_ms=T + 600_000,
+        market_ids=required,
+        base_registry_version=active.version,
+        base_registry_hash=active.content_hash,
+    )
+    assert wakes == [(T + 600_000, "LIVE_ACTIONABLE")]
+    await runtime._on_5m(mixed[1])
+    await runtime._on_5m(mixed[1])
+    assert (T + 300_000, "LIVE_ACTIONABLE") not in wakes
+    assert wakes.count((T + 600_000, "LIVE_ACTIONABLE")) == 1
     projection.close()
     domain.close()
 

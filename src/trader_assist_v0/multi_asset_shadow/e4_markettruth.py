@@ -528,7 +528,7 @@ class E4MarketTruthProjection:
         base_registry_version: str,
         base_registry_hash: str,
     ) -> bool:
-        if not market_ids:
+        if self._cohort_continuity_epoch(boundary_open_time_ms, market_ids) is None:
             return False
         durable = {event.admission_hash for event in self.e4_store.load_admissions()}
         for market_id in market_ids:
@@ -557,6 +557,32 @@ class E4MarketTruthProjection:
             if retained is None:
                 return False
         return True
+
+    def _cohort_continuity_epoch(
+        self, boundary_open_time_ms: int, market_ids: frozenset[str]
+    ) -> str | None:
+        """Prove one exact-T continuity epoch for the whole required cohort."""
+        if not market_ids:
+            return None
+        events = tuple(
+            self._bar_events.get((market_id, "5m", boundary_open_time_ms))
+            for market_id in market_ids
+        )
+        if any(
+            event is None
+            or event.continuity_state is not EvidenceState.COMPLETE
+            or event.out_of_order
+            for event in events
+        ):
+            return None
+        epochs = {event.continuity_epoch for event in events if event is not None}
+        if len(epochs) != 1:
+            return None
+        epoch = next(iter(epochs))
+        current = self._capture_health().get("continuity_epoch")
+        if current is not None and (not isinstance(current, str) or current != epoch):
+            return None
+        return epoch
 
     def prove_initial_boundary_evidence(
         self,
@@ -673,11 +699,15 @@ class E4MarketTruthProjection:
             and health.get("storage_failures") == 0
             and not health.get("admitted_observer_failures")
         )
+        cohort_epoch = self._cohort_continuity_epoch(
+            latest, frozenset(m.identity.market_id for m in active)
+        )
         ready = tuple(
             m.identity.market_id
             for m in active
             if (
                 common
+                and cohort_epoch is not None
                 and not self.market_failed(m.identity.market_id)
                 and self.validate_market(m)
                 and self.store.last_open(m.identity.market_id) == latest
