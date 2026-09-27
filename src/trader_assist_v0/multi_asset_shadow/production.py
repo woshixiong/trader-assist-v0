@@ -23,14 +23,12 @@ from trader_assist_v0.nautilus_e4.contracts import PitUniverseSnapshot, RunManif
 from trader_assist_v0.nautilus_e4.storage import EvidenceStore as E4EvidenceStore
 
 from .bootstrap import BoundaryReport, MultiAssetProductionBootstrap
-from .data import ClosedBarStore, MultiAssetDataAuthority
 from .e4_markettruth import E4MarketTruthProjection
-from .hyperliquid_public import HyperliquidPublicClient, OfficialMetadataValidator
 from .models import ClosedBar, MarketLifecycle
 from .notification_engine import OutboxDispatcher, WebhookDeliveryAdapter
 from .planning import CostModel
 from .registry import MarketRegistryManager
-from .runtime import BoundaryMode, E4ThreeSetupRuntime, MultiAssetPublicRuntime
+from .runtime import BoundaryMode, E4ThreeSetupRuntime
 from .shadow_records import EvidenceStore
 
 THREE_SETUP_CONFIG_SCHEMA = "trader-assist-v0/three-setup-production-config/v1"
@@ -421,47 +419,15 @@ def compose_three_setup_application(
     *,
     config: ThreeSetupProductionConfig,
     notification_adapter: WebhookDeliveryAdapter,
-    public_client: HyperliquidPublicClient | None = None,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> ThreeSetupProductionApplication:
-    """Bind exactly the accepted public components to the fixed path manifest."""
-    if public_client is None:
-        return _compose_e4_three_setup_application(
-            config=config,
-            notification_adapter=notification_adapter,
-            clock=clock,
-            sleep=sleep,
-        )
-    client = public_client or HyperliquidPublicClient()
-    config.evidence_store_path.parent.mkdir(parents=True, exist_ok=True)
-    config.closed_bar_store_path.parent.mkdir(parents=True, exist_ok=True)
-    config.registry_root.mkdir(parents=True, exist_ok=True)
-    registry = MarketRegistryManager(
-        config.registry_root, metadata_validator=OfficialMetadataValidator(client)
-    )
-    data = MultiAssetDataAuthority(
-        store=ClosedBarStore(config.closed_bar_store_path), registry=registry
-    )
-    bootstrap = MultiAssetProductionBootstrap.compose(
-        registry=registry,
-        data_authority=data,
-        public_client=client,
-        evidence_db_path=config.evidence_store_path,
-        cost_model=config.cost_model,
-        release_sha=config.release_sha,
+    """Bind the public Three Setup production entrypoint to E4 market truth."""
+    return _compose_e4_three_setup_application(
+        config=config,
+        notification_adapter=notification_adapter,
         clock=clock,
         sleep=sleep,
-    )
-    cast(
-        MultiAssetPublicRuntime, bootstrap.runtime
-    ).acknowledgement_timeout_seconds = config.acknowledgement_timeout_seconds
-    return ThreeSetupProductionApplication(
-        bootstrap=bootstrap,
-        dispatcher=OutboxDispatcher(outbox=bootstrap.outbox, adapter=notification_adapter),
-        clock=clock,
-        sleep=sleep,
-        notification_poll_seconds=config.notification_poll_seconds,
     )
 
 

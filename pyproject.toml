@@ -41,7 +41,21 @@ target-version = "py312"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "RUF"]
+select = ["E", "F", "I", "B", "UP", "RUF", "TID251"]
+
+[tool.ruff.lint.per-file-ignores]
+"!src/trader_assist_v0/multi_asset_shadow/production.py" = ["TID251"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"trader_assist_v0.multi_asset_shadow.data.ClosedBarStore" = { msg = "TS5A: legacy Three Setup production owner is prohibited; use E4 composition." }
+"trader_assist_v0.multi_asset_shadow.data.MultiAssetDataAuthority" = { msg = "TS5A: legacy Three Setup production owner is prohibited; use E4 composition." }
+"trader_assist_v0.multi_asset_shadow.hyperliquid_public.HyperliquidPublicClient" = { msg = "TS5A: legacy Three Setup production owner is prohibited; use E4 composition." }
+"trader_assist_v0.multi_asset_shadow.hyperliquid_public.OfficialMetadataValidator" = { msg = "TS5A: legacy Three Setup production owner is prohibited; use E4 composition." }
+"trader_assist_v0.multi_asset_shadow.hyperliquid_public.HyperliquidPublicPlanningAdapter" = { msg = "TS5A: legacy Three Setup production owner is prohibited; use E4 composition." }
+"trader_assist_v0.multi_asset_shadow.hyperliquid_public.HyperliquidRestOneMinuteProvider" = { msg = "TS5A: legacy Three Setup production owner is prohibited; use E4 composition." }
+"trader_assist_v0.multi_asset_shadow.runtime.MultiAssetPublicRuntime" = { msg = "TS5A: legacy Three Setup production owner is prohibited; use E4 composition." }
+"trader_assist_v0.multi_asset_shadow.cohort_finality.Closed5mCohortFinality" = { msg = "TS5A: legacy Three Setup production owner is prohibited; use E4 composition." }
+"trader_assist_v0.multi_asset_shadow.bootstrap.MultiAssetProductionBootstrap.compose" = { msg = "TS5A: legacy Three Setup production owner is prohibited; use compose_e4." }
 
 [tool.mypy]
 python_version = "3.12"
