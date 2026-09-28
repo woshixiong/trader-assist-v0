@@ -58,7 +58,7 @@ export EXPECTED_RELEASE_MANIFEST_CANONICAL_DIGEST="$4"
 export EXPECTED_BUNDLE_MANIFEST_SHA256="$5"
 BUNDLE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 export BUNDLE_ROOT
-python3.12 - <<'PY_VERIFY'
+python3.12 -I -B - <<'PY_VERIFY'
 import hashlib, json, os, re, stat
 from pathlib import Path
 root = Path(os.environ['BUNDLE_ROOT'])
@@ -125,7 +125,7 @@ if actual != listed | {'bundle-manifest.json'}:
     raise SystemExit('transfer path set mismatch')
 print('BUNDLE_HASH_VERIFY=PASS')
 PY_VERIFY
-PYTHONPATH="$BUNDLE_ROOT/payload/src:$BUNDLE_ROOT/payload" python3.12 \
+PYTHONPATH="$BUNDLE_ROOT/payload/src:$BUNDLE_ROOT/payload" python3.12 -B \
   "$BUNDLE_ROOT/payload/scripts/verify_exact_release.py" \
   --root "$BUNDLE_ROOT/payload" --verify-staged "$BUNDLE_ROOT/release-manifest.json" \
   --expected-release-sha "$EXPECTED_RELEASE_SHA" \
@@ -139,7 +139,7 @@ SERVICE_STATE="$(systemctl is-active trader-assist-v0-three-setup.service 2>/dev
 [[ ! -e /etc/trader-assist-v0/three-setup-activation-permit ]] || {
   echo "activation permit exists" >&2; exit 2;
 }
-PYTHONPATH="$BUNDLE_ROOT/payload/src:$BUNDLE_ROOT/payload" python3.12 \
+PYTHONPATH="$BUNDLE_ROOT/payload/src:$BUNDLE_ROOT/payload" python3.12 -B \
   "$BUNDLE_ROOT/payload/scripts/three_setup_shadow_preflight.py" --host-only \
   --host-wheel "$BUNDLE_ROOT/__WHEEL_NAME__"
 echo "PREINSTALL_VERIFY=PASS; SERVICE=STOPPED; ACTIVATION=DEFAULT_OFF"

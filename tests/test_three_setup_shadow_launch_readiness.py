@@ -381,13 +381,14 @@ def _candidate_repo(root: Path, *, secret: bool = False) -> tuple[str, str]:
     )
     (root / "scripts/verify_exact_release.py").write_text(
         "import sys\n"
+        "import demo\n"
         "assert '--verify-staged' in sys.argv\n"
         "assert '--expected-manifest-digest' in sys.argv\n"
         "print('EXACT_RELEASE_VERIFY=PASS')\n",
         encoding="utf-8",
     )
     (root / "scripts/three_setup_shadow_preflight.py").write_text(
-        "print('HOST_PREFLIGHT_FIXTURE=PASS')\n", encoding="utf-8",
+        "import demo\nprint('HOST_PREFLIGHT_FIXTURE=PASS')\n", encoding="utf-8",
     )
     for command in (
         ("git", "init"),
@@ -457,11 +458,14 @@ def _qualification_fixture(
     python.write_text(f"#!/bin/sh\nexec {sys.executable} \"$@\"\n", encoding="utf-8")
     python.chmod(0o755)
     env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+    for key in ("PYTHONDONTWRITEBYTECODE", "PYTHONPYCACHEPREFIX", "PYTHONSAFEPATH"):
+        env.pop(key, None)
     return output, anchors, env
 
 
 def _run_qualification(
-    output: Path, anchors: dict[str, str], env: dict[str, str], *, mode: str = "--verify",
+    output: Path, anchors: dict[str, str], env: dict[str, str], *,
+    mode: str = "--verify", cwd: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         (
@@ -470,7 +474,56 @@ def _run_qualification(
             anchors["EXPECTED_RELEASE_MANIFEST_CANONICAL_DIGEST"],
             anchors["EXPECTED_BUNDLE_MANIFEST_SHA256"],
         ),
-        env=env, capture_output=True, text=True, check=False,
+        env=env, cwd=cwd, capture_output=True, text=True, check=False,
+    )
+
+
+def _bundle_snapshot(output: Path) -> dict[str, str]:
+    return {
+        path.relative_to(output).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in output.rglob("*") if path.is_file()
+    }
+
+
+def test_untrusted_startup_hook_cannot_run_before_path_set_rejection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output, anchors, env = _qualification_fixture(tmp_path, monkeypatch)
+    marker = tmp_path / "startup-hook-ran"
+    (output / "sitecustomize.py").write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('executed')\n",
+        encoding="utf-8",
+    )
+    env["PYTHONPATH"] = str(output)
+    result = _run_qualification(output, anchors, env, cwd=output)
+    assert result.returncode != 0
+    assert "transfer path set mismatch" in result.stderr
+    assert not marker.exists(), "unverified Python startup hook executed"
+    assert "BUNDLE_HASH_VERIFY=PASS" not in result.stdout
+
+
+def test_successful_verify_and_denied_install_leave_bundle_byte_exact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output, anchors, env = _qualification_fixture(tmp_path, monkeypatch)
+    before = _bundle_snapshot(output)
+    verified = _run_qualification(output, anchors, env)
+    assert verified.returncode == 0, verified.stderr
+    assert "STAGED_RELEASE_VERIFY=PASS" in verified.stdout
+    assert "HOST_PREFLIGHT_FIXTURE=PASS" in verified.stdout
+    assert _bundle_snapshot(output) == before
+    assert not any(
+        path.name == "__pycache__" or path.suffix == ".pyc"
+        for path in output.rglob("*")
+    )
+    denied = _run_qualification(output, anchors, env, mode="--install")
+    assert denied.returncode != 0
+    assert "current deployment authorization is required" in denied.stderr
+    assert "INSTALL_VERIFIED=PASS" not in denied.stdout
+    assert _bundle_snapshot(output) == before
+    assert not any(
+        path.name == "__pycache__" or path.suffix == ".pyc"
+        for path in output.rglob("*")
     )
 
 
