@@ -1,0 +1,37 @@
+# Three Setup Q1 qualification
+
+This workflow is evidence instrumentation for the frozen Q1-B/C/D candidate. It is not a runtime, deployment path, trading permission, or Strategy authority. The candidate is commit `36d57b3a9f4677354f1d5d63bca17c6fb72befbd` with tree `d642119ddd8b9e554ae9bd441de44daac3e97599`. A pull request is rejected before live work if its base differs. `workflow_dispatch` reruns the same frozen candidate.
+
+The workflow checks out harness/control HEAD and product candidate separately. Its target Python 3.12 environment is installed only from the candidate `requirements-runtime.lock` and `requirements-nautilus-pilot.lock`, with runtime hashes required and the pilot wheel installed with `--no-deps --only-binary=:all:`. It rejects an installed project distribution and resolves all project modules through `PYTHONPATH=<candidate>/src:<candidate>`. A dev or control environment cannot count as target-runtime proof.
+
+## Qualification composition
+
+The product config fixes `/var/lib` durable paths. Qualification uses an isolated ephemeral root and directly composes the candidate's `MarketRegistryManager`, `E4MarketTruthProjection`, `MultiAssetProductionBootstrap.compose_e4`, `OutboxDispatcher`, `E4ThreeSetupProductionApplication`, `E4ThreeSetupRuntime`, E4 capture strategy, and public Nautilus node. The candidate owns all domain decisions. The harness observes callbacks and storage; it does not copy Strategy, Registry, E4, or restart logic. A local notification adapter has no URL, HTTP client, credential, or network method and records only delivery identity and result.
+
+The single fixture is ETH Hyperliquid MAIN perpetual. Public `/info` metadata supplies the PIT metadata hash and Registry precision fields. The manifest binds exact candidate SHA/tree, rc5, public-only capability and the PIT snapshot. Subscriptions use external LAST 1m and 5m bars. The run records quote, trade, Depth10, finalized bar callback, historical warmup, runtime readiness, and an exact 5m boundary when available. Each live segment has a finite wall-clock window and stops through the product application. Provider timing or missing data yields `PROVIDER_DATA_INCOMPLETE`, never `PASS` or a product failure.
+
+## Storage and restart evidence
+
+Q1-C15/D08 check `PRAGMA integrity_check` on the isolated file-backed domain `shadow_records.EvidenceStore`. Q1-C16/D09 check `PRAGMA integrity_check` directly on `E4ThreeSetupProductionApplication.projection.store.connection` while each segment is live. That product `E4MemoryBarStore` uses SQLite `:memory:`. The JSON result records `product_closed_bar_store.storage_mode="sqlite::memory:"`. No detached or file-backed ClosedBarStore, surrogate database, or harness-owned projection can satisfy those claims.
+
+The two segments run in distinct child OS processes with controlled shutdown between them. The memory store is process-local. On restart, candidate `E4MarketTruthProjection` reconstructs it by replaying retained E4 admissions; the store itself does not persist. Durable E4 manifest, PIT, admissions, runtime checkpoint, process segments, Registry, domain evidence, and outbox identities are checked separately. An old boundary must pass through the candidate's existing `RECOVERY_CONTEXT_ONLY` or recovery/maintenance lane and create no new actionable activity. If provider timing prevents decisive post-restart proof, the run remains `PROVIDER_DATA_INCOMPLETE`.
+
+## Result and review
+
+The artifact follows `deploy/p4a/evidence/three-setup-q1-qualification-v1.json.example`. It contains exact identities, dependency/import proof, zero-write proof, E4/PIT/Registry hashes, public observations, warmup/readiness, boundary and restart evidence, shadow/outbox identities, separate SQLite integrity fields, artifact hashes, B01–D10 acceptance decisions, and an H01–H22 adversarial matrix. It excludes credentials, private/account data, production databases, and raw logs. The classifier is exactly `PASS`, `PRODUCT_BLOCKER`, `PROVIDER_DATA_INCOMPLETE`, or `HARNESS_OR_EXECUTION_SURFACE_GAP`; every mandatory B/C/D item and adversarial check must pass for overall `PASS`. H01–H22 cover drift, capability rejection, provider/harness separation, integrity, recovery, duplicate identity, and the PASS gate.
+
+| Fault | Decisive mechanism |
+| --- | --- |
+| H01–H02 | Frozen candidate HEAD/tree and PR base checks precede live work. |
+| H03–H04 | Target distribution absence and loaded product module origins are checked. |
+| H05–H06 | Exact rc5, release/RunManifest hash, and E4 manifest/PIT store equality are checked. |
+| H07–H08 | Registry/PIT metadata equality and both parsed external LAST BarTypes are required. |
+| H09–H10 | `assert_public_only`, literal zero-write fields, and the local adapter with no network port are required. |
+| H11–H13 | Candidate public-only node, product stale/partial gate, and persisted NOT_SUBMITTED/ExecutionChain flags are inspected. |
+| H14–H15 | Product child exit and each actual product SQLite integrity result block PASS. |
+| H16–H17 | Candidate old-boundary recovery plus persisted evidence/outbox identity comparisons block new action or duplication. |
+| H18–H19 | Missing decisive provider boundary yields `PROVIDER_DATA_INCOMPLETE`; harness/setup failure yields `HARNESS_OR_EXECUTION_SURFACE_GAP`. |
+| H20–H21 | Redacted artifact check and exact clean candidate source identity reject private evidence or product drift. |
+| H22 | The classifier requires every B01–D10 acceptance entry to be true for `PASS`. |
+
+After a Draft PR, read back the exact-head CI and dedicated Q1 workflow artifact, then obtain fresh Final Independent Review. Publishing this new workflow requires current human-backed `GH_WORKFLOW_SCOPE_VERIFIED=YES`. Qualification grants no Mark Ready, merge, deployment, service, credential, private API, signing, exchange write/order, autonomous trading, or real-capital action.
