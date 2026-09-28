@@ -20,6 +20,8 @@ The two segments run in distinct child OS processes with controlled shutdown bet
 
 The artifact follows `deploy/p4a/evidence/three-setup-q1-qualification-v1.json.example`. It contains exact identities, dependency/import proof, zero-write proof, E4/PIT/Registry hashes, public observations, warmup/readiness, boundary and restart evidence, shadow/outbox identities, separate SQLite integrity fields, artifact hashes, B01–D10 acceptance decisions, and an H01–H22 adversarial matrix. It excludes credentials, private/account data, production databases, and raw logs. The classifier is exactly `PASS`, `PRODUCT_BLOCKER`, `PROVIDER_DATA_INCOMPLETE`, or `HARNESS_OR_EXECUTION_SURFACE_GAP`; every mandatory B/C/D item and adversarial check must pass for overall `PASS`. H01–H22 cover drift, capability rejection, provider/harness separation, integrity, recovery, duplicate identity, and the PASS gate.
 
+Failure artifacts carry bounded `reason_stage` and `reason_code`. For a recognized static harness guard, `reason_detail` names that guard. The child segment writes the same bounded fields, and the parent preserves them in the final artifact. Arbitrary exception messages and process output are excluded; unknown exceptions contribute only their type and current stage. All fields pass the artifact redaction check before writing. A diagnostic does not alter classification or turn an incomplete acceptance matrix into `PASS`.
+
 | Fault | Decisive mechanism |
 | --- | --- |
 | H01–H02 | Frozen candidate HEAD/tree and PR base checks precede live work. |

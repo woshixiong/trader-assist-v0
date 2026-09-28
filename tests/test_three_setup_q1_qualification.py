@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 import subprocess
@@ -183,6 +184,103 @@ def test_child_result_preserves_failure_class(
         q1._run_child(tmp_path, tmp_path, 1, q1.BASE_SHA, q1.BASE_TREE, 60)
 
 
+def test_known_custom_failure_has_bounded_stage_and_guard() -> None:
+    q1._mark_stage("DEPENDENCY_LOCKS")
+    diagnostic = q1._failure_diagnostic(q1.QualificationGap("pilot lock identity differs"))
+    assert diagnostic == {
+        "reason_stage": "DEPENDENCY_LOCKS",
+        "reason_code": "QualificationGap",
+        "reason_detail": "pilot lock identity differs",
+    }
+    q1._safe_artifact(diagnostic)
+    assert (
+        q1.classify(dict.fromkeys(q1.MANDATORY, True), "HARNESS_OR_EXECUTION_SURFACE_GAP")
+        != "PASS"
+    )
+
+
+def test_async_failure_stage_reaches_outer_handler() -> None:
+    async def fail() -> None:
+        q1._mark_stage("PUBLIC_FIXTURE")
+        raise q1.ProviderIncomplete("public MAIN metadata unavailable")
+
+    with pytest.raises(q1.ProviderIncomplete) as caught:
+        asyncio.run(fail())
+    assert q1._failure_diagnostic(caught.value) == {
+        "reason_stage": "PUBLIC_FIXTURE",
+        "reason_code": "ProviderIncomplete",
+        "reason_detail": "public MAIN metadata unavailable",
+    }
+    q1._mark_stage("CHILD_LIVE")
+    assert q1._failure_diagnostic(q1.ProductBlocker("old boundary became newly actionable")) == {
+        "reason_stage": "CHILD_LIVE",
+        "reason_code": "ProductBlocker",
+        "reason_detail": "old boundary became newly actionable",
+    }
+
+
+def test_unknown_exception_never_exposes_its_message() -> None:
+    q1._mark_stage("PUBLIC_FIXTURE")
+    diagnostic = q1._failure_diagnostic(ValueError("api_key=private account secret"))
+    assert diagnostic == {"reason_stage": "PUBLIC_FIXTURE", "reason_code": "ValueError"}
+    q1._safe_artifact(diagnostic)
+    assert q1._failure_diagnostic(q1.QualificationGap("api_key=private account secret")) == {
+        "reason_stage": "PUBLIC_FIXTURE", "reason_code": "QualificationGap"
+    }
+
+
+def test_child_bounded_reason_propagates_to_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_run(command: tuple[str, ...], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        result_path = Path(command[command.index("--result") + 1])
+        result_path.write_text(json.dumps({
+            "classification": "HARNESS_OR_EXECUTION_SURFACE_GAP",
+            "reason_stage": "CHILD_COMPOSITION",
+            "reason_code": "QualificationGap",
+            "reason_detail": "exact external LAST 1m/5m BarTypes are unavailable",
+        }))
+        return subprocess.CompletedProcess(command, 2, "", "")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(q1.QualificationGap) as caught:
+        q1._run_child(tmp_path, tmp_path, 1, q1.BASE_SHA, q1.BASE_TREE, 60)
+    assert q1._failure_diagnostic(caught.value) == {
+        "reason_stage": "CHILD_COMPOSITION",
+        "reason_code": "QualificationGap",
+        "reason_detail": "exact external LAST 1m/5m BarTypes are unavailable",
+    }
+    assert (
+        q1.classify(dict.fromkeys(q1.MANDATORY, True), "HARNESS_OR_EXECUTION_SURFACE_GAP")
+        != "PASS"
+    )
+
+
+def test_child_untrusted_reason_is_not_propagated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_run(command: tuple[str, ...], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        result_path = Path(command[command.index("--result") + 1])
+        result_path.write_text(json.dumps({
+            "classification": "HARNESS_OR_EXECUTION_SURFACE_GAP",
+            "reason_stage": "CHILD_COMPOSITION",
+            "reason_code": "QualificationGap",
+            "reason_detail": "api_key=private account secret",
+        }))
+        return subprocess.CompletedProcess(command, 2, "", "")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(q1.QualificationGap) as caught:
+        q1._run_child(tmp_path, tmp_path, 1, q1.BASE_SHA, q1.BASE_TREE, 60)
+    assert q1._failure_diagnostic(caught.value) == {
+        "reason_stage": "CHILD_RESULT",
+        "reason_code": "QualificationGap",
+        "reason_detail": "child segment execution surface failed",
+    }
+    with pytest.raises(q1.QualificationGap):
+        q1._safe_artifact({"reason_detail": "api_key=private account secret"})
+
+
 def test_example_declares_distinct_store_lifetimes() -> None:
     example = json.loads(
         (
@@ -197,3 +295,5 @@ def test_example_declares_distinct_store_lifetimes() -> None:
     )
     assert example["sqlite_integrity"]["domain_evidence"] == []
     assert example["classification"] != "PASS"
+    assert example["reason_stage"] == example["reason_code"] == "UNRUN"
+    assert example["reason_detail"] is None

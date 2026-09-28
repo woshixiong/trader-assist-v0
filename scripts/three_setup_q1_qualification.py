@@ -45,16 +45,96 @@ MANDATORY = tuple(
 ADVERSARIAL = tuple(f"H{i:02}" for i in range(1, 23))
 
 
-class QualificationGap(RuntimeError):
+class DiagnosticFailure(RuntimeError):
+    """A classified failure with an optional validated child diagnostic."""
+
+    def __init__(self, message: str, diagnostic: dict[str, str] | None = None) -> None:
+        super().__init__(message)
+        self.diagnostic = diagnostic
+
+
+class QualificationGap(DiagnosticFailure):
     """The harness or execution surface cannot prove the frozen claim."""
 
 
-class ProductBlocker(RuntimeError):
+class ProductBlocker(DiagnosticFailure):
     """An observed candidate product invariant failed."""
 
 
-class ProviderIncomplete(RuntimeError):
+class ProviderIncomplete(DiagnosticFailure):
     """Public provider data did not satisfy the finite proof window."""
+
+
+DIAGNOSTIC_STAGE = "ENTRY"
+STAGES = frozenset(
+    {
+        "ENTRY", "CANDIDATE_IDENTITY", "RELEASE_MANIFEST", "DEPENDENCY_LOCKS",
+        "TARGET_IMPORT", "TARGET_PIP", "TARGET_RUNTIME", "PUBLIC_FIXTURE",
+        "E4_STORE", "CHILD_IDENTITY", "CHILD_RETAINED", "CHILD_COMPOSITION",
+        "CHILD_LIVE", "CHILD_RESULT", "CHILD_1", "CHILD_2", "ARTIFACT_WRITE",
+    }
+)
+KNOWN_FAILURES = frozenset(
+    {
+        "frozen candidate identity differs", "candidate HEAD drift", "candidate tree drift",
+        "candidate checkout is not clean", "product module imported outside candidate source",
+        "product script imported outside candidate checkout",
+        "domain EvidenceStore integrity failed",
+        "domain EvidenceStore SQLite read failed",
+        "artifact includes private or secret-shaped data",
+        "artifact includes secret-shaped content", "staged release unexpectedly includes Git state",
+        "pilot lock identity differs", "candidate import is absent",
+        "project distribution installed in target venv", "target pip check failed",
+        "target platform differs from Ubuntu x86_64 Python 3.12",
+        "public MAIN metadata unavailable", "public MAIN metadata shape unavailable",
+        "public ETH perpetual metadata unavailable", "Registry identity changed",
+        "exact external LAST 1m/5m BarTypes are unavailable",
+        "Registry/PIT metadata binding failed", "segment has no Registry authority",
+        "partial readiness reached product boundary callback",
+        "active Registry readiness failed", "product application child failed during segment",
+        "old boundary became newly actionable", "retained Registry identity is missing",
+        "segment candidate release identity drift", "child process produced no bounded result",
+        "candidate product segment failed", "candidate provider segment incomplete",
+        "child segment execution surface failed", "E4 store identity failed",
+    }
+)
+
+
+def _mark_stage(stage: str) -> None:
+    global DIAGNOSTIC_STAGE
+    if stage not in STAGES:
+        raise ValueError("unknown diagnostic stage")
+    DIAGNOSTIC_STAGE = stage
+
+
+def _failure_diagnostic(exc: BaseException) -> dict[str, str]:
+    if isinstance(exc, DiagnosticFailure) and exc.diagnostic is not None:
+        return exc.diagnostic
+    stage = DIAGNOSTIC_STAGE
+    diagnostic = {"reason_stage": stage, "reason_code": type(exc).__name__}
+    if isinstance(exc, DiagnosticFailure) and str(exc) in KNOWN_FAILURES:
+        diagnostic["reason_detail"] = str(exc)
+    return diagnostic
+
+
+def _child_diagnostic(result: dict[str, Any]) -> dict[str, str] | None:
+    stage, code, detail = (
+        result.get("reason_stage"), result.get("reason_code"), result.get("reason_detail")
+    )
+    if (
+        stage not in STAGES
+        or not isinstance(code, str)
+        or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", code)
+    ):
+        return None
+    if detail is not None and (detail not in KNOWN_FAILURES or code not in {
+        "QualificationGap", "ProviderIncomplete", "ProductBlocker"
+    }):
+        return None
+    diagnostic = {"reason_stage": stage, "reason_code": code}
+    if detail is not None:
+        diagnostic["reason_detail"] = detail
+    return diagnostic
 
 
 def _sha(data: bytes) -> str:
@@ -240,6 +320,7 @@ def _write_result(path: Path, result: dict[str, Any]) -> None:
 
 
 def _release_and_environment(candidate: Path, sha: str, tree: str) -> dict[str, Any]:
+    _mark_stage("RELEASE_MANIFEST")
     from scripts import check_dependency_lock as locks
     from scripts.verify_exact_release import (
         build_release_manifest,
@@ -265,11 +346,13 @@ def _release_and_environment(candidate: Path, sha: str, tree: str) -> dict[str, 
             expected_release_tree=tree,
             expected_manifest_digest=str(release["manifest_sha256"]),
         )
+    _mark_stage("DEPENDENCY_LOCKS")
     runtime = locks._read_lock(str(candidate / "requirements-runtime.lock"))
     pilot = locks._read_lock(str(candidate / "requirements-nautilus-pilot.lock"))
     if pilot != {"nautilus-trader": ("2.0.0rc5", locks.PILOT_WHEEL_SHA256)}:
         raise QualificationGap("pilot lock identity differs")
     locks._verify_installed(runtime, pilot, project_distribution_expected=False)
+    _mark_stage("TARGET_IMPORT")
     locks._verify_target_import(candidate / "src")
     if importlib.util.find_spec("trader_assist_v0") is None:
         raise QualificationGap("candidate import is absent")
@@ -280,6 +363,7 @@ def _release_and_environment(candidate: Path, sha: str, tree: str) -> dict[str, 
     else:
         raise QualificationGap("project distribution installed in target venv")
     _assert_import_origins(candidate)
+    _mark_stage("TARGET_PIP")
     host_python = (
         Path(sys.base_prefix) / "bin" / f"python{sys.version_info.major}.{sys.version_info.minor}"
     )
@@ -289,6 +373,7 @@ def _release_and_environment(candidate: Path, sha: str, tree: str) -> dict[str, 
         check=False,
     ).returncode:
         raise QualificationGap("target pip check failed")
+    _mark_stage("TARGET_RUNTIME")
     if (
         platform.system() != "Linux"
         or platform.machine() != "x86_64"
@@ -667,6 +752,7 @@ def _fixture_from_retained(root: Path) -> dict[str, Any]:
 async def _child_segment(
     candidate: Path, root: Path, index: int, seconds: int, sha: str, tree: str
 ) -> dict[str, Any]:
+    _mark_stage("CHILD_RETAINED")
     from trader_assist_v0.nautilus_e4.storage import EvidenceStore as E4EvidenceStore
 
     fixture = _fixture_from_retained(root)
@@ -689,10 +775,12 @@ async def _child_segment(
         else None
     )
     adapter = MemoryNotificationAdapter()
+    _mark_stage("CHILD_COMPOSITION")
     app = _compose(root, fixture, adapter)
     reconstructed_rows = app.projection.store.connection.execute(
         "SELECT COUNT(*) FROM closed_bars"
     ).fetchone()[0]
+    _mark_stage("CHILD_LIVE")
     segment = await _segment(app, seconds=seconds, old_event=old)
     _assert_import_origins(candidate)
     checkpoint = e4.load_runtime_checkpoint(manifest)
@@ -732,33 +820,39 @@ def _run_child(
         str(seconds),
     )
     completed = subprocess.run(command, capture_output=True, check=False, timeout=seconds + 60)
+    _mark_stage("CHILD_RESULT")
     if not target.is_file():
         raise QualificationGap("child process produced no bounded result")
     result = json.loads(target.read_text(encoding="utf-8"))
     if completed.returncode != 0 or result.get("classification") != "SEGMENT_COMPLETE":
+        diagnostic = _child_diagnostic(result)
         if result.get("classification") == "PRODUCT_BLOCKER":
-            raise ProductBlocker("candidate product segment failed")
+            raise ProductBlocker("candidate product segment failed", diagnostic)
         if result.get("classification") == "PROVIDER_DATA_INCOMPLETE":
-            raise ProviderIncomplete("candidate provider segment incomplete")
-        raise QualificationGap("child segment execution surface failed")
+            raise ProviderIncomplete("candidate provider segment incomplete", diagnostic)
+        raise QualificationGap("child segment execution surface failed", diagnostic)
     return cast(dict[str, Any], result)
 
 
 async def qualify(candidate: Path, root: Path, sha: str, tree: str, seconds: int) -> dict[str, Any]:
     matrix = {key: False for key in MANDATORY}
+    _mark_stage("CANDIDATE_IDENTITY")
     exact_identity(candidate, sha, tree)
     matrix["B01"] = True
     env = _release_and_environment(candidate, sha, tree)
     for key in ("B02", "B03", "B04", "B05"):
         matrix[key] = True
+    _mark_stage("PUBLIC_FIXTURE")
     fixture = _fixture(root, sha, tree)
     manifest, snapshot, version = fixture["manifest"], fixture["snapshot"], fixture["registry"]
     from trader_assist_v0.nautilus_e4.storage import EvidenceStore as E4EvidenceStore
 
+    _mark_stage("E4_STORE")
     e4 = E4EvidenceStore(fixture["e4_root"])
     matrix.update({key: True for key in ("B06", "B07", "B08", "B09", "B10", "B11", "B12")})
     if e4.load_manifest() != manifest or e4.load_snapshot() != snapshot:
         raise ProductBlocker("E4 store identity failed")
+    _mark_stage("CHILD_1")
     first_child = _run_child(candidate, root, 1, sha, tree, seconds)
     first, first_domain = first_child["segment"], first_child["domain"]
     retained = e4.load_admissions()
@@ -771,6 +865,7 @@ async def qualify(candidate: Path, root: Path, sha: str, tree: str, seconds: int
         ),
         None,
     )
+    _mark_stage("CHILD_2")
     second_child = _run_child(candidate, root, 2, sha, tree, seconds)
     second, second_domain = second_child["segment"], second_child["domain"]
     reconstructed_rows = second_child["reconstructed_bar_count"]
@@ -965,6 +1060,7 @@ def main() -> int:
         if args.root is None:
             parser.error("internal segment requires --root")
         try:
+            _mark_stage("CHILD_IDENTITY")
             exact_identity(args.candidate.resolve(), args.candidate_sha, args.candidate_tree)
             child_result = asyncio.run(
                 _child_segment(
@@ -976,12 +1072,16 @@ def main() -> int:
                     args.candidate_tree,
                 )
             )
-        except ProductBlocker:
-            child_result = {"classification": "PRODUCT_BLOCKER"}
-        except ProviderIncomplete:
-            child_result = {"classification": "PROVIDER_DATA_INCOMPLETE"}
-        except Exception:
-            child_result = {"classification": "HARNESS_OR_EXECUTION_SURFACE_GAP"}
+        except ProductBlocker as exc:
+            child_result = {"classification": "PRODUCT_BLOCKER", **_failure_diagnostic(exc)}
+        except ProviderIncomplete as exc:
+            child_result = {
+                "classification": "PROVIDER_DATA_INCOMPLETE", **_failure_diagnostic(exc)
+            }
+        except Exception as exc:
+            child_result = {
+                "classification": "HARNESS_OR_EXECUTION_SURFACE_GAP", **_failure_diagnostic(exc)
+            }
         _write_result(args.result, child_result)
         return 0 if child_result["classification"] == "SEGMENT_COMPLETE" else 2
     example_path = (
@@ -995,6 +1095,7 @@ def main() -> int:
         harness_head_sha=_git(Path(__file__).resolve().parents[1], "rev-parse", "HEAD"),
         harness_head_tree=_git(Path(__file__).resolve().parents[1], "rev-parse", "HEAD^{tree}"),
     )
+    _mark_stage("ENTRY")
     try:
         with tempfile.TemporaryDirectory(prefix="q1-three-setup-") as temporary:
             result = asyncio.run(
@@ -1007,24 +1108,25 @@ def main() -> int:
                 )
             )
     except ProductBlocker as exc:
-        result.update(classification="PRODUCT_BLOCKER", reason_code=type(exc).__name__)
+        result.update(classification="PRODUCT_BLOCKER", **_failure_diagnostic(exc))
     except ProviderIncomplete as exc:
-        result.update(classification="PROVIDER_DATA_INCOMPLETE", reason_code=type(exc).__name__)
+        result.update(classification="PROVIDER_DATA_INCOMPLETE", **_failure_diagnostic(exc))
     except SystemExit as exc:
         result.update(
             classification="HARNESS_OR_EXECUTION_SURFACE_GAP",
-            reason_code=type(exc).__name__,
+            **_failure_diagnostic(exc),
         )
     except Exception as exc:
         result.update(
             classification="HARNESS_OR_EXECUTION_SURFACE_GAP",
-            reason_code=type(exc).__name__,
+            **_failure_diagnostic(exc),
         )
     try:
+        _mark_stage("ARTIFACT_WRITE")
         _write_result(args.result, result)
     except QualificationGap:
         result = json.loads(example_path.read_text(encoding="utf-8"))
-        result["reason_code"] = "ArtifactRedactionFailure"
+        result.update(reason_stage="ARTIFACT_WRITE", reason_code="ArtifactRedactionFailure")
         _write_result(args.result, result)
     print(f"Q1_CLASSIFICATION={result['classification']}")
     return 0 if result["classification"] == "PASS" else 2
