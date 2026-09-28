@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import re
+import subprocess
+import sys
 import tomllib
 from importlib.metadata import distributions
 from pathlib import Path
@@ -91,8 +94,7 @@ def _verify_direct_pins(
     typesafe_name, typesafe_version = _pin(DECISION_MODEL_TYPESAFE_REQUIREMENT)
     if typesafe.get(typesafe_name, (None, None))[0] != typesafe_version:
         raise SystemExit(
-            "TypeSafe decision-model lock does not contain the exact accepted "
-            "typesafe-sdk pin"
+            "TypeSafe decision-model lock does not contain the exact accepted typesafe-sdk pin"
         )
     shared = sorted(set(dev) & set(typesafe))
     mismatched_shared = [name for name in shared if dev[name] != typesafe[name]]
@@ -117,14 +119,21 @@ def _verify_runtime_subset(
 def _verify_installed(
     dev: dict[str, tuple[str, str]],
     extra: dict[str, tuple[str, str]] | None = None,
+    *,
+    project_distribution_expected: bool = True,
 ) -> None:
     installed: dict[str, str] = {}
     for distribution in distributions():
         name = distribution.metadata.get("Name")
         if name:
-            installed[_normalized_name(name)] = distribution.version
+            normalized = _normalized_name(name)
+            if normalized in installed:
+                raise SystemExit(f"duplicate installed distribution: {normalized}")
+            installed[normalized] = distribution.version
     expected = dev if extra is None else {**dev, **extra}
-    expected_names = set(expected) | {"trader-assist-v0"}
+    expected_names = set(expected) | (
+        {"trader-assist-v0"} if project_distribution_expected else set()
+    )
     actual_names = set(installed)
     missing = sorted(expected_names - actual_names)
     extra_names = sorted(actual_names - expected_names)
@@ -144,16 +153,51 @@ def _verify_installed(
         raise SystemExit("; ".join(failures))
 
 
+def _verify_target_import(staged_source: Path) -> None:
+    expected = staged_source.resolve(strict=True)
+    spec = importlib.util.find_spec("trader_assist_v0")
+    if spec is None or spec.origin is None:
+        raise SystemExit("target project import is unavailable")
+    actual = Path(spec.origin).resolve(strict=True)
+    if not actual.is_relative_to(expected):
+        raise SystemExit("target project import resolves outside exact staged source")
+
+
+def _pip_check(host_python: Path) -> None:
+    result = subprocess.run(
+        (str(host_python), "-m", "pip", "--python", sys.executable, "check"),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode:
+        raise SystemExit("target pip check failed: " + result.stdout.strip())
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     installed_mode = parser.add_mutually_exclusive_group()
     installed_mode.add_argument("--verify-installed", action="store_true")
     installed_mode.add_argument("--verify-pilot-installed", action="store_true")
     installed_mode.add_argument("--verify-decision-model-typesafe-installed", action="store_true")
+    installed_mode.add_argument("--verify-target-runtime-installed", action="store_true")
+    parser.add_argument("--staged-source", type=Path)
+    parser.add_argument("--pip-check-with", type=Path)
     args = parser.parse_args()
     runtime = _read_lock("requirements-runtime.lock")
-    dev = _read_lock("requirements-dev.lock")
     pilot = _read_lock("requirements-nautilus-pilot.lock")
+    expected_pilot = {_pin(PILOT_REQUIREMENT)[0]: (_pin(PILOT_REQUIREMENT)[1], PILOT_WHEEL_SHA256)}
+    if pilot != expected_pilot:
+        raise SystemExit("pilot lock must contain only the exact authorized rc5 Linux wheel")
+    if args.verify_target_runtime_installed:
+        if args.staged_source is None or args.pip_check_with is None:
+            parser.error("target mode requires --staged-source and --pip-check-with")
+        _verify_installed(runtime, pilot, project_distribution_expected=False)
+        _verify_target_import(args.staged_source)
+        _pip_check(args.pip_check_with)
+        print("target dependency closure: exact runtime + rc5 pilot; pip check PASS")
+        return 0
+    dev = _read_lock("requirements-dev.lock")
     typesafe = _read_lock("requirements-decision-model-typesafe.lock")
     _verify_direct_pins(runtime, dev, pilot, typesafe)
     _verify_runtime_subset(runtime, dev)

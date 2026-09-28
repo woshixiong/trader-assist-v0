@@ -8,6 +8,7 @@ import logging
 import sqlite3
 import sys
 import threading
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -42,6 +43,7 @@ from trader_assist_v0.nautilus_e4.contracts import (
 from trader_assist_v0.nautilus_e4.storage import EvidenceStore as E4Store
 
 SHA = "a" * 40
+
 
 class Clock:
     def now(self) -> datetime:
@@ -220,6 +222,33 @@ def _e4_composition_fixture(
     fake_host.build_public_data_node = lambda: node  # type: ignore[attr-defined]
     fake_host.build_capture_strategy = lambda **_kwargs: capture  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "trader_assist_v0.nautilus_e4.host", fake_host)
+    # The ordinary local dev venv omits optional rc5; authoritative rc5 tests
+    # run in the qualified Linux environment. Preserve the real parser seam.
+    fake_model = ModuleType("nautilus_trader.model")
+    minute, last, external = object(), object(), object()
+    fake_model.BarAggregation = SimpleNamespace(MINUTE=minute)  # type: ignore[attr-defined]
+    fake_model.PriceType = SimpleNamespace(LAST=last)  # type: ignore[attr-defined]
+    fake_model.AggregationSource = SimpleNamespace(EXTERNAL=external)  # type: ignore[attr-defined]
+
+    class FakeBarType:
+        @staticmethod
+        def from_str(raw: str) -> SimpleNamespace:
+            instrument, step, aggregation, price, source = raw.rsplit("-", 4)
+            return SimpleNamespace(
+                instrument_id=instrument,
+                spec=SimpleNamespace(
+                    step=int(step),
+                    aggregation=minute if aggregation == "MINUTE" else object(),
+                    price_type=last if price == "LAST" else object(),
+                ),
+                aggregation_source=external if source == "EXTERNAL" else object(),
+            )
+
+    fake_model.BarType = FakeBarType  # type: ignore[attr-defined]
+    fake_package = ModuleType("nautilus_trader")
+    fake_package.model = fake_model  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "nautilus_trader", fake_package)
+    monkeypatch.setitem(sys.modules, "nautilus_trader.model", fake_model)
     config = production.ThreeSetupProductionConfig(
         release_sha=SHA,
         evidence_store_path=root / "evidence.sqlite",
@@ -259,6 +288,126 @@ def test_fixed_manifest_config_is_canonical_and_rejects_legacy_path(
         production.load_three_setup_config(path)
 
 
+@pytest.mark.parametrize("identity", ("manifest", "snapshot"))
+def test_provided_e4_identity_must_match_durable_store(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    identity: str,
+) -> None:
+    config, _node, _capture = _e4_composition_fixture(tmp_path, monkeypatch)
+    assert config.e4_evidence_root is not None
+    store = E4Store(config.e4_evidence_root)
+    if identity == "manifest":
+        other = RunManifest.create(
+            run_id="other-run",
+            git_sha=SHA,
+            git_tree="b" * 40,
+            snapshot=store.load_snapshot(),
+            process_epoch="process-1",
+            continuity_epoch="continuity-1",
+            admission_epoch="admission-1",
+            capture_configuration={"bar_types": ["1-MINUTE", "5-MINUTE"]},
+            subscription_policy={"discovery": [], "watch": [], "actionable": []},
+            trial_ledger_id="other",
+        )
+        path = tmp_path / "other-manifest.json"
+        path.write_text(other.model_dump_json(), encoding="utf-8")
+        config = replace(config, e4_manifest_path=path)
+    else:
+        original = store.load_snapshot()
+        other_snapshot = PitUniverseSnapshot.create(
+            observed_at_ns=original.observed_at_ns + 1,
+            expressions=original.expressions,
+        )
+        path = tmp_path / "other-snapshot.json"
+        path.write_text(other_snapshot.model_dump_json(), encoding="utf-8")
+        config = replace(config, e4_snapshot_path=path)
+    with pytest.raises(production.ThreeSetupProductionError, match="durable evidence"):
+        production.validate_three_setup_e4_identity(config)
+
+
+@pytest.mark.parametrize("minute", (1, 5))
+def test_selected_market_requires_both_exact_external_bar_types(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    minute: int,
+) -> None:
+    config, _node, _capture = _e4_composition_fixture(tmp_path, monkeypatch)
+    remaining = tuple(bar for bar in config.e4_bar_types if f"-{minute}-MINUTE-" not in bar)
+    with pytest.raises(production.ThreeSetupProductionError, match="subscriptions lack"):
+        production.validate_three_setup_e4_identity(replace(config, e4_bar_types=remaining))
+
+
+@pytest.mark.parametrize("change", ("market", "metadata"))
+def test_registry_market_and_metadata_must_match_pit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    change: str,
+) -> None:
+    config, _node, _capture = _e4_composition_fixture(tmp_path, monkeypatch)
+    market = _market()
+    if change == "market":
+        market = market.model_copy(
+            update={
+                "identity": MarketIdentity.create(dex="MAIN", coin="ETH"),
+            }
+        )
+    else:
+        market = market.model_copy(update={"metadata_hash": "0" * 64})
+    selected = SimpleNamespace(markets=(market,))
+    monkeypatch.setattr(
+        production,
+        "MarketRegistryManager",
+        lambda *_args, **_kwargs: SimpleNamespace(active=lambda: selected),
+    )
+    with pytest.raises(production.ThreeSetupProductionError, match="Registry market differs"):
+        production.validate_three_setup_e4_identity(config)
+
+
+@pytest.mark.parametrize("suffix", ("MID-EXTERNAL", "LAST-INTERNAL", "LAST-EXTERNAL"))
+def test_bar_identity_never_accepts_prefix_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    suffix: str,
+) -> None:
+    config, _node, _capture = _e4_composition_fixture(tmp_path, monkeypatch)
+    bad = f"BTC-PERP.HYPERLIQUID-1-MINUTE-{suffix}"
+    bars = (bad, config.e4_bar_types[1])
+    if suffix == "LAST-EXTERNAL":
+        bad = "ETH-PERP.HYPERLIQUID-1-MINUTE-LAST-EXTERNAL"
+        bars = (bad, config.e4_bar_types[1])
+    with pytest.raises(production.ThreeSetupProductionError, match="subscriptions lack"):
+        production.validate_three_setup_e4_identity(replace(config, e4_bar_types=bars))
+
+
+def test_active_e4_rejects_legacy_rc4_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, _node, _capture = _e4_composition_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        production.RunManifest,
+        "model_validate_json",
+        lambda _: SimpleNamespace(git_sha=SHA, nautilus_version="2.0.0rc4"),
+    )
+    with pytest.raises(production.ThreeSetupProductionError, match="Nautilus identity differs"):
+        production.validate_three_setup_e4_identity(config)
+
+
+@pytest.mark.parametrize("flag", ("private_api", "exchange_write", "real_exec_client_registered"))
+def test_e4_run_manifest_rejects_true_zero_write_flag(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    flag: str,
+) -> None:
+    config, _node, _capture = _e4_composition_fixture(tmp_path, monkeypatch)
+    assert config.e4_evidence_root is not None
+    raw = E4Store(config.e4_evidence_root).load_manifest().model_dump(mode="json")
+    raw[flag] = True
+    with pytest.raises(ValueError):
+        RunManifest.model_validate(raw)
+
+
 @pytest.mark.parametrize(
     "retained_work",
     ("scanner_evidence", "strategy_evaluation", "formal_signal", "notification_outbox"),
@@ -296,6 +445,7 @@ def test_initial_pending_registry_rejects_retained_application_work(
             ),
             clock=Clock().now,
         )
+
 
 def test_real_composition_owns_one_dispatcher_and_shuts_down_cleanly(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
@@ -340,6 +490,7 @@ def test_real_composition_owns_one_dispatcher_and_shuts_down_cleanly(
         application.bootstrap.evidence._connection.execute("SELECT 1")
     with pytest.raises(sqlite3.ProgrammingError):
         application.projection.store.connection.execute("SELECT 1")
+
 
 def test_systemd_execstart_targets_the_executable_three_setup_wrapper() -> None:
     root = Path(__file__).parents[1]
@@ -467,9 +618,7 @@ def test_runtime_child_exit_before_operator_shutdown_is_fatal(
     outcome: str, caplog: pytest.LogCaptureFixture
 ) -> None:
     application, dispatcher, store = supervisor_application(outcome)
-    expected = (
-        "PRODUCTION_CHILD_EXIT_UNEXPECTED" if outcome == "normal" else "runtime child failed"
-    )
+    expected = "PRODUCTION_CHILD_EXIT_UNEXPECTED" if outcome == "normal" else "runtime child failed"
     with caplog.at_level(logging.INFO, logger="trader_assist_v0.three_setup"):
         with pytest.raises(Exception, match=expected):
             asyncio.run(application.run(asyncio.Event()))  # type: ignore[attr-defined]
