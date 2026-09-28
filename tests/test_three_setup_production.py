@@ -7,7 +7,6 @@ import json
 import logging
 import sqlite3
 import sys
-import threading
 from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -127,26 +126,80 @@ def _market() -> RegistryMarket:
 class E4Node:
     def __init__(self) -> None:
         self.strategy: object | None = None
-        self.started = threading.Event()
-        self.stopped = threading.Event()
+        self.started = asyncio.Event()
+        self.stopped = asyncio.Event()
         self.disposed = False
         self.run_calls = 0
+        self.run_async_calls = 0
+        self.stop_calls = 0
+        self.handle_calls = 0
+        self.run_completed = False
+        self.run_cancelled = False
+        self._is_running = False
+        self.running_reads = 0
+        self.running_observed = asyncio.Event()
+        self.auto_running = True
+        self.events: list[str] = []
+        self.outcome = "wait"
+        self.release = asyncio.Event()
+        self.stop_error: Exception | None = None
 
     def add_strategy(self, strategy: object) -> None:
         self.strategy = strategy
 
+    @property
+    def is_running(self) -> bool:
+        self.running_reads += 1
+        if self._is_running:
+            self.running_observed.set()
+        return self._is_running
+
+    @is_running.setter
+    def is_running(self, value: bool) -> None:
+        self._is_running = value
+
     def run(self) -> None:
         self.run_calls += 1
+        raise AssertionError("hosted application called synchronous LiveNode.run")
+
+    async def run_async(self) -> None:
+        self.run_async_calls += 1
+        assert self.handle_calls == 1
+        self.events.append("run_start")
+        self.is_running = self.auto_running
         self.started.set()
-        self.stopped.wait(timeout=2)
+        try:
+            if self.outcome == "wait":
+                await self.stopped.wait()
+            else:
+                await self.release.wait()
+                if self.outcome == "exception":
+                    raise RuntimeError("node child failed")
+                if self.outcome == "cancelled":
+                    raise asyncio.CancelledError
+        except asyncio.CancelledError:
+            self.run_cancelled = True
+            raise
+        finally:
+            self.is_running = False
+            self.run_completed = True
+            self.events.append("run_complete")
 
     def handle(self) -> E4Node:
+        self.handle_calls += 1
+        self.events.append("handle")
         return self
 
     def stop(self) -> None:
+        self.stop_calls += 1
+        self.events.append("stop")
         self.stopped.set()
+        if self.stop_error is not None:
+            raise self.stop_error
 
     def dispose(self) -> None:
+        assert self.run_completed
+        self.events.append("dispose")
         self.disposed = True
 
 
@@ -474,15 +527,19 @@ def test_real_composition_owns_one_dispatcher_and_shuts_down_cleanly(
     async def exercise() -> None:
         shutdown = asyncio.Event()
         task = asyncio.create_task(application.run(shutdown))
-        started = await asyncio.wait_for(asyncio.to_thread(node.started.wait), timeout=1)
-        assert started
+        await asyncio.wait_for(node.started.wait(), timeout=1)
         shutdown.set()
         await task
 
     with caplog.at_level(logging.INFO, logger="trader_assist_v0.three_setup"):
         asyncio.run(exercise())
     assert dispatcher_starts == 1
-    assert node.run_calls == 1
+    assert node.run_calls == 0
+    assert node.run_async_calls == 1
+    assert node.handle_calls == 1
+    assert node.stop_calls == 1
+    assert not node.run_cancelled
+    assert node.events == ["handle", "run_start", "stop", "run_complete", "dispose"]
     assert node.stopped.is_set() and node.disposed
     events = {json.loads(record.message)["event"] for record in caplog.records}
     assert {"STARTUP", "SHUTDOWN"} <= events
@@ -490,6 +547,344 @@ def test_real_composition_owns_one_dispatcher_and_shuts_down_cleanly(
         application.bootstrap.evidence._connection.execute("SELECT 1")
     with pytest.raises(sqlite3.ProgrammingError):
         application.projection.store.connection.execute("SELECT 1")
+
+
+class E4ControlledChild:
+    def __init__(self, component: str) -> None:
+        self.component = component
+        self.outcome = "wait"
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def run(self, shutdown: asyncio.Event) -> None:
+        self.started.set()
+        await self.release.wait()
+        if self.outcome == "exception":
+            raise RuntimeError(f"{self.component} child failed")
+        if self.outcome == "cancelled":
+            raise asyncio.CancelledError
+        if self.outcome == "wait":
+            await shutdown.wait()
+
+
+class E4ControlledCloser:
+    def __init__(self) -> None:
+        self.closed = False
+        self.error: Exception | None = None
+
+    def close(self) -> None:
+        self.closed = True
+        if self.error is not None:
+            raise self.error
+
+
+def e4_supervisor_application() -> tuple[
+    production.E4ThreeSetupProductionApplication,
+    E4Node,
+    E4ControlledChild,
+    E4ControlledChild,
+    tuple[E4ControlledCloser, E4ControlledCloser, E4ControlledCloser],
+]:
+    node = E4Node()
+    domain = E4ControlledChild("domain")
+    dispatcher_child = E4ControlledChild("dispatcher")
+    dispatcher = E4ControlledCloser()
+    bootstrap_closer = E4ControlledCloser()
+    projection = E4ControlledCloser()
+    active = SimpleNamespace(version="v1", content_hash="hash")
+    application = object.__new__(production.E4ThreeSetupProductionApplication)
+    application.node = node
+    application.e4_runtime = domain  # type: ignore[assignment]
+    application.dispatcher = dispatcher  # type: ignore[assignment]
+    application.projection = projection  # type: ignore[assignment]
+    application.bootstrap = SimpleNamespace(  # type: ignore[assignment]
+        registry=SimpleNamespace(active=lambda: active, pending_version=lambda: None),
+        close=bootstrap_closer.close,
+    )
+    application.logger = logging.getLogger("trader_assist_v0.three_setup")
+    application._dispatch_loop = dispatcher_child.run  # type: ignore[method-assign]
+    return application, node, domain, dispatcher_child, (
+        dispatcher,
+        bootstrap_closer,
+        projection,
+    )
+
+
+def e4_child_event(caplog: pytest.LogCaptureFixture) -> dict[str, object]:
+    return next(
+        event
+        for record in caplog.records
+        if (event := json.loads(record.message))["event"] == "PRODUCTION_CHILD_EXIT_UNEXPECTED"
+    )
+
+
+@pytest.mark.parametrize("component", ("node", "domain", "dispatcher"))
+@pytest.mark.parametrize("outcome", ("exception", "normal", "cancelled"))
+def test_e4_each_child_exit_is_fatal_and_journaled(
+    component: str, outcome: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    application, node, domain, dispatcher, closers = e4_supervisor_application()
+    target = {"node": node, "domain": domain, "dispatcher": dispatcher}[component]
+    target.outcome = outcome
+
+    async def exercise() -> BaseException:
+        shutdown = asyncio.Event()
+        run_task = asyncio.create_task(application.run(shutdown))
+        await asyncio.wait_for(
+            asyncio.gather(node.started.wait(), domain.started.wait(), dispatcher.started.wait()),
+            timeout=1,
+        )
+        target.release.set()
+        try:
+            await asyncio.wait_for(run_task, timeout=1)
+        except BaseException as exc:
+            return exc
+        raise AssertionError("unexpected E4 child exit was not fatal")
+
+    with caplog.at_level(logging.INFO, logger="trader_assist_v0.three_setup"):
+        error = asyncio.run(exercise())
+    expected_type = "RuntimeError" if outcome == "exception" else "ThreeSetupProductionError"
+    assert type(error).__name__ == expected_type
+    assert component in str(error)
+    assert e4_child_event(caplog) == {
+        "event": "PRODUCTION_CHILD_EXIT_UNEXPECTED",
+        "component": component,
+        "error_type": expected_type,
+    }
+    assert all(closer.closed for closer in closers)
+    assert node.stop_calls == 1 and node.disposed and node.run_completed
+    assert node.run_calls == 0 and node.run_async_calls == 1
+    assert node.events.index("handle") < node.events.index("run_start")
+    assert node.events.index("stop") < node.events.index("dispose")
+    assert node.events.index("run_complete") < node.events.index("dispose")
+    if component != "node":
+        assert not node.run_cancelled
+
+
+@pytest.mark.parametrize(
+    ("outcomes", "expected_component", "expected_type"),
+    [
+        ({"node": "normal", "domain": "exception"}, "domain", "RuntimeError"),
+        ({"node": "cancelled", "domain": "exception"}, "domain", "RuntimeError"),
+        ({"node": "exception", "domain": "exception"}, "node", "RuntimeError"),
+        ({"domain": "exception", "dispatcher": "exception"}, "domain", "RuntimeError"),
+        ({"node": "normal", "domain": "normal"}, "node", "ThreeSetupProductionError"),
+    ],
+)
+def test_e4_simultaneous_done_selection_is_stable(
+    outcomes: dict[str, str], expected_component: str, expected_type: str
+) -> None:
+    async def exercise() -> production._SelectedE4ChildFailure | None:
+        async def finish(outcome: str) -> None:
+            if outcome == "exception":
+                raise RuntimeError("selected child failed")
+            if outcome == "cancelled":
+                raise asyncio.CancelledError
+
+        children = tuple(
+            (component, asyncio.create_task(finish(outcomes.get(component, "normal"))))
+            for component in ("node", "domain", "dispatcher")
+        )
+        await asyncio.gather(*(task for _, task in children), return_exceptions=True)
+        return production._select_e4_child_failure(
+            children, {task for _, task in children}, asyncio.Event()
+        )
+
+    selected = asyncio.run(exercise())
+    assert selected is not None
+    assert selected.component == expected_component
+    assert selected.error_type == expected_type
+
+
+def test_e4_startup_waits_for_running_without_unsupervised_children(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    application, node, domain, dispatcher, closers = e4_supervisor_application()
+    node.auto_running = False
+    original_wait = asyncio.wait
+    timed_wait_started = asyncio.Event()
+    timeouts: list[float] = []
+
+    async def recorded_wait(
+        tasks: object, *, timeout: float | None = None, return_when: str = asyncio.ALL_COMPLETED
+    ) -> object:
+        if timeout is not None:
+            timeouts.append(timeout)
+            timed_wait_started.set()
+        return await original_wait(tasks, timeout=timeout, return_when=return_when)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(production.asyncio, "wait", recorded_wait)
+
+    async def exercise() -> None:
+        shutdown = asyncio.Event()
+        run_task = asyncio.create_task(application.run(shutdown))
+        await asyncio.wait_for(
+            asyncio.gather(node.started.wait(), domain.started.wait(), dispatcher.started.wait()),
+            timeout=1,
+        )
+        await asyncio.wait_for(timed_wait_started.wait(), timeout=1)
+        assert not run_task.done() and not node.is_running
+        assert timeouts == [0.01]
+        node.is_running = True
+        await asyncio.wait_for(node.running_observed.wait(), timeout=1)
+        assert not run_task.done()
+        domain.release.set()
+        dispatcher.release.set()
+        shutdown.set()
+        await asyncio.wait_for(run_task, timeout=1)
+
+    asyncio.run(exercise())
+    assert node.disposed and node.stop_calls == 1
+    assert all(closer.closed for closer in closers)
+
+
+@pytest.mark.parametrize("component", ("node", "domain", "dispatcher"))
+@pytest.mark.parametrize("outcome", ("exception", "normal", "cancelled"))
+def test_e4_startup_child_exit_before_running_is_fatal(
+    component: str, outcome: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    application, node, domain, dispatcher, _ = e4_supervisor_application()
+    node.auto_running = False
+    target = {"node": node, "domain": domain, "dispatcher": dispatcher}[component]
+    target.outcome = outcome
+
+    async def exercise() -> BaseException:
+        shutdown = asyncio.Event()
+        run_task = asyncio.create_task(application.run(shutdown))
+        await asyncio.wait_for(
+            asyncio.gather(node.started.wait(), domain.started.wait(), dispatcher.started.wait()),
+            timeout=1,
+        )
+        target.release.set()
+        try:
+            await asyncio.wait_for(run_task, timeout=1)
+        except BaseException as exc:
+            return exc
+        raise AssertionError("early child exit was not fatal")
+
+    with caplog.at_level(logging.INFO, logger="trader_assist_v0.three_setup"):
+        error = asyncio.run(exercise())
+    expected_type = "RuntimeError" if outcome == "exception" else "ThreeSetupProductionError"
+    assert type(error).__name__ == expected_type
+    assert component in str(error)
+    assert e4_child_event(caplog)["component"] == component
+    assert e4_child_event(caplog)["error_type"] == expected_type
+    assert node.disposed
+
+
+def test_e4_running_transition_does_not_hide_simultaneous_child_exception(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    application, node, domain, dispatcher, _ = e4_supervisor_application()
+    node.auto_running = False
+    domain.outcome = "exception"
+
+    async def exercise() -> None:
+        run_task = asyncio.create_task(application.run(asyncio.Event()))
+        await asyncio.wait_for(
+            asyncio.gather(node.started.wait(), domain.started.wait(), dispatcher.started.wait()),
+            timeout=1,
+        )
+        node.is_running = True
+        domain.release.set()
+        with pytest.raises(RuntimeError, match="domain child failed"):
+            await asyncio.wait_for(run_task, timeout=1)
+
+    with caplog.at_level(logging.INFO, logger="trader_assist_v0.three_setup"):
+        asyncio.run(exercise())
+    assert e4_child_event(caplog)["component"] == "domain"
+
+
+@pytest.mark.parametrize("node_outcome", ("normal", "cancelled"))
+def test_e4_startup_simultaneous_exception_outranks_other_exit(
+    node_outcome: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    application, node, domain, dispatcher, _ = e4_supervisor_application()
+    node.auto_running = False
+    node.outcome = node_outcome
+    domain.outcome = "exception"
+
+    async def exercise() -> None:
+        run_task = asyncio.create_task(application.run(asyncio.Event()))
+        await asyncio.wait_for(
+            asyncio.gather(node.started.wait(), domain.started.wait(), dispatcher.started.wait()),
+            timeout=1,
+        )
+        node.release.set()
+        domain.release.set()
+        with pytest.raises(RuntimeError, match="domain child failed"):
+            await asyncio.wait_for(run_task, timeout=1)
+
+    with caplog.at_level(logging.INFO, logger="trader_assist_v0.three_setup"):
+        asyncio.run(exercise())
+    assert e4_child_event(caplog)["component"] == "domain"
+    assert node.disposed
+
+
+def test_e4_operator_shutdown_during_startup_is_clean() -> None:
+    application, node, domain, dispatcher, closers = e4_supervisor_application()
+    node.auto_running = False
+
+    async def exercise() -> None:
+        shutdown = asyncio.Event()
+        run_task = asyncio.create_task(application.run(shutdown))
+        await asyncio.wait_for(
+            asyncio.gather(node.started.wait(), domain.started.wait(), dispatcher.started.wait()),
+            timeout=1,
+        )
+        shutdown.set()
+        await asyncio.wait_for(run_task, timeout=1)
+
+    asyncio.run(exercise())
+    assert node.disposed and node.stop_calls == 1
+    assert all(closer.closed for closer in closers)
+
+
+def test_e4_failed_stop_never_disposes_uncompleted_node() -> None:
+    application, node, domain, dispatcher, closers = e4_supervisor_application()
+
+    def failed_stop() -> None:
+        node.stop_calls += 1
+        raise ValueError("node stop failed before signalling")
+
+    node.stop = failed_stop  # type: ignore[method-assign]
+
+    async def exercise() -> None:
+        shutdown = asyncio.Event()
+        run_task = asyncio.create_task(application.run(shutdown))
+        await asyncio.wait_for(
+            asyncio.gather(node.started.wait(), domain.started.wait(), dispatcher.started.wait()),
+            timeout=1,
+        )
+        shutdown.set()
+        with pytest.raises(ValueError, match="node stop failed"):
+            await asyncio.wait_for(run_task, timeout=2)
+        assert not node.run_completed and not node.disposed
+
+    asyncio.run(exercise())
+    assert node.stop_calls == 1 and not node.disposed
+    assert all(closer.closed for closer in closers)
+
+
+def test_e4_selected_child_error_survives_cleanup_failure() -> None:
+    application, node, domain, dispatcher, closers = e4_supervisor_application()
+    domain.outcome = "exception"
+    closers[0].error = ValueError("dispatcher cleanup failed")
+    node.stop_error = ValueError("node stop failed")
+
+    async def exercise() -> None:
+        run_task = asyncio.create_task(application.run(asyncio.Event()))
+        await asyncio.wait_for(
+            asyncio.gather(node.started.wait(), domain.started.wait(), dispatcher.started.wait()),
+            timeout=1,
+        )
+        domain.release.set()
+        with pytest.raises(RuntimeError, match="domain child failed"):
+            await asyncio.wait_for(run_task, timeout=2)
+
+    asyncio.run(exercise())
+    assert all(closer.closed for closer in closers)
+    assert node.disposed and node.stop_calls == 1
 
 
 def test_systemd_execstart_targets_the_executable_three_setup_wrapper() -> None:
