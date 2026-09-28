@@ -257,8 +257,10 @@ def test_exact_current_public_data_live_node_surfaces() -> None:
     try:
         assert isinstance(node, LiveNode)
         assert callable(node.add_strategy)
+        assert callable(node.run_async)
         handle = node.handle()
         assert isinstance(handle, LiveNodeHandle)
+        assert isinstance(handle.is_running, bool)
         assert callable(handle.stop)
     finally:
         node.dispose()

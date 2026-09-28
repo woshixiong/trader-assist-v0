@@ -46,6 +46,42 @@ class ThreeSetupProductionError(ValueError):
 
 
 @dataclass(frozen=True)
+class _SelectedE4ChildFailure:
+    component: str
+    error: BaseException
+    error_type: str
+
+
+def _select_e4_child_failure(
+    children: tuple[tuple[str, asyncio.Task[None]], ...],
+    done: set[asyncio.Task[None]],
+    shutdown: asyncio.Event,
+) -> _SelectedE4ChildFailure | None:
+    """Inspect every completed child before applying stable component precedence."""
+    observed: list[tuple[str, str, BaseException | None]] = []
+    for component, task in children:
+        if task not in done:
+            continue
+        if task.cancelled():
+            observed.append((component, "cancelled", None))
+            continue
+        error = task.exception()
+        observed.append((component, "exception" if error is not None else "normal", error))
+
+    for component, outcome, error in observed:
+        if outcome == "exception" and error is not None:
+            return _SelectedE4ChildFailure(component, error, type(error).__name__)
+    if observed and not shutdown.is_set():
+        component, outcome, _ = observed[0]
+        description = "was cancelled" if outcome == "cancelled" else "returned normally"
+        error = ThreeSetupProductionError(
+            f"PRODUCTION_CHILD_EXIT_UNEXPECTED: {component} {description}"
+        )
+        return _SelectedE4ChildFailure(component, error, type(error).__name__)
+    return None
+
+
+@dataclass(frozen=True)
 class ThreeSetupProductionConfig:
     """Non-secret, canonical configuration for the fixed durable asset layout."""
 
@@ -515,36 +551,114 @@ class E4ThreeSetupProductionApplication(ThreeSetupProductionApplication):
             registry_version=active.version,
             registry_content_hash=active.content_hash,
         )
+        handle = self.node.handle()
         dispatcher_task = asyncio.create_task(self._dispatch_loop(shutdown))
         domain_task = asyncio.create_task(self.e4_runtime.run(shutdown))
-        await asyncio.sleep(0)
-        node_task = asyncio.create_task(asyncio.to_thread(self.node.run))
-        tasks = (dispatcher_task, domain_task, node_task)
+        node_task = asyncio.create_task(self.node.run_async())
+        children = (("node", node_task), ("domain", domain_task), ("dispatcher", dispatcher_task))
+        tasks = tuple(task for _, task in children)
+        primary: _SelectedE4ChildFailure | None = None
+        interrupted: BaseException | None = None
+        cleanup_error: BaseException | None = None
+        node_complete = False
         try:
-            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-            if not shutdown.is_set():
-                task = next(
-                    (item for item in done if item.exception() is not None), next(iter(done))
+            # A created run task is not a Running node. All three children are
+            # supervised during the bounded hosted-loop startup wait.
+            while True:
+                done = {task for task in tasks if task.done()}
+                primary = _select_e4_child_failure(children, done, shutdown)
+                if primary is not None or shutdown.is_set():
+                    break
+                if handle.is_running:
+                    break
+                done, _ = await asyncio.wait(
+                    tasks, timeout=0.01, return_when=asyncio.FIRST_COMPLETED
                 )
-                error = task.exception() or ThreeSetupProductionError("E4 production child exited")
+                primary = _select_e4_child_failure(children, done, shutdown)
+                if primary is not None or shutdown.is_set():
+                    break
+            if primary is None and not shutdown.is_set():
+                done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                primary = _select_e4_child_failure(children, done, shutdown)
+            if primary is not None:
                 _journal(
-                    self.logger, "PRODUCTION_CHILD_EXIT_UNEXPECTED", error_type=type(error).__name__
+                    self.logger,
+                    "PRODUCTION_CHILD_EXIT_UNEXPECTED",
+                    component=primary.component,
+                    error_type=primary.error_type,
                 )
-                raise error
+        except BaseException as exc:
+            interrupted = exc
         finally:
             shutdown.set()
-            self.node.handle().stop()
+            stop_failed = False
+            try:
+                handle.stop()
+            except BaseException as exc:
+                cleanup_error = exc
+                stop_failed = True
             for task in (dispatcher_task, domain_task):
                 if not task.done():
                     task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            try:
+                results = await asyncio.gather(dispatcher_task, domain_task, return_exceptions=True)
+                for result in results:
+                    if isinstance(result, BaseException) and not isinstance(
+                        result, asyncio.CancelledError
+                    ) and cleanup_error is None:
+                        cleanup_error = result
+            except BaseException as exc:
+                if cleanup_error is None:
+                    cleanup_error = exc
+            try:
+                if stop_failed and not node_task.done():
+                    # A failed stop must not leave cleanup blocked forever or
+                    # permit disposal of a still-running node.
+                    await asyncio.wait({node_task}, timeout=1.0)
+                else:
+                    await asyncio.gather(node_task, return_exceptions=True)
+                node_complete = node_task.done()
+                if node_complete and not node_task.cancelled():
+                    node_error = node_task.exception()
+                    if node_error is not None and cleanup_error is None:
+                        cleanup_error = node_error
+            except BaseException as exc:
+                if cleanup_error is None:
+                    cleanup_error = exc
             try:
                 await self._close_dispatcher()
-            finally:
+            except BaseException as exc:
+                if cleanup_error is None:
+                    cleanup_error = exc
+            try:
                 self.bootstrap.close()
+            except BaseException as exc:
+                if cleanup_error is None:
+                    cleanup_error = exc
+            try:
                 self.projection.close()
-                self.node.dispose()
+            except BaseException as exc:
+                if cleanup_error is None:
+                    cleanup_error = exc
+            if node_complete:
+                try:
+                    self.node.dispose()
+                except BaseException as exc:
+                    if cleanup_error is None:
+                        cleanup_error = exc
+            elif cleanup_error is None:
+                cleanup_error = ThreeSetupProductionError("LiveNode run completion was not proven")
+            try:
                 _journal(self.logger, "SHUTDOWN")
+            except BaseException as exc:
+                if cleanup_error is None:
+                    cleanup_error = exc
+        if primary is not None:
+            raise primary.error
+        if interrupted is not None:
+            raise interrupted
+        if cleanup_error is not None:
+            raise cleanup_error
 
 
 def _compose_e4_three_setup_application(
