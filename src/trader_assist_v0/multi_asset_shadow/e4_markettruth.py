@@ -314,6 +314,8 @@ class E4MarketTruthProjection:
                 self._failed_markets.add(event.source.market_id)
                 raise E4ProjectionError("conflicting E4 closed-bar slot")
             return None
+        if interval == "5m" and event.out_of_order:
+            return None
         self._bar_events[slot] = event
         if interval == "1m":
             bar_1m = OneMinuteBar.create(

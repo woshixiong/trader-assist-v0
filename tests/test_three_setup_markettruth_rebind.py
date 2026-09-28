@@ -1018,6 +1018,147 @@ def test_strategy_readiness_enforces_close_deadline_and_contiguous_5m_history(
     domain.close()
 
 
+@async_test
+async def test_late_5m_gap_fill_stays_durable_without_strategy_projection(
+    tmp_path: Path,
+) -> None:
+    from types import SimpleNamespace
+
+    from trader_assist_v0.multi_asset_shadow.runtime import E4ThreeSetupRuntime
+
+    markets, e4, domain, registry, projection = _setup(tmp_path)
+    initial = tuple(_event(m, ordinal=i + 1) for i, m in enumerate(markets))
+    e4.append_admission_batch(initial)
+    for event in initial:
+        assert projection.accept(event) == "5m"
+    registry.apply_initial_e4_witness(
+        registry.issue_initial_e4_witness(boundary_open_time_ms=T),
+        evidence_authority=projection,
+    )
+
+    gap_market = markets[0]
+    missing_open = T + 5_100_000
+    pre_late_latest = missing_open + 300_000
+    ordinal = 3
+    history = []
+    for open_ms in range(T + 300_000, pre_late_latest + 1, 300_000):
+        for market in markets:
+            if market == gap_market and open_ms == missing_open:
+                continue
+            event = _event(market, ordinal=ordinal, open_ms=open_ms)
+            ordinal += 1
+            history.append(event)
+    e4.append_admission_batch(tuple(history))
+    for event in history:
+        assert projection.accept(event) == "5m"
+
+    projection.clock_ms = lambda: pre_late_latest + 301_000
+    assert not projection.store.is_contiguous_5m(gap_market.identity.market_id)
+    assert projection.readiness_snapshot().ready_market_ids == ()
+    derived_before = projection.store.connection.execute(
+        "SELECT COUNT(*) FROM closed_bars WHERE market_id=? AND interval IN ('15m','60m')",
+        (gap_market.identity.market_id,),
+    ).fetchone()[0]
+
+    late = _event(
+        gap_market,
+        ordinal=ordinal,
+        open_ms=missing_open,
+        continuity=EvidenceState.GAPPED,
+        out_of_order=True,
+    )
+    ordinal += 1
+    e4.append_admission_batch((late,))
+    durable = next(
+        event for event in e4.load_admissions() if event.admission_hash == late.admission_hash
+    )
+    assert durable.out_of_order is True
+    assert durable.continuity_state is EvidenceState.GAPPED
+    assert projection.accept(late) is None
+
+    slot = (gap_market.identity.market_id, "5m", missing_open)
+    assert slot not in projection._bar_events
+    assert (
+        projection.store.connection.execute(
+            "SELECT 1 FROM closed_bars WHERE market_id=? AND interval='5m' AND open_time_ms=?",
+            (gap_market.identity.market_id, missing_open),
+        ).fetchone()
+        is None
+    )
+    assert late.admission_hash.encode() not in domain.export_jsonl()
+    derived_after = projection.store.connection.execute(
+        "SELECT COUNT(*) FROM closed_bars WHERE market_id=? AND interval IN ('15m','60m')",
+        (gap_market.identity.market_id,),
+    ).fetchone()[0]
+    assert derived_after == derived_before
+
+    projected_open_times = {
+        bar.open_time_ms
+        for bar in projection.store.tail_bars(
+            gap_market.identity.market_id, at_or_before_ms=pre_late_latest, limit=64
+        )
+    }
+    assert missing_open not in projected_open_times
+    assert pre_late_latest in projected_open_times
+    assert not projection.store.is_contiguous_5m(gap_market.identity.market_id)
+    readiness = projection.readiness_snapshot()
+    assert readiness.data_ready is False
+    assert readiness.ready_market_ids == ()
+
+    future_open = pre_late_latest + 300_000
+    future = tuple(
+        _event(m, ordinal=ordinal + i, open_ms=future_open) for i, m in enumerate(markets)
+    )
+    e4.append_admission_batch(future)
+    for event in future:
+        assert projection.accept(event) == "5m"
+    projection.clock_ms = lambda: future_open + 301_000
+    assert not projection.store.is_contiguous_5m(gap_market.identity.market_id)
+    assert projection.readiness_snapshot().ready_market_ids == ()
+
+    runtime = E4ThreeSetupRuntime(
+        projection=projection,
+        registry=registry,
+        clock=lambda: datetime.fromtimestamp((future_open + 301_000) / 1000, UTC),
+    )
+    wakes: list[tuple[int, str]] = []
+
+    async def on_boundary(bar: object, mode: object) -> object:
+        wakes.append((bar.open_time_ms, mode.value))
+        return SimpleNamespace(disposition=SimpleNamespace(value="PROCESSED"))
+
+    runtime.on_finalized_5m = on_boundary
+    for event in future:
+        await runtime._on_5m(event)
+    assert wakes == []
+    projection.close()
+    domain.close()
+
+
+def test_late_5m_same_slot_duplicate_and_conflict_are_decided_before_discard(
+    tmp_path: Path,
+) -> None:
+    markets, e4, domain, _registry, projection = _setup(tmp_path)
+    current = _event(markets[0], ordinal=1)
+    e4.append_admission_batch((current,))
+    assert projection.accept(current) == "5m"
+
+    duplicate = _event(markets[0], ordinal=2, out_of_order=True)
+    e4.append_admission_batch((duplicate,))
+    assert projection.accept(duplicate) is None
+    assert not projection.market_failed(markets[0].identity.market_id)
+
+    payload = dict(current.source.payload)
+    payload["close"] = "100.5"
+    conflict = _event(markets[0], ordinal=3, payload=payload, out_of_order=True)
+    e4.append_admission_batch((conflict,))
+    with pytest.raises(E4ProjectionError, match="conflicting E4 closed-bar slot"):
+        projection.accept(conflict)
+    assert projection.market_failed(markets[0].identity.market_id)
+    projection.close()
+    domain.close()
+
+
 def test_gapped_depth_is_usable_and_older_snapshot_is_ignored_without_market_poison(
     tmp_path: Path,
 ) -> None:
