@@ -45,55 +45,117 @@ def _reject_secret(path: Path) -> None:
             raise BundleError(f"secret-shaped content in release file: {path.name}")
 
 
-def _remote_script(sha: str, tree: str, digest: str, wheel_name: str) -> str:
-    return f"""#!/usr/bin/env bash
+def _remote_script(wheel_name: str) -> str:
+    script = '''#!/usr/bin/env bash
 set -euo pipefail
-[[ "${{1:-}}" == "--verify" || "${{1:-}}" == "--install" ]] || {{
+[[ "${1:-}" == "--verify" || "${1:-}" == "--install" ]] || {
   echo "Use --verify or --install" >&2; exit 2;
-}}
-BUNDLE_ROOT="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd -P)"
+}
+[[ "$#" == 5 ]] || { echo "four independent anchors are required" >&2; exit 2; }
+export EXPECTED_RELEASE_SHA="$2"
+export EXPECTED_RELEASE_TREE="$3"
+export EXPECTED_RELEASE_MANIFEST_CANONICAL_DIGEST="$4"
+export EXPECTED_BUNDLE_MANIFEST_SHA256="$5"
+BUNDLE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 export BUNDLE_ROOT
 python3.12 - <<'PY_VERIFY'
-import hashlib, json, os
+import hashlib, json, os, re, stat
 from pathlib import Path
 root = Path(os.environ['BUNDLE_ROOT'])
-manifest = json.loads((root / 'bundle-manifest.json').read_text())
-assert manifest['release_sha'] == '{sha}'
-assert manifest['release_tree'] == '{tree}'
-assert manifest['release_manifest_digest'] == '{digest}'
+sha = os.environ['EXPECTED_RELEASE_SHA']
+tree = os.environ['EXPECTED_RELEASE_TREE']
+release_digest = os.environ['EXPECTED_RELEASE_MANIFEST_CANONICAL_DIGEST']
+bundle_digest = os.environ['EXPECTED_BUNDLE_MANIFEST_SHA256']
+if not all(re.fullmatch(r'[0-9a-f]{40}', value) for value in (sha, tree)) or not all(
+    re.fullmatch(r'[0-9a-f]{64}', value) for value in (release_digest, bundle_digest)
+):
+    raise SystemExit('invalid independent anchor format')
+def canonical(value):
+    return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
+def regular(path):
+    if not stat.S_ISREG(path.lstat().st_mode):
+        raise SystemExit('non-regular transfer file')
+    return path.read_bytes()
+manifest_bytes = regular(root / 'bundle-manifest.json')
+if hashlib.sha256(manifest_bytes).hexdigest() != bundle_digest:
+    raise SystemExit('independent bundle-manifest digest mismatch')
+manifest = json.loads(manifest_bytes)
+if (manifest['release_sha'] != sha or manifest['release_tree'] != tree
+        or manifest['release_manifest_digest'] != release_digest):
+    raise SystemExit('independent release identity mismatch')
+release_bytes = regular(root / 'release-manifest.json')
+release = json.loads(release_bytes)
+if canonical(release) != release_bytes:
+    raise SystemExit('release manifest is not canonical')
+actual_digest = hashlib.sha256(canonical({
+    key: value for key, value in release.items() if key != 'manifest_sha256'
+})).hexdigest()
+if actual_digest != release_digest or release.get('manifest_sha256') != release_digest:
+    raise SystemExit('independent release-manifest canonical digest mismatch')
+if release.get('release_sha') != sha or release.get('release_tree') != tree:
+    raise SystemExit('release manifest SHA/TREE mismatch')
+listed = set()
 for entry in manifest['files']:
-    relative = Path(entry['path'])
-    assert not relative.is_absolute() and '..' not in relative.parts
-    path = root / relative
-    assert path.is_file() and not path.is_symlink()
-    assert path.stat().st_size == entry['size']
-    assert hashlib.sha256(path.read_bytes()).hexdigest() == entry['sha256']
+    if set(entry) != {'path', 'sha256', 'size'} or not isinstance(entry['path'], str):
+        raise SystemExit('invalid bundle entry')
+    name = entry['path']
+    if (not name or name.startswith('/') or chr(92) in name
+            or any(part in ('', '.', '..') for part in name.split('/'))
+            or name in listed or name == 'bundle-manifest.json'):
+        raise SystemExit('unsafe or duplicate bundle path')
+    listed.add(name)
+    path = root / name
+    data = regular(path)
+    if (type(entry['size']) is not int or len(data) != entry['size']
+            or not re.fullmatch(r'[0-9a-f]{64}', entry['sha256'])
+            or hashlib.sha256(data).hexdigest() != entry['sha256']):
+        raise SystemExit('bundle file hash or size mismatch')
+actual = set()
+def walk_error(error):
+    raise SystemExit(f'cannot traverse transfer: {error}')
+for directory, dirs, files in os.walk(root, followlinks=False, onerror=walk_error):
+    for name in dirs:
+        if not stat.S_ISDIR((Path(directory) / name).lstat().st_mode):
+            raise SystemExit('symlink or non-directory in transfer')
+    for name in files:
+        path = Path(directory) / name
+        regular(path)
+        actual.add(path.relative_to(root).as_posix())
+if actual != listed | {'bundle-manifest.json'}:
+    raise SystemExit('transfer path set mismatch')
 print('BUNDLE_HASH_VERIFY=PASS')
 PY_VERIFY
+PYTHONPATH="$BUNDLE_ROOT/payload/src:$BUNDLE_ROOT/payload" python3.12 \
+  "$BUNDLE_ROOT/payload/scripts/verify_exact_release.py" \
+  --root "$BUNDLE_ROOT/payload" --verify-staged "$BUNDLE_ROOT/release-manifest.json" \
+  --expected-release-sha "$EXPECTED_RELEASE_SHA" \
+  --expected-release-tree "$EXPECTED_RELEASE_TREE" \
+  --expected-manifest-digest "$EXPECTED_RELEASE_MANIFEST_CANONICAL_DIGEST"
+echo "STAGED_RELEASE_VERIFY=PASS"
 SERVICE_STATE="$(systemctl is-active trader-assist-v0-three-setup.service 2>/dev/null || true)"
-[[ "$SERVICE_STATE" != "active" ]] || {{
+[[ "$SERVICE_STATE" != "active" ]] || {
   echo "Three Setup service is active" >&2; exit 2;
-}}
-[[ ! -e /etc/trader-assist-v0/three-setup-activation-permit ]] || {{
+}
+[[ ! -e /etc/trader-assist-v0/three-setup-activation-permit ]] || {
   echo "activation permit exists" >&2; exit 2;
-}}
+}
 PYTHONPATH="$BUNDLE_ROOT/payload/src:$BUNDLE_ROOT/payload" python3.12 \
   "$BUNDLE_ROOT/payload/scripts/three_setup_shadow_preflight.py" --host-only \
-  --host-wheel "$BUNDLE_ROOT/{wheel_name}"
+  --host-wheel "$BUNDLE_ROOT/__WHEEL_NAME__"
 echo "PREINSTALL_VERIFY=PASS; SERVICE=STOPPED; ACTIVATION=DEFAULT_OFF"
-[[ "${{1}}" == "--install" ]] || exit 0
-[[ "${{TRADER_ASSIST_V0_DEPLOYMENT_AUTHORIZED:-}}" == "YES" ]] || {{
+[[ "${1}" == "--install" ]] || exit 0
+[[ "${TRADER_ASSIST_V0_DEPLOYMENT_AUTHORIZED:-}" == "YES" ]] || {
   echo "current deployment authorization is required" >&2; exit 2;
-}}
-[[ ! -e /opt/trader-assist-v0 ]] || {{
+}
+[[ ! -e /opt/trader-assist-v0 ]] || {
   echo "existing install requires separate rollback handling" >&2; exit 2;
-}}
-[[ ! -e /etc/trader-assist-v0/three-setup-shadow.json ]] || {{
+}
+[[ ! -e /etc/trader-assist-v0/three-setup-shadow.json ]] || {
   echo "existing config requires separate rollback handling" >&2; exit 2;
-}}
-[[ ! -e /etc/trader-assist-v0/three-setup-shadow.env ]] || {{
+}
+[[ ! -e /etc/trader-assist-v0/three-setup-shadow.env ]] || {
   echo "existing env requires separate rollback handling" >&2; exit 2;
-}}
+}
 install -d -m 0750 /opt/trader-assist-v0
 cp -a "$BUNDLE_ROOT/payload/." /opt/trader-assist-v0/
 cp "$BUNDLE_ROOT/release-manifest.json" /opt/trader-assist-v0/three-setup-release-manifest.json
@@ -113,7 +175,19 @@ export PYTHONPATH=/opt/trader-assist-v0/src:/opt/trader-assist-v0
   --verify-target-runtime-installed --staged-source /opt/trader-assist-v0/src \
   --pip-check-with "$(command -v python3.12)"
 echo "INSTALL_VERIFIED=PASS; SERVICE=STOPPED; ACTIVATION=DEFAULT_OFF"
-"""
+'''
+    return script.replace('__WHEEL_NAME__', wheel_name)
+
+
+def handoff_anchors(output: Path) -> dict[str, str]:
+    manifest = json.loads((output / 'bundle-manifest.json').read_bytes())
+    return {
+        'EXPECTED_RELEASE_SHA': str(manifest['release_sha']),
+        'EXPECTED_RELEASE_TREE': str(manifest['release_tree']),
+        'EXPECTED_RELEASE_MANIFEST_CANONICAL_DIGEST': str(manifest['release_manifest_digest']),
+        'EXPECTED_BUNDLE_MANIFEST_SHA256': _digest(output / 'bundle-manifest.json'),
+        'EXPECTED_REMOTE_QUALIFICATION_SHA256': _digest(output / 'remote-qualification.sh'),
+    }
 
 
 def build_bundle(
@@ -129,6 +203,8 @@ def build_bundle(
 ) -> Path:
     exact_clean_head(root, expected_head=sha)
     exact_clean_tree(root, expected_tree=tree)
+    if not re.fullmatch(r"[A-Za-z0-9_.+-]+\.whl", wheel.name):
+        raise BundleError("rc5 wheel filename is unsafe")
     if _digest(wheel) != PILOT_WHEEL_SHA256:
         raise BundleError("rc5 wheel differs from exact pilot lock hash")
     if output.exists():
@@ -166,7 +242,7 @@ def build_bundle(
         shutil.copy2(wheel, output / wheel.name)
         remote = output / "remote-qualification.sh"
         remote.write_text(
-            _remote_script(sha, tree, str(release["manifest_sha256"]), wheel.name),
+            _remote_script(wheel.name),
             encoding="utf-8",
         )
         remote.chmod(0o750)
@@ -221,6 +297,8 @@ def main() -> int:
         cost_version=args.cost_model_version,
     )
     print(f"THREE_SETUP_BUNDLE={path}")
+    for key, value in handoff_anchors(path).items():
+        print(f"{key}={value}")
     return 0
 
 

@@ -12,15 +12,44 @@ current Operations and human authorization before any target installation or sta
    using `--expected-sha`, `--expected-tree`, `--rc5-wheel`, `--bar-type-1m`,
    `--bar-type-5m`, `--cost-model-version`, and an empty `--output` path outside
    the repository. The generator requires a clean exact Git candidate.
-2. Upload that single folder unchanged through FinalShell SFTP to the unique
-   `upload_path` in `bundle-manifest.json`. Do not mix it with a prior folder.
-3. In the already-connected FinalShell terminal, run `remote-qualification.sh
-   --verify` from that folder. It verifies all transferred hashes, exact SHA/tree,
-   stopped service, absent activation permit, Linux/x86_64/Python 3.12, glibc
-   compatibility and the locked rc5 wheel hash before installation.
-4. Only after a separate current deployment authorization, run that same script
-   with `--install` and the explicit authorization setting described in the
-   generated script. It refuses an existing `/opt/trader-assist-v0` install;
+2. Preserve the generator's five `EXPECTED_*` values in the canonical reviewed
+   Engineering/Operations handoff, independently of the transfer folder. They
+   are the expected release SHA, tree, release-manifest canonical digest,
+   bundle-manifest raw SHA256 and remote-qualification script raw SHA256. Never
+   obtain expected values from the uploaded folder. Upload that single folder
+   unchanged through FinalShell SFTP to the reviewed unique upload path. Do not
+   mix it with a prior folder.
+3. In the already-connected FinalShell terminal, use the five values copied
+   from the canonical reviewed handoff in this bounded pre-execution block.
+   Substitute the reviewed absolute upload path; keep the values outside the
+   uploaded folder. No uploaded code runs until both raw hashes match:
+
+   ```bash
+   set -euo pipefail
+   BUNDLE_ROOT=/tmp/trade-os-deploy-ts7-REVIEWED_SHA_PREFIX
+   EXPECTED_RELEASE_SHA=REVIEWED_40_LOWERCASE_SHA
+   EXPECTED_RELEASE_TREE=REVIEWED_40_LOWERCASE_TREE
+   EXPECTED_RELEASE_MANIFEST_CANONICAL_DIGEST=REVIEWED_64_LOWERCASE_DIGEST
+   EXPECTED_BUNDLE_MANIFEST_SHA256=REVIEWED_64_LOWERCASE_DIGEST
+   EXPECTED_REMOTE_QUALIFICATION_SHA256=REVIEWED_64_LOWERCASE_DIGEST
+   test "$(sha256sum "$BUNDLE_ROOT/bundle-manifest.json" | cut -d ' ' -f 1)" = "$EXPECTED_BUNDLE_MANIFEST_SHA256"
+   test "$(sha256sum "$BUNDLE_ROOT/remote-qualification.sh" | cut -d ' ' -f 1)" = "$EXPECTED_REMOTE_QUALIFICATION_SHA256"
+   bash "$BUNDLE_ROOT/remote-qualification.sh" --verify "$EXPECTED_RELEASE_SHA" "$EXPECTED_RELEASE_TREE" "$EXPECTED_RELEASE_MANIFEST_CANONICAL_DIGEST" "$EXPECTED_BUNDLE_MANIFEST_SHA256"
+   ```
+
+   The anchored script recomputes the release-manifest canonical digest from
+   actual bytes, checks the exact regular-file transfer path set and each file
+   hash/size, and invokes the existing no-Git staged release verifier before
+   host preflight or installation. Host preflight checks stopped/default-off
+   state and exact wheel bytes; compatibility comes from the wheel's intrinsic
+   `WHEEL` `Tag:` metadata. Target Python 3.12 must have the staged verifier's
+   import prerequisites available before this read-only verification; absence
+   fails closed. Record that prerequisite separately from the target runtime
+   and pilot venv closure.
+4. Only after a separate current deployment authorization, repeat the exact
+   pre-execution hash block and pass the same four independent release/bundle
+   arguments to the script with `--install` and the explicit authorization
+   setting described in the generated script. It refuses an existing `/opt/trader-assist-v0` install;
    replacement requires a separately reviewed rollback plan. Installation uses
    the runtime lock with hashes, the pilot lock with hashes, `--no-deps` and
    `--only-binary`, and `PYTHONPATH` source rather than project installation.
@@ -41,7 +70,8 @@ current Operations and human authorization before any target installation or sta
 
 Copy the non-secret qualification evidence schema in
 `deploy/p4a/evidence/three-setup-shadow-qualification-manifest-v1.json.example`.
-Record exact release and bundle hashes, service/permit state before and after,
+Record the canonical independent anchors, exact release and bundle hashes,
+transfer path-set proof, service/permit state before and after,
 host and venv proof, validate-only result, and rollback result. Never include
 credential values, private data, tokens, keys, production DBs or raw logs.
 After merge, Q1 separately observes the public Nautilus probe, bounded

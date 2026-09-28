@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import json
+import os
 import subprocess
+import sys
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -24,6 +28,26 @@ from trader_assist_v0.multi_asset_shadow.production import (
 
 SHA = "a" * 40
 TREE = "b" * 40
+
+
+def _wheel_bytes(*, tags: tuple[str, ...] = ("cp312-cp312-manylinux_2_28_x86_64",),
+                 metadata_count: int = 1) -> bytes:
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w") as archive:
+        for index in range(metadata_count):
+            prefix = "nautilus_trader-2.0.0rc5" if index == 0 else "other-1.0"
+            archive.writestr(
+                f"{prefix}.dist-info/WHEEL",
+                "Wheel-Version: 1.0\n" + "".join(f"Tag: {tag}\n" for tag in tags),
+            )
+    return stream.getvalue()
+
+
+def _linux_host(monkeypatch: pytest.MonkeyPatch, glibc: str = "2.35") -> None:
+    monkeypatch.setattr(preflight.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(preflight.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(preflight.platform, "libc_ver", lambda: ("glibc", glibc))
+    monkeypatch.setattr(preflight.sys, "version_info", (3, 12))
 
 
 def test_v1_config_cannot_be_deploy_preflight_candidate(
@@ -93,12 +117,13 @@ def test_host_prerequisite_rejections(
     message: str,
 ) -> None:
     wheel = tmp_path / f"nautilus_trader-2.0.0rc5-cp312-cp312-{wheel_tag}.whl"
-    wheel.write_bytes(b"test wheel")
+    wheel_bytes = _wheel_bytes(tags=(f"cp312-cp312-{wheel_tag}",))
+    wheel.write_bytes(wheel_bytes)
     monkeypatch.setattr(preflight.platform, "system", lambda: system)
     monkeypatch.setattr(preflight.platform, "machine", lambda: machine)
     monkeypatch.setattr(preflight.platform, "libc_ver", lambda: libc)
     monkeypatch.setattr(preflight.sys, "version_info", python)
-    monkeypatch.setattr(preflight, "PILOT_WHEEL_SHA256", hashlib.sha256(b"test wheel").hexdigest())
+    monkeypatch.setattr(preflight, "PILOT_WHEEL_SHA256", hashlib.sha256(wheel_bytes).hexdigest())
     with pytest.raises(preflight.PreflightError, match=message):
         preflight.verify_host_prerequisites(wheel)
 
@@ -112,6 +137,49 @@ def test_host_wheel_hash_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(preflight.sys, "version_info", (3, 12))
     with pytest.raises(preflight.PreflightError, match="hash"):
         preflight.verify_host_prerequisites(wheel)
+
+
+def test_intrinsic_wheel_tags_survive_permissive_rename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _linux_host(monkeypatch, "2.17")
+    data = _wheel_bytes()
+    monkeypatch.setattr(preflight, "PILOT_WHEEL_SHA256", hashlib.sha256(data).hexdigest())
+    wheel = tmp_path / "nautilus_trader-2.0.0rc5-cp312-cp312-manylinux_2_17_x86_64.whl"
+    wheel.write_bytes(data)
+    with pytest.raises(preflight.PreflightError, match="glibc"):
+        preflight.verify_host_prerequisites(wheel)
+
+
+@pytest.mark.parametrize(
+    ("data", "message"),
+    [
+        (b"not zip", "malformed"),
+        (_wheel_bytes(metadata_count=0), "missing or ambiguous"),
+        (_wheel_bytes(metadata_count=2), "missing or ambiguous"),
+        (_wheel_bytes(tags=("cp312-abi3-manylinux_2_28_x86_64",)), "unsupported"),
+    ],
+)
+def test_intrinsic_wheel_metadata_rejects_malformed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data: bytes, message: str,
+) -> None:
+    _linux_host(monkeypatch)
+    wheel = tmp_path / "wheel.whl"
+    wheel.write_bytes(data)
+    monkeypatch.setattr(preflight, "PILOT_WHEEL_SHA256", hashlib.sha256(data).hexdigest())
+    with pytest.raises(preflight.PreflightError, match=message):
+        preflight.verify_host_prerequisites(wheel)
+
+
+def test_intrinsic_wheel_exact_hash_compatible_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _linux_host(monkeypatch, "2.35")
+    data = _wheel_bytes()
+    wheel = tmp_path / "diagnostic-name.whl"
+    wheel.write_bytes(data)
+    monkeypatch.setattr(preflight, "PILOT_WHEEL_SHA256", hashlib.sha256(data).hexdigest())
+    preflight.verify_host_prerequisites(wheel)
 
 
 @pytest.mark.parametrize(
@@ -311,6 +379,16 @@ def _candidate_repo(root: Path, *, secret: bool = False) -> tuple[str, str]:
         'api_key = "abcdefghijk"\n' if secret else "VALUE = 1\n",
         encoding="utf-8",
     )
+    (root / "scripts/verify_exact_release.py").write_text(
+        "import sys\n"
+        "assert '--verify-staged' in sys.argv\n"
+        "assert '--expected-manifest-digest' in sys.argv\n"
+        "print('EXACT_RELEASE_VERIFY=PASS')\n",
+        encoding="utf-8",
+    )
+    (root / "scripts/three_setup_shadow_preflight.py").write_text(
+        "print('HOST_PREFLIGHT_FIXTURE=PASS')\n", encoding="utf-8",
+    )
     for command in (
         ("git", "init"),
         ("git", "config", "user.email", "ts7@example.invalid"),
@@ -356,6 +434,158 @@ def test_bundle_hashes_every_transfer_file_and_verifies_before_install(
     assert remote.index('[[ "${1}" == "--install" ]]') < remote.index("install -d")
     assert "SERVICE=STOPPED; ACTIVATION=DEFAULT_OFF" in remote
     assert "notification.json" not in "".join(actual)
+
+
+def _qualification_fixture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Path, dict[str, str], dict[str, str]]:
+    root = tmp_path / "candidate"
+    sha, tree = _candidate_repo(root)
+    wheel = tmp_path / "nautilus_trader-2.0.0rc5-cp312-cp312-manylinux_2_28_x86_64.whl"
+    wheel.write_bytes(b"wheel fixture")
+    monkeypatch.setattr(bundle, "PILOT_WHEEL_SHA256", hashlib.sha256(b"wheel fixture").hexdigest())
+    output = bundle.build_bundle(
+        root=root, output=tmp_path / "bundle", sha=sha, tree=tree, wheel=wheel,
+        bar_1m="BTC-PERP.HYPERLIQUID-1-MINUTE-LAST-EXTERNAL",
+        bar_5m="BTC-PERP.HYPERLIQUID-5-MINUTE-LAST-EXTERNAL",
+        cost_version="reviewed-cost-v1",
+    )
+    anchors = bundle.handoff_anchors(output)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    python = bin_dir / "python3.12"
+    python.write_text(f"#!/bin/sh\nexec {sys.executable} \"$@\"\n", encoding="utf-8")
+    python.chmod(0o755)
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+    return output, anchors, env
+
+
+def _run_qualification(
+    output: Path, anchors: dict[str, str], env: dict[str, str], *, mode: str = "--verify",
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        (
+            "bash", str(output / "remote-qualification.sh"), mode,
+            anchors["EXPECTED_RELEASE_SHA"], anchors["EXPECTED_RELEASE_TREE"],
+            anchors["EXPECTED_RELEASE_MANIFEST_CANONICAL_DIGEST"],
+            anchors["EXPECTED_BUNDLE_MANIFEST_SHA256"],
+        ),
+        env=env, capture_output=True, text=True, check=False,
+    )
+
+
+def test_independent_anchors_accept_original_and_staged_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output, anchors, env = _qualification_fixture(tmp_path, monkeypatch)
+    manifest = json.loads((output / "release-manifest.json").read_bytes())
+    verify_staged_release(
+        output / "payload", manifest,
+        expected_release_sha=anchors["EXPECTED_RELEASE_SHA"],
+        expected_release_tree=anchors["EXPECTED_RELEASE_TREE"],
+        expected_manifest_digest=anchors["EXPECTED_RELEASE_MANIFEST_CANONICAL_DIGEST"],
+    )
+    result = _run_qualification(output, anchors, env)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.index("BUNDLE_HASH_VERIFY=PASS") < result.stdout.index(
+        "EXACT_RELEASE_VERIFY=PASS"
+    ) < result.stdout.index("HOST_PREFLIGHT_FIXTURE=PASS")
+    assert "PREINSTALL_VERIFY=PASS; SERVICE=STOPPED; ACTIVATION=DEFAULT_OFF" in result.stdout
+    assert "INSTALL_VERIFIED" not in result.stdout
+    denied = _run_qualification(output, anchors, env, mode="--install")
+    assert denied.returncode != 0
+    assert "current deployment authorization is required" in denied.stderr
+    assert "INSTALL_VERIFIED" not in denied.stdout
+
+
+@pytest.mark.parametrize(
+    "mutation", ("coupled", "release_digest", "bundle_rewrite", "extra", "missing", "symlink")
+)
+def test_independent_anchor_and_transfer_mutations_fail_before_host_or_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str,
+) -> None:
+    output, anchors, env = _qualification_fixture(tmp_path, monkeypatch)
+    manifest_path = output / "bundle-manifest.json"
+    bundle_manifest = json.loads(manifest_path.read_bytes())
+    payload_file = output / "payload/src/demo.py"
+    if mutation in {"coupled", "bundle_rewrite"}:
+        payload_file.write_text("VALUE = 2\n", encoding="utf-8")
+        entry = next(e for e in bundle_manifest["files"] if e["path"] == "payload/src/demo.py")
+        entry["sha256"] = hashlib.sha256(payload_file.read_bytes()).hexdigest()
+        if mutation == "coupled":
+            release_path = output / "release-manifest.json"
+            release = json.loads(release_path.read_bytes())
+            release_entry = next(e for e in release["files"] if e["path"] == "src/demo.py")
+            release_entry["sha256"] = entry["sha256"]
+            release["manifest_sha256"] = sha256_hex(canonical_json_bytes(
+                {k: v for k, v in release.items() if k != "manifest_sha256"}
+            ))
+            release_path.write_bytes(canonical_json_bytes(release))
+            bundle_manifest["release_manifest_digest"] = release["manifest_sha256"]
+            release_bundle_entry = next(
+                e for e in bundle_manifest["files"] if e["path"] == "release-manifest.json"
+            )
+            release_bundle_entry["sha256"] = hashlib.sha256(release_path.read_bytes()).hexdigest()
+            release_bundle_entry["size"] = release_path.stat().st_size
+        manifest_path.write_bytes(canonical_json_bytes(bundle_manifest))
+    elif mutation == "release_digest":
+        release_path = output / "release-manifest.json"
+        release = json.loads(release_path.read_bytes())
+        release["files"][0]["sha256"] = "0" * 64
+        release_path.write_bytes(canonical_json_bytes(release))
+    elif mutation == "extra":
+        (output / "extra.txt").write_text("unlisted", encoding="utf-8")
+    elif mutation == "missing":
+        payload_file.unlink()
+    else:
+        payload_file.unlink()
+        payload_file.symlink_to(output / "release-manifest.json")
+    result = _run_qualification(output, anchors, env, mode="--install")
+    assert result.returncode != 0
+    assert "HOST_PREFLIGHT_FIXTURE=PASS" not in result.stdout
+    assert "PREINSTALL_VERIFY=PASS" not in result.stdout
+    assert "INSTALL_VERIFIED" not in result.stdout
+    if mutation in {"coupled", "bundle_rewrite"}:
+        assert "independent bundle-manifest digest mismatch" in result.stderr
+    if mutation == "release_digest":
+        assert "independent release-manifest canonical digest mismatch" in result.stderr
+
+
+def test_remote_script_mutation_rejected_before_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output, anchors, env = _qualification_fixture(tmp_path, monkeypatch)
+    remote = output / "remote-qualification.sh"
+    remote.write_text("#!/bin/sh\necho UPLOADED_CODE_RAN\n", encoding="utf-8")
+    # Model the runbook's trusted pre-execution raw SHA256 comparison.
+    assert hashlib.sha256(remote.read_bytes()).hexdigest() != anchors[
+        "EXPECTED_REMOTE_QUALIFICATION_SHA256"
+    ]
+    assert "UPLOADED_CODE_RAN" not in _run_preexecution_guard(output, anchors, env).stdout
+
+
+def _run_preexecution_guard(
+    output: Path, anchors: dict[str, str], env: dict[str, str],
+) -> subprocess.CompletedProcess[str]:
+    guard = (
+        "import hashlib, os, subprocess, sys\n"
+        "root = sys.argv[1]\n"
+        "for name, expected in ((\"bundle-manifest.json\", sys.argv[2]), "
+        "(\"remote-qualification.sh\", sys.argv[3])):\n"
+        "    actual = hashlib.sha256(open(os.path.join(root, name), 'rb').read()).hexdigest()\n"
+        "    if actual != expected: raise SystemExit(2)\n"
+        "subprocess.run(['bash', os.path.join(root, 'remote-qualification.sh'), "
+        "'--verify', *sys.argv[4:]], check=True)\n"
+    )
+    return subprocess.run(
+        (sys.executable, "-c", guard, str(output),
+         anchors["EXPECTED_BUNDLE_MANIFEST_SHA256"],
+         anchors["EXPECTED_REMOTE_QUALIFICATION_SHA256"],
+         anchors["EXPECTED_RELEASE_SHA"], anchors["EXPECTED_RELEASE_TREE"],
+         anchors["EXPECTED_RELEASE_MANIFEST_CANONICAL_DIGEST"],
+         anchors["EXPECTED_BUNDLE_MANIFEST_SHA256"]),
+        env=env, capture_output=True, text=True, check=False,
+    )
 
 
 def test_bundle_rejects_secret_shaped_source(

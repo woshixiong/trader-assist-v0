@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import platform
 import re
 import sys
+import zipfile
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
@@ -26,13 +28,45 @@ def verify_host_prerequisites(wheel: Path) -> None:
         raise PreflightError("target architecture must be x86_64")
     if sys.version_info[:2] != (3, 12):
         raise PreflightError("target Python must be 3.12")
-    name = wheel.name
-    match = re.fullmatch(
-        r"nautilus_trader-2\.0\.0rc5-(?:[^-]+-)?cp312-cp312-([^.]+(?:\.[^.]+)*)\.whl",
-        name,
-    )
-    if match is None:
-        raise PreflightError("exact rc5 wheel tag is incompatible")
+    wheel_bytes = wheel.read_bytes()
+    if hashlib.sha256(wheel_bytes).hexdigest() != PILOT_WHEEL_SHA256:
+        raise PreflightError("exact rc5 wheel lock hash mismatch")
+    try:
+        with zipfile.ZipFile(io.BytesIO(wheel_bytes)) as archive:
+            metadata_paths = [
+                name for name in archive.namelist()
+                if name.endswith(".dist-info/WHEEL")
+            ]
+            if len(metadata_paths) != 1 or not re.fullmatch(
+                r"nautilus[_-]trader-2\.0\.0rc5\.dist-info/WHEEL",
+                metadata_paths[0],
+                flags=re.IGNORECASE,
+            ):
+                raise PreflightError("exact rc5 wheel metadata is missing or ambiguous")
+            metadata = archive.read(metadata_paths[0]).decode("utf-8")
+    except (zipfile.BadZipFile, KeyError, UnicodeError, OSError) as exc:
+        raise PreflightError("exact rc5 wheel metadata is malformed") from exc
+    if "Wheel-Version: 1.0" not in metadata.splitlines():
+        raise PreflightError("exact rc5 wheel metadata is malformed")
+    tags = [line.removeprefix("Tag: ") for line in metadata.splitlines()
+            if line.startswith("Tag: ")]
+    if not tags:
+        raise PreflightError("exact rc5 wheel tags are missing")
+    minimums: set[tuple[int, int]] = set()
+    for tag in tags:
+        parts = tag.split("-")
+        if len(parts) != 3 or parts[:2] != ["cp312", "cp312"]:
+            raise PreflightError("exact rc5 wheel tag is unsupported or ambiguous")
+        for platform_tag in parts[2].split("."):
+            modern = re.fullmatch(r"manylinux_(\d+)_(\d+)_x86_64", platform_tag)
+            if modern:
+                minimums.add((int(modern.group(1)), int(modern.group(2))))
+            elif platform_tag == "manylinux2014_x86_64":
+                minimums.add((2, 17))
+            else:
+                raise PreflightError("exact rc5 wheel tag is unsupported or ambiguous")
+    if not minimums:
+        raise PreflightError("exact rc5 wheel tag is unsupported or ambiguous")
     libc, current = platform.libc_ver()
     if libc != "glibc" or not current:
         raise PreflightError("target glibc version is unavailable")
@@ -40,20 +74,8 @@ def verify_host_prerequisites(wheel: Path) -> None:
         host_version = tuple(int(part) for part in current.split(".")[:2])
     except ValueError as exc:
         raise PreflightError("target glibc version is invalid") from exc
-    platform_tags = match.group(1).split(".")
-    minimums = []
-    for tag in platform_tags:
-        modern = re.fullmatch(r"manylinux_(\d+)_(\d+)_x86_64", tag)
-        if modern:
-            minimums.append((int(modern.group(1)), int(modern.group(2))))
-        elif tag == "manylinux2014_x86_64":
-            minimums.append((2, 17))
-    if not minimums:
-        raise PreflightError("exact rc5 wheel tag is incompatible")
     if not any(host_version >= minimum for minimum in minimums):
         raise PreflightError("target glibc is incompatible with rc5 wheel")
-    if hashlib.sha256(wheel.read_bytes()).hexdigest() != PILOT_WHEEL_SHA256:
-        raise PreflightError("exact rc5 wheel lock hash mismatch")
 
 
 def verify_candidate(
