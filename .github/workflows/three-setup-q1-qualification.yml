@@ -1,0 +1,118 @@
+name: Three Setup Q1 qualification
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Draft harness PR number bound to the frozen base
+        required: true
+      harness_head_sha:
+        description: Exact harness head to qualify
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  qualification:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      HARNESS_PR_BASE_SHA: e3c0c67cc3d787bdf5044bdf598699a78652bdb5
+      HARNESS_PR_BASE_TREE: d5d76f6994ac4b635ddd6ea0647a7050af9a3a49
+      HARNESS_HEAD_SHA: ${{ github.event.pull_request.head.sha || inputs.harness_head_sha }}
+    steps:
+      - name: Checkout harness control HEAD
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          path: harness
+          ref: ${{ env.HARNESS_HEAD_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout exact frozen product candidate
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          path: candidate
+          ref: ${{ env.HARNESS_PR_BASE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Initialize bounded non-PASS result
+        env:
+          RESULT_PATH: ${{ runner.temp }}/three-setup-q1-result.json
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          example = Path('harness/deploy/p4a/evidence/three-setup-q1-qualification-v1.json.example')
+          result = json.loads(example.read_text())
+          result.update(reason_stage='ENTRY', reason_code='WorkflowPreflightIncomplete')
+          Path(os.environ['RESULT_PATH']).write_text(json.dumps(result, sort_keys=True) + '\n')
+          PY
+      - name: Reject candidate and PR-base drift before live work
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          DISPATCH_PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          test "$(git -C harness rev-parse HEAD)" = "$HARNESS_HEAD_SHA"
+          test "$(git -C candidate rev-parse HEAD)" = "$HARNESS_PR_BASE_SHA"
+          test "$(git -C candidate rev-parse 'HEAD^{tree}')" = "$HARNESS_PR_BASE_TREE"
+          test "$(git -C candidate ls-remote origin refs/heads/main | cut -f1)" = "$HARNESS_PR_BASE_SHA"
+          if [ "$EVENT_NAME" = pull_request ]; then
+            test "$PR_BASE_SHA" = "$HARNESS_PR_BASE_SHA"
+          else
+            [[ "$DISPATCH_PR_NUMBER" =~ ^[0-9]+$ ]]
+            test "$GITHUB_SHA" = "$HARNESS_HEAD_SHA"
+            test "$(gh api "repos/$GITHUB_REPOSITORY/pulls/$DISPATCH_PR_NUMBER" --jq .head.sha)" = "$HARNESS_HEAD_SHA"
+            test "$(gh api "repos/$GITHUB_REPOSITORY/pulls/$DISPATCH_PR_NUMBER" --jq .base.sha)" = "$HARNESS_PR_BASE_SHA"
+          fi
+          test -z "$(git -C candidate status --porcelain=v1 --untracked-files=all)"
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Install exact candidate target closure
+        run: |
+          test "$(uname -s)" = Linux
+          test "$(uname -m)" = x86_64
+          python -m venv --without-pip "$RUNNER_TEMP/q1-target"
+          python -m pip --python "$RUNNER_TEMP/q1-target/bin/python" install --require-hashes -r candidate/requirements-runtime.lock
+          python -m pip --python "$RUNNER_TEMP/q1-target/bin/python" install --require-hashes --no-deps --only-binary=:all: -r candidate/requirements-nautilus-pilot.lock
+          python -m pip --python "$RUNNER_TEMP/q1-target/bin/python" check
+          ! python -m pip --python "$RUNNER_TEMP/q1-target/bin/python" show trader-assist-v0
+      - name: Run candidate-only product qualification
+        env:
+          PYTHONPATH: ${{ github.workspace }}/candidate/src:${{ github.workspace }}/candidate
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          "$RUNNER_TEMP/q1-target/bin/python" harness/scripts/three_setup_q1_qualification.py \
+            --candidate candidate \
+            --harness-head-sha "$HARNESS_HEAD_SHA" \
+            --candidate-sha "$HARNESS_PR_BASE_SHA" \
+            --candidate-tree "$HARNESS_PR_BASE_TREE" \
+            --result "$RUNNER_TEMP/three-setup-q1-result.json" \
+            --segment-seconds 900
+      - name: Recheck exact PR and candidate identity at terminal evidence
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+        run: |
+          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]
+          test "$(git -C harness rev-parse HEAD)" = "$HARNESS_HEAD_SHA"
+          test "$(git -C candidate rev-parse HEAD)" = "$HARNESS_PR_BASE_SHA"
+          test "$(git -C candidate rev-parse 'HEAD^{tree}')" = "$HARNESS_PR_BASE_TREE"
+          test "$(git -C candidate ls-remote origin refs/heads/main | cut -f1)" = "$HARNESS_PR_BASE_SHA"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq .head.sha)" = "$HARNESS_HEAD_SHA"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq .base.sha)" = "$HARNESS_PR_BASE_SHA"
+      - name: Upload canonical Q1 evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: three-setup-q1-qualification
+          path: ${{ runner.temp }}/three-setup-q1-result.json
+          if-no-files-found: error
