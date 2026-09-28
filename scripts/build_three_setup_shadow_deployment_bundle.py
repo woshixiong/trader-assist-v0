@@ -38,7 +38,7 @@ def _reject_secret(path: Path) -> None:
     if path.suffix in {".py", ".sh", ".json", ".example", ".md", ".toml"}:
         data = path.read_bytes()
         if (
-            b"-----BEGIN PRIVATE KEY-----\n" in data
+            (b"-----BEGIN " + b"PRIVATE KEY-----\n") in data
             or (b"https://discord.com/api/" + b"webhooks/") in data
             or SECRET_VALUE.search(data)
         ):
