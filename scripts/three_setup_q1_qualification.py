@@ -18,6 +18,7 @@ import os
 import platform
 import re
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -48,7 +49,7 @@ ADVERSARIAL = tuple(f"H{i:02}" for i in range(1, 23))
 class DiagnosticFailure(RuntimeError):
     """A classified failure with an optional validated child diagnostic."""
 
-    def __init__(self, message: str, diagnostic: dict[str, str] | None = None) -> None:
+    def __init__(self, message: str, diagnostic: dict[str, Any] | None = None) -> None:
         super().__init__(message)
         self.diagnostic = diagnostic
 
@@ -72,6 +73,7 @@ STAGES = frozenset(
         "TARGET_IMPORT", "TARGET_PIP", "TARGET_RUNTIME", "PUBLIC_FIXTURE",
         "E4_STORE", "CHILD_IDENTITY", "CHILD_RETAINED", "CHILD_COMPOSITION",
         "CHILD_LIVE", "CHILD_RESULT", "CHILD_1", "CHILD_2", "ARTIFACT_WRITE",
+        "CHILD_ENTRY", "CHILD_ARTIFACT_WRITE",
     }
 )
 KNOWN_FAILURES = frozenset(
@@ -107,7 +109,7 @@ def _mark_stage(stage: str) -> None:
     DIAGNOSTIC_STAGE = stage
 
 
-def _failure_diagnostic(exc: BaseException) -> dict[str, str]:
+def _failure_diagnostic(exc: BaseException) -> dict[str, Any]:
     if isinstance(exc, DiagnosticFailure) and exc.diagnostic is not None:
         return exc.diagnostic
     stage = DIAGNOSTIC_STAGE
@@ -135,6 +137,25 @@ def _child_diagnostic(result: dict[str, Any]) -> dict[str, str] | None:
     if detail is not None:
         diagnostic["reason_detail"] = detail
     return diagnostic
+
+
+def _child_exit_diagnostic(
+    diagnostic: dict[str, str] | None, returncode: int
+) -> dict[str, Any]:
+    bounded: dict[str, Any] = diagnostic or {
+        "reason_stage": "CHILD_RESULT", "reason_code": "ChildResultUnavailable"
+    }
+    if not -65535 <= returncode <= 65535:
+        return {**bounded, "reason_code": "ChildReturncodeOutOfRange"}
+    bounded = {**bounded, "reason_returncode": returncode}
+    if returncode < 0:
+        number = -returncode
+        try:
+            name = signal.Signals(number).name
+        except ValueError:
+            name = f"SIG{number}"
+        bounded.update(reason_signal=name, reason_signal_number=number)
+    return bounded
 
 
 def _sha(data: bytes) -> str:
@@ -317,6 +338,27 @@ def _write_result(path: Path, result: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     encoded = json.dumps(result, sort_keys=True, separators=(",", ":")).encode() + b"\n"
     path.write_bytes(encoded)
+
+
+def _write_child_result(path: Path, result: dict[str, Any]) -> None:
+    """Retain the previous bounded child result if an overwrite is interrupted."""
+    next_path = path.with_name(path.name + ".next")
+    _write_result(next_path, result)
+    next_path.replace(path)
+
+
+def _child_checkpoint(path: Path, stage: str) -> None:
+    if stage not in {
+        "CHILD_ENTRY", "CHILD_IDENTITY", "CHILD_RETAINED", "CHILD_COMPOSITION",
+        "CHILD_LIVE", "CHILD_ARTIFACT_WRITE",
+    }:
+        raise ValueError("unknown child checkpoint stage")
+    _mark_stage(stage)
+    _write_child_result(path, {
+        "classification": "HARNESS_OR_EXECUTION_SURFACE_GAP",
+        "reason_stage": stage,
+        "reason_code": "ChildInProgress",
+    })
 
 
 def _release_and_environment(candidate: Path, sha: str, tree: str) -> dict[str, Any]:
@@ -750,9 +792,10 @@ def _fixture_from_retained(root: Path) -> dict[str, Any]:
 
 
 async def _child_segment(
-    candidate: Path, root: Path, index: int, seconds: int, sha: str, tree: str
+    candidate: Path, root: Path, index: int, seconds: int, sha: str, tree: str,
+    result_path: Path,
 ) -> dict[str, Any]:
-    _mark_stage("CHILD_RETAINED")
+    _child_checkpoint(result_path, "CHILD_RETAINED")
     from trader_assist_v0.nautilus_e4.storage import EvidenceStore as E4EvidenceStore
 
     fixture = _fixture_from_retained(root)
@@ -775,12 +818,12 @@ async def _child_segment(
         else None
     )
     adapter = MemoryNotificationAdapter()
-    _mark_stage("CHILD_COMPOSITION")
+    _child_checkpoint(result_path, "CHILD_COMPOSITION")
     app = _compose(root, fixture, adapter)
     reconstructed_rows = app.projection.store.connection.execute(
         "SELECT COUNT(*) FROM closed_bars"
     ).fetchone()[0]
-    _mark_stage("CHILD_LIVE")
+    _child_checkpoint(result_path, "CHILD_LIVE")
     segment = await _segment(app, seconds=seconds, old_event=old)
     _assert_import_origins(candidate)
     checkpoint = e4.load_runtime_checkpoint(manifest)
@@ -819,13 +862,21 @@ def _run_child(
         "--segment-seconds",
         str(seconds),
     )
-    completed = subprocess.run(command, capture_output=True, check=False, timeout=seconds + 60)
+    completed = subprocess.run(
+        command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        check=False, timeout=seconds + 60,
+    )
     _mark_stage("CHILD_RESULT")
     if not target.is_file():
-        raise QualificationGap("child process produced no bounded result")
+        raise QualificationGap(
+            "child process produced no bounded result",
+            _child_exit_diagnostic(None, completed.returncode),
+        )
     result = json.loads(target.read_text(encoding="utf-8"))
     if completed.returncode != 0 or result.get("classification") != "SEGMENT_COMPLETE":
         diagnostic = _child_diagnostic(result)
+        if result.get("reason_code") == "ChildInProgress":
+            diagnostic = _child_exit_diagnostic(diagnostic, completed.returncode)
         if result.get("classification") == "PRODUCT_BLOCKER":
             raise ProductBlocker("candidate product segment failed", diagnostic)
         if result.get("classification") == "PROVIDER_DATA_INCOMPLETE":
@@ -1059,8 +1110,9 @@ def main() -> int:
     if args.internal_segment is not None:
         if args.root is None:
             parser.error("internal segment requires --root")
+        _child_checkpoint(args.result, "CHILD_ENTRY")
         try:
-            _mark_stage("CHILD_IDENTITY")
+            _child_checkpoint(args.result, "CHILD_IDENTITY")
             exact_identity(args.candidate.resolve(), args.candidate_sha, args.candidate_tree)
             child_result = asyncio.run(
                 _child_segment(
@@ -1070,6 +1122,7 @@ def main() -> int:
                     args.segment_seconds,
                     args.candidate_sha,
                     args.candidate_tree,
+                    args.result,
                 )
             )
         except ProductBlocker as exc:
@@ -1082,7 +1135,8 @@ def main() -> int:
             child_result = {
                 "classification": "HARNESS_OR_EXECUTION_SURFACE_GAP", **_failure_diagnostic(exc)
             }
-        _write_result(args.result, child_result)
+        _child_checkpoint(args.result, "CHILD_ARTIFACT_WRITE")
+        _write_child_result(args.result, child_result)
         return 0 if child_result["classification"] == "SEGMENT_COMPLETE" else 2
     example_path = (
         Path(__file__).resolve().parents[1]

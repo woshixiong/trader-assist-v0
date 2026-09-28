@@ -22,6 +22,8 @@ The artifact follows `deploy/p4a/evidence/three-setup-q1-qualification-v1.json.e
 
 Failure artifacts carry bounded `reason_stage` and `reason_code`. For a recognized static harness guard, `reason_detail` names that guard. The child segment writes the same bounded fields, and the parent preserves them in the final artifact. Arbitrary exception messages and process output are excluded; unknown exceptions contribute only their type and current stage. All fields pass the artifact redaction check before writing. A diagnostic does not alter classification or turn an incomplete acceptance matrix into `PASS`.
 
+Before candidate checks, each child writes a minimal failure checkpoint to its result path. It advances through `CHILD_ENTRY`, `CHILD_IDENTITY`, `CHILD_RETAINED`, `CHILD_COMPOSITION`, `CHILD_LIVE`, and `CHILD_ARTIFACT_WRITE`; each write atomically replaces the prior checkpoint. A caught failure or completed segment replaces it with the bounded final result. If a child exits while a checkpoint remains, the parent records that last stage and a bounded `reason_returncode`; negative codes also carry `reason_signal` and `reason_signal_number`. Child stdout and stderr are discarded. A remaining checkpoint always classifies as `HARNESS_OR_EXECUTION_SURFACE_GAP`.
+
 | Fault | Decisive mechanism |
 | --- | --- |
 | H01–H02 | Frozen candidate HEAD/tree and PR base checks precede live work. |

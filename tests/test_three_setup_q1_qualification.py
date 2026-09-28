@@ -281,6 +281,126 @@ def test_child_untrusted_reason_is_not_propagated(
         q1._safe_artifact({"reason_detail": "api_key=private account secret"})
 
 
+def test_child_entry_checkpoint_precedes_candidate_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "child-result.json"
+    stages: list[str] = []
+    checkpoint = q1._child_checkpoint
+
+    def recording_checkpoint(path: Path, stage: str) -> None:
+        stages.append(stage)
+        checkpoint(path, stage)
+
+    def abrupt_identity(_candidate: Path, _sha: str, _tree: str) -> None:
+        assert json.loads(target.read_text()) == {
+            "classification": "HARNESS_OR_EXECUTION_SURFACE_GAP",
+            "reason_code": "ChildInProgress",
+            "reason_stage": "CHILD_IDENTITY",
+        }
+        raise SystemExit(7)
+
+    monkeypatch.setattr(q1, "exact_identity", abrupt_identity)
+    monkeypatch.setattr(q1, "_child_checkpoint", recording_checkpoint)
+    monkeypatch.setattr(sys, "argv", [
+        "q1", "--candidate", str(tmp_path), "--result", str(target),
+        "--root", str(tmp_path), "--internal-segment", "1",
+    ])
+    with pytest.raises(SystemExit):
+        q1.main()
+    assert stages == ["CHILD_ENTRY", "CHILD_IDENTITY"]
+    assert json.loads(target.read_text())["reason_stage"] == "CHILD_IDENTITY"
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_code", "expected_detail"),
+    [
+        (q1.QualificationGap("candidate HEAD drift"), "QualificationGap", "candidate HEAD drift"),
+        (ValueError("api_key=hidden"), "ValueError", None),
+    ],
+)
+def test_caught_child_failure_replaces_checkpoint_without_raw_exception(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: Exception,
+    expected_code: str,
+    expected_detail: str | None,
+) -> None:
+    target = tmp_path / "child-result.json"
+
+    def failing_identity(_candidate: Path, _sha: str, _tree: str) -> None:
+        raise failure
+
+    monkeypatch.setattr(q1, "exact_identity", failing_identity)
+    monkeypatch.setattr(sys, "argv", [
+        "q1", "--candidate", str(tmp_path), "--result", str(target),
+        "--root", str(tmp_path), "--internal-segment", "1",
+    ])
+    assert q1.main() == 2
+    result = json.loads(target.read_text())
+    assert result["classification"] == "HARNESS_OR_EXECUTION_SURFACE_GAP"
+    assert result["reason_stage"] == "CHILD_IDENTITY"
+    assert result["reason_code"] == expected_code
+    assert result.get("reason_detail") == expected_detail
+    assert "api_key" not in target.read_text()
+
+
+def test_child_checkpoints_advance_and_final_result_replaces_them(tmp_path: Path) -> None:
+    target = tmp_path / "child-result.json"
+    stages = (
+        "CHILD_ENTRY", "CHILD_IDENTITY", "CHILD_RETAINED", "CHILD_COMPOSITION",
+        "CHILD_LIVE", "CHILD_ARTIFACT_WRITE",
+    )
+    for stage in stages:
+        q1._child_checkpoint(target, stage)
+        assert json.loads(target.read_text()) == {
+            "classification": "HARNESS_OR_EXECUTION_SURFACE_GAP",
+            "reason_stage": stage,
+            "reason_code": "ChildInProgress",
+        }
+    with pytest.raises(ValueError):
+        q1._child_checkpoint(target, "UNBOUNDED_STAGE")
+    q1._write_child_result(target, {"classification": "SEGMENT_COMPLETE"})
+    assert json.loads(target.read_text()) == {"classification": "SEGMENT_COMPLETE"}
+
+
+@pytest.mark.parametrize(
+    ("returncode", "expected_signal"), [(127, None), (-9, ("SIGKILL", 9))]
+)
+def test_abrupt_child_exit_preserves_checkpoint_and_bounded_exit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    returncode: int,
+    expected_signal: tuple[str, int] | None,
+) -> None:
+    def fake_run(command: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        assert kwargs["stdout"] == kwargs["stderr"] == subprocess.DEVNULL
+        target = Path(command[command.index("--result") + 1])
+        q1._child_checkpoint(target, "CHILD_COMPOSITION")
+        return subprocess.CompletedProcess(
+            command, returncode, "api_key=hidden-output", "private account stderr"
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(q1.QualificationGap) as caught:
+        q1._run_child(tmp_path, tmp_path, 1, q1.BASE_SHA, q1.BASE_TREE, 60)
+    diagnostic = q1._failure_diagnostic(caught.value)
+    assert diagnostic["reason_stage"] == "CHILD_COMPOSITION"
+    assert diagnostic["reason_code"] == "ChildInProgress"
+    assert diagnostic["reason_returncode"] == returncode
+    if expected_signal is None:
+        assert "reason_signal" not in diagnostic
+    else:
+        assert (diagnostic["reason_signal"], diagnostic["reason_signal_number"]) == expected_signal
+    assert "api_key" not in json.dumps(diagnostic)
+    assert "stderr" not in json.dumps(diagnostic)
+    q1._safe_artifact(diagnostic)
+    assert (
+        q1.classify(dict.fromkeys(q1.MANDATORY, True), "HARNESS_OR_EXECUTION_SURFACE_GAP")
+        != "PASS"
+    )
+
+
 def test_example_declares_distinct_store_lifetimes() -> None:
     example = json.loads(
         (
@@ -297,3 +417,6 @@ def test_example_declares_distinct_store_lifetimes() -> None:
     assert example["classification"] != "PASS"
     assert example["reason_stage"] == example["reason_code"] == "UNRUN"
     assert example["reason_detail"] is None
+    assert example["reason_returncode"] is None
+    assert example["reason_signal"] is None
+    assert example["reason_signal_number"] is None
