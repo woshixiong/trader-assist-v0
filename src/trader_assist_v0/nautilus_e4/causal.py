@@ -47,6 +47,7 @@ class CausalAdmissionLedger:
         self._continuity_index = 0
         self._ordinal = 0
         self._largest_ts_event = 0
+        self._largest_ts_event_by_stream: dict[tuple[str, str, str, str, str, str], int] = {}
         self._seen = set() if seen_source_ids is None else set(seen_source_ids)
         self._health = StreamHealth.HEALTHY
         self._bbo: dict[tuple[str, str], BboValidity] = {}
@@ -67,6 +68,17 @@ class CausalAdmissionLedger:
     def health(self) -> StreamHealth:
         return self._health
 
+    @staticmethod
+    def _stream_key(source: SourceEvent) -> tuple[str, str, str, str, str, str]:
+        return (
+            source.provider_id,
+            source.market_id,
+            source.expression_id,
+            source.instrument_id,
+            source.data_kind.value,
+            source.event_context if source.data_kind is DataKind.BAR else "",
+        )
+
     def admit(self, source: SourceEvent, *, admission_ts: int) -> AdmissionOutcome:
         identity = source.replay_identity
         if identity in self._seen:
@@ -74,9 +86,12 @@ class CausalAdmissionLedger:
             return AdmissionOutcome(event=None, duplicate=True)
         self._seen.add(identity)
         self._ordinal += 1
-        out_of_order = source.ts_event < self._largest_ts_event
+        stream_key = self._stream_key(source)
+        stream_max = self._largest_ts_event_by_stream.get(stream_key, 0)
+        out_of_order = source.ts_event < stream_max
         if out_of_order:
             self.out_of_order_count += 1
+        self._largest_ts_event_by_stream[stream_key] = max(stream_max, source.ts_event)
         self._largest_ts_event = max(self._largest_ts_event, source.ts_event)
         continuity_state = (
             EvidenceState.COMPLETE
@@ -154,6 +169,18 @@ class CausalAdmissionLedger:
             "seen_source_ids": sorted(self._seen),
             "ordinal": self._ordinal,
             "largest_ts_event": self._largest_ts_event,
+            "stream_max_ts_event": [
+                {
+                    "provider_id": key[0],
+                    "market_id": key[1],
+                    "expression_id": key[2],
+                    "instrument_id": key[3],
+                    "data_kind": key[4],
+                    "event_context": key[5],
+                    "ts_event": value,
+                }
+                for key, value in sorted(self._largest_ts_event_by_stream.items())
+            ],
             "duplicate_count": self.duplicate_count,
             "out_of_order_count": self.out_of_order_count,
             "gap_count": self.gap_count,
@@ -177,6 +204,22 @@ class CausalAdmissionLedger:
         )
         ledger._ordinal = int(checkpoint["ordinal"])
         ledger._largest_ts_event = int(checkpoint["largest_ts_event"])
+        raw_stream_max = checkpoint.get("stream_max_ts_event")
+        if raw_stream_max is not None:
+            if not isinstance(raw_stream_max, list):
+                raise ValueError("stream_max_ts_event checkpoint must be a list")
+            for raw in raw_stream_max:
+                if not isinstance(raw, dict):
+                    raise ValueError("stream_max_ts_event entry must be an object")
+                key = (
+                    str(raw["provider_id"]),
+                    str(raw["market_id"]),
+                    str(raw["expression_id"]),
+                    str(raw["instrument_id"]),
+                    str(raw["data_kind"]),
+                    str(raw["event_context"]),
+                )
+                ledger._largest_ts_event_by_stream[key] = int(raw["ts_event"])
         ledger.duplicate_count = int(checkpoint["duplicate_count"])
         ledger.out_of_order_count = int(checkpoint["out_of_order_count"])
         ledger.gap_count = int(checkpoint["gap_count"]) + 1

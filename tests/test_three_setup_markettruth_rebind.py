@@ -192,14 +192,19 @@ def _depth_event(
     *,
     ordinal: int,
     now_ms: int = T + 300_500,
+    bids: list[list[str]] | None = None,
     asks: list[list[str]] | None = None,
+    bid_price: str | None = None,
+    ask_price: str | None = None,
+    continuity: EvidenceState = EvidenceState.COMPLETE,
+    out_of_order: bool = False,
 ) -> AdmittedEvent:
-    bids = [["100", "10"], ["99.9", "10"]]
+    bids = bids or [["100", "10"], ["99.9", "10"]]
     asks = asks or [["100.1", "10"], ["100.2", "10"]]
     payload = {
-        "bid_price": "100",
-        "bid_size": "10",
-        "ask_price": asks[0][0],
+        "bid_price": bid_price or bids[0][0],
+        "bid_size": bids[0][1],
+        "ask_price": ask_price or asks[0][0],
         "ask_size": asks[0][1],
         "native_depth": 10,
         "bids": bids,
@@ -228,8 +233,8 @@ def _depth_event(
         admission_ordinal=ordinal,
         admission_ts=source.ts_init,
         source_identity=source.replay_identity,
-        out_of_order=False,
-        continuity_state=EvidenceState.COMPLETE,
+        out_of_order=out_of_order,
+        continuity_state=continuity,
         source=source,
     )
 
@@ -438,6 +443,7 @@ def test_active_entrypoint_never_constructs_legacy_market_path(
     application.bootstrap.close()
     application.projection.close()
 
+
 def test_restart_missing_e4_lineage_ref_fails_closed(tmp_path: Path) -> None:
     markets, e4, domain, registry, projection = _setup(tmp_path)
     event = _event(markets[0], ordinal=1, interval="1m")
@@ -562,7 +568,7 @@ async def test_late_context_cohort_never_replays_as_live_action(tmp_path: Path) 
 
 
 @async_test
-async def test_mixed_continuity_exact_t_blocks_registry_and_live_then_future_recovers(
+async def test_gapped_strategy_cohort_runs_while_registry_evidence_stays_strict(
     tmp_path: Path,
 ) -> None:
     from types import SimpleNamespace
@@ -579,8 +585,8 @@ async def test_mixed_continuity_exact_t_blocks_registry_and_live_then_future_rec
         evidence_authority=projection,
     )
     health = {
-        "stream_health": "HEALTHY",
-        "continuity_requirements_remaining": 0,
+        "stream_health": "REESTABLISHING",
+        "continuity_requirements_remaining": 2,
         "storage_failures": 0,
         "admitted_observer_failures": (),
         "continuity_epoch": "continuity-2",
@@ -608,28 +614,29 @@ async def test_mixed_continuity_exact_t_blocks_registry_and_live_then_future_rec
 
     runtime.on_finalized_5m = on_boundary
     mixed = (
-        _event(markets[0], ordinal=3, open_ms=T + 300_000),
+        _event(markets[0], ordinal=3, open_ms=T + 300_000, continuity=EvidenceState.GAPPED),
         _event(
             markets[1],
             ordinal=4,
             open_ms=T + 300_000,
+            continuity=EvidenceState.GAPPED,
             continuity_epoch="continuity-2",
         ),
     )
     e4.append_admission_batch(mixed)
     for event in mixed:
-        assert event.continuity_state is EvidenceState.COMPLETE
+        assert event.continuity_state is EvidenceState.GAPPED
         assert not event.out_of_order
-        projection.accept(event)
+        assert projection.accept(event) == "5m"
         await runtime._on_5m(event)
-    assert projection.readiness_snapshot().ready_market_ids == ()
+    assert set(projection.readiness_snapshot().ready_market_ids) == required
     assert not projection.prove_boundary_evidence(
         boundary_open_time_ms=T + 300_000,
         market_ids=required,
         base_registry_version=active.version,
         base_registry_hash=active.content_hash,
     )
-    assert wakes == []
+    assert wakes == [(T + 300_000, "LIVE_ACTIONABLE")]
     successor = registry.lifecycle_successor(
         version="same-epoch-next",
         updates={markets[0].identity.market_id: MarketLifecycle.DRAINING},
@@ -668,11 +675,15 @@ async def test_mixed_continuity_exact_t_blocks_registry_and_live_then_future_rec
         base_registry_version=active.version,
         base_registry_hash=active.content_hash,
     )
-    assert wakes == [(T + 600_000, "LIVE_ACTIONABLE")]
+    assert wakes == [
+        (T + 300_000, "LIVE_ACTIONABLE"),
+        (T + 600_000, "LIVE_ACTIONABLE"),
+    ]
+    assert registry.active() == successor
     await runtime._on_5m(mixed[1])
     await runtime._on_5m(mixed[1])
-    assert (T + 300_000, "LIVE_ACTIONABLE") not in wakes
     assert wakes.count((T + 600_000, "LIVE_ACTIONABLE")) == 1
+    assert wakes.count((T + 300_000, "LIVE_ACTIONABLE")) == 1
     projection.close()
     domain.close()
 
@@ -952,10 +963,12 @@ def test_e4_readiness_health_defects_then_future_cohort_recovery(tmp_path: Path)
     projection._capture_health = lambda: healthy
     projection._warmup_health = lambda: {"readiness": "READY"}
     assert len(projection.readiness_snapshot().ready_market_ids) == 2
+    for allowed in ({"stream_health": "REESTABLISHING", "continuity_requirements_remaining": 1},):
+        projection._capture_health = lambda allowed=allowed: healthy | allowed
+        assert len(projection.readiness_snapshot().ready_market_ids) == 2
     for defect in (
-        {"stream_health": "GAPPED"},
         {"stream_health": "DISCONNECTED"},
-        {"continuity_requirements_remaining": 1},
+        {"storage_failures": 1},
         {"admitted_observer_failures": ("domain",)},
     ):
         projection._capture_health = lambda defect=defect: healthy | defect
@@ -972,6 +985,83 @@ def test_e4_readiness_health_defects_then_future_cohort_recovery(tmp_path: Path)
     assert set(projection.readiness_snapshot().ready_market_ids) == {
         m.identity.market_id for m in markets
     }
+    projection.close()
+    domain.close()
+
+
+def test_strategy_readiness_enforces_close_deadline_and_contiguous_5m_history(
+    tmp_path: Path,
+) -> None:
+    markets, e4, domain, registry, projection = _setup(tmp_path)
+    initial = tuple(_event(m, ordinal=i + 1) for i, m in enumerate(markets))
+    e4.append_admission_batch(initial)
+    for event in initial:
+        projection.accept(event)
+    registry.apply_initial_e4_witness(
+        registry.issue_initial_e4_witness(boundary_open_time_ms=T),
+        evidence_authority=projection,
+    )
+    projection.clock_ms = lambda: T + 360_000
+    assert len(projection.readiness_snapshot().ready_market_ids) == 2
+    projection.clock_ms = lambda: T + 360_001
+    assert projection.readiness_snapshot().ready_market_ids == ()
+
+    gapped_history = tuple(
+        _event(m, ordinal=i + 3, open_ms=T + 600_000) for i, m in enumerate(markets)
+    )
+    e4.append_admission_batch(gapped_history)
+    for event in gapped_history:
+        projection.accept(event)
+    projection.clock_ms = lambda: T + 901_000
+    assert projection.readiness_snapshot().ready_market_ids == ()
+    projection.close()
+    domain.close()
+
+
+def test_gapped_depth_is_usable_and_older_snapshot_is_ignored_without_market_poison(
+    tmp_path: Path,
+) -> None:
+    markets, e4, domain, _registry, projection = _setup(tmp_path)
+    current = _depth_event(
+        markets[0],
+        ordinal=1,
+        continuity=EvidenceState.GAPPED,
+        now_ms=T + 300_500,
+    )
+    e4.append_admission_batch((current,))
+    projection.accept(current)
+    assert projection.current_depth(markets[0].identity.market_id, T + 301_000) == current
+
+    older = _depth_event(
+        markets[0],
+        ordinal=2,
+        continuity=EvidenceState.GAPPED,
+        out_of_order=True,
+        now_ms=T + 300_000,
+    )
+    e4.append_admission_batch((older,))
+    projection.accept(older)
+    assert projection.current_depth(markets[0].identity.market_id, T + 301_000) == current
+    assert not projection.market_failed(markets[0].identity.market_id)
+    projection.close()
+    domain.close()
+
+
+def test_depth10_unordered_and_top_of_book_mismatch_fail_closed(tmp_path: Path) -> None:
+    markets, e4, domain, _registry, projection = _setup(tmp_path)
+    unordered = _depth_event(
+        markets[0],
+        ordinal=1,
+        bids=[["99.9", "10"], ["100", "10"]],
+    )
+    e4.append_admission_batch((unordered,))
+    with pytest.raises(E4ProjectionError, match="not ordered"):
+        projection.accept(unordered)
+
+    mismatch = _depth_event(markets[1], ordinal=2, bid_price="99")
+    e4.append_admission_batch((mismatch,))
+    with pytest.raises(E4ProjectionError, match="top-of-book"):
+        projection.accept(mismatch)
     projection.close()
     domain.close()
 

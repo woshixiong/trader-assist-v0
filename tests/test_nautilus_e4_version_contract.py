@@ -272,11 +272,16 @@ def test_exact_host_composes_public_data_factory_only() -> None:
     assert "builder.add_data_client(" in source
     assert "HyperliquidDataClientFactory()" in source
     assert "HyperliquidEnvironment.MAINNET" in source
+    assert source.count("stale_stream_recovery_enabled=True") == 1
     assert "Environment.LIVE" in source
     assert "StreamingConfig" not in source
     assert "TradingNode" not in source
     assert "ExecClient" not in source
     assert all(name not in source for name in ("submit_order(", "cancel_order(", "modify_order("))
+    assert all(
+        token not in source
+        for token in ("StaleStreamMonitor", "CandleWatchdog", "custom_reconnect", "rest_backfill")
+    )
 
 
 def test_e4_provider_boundary_uses_only_supported_root_model_imports() -> None:
