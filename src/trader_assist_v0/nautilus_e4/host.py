@@ -721,7 +721,10 @@ def build_public_data_node() -> LiveNodeLike:
     builder.add_data_client(
         None,
         HyperliquidDataClientFactory(),
-        HyperliquidDataClientConfig(environment=HyperliquidEnvironment.MAINNET),
+        HyperliquidDataClientConfig(
+            environment=HyperliquidEnvironment.MAINNET,
+            stale_stream_recovery_enabled=True,
+        ),
     )
     return cast(LiveNodeLike, builder.build())
 

@@ -314,6 +314,8 @@ class E4MarketTruthProjection:
                 self._failed_markets.add(event.source.market_id)
                 raise E4ProjectionError("conflicting E4 closed-bar slot")
             return None
+        if interval == "5m" and event.out_of_order:
+            return None
         self._bar_events[slot] = event
         if interval == "1m":
             bar_1m = OneMinuteBar.create(
@@ -384,15 +386,10 @@ class E4MarketTruthProjection:
                 )
         if not self._replaying:
             self._prune()
-        return (
-            interval
-            if not event.out_of_order and event.continuity_state is EvidenceState.COMPLETE
-            else None
-        )
+        return interval if not event.out_of_order else None
 
     def _accept_depth(self, event: AdmittedEvent) -> None:
-        if event.out_of_order or event.continuity_state is not EvidenceState.COMPLETE:
-            self._failed_markets.add(event.source.market_id)
+        if event.out_of_order:
             return
         payload = event.source.payload
         sides = []
@@ -694,20 +691,15 @@ class E4MarketTruthProjection:
         warmup = self._warmup_health()
         common = (
             warmup.get("readiness") == "READY"
-            and health.get("stream_health") == "HEALTHY"
-            and health.get("continuity_requirements_remaining") == 0
+            and health.get("stream_health") in {"HEALTHY", "REESTABLISHING"}
             and health.get("storage_failures") == 0
             and not health.get("admitted_observer_failures")
         )
-        cohort_epoch = self._cohort_continuity_epoch(
-            latest, frozenset(m.identity.market_id for m in active)
-        )
-        ready = tuple(
+        candidate_ready = tuple(
             m.identity.market_id
             for m in active
             if (
                 common
-                and cohort_epoch is not None
                 and not self.market_failed(m.identity.market_id)
                 and self.validate_market(m)
                 and self.store.last_open(m.identity.market_id) == latest
@@ -716,13 +708,15 @@ class E4MarketTruthProjection:
                 and self.store.is_contiguous_5m(m.identity.market_id)
             )
         )
+        data_ready = bool(active) and len(candidate_ready) == len(active)
+        ready = candidate_ready if data_ready else ()
         failed = tuple(
             m.identity.market_id for m in active if self.market_failed(m.identity.market_id)
         )
         return RuntimeReadinessSnapshot.create(
             registry_version=registry.version,
             registry_content_hash=registry.content_hash,
-            data_ready=bool(common),
+            data_ready=data_ready,
             ready_market_ids=ready,
             failed_market_ids=failed,
             latest_closed_5m_open_time_ms=latest,

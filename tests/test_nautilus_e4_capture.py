@@ -129,6 +129,12 @@ def _event(
     )
 
 
+def _source_variant(source: SourceEvent, **updates: object) -> SourceEvent:
+    values = source.model_dump(mode="python", exclude={"payload_hash"})
+    values.update(updates)
+    return SourceEvent.create(**values)
+
+
 def _session(*, batch_size: int = 128, sink: InMemoryCatalogSink | None = None) -> CaptureSession:
     return CaptureSession(
         manifest=_manifest(),
@@ -191,6 +197,7 @@ def test_equal_timestamps_keep_arrival_order_and_source_identity() -> None:
     assert first is not None and second is not None
     assert (first.admission_ordinal, second.admission_ordinal) == (1, 2)
     assert first.source_identity != second.source_identity
+    assert first.out_of_order is False and second.out_of_order is False
 
 
 def test_trade_tick_dedup_binds_native_id_side_market_expression_and_context() -> None:
@@ -215,6 +222,91 @@ def test_out_of_order_is_admitted_late_without_reordering() -> None:
     assert later is not None and late is not None
     assert (later.admission_ordinal, late.admission_ordinal) == (1, 2)
     assert late.out_of_order is True
+
+
+def test_stream_local_ordering_separates_kind_market_expression_instrument_and_bar_type() -> None:
+    ledger = CausalAdmissionLedger(
+        process_epoch="process-1", continuity_epoch="continuity-1", admission_epoch="admission-1"
+    )
+    current_depth = _event(100, kind=DataKind.DEPTH10, ts_event=BASE + 100_000, context="depth")
+    assert (
+        ledger.admit(current_depth, admission_ts=current_depth.ts_init).event.out_of_order is False
+    )
+    bar_5m = _event(
+        50, kind=DataKind.BAR, ts_event=BASE + 50_000, context="ETH-5-MINUTE-LAST-EXTERNAL"
+    )
+    assert ledger.admit(bar_5m, admission_ts=bar_5m.ts_init).event.out_of_order is False
+    bar_1m = _event(
+        40, kind=DataKind.BAR, ts_event=BASE + 40_000, context="ETH-1-MINUTE-LAST-EXTERNAL"
+    )
+    assert ledger.admit(bar_1m, admission_ts=bar_1m.ts_init).event.out_of_order is False
+    other_market = _event(30, market=MARKET_B, ts_event=BASE + 30_000)
+    assert ledger.admit(other_market, admission_ts=other_market.ts_init).event.out_of_order is False
+    expression_variant = _source_variant(
+        _event(20, ts_event=BASE + 20_000), expression_id="expr-ETH-v2"
+    )
+    assert (
+        ledger.admit(expression_variant, admission_ts=expression_variant.ts_init).event.out_of_order
+        is False
+    )
+    instrument_variant = _source_variant(
+        _event(10, ts_event=BASE + 10_000), instrument_id="ETH-ALT.HYPERLIQUID"
+    )
+    assert (
+        ledger.admit(instrument_variant, admission_ts=instrument_variant.ts_init).event.out_of_order
+        is False
+    )
+    late_5m = _event(
+        49, kind=DataKind.BAR, ts_event=BASE + 49_000, context="ETH-5-MINUTE-LAST-EXTERNAL"
+    )
+    assert ledger.admit(late_5m, admission_ts=late_5m.ts_init).event.out_of_order is True
+
+
+def test_duplicate_replay_does_not_advance_stream_maximum() -> None:
+    ledger = CausalAdmissionLedger(
+        process_epoch="process-1", continuity_epoch="continuity-1", admission_epoch="admission-1"
+    )
+    original = _event(10, tid="same-tid", context="same-context", ts_event=BASE + 10_000)
+    replay = _event(99, tid="same-tid", context="same-context", ts_event=BASE + 99_000)
+    between = _event(50, tid="new-tid", context="new-context", ts_event=BASE + 50_000)
+    assert ledger.admit(original, admission_ts=original.ts_init).duplicate is False
+    assert ledger.admit(replay, admission_ts=replay.ts_init).duplicate is True
+    admitted = ledger.admit(between, admission_ts=between.ts_init).event
+    assert admitted is not None and admitted.out_of_order is False
+
+
+def test_checkpoint_preserves_stream_maxima_and_legacy_checkpoint_reestablishes_safely() -> None:
+    ledger = CausalAdmissionLedger(
+        process_epoch="process-1", continuity_epoch="continuity-1", admission_epoch="admission-1"
+    )
+    high = _event(100, ts_event=BASE + 100_000)
+    ledger.admit(high, admission_ts=high.ts_init)
+    checkpoint = ledger.checkpoint()
+    assert checkpoint["stream_max_ts_event"]
+    restarted = CausalAdmissionLedger.restart_from(
+        checkpoint,
+        process_epoch="process-2",
+        admission_epoch="admission-2",
+        continuity_epoch="continuity-2",
+    )
+    lower = _event(90, tid="lower", ts_event=BASE + 90_000)
+    event = restarted.admit(lower, admission_ts=lower.ts_init).event
+    assert restarted.health is StreamHealth.REESTABLISHING
+    assert event is not None and event.out_of_order is True
+    assert event.continuity_state is EvidenceState.GAPPED
+    legacy = dict(checkpoint)
+    legacy.pop("stream_max_ts_event")
+    recovered = CausalAdmissionLedger.restart_from(
+        legacy,
+        process_epoch="process-3",
+        admission_epoch="admission-3",
+        continuity_epoch="continuity-3",
+    )
+    legacy_lower = _event(80, tid="legacy-lower", ts_event=BASE + 80_000)
+    legacy_event = recovered.admit(legacy_lower, admission_ts=legacy_lower.ts_init).event
+    assert recovered.health is StreamHealth.REESTABLISHING
+    assert legacy_event is not None and legacy_event.out_of_order is False
+    assert legacy_event.continuity_state is EvidenceState.GAPPED
 
 
 def test_reconnect_replay_duplicate_does_not_change_flow_evidence() -> None:
@@ -282,9 +374,7 @@ def test_native_socket_mapping_requires_fresh_full_subscription_observation() ->
     assert session.tail_statuses["pkg-001"].evidence_state is EvidenceState.GAPPED
     assert session.handle_socket_state("CONNECTED", required_streams=required)
     assert session.ledger.health is StreamHealth.REESTABLISHING
-    assert session.ledger.bbo_validity(
-        market_id=MARKET_A, expression_id="expr-ETH"
-    ).valid is False
+    assert session.ledger.bbo_validity(market_id=MARKET_A, expression_id="expr-ETH").valid is False
 
     fresh_bbo = _admit(session, _event(10, kind=DataKind.BBO)).event
     assert fresh_bbo is not None
@@ -406,9 +496,7 @@ def test_restart_creates_new_epochs_marks_active_window_interrupted_and_dedups()
     checkpoint = first.checkpoint()
     restarted = CaptureSession.restart_from(
         checkpoint,
-        manifest=_manifest(
-            process="process-2", continuity="continuity-2", admission="admission-2"
-        ),
+        manifest=_manifest(process="process-2", continuity="continuity-2", admission="admission-2"),
         policy=_policy(),
         raw_sink=InMemoryCatalogSink(),
     )
@@ -460,17 +548,13 @@ def test_full_lifecycle_ids_parents_timestamps_and_reasons_are_portable() -> Non
             expression_id="expr-ETH",
             kind=kind,
             status=(
-                LifecycleStatus.TERMINAL
-                if kind is LifecycleKind.EXIT
-                else LifecycleStatus.ACTIVE
+                LifecycleStatus.TERMINAL if kind is LifecycleKind.EXIT else LifecycleStatus.ACTIVE
             ),
             state_ts=BASE + (2 + offset) * 1_000_000_000,
             reason_codes=(kind.value,),
             evidence_state=EvidenceState.PRE_DECISION_WINDOW_INCOMPLETE,
             approval_timing_mode=(
-                None
-                if kind is not LifecycleKind.ARMED
-                else "PREAUTHORIZED_ARMED"
+                None if kind is not LifecycleKind.ARMED else "PREAUTHORIZED_ARMED"
             ),
         )
         assert record.parent_id == parent
@@ -623,9 +707,7 @@ def test_restart_restores_latest_fact_authority() -> None:
 
     restarted = CaptureSession.restart_from(
         checkpoint,
-        manifest=_manifest(
-            process="process-2", continuity="continuity-2", admission="admission-2"
-        ),
+        manifest=_manifest(process="process-2", continuity="continuity-2", admission="admission-2"),
         policy=_policy(),
         raw_sink=InMemoryCatalogSink(),
     )
@@ -645,9 +727,7 @@ def test_legacy_checkpoint_without_history_fails_closed_only_for_existing_object
     checkpoint.pop("latest_lifecycle_records")
     restarted = CaptureSession.restart_from(
         checkpoint,
-        manifest=_manifest(
-            process="process-2", continuity="continuity-2", admission="admission-2"
-        ),
+        manifest=_manifest(process="process-2", continuity="continuity-2", admission="admission-2"),
         policy=_policy(),
         raw_sink=InMemoryCatalogSink(),
     )
@@ -698,9 +778,7 @@ def test_every_terminal_denominator_gets_micro_and_context_tails(
     _admit(session, _event(1))
     _open(session, decision_ts=BASE + 2_000_000_000)
     terminal_ts = BASE + 3_000_000_000
-    tail = session.terminal(
-        package_id="pkg-001", terminal_ts=terminal_ts, decision_state=decision
-    )
+    tail = session.terminal(package_id="pkg-001", terminal_ts=terminal_ts, decision_state=decision)
     assert tail.micro_deadline_ts == terminal_ts + POST_TERMINAL_MICRO_NS
     assert tail.context_deadline_ts == terminal_ts + POST_TERMINAL_CONTEXT_NS
     assert tail.micro_phase is tail.context_phase is TailPhase.ACTIVE
@@ -833,11 +911,16 @@ def test_native_depth10_full_levels_preserve_top_ref() -> None:
         def ingest(self, source: SourceEvent, *, admission_ts: int) -> object:
             source_events.append(source)
             event = AdmittedEvent.create(
-                schema_version="E4_CAPTURE_V1", process_epoch="process-1",
-                continuity_epoch="continuity-1", admission_epoch="admission-1",
-                admission_ordinal=1, admission_ts=admission_ts,
-                source_identity=source.replay_identity, out_of_order=False,
-                continuity_state=EvidenceState.COMPLETE, source=source,
+                schema_version="E4_CAPTURE_V1",
+                process_epoch="process-1",
+                continuity_epoch="continuity-1",
+                admission_epoch="admission-1",
+                admission_ordinal=1,
+                admission_ts=admission_ts,
+                source_identity=source.replay_identity,
+                out_of_order=False,
+                continuity_state=EvidenceState.COMPLETE,
+                source=source,
             )
             return SimpleNamespace(event=event)
 
@@ -853,18 +936,24 @@ def test_native_depth10_full_levels_preserve_top_ref() -> None:
 
     fake = SimpleNamespace(
         _expression_for=lambda _depth: expression,
-        _session=Session(), _depth10_gate=SimpleNamespace(admit=lambda **_: None),
+        _session=Session(),
+        _depth10_gate=SimpleNamespace(admit=lambda **_: None),
         _markettruth_fanout=Fanout(),
         publish_message=lambda *_: None,
         clock=SimpleNamespace(timestamp_ns=lambda: BASE + 100),
         _observe_admission=lambda _outcome: order.append("domain"),
     )
     depth = SimpleNamespace(
-        bids=[SimpleNamespace(price=Decimal("100") - Decimal(i) / 10,
-                              size=Decimal("1")) for i in range(10)],
-        asks=[SimpleNamespace(price=Decimal("101") + Decimal(i) / 10,
-                              size=Decimal("1")) for i in range(10)],
-        ts_event=BASE, ts_init=BASE + 1,
+        bids=[
+            SimpleNamespace(price=Decimal("100") - Decimal(i) / 10, size=Decimal("1"))
+            for i in range(10)
+        ],
+        asks=[
+            SimpleNamespace(price=Decimal("101") + Decimal(i) / 10, size=Decimal("1"))
+            for i in range(10)
+        ],
+        ts_event=BASE,
+        ts_init=BASE + 1,
     )
     NautilusE4CaptureStrategy.on_book_depth(fake, depth)
     assert len(source_events) == 1 and len(published) == 1
@@ -883,11 +972,16 @@ def test_domain_observer_failure_is_observable_and_capture_continues() -> None:
 
     source = _event(1)
     event = AdmittedEvent.create(
-        schema_version="E4_CAPTURE_V1", process_epoch="process-1",
-        continuity_epoch="continuity-1", admission_epoch="admission-1",
-        admission_ordinal=1, admission_ts=source.ts_init,
-        source_identity=source.replay_identity, out_of_order=False,
-        continuity_state=EvidenceState.COMPLETE, source=source,
+        schema_version="E4_CAPTURE_V1",
+        process_epoch="process-1",
+        continuity_epoch="continuity-1",
+        admission_epoch="admission-1",
+        admission_ordinal=1,
+        admission_ts=source.ts_init,
+        source_identity=source.replay_identity,
+        out_of_order=False,
+        continuity_state=EvidenceState.COMPLETE,
+        source=source,
     )
     failures: list[Exception] = []
 
