@@ -19,7 +19,8 @@ from scripts.verify_exact_release import (
     verify_staged_release,
 )
 from scripts.verify_exact_release import main as exact_release_main
-from trader_assist_v0.multi_asset_shadow.production import THREE_SETUP_CONFIG_SCHEMA
+from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
+from trader_assist_v0.multi_asset_shadow.production import THREE_SETUP_E4_CONFIG_SCHEMA
 
 
 def test_repository_release_surface_binds_source_locks_deployment_and_schema() -> None:
@@ -29,18 +30,27 @@ def test_repository_release_surface_binds_source_locks_deployment_and_schema() -
         "pyproject.toml",
         "requirements-runtime.lock",
         "requirements-dev.lock",
+        "requirements-nautilus-pilot.lock",
+        "scripts/check_dependency_lock.py",
+        "scripts/verify_exact_release.py",
+        "scripts/three_setup_shadow_preflight.py",
+        "scripts/build_three_setup_shadow_deployment_bundle.py",
         "scripts/run_three_setup_shadow_runtime.py",
         "scripts/run_first_launch_public_runtime.py",
         "scripts/p4a/run_three_setup_shadow_runtime.sh",
         "deploy/p4a/config/three-setup-shadow.json.example",
         "deploy/p4a/systemd/trader-assist-v0-three-setup.env.example",
         "deploy/p4a/systemd/trader-assist-v0-three-setup.service",
+        "deploy/p4a/evidence/three-setup-shadow-qualification-manifest-v1.json.example",
+        "docs/operations/THREE_SETUP_SHADOW_DEPLOYMENT.md",
         "src/trader_assist_v0/multi_asset_shadow/production.py",
     } <= paths
-    manifest = build_release_manifest(root, release_sha="a" * 40)
-    assert manifest["config_schema"] == THREE_SETUP_CONFIG_SCHEMA
+    manifest = build_release_manifest(root, release_sha="a" * 40, release_tree="b" * 40)
+    assert manifest["config_schema"] == THREE_SETUP_E4_CONFIG_SCHEMA
     assert manifest["source_file_count"] == len(paths)
-    verify_manifest(root, json.loads(json.dumps(manifest)), release_sha="a" * 40)
+    verify_manifest(
+        root, json.loads(json.dumps(manifest)), release_sha="a" * 40, release_tree="b" * 40
+    )
 
 
 def test_three_setup_entrypoint_direct_script_imports_are_release_selected() -> None:
@@ -58,9 +68,7 @@ def test_three_setup_entrypoint_direct_script_imports_are_release_selected() -> 
                     direct_script_imports.add(alias.name.replace(".", "/") + ".py")
 
     assert "scripts/run_first_launch_public_runtime.py" in direct_script_imports
-    selected_paths = {
-        path.relative_to(root).as_posix() for path in release_paths(root)
-    }
+    selected_paths = {path.relative_to(root).as_posix() for path in release_paths(root)}
     assert direct_script_imports <= selected_paths
 
 
@@ -79,18 +87,29 @@ def _write_release_surface(root: Path) -> None:
         "src/trader_assist_v0/example.py",
         "scripts/run_three_setup_shadow_runtime.py",
         "scripts/run_first_launch_public_runtime.py",
+        "scripts/check_dependency_lock.py",
+        "scripts/verify_exact_release.py",
+        "scripts/three_setup_shadow_preflight.py",
+        "scripts/build_three_setup_shadow_deployment_bundle.py",
         "scripts/p4a/run_three_setup_shadow_runtime.sh",
         "deploy/p4a/systemd/trader-assist-v0-three-setup.env.example",
         "deploy/p4a/systemd/trader-assist-v0-three-setup.service",
+        "deploy/p4a/evidence/three-setup-shadow-qualification-manifest-v1.json.example",
+        "docs/operations/THREE_SETUP_SHADOW_DEPLOYMENT.md",
     ):
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(relative, encoding="utf-8")
     (root / "deploy/p4a/config").mkdir(parents=True, exist_ok=True)
     (root / "deploy/p4a/config/three-setup-shadow.json.example").write_text(
-        json.dumps({"schema": THREE_SETUP_CONFIG_SCHEMA}), encoding="utf-8"
+        json.dumps({"schema": THREE_SETUP_E4_CONFIG_SCHEMA}), encoding="utf-8"
     )
-    for relative in ("pyproject.toml", "requirements-runtime.lock", "requirements-dev.lock"):
+    for relative in (
+        "pyproject.toml",
+        "requirements-runtime.lock",
+        "requirements-dev.lock",
+        "requirements-nautilus-pilot.lock",
+    ):
         (root / relative).write_text(relative, encoding="utf-8")
 
 
@@ -107,6 +126,7 @@ def staged_release(
     _git(candidate_root, "add", ".")
     _git(candidate_root, "commit", "-m", "candidate")
     release_sha = _git(candidate_root, "rev-parse", "HEAD")
+    release_tree = _git(candidate_root, "rev-parse", "HEAD^{tree}")
 
     manifest_path = tmp_path / "release-manifest.json"
     assert (
@@ -116,6 +136,8 @@ def staged_release(
                 str(candidate_root),
                 "--expected-head",
                 release_sha,
+                "--expected-tree",
+                release_tree,
                 "--output",
                 str(manifest_path),
             )
@@ -139,8 +161,60 @@ def test_staged_non_git_release_accepts_retained_canonical_manifest(
     staged_root, manifest, release_sha = staged_release
     assert not (staged_root / ".git").exists()
     verify_staged_release(
-        staged_root, manifest, expected_release_sha=release_sha
+        staged_root,
+        manifest,
+        expected_release_sha=release_sha,
+        expected_release_tree=str(manifest["release_tree"]),
     )
+
+
+def test_staged_release_rejects_wrong_tree_and_manifest_mutation(
+    staged_release: tuple[Path, dict[str, object], str],
+) -> None:
+    staged_root, manifest, release_sha = staged_release
+    with pytest.raises(ExactReleaseError, match="release TREE"):
+        verify_staged_release(
+            staged_root,
+            manifest,
+            expected_release_sha=release_sha,
+            expected_release_tree="0" * 40,
+        )
+    changed = json.loads(json.dumps(manifest))
+    changed["runtime_lock_sha256"] = "0" * 64
+    with pytest.raises(ExactReleaseError, match="digest"):
+        verify_staged_release(
+            staged_root,
+            changed,
+            expected_release_sha=release_sha,
+            expected_release_tree=str(manifest["release_tree"]),
+        )
+
+
+@pytest.mark.parametrize("attack", ("duplicate", "unsafe", "pilot-lock"))
+def test_staged_release_rejects_path_and_pilot_lock_attacks(
+    staged_release: tuple[Path, dict[str, object], str],
+    attack: str,
+) -> None:
+    staged_root, manifest, release_sha = staged_release
+    if attack == "pilot-lock":
+        (staged_root / "requirements-nautilus-pilot.lock").write_text("changed", encoding="utf-8")
+    else:
+        files = manifest["files"]
+        assert isinstance(files, list)
+        entry = dict(files[0])
+        if attack == "unsafe":
+            entry["path"] = "../outside"
+        files.append(entry)
+        manifest["source_file_count"] = len(files)
+        payload = {k: v for k, v in manifest.items() if k != "manifest_sha256"}
+        manifest["manifest_sha256"] = sha256_hex(canonical_json_bytes(payload))
+    with pytest.raises(ExactReleaseError):
+        verify_staged_release(
+            staged_root,
+            manifest,
+            expected_release_sha=release_sha,
+            expected_release_tree=str(manifest["release_tree"]),
+        )
 
 
 @pytest.mark.parametrize(
@@ -203,7 +277,10 @@ def test_staged_non_git_release_fails_closed(
 
     with pytest.raises(ExactReleaseError, match=expected_error):
         verify_staged_release(
-            staged_root, manifest, expected_release_sha=expected_release_sha
+            staged_root,
+            manifest,
+            expected_release_sha=expected_release_sha,
+            expected_release_tree=str(manifest["release_tree"]),
         )
 
 
@@ -226,7 +303,7 @@ def test_exact_release_guard_rejects_dirty_or_wrong_head(tmp_path: Path) -> None
 
 def test_release_manifest_detects_any_selected_file_change(tmp_path: Path) -> None:
     _write_release_surface(tmp_path)
-    first = build_release_manifest(tmp_path, release_sha="b" * 40)
+    first = build_release_manifest(tmp_path, release_sha="b" * 40, release_tree="c" * 40)
     (tmp_path / "src/trader_assist_v0/example.py").write_text("changed", encoding="utf-8")
-    second = build_release_manifest(tmp_path, release_sha="b" * 40)
+    second = build_release_manifest(tmp_path, release_sha="b" * 40, release_tree="c" * 40)
     assert first["manifest_sha256"] != second["manifest_sha256"]

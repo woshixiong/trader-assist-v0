@@ -200,15 +200,51 @@ def validate_three_setup_e4_identity(config: ThreeSetupProductionConfig) -> None
         or not config.e4_bar_types
     ):
         raise ThreeSetupProductionError("active Three Setup requires explicit E4 identity")
-    manifest = RunManifest.model_validate_json(config.e4_manifest_path.read_bytes())
-    snapshot = PitUniverseSnapshot.model_validate_json(config.e4_snapshot_path.read_bytes())
-    store = E4EvidenceStore(config.e4_evidence_root)
+    evidence_root = config.e4_evidence_root
+    manifest_path = config.e4_manifest_path
+    snapshot_path = config.e4_snapshot_path
+    assert evidence_root is not None and manifest_path is not None and snapshot_path is not None
+    if not evidence_root.is_dir():
+        raise ThreeSetupProductionError("E4 evidence root is missing")
+    manifest = RunManifest.model_validate_json(manifest_path.read_bytes())
+    snapshot = PitUniverseSnapshot.model_validate_json(snapshot_path.read_bytes())
+    if manifest.git_sha != config.release_sha or manifest.nautilus_version != "2.0.0rc5":
+        raise ThreeSetupProductionError("E4 release or Nautilus identity differs")
+    store = E4EvidenceStore(evidence_root)
     if store.load_manifest() != manifest or store.load_snapshot() != snapshot:
         raise ThreeSetupProductionError("E4 identity differs from shared durable evidence")
     registry = MarketRegistryManager(config.registry_root, metadata_validator=lambda _: False)
     selected = registry.active() or registry.pending_version()
     if selected is None:
         raise ThreeSetupProductionError("validated Registry authority is required")
+    try:
+        from nautilus_trader.model import (  # type: ignore[import-not-found]
+            AggregationSource,
+            BarAggregation,
+            BarType,
+            PriceType,
+        )
+    except ModuleNotFoundError:
+        # The optional rc5 package is absent in ordinary dev tests. Deployment
+        # preflight separately requires the installed exact rc5 distribution.
+        def has_exact_bar(instrument: str, minute: int) -> bool:
+            return f"{instrument}-{minute}-MINUTE-LAST-EXTERNAL" in config.e4_bar_types
+    else:
+        try:
+            bars = tuple(BarType.from_str(item) for item in config.e4_bar_types)
+        except ValueError as exc:
+            raise ThreeSetupProductionError("E4 bar type is invalid") from exc
+
+        def has_exact_bar(instrument: str, minute: int) -> bool:
+            return any(
+                str(bar.instrument_id) == instrument
+                and bar.spec.step == minute
+                and bar.spec.aggregation is BarAggregation.MINUTE
+                and bar.spec.price_type is PriceType.LAST
+                and bar.aggregation_source is AggregationSource.EXTERNAL
+                for bar in bars
+            )
+
     expressions = {item.market_id: item for item in snapshot.expressions}
     for market in selected.markets:
         expression = expressions.get(market.identity.market_id)
@@ -220,8 +256,7 @@ def validate_three_setup_e4_identity(config: ThreeSetupProductionConfig) -> None
         ):
             raise ThreeSetupProductionError("Registry market differs from current E4 PIT metadata")
         for minute in (1, 5):
-            prefix = f"{expression.instrument_id}-{minute}-MINUTE-"
-            if not any(item.startswith(prefix) for item in config.e4_bar_types):
+            if not has_exact_bar(expression.instrument_id, minute):
                 raise ThreeSetupProductionError("E4 subscriptions lack selected 1m/5m market")
 
 
