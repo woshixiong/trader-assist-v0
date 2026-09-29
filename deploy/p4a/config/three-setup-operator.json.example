@@ -1,0 +1,15 @@
+{
+  "runtime_evidence_path": "/var/lib/trader-assist-v0/three-setup-shadow/evidence.sqlite",
+  "operator_ledger_path": "/var/lib/trader-assist-v0/three-setup-operator/operator.sqlite",
+  "credential_path": "/etc/trader-assist-v0/three-setup-operator-credential.json",
+  "allowed_hosts": ["operator.example.invalid"],
+  "allowed_origin": "https://operator.example.invalid",
+  "bind_host": "127.0.0.1",
+  "bind_port": 8768,
+  "tls_cert_path": null,
+  "tls_key_path": null,
+  "reference_scenario": null,
+  "approval_mode": "POST_ACTIVATION",
+  "approval_ttl_ms": 300000,
+  "reconcile_interval_ms": 500
+}

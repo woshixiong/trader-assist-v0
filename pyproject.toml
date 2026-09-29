@@ -24,6 +24,12 @@ dev = [
 nautilus-pilot = [
   "nautilus-trader==2.0.0rc5",
 ]
+operator = [
+  "fastapi==0.141.1",
+  "starlette==1.7.0",
+  "jinja2==3.1.6",
+  "uvicorn==0.54.0",
+]
 decision-model-typesafe = [
   "typesafe-sdk==0.7.0",
 ]

@@ -1,0 +1,21 @@
+[Unit]
+Description=Trader Assist Three Setup zero-write operator
+
+[Service]
+Type=simple
+User=trader-assist-operator
+Group=trader-assist-operator
+EnvironmentFile=/etc/trader-assist-v0/three-setup-operator.env
+ExecStart=/opt/trader-assist-v0/operator-venv/bin/python /opt/trader-assist-v0/source/scripts/run_three_setup_operator.py --config ${TS8_OPERATOR_CONFIG}
+WorkingDirectory=/opt/trader-assist-v0/source
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/trader-assist-v0/three-setup-operator
+ReadOnlyPaths=/var/lib/trader-assist-v0/three-setup-shadow
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

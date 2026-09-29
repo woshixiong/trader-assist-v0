@@ -12,6 +12,19 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PILOT_REQUIREMENT = "nautilus-trader==2.0.0rc5"
 PILOT_WHEEL_SHA256 = "eab45fafd2312deda1236554c49a9798bfc76bc8465af864878e2f70189ebebe"
+OPERATOR_REQUIREMENTS = (
+    "fastapi==0.141.1",
+    "starlette==1.7.0",
+    "jinja2==3.1.6",
+    "uvicorn==0.54.0",
+)
+OPERATOR_CLOSURE = frozenset(
+    {
+        "annotated-doc", "annotated-types", "anyio", "click", "fastapi", "h11",
+        "idna", "jinja2", "markupsafe", "pydantic", "pydantic-core", "starlette",
+        "typing-extensions", "typing-inspection", "uvicorn", "websockets",
+    }
+)
 DECISION_MODEL_TYPESAFE_REQUIREMENT = "typesafe-sdk==0.7.0"
 PIN_RE = re.compile(r"^[A-Za-z0-9_.-]+==[A-Za-z0-9_.!+-]+$")
 LOCK_RE = re.compile(
@@ -57,14 +70,23 @@ def _verify_direct_pins(
     dev: dict[str, tuple[str, str]],
     pilot: dict[str, tuple[str, str]],
     typesafe: dict[str, tuple[str, str]],
+    operator: dict[str, tuple[str, str]],
 ) -> None:
     data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     project = tuple(data["project"]["dependencies"])
     optional_dev = tuple(data["project"]["optional-dependencies"]["dev"])
     optional_pilot = tuple(data["project"]["optional-dependencies"]["nautilus-pilot"])
     optional_typesafe = tuple(data["project"]["optional-dependencies"]["decision-model-typesafe"])
+    optional_operator = tuple(data["project"]["optional-dependencies"]["operator"])
     build = tuple(data["build-system"]["requires"])
-    for requirement in (*project, *optional_dev, *optional_pilot, *optional_typesafe, *build):
+    for requirement in (
+        *project,
+        *optional_dev,
+        *optional_pilot,
+        *optional_typesafe,
+        *optional_operator,
+        *build,
+    ):
         if not PIN_RE.fullmatch(requirement):
             raise SystemExit(f"pyproject dependency is not exactly pinned: {requirement}")
     missing_runtime = [
@@ -81,6 +103,20 @@ def _verify_direct_pins(
         raise SystemExit("runtime lock mismatch: " + ", ".join(missing_runtime))
     if missing_dev:
         raise SystemExit("dev lock mismatch: " + ", ".join(missing_dev))
+    if optional_operator != OPERATOR_REQUIREMENTS:
+        raise SystemExit("operator optional dependencies differ from frozen pins")
+    if set(operator) != OPERATOR_CLOSURE:
+        raise SystemExit("operator lock differs from frozen complete closure")
+    for requirement in (*project, *optional_operator):
+        name, version = _pin(requirement)
+        if operator.get(name, (None, None))[0] != version:
+            raise SystemExit("operator direct dependency mismatch: " + requirement)
+        if dev.get(name) != operator.get(name):
+            raise SystemExit("operator/dev exact wheel hash mismatch: " + requirement)
+    if not set(runtime).issubset(operator):
+        raise SystemExit("operator lock omits core runtime dependency")
+    if any(dev.get(name) != entry for name, entry in operator.items()):
+        raise SystemExit("operator lock is not an exact hashed subset of dev lock")
     if optional_pilot != (PILOT_REQUIREMENT,):
         raise SystemExit("nautilus-pilot optional dependency must contain only the exact rc5 pin")
     expected_pilot = {_pin(PILOT_REQUIREMENT)[0]: (_pin(PILOT_REQUIREMENT)[1], PILOT_WHEEL_SHA256)}
@@ -181,11 +217,13 @@ def main() -> int:
     installed_mode.add_argument("--verify-pilot-installed", action="store_true")
     installed_mode.add_argument("--verify-decision-model-typesafe-installed", action="store_true")
     installed_mode.add_argument("--verify-target-runtime-installed", action="store_true")
+    installed_mode.add_argument("--verify-operator-installed", action="store_true")
     parser.add_argument("--staged-source", type=Path)
     parser.add_argument("--pip-check-with", type=Path)
     args = parser.parse_args()
     runtime = _read_lock("requirements-runtime.lock")
     pilot = _read_lock("requirements-nautilus-pilot.lock")
+    operator = _read_lock("requirements-operator.lock")
     expected_pilot = {_pin(PILOT_REQUIREMENT)[0]: (_pin(PILOT_REQUIREMENT)[1], PILOT_WHEEL_SHA256)}
     if pilot != expected_pilot:
         raise SystemExit("pilot lock must contain only the exact authorized rc5 Linux wheel")
@@ -199,10 +237,12 @@ def main() -> int:
         return 0
     dev = _read_lock("requirements-dev.lock")
     typesafe = _read_lock("requirements-decision-model-typesafe.lock")
-    _verify_direct_pins(runtime, dev, pilot, typesafe)
+    _verify_direct_pins(runtime, dev, pilot, typesafe, operator)
     _verify_runtime_subset(runtime, dev)
     if args.verify_installed:
         _verify_installed(dev)
+    if args.verify_operator_installed:
+        _verify_installed(operator, project_distribution_expected=False)
     if args.verify_pilot_installed:
         _verify_installed(dev, pilot)
     if args.verify_decision_model_typesafe_installed:

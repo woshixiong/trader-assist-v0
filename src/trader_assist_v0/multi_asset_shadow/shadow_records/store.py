@@ -31,6 +31,101 @@ class RecordConflictError(RecordError):
     """A deterministic identity was retried with different immutable content."""
 
 
+class ReadOnlyEvidenceSnapshot:
+    """Short, consistent operator read of the runtime-owned evidence database.
+
+    This deliberately does not instantiate EvidenceStore: that class configures
+    WAL and owns runtime writes.  The caller must close this snapshot before
+    acquiring an operator-ledger write transaction.
+    """
+
+    def __init__(self, path: Path | str) -> None:
+        uri = Path(path).resolve().as_uri() + "?mode=ro"
+        self._connection = sqlite3.connect(uri, uri=True, timeout=0.1)
+        self._connection.row_factory = sqlite3.Row
+        self._connection.execute("PRAGMA query_only = ON")
+        self._connection.execute("BEGIN")
+        self._closed = False
+
+    def __enter__(self) -> ReadOnlyEvidenceSnapshot:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        if not self._closed:
+            self._connection.rollback()
+            self._connection.close()
+            self._closed = True
+
+    def get(self, record_id: str) -> ImmutableRecord | None:
+        row = self._connection.execute(
+            "SELECT record_id, record_type, canonical_hash, identity_json, payload_json "
+            "FROM immutable_records WHERE record_id = ?",
+            (record_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        record_class = RECORD_TYPES[str(row["record_type"])]
+        return record_class.from_storage(
+            record_id=str(row["record_id"]),
+            canonical_hash=str(row["canonical_hash"]),
+            identity_json=str(row["identity_json"]),
+            payload_json=str(row["payload_json"]),
+        )
+
+    def exact(self, record_id: str, record_type: str) -> ImmutableRecord:
+        record = self.get(record_id)
+        if record is None or record.record_type != record_type:
+            raise RecordError("exact operator source record is missing or has wrong type")
+        return record
+
+    def matching(
+        self, record_type: str, json_field: str, value: str
+    ) -> tuple[ImmutableRecord, ...]:
+        if json_field not in {
+            "market_id",
+            "strategy_evaluation_id",
+            "market_event_id",
+            "evaluation_id",
+            "kernel_market_event_id",
+        }:
+            raise RecordError("operator source query field is not allowed")
+        rows = self._connection.execute(
+            "SELECT record_id FROM immutable_records WHERE record_type = ? "
+            f"AND json_extract(payload_json, '$.{json_field}') = ? ORDER BY record_id LIMIT 3",
+            (record_type, value),
+        ).fetchall()
+        return tuple(self.exact(str(row["record_id"]), record_type) for row in rows)
+
+    def latest_shadow(self) -> ImmutableRecord | None:
+        rows = self._connection.execute(
+            "SELECT record_id, json_extract(payload_json, '$.created_at') AS created_at "
+            "FROM immutable_records WHERE record_type = 'shadow_order' "
+            "ORDER BY created_at DESC, record_id LIMIT 2"
+        ).fetchall()
+        if not rows:
+            return None
+        if len(rows) > 1 and rows[0]["created_at"] == rows[1]["created_at"]:
+            raise RecordError("latest Shadow evidence is ambiguous")
+        return self.exact(str(rows[0]["record_id"]), "shadow_order")
+
+    def latest_strategy(self, market_id: str) -> ImmutableRecord | None:
+        rows = self._connection.execute(
+            "SELECT record_id, json_extract(payload_json, '$.evaluation_boundary_ms') AS boundary "
+            "FROM immutable_records WHERE record_type = 'strategy_evaluation' "
+            "AND json_extract(payload_json, '$.market_id') = ? "
+            "ORDER BY boundary DESC, record_id LIMIT 2",
+            (market_id,),
+        ).fetchall()
+        if not rows:
+            return None
+        if len(rows) > 1 and rows[0]["boundary"] == rows[1]["boundary"]:
+            raise RecordError("latest Strategy evaluation is ambiguous")
+        return self.exact(str(rows[0]["record_id"]), "strategy_evaluation")
+
+
 @dataclass(frozen=True)
 class EvidenceQueryCounters:
     queries: int = 0

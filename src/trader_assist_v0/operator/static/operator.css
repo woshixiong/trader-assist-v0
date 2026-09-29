@@ -1,0 +1,20 @@
+:root { color-scheme: dark; font: 16px/1.45 system-ui, sans-serif; background: #101820; color: #f4f7f8; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+.shell { width: min(100%, 54rem); margin: auto; padding: 1rem; }
+header { display: flex; flex-wrap: wrap; gap: .6rem 1.2rem; align-items: center; justify-content: space-between; padding: .7rem 0 1.5rem; }
+.mode, .state { color: #93e2d6; font-weight: 700; }
+.card { background: #1b2933; border: 1px solid #47606b; border-radius: .8rem; padding: clamp(1rem, 4vw, 2rem); }
+h1 { margin-top: 0; font-size: 1.5rem; }
+dl { display: grid; grid-template-columns: minmax(9rem, 13rem) minmax(0, 1fr); gap: .6rem 1rem; }
+dt { color: #b9cbd0; }
+dd { margin: 0; overflow-wrap: anywhere; }
+.mono { font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
+input, button { font: inherit; min-height: 2.8rem; border-radius: .4rem; }
+input { display: block; width: 100%; margin: .5rem 0 1rem; padding: .5rem; }
+button { border: 0; padding: .6rem 1rem; cursor: pointer; background: #8ce0d0; color: #091a20; font-weight: 700; }
+button:disabled { cursor: not-allowed; opacity: .5; }
+.actions { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: 1.5rem; }
+.actions button { flex: 1 1 10rem; }
+details { margin-top: 1rem; }
+@media (max-width: 36rem) { dl { display: block; } dt { margin-top: .8rem; } .actions { display: grid; grid-template-columns: 1fr; } }
