@@ -1,0 +1,182 @@
+name: Three Setup Q1 composition qualification
+
+"on":
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Draft qualification PR number
+        required: true
+      control_head_sha:
+        description: Exact qualification control HEAD
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+
+jobs:
+  composition:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      CANDIDATE_SHA: e3c0c67cc3d787bdf5044bdf598699a78652bdb5
+      CANDIDATE_TREE: d5d76f6994ac4b635ddd6ea0647a7050af9a3a49
+      CONTROL_HEAD: ${{ inputs.control_head_sha }}
+      RESULT_PATH: ${{ runner.temp }}/three-setup-q1-composition.json
+      CONTRACTS_PROOF: ${{ runner.temp }}/three-setup-q1-contracts-proof.json
+      TERMINAL_PROOF: ${{ runner.temp }}/three-setup-q1-terminal-proof.json
+    steps:
+      - name: Checkout exact control HEAD
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          path: control
+          ref: ${{ env.CONTROL_HEAD }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout exact product candidate
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          path: candidate
+          ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Initialize bounded non-PASS artifact
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          source = Path('control/deploy/p4a/evidence/three-setup-q1-composition-v1.json.example')
+          result = json.loads(source.read_text())
+          result['reason_stage'] = 'ENTRY'
+          result['reason_code'] = 'ACCEPTANCE_INCOMPLETE'
+          Path(os.environ['RESULT_PATH']).write_text(json.dumps(result, sort_keys=True) + '\n')
+          PY
+      - name: Reject checkout or PR drift before construction
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]
+          test "$(git -C control rev-parse HEAD)" = "$CONTROL_HEAD"
+          test "$(git -C candidate rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git -C candidate rev-parse 'HEAD^{tree}')" = "$CANDIDATE_TREE"
+          test -z "$(git -C candidate status --porcelain=v1 --untracked-files=all)"
+          test "$(git -C candidate ls-remote origin refs/heads/main | cut -f1)" = "$CANDIDATE_SHA"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq .head.sha)" = "$CONTROL_HEAD"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq .base.sha)" = "$CANDIDATE_SHA"
+          test ! -e /var/lib/trader-assist-v0/three-setup-shadow
+          sudo install -d -m 0755 -o "$(id -u)" -g "$(id -g)" /var/lib/trader-assist-v0
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Install exact candidate target closure
+        run: |
+          test "$(uname -s)" = Linux
+          test "$(uname -m)" = x86_64
+          python -m venv --without-pip "$RUNNER_TEMP/q1-composition-target"
+          python -m pip --python "$RUNNER_TEMP/q1-composition-target/bin/python" install --require-hashes -r candidate/requirements-runtime.lock
+          python -m pip --python "$RUNNER_TEMP/q1-composition-target/bin/python" install --require-hashes --no-deps --only-binary=:all: -r candidate/requirements-nautilus-pilot.lock
+          python -m pip --python "$RUNNER_TEMP/q1-composition-target/bin/python" check
+          ! python -m pip --python "$RUNNER_TEMP/q1-composition-target/bin/python" show trader-assist-v0
+      - name: Qualify real public-only composition without provider run
+        env:
+          PYTHONPATH: ${{ github.workspace }}/candidate/src:${{ github.workspace }}/candidate
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          "$RUNNER_TEMP/q1-composition-target/bin/python" control/scripts/three_setup_q1_composition.py \
+            --control control \
+            --candidate candidate \
+            --control-head "$CONTROL_HEAD" \
+            --result "$RESULT_PATH"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          result = json.loads(Path(os.environ['RESULT_PATH']).read_text())
+          assert result['classification'] == 'HARNESS_OR_EXECUTION_SURFACE_GAP'
+          assert result['reason_code'] == 'ACCEPTANCE_INCOMPLETE'
+          assert all(result['cqa'][f'CQA{i:02}'] for i in range(1, 18))
+          assert result['cqa']['CQA18'] is False and not any(result['cqh'].values())
+          assert result['builder']['data'] == 1
+          assert all(result['builder'][name] == 0 for name in ('exec', 'sim_exec', 'order', 'signer'))
+          assert result['builder']['restored'] and result['store']['close_attempt_count'] == 1
+          assert result['node_disposed'] and not result['run_started']
+          PY
+      - name: Verify exact-head contracts CI once
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/commits/$CONTROL_HEAD/check-runs?per_page=100" \
+            --jq '[.check_runs[] | {id, name, head_sha, status, conclusion, app_slug: .app.slug}]' \
+            > "$RUNNER_TEMP/q1-composition-contracts-checks.json"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          checks = json.loads((Path(os.environ['RUNNER_TEMP']) / 'q1-composition-contracts-checks.json').read_text())
+          matching = [check for check in checks if check['name'] == 'contracts'
+                      and check['head_sha'] == os.environ['CONTROL_HEAD']
+                      and check['app_slug'] == 'github-actions']
+          assert matching
+          latest = max(matching, key=lambda check: check['id'])
+          assert latest['status'] == 'completed' and latest['conclusion'] == 'success'
+          proof = {
+              'schema': 'trader-assist-v0/three-setup-q1-composition/v1',
+              'check_name': 'contracts',
+              'control_head': os.environ['CONTROL_HEAD'],
+              'status': 'completed',
+              'conclusion': 'success',
+          }
+          Path(os.environ['CONTRACTS_PROOF']).write_text(json.dumps(proof, sort_keys=True) + '\n')
+          PY
+      - name: Terminal exact identity readback
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]
+          test "$(git -C control rev-parse HEAD)" = "$CONTROL_HEAD"
+          test "$(git -C candidate rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git -C candidate rev-parse 'HEAD^{tree}')" = "$CANDIDATE_TREE"
+          test "$(git -C candidate ls-remote origin refs/heads/main | cut -f1)" = "$CANDIDATE_SHA"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq .head.sha)" = "$CONTROL_HEAD"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq .base.sha)" = "$CANDIDATE_SHA"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          proof = {
+              'schema': 'trader-assist-v0/three-setup-q1-composition/v1',
+              'verified': True,
+              'pr_number': os.environ['PR_NUMBER'],
+              'control_head': os.environ['CONTROL_HEAD'],
+              'candidate_sha': os.environ['CANDIDATE_SHA'],
+              'candidate_tree': os.environ['CANDIDATE_TREE'],
+          }
+          Path(os.environ['TERMINAL_PROOF']).write_text(json.dumps(proof, sort_keys=True) + '\n')
+          PY
+      - name: Finalize bounded artifact after both exact-head proofs
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+          PYTHONPATH: ${{ github.workspace }}/candidate/src:${{ github.workspace }}/candidate
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          "$RUNNER_TEMP/q1-composition-target/bin/python" control/scripts/three_setup_q1_composition.py \
+            --control control \
+            --candidate candidate \
+            --control-head "$CONTROL_HEAD" \
+            --result "$RESULT_PATH" \
+            --finalize \
+            --contracts-proof "$CONTRACTS_PROOF" \
+            --terminal-proof "$TERMINAL_PROOF" \
+            --pr-number "$PR_NUMBER"
+      - name: Upload bounded composition artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: three-setup-q1-composition
+          path: ${{ env.RESULT_PATH }}
+          if-no-files-found: error
