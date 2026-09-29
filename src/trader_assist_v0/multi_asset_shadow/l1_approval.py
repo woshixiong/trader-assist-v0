@@ -53,6 +53,13 @@ NOT_SUBMITTED = "NOT_SUBMITTED"
 _PACKAGE_VERSION = "L1-1"
 
 
+def _ts8_thesis_valid_no_submit(reasons: tuple[str, ...]) -> bool:
+    return not any(
+        reason in {"PACKAGE_EXPIRED", "THESIS_INVALID", "ACTIVATION_INVALID", "SUPERSEDED"}
+        for reason in reasons
+    )
+
+
 def _canonical_decimal(value: Decimal) -> str:
     if not value.is_finite() or value <= 0:
         raise L1ContractError("sizing values must be positive finite decimals")
@@ -302,9 +309,42 @@ class HumanApprovalLedger:
         ).fetchone()
         return None if row is None else str(row["state"])
 
+    def ts8_action_replay(
+        self, *, action_key: str, package_id: str, request_digest: str, action: str,
+        shadow_id: str | None = None,
+    ) -> tuple[str, int] | None:
+        """Return exact committed result/time without consulting Strategy evidence."""
+        row = self._connection.execute(
+            "SELECT package_id, request_digest, action, result_state, observed_server_ms "
+            "FROM ts8_actions WHERE action_key = ?",
+            (action_key,),
+        ).fetchone()
+        if row is None:
+            return None
+        if (row["package_id"], row["request_digest"], row["action"]) != (
+            package_id, request_digest, action
+        ):
+            raise L1ContractError("action key reused with altered payload")
+        if shadow_id is not None:
+            package = self.ts8_package(package_id)
+            if package is None or package.parent_strategy_order_id != shadow_id:
+                raise L1ContractError("action key reused with altered payload")
+        return str(row["result_state"]), int(row["observed_server_ms"])
+
     def ts8_revision(self) -> int:
         row = self._connection.execute("SELECT COUNT(*) FROM ts8_transitions").fetchone()
         return int(row[0])
+
+    def ts8_recent_terminal(self) -> tuple[str, str] | None:
+        row = self._connection.execute(
+            "SELECT state, package_id FROM ts8_state WHERE state IN "
+            "('EXPIRED', 'SUPERSEDED', 'THESIS_INVALID', 'WAITING_FRESH_TRIGGER', "
+            "'REJECTED', 'WOULD_SUBMIT') "
+            "ORDER BY updated_server_ms DESC, package_id DESC LIMIT 1"
+        ).fetchone()
+        if row is None:
+            return None
+        return str(row["state"]), str(row["package_id"])
 
     def ts8_approval_time(self, package_id: str) -> int:
         rows = self._connection.execute(
@@ -328,6 +368,54 @@ class HumanApprovalLedger:
         if any(package is None for package in result):
             raise L1ContractError("pending package is missing")
         return tuple(package for package in result if package is not None)
+
+    def ts8_open_post(self, *, limit: int = 32) -> tuple[StrategyOrderPackage, ...]:
+        if not 1 <= limit <= 128:
+            raise L1ContractError("open POST batch limit is invalid")
+        rows = self._connection.execute(
+            "SELECT package_id FROM ts8_state WHERE approval_mode = 'POST_ACTIVATION' "
+            "AND state = 'AWAITING_HUMAN_APPROVAL' ORDER BY package_id LIMIT ?",
+            (limit,),
+        ).fetchall()
+        packages = tuple(self.ts8_package(str(row["package_id"])) for row in rows)
+        if any(package is None for package in packages):
+            raise L1ContractError("open POST package is missing")
+        return tuple(package for package in packages if package is not None)
+
+    def ts8_terminalize_post(
+        self,
+        package: StrategyOrderPackage,
+        *,
+        terminal: str,
+        server_ms: int,
+        snapshot_digest: str,
+        source_refs: dict[str, str],
+        reason_code: str,
+    ) -> str:
+        if terminal not in {"EXPIRED", "SUPERSEDED", "THESIS_INVALID"} or not reason_code:
+            raise L1ContractError("invalid POST terminal disposition")
+        with self._mutation():
+            self.ts8_display(package, mode=ApprovalMode.POST_ACTIVATION)
+            state = self.ts8_state(package.package_id)
+            if state != "AWAITING_HUMAN_APPROVAL":
+                if state is None:
+                    raise L1ContractError("POST package state is missing")
+                return state
+            self._ts8_transition(
+                "post-terminal:" + package.package_id,
+                package,
+                terminal,
+                server_ms,
+                None,
+                snapshot_digest,
+                canonical_json_bytes(source_refs).decode("utf-8"),
+                (reason_code,),
+            )
+            self._connection.execute(
+                "UPDATE ts8_state SET state = ?, updated_server_ms = ? WHERE package_id = ?",
+                (terminal, server_ms, package.package_id),
+            )
+            return terminal
 
     def ts8_display(self, package: StrategyOrderPackage, *, mode: ApprovalMode) -> str:
         if package.ts8_details is None or package.ts8_details.get("approval_mode") != mode.value:
@@ -376,21 +464,25 @@ class HumanApprovalLedger:
             raise L1ContractError("invalid zero-write disposition")
         refs_json = canonical_json_bytes(source_refs).decode("utf-8")
         with self._mutation():
-            retained = self._connection.execute(
-                "SELECT package_id, request_digest, action, result_state FROM ts8_actions "
-                "WHERE action_key = ?",
-                (action_key,),
-            ).fetchone()
+            retained = self.ts8_action_replay(
+                action_key=action_key, package_id=package.package_id,
+                request_digest=request_digest, action=action,
+                shadow_id=package.parent_strategy_order_id,
+            )
             if retained is not None:
-                if tuple(retained)[:3] != (package.package_id, request_digest, action):
-                    raise L1ContractError("action key reused with altered payload")
-                return str(retained["result_state"])
+                return retained[0]
             # The initial display, Human action and final disposition share
             # one short operator-ledger transaction after the source closes.
             self.ts8_display(package, mode=approval_mode)
             self._require_displayed(package)
-            self._require_fresh(package, server_ms)
             state = self.ts8_state(package.package_id)
+            if server_ms >= package.expires_server_ms and state == "AWAITING_HUMAN_APPROVAL":
+                return self.ts8_terminalize_post(
+                    package, terminal="EXPIRED", server_ms=server_ms,
+                    snapshot_digest=snapshot_digest, source_refs=source_refs,
+                    reason_code="PACKAGE_EXPIRED",
+                )
+            self._require_fresh(package, server_ms)
             if state not in {None, "ARMED_REVIEWABLE", "AWAITING_HUMAN_APPROVAL"}:
                 raise L1ContractError("package is no longer reviewable")
             if approval_mode.value != package.ts8_details.get("approval_mode"):
@@ -451,6 +543,10 @@ class HumanApprovalLedger:
                 EvidenceStream.HUMAN_WORKFLOW_SHADOW,
                 server_ms,
             )
+            if result == "NO_SUBMIT" and _ts8_thesis_valid_no_submit(reason_codes):
+                self._ts8_wait_fresh_trigger(
+                    package, server_ms, snapshot_digest, refs_json, reason_codes
+                )
             return result
 
     def ts8_reconcile(
@@ -470,7 +566,9 @@ class HumanApprovalLedger:
         with self._mutation():
             self._require_displayed(package)
             state = self.ts8_state(package.package_id)
-            if state in {"WOULD_SUBMIT", "NO_SUBMIT", "EXPIRED", "THESIS_INVALID"}:
+            if state in {
+                "WOULD_SUBMIT", "NO_SUBMIT", "WAITING_FRESH_TRIGGER", "EXPIRED", "THESIS_INVALID"
+            }:
                 return state
             if state != "APPROVED_WAITING_ACTIVATION":
                 raise L1ContractError("package is not waiting for activation")
@@ -508,6 +606,10 @@ class HumanApprovalLedger:
                 EvidenceStream.HUMAN_WORKFLOW_SHADOW,
                 server_ms,
             )
+            if disposition == "NO_SUBMIT" and _ts8_thesis_valid_no_submit(reason_codes):
+                self._ts8_wait_fresh_trigger(
+                    package, server_ms, snapshot_digest, refs_json, reason_codes
+                )
             return disposition
 
     def ts8_fail_pending(
@@ -524,7 +626,7 @@ class HumanApprovalLedger:
             raise L1ContractError("terminal reason is required")
         with self._mutation():
             state = self.ts8_state(package.package_id)
-            if state in {"NO_SUBMIT", "WOULD_SUBMIT", "EXPIRED"}:
+            if state in {"NO_SUBMIT", "WAITING_FRESH_TRIGGER", "WOULD_SUBMIT", "EXPIRED"}:
                 return state
             if state != "APPROVED_WAITING_ACTIVATION":
                 raise L1ContractError("package is not pending")
@@ -545,6 +647,21 @@ class HumanApprovalLedger:
                 (terminal, server_ms, package.package_id),
             )
             return terminal
+
+    def _ts8_wait_fresh_trigger(
+        self, package: StrategyOrderPackage, server_ms: int,
+        snapshot_digest: str, refs_json: str, reasons: tuple[str, ...]
+    ) -> None:
+        self._ts8_transition(
+            "fresh-trigger:" + package.package_id,
+            package, "WAITING_FRESH_TRIGGER", server_ms, None,
+            snapshot_digest, refs_json, reasons,
+        )
+        self._connection.execute(
+            "UPDATE ts8_state SET state = 'WAITING_FRESH_TRIGGER', updated_server_ms = ? "
+            "WHERE package_id = ? AND state = 'NO_SUBMIT'",
+            (server_ms, package.package_id),
+        )
 
     def _ts8_transition(
         self,

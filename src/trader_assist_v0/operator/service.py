@@ -128,8 +128,13 @@ def create_app(
             projection, state = operator.latest()
             package = projection.package
             details = package.ts8_details or {}
-            blocked = False
-            reason = ""
+            blocked = state not in {"AWAITING_HUMAN_APPROVAL", "ARMED_REVIEWABLE"}
+            reason = (
+                "Old package consumed. A fresh causal trigger, package and Human "
+                "approval are required."
+                if state == "WAITING_FRESH_TRIGGER"
+                else "Package is terminal or unavailable for Human action."
+            ) if blocked else ""
         except OperatorBlocked as exc:
             package, details, state, blocked, reason = None, {}, "BLOCKED", True, str(exc)
         return templates.TemplateResponse(
@@ -143,6 +148,7 @@ def create_app(
                 "reason": reason,
                 "csrf": session.csrf,
                 "revision": operator.revision(),
+                "recent_terminal": operator.recent_terminal(),
                 "configured_mode": config.approval_mode,
             },
         )
@@ -156,7 +162,7 @@ def create_app(
         except (ValidationError, ValueError) as exc:
             raise HTTPException(422, "invalid action body") from exc
         try:
-            state = operator.human_action(
+            result = operator.human_action_record(
                 shadow_id=body.shadow_id,
                 package_id=body.package_id,
                 package_hash=body.package_hash,
@@ -166,7 +172,11 @@ def create_app(
             )
         except OperatorBlocked as exc:
             raise HTTPException(409, str(exc)) from exc
-        return JSONResponse({"state": state, "submission_status": "NOT_SUBMITTED"})
+        return JSONResponse({
+            "state": result.state,
+            "observed_server_ms": result.observed_server_ms,
+            "submission_status": "NOT_SUBMITTED",
+        })
 
     @app.get("/events")
     async def events(request: Request) -> StreamingResponse:

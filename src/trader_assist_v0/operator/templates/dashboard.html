@@ -4,9 +4,14 @@
   <h1>Approval package</h1>
   <p>Approval timing: {{ configured_mode }}</p>
   <p class="state">{{ "BLOCKED" if blocked else "READY" }} · {{ state }}</p>
+  <p>ZERO_WRITE · NOT_SUBMITTED · no exchange action</p>
+  {% if recent_terminal %}
+  <p>Latest terminal evidence: {{ recent_terminal[0] }} · package {{ recent_terminal[1][:12] }}…</p>
+  {% endif %}
   {% if blocked %}
   <p role="status">{{ reason }}</p>
-  {% else %}
+  {% endif %}
+  {% if package %}
   <p>Opportunity: {{ package.activation_opportunity_id }}</p>
   <dl>
     <dt>Market / instrument</dt><dd>{{ details.market_id }} / {{ details.instrument_id or "UNAVAILABLE" }}</dd>
@@ -24,8 +29,8 @@
   <details><summary>Exact identity</summary><p class="mono">Package {{ package.package_id }}<br>Hash {{ package.package_hash }}<br>Parent Shadow {{ package.parent_strategy_order_id }}</p></details>
   <p>Single use. Guard failure is terminal and requires a fresh trigger and approval.</p>
   <div class="actions" data-shadow="{{ package.parent_strategy_order_id }}" data-package="{{ package.package_id }}" data-hash="{{ package.package_hash }}">
-    <button type="button" data-action="APPROVE" {% if state not in ("AWAITING_HUMAN_APPROVAL", "ARMED_REVIEWABLE") %}disabled{% endif %}>Approve</button>
-    <button type="button" data-action="REJECT" {% if state not in ("AWAITING_HUMAN_APPROVAL", "ARMED_REVIEWABLE") %}disabled{% endif %}>Reject</button>
+    <button type="button" data-action="APPROVE" {% if blocked or state not in ("AWAITING_HUMAN_APPROVAL", "ARMED_REVIEWABLE") %}disabled{% endif %}>Approve</button>
+    <button type="button" data-action="REJECT" {% if blocked or state not in ("AWAITING_HUMAN_APPROVAL", "ARMED_REVIEWABLE") %}disabled{% endif %}>Reject</button>
   </div>
   <p id="action-result" role="status"></p>
   {% endif %}

@@ -23,13 +23,13 @@ from trader_assist_v0.operator.contracts import OperatorConfig, OperatorCredenti
 
 def make_source(
     path: Path, *, created_ms: int, instrument: str = "BTC-PERP",
-    policy_version: str | None = None,
+    policy_version: str | None = None, opportunity_suffix: str = "",
 ) -> str:
     with EvidenceStore(path):
         pass
     stamp = datetime.fromtimestamp(created_ms / 1000, tz=UTC).isoformat()
     provenance = ProvenanceRecord.create(
-        identity={"sample": "provenance"},
+        identity={"sample": "provenance" + opportunity_suffix},
         strategy_version="strategy-v1",
         parameter_version="params-v1",
         registry_version="registry-v1",
@@ -39,17 +39,17 @@ def make_source(
         recorded_at=stamp,
     )
     event = MarketEvent.create(
-        identity={"sample": "event"},
+        identity={"sample": "event" + opportunity_suffix},
         market_id="market-1",
         event_kind="BREAKOUT_RETEST",
         event_time=stamp,
-        kernel_market_event_id="kernel-opportunity-1",
+        kernel_market_event_id="kernel-opportunity-1" + opportunity_suffix,
         side="LONG",
         setup_family="BREAKOUT_RETEST",
     )
     evaluation = StrategyEvaluation.create(
-        identity={"sample": "evaluation"},
-        evaluation_id="evaluation-1",
+        identity={"sample": "evaluation" + opportunity_suffix},
+        evaluation_id="evaluation-1" + opportunity_suffix,
         market_id="market-1",
         latest_closed_5m_hash="b" * 64,
         evaluation_boundary_ms=created_ms,
@@ -63,7 +63,7 @@ def make_source(
         decisions=[],
     )
     signal = FormalSignal.create(
-        identity={"sample": "signal"},
+        identity={"sample": "signal" + opportunity_suffix},
         market_event_id=event.record_id,
         market_id="market-1",
         setup_family="BREAKOUT_RETEST",
@@ -73,7 +73,7 @@ def make_source(
         tier="P1",
         confirmed_at=stamp,
         provenance_id=provenance.record_id,
-        strategy_evaluation_id="evaluation-1",
+        strategy_evaluation_id="evaluation-1" + opportunity_suffix,
     )
     sizing = {
         "reference_equity_usd": "200",
@@ -94,14 +94,14 @@ def make_source(
         "risk_reference_sizing": sizing,
     }
     plan = PlanRecord.create(
-        identity={"sample": "plan"},
+        identity={"sample": "plan" + opportunity_suffix},
         signal_id=signal.record_id,
         created_at=stamp,
         provenance_id=provenance.record_id,
         **terms,
     )
     shadow = ShadowOrder.create(
-        identity={"sample": "shadow"},
+        identity={"sample": "shadow" + opportunity_suffix},
         signal_id=signal.record_id,
         plan_id=plan.record_id,
         market_event_id=event.record_id,
@@ -142,7 +142,9 @@ def make_source(
     return shadow.record_id
 
 
-def make_config(tmp_path: Path, *, scenario: str | None = "1pct") -> OperatorConfig:
+def make_config(
+    tmp_path: Path, *, scenario: str | None = "1pct", mode: str = "POST_ACTIVATION"
+) -> OperatorConfig:
     return OperatorConfig.model_validate(
         {
             "runtime_evidence_path": str(tmp_path / "runtime.sqlite"),
@@ -151,6 +153,7 @@ def make_config(tmp_path: Path, *, scenario: str | None = "1pct") -> OperatorCon
             "allowed_hosts": ["operator.test"],
             "allowed_origin": "https://operator.test",
             "reference_scenario": scenario,
+            "approval_mode": mode,
         }
     )
 
