@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card" id="dashboard" data-csrf="{{ csrf }}" data-revision="{{ revision }}">
+  <h1>Approval package</h1>
+  <p>Approval timing: {{ configured_mode }}</p>
+  <p class="state">{{ "BLOCKED" if blocked else "READY" }} · {{ state }}</p>
+  {% if blocked %}
+  <p role="status">{{ reason }}</p>
+  {% else %}
+  <p>Opportunity: {{ package.activation_opportunity_id }}</p>
+  <dl>
+    <dt>Market / instrument</dt><dd>{{ details.market_id }} / {{ details.instrument_id or "UNAVAILABLE" }}</dd>
+    <dt>Side / setup</dt><dd>{{ details.side }} / {{ details.setup_family }} {{ details.setup_mode or "" }}</dd>
+    <dt>Versions</dt><dd>Strategy {{ package.strategy_version }} · Policy {{ details.policy_version or "UNAVAILABLE" }} · Parameter {{ package.parameter_version }} · Registry {{ details.registry_version }} · Cost {{ details.cost_model_version }}</dd>
+    <dt>Approval mode</dt><dd>{{ details.approval_mode }}</dd>
+    <dt>Expiry (server ms)</dt><dd>{{ package.expires_server_ms }}</dd>
+    <dt>Activation trigger</dt><dd>{{ details.activation_trigger_id }}</dd>
+    <dt>Reference scenario</dt><dd>{{ details.reference_scenario }} — reference only, not account risk authority</dd>
+    <dt>Reference quantity / notional / risk budget</dt><dd>{{ details.reference_quantity }} / {{ details.reference_notional }} / {{ details.reference_risk_budget_usd }}</dd>
+    <dt>Entry / stop / TP1 / TP2</dt><dd>{{ details.planned_entry }} / {{ details.stop }} / {{ details.tp1 }} / {{ details.tp2 or "UNAVAILABLE" }}</dd>
+    <dt>Current executable / BBO / friction / depth</dt><dd>UNAVAILABLE — current guard fails closed</dd>
+    <dt>Material current diff</dt><dd>Current executable economics unavailable; no approval can create an order.</dd>
+  </dl>
+  <details><summary>Exact identity</summary><p class="mono">Package {{ package.package_id }}<br>Hash {{ package.package_hash }}<br>Parent Shadow {{ package.parent_strategy_order_id }}</p></details>
+  <p>Single use. Guard failure is terminal and requires a fresh trigger and approval.</p>
+  <div class="actions" data-shadow="{{ package.parent_strategy_order_id }}" data-package="{{ package.package_id }}" data-hash="{{ package.package_hash }}">
+    <button type="button" data-action="APPROVE" {% if state not in ("AWAITING_HUMAN_APPROVAL", "ARMED_REVIEWABLE") %}disabled{% endif %}>Approve</button>
+    <button type="button" data-action="REJECT" {% if state not in ("AWAITING_HUMAN_APPROVAL", "ARMED_REVIEWABLE") %}disabled{% endif %}>Reject</button>
+  </div>
+  <p id="action-result" role="status"></p>
+  {% endif %}
+</section>
+{% endblock %}

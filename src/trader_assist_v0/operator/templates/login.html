@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card" id="login" data-csrf="{{ csrf }}">
+  <h1>Operator access</h1>
+  <p>Private zero-write review. No order can be submitted here.</p>
+  <label for="access-token">Access token</label>
+  <input id="access-token" type="password" autocomplete="off" spellcheck="false">
+  <button id="login-button" type="button">Open operator view</button>
+  <p id="login-error" role="alert"></p>
+</section>
+{% endblock %}
