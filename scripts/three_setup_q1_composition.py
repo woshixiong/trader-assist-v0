@@ -350,6 +350,7 @@ def _verify_runtime() -> None:
 
 
 def _verify_release(candidate: Path) -> str:
+    candidate = candidate.resolve(strict=True)
     from scripts import check_dependency_lock as locks
     from scripts.verify_exact_release import (
         build_release_manifest,

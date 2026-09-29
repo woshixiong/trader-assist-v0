@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
 import sys
 import tempfile
 import unittest
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, chdir, contextmanager
 from decimal import Decimal
 from pathlib import Path
 from types import ModuleType
@@ -20,6 +21,7 @@ q1 = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = q1
 SPEC.loader.exec_module(q1)
 
+from scripts import check_dependency_lock as locks  # noqa: E402
 from trader_assist_v0.multi_asset_shadow import production  # noqa: E402
 from trader_assist_v0.multi_asset_shadow.planning import CostModel  # noqa: E402
 from trader_assist_v0.multi_asset_shadow.registry import MarketRegistryManager  # noqa: E402
@@ -92,6 +94,33 @@ class FakeBuilder:
 
 
 class QualificationGuards(unittest.TestCase):
+    def test_relative_candidate_lock_paths_do_not_double_root(self):
+        class LocksRead(Exception):
+            pass
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            candidate = root / "candidate"
+            candidate.mkdir()
+            lock_names = ("requirements-runtime.lock", "requirements-nautilus-pilot.lock")
+            for name in lock_names:
+                shutil.copyfile(SCRIPT.parents[1] / name, candidate / name)
+            original_read = locks._read_lock
+            observed: list[Path] = []
+
+            def read_lock(name: str):
+                observed.append(Path(name))
+                return original_read(name)
+
+            with (
+                chdir(root),
+                patch.object(locks, "_read_lock", read_lock),
+                patch.object(locks, "_verify_installed", side_effect=LocksRead),
+            ):
+                with self.assertRaises(LocksRead):
+                    q1._verify_release(Path("candidate"))
+            self.assertEqual(observed, [candidate.resolve() / name for name in lock_names])
+
     def intermediate(self):
         result = q1._safe_result()
         result.update(
