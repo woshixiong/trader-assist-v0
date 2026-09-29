@@ -23,9 +23,6 @@ jobs:
       CANDIDATE_SHA: e3c0c67cc3d787bdf5044bdf598699a78652bdb5
       CANDIDATE_TREE: d5d76f6994ac4b635ddd6ea0647a7050af9a3a49
       CONTROL_HEAD: ${{ inputs.control_head_sha }}
-      RESULT_PATH: ${{ runner.temp }}/three-setup-q1-composition.json
-      CONTRACTS_PROOF: ${{ runner.temp }}/three-setup-q1-contracts-proof.json
-      TERMINAL_PROOF: ${{ runner.temp }}/three-setup-q1-terminal-proof.json
     steps:
       - name: Checkout exact control HEAD
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -42,6 +39,8 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Initialize bounded non-PASS artifact
+        env:
+          RESULT_PATH: ${{ runner.temp }}/three-setup-q1-composition.json
         run: |
           python - <<'PY'
           import json
@@ -83,6 +82,7 @@ jobs:
           ! python -m pip --python "$RUNNER_TEMP/q1-composition-target/bin/python" show trader-assist-v0
       - name: Qualify real public-only composition without provider run
         env:
+          RESULT_PATH: ${{ runner.temp }}/three-setup-q1-composition.json
           PYTHONPATH: ${{ github.workspace }}/candidate/src:${{ github.workspace }}/candidate
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
@@ -107,6 +107,7 @@ jobs:
           PY
       - name: Verify exact-head contracts CI once
         env:
+          CONTRACTS_PROOF: ${{ runner.temp }}/three-setup-q1-contracts-proof.json
           GH_TOKEN: ${{ github.token }}
         run: |
           gh api "repos/$GITHUB_REPOSITORY/commits/$CONTROL_HEAD/check-runs?per_page=100" \
@@ -134,6 +135,7 @@ jobs:
           PY
       - name: Terminal exact identity readback
         env:
+          TERMINAL_PROOF: ${{ runner.temp }}/three-setup-q1-terminal-proof.json
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
         run: |
@@ -160,6 +162,9 @@ jobs:
           PY
       - name: Finalize bounded artifact after both exact-head proofs
         env:
+          RESULT_PATH: ${{ runner.temp }}/three-setup-q1-composition.json
+          CONTRACTS_PROOF: ${{ runner.temp }}/three-setup-q1-contracts-proof.json
+          TERMINAL_PROOF: ${{ runner.temp }}/three-setup-q1-terminal-proof.json
           PR_NUMBER: ${{ inputs.pr_number }}
           PYTHONPATH: ${{ github.workspace }}/candidate/src:${{ github.workspace }}/candidate
           PYTHONDONTWRITEBYTECODE: '1'
@@ -178,5 +183,5 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: three-setup-q1-composition
-          path: ${{ env.RESULT_PATH }}
+          path: ${{ runner.temp }}/three-setup-q1-composition.json
           if-no-files-found: error
