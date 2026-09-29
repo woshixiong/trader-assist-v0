@@ -33,6 +33,7 @@ from typing import Any, cast
 
 BASE_SHA = "e3c0c67cc3d787bdf5044bdf598699a78652bdb5"
 BASE_TREE = "d5d76f6994ac4b635ddd6ea0647a7050af9a3a49"
+Q1_ETH_INSTRUMENT_ID = "ETH-USD-PERP.HYPERLIQUID"
 SCHEMA = "trader-assist-v0/three-setup-q1-qualification/v1"
 SHUTDOWN_GRACE_SECONDS = 30.0
 CLASSES = (
@@ -135,6 +136,7 @@ KNOWN_FAILURES = frozenset(
         "product application shutdown did not complete",
         "candidate preflight equivalence failed",
         "actual composition zero-write proof unavailable",
+        "canonical public provider instrument identity differs",
     }
 )
 
@@ -266,12 +268,44 @@ def _child_failure_class(result: dict[str, Any]) -> str:
     return value if value in CLASSES[1:] else "HARNESS_OR_EXECUTION_SURFACE_GAP"
 
 
+def _provider_binding_valid(
+    expression_instrument_id: str, parsed_bar_instrument_ids: tuple[str, ...] | None = None
+) -> bool:
+    if expression_instrument_id != Q1_ETH_INSTRUMENT_ID:
+        return False
+    return parsed_bar_instrument_ids is None or parsed_bar_instrument_ids == (
+        Q1_ETH_INSTRUMENT_ID,
+        Q1_ETH_INSTRUMENT_ID,
+    )
+
+
+def _assert_provider_binding(
+    expression_instrument_id: str, parsed_bar_instrument_ids: tuple[str, ...] | None = None
+) -> None:
+    if not _provider_binding_valid(expression_instrument_id, parsed_bar_instrument_ids):
+        raise QualificationGap("canonical public provider instrument identity differs")
+
+
+def _external_last_bar_types(expression_instrument_id: str) -> tuple[str, str]:
+    _assert_provider_binding(expression_instrument_id)
+    return (
+        f"{Q1_ETH_INSTRUMENT_ID}-1-MINUTE-LAST-EXTERNAL",
+        f"{Q1_ETH_INSTRUMENT_ID}-5-MINUTE-LAST-EXTERNAL",
+    )
+
+
 def _acceptance_cause(
-    matrix: dict[str, bool], *, provider_ready: bool, old_boundary_available: bool
+    matrix: dict[str, bool],
+    *,
+    provider_ready: bool,
+    old_boundary_available: bool,
+    provider_binding_valid: bool = True,
 ) -> str | None:
     product_claims = ("C11", "C14", "C15", "C16", "D02", "D05", "D06", "D07", "D08", "D09", "D10")
     if any(matrix.get(key) is not True for key in product_claims):
         return "PRODUCT_BLOCKER"
+    if not provider_binding_valid:
+        return "HARNESS_OR_EXECUTION_SURFACE_GAP"
     provider_claims = ("C03", "C04", "C05", "C06", "C07", "C09", "C10", "D03", "D04")
     if (
         not old_boundary_available
@@ -599,11 +633,12 @@ def _fixture(root: Path, sha: str, tree: str) -> dict[str, Any]:
         market_id=identity.market_id,
         dex="MAIN",
         provider_coin="ETH",
-        instrument_id="ETH-PERP.HYPERLIQUID",
+        instrument_id=Q1_ETH_INSTRUMENT_ID,
         expression_id="q1-eth-main",
         instrument_metadata_version="PUBLIC_MAIN_META_V1",
         instrument_metadata_hash=metadata_hash,
     )
+    _assert_provider_binding(expression.instrument_id)
     snapshot = PitUniverseSnapshot.create(observed_at_ns=time.time_ns(), expressions=(expression,))
     manifest = RunManifest.create(
         run_id=f"q1-eth-{sha[:12]}",
@@ -682,10 +717,7 @@ def _preflight_equivalent(
             and release["manifest_sha256"] == env["release_manifest_digest"]
         )
     e4_root = fixture["e4_root"]
-    bars = tuple(
-        f"{fixture['snapshot'].expressions[0].instrument_id}-{minute}-MINUTE-LAST-EXTERNAL"
-        for minute in (1, 5)
-    )
+    bars = _external_last_bar_types(fixture["snapshot"].expressions[0].instrument_id)
     config = SimpleNamespace(
         e4_evidence_root=e4_root,
         e4_manifest_path=e4_root / "run-manifest.json",
@@ -751,6 +783,7 @@ class ObservedNode:
         self.stop_called = False
         self.dispose_called = False
         self.dispose_after_run = False
+        self.provider_binding_valid = False
         self._handle: ObservedHandle | None = None
 
     def add_strategy(self, strategy: object) -> None:
@@ -870,11 +903,12 @@ def _compose(root: Path, fixture: dict[str, Any], adapter: MemoryNotificationAda
         watch=frozenset((market.identity.market_id,)),
         actionable=frozenset((market.identity.market_id,)),
     )
-    bars = tuple(
-        f"{snapshot.expressions[0].instrument_id}-{minute}-MINUTE-LAST-EXTERNAL"
-        for minute in (1, 5)
-    )
+    bars = _external_last_bar_types(snapshot.expressions[0].instrument_id)
     parsed = tuple(BarType.from_str(item) for item in bars)
+    _assert_provider_binding(
+        snapshot.expressions[0].instrument_id,
+        tuple(str(bar.instrument_id) for bar in parsed),
+    )
     if not all(
         str(bar.instrument_id) == snapshot.expressions[0].instrument_id
         and bar.spec.step == minute
@@ -885,6 +919,7 @@ def _compose(root: Path, fixture: dict[str, Any], adapter: MemoryNotificationAda
     ):
         raise QualificationGap("exact external LAST 1m/5m BarTypes are unavailable")
     node = ObservedNode(build_public_data_node())
+    node.provider_binding_valid = True
     capture = build_capture_strategy(
         manifest=manifest,
         snapshot=snapshot,
@@ -1177,6 +1212,7 @@ async def _child_segment(
         "adapter_attempted": list(adapter.attempted),
         "adapter_type": type(adapter).__name__,
         "composition_zero_write": composition,
+        "provider_binding_valid": app.node.provider_binding_valid,
         "release_manifest_digest": build_release_manifest(
             candidate, release_sha=sha, release_tree=tree
         )["manifest_sha256"],
@@ -1285,7 +1321,8 @@ async def qualify(candidate: Path, root: Path, sha: str, tree: str, seconds: int
             "B09": fixture["market"].metadata_hash
             == snapshot.expressions[0].instrument_metadata_hash
             and fixture["market"].identity.market_id == snapshot.expressions[0].market_id,
-            "B10": preflight["e4_registry_pit_bars"],
+            "B10": preflight["e4_registry_pit_bars"]
+            and _provider_binding_valid(snapshot.expressions[0].instrument_id),
             "B11": all(preflight.values()),
         }
     )
@@ -1306,6 +1343,11 @@ async def qualify(candidate: Path, root: Path, sha: str, tree: str, seconds: int
     _mark_stage("CHILD_2")
     second_child = _run_child(candidate, root, 2, sha, tree, seconds)
     second, second_domain = second_child["segment"], second_child["domain"]
+    provider_binding_valid = (
+        _provider_binding_valid(snapshot.expressions[0].instrument_id)
+        and first_child["provider_binding_valid"] is True
+        and second_child["provider_binding_valid"] is True
+    )
     lifecycle = (first["lifecycle"], second["lifecycle"])
     lifecycle_ok = all(all(item.values()) for item in lifecycle)
     reconstructed_rows = second_child["reconstructed_bar_count"]
@@ -1401,7 +1443,10 @@ async def qualify(candidate: Path, root: Path, sha: str, tree: str, seconds: int
         }
     )
     cause = _acceptance_cause(
-        matrix, provider_ready=provider_ready, old_boundary_available=old is not None
+        matrix,
+        provider_ready=provider_ready,
+        old_boundary_available=old is not None,
+        provider_binding_valid=provider_binding_valid,
     )
     adversarial = adversarial_matrix(
         matrix,
@@ -1439,9 +1484,12 @@ async def qualify(candidate: Path, root: Path, sha: str, tree: str, seconds: int
         "pit_snapshot_hash": snapshot.snapshot_hash,
         "registry_version": version.version,
         "registry_hash": version.content_hash,
-        "bar_types": [
-            f"{snapshot.expressions[0].instrument_id}-{n}-MINUTE-LAST-EXTERNAL" for n in (1, 5)
-        ],
+        "bar_types": list(_external_last_bar_types(snapshot.expressions[0].instrument_id)),
+        "provider_binding": {
+            "canonical_instrument_id": Q1_ETH_INSTRUMENT_ID,
+            "first_segment_parsed": first_child["provider_binding_valid"],
+            "second_segment_parsed": second_child["provider_binding_valid"],
+        },
         "public_provider_observation": [
             first["public_provider_observation"],
             second["public_provider_observation"],

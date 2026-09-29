@@ -466,6 +466,11 @@ def test_example_declares_distinct_store_lifetimes() -> None:
     assert example["reason_signal_number"] is None
     assert not any(example["preflight_equivalence"].values())
     assert example["process_segment_restart_evidence"]["lifecycle"] == []
+    assert example["provider_binding"] == {
+        "canonical_instrument_id": "UNRUN",
+        "first_segment_parsed": False,
+        "second_segment_parsed": False,
+    }
 
 
 @pytest.mark.parametrize("segment_index", (1, 2))
@@ -720,3 +725,58 @@ def test_continuity_failure_outranks_provider_incompleteness(failed_claim: str) 
         q1._acceptance_cause(matrix, provider_ready=False, old_boundary_available=False)
         == "PRODUCT_BLOCKER"
     )
+
+
+@pytest.mark.parametrize(
+    ("expression_id", "parsed_bar_ids"),
+    (
+        ("ETH-PERP.HYPERLIQUID", None),
+        (
+            "ETH-PERP.HYPERLIQUID",
+            ("ETH-PERP.HYPERLIQUID", "ETH-PERP.HYPERLIQUID"),
+        ),
+        (
+            "ETH-USD-PERP.HYPERLIQUID",
+            ("ETH-PERP.HYPERLIQUID", "ETH-USD-PERP.HYPERLIQUID"),
+        ),
+    ),
+)
+def test_old_fixture_or_parsed_bar_identity_fails_before_live_segment(
+    expression_id: str, parsed_bar_ids: tuple[str, str] | None
+) -> None:
+    assert not q1._provider_binding_valid(expression_id, parsed_bar_ids)
+    with pytest.raises(q1.QualificationGap, match="provider instrument identity"):
+        q1._assert_provider_binding(expression_id, parsed_bar_ids)
+    if expression_id == "ETH-PERP.HYPERLIQUID":
+        with pytest.raises(q1.QualificationGap):
+            q1._external_last_bar_types(expression_id)
+
+
+def test_canonical_fixture_and_both_external_last_bars_share_one_identity() -> None:
+    instrument = q1.Q1_ETH_INSTRUMENT_ID
+    assert instrument == "ETH-USD-PERP.HYPERLIQUID"
+    bars = q1._external_last_bar_types(instrument)
+    assert bars == (
+        "ETH-USD-PERP.HYPERLIQUID-1-MINUTE-LAST-EXTERNAL",
+        "ETH-USD-PERP.HYPERLIQUID-5-MINUTE-LAST-EXTERNAL",
+    )
+    q1._assert_provider_binding(instrument, (instrument, instrument))
+
+
+def test_known_local_provider_binding_mismatch_is_harness_gap_not_provider_timing() -> None:
+    matrix = dict.fromkeys(q1.MANDATORY, True)
+    valid_timing_gap = q1._acceptance_cause(
+        matrix,
+        provider_ready=False,
+        old_boundary_available=False,
+        provider_binding_valid=True,
+    )
+    assert valid_timing_gap == "PROVIDER_DATA_INCOMPLETE"
+    invalid_binding = q1._acceptance_cause(
+        matrix,
+        provider_ready=False,
+        old_boundary_available=False,
+        provider_binding_valid=q1._provider_binding_valid("ETH-PERP.HYPERLIQUID"),
+    )
+    assert invalid_binding == "HARNESS_OR_EXECUTION_SURFACE_GAP"
+    assert q1.classify(matrix, invalid_binding) == "HARNESS_OR_EXECUTION_SURFACE_GAP"
