@@ -555,6 +555,8 @@ class CaptureSession:
             raise ValueError("structural opening intent segment is ambiguous")
         if not selected <= durable or opening_segment != self._runtime_segment_index:
             state = EvidenceState.PRE_DECISION_WINDOW_INCOMPLETE
+        if self.evidence_store is None:
+            raise ValueError("structural binding requires durable E4 evidence")
         durable_lifecycle = self.evidence_store.load_lifecycle()
         for object_id, kind, parent_id, reason in (
             (opportunity_id, LifecycleKind.OPPORTUNITY, None, "FORMAL_SETUP_ADMITTED"),
