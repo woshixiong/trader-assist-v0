@@ -33,15 +33,15 @@
     "execution_surface": "CODEX_CLI",
     "config": ".codex/config.toml",
     "primary": {
-      "model": "gpt-6-sol",
+      "model": "gpt-6.1-sol",
       "reasoning": "medium"
     },
     "repair_1": {
-      "model": "gpt-6-sol",
+      "model": "gpt-6.1-sol",
       "reasoning": "medium"
     },
     "repair_2_hard_root_cause": {
-      "model": "gpt-6-sol",
+      "model": "gpt-6.1-sol",
       "reasoning": "high"
     },
     "exceptional_control_analysis": {

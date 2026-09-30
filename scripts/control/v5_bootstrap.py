@@ -122,10 +122,10 @@ def verify(args: argparse.Namespace) -> V5BootstrapEvidence:
     if args.active_governance != "V5":
         raise BootstrapError("active governance must be V5 for post-merge V5 packages")
     expected_route = {
-        "PLAN": ("gpt-6-sol", "medium"),
-        "IMPLEMENT": ("gpt-6-sol", "medium"),
-        "REPAIR_1": ("gpt-6-sol", "medium"),
-        "REPAIR_2": ("gpt-6-sol", "high"),
+        "PLAN": ("gpt-6.1-sol", "medium"),
+        "IMPLEMENT": ("gpt-6.1-sol", "medium"),
+        "REPAIR_1": ("gpt-6.1-sol", "medium"),
+        "REPAIR_2": ("gpt-6.1-sol", "high"),
     }
     if args.semantic_phase not in expected_route:
         raise BootstrapError("unsupported post-merge V5 semantic phase")

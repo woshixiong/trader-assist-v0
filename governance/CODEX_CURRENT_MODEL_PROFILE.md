@@ -1,20 +1,22 @@
 # Trader Assist / Trade OS — Codex Current Model Profile
 
 **Status:** V5 ACTIVE
-**Runtime qualification:** BASELINE PASSED; FIRST REAL NON-PRODUCTION CANARY PASSED
+**Runtime qualification:** V5 BASELINE PASSED; GPT-6.1 Sol direct model-ID switch; no standalone requalification requested
 **Execution target:** Codex CLI only
 
 This profile records refreshable model/config intent and the current active V5
-qualification state. The activation merge, baseline CLI/GPT-6/permission/tooling
-qualification, and first real non-production end-to-end V5 canary have passed;
-the manifest may now truthfully claim ACTIVE.
+state. The activation merge, baseline CLI/permission/tooling qualification, and
+first real non-production end-to-end V5 canary remain accepted historical V5
+evidence. The primary Sol model ID was directly switched from GPT-6 Sol to
+GPT-6.1 Sol by current human direction without a standalone requalification
+exercise; ordinary per-launch requested/actual identity drift remains fail-closed.
 
 ## Current V5 routing
 
 ~~~text
-PRIMARY PLAN + IMPLEMENT    gpt-6-sol / medium
-REPAIR 1                    gpt-6-sol / medium
-REPAIR 2 / HARD ROOT CAUSE  gpt-6-sol / high
+PRIMARY PLAN + IMPLEMENT    gpt-6.1-sol / medium
+REPAIR 1                    gpt-6.1-sol / medium
+REPAIR 2 / HARD ROOT CAUSE  gpt-6.1-sol / high
 OPTIONAL EXPLORER           gpt-6-luna / low
 OPTIONAL INTERNAL REVIEW    gpt-6-luna / high
 EXCEPTIONAL CONTROL ANALYSIS
@@ -46,7 +48,7 @@ V5, including:
 - agents.max_concurrent_threads_per_session, excluding the primary thread;
 - sandbox_workspace_write.network_access.
 
-Current OpenAI model documentation exposes the frozen model IDs gpt-6-sol,
+Current OpenAI model documentation exposes the frozen model IDs gpt-6.1-sol,
 gpt-6-luna, and gpt-6-astra and the required reasoning levels.
 
 Static syntax/contracts are only one input. Baseline local runtime identity,
@@ -67,11 +69,12 @@ web_search=disabled
 workspace sandbox network_access=false
 ~~~
 
-The network setting preserves a restrictive default sandbox. Baseline
-qualification has proven the frozen primary GPT-6 Sol route, requested/actual
-identity checks, workspace-write posture, on-request + auto_review behavior,
-authorized GitHub network lifecycle behavior, hook loading, and protected-action
-nonregression without expanding authority.
+The network setting preserves a restrictive default sandbox. Baseline V5
+qualification proved the CLI/permission/network/hook/protected-action posture.
+The earlier GPT-6 Sol route qualification is historical evidence; the current
+GPT-6.1 Sol route was selected by direct human model-ID switch without a separate
+qualification package. Normal launches still require requested/actual model and
+reasoning identity to match or fail closed.
 
 Normal engineering must not require danger-full-access.
 
@@ -79,17 +82,17 @@ Normal engineering must not require danger-full-access.
 
 The manifest-selected post-merge route is fail-closed:
 
-- PLAN and IMPLEMENT use gpt-6-sol / medium;
-- Repair 1 uses gpt-6-sol / medium;
-- Repair 2 / hard root cause uses gpt-6-sol / high;
+- PLAN and IMPLEMENT use gpt-6.1-sol / medium;
+- Repair 1 uses gpt-6.1-sol / medium;
+- Repair 2 / hard root cause uses gpt-6.1-sol / high;
 - GPT-5.6 is not a V5 fallback;
 - optional child routes remain optional and require verifiable actual identity;
 - exceptional gpt-6-astra remains Engineering-Control-only.
 
-The first real non-production V5 Development Package canary has passed, and
-the manifest may therefore truthfully remain `ACTIVE`. The current GPT-6 routing,
-fail-closed identity/permission rules, and protected-action boundaries are
-unchanged.
+The first real non-production V5 Development Package canary remains the accepted
+lifecycle proof point, so the manifest remains `ACTIVE`. The Sol model ID is now
+GPT-6.1 Sol; fail-closed identity/permission rules and protected-action boundaries
+are unchanged.
 
 ## Accepted first real canary telemetry
 

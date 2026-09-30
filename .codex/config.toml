@@ -1,7 +1,7 @@
 #:schema https://developers.openai.com/codex/config-schema.json
 # Trade OS V5 candidate repo defaults.
 # Static configuration does not prove local CLI/model/permission qualification.
-model = "gpt-6-sol"
+model = "gpt-6.1-sol"
 model_reasoning_effort = "medium"
 service_tier = "default"
 model_verbosity = "low"
