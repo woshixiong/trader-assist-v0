@@ -980,6 +980,231 @@ def _record_ids(store: EvidenceStore, record_type: str) -> tuple[str, ...]:
     return tuple(str(row["record_id"]) for row in rows)
 
 
+M1_BINDING_CONTRACT = "M1_THREE_SETUP_CORE_EVIDENCE_BINDING_V1"
+_OUTCOME_120M_MS = 120 * 60 * 1_000
+
+
+@dataclass(frozen=True)
+class CoreBindingFormal:
+    market_event: EvidenceMarketEvent
+    signal: FormalSignal
+    shadow: ShadowOrder
+    horizon_ms: int
+    complete_outcome: bool
+
+
+def _all_prefence_rows(store: EvidenceStore, fence: int) -> tuple[tuple[int, str, str, str], ...]:
+    if type(fence) is not int or fence < 0:
+        raise IntegrationError("activation rowid is invalid")
+    rows = store._connection.execute(
+        """SELECT rowid, record_type, record_id, canonical_hash
+           FROM immutable_records WHERE rowid <= ? ORDER BY rowid""",
+        (fence,),
+    ).fetchall()
+    values: list[tuple[int, str, str, str]] = []
+    prior: int | None = None
+    for row in rows:
+        value = (row["rowid"], row["record_type"], row["record_id"], row["canonical_hash"])
+        if (
+            type(value[0]) is not int or value[0] > fence
+            or (prior is not None and value[0] <= prior)
+            or any(not isinstance(item, str) or not item for item in value[1:])
+        ):
+            raise IntegrationError("ambiguous immutable pre-fence row")
+        prior = value[0]
+        values.append(value)
+    if (fence == 0 and values) or (fence > 0 and prior != fence):
+        raise IntegrationError("activation high-water row is absent or ambiguous")
+    return tuple(values)
+
+
+def _prefence_witness(store: EvidenceStore, fence: int) -> tuple[int, str]:
+    rows = _all_prefence_rows(store, fence)
+    # canonical_json_bytes fixes UTF-8, integer rendering, array framing and field order.
+    return len(rows), sha256_hex(canonical_json_bytes(rows))
+
+
+def capture_binding_activation(
+    store: EvidenceStore, *, release_sha: str, run_id: str, manifest_hash: str
+) -> dict[str, object]:
+    """Capture the immutable high-water while Formal publication is quiescent."""
+    row = store._connection.execute(
+        "SELECT COALESCE(MAX(rowid), 0) AS activation_rowid FROM immutable_records"
+    ).fetchone()
+    if row is None or type(row["activation_rowid"]) is not int:
+        raise IntegrationError("activation high-water query is ambiguous")
+    fence = row["activation_rowid"]
+    count, digest = _prefence_witness(store, fence)
+    again = store._connection.execute(
+        "SELECT COALESCE(MAX(rowid), 0) FROM immutable_records"
+    ).fetchone()
+    if again is None or again[0] != fence:
+        raise IntegrationError("domain changed during binding activation")
+    return {
+        "binding_contract_id": M1_BINDING_CONTRACT,
+        "release_sha": release_sha,
+        "run_id": run_id,
+        "manifest_hash": manifest_hash,
+        "activation_rowid": fence,
+        "pre_fence_all_immutable_row_count": count,
+        "pre_fence_all_immutable_sha256": digest,
+    }
+
+
+def verify_binding_activation(
+    store: EvidenceStore, activation: Mapping[str, object], *,
+    release_sha: str, run_id: str, manifest_hash: str,
+) -> int:
+    if (
+        activation.get("binding_contract_id") != M1_BINDING_CONTRACT
+        or activation.get("release_sha") != release_sha
+        or activation.get("run_id") != run_id
+        or activation.get("manifest_hash") != manifest_hash
+    ):
+        raise IntegrationError("binding activation identity drift")
+    fence = activation.get("activation_rowid")
+    if type(fence) is not int or fence < 0:
+        raise IntegrationError("binding activation fence is invalid")
+    count, digest = _prefence_witness(store, fence)
+    if (
+        activation.get("pre_fence_all_immutable_row_count") != count
+        or activation.get("pre_fence_all_immutable_sha256") != digest
+    ):
+        raise IntegrationError("binding activation all-row witness drift")
+    return fence
+
+
+def eligible_core_binding_formals(
+    store: EvidenceStore, *, fence: int, release_sha: str
+) -> tuple[CoreBindingFormal, ...]:
+    if type(fence) is not int or fence < 0:
+        raise IntegrationError("binding activation fence is invalid")
+    if store._connection.execute("SELECT 1 FROM outcome_transitions LIMIT 1").fetchone():
+        raise IntegrationError("production Outcome transition authority changed")
+    rows = store._connection.execute(
+        """SELECT rowid, record_id, canonical_hash FROM immutable_records
+           WHERE record_type='formal_signal' AND rowid > ? ORDER BY rowid""",
+        (fence,),
+    ).fetchall()
+    result: list[CoreBindingFormal] = []
+    prior = fence
+    for row in rows:
+        if type(row["rowid"]) is not int or row["rowid"] <= prior:
+            raise IntegrationError("eligible FormalSignal rowid is ambiguous")
+        prior = row["rowid"]
+        signal = store.get(str(row["record_id"]))
+        if not isinstance(signal, FormalSignal) or signal.canonical_hash != row["canonical_hash"]:
+            raise IntegrationError("eligible FormalSignal immutable identity drift")
+        event = store.get(str(signal.payload["market_event_id"]))
+        provenance = store.get(str(signal.payload["provenance_id"]))
+        if (
+            not isinstance(event, EvidenceMarketEvent)
+            or not isinstance(provenance, ProvenanceRecord)
+            or provenance.payload.get("release_sha") != release_sha
+            or event.payload.get("market_id") != signal.payload.get("market_id")
+            or event.payload.get("event_kind") != signal.payload.get("setup_family")
+            or event.payload.get("side") != signal.payload.get("side")
+            or signal.payload.get("formalization_status") != "STRATEGY_ELIGIBLE"
+        ):
+            raise IntegrationError("eligible Formal causal provenance drift")
+        shadows = store._query_records(
+            "binding.shadow.by_signal",
+            """SELECT record_id, record_type, canonical_hash, identity_json, payload_json
+               FROM immutable_records WHERE record_type='shadow_order'
+               AND json_extract(payload_json, '$.signal_id')=?""",
+            (signal.record_id,),
+        )
+        if len(shadows) != 1 or not isinstance(shadows[0], ShadowOrder):
+            raise IntegrationError("eligible Formal lacks one retained ShadowOrder")
+        shadow = shadows[0]
+        plan = store.get(str(shadow.payload["plan_id"]))
+        references = store._query_records(
+            "binding.outbox_reference.by_signal",
+            """SELECT record_id, record_type, canonical_hash, identity_json, payload_json
+               FROM immutable_records WHERE record_type='notification_outbox_reference'
+               AND json_extract(payload_json, '$.signal_id')=?""",
+            (signal.record_id,),
+        )
+        if len(references) != 1 or not isinstance(references[0], NotificationOutboxReference):
+            raise IntegrationError("eligible Formal lacks one durable notification reference")
+        publication_id = references[0].payload.get("publication_id")
+        outbox = store._connection.execute(
+            "SELECT kind, content FROM notification_outbox WHERE idempotency_key=?",
+            (publication_id,),
+        ).fetchone()
+        if (
+            not isinstance(publication_id, str)
+            or references[0].payload.get("outbox_reference") != publication_id
+            or references[0].payload.get("published_at") != signal.payload.get("confirmed_at")
+            or outbox is None or outbox["kind"] != "FORMAL_SIGNAL"
+            or not isinstance(outbox["content"], str) or not outbox["content"]
+        ):
+            raise IntegrationError("eligible Formal notification publication drift")
+        if (
+            not isinstance(plan, PlanRecord)
+            or plan.payload.get("signal_id") != signal.record_id
+            or plan.payload.get("provenance_id") != provenance.record_id
+            or shadow.payload.get("market_event_id") != event.record_id
+            or shadow.payload.get("market_id") != signal.payload.get("market_id")
+            or shadow.payload.get("provenance_id") != provenance.record_id
+            or shadow.payload.get("setup_family") != signal.payload.get("setup_family")
+            or shadow.payload.get("side") != signal.payload.get("side")
+            or shadow.payload.get("confirmed_at") != signal.payload.get("confirmed_at")
+            or shadow.payload.get("registry_version") != provenance.payload.get("registry_version")
+            or shadow.payload.get("registry_hash") != provenance.payload.get("registry_hash")
+            or shadow.payload.get("cost_model_version")
+            != provenance.payload.get("cost_model_version")
+            or shadow.payload.get("submission_status") != "NOT_SUBMITTED"
+        ):
+            raise IntegrationError("eligible Formal/Shadow linkage drift")
+        start = shadow.payload.get("outcome_start_ms")
+        if type(start) is not int or start < 0:
+            raise IntegrationError("eligible ShadowOrder lacks Outcome start")
+        confirmed = _parse_timestamp(signal.payload.get("confirmed_at"), "Formal confirmed_at")
+        since_epoch = confirmed - datetime(1970, 1, 1, tzinfo=UTC)
+        confirmed_ms = (
+            since_epoch.days * 86_400_000
+            + since_epoch.seconds * 1_000
+            + since_epoch.microseconds // 1_000
+        )
+        if start != confirmed_ms or since_epoch.microseconds % 1_000:
+            raise IntegrationError("eligible Outcome start contradicts Formal confirmation")
+        horizon = start + _OUTCOME_120M_MS
+        outcomes = store._query_records(
+            "binding.outcome.by_shadow",
+            """SELECT record_id, record_type, canonical_hash, identity_json, payload_json
+               FROM immutable_records WHERE record_type='outcome_envelope'
+               AND json_extract(payload_json, '$.shadow_order_id')=?""",
+            (shadow.record_id,),
+        )
+        latest_at = -1
+        latest_status: tuple[str, bool] | None = None
+        for outcome in outcomes:
+            if not isinstance(outcome, OutcomeEnvelope) or (
+                outcome.payload.get("signal_id") != signal.record_id
+                or outcome.payload.get("original_deadline_ms") != horizon
+                or outcome.payload.get("required_end_ms") != horizon
+            ):
+                raise IntegrationError("eligible Outcome horizon or identity drift")
+            evaluated_at = outcome.payload.get("evaluated_at_ms")
+            status = outcome.payload.get("path_maturity_status")
+            unresolved = outcome.payload.get("unresolved")
+            if (type(evaluated_at) is not int or evaluated_at < 0
+                    or not isinstance(status, str) or type(unresolved) is not bool):
+                raise IntegrationError("eligible Outcome snapshot authority is ambiguous")
+            state = (status, unresolved)
+            if evaluated_at == latest_at and state != latest_status:
+                raise IntegrationError("eligible Outcome snapshots conflict at one time")
+            if evaluated_at > latest_at:
+                latest_at, latest_status = evaluated_at, state
+        complete = (
+            latest_status == (MaturityStatus.MATURE.value, False)
+            and latest_at >= horizon
+        )
+        result.append(CoreBindingFormal(event, signal, shadow, horizon, complete))
+    return tuple(result)
+
+
 class EvidenceOutcomeAdapter(OutcomeSink):
     """Persist outcome snapshots and rebuild Formal 1m demand from Evidence."""
 

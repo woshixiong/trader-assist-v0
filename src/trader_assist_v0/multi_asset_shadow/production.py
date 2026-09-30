@@ -19,11 +19,22 @@ from typing import Any, cast
 
 from trader_assist_v0.contracts.common import canonical_json_bytes
 from trader_assist_v0.nautilus_e4.capture import SubscriptionPolicy
-from trader_assist_v0.nautilus_e4.contracts import PitUniverseSnapshot, RunManifest
+from trader_assist_v0.nautilus_e4.contracts import (
+    POST_TERMINAL_MICRO_NS,
+    PRE_DECISION_RETENTION_NS,
+    PitUniverseSnapshot,
+    RunManifest,
+)
 from trader_assist_v0.nautilus_e4.storage import EvidenceStore as E4EvidenceStore
 
 from .bootstrap import BoundaryReport, MultiAssetProductionBootstrap
 from .e4_markettruth import E4MarketTruthProjection
+from .integration import (
+    M1_BINDING_CONTRACT,
+    capture_binding_activation,
+    eligible_core_binding_formals,
+    verify_binding_activation,
+)
 from .models import ClosedBar, MarketLifecycle
 from .notification_engine import OutboxDispatcher, WebhookDeliveryAdapter
 from .planning import CostModel
@@ -454,6 +465,7 @@ class ThreeSetupProductionApplication:
     async def _dispatch_loop(self, shutdown: asyncio.Event) -> None:
         try:
             while not shutdown.is_set():
+                await self._on_dispatch_tick()
                 now = self.clock()
                 if now.tzinfo is not UTC:
                     raise ThreeSetupProductionError("dispatcher clock must be exact UTC")
@@ -475,6 +487,9 @@ class ThreeSetupProductionApplication:
         except Exception as exc:
             _journal(self.logger, "NOTIFICATION_FAILURE", error_type=type(exc).__name__)
             raise
+
+    async def _on_dispatch_tick(self) -> None:
+        """Composition-specific maintenance before the existing outbox poll."""
 
     async def _close_dispatcher(self) -> None:
         """Close an injected production dispatcher when it exposes a closer."""
@@ -510,6 +525,7 @@ class E4ThreeSetupProductionApplication(ThreeSetupProductionApplication):
         *,
         node: Any,
         capture: Any,
+        snapshot: PitUniverseSnapshot,
         bootstrap: MultiAssetProductionBootstrap,
         dispatcher: OutboxDispatcher,
         clock: Callable[[], datetime],
@@ -527,10 +543,224 @@ class E4ThreeSetupProductionApplication(ThreeSetupProductionApplication):
         )
         self.node = node
         self.capture = capture
+        self._binding_enabled = hasattr(capture, "activate_binding")
+        self.snapshot = snapshot
         self.e4_runtime = cast(E4ThreeSetupRuntime, self.bootstrap.runtime)
         self.projection = cast(E4MarketTruthProjection, self.bootstrap.data_authority)
         self.e4_runtime.on_domain_error = self._on_domain_error
         self.capture.set_admitted_event_observer(self.e4_runtime.offer_admission)
+        self.bootstrap.on_formalized = self._on_formalized
+
+    def _binding_identity(self) -> tuple[str, str]:
+        session = self.capture.capture_session
+        return session.manifest.run_id, session.manifest.manifest_hash
+
+    def _initialize_binding(self) -> None:
+        run_id, manifest_hash = self._binding_identity()
+        release_sha = self.bootstrap.coordinator._release_sha
+        activation = self.capture.binding_activation
+        if activation is None:
+            if self.capture.bound_packages() or self.capture.bound_opening_intents():
+                raise ThreeSetupProductionError("E4 structural state lacks activation fence")
+            activation = capture_binding_activation(
+                self.bootstrap.evidence, release_sha=release_sha,
+                run_id=run_id, manifest_hash=manifest_hash,
+            )
+            self.capture.activate_binding(activation)
+        verify_binding_activation(
+            self.bootstrap.evidence, activation, release_sha=release_sha,
+            run_id=run_id, manifest_hash=manifest_hash,
+        )
+        self._reconcile_binding()
+
+    def _on_formalized(self, _artifacts: object) -> None:
+        # The domain bundle is already durable. Exact retained readback is the
+        # authority for both first delivery and replay.
+        self._reconcile_binding()
+
+    def _reconcile_binding(self) -> None:
+        try:
+            self._reconcile_binding_checked()
+        except Exception:
+            # A contradictory domain authority must stop rich retention even if
+            # the node is still unwinding after this failure.
+            for package_id in self.capture.bound_packages():
+                self.capture.block_bound_package(
+                    package_id=package_id, reason="BINDING_AUTHORITY_FAILED"
+                )
+            raise
+
+    def _reconcile_binding_checked(self) -> None:
+        activation = self.capture.binding_activation
+        if activation is None:
+            raise ThreeSetupProductionError("E4 binding activation is absent")
+        run_id, manifest_hash = self._binding_identity()
+        fence = verify_binding_activation(
+            self.bootstrap.evidence, activation,
+            release_sha=self.bootstrap.coordinator._release_sha,
+            run_id=run_id, manifest_hash=manifest_hash,
+        )
+        formals = eligible_core_binding_formals(
+            self.bootstrap.evidence, fence=fence,
+            release_sha=self.bootstrap.coordinator._release_sha,
+        )
+        selected = self.bootstrap.registry.active() or self.bootstrap.registry.pending_version()
+        if selected is None:
+            raise ThreeSetupProductionError("E4 binding lacks Registry authority")
+        markets = {item.identity.market_id: item for item in selected.markets}
+        expressions = {
+            item.market_id: item for item in self.snapshot.expressions
+        }
+        existing = self.capture.bound_packages()
+        intents = self.capture.bound_opening_intents()
+        eligible_packages = {
+            f"m1:shadow:{formal.shadow.record_id}" for formal in formals
+        }
+        if not (set(existing) | set(intents)) <= eligible_packages:
+            raise ThreeSetupProductionError("E4 binding has lost its Formal domain authority")
+        observed_ns = self.capture.observed_ns()
+        for formal in formals:
+            shadow = formal.shadow
+            market_id = str(shadow.payload["market_id"])
+            if market_id not in markets or market_id not in expressions:
+                raise ThreeSetupProductionError("eligible Formal market lacks E4 expression")
+            package_id = f"m1:shadow:{shadow.record_id}"
+            horizon_ns = formal.horizon_ms * 1_000_000
+            if horizon_ns <= 0 or horizon_ns >= 2**63:
+                raise ThreeSetupProductionError("eligible Formal horizon is outside E4 ns range")
+            prior = existing.get(package_id)
+            intent = intents.get(package_id)
+            if prior is None and intent is None and observed_ns >= horizon_ns:
+                raise ThreeSetupProductionError("eligible Formal missed its E4 opening window")
+            created_ts = (
+                prior["binding"]["created_ts"] if prior is not None
+                else intent["created_ts"] if intent is not None
+                else None
+            )
+            opening: dict[str, Any] = dict(
+                package_id=package_id,
+                opportunity_id=f"m1:event:{formal.market_event.record_id}",
+                thesis_id=f"m1:signal:{formal.signal.record_id}",
+                market_id=market_id,
+                expression_id=expressions[market_id].expression_id,
+                horizon_ns=horizon_ns,
+                release_sha=self.bootstrap.coordinator._release_sha,
+                contract_id=M1_BINDING_CONTRACT,
+            )
+            if created_ts is not None:
+                opening["created_ts"] = created_ts
+            self.capture.open_bound_structural_package(**opening)
+            if observed_ns >= horizon_ns:
+                self.capture.close_bound_window(
+                    package_id=package_id, terminal_ts=horizon_ns,
+                    complete=formal.complete_outcome,
+                    reason=("OUTCOME_MATURE" if formal.complete_outcome else "OUTCOME_INCOMPLETE"),
+                )
+        self.capture.advance_bound_windows()
+
+    def read_core_binding_research(self) -> tuple[dict[str, object], ...]:
+        """Read validated domain/E4 linkage from existing durable authorities."""
+        activation = self.capture.binding_activation
+        assert activation is not None
+        run_id, manifest_hash = self._binding_identity()
+        fence = verify_binding_activation(
+            self.bootstrap.evidence, activation,
+            release_sha=self.bootstrap.coordinator._release_sha,
+            run_id=run_id, manifest_hash=manifest_hash,
+        )
+        formals = eligible_core_binding_formals(
+            self.bootstrap.evidence, fence=fence,
+            release_sha=self.bootstrap.coordinator._release_sha,
+        )
+        session = self.capture.capture_session
+        if session.evidence_store is None:
+            raise ThreeSetupProductionError("E4 research readback lacks durable evidence")
+        admissions = session.evidence_store.load_admissions()
+        lifecycle = session.evidence_store.load_lifecycle()
+        packages = self.capture.bound_packages()
+        checkpoint = session.evidence_store.load_runtime_checkpoint(session.manifest)
+        if checkpoint is None or checkpoint.state.get("binding_activation") != activation:
+            raise ThreeSetupProductionError("E4 binding checkpoint readback conflicts")
+        result: list[dict[str, object]] = []
+        for formal in formals:
+            package_id = f"m1:shadow:{formal.shadow.record_id}"
+            package = packages.get(package_id)
+            if package is None:
+                raise ThreeSetupProductionError("eligible Formal lacks E4 package readback")
+            binding = package["binding"]
+            durable_package = checkpoint.state.get("packages", {}).get(package_id)
+            if not isinstance(durable_package, dict) or durable_package.get("binding") != binding:
+                raise ThreeSetupProductionError("E4 package checkpoint readback conflicts")
+            opportunity_id = f"m1:event:{formal.market_event.record_id}"
+            thesis_id = f"m1:signal:{formal.signal.record_id}"
+            facts = tuple(
+                item for item in lifecycle
+                if item.package_id == package_id
+            )
+            opportunities = tuple(item for item in facts if item.object_id == opportunity_id)
+            theses = tuple(item for item in facts if item.object_id == thesis_id)
+            if (
+                len(opportunities) != 1
+                or not theses
+                or len(facts) != len(opportunities) + len(theses)
+                or opportunities[0].state_ts != binding["created_ts"]
+                or theses[0].state_ts != binding["created_ts"]
+                or opportunities[0].kind.value != "OPPORTUNITY"
+                or theses[0].kind.value != "THESIS"
+                or binding["horizon_ns"] != formal.horizon_ms * 1_000_000
+            ):
+                raise ThreeSetupProductionError("E4 lifecycle or horizon readback conflicts")
+            market_id = formal.signal.payload["market_id"]
+            raw = tuple(
+                item for item in admissions
+                if item.source.market_id == market_id
+                and item.source.data_kind.value in {"BBO", "TRADE"}
+                and binding["created_ts"] - PRE_DECISION_RETENTION_NS
+                <= item.admission_ts <= binding["horizon_ns"] + POST_TERMINAL_MICRO_NS
+            )
+            outcomes = self.bootstrap.evidence._query_records(
+                "binding.research.outcome",
+                """SELECT record_id, record_type, canonical_hash, identity_json, payload_json
+                   FROM immutable_records WHERE record_type='outcome_envelope'
+                   AND json_extract(payload_json, '$.shadow_order_id')=?""",
+                (formal.shadow.record_id,),
+            )
+            plan = self.bootstrap.evidence.get(str(formal.shadow.payload["plan_id"]))
+            provenance = self.bootstrap.evidence.get(str(formal.signal.payload["provenance_id"]))
+            if plan is None or provenance is None:
+                raise ThreeSetupProductionError("Formal plan or provenance readback is absent")
+            result.append({
+                "market_event": formal.market_event.canonical_row(),
+                "formal_signal": formal.signal.canonical_row(),
+                "shadow_order": formal.shadow.canonical_row(),
+                "plan_record": plan.canonical_row(),
+                "provenance": provenance.canonical_row(),
+                "outcomes": [item.canonical_row() for item in outcomes],
+                "package_id": package_id,
+                "binding": binding,
+                "tail": package["tail"],
+                "predecision_state": package["predecision_state"],
+                "lifecycle": [item.model_dump(mode="json") for item in facts],
+                "admissions": [item.model_dump(mode="json") for item in raw],
+                "evidence_state": package["tail"]["evidence_state"],
+                "missingness": (
+                    "ADMISSIONS_ABSENT" if not raw
+                    else "INCOMPLETE" if package["tail"]["evidence_state"] != "COMPLETE"
+                    else None
+                ),
+                "coefficient_level_after_cost_reconstruction": "NOT_PROVEN",
+            })
+        return tuple(result)
+
+    def export_core_binding_research_jsonl(self) -> bytes:
+        return b"".join(
+            canonical_json_bytes(item) + b"\n"
+            for item in self.read_core_binding_research()
+        )
+
+    async def _on_dispatch_tick(self) -> None:
+        if self._binding_enabled:
+            self._reconcile_binding()
 
     def _on_domain_error(self, market_id: str, admission_hash: str, error_type: str) -> None:
         _journal(
@@ -545,6 +775,8 @@ class E4ThreeSetupProductionApplication(ThreeSetupProductionApplication):
         active = self.bootstrap.registry.active() or self.bootstrap.registry.pending_version()
         if active is None:
             raise ThreeSetupProductionError("validated Registry authority is required")
+        if getattr(self, "_binding_enabled", False):
+            self._initialize_binding()
         _journal(
             self.logger,
             "STARTUP",
@@ -735,6 +967,7 @@ def _compose_e4_three_setup_application(
     return E4ThreeSetupProductionApplication(
         node=node,
         capture=capture,
+        snapshot=snapshot,
         bootstrap=bootstrap,
         dispatcher=OutboxDispatcher(outbox=bootstrap.outbox, adapter=notification_adapter),
         clock=clock,

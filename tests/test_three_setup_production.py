@@ -18,7 +18,12 @@ import pytest
 from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
 from trader_assist_v0.multi_asset_shadow import production
 from trader_assist_v0.multi_asset_shadow.data import ClosedBarStore, MultiAssetDataAuthority
-from trader_assist_v0.multi_asset_shadow.integration import IntegrationError
+from trader_assist_v0.multi_asset_shadow.integration import (
+    IntegrationError,
+    capture_binding_activation,
+    eligible_core_binding_formals,
+    verify_binding_activation,
+)
 from trader_assist_v0.multi_asset_shadow.models import (
     AssetClass,
     MarketIdentity,
@@ -34,6 +39,17 @@ from trader_assist_v0.multi_asset_shadow.notification_engine import (
 )
 from trader_assist_v0.multi_asset_shadow.registry import MarketRegistryManager
 from trader_assist_v0.multi_asset_shadow.shadow_records import EvidenceStore
+from trader_assist_v0.multi_asset_shadow.shadow_records.records import (
+    FormalSignal,
+    MarketEvent,
+    NotificationOutboxReference,
+    OutcomeEnvelope,
+    OutcomeTransitionEvidence,
+    PlanRecord,
+    ProvenanceRecord,
+    ShadowOrder,
+)
+from trader_assist_v0.nautilus_e4.capture import SubscriptionPolicy, recover_capture_session
 from trader_assist_v0.nautilus_e4.contracts import (
     MarketExpression,
     PitUniverseSnapshot,
@@ -42,6 +58,363 @@ from trader_assist_v0.nautilus_e4.contracts import (
 from trader_assist_v0.nautilus_e4.storage import EvidenceStore as E4Store
 
 SHA = "a" * 40
+
+
+def _insert_immutable_witness_row(store: EvidenceStore, record_id: str, kind: str) -> int:
+    with store._connection:
+        cursor = store._connection.execute(
+            """INSERT INTO immutable_records
+               (record_id, record_type, canonical_hash, identity_json, payload_json)
+               VALUES (?, ?, ?, '{}', '{}')""",
+            (record_id, kind, sha256_hex(record_id.encode())),
+        )
+    return int(cursor.lastrowid)
+
+
+def _simulate_external_immutable_corruption(store: EvidenceStore) -> None:
+    # Model a store rewrite outside the authorized append-only production path.
+    rows = store._connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='immutable_records'"
+    ).fetchall()
+    with store._connection:
+        for row in rows:
+            name = str(row[0]).replace('"', '""')
+            store._connection.execute(f'DROP TRIGGER "{name}"')
+
+
+def test_binding_activation_all_row_witness_blocks_nonformal_high_water_loss(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path / "evidence.sqlite")
+    _insert_immutable_witness_row(store, "historical-formal", "formal_signal")
+    high = _insert_immutable_witness_row(store, "historical-market", "market_event")
+    activation = capture_binding_activation(
+        store, release_sha=SHA, run_id="run", manifest_hash="manifest",
+    )
+    assert activation["activation_rowid"] == high
+    verify_binding_activation(
+        store, activation, release_sha=SHA, run_id="run", manifest_hash="manifest",
+    )
+    _insert_immutable_witness_row(store, "post-activation", "formal_signal")
+    assert store._connection.execute(
+        "SELECT record_id FROM immutable_records WHERE record_type='formal_signal' AND rowid > ?",
+        (high,),
+    ).fetchall()[0][0] == "post-activation"
+    _simulate_external_immutable_corruption(store)
+    with store._connection:
+        store._connection.execute("DELETE FROM immutable_records WHERE rowid=?", (high,))
+    with pytest.raises(IntegrationError, match="high-water|witness drift"):
+        verify_binding_activation(
+            store, activation, release_sha=SHA, run_id="run", manifest_hash="manifest",
+        )
+    store.close()
+
+
+@pytest.mark.parametrize("mutation", ("delete_reuse", "rewrite", "hash", "type"))
+def test_binding_activation_detects_all_row_rewrites(tmp_path: Path, mutation: str) -> None:
+    store = EvidenceStore(tmp_path / "evidence.sqlite")
+    _insert_immutable_witness_row(store, "old-formal", "formal_signal")
+    high = _insert_immutable_witness_row(store, "old-nonformal", "market_event")
+    activation = capture_binding_activation(
+        store, release_sha=SHA, run_id="run", manifest_hash="manifest",
+    )
+    _simulate_external_immutable_corruption(store)
+    with store._connection:
+        if mutation == "delete_reuse":
+            store._connection.execute("DELETE FROM immutable_records WHERE rowid=?", (high,))
+        elif mutation == "rewrite":
+            store._connection.execute(
+                "UPDATE immutable_records SET rowid=rowid+10 WHERE rowid=?", (high,)
+            )
+        elif mutation == "hash":
+            store._connection.execute(
+                "UPDATE immutable_records SET canonical_hash=? WHERE rowid=?", ("b" * 64, high)
+            )
+        else:
+            store._connection.execute(
+                "UPDATE immutable_records SET record_type=? WHERE rowid=?", ("shadow_order", high)
+            )
+    if mutation == "delete_reuse":
+        _insert_immutable_witness_row(store, "later-crossing-row", "market_event")
+    with pytest.raises(IntegrationError, match="high-water|witness drift"):
+        verify_binding_activation(
+            store, activation, release_sha=SHA, run_id="run", manifest_hash="manifest",
+        )
+    store.close()
+
+
+def test_binding_activation_detects_rowid_changing_vacuum(tmp_path: Path) -> None:
+    store = EvidenceStore(tmp_path / "evidence.sqlite")
+    _insert_immutable_witness_row(store, "first", "market_event")
+    _insert_immutable_witness_row(store, "middle", "market_event")
+    _insert_immutable_witness_row(store, "highest", "market_event")
+    activation = capture_binding_activation(
+        store, release_sha=SHA, run_id="run", manifest_hash="manifest",
+    )
+    _simulate_external_immutable_corruption(store)
+    with store._connection:
+        store._connection.execute("DELETE FROM immutable_records WHERE record_id='middle'")
+    store._connection.execute("VACUUM")
+    with pytest.raises(IntegrationError, match="high-water|witness drift"):
+        verify_binding_activation(
+            store, activation, release_sha=SHA, run_id="run", manifest_hash="manifest",
+        )
+    store.close()
+
+
+@pytest.mark.parametrize("field", (
+    "release_sha", "run_id", "manifest_hash", "activation_rowid",
+    "pre_fence_all_immutable_row_count", "pre_fence_all_immutable_sha256",
+))
+def test_binding_activation_identity_and_witness_corruption_fails_closed(
+    tmp_path: Path, field: str
+) -> None:
+    store = EvidenceStore(tmp_path / "evidence.sqlite")
+    _insert_immutable_witness_row(store, "old-nonformal", "market_event")
+    activation = capture_binding_activation(
+        store, release_sha=SHA, run_id="run", manifest_hash="manifest",
+    )
+    activation[field] = -1 if isinstance(activation[field], int) else "corrupt"
+    with pytest.raises(IntegrationError):
+        verify_binding_activation(
+            store, activation, release_sha=SHA, run_id="run", manifest_hash="manifest",
+        )
+    store.close()
+
+
+def _commit_test_formal(store: EvidenceStore, *, suffix: str) -> FormalSignal:
+    confirmed_at = "1970-01-01T00:16:40Z"
+    market_id = _market().identity.market_id
+    provenance = ProvenanceRecord.create(
+        identity={"test": suffix}, strategy_version="strategy", parameter_version="param",
+        registry_version="registry", registry_hash="hash", cost_model_version="cost",
+        release_sha=SHA, recorded_at="2026-08-16T00:00:00Z",
+    )
+    event = MarketEvent.create(
+        identity={"test": suffix}, market_id=market_id, event_kind="SWEEP_RECLAIM",
+        event_time=confirmed_at, side="LONG",
+    )
+    signal = FormalSignal.create(
+        identity={"test": suffix}, market_event_id=event.record_id,
+        market_id=market_id, setup_family="SWEEP_RECLAIM", setup_mode=None,
+        side="LONG", approval_status="APPROVED", formalization_status="STRATEGY_ELIGIBLE",
+        tier="P0", confirmed_at=confirmed_at,
+        provenance_id=provenance.record_id,
+    )
+    plan = PlanRecord.create(
+        identity={"test": suffix}, signal_id=signal.record_id,
+        planned_entry="100", stop="99", tp1="102", tp2=None,
+        risk_reference_sizing={}, created_at="2026-08-16T00:00:00Z",
+        provenance_id=provenance.record_id,
+    )
+    shadow = ShadowOrder.create(
+        identity={"test": suffix}, signal_id=signal.record_id,
+        plan_id=plan.record_id, market_event_id=event.record_id,
+        market_id=market_id, setup_family="SWEEP_RECLAIM", setup_mode=None,
+        side="LONG", planned_entry="100", stop="99", tp1="102", tp2=None,
+        risk_reference_sizing={}, provenance_id=provenance.record_id,
+        strategy_version="strategy", parameter_version="param", registry_version="registry",
+        registry_hash="hash", cost_model_version="cost",
+        created_at=confirmed_at, confirmed_at=confirmed_at,
+        submission_status="NOT_SUBMITTED",
+        outcome_start_ms=1_000_000,
+    )
+    publication_id = f"publication-{suffix}"
+    reference = NotificationOutboxReference.create(
+        identity={"signal_id": signal.record_id, "publication_id": publication_id},
+        signal_id=signal.record_id, publication_id=publication_id,
+        published_at=confirmed_at, outbox_reference=publication_id,
+    )
+    with store._controlled_transaction():
+        for record in (provenance, event, signal, plan, shadow, reference):
+            store._write_one(record)
+        store._connection.execute(
+            """INSERT INTO notification_outbox
+               (idempotency_key, schema_version, kind, content, created_at,
+                state, next_attempt_at)
+               VALUES (?, '1', 'FORMAL_SIGNAL', '{}', ?, 'PENDING', ?)""",
+            (publication_id, confirmed_at, confirmed_at),
+        )
+    return signal
+
+
+def test_binding_cohort_excludes_same_release_history_and_repairs_postfence_commit(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path / "evidence.sqlite")
+    old = _commit_test_formal(store, suffix="historical")
+    activation = capture_binding_activation(
+        store, release_sha=SHA, run_id="run", manifest_hash="manifest",
+    )
+    current = _commit_test_formal(store, suffix="after-activation")
+    # Simulate a domain commit followed by E4 bind failure: no E4 fact is
+    # written here. Restart reuses the original fence and finds the bundle.
+    fence = verify_binding_activation(
+        store, activation, release_sha=SHA, run_id="run", manifest_hash="manifest",
+    )
+    eligible = eligible_core_binding_formals(store, fence=fence, release_sha=SHA)
+    assert [item.signal.record_id for item in eligible] == [current.record_id]
+    assert old.record_id not in [item.signal.record_id for item in eligible]
+    assert [item.signal.record_id for item in eligible_core_binding_formals(
+        store, fence=fence, release_sha=SHA,
+    )] == [current.record_id]
+    store.close()
+
+
+def test_binding_research_readback_exposes_linked_missingness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, _node, _capture = _e4_composition_fixture(tmp_path, monkeypatch)
+    domain = EvidenceStore(config.evidence_store_path)
+    assert config.e4_evidence_root is not None
+    e4 = E4Store(config.e4_evidence_root)
+    manifest, snapshot = e4.load_manifest(), e4.load_snapshot()
+    activation = capture_binding_activation(
+        domain, release_sha=SHA, run_id=manifest.run_id,
+        manifest_hash=manifest.manifest_hash,
+    )
+    market_id = _market().identity.market_id
+    policy = SubscriptionPolicy(
+        discovery=frozenset({market_id}), watch=frozenset({market_id}),
+        actionable=frozenset({market_id}),
+    )
+    session = recover_capture_session(
+        manifest=manifest,
+        policy=policy,
+        raw_sink=None, evidence_store=e4,
+    )
+    session.activate_binding(activation)
+    signal = _commit_test_formal(domain, suffix="after-activation")
+    formal = eligible_core_binding_formals(
+        domain, fence=int(activation["activation_rowid"]), release_sha=SHA,
+    )[0]
+    # The domain transaction committed but the first E4 bind failed before
+    # intent. The original activation survives and startup scans the same row.
+    session = recover_capture_session(
+        manifest=manifest, policy=policy, raw_sink=None, evidence_store=e4,
+    )
+    assert session.binding_activation == activation
+    session.open_bound_structural_package(
+        package_id=f"m1:shadow:{formal.shadow.record_id}",
+        opportunity_id=f"m1:event:{formal.market_event.record_id}",
+        thesis_id=f"m1:signal:{signal.record_id}",
+        market_id=market_id, expression_id=snapshot.expressions[0].expression_id,
+        created_ts=1_000_000_000_000, horizon_ns=formal.horizon_ms * 1_000_000,
+        release_sha=SHA, contract_id=production.M1_BINDING_CONTRACT,
+    )
+    session.open_bound_structural_package(
+        package_id=f"m1:shadow:{formal.shadow.record_id}",
+        opportunity_id=f"m1:event:{formal.market_event.record_id}",
+        thesis_id=f"m1:signal:{signal.record_id}",
+        market_id=market_id, expression_id=snapshot.expressions[0].expression_id,
+        created_ts=1_000_000_000_000, horizon_ns=formal.horizon_ms * 1_000_000,
+        release_sha=SHA, contract_id=production.M1_BINDING_CONTRACT,
+    )
+    assert len(e4.load_lifecycle()) == 2
+    app = object.__new__(production.E4ThreeSetupProductionApplication)
+    app.capture = SimpleNamespace(
+        capture_session=session, binding_activation=session.binding_activation,
+        bound_packages=session.bound_packages,
+    )
+    app.bootstrap = SimpleNamespace(
+        evidence=domain, coordinator=SimpleNamespace(_release_sha=SHA),
+    )
+    readback = app.read_core_binding_research()
+    assert len(readback) == 1
+    assert readback[0]["formal_signal"]["record_id"] == signal.record_id
+    assert readback[0]["missingness"] == "ADMISSIONS_ABSENT"
+    assert b'"ADMISSIONS_ABSENT"' in app.export_core_binding_research_jsonl()
+    domain.close()
+
+
+@pytest.mark.parametrize("transition_count", (0, 1, 2))
+def test_binding_horizon_rejects_retained_transition_authority(
+    tmp_path: Path, transition_count: int
+) -> None:
+    store = EvidenceStore(tmp_path / "evidence.sqlite")
+    activation = capture_binding_activation(
+        store, release_sha=SHA, run_id="run", manifest_hash="manifest",
+    )
+    signal = _commit_test_formal(store, suffix="current")
+    shadow_id = store._connection.execute(
+        "SELECT record_id FROM shadow_orders WHERE signal_id=?", (signal.record_id,)
+    ).fetchone()[0]
+    if transition_count:
+        with store._controlled_transaction():
+            for index in range(transition_count):
+                transition = OutcomeTransitionEvidence.create(
+                    identity={"index": index}, transition_id=f"transition-{index}",
+                    shadow_order_id=shadow_id, market_id=_market().identity.market_id,
+                    kind="ACCEPTED_REENTRY", occurred_at_ms=1_100_000 + index,
+                    reference_price="100", payload_hash="a" * 64,
+                )
+                store._write_one(transition)
+        with pytest.raises(IntegrationError, match="transition authority changed"):
+            eligible_core_binding_formals(
+                store, fence=int(activation["activation_rowid"]), release_sha=SHA,
+            )
+    else:
+        assert eligible_core_binding_formals(
+            store, fence=int(activation["activation_rowid"]), release_sha=SHA,
+        )[0].horizon_ms == 1_000_000 + 120 * 60_000
+    store.close()
+
+
+def test_binding_extended_outcome_fails_closed_without_transition_authority(tmp_path: Path) -> None:
+    store = EvidenceStore(tmp_path / "evidence.sqlite")
+    activation = capture_binding_activation(
+        store, release_sha=SHA, run_id="run", manifest_hash="manifest",
+    )
+    signal = _commit_test_formal(store, suffix="current")
+    shadow_id = store._connection.execute(
+        "SELECT record_id FROM shadow_orders WHERE signal_id=?", (signal.record_id,)
+    ).fetchone()[0]
+    outcome = OutcomeEnvelope.create(
+        identity={"test": "extended"}, signal_id=signal.record_id,
+        shadow_order_id=shadow_id, observed_at="2026-08-16T00:00:00Z",
+        path_maturity_status="MATURE", unresolved=False,
+        evaluated_at_ms=9_000_000, original_deadline_ms=8_200_000,
+        required_end_ms=9_000_000,
+    )
+    with store._controlled_transaction():
+        store._write_one(outcome)
+    with pytest.raises(IntegrationError, match="Outcome horizon"):
+        eligible_core_binding_formals(
+            store, fence=int(activation["activation_rowid"]), release_sha=SHA,
+        )
+    store.close()
+
+
+@pytest.mark.parametrize("latest_status,expected_complete", (("GAPPED", False), ("MATURE", True)))
+def test_binding_latest_outcome_controls_completeness(
+    tmp_path: Path, latest_status: str, expected_complete: bool
+) -> None:
+    store = EvidenceStore(tmp_path / "evidence.sqlite")
+    activation = capture_binding_activation(
+        store, release_sha=SHA, run_id="run", manifest_hash="manifest",
+    )
+    signal = _commit_test_formal(store, suffix="current")
+    shadow_id = store._connection.execute(
+        "SELECT record_id FROM shadow_orders WHERE signal_id=?", (signal.record_id,)
+    ).fetchone()[0]
+    with store._controlled_transaction():
+        for evaluated_at, status, unresolved in (
+            (8_200_000, "MATURE", False),
+            (8_200_001, latest_status, latest_status != "MATURE"),
+        ):
+            store._write_one(OutcomeEnvelope.create(
+                identity={"evaluated_at": evaluated_at}, signal_id=signal.record_id,
+                shadow_order_id=shadow_id, observed_at="1970-01-01T00:16:40Z",
+                path_maturity_status=status, unresolved=unresolved,
+                evaluated_at_ms=evaluated_at, original_deadline_ms=8_200_000,
+                required_end_ms=8_200_000,
+            ))
+    formal = eligible_core_binding_formals(
+        store, fence=int(activation["activation_rowid"]), release_sha=SHA,
+    )[0]
+    assert formal.horizon_ms == 8_200_000
+    assert formal.complete_outcome is expected_complete
+    store.close()
 
 
 class Clock:

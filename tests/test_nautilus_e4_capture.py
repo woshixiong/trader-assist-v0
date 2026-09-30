@@ -11,6 +11,7 @@ from trader_assist_v0.nautilus_e4.capture import (
     SubscriptionPolicy,
     denominator_states,
     preserve_decision_under_late_evidence,
+    recover_capture_session,
 )
 from trader_assist_v0.nautilus_e4.causal import CausalAdmissionLedger
 from trader_assist_v0.nautilus_e4.contracts import (
@@ -30,6 +31,7 @@ from trader_assist_v0.nautilus_e4.contracts import (
     StreamHealth,
     TailPhase,
 )
+from trader_assist_v0.nautilus_e4.storage import EvidenceStore as E4Store
 from trader_assist_v0.nautilus_e4.storage import InMemoryCatalogSink
 from trader_assist_v0.nautilus_g4.catalog_bridge import derive_thesis_valid
 from trader_assist_v0.vnext_g4.contracts import CausalLineage, DerivationStatus
@@ -142,6 +144,171 @@ def _session(*, batch_size: int = 128, sink: InMemoryCatalogSink | None = None) 
         raw_sink=sink or InMemoryCatalogSink(),
         batch_size=batch_size,
     )
+
+
+def _bound_session(tmp_path):
+    store = E4Store(tmp_path / "e4")
+    store.initialize(_manifest(), _snapshot())
+    session = recover_capture_session(
+        manifest=_manifest(), policy=_policy(), raw_sink=None, evidence_store=store,
+    )
+    session.activate_binding({
+        "binding_contract_id": "test", "activation_rowid": 0,
+        "release_sha": "a" * 40, "run_id": _manifest().run_id,
+        "manifest_hash": _manifest().manifest_hash,
+    })
+    session.ingest(_event(1), admission_ts=BASE + 1_000_000_001)
+    return store, session
+
+
+def _bound_open(session):
+    return session.open_bound_structural_package(
+        package_id="m1:shadow:test", opportunity_id="m1:event:test",
+        thesis_id="m1:signal:test", market_id=MARKET_A,
+        expression_id="expr-ETH", created_ts=BASE + 2_000_000_000,
+        horizon_ns=BASE + 7_202_000_000_000,
+        release_sha="a" * 40, contract_id="test",
+    )
+
+
+@pytest.mark.parametrize("cut", ("intent", "prebuffer", "opportunity", "thesis", "package"))
+def test_bound_open_recovers_each_durable_cut_once(tmp_path, monkeypatch, cut):
+    store, session = _bound_session(tmp_path)
+    if cut == "intent":
+        method, trigger = session._persist_if_configured, "STRUCTURAL_OPEN_INTENT"
+        def crash(*, reason):
+            method(reason=reason)
+            if reason == trigger:
+                raise RuntimeError("crash cut")
+        monkeypatch.setattr(session, "_persist_if_configured", crash)
+    elif cut == "prebuffer":
+        method = store.append_admission_batch
+        def crash(batch):
+            method(batch)
+            raise RuntimeError("crash cut")
+        monkeypatch.setattr(store, "append_admission_batch", crash)
+    elif cut in {"opportunity", "thesis"}:
+        method = store.append_lifecycle
+        count = 0
+        def crash(records):
+            nonlocal count
+            method(records)
+            count += 1
+            if count == (1 if cut == "opportunity" else 2):
+                raise RuntimeError("crash cut")
+        monkeypatch.setattr(store, "append_lifecycle", crash)
+    else:
+        method = session._persist_if_configured
+        def crash(*, reason):
+            method(reason=reason)
+            if reason == "STRUCTURAL_BOUND_OPENED":
+                raise RuntimeError("crash cut")
+        monkeypatch.setattr(session, "_persist_if_configured", crash)
+    with pytest.raises(RuntimeError, match="crash cut"):
+        _bound_open(session)
+    monkeypatch.undo()
+    recovered = recover_capture_session(
+        manifest=_manifest(), policy=_policy(), raw_sink=None, evidence_store=store,
+    )
+    _bound_open(recovered)
+    _bound_open(recovered)
+    facts = store.load_lifecycle()
+    assert len([fact for fact in facts if fact.object_id == "m1:event:test"]) == 1
+    assert len([fact for fact in facts if fact.object_id == "m1:signal:test"]) == 1
+    with pytest.raises(ValueError, match="conflict"):
+        recovered.open_bound_structural_package(
+            package_id="m1:shadow:test", opportunity_id="m1:event:other",
+            thesis_id="m1:signal:test", market_id=MARKET_A,
+            expression_id="expr-ETH", created_ts=BASE + 2_000_000_000,
+            horizon_ns=BASE + 7_202_000_000_000,
+            release_sha="a" * 40, contract_id="test",
+        )
+
+
+@pytest.mark.parametrize("complete", (True, False))
+def test_bound_horizon_closes_with_absolute_tails(tmp_path, complete):
+    _store, session = _bound_session(tmp_path)
+    _bound_open(session)
+    session._packages["m1:shadow:test"].predecision_state = EvidenceState.COMPLETE
+    horizon = BASE + 7_202_000_000_000
+    tail = session.close_bound_window(
+        package_id="m1:shadow:test", terminal_ts=horizon,
+        complete=complete, reason="OUTCOME_MATURE" if complete else "OUTCOME_INCOMPLETE",
+    )
+    assert tail.terminal_ts == horizon
+    assert tail.micro_deadline_ts == horizon + POST_TERMINAL_MICRO_NS
+    assert tail.context_deadline_ts == horizon + POST_TERMINAL_CONTEXT_NS
+    session.advance(now_ns=horizon + POST_TERMINAL_CONTEXT_NS + 1)
+    assert session.tail_statuses["m1:shadow:test"].micro_deadline_ts == (
+        horizon + POST_TERMINAL_MICRO_NS
+    )
+    assert tail.evidence_state is (
+        EvidenceState.COMPLETE if complete else EvidenceState.GAPPED
+    )
+    if complete:
+        later = session.close_bound_window(
+            package_id="m1:shadow:test", terminal_ts=horizon,
+            complete=False, reason="OUTCOME_INCOMPLETE",
+        )
+        assert later.evidence_state is EvidenceState.GAPPED
+        assert later.terminal_ts == horizon
+
+
+def test_bound_restart_keeps_original_deadline_and_incomplete_evidence(tmp_path):
+    store, session = _bound_session(tmp_path)
+    _bound_open(session)
+    restarted = recover_capture_session(
+        manifest=_manifest(), policy=_policy(), raw_sink=None, evidence_store=store,
+    )
+    horizon = BASE + 7_202_000_000_000
+    tail = restarted.close_bound_window(
+        package_id="m1:shadow:test", terminal_ts=horizon,
+        complete=True, reason="OUTCOME_MATURE",
+    )
+    assert tail.terminal_ts == horizon
+    assert tail.evidence_state is EvidenceState.GAPPED
+    assert tail.micro_deadline_ts == horizon + POST_TERMINAL_MICRO_NS
+
+
+def test_bound_active_valid_requires_later_admitted_bbo(tmp_path):
+    store, session = _bound_session(tmp_path)
+    _bound_open(session)
+    package = session._packages["m1:shadow:test"]
+    package.predecision_state = EvidenceState.COMPLETE
+    assert all("ACTIVE_VALID" not in fact.reason_codes for fact in store.load_lifecycle())
+    admitted = session.ingest(
+        _event(3, kind=DataKind.BBO), admission_ts=BASE + 3_000_000_001,
+    ).event
+    assert admitted is not None
+    session.observe_bound_validity(package_id="m1:shadow:test", event=admitted)
+    assert admitted.source_identity in {item.source_identity for item in store.load_admissions()}
+    facts = [fact for fact in store.load_lifecycle() if "ACTIVE_VALID" in fact.reason_codes]
+    assert len(facts) == 1
+    assert facts[0].state_ts == admitted.admission_ts
+    session.observe_bound_validity(package_id="m1:shadow:test", event=admitted)
+    assert len([
+        fact for fact in store.load_lifecycle() if "ACTIVE_VALID" in fact.reason_codes
+    ]) == 1
+
+
+def test_bound_missing_selected_prebuffer_is_incomplete_without_backfill(tmp_path, monkeypatch):
+    store, session = _bound_session(tmp_path)
+    session.ingest(
+        _event(
+            2, kind=DataKind.BBO,
+            ts_event=BASE + 1_400_000_000, ts_init=BASE + 1_400_000_001,
+        ),
+        admission_ts=BASE + 1_500_000_000,
+    )
+    session._watch_started[MARKET_A] = (
+        BASE + 2_000_000_000 - PRE_DECISION_RETENTION_NS,
+        session.ledger.continuity_epoch,
+    )
+    monkeypatch.setattr(store, "append_admission_batch", lambda _batch: None)
+    state = _bound_open(session)
+    assert state is EvidenceState.PRE_DECISION_WINDOW_INCOMPLETE
+    assert store.load_admissions() == ()
+    assert session.bound_packages()["m1:shadow:test"]["predecision_state"] == state.value
 
 
 def _admit(session: CaptureSession, event: SourceEvent, at: int | None = None):

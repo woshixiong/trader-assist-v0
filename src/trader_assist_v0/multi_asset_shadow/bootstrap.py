@@ -144,6 +144,7 @@ class MultiAssetProductionBootstrap:
         self.clock = clock
         self.sleep = sleep
         self._lock = asyncio.Lock()
+        self.on_formalized: Callable[[FormalizationArtifacts], None] | None = None
 
     @classmethod
     def compose(
@@ -485,6 +486,8 @@ class MultiAssetProductionBootstrap:
                         )
                         if isinstance(result, FormalizationArtifacts):
                             formalized.append(result)
+                            if self.on_formalized is not None:
+                                self.on_formalized(result)
                         elif isinstance(result, PlanRejection):
                             rejections.append((pending.market_id, result))
 
@@ -521,6 +524,8 @@ class MultiAssetProductionBootstrap:
             )
             if isinstance(result, FormalizationArtifacts):
                 artifacts.append(result)
+                if self.on_formalized is not None:
+                    self.on_formalized(result)
         await self.advance_outcomes_async()
         return tuple(artifacts)
 

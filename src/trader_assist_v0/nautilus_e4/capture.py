@@ -140,6 +140,7 @@ class _PackageState:
     predecision_state: EvidenceState
     tail: TailStatus
     terminal_decision: DecisionState | None = None
+    binding: dict[str, Any] | None = None
 
 
 class CaptureSession:
@@ -190,6 +191,8 @@ class CaptureSession:
             set() if durable_source_ids is None else set(durable_source_ids)
         )
         self._packages: dict[str, _PackageState] = {}
+        self._binding_activation: dict[str, Any] | None = None
+        self._opening_intents: dict[str, dict[str, Any]] = {}
         self._market_packages: dict[str, set[str]] = defaultdict(set)
         self._lifecycle_ids = set() if seen_lifecycle_ids is None else set(seen_lifecycle_ids)
         self._latest_lifecycle_records = (
@@ -239,6 +242,37 @@ class CaptureSession:
     @property
     def tail_statuses(self) -> dict[str, TailStatus]:
         return {package_id: state.tail for package_id, state in self._packages.items()}
+
+    @property
+    def binding_activation(self) -> dict[str, Any] | None:
+        return deepcopy(self._binding_activation)
+
+    def activate_binding(self, activation: dict[str, Any]) -> None:
+        if self._binding_activation is not None:
+            if self._binding_activation != activation:
+                raise ValueError("binding activation identity changed")
+            return
+        if self.evidence_store is None:
+            raise ValueError("binding activation requires durable E4 evidence")
+        self._binding_activation = deepcopy(activation)
+        self.persist_runtime_checkpoint(reason="STRUCTURAL_BINDING_ACTIVATED")
+        loaded = self.evidence_store.load_runtime_checkpoint(self.manifest)
+        if loaded is None or loaded.state.get("binding_activation") != activation:
+            raise ValueError("binding activation checkpoint readback differs")
+
+    def bound_packages(self) -> dict[str, dict[str, Any]]:
+        return {
+            package_id: {
+                "binding": deepcopy(package.binding),
+                "tail": package.tail.model_dump(mode="json"),
+                "predecision_state": package.predecision_state.value,
+            }
+            for package_id, package in self._packages.items()
+            if package.binding is not None
+        }
+
+    def bound_opening_intents(self) -> dict[str, dict[str, Any]]:
+        return deepcopy(self._opening_intents)
 
     def ingest(
         self, source: SourceEvent, *, admission_ts: int, historical: bool = False
@@ -302,6 +336,17 @@ class CaptureSession:
             return True
         for package_id in self._market_packages[event.source.market_id]:
             package = self._packages[package_id]
+            if package.binding is not None:
+                if package.binding.get("blocked"):
+                    continue
+                deadline = package.binding["horizon_ns"] + (
+                    POST_TERMINAL_MICRO_NS
+                    if event.source.data_kind in {DataKind.BBO, DataKind.TRADE}
+                    else POST_TERMINAL_CONTEXT_NS
+                )
+                if event.admission_ts <= deadline:
+                    return True
+                continue
             if package.tail.terminal_ts is None:
                 return True
             if event.source.data_kind in {DataKind.BBO, DataKind.TRADE}:
@@ -402,6 +447,238 @@ class CaptureSession:
         )
         self._persist_if_configured(reason="ACTIONABLE_LIFECYCLE_OPENED")
         return state
+
+    def open_bound_structural_package(
+        self,
+        *,
+        package_id: str,
+        opportunity_id: str,
+        thesis_id: str,
+        market_id: str,
+        expression_id: str,
+        created_ts: int,
+        horizon_ns: int,
+        release_sha: str,
+        contract_id: str,
+    ) -> EvidenceState:
+        """Resume one source-bound open from its durable intent and append history."""
+        if self._binding_activation is None:
+            raise ValueError("structural binding is not activated")
+        if (self._binding_activation.get("binding_contract_id") != contract_id
+                or self._binding_activation.get("release_sha") != release_sha
+                or self._binding_activation.get("run_id") != self.manifest.run_id
+                or self._binding_activation.get("manifest_hash") != self.manifest.manifest_hash):
+            raise ValueError("structural opening conflicts with activation authority")
+        if (type(created_ts) is not int or type(horizon_ns) is not int
+                or created_ts <= 0 or horizon_ns <= created_ts or horizon_ns >= 2**63):
+            raise ValueError("structural horizon must follow observed opening")
+        if self.policy.tier(market_id) not in {CaptureTier.WATCH, CaptureTier.ACTIONABLE}:
+            raise ValueError("structural binding requires Watch/Actionable policy")
+        identity = {
+            "package_id": package_id,
+            "opportunity_id": opportunity_id,
+            "thesis_id": thesis_id,
+            "market_id": market_id,
+            "expression_id": expression_id,
+            "created_ts": created_ts,
+            "horizon_ns": horizon_ns,
+            "release_sha": release_sha,
+            "contract_id": contract_id,
+            "run_id": self.manifest.run_id,
+        }
+        intent = self._opening_intents.get(package_id)
+        package = self._packages.get(package_id)
+        if intent is not None:
+            if package is not None:
+                raise ValueError("structural intent and package checkpoint conflict")
+            if any(intent.get(key) != value for key, value in identity.items()):
+                raise ValueError("structural opening intent conflicts with replay")
+        elif package is not None:
+            if (
+                package.binding is None
+                or package.opportunity_id != opportunity_id
+                or package.thesis_id != thesis_id
+                or package.market_id != market_id
+                or package.expression_id != expression_id
+                or any(
+                package.binding.get(key) != value for key, value in identity.items()
+                )
+            ):
+                raise ValueError("structural package conflicts with replay")
+            return package.predecision_state
+        else:
+            if opportunity_id in self._lifecycle_ids or thesis_id in self._lifecycle_ids:
+                raise ValueError("structural lifecycle identity lacks opening intent")
+            available = tuple(
+                item for item in self._prebuffers[market_id]
+                if created_ts - PRE_DECISION_RETENTION_NS <= item.admission_ts <= created_ts
+            )
+            started = self._watch_started.get(market_id)
+            bbo = self.ledger.bbo_validity(
+                market_id=market_id, expression_id=expression_id
+            )
+            complete = (
+                started is not None
+                and started[0] <= created_ts - PRE_DECISION_RETENTION_NS
+                and started[1] == self.ledger.continuity_epoch
+                and bbo.valid
+                and bbo.continuity_epoch == self.ledger.continuity_epoch
+                and all(item.continuity_state is EvidenceState.COMPLETE for item in available)
+            )
+            intent = {
+                **identity,
+                "predecision_state": (
+                    EvidenceState.COMPLETE
+                    if complete else EvidenceState.PRE_DECISION_WINDOW_INCOMPLETE
+                ).value,
+                "prebuffer_source_ids": [item.source_identity for item in available],
+                "opening_segment_index": self._runtime_segment_index,
+            }
+            self._opening_intents[package_id] = intent
+            self._persist_if_configured(reason="STRUCTURAL_OPEN_INTENT")
+            self._queue_durable(available)
+            self._flush_if_full(force=True)
+        assert intent is not None
+        selected = set(intent["prebuffer_source_ids"])
+        self._queue_durable(
+            item for item in self._prebuffers[market_id]
+            if item.source_identity in selected
+        )
+        self._flush_if_full(force=True)
+        durable = (
+            {item.source_identity for item in self.evidence_store.load_admissions()}
+            if self.evidence_store is not None else self._durable_source_ids
+        )
+        state = EvidenceState(intent["predecision_state"])
+        opening_segment = intent.get("opening_segment_index")
+        if type(opening_segment) is not int or opening_segment > self._runtime_segment_index:
+            raise ValueError("structural opening intent segment is ambiguous")
+        if not selected <= durable or opening_segment != self._runtime_segment_index:
+            state = EvidenceState.PRE_DECISION_WINDOW_INCOMPLETE
+        durable_lifecycle = self.evidence_store.load_lifecycle()
+        for object_id, kind, parent_id, reason in (
+            (opportunity_id, LifecycleKind.OPPORTUNITY, None, "FORMAL_SETUP_ADMITTED"),
+            (thesis_id, LifecycleKind.THESIS, opportunity_id, "THESIS_CREATED"),
+        ):
+            prior = self._latest_lifecycle_records.get(object_id)
+            if prior is not None:
+                opening = [item for item in durable_lifecycle if item.object_id == object_id]
+                if (
+                    not opening or opening[0].kind is not kind
+                    or opening[0].status is not LifecycleStatus.ACTIVE
+                    or opening[0].state_ts != created_ts
+                    or opening[0].reason_codes != (reason,)
+                    or opening[0].evidence_state.value != intent["predecision_state"]
+                    or prior.kind is not kind or prior.parent_id != parent_id
+                    or prior.package_id != package_id or prior.market_id != market_id
+                    or prior.expression_id != expression_id or prior.run_id != self.manifest.run_id
+                    or prior.state_ts < created_ts
+                ):
+                    raise ValueError("durable structural lifecycle conflicts with intent")
+                continue
+            self.record_lifecycle(
+                object_id=object_id, parent_id=parent_id, package_id=package_id,
+                market_id=market_id, expression_id=expression_id, kind=kind,
+                status=LifecycleStatus.ACTIVE, state_ts=created_ts,
+                reason_codes=(reason,), evidence_state=state, _persist_checkpoint=False,
+            )
+        if package is None:
+            package = _PackageState(
+                market_id=market_id, expression_id=expression_id,
+                opportunity_id=opportunity_id, thesis_id=thesis_id,
+                predecision_state=state, tail=TailStatus(package_id=package_id),
+                binding={**identity, "blocked": False},
+            )
+            self._packages[package_id] = package
+            self._market_packages[market_id].add(package_id)
+        self._opening_intents.pop(package_id, None)
+        self._persist_if_configured(reason="STRUCTURAL_BOUND_OPENED")
+        return state
+
+    def observe_bound_validity(self, *, package_id: str, event: AdmittedEvent) -> None:
+        package = self._packages[package_id]
+        binding = package.binding
+        if binding is None or event.source.market_id != package.market_id:
+            raise ValueError("validity observation mismatches structural package")
+        if binding.get("blocked") or package.tail.terminal_ts is not None:
+            return
+        if event.source.data_kind not in {DataKind.BBO, DataKind.TRADE}:
+            return
+        if (
+            event.admission_ts <= binding["created_ts"]
+            or event.admission_ts > binding["horizon_ns"]
+        ):
+            return
+        if event.continuity_state is not EvidenceState.COMPLETE:
+            return
+        if package.predecision_state is not EvidenceState.COMPLETE:
+            return
+        latest = self._latest_lifecycle_records[package.thesis_id]
+        if "ACTIVE_VALID" in latest.reason_codes:
+            return
+        bbo = self.ledger.bbo_validity(
+            market_id=package.market_id, expression_id=package.expression_id
+        )
+        if not bbo.valid:
+            return
+        self._flush_if_full(force=True, checkpoint_reason="BOUND_ADMISSION_BEFORE_VALIDITY")
+        if (
+            self.evidence_store is None
+            or event.admission_hash not in {
+                item.admission_hash for item in self.evidence_store.load_admissions()
+            }
+        ):
+            raise ValueError("ACTIVE_VALID lacks durable admitted source")
+        self.record_lifecycle(
+            object_id=package.thesis_id, parent_id=package.opportunity_id,
+            package_id=package_id, market_id=package.market_id,
+            expression_id=package.expression_id, kind=LifecycleKind.THESIS,
+            status=LifecycleStatus.ACTIVE, state_ts=event.admission_ts,
+            reason_codes=("ACTIVE_VALID",), evidence_state=package.predecision_state,
+        )
+
+    def block_bound_package(self, *, package_id: str, reason: str) -> None:
+        package = self._packages[package_id]
+        if package.binding is None:
+            raise ValueError("package is not structural-bound")
+        package.binding["blocked"] = True
+        package.tail = package.tail.model_copy(update={
+            "evidence_state": EvidenceState.GAPPED,
+            "reason_codes": (*package.tail.reason_codes, reason),
+        })
+        self._persist_if_configured(reason="STRUCTURAL_BINDING_BLOCKED")
+
+    def close_bound_window(
+        self, *, package_id: str, terminal_ts: int, complete: bool, reason: str
+    ) -> TailStatus:
+        package = self._packages[package_id]
+        if package.binding is None or terminal_ts != package.binding["horizon_ns"]:
+            raise ValueError("structural terminal differs from authoritative horizon")
+        if package.tail.terminal_ts is not None:
+            if package.tail.terminal_ts != terminal_ts:
+                raise ValueError("structural terminal replay conflicts")
+            if not complete and package.tail.evidence_state is EvidenceState.COMPLETE:
+                package.tail = package.tail.model_copy(update={
+                    "evidence_state": EvidenceState.GAPPED,
+                    "reason_codes": (*package.tail.reason_codes, "LATER_OUTCOME_INCOMPLETE"),
+                })
+                self._persist_if_configured(reason="STRUCTURAL_OUTCOME_INCOMPLETE")
+            return package.tail
+        state = package.predecision_state
+        if (
+            not complete or state is not EvidenceState.COMPLETE
+            or package.tail.evidence_state in {EvidenceState.GAPPED, EvidenceState.INTERRUPTED}
+        ):
+            state = EvidenceState.GAPPED
+        package.tail = TailStatus(
+            package_id=package_id, terminal_ts=terminal_ts,
+            micro_deadline_ts=terminal_ts + POST_TERMINAL_MICRO_NS,
+            context_deadline_ts=terminal_ts + POST_TERMINAL_CONTEXT_NS,
+            micro_phase=TailPhase.ACTIVE, context_phase=TailPhase.ACTIVE,
+            evidence_state=state, reason_codes=("RESEARCH_WINDOW_CLOSED", reason),
+        )
+        self._persist_if_configured(reason="STRUCTURAL_RESEARCH_WINDOW_CLOSED")
+        return package.tail
 
     def open_structural_package(
         self,
@@ -874,6 +1151,8 @@ class CaptureSession:
     def checkpoint(self) -> dict[str, Any]:
         return {
             "schema_version": "E4_CAPTURE_SESSION_CHECKPOINT_V1",
+            "binding_activation": deepcopy(self._binding_activation),
+            "opening_intents": deepcopy(self._opening_intents),
             "ledger": self.ledger.checkpoint(),
             "lifecycle_ids": sorted(self._lifecycle_ids),
             "latest_lifecycle_records": {
@@ -893,6 +1172,7 @@ class CaptureSession:
                         if package.terminal_decision is None
                         else package.terminal_decision.value
                     ),
+                    "binding": deepcopy(package.binding),
                 }
                 for package_id, package in self._packages.items()
             },
@@ -981,6 +1261,8 @@ class CaptureSession:
             admission_epoch=admission_epoch or manifest.admission_epoch,
         )
         packages = checkpoint["packages"]
+        session._binding_activation = deepcopy(checkpoint.get("binding_activation"))
+        session._opening_intents = deepcopy(checkpoint.get("opening_intents", {}))
         interrupted_packages = 0
         for package_id, raw in packages.items():
             tail = TailStatus.model_validate(raw["tail"])
@@ -1018,6 +1300,7 @@ class CaptureSession:
                     if raw["terminal_decision"] is None
                     else DecisionState(raw["terminal_decision"])
                 ),
+                binding=deepcopy(raw.get("binding")),
             )
             session._packages[package_id] = state
             session._market_packages[state.market_id].add(package_id)
