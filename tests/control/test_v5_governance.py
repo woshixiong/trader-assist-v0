@@ -140,13 +140,20 @@ def test_context_io_document_invariants_are_required(
     with pytest.raises(checker.CheckFailure):
         checker.check_documents(ROOT)
 
+
 def test_ci_turn_continuity_contract_is_present() -> None:
     value = (ROOT / ".agents/skills/trade-os-v5-ci/SKILL.md").read_text(encoding="utf-8")
     for needle in (
         "CI_WAITER_STARTED=>CURRENT_ENGINEERING_TURN_MUST_REMAIN_ACTIVE_UNTIL_TERMINAL",
         "USER_REPROMPT_FOR_CI_COMPLETION=PROHIBITED",
         "OUTER_TURN_GITHUB_CI_POLLING=PROHIBITED",
+        "OUTER_TURN_WAIT=DETERMINISTIC_SLEEP_60_TO_120_SECONDS",
         "OUTER_TURN_RESULT_READBACK=SPARSE_ONLY",
-        "TURN_CONTINUITY_UNAVAILABLE=>PAUSED_CAPABILITY_WITH_EXPLICIT_HANDOFF",
+        "REMOTE_RELAY_UNAVAILABLE=>DETERMINISTIC_TOOL_INTERNAL_EXACT_HEAD_WAIT",
+        "INTERMEDIATE_CI_STATES=>NOT_RETURNED_TO_MODEL",
+        "TERMINAL_RESULT_ONLY=>MODEL_RESUME",
+        "NO_COMPLETION_CALLBACK_REQUIRED",
+        "WAIT_WINDOW_EXPIRED=>CONTINUE_SAME_TURN_WITH_NEW_DETERMINISTIC_WAIT_WINDOW",
+        "WAIT_PRIMITIVE_UNAVAILABLE=>PAUSED_CAPABILITY_WITH_EXPLICIT_HANDOFF",
     ):
         assert needle in value
