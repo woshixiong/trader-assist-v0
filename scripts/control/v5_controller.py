@@ -64,6 +64,7 @@ class Stage(StrEnum):
     DONE = "DONE"
     PLAN_REVISE = "PLAN_REVISE"
     CONTROL_REPLAN = "CONTROL_REPLAN"
+    MECHANICAL_REPAIR = "MECHANICAL_REPAIR"
     REPAIR_1 = "REPAIR_1"
     REPAIR_2 = "REPAIR_2"
     PAUSED_QUOTA = "PAUSED_QUOTA"
@@ -83,6 +84,7 @@ NORMAL = {
     Stage.PUBLISH: {Stage.CI_WAIT},
     Stage.CI_WAIT: {
         Stage.OPTIONAL_INTERNAL_REVIEW,
+        Stage.MECHANICAL_REPAIR,
         Stage.REPAIR_1,
         Stage.REPAIR_2,
         Stage.CONTROL_REPLAN,
@@ -92,6 +94,7 @@ NORMAL = {
     Stage.FINAL_REVIEW_READY: {Stage.FINAL_INDEPENDENT_REVIEW},
     Stage.FINAL_INDEPENDENT_REVIEW: {Stage.HUMAN_CLOSEOUT_GATE, Stage.STALE_REBIND},
     Stage.HUMAN_CLOSEOUT_GATE: {Stage.DONE},
+    Stage.MECHANICAL_REPAIR: {Stage.LOCAL_VALIDATE, Stage.CONTROL_REPLAN},
     Stage.REPAIR_1: {Stage.LOCAL_VALIDATE, Stage.CONTROL_REPLAN},
     Stage.REPAIR_2: {Stage.LOCAL_VALIDATE, Stage.CONTROL_REPLAN},
     Stage.STALE_REBIND: {Stage.LOCAL_VALIDATE, Stage.CONTROL_REPLAN},
@@ -254,6 +257,8 @@ def route_ci(state: PackageState, observation: CiObservation) -> Stage:
         return Stage.OPTIONAL_INTERNAL_REVIEW
     if observation.classification == "TRANSIENT_OR_KNOWN_FLAKE":
         return Stage.CI_WAIT if observation.rerun_count < 1 else Stage.PAUSED_TRANSPORT
+    if observation.classification == "DETERMINISTIC_MECHANICAL":
+        return Stage.MECHANICAL_REPAIR
     if observation.classification == "SEMANTIC":
         return (
             Stage.REPAIR_1
