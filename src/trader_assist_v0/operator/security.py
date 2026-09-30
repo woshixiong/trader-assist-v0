@@ -7,9 +7,11 @@ import binascii
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import time
 from dataclasses import dataclass
+from urllib.parse import parse_qsl
 
 from fastapi import HTTPException, Request
 from starlette.responses import Response
@@ -18,6 +20,10 @@ from .contracts import OperatorConfig, OperatorCredential
 
 COOKIE_NAME = "__Host-ts8-session"
 SESSION_SECONDS = 1800
+FORM_BODY_LIMIT = 4096
+FORM_FIELDS = frozenset({
+    "csrf_token", "shadow_id", "package_id", "package_hash", "action_key", "action",
+})
 
 
 def _b64(data: bytes) -> str:
@@ -93,6 +99,52 @@ class OperatorSecurity:
             raise HTTPException(403, "invalid CSRF token")
         if request.headers.get("content-type", "").split(";", 1)[0] != "application/json":
             raise HTTPException(415, "JSON required")
+
+    async def check_action_form(self, request: Request, session: Session) -> dict[str, str]:
+        """Verify the one bounded HTML mutation transport in the security owner."""
+        origins = request.headers.getlist("origin")
+        if len(origins) != 1 or origins[0] != self.config.allowed_origin:
+            raise HTTPException(403, "invalid origin")
+        media_types = request.headers.getlist("content-type")
+        if media_types != ["application/x-www-form-urlencoded"]:
+            raise HTTPException(415, "form media type required")
+        if request.headers.get("content-encoding") not in (None, "identity"):
+            raise HTTPException(415, "encoded form body unsupported")
+        declared = request.headers.get("content-length")
+        if declared is not None:
+            try:
+                if int(declared) < 0 or int(declared) > FORM_BODY_LIMIT:
+                    raise HTTPException(413, "form body too large")
+            except ValueError as exc:
+                raise HTTPException(400, "invalid content length") from exc
+        body = bytearray()
+        async for chunk in request.stream():
+            if len(body) + len(chunk) > FORM_BODY_LIMIT:
+                raise HTTPException(413, "form body too large")
+            body.extend(chunk)
+        try:
+            encoded = body.decode("ascii")
+            if re.search(r"%(?![0-9A-Fa-f]{2})", encoded):
+                raise ValueError("malformed percent escape")
+            pairs = parse_qsl(
+                encoded, keep_blank_values=True, strict_parsing=True,
+                encoding="utf-8", errors="strict", max_num_fields=len(FORM_FIELDS),
+            )
+        except (UnicodeError, ValueError) as exc:
+            raise HTTPException(400, "malformed form body") from exc
+        fields: dict[str, str] = {}
+        for name, value in pairs:
+            if name not in FORM_FIELDS or name in fields or not value.isascii() or (
+                not value.isprintable()
+            ):
+                raise HTTPException(400, "invalid form fields")
+            fields[name] = value
+        if set(fields) != FORM_FIELDS:
+            raise HTTPException(400, "incomplete form fields")
+        csrf = fields.pop("csrf_token")
+        if not hmac.compare_digest(csrf, session.csrf):
+            raise HTTPException(403, "invalid CSRF token")
+        return fields
 
     def verify_access_token(self, supplied: str) -> None:
         supplied_hash = hashlib.sha256(supplied.encode("utf-8")).digest()

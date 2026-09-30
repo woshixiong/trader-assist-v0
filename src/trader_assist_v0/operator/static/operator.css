@@ -1,20 +1,32 @@
-:root { color-scheme: dark; font: 16px/1.45 system-ui, sans-serif; background: #101820; color: #f4f7f8; }
+:root { color-scheme: light dark; font: 15px/1.4 system-ui, sans-serif; background: Canvas; color: CanvasText; }
 * { box-sizing: border-box; }
 body { margin: 0; }
-.shell { width: min(100%, 54rem); margin: auto; padding: 1rem; }
-header { display: flex; flex-wrap: wrap; gap: .6rem 1.2rem; align-items: center; justify-content: space-between; padding: .7rem 0 1.5rem; }
-.mode, .state { color: #93e2d6; font-weight: 700; }
-.card { background: #1b2933; border: 1px solid #47606b; border-radius: .8rem; padding: clamp(1rem, 4vw, 2rem); }
-h1 { margin-top: 0; font-size: 1.5rem; }
-dl { display: grid; grid-template-columns: minmax(9rem, 13rem) minmax(0, 1fr); gap: .6rem 1rem; }
-dt { color: #b9cbd0; }
-dd { margin: 0; overflow-wrap: anywhere; }
+.shell { width: min(100%, 76rem); margin: auto; padding: clamp(.65rem, 2vw, 1.5rem); }
+.site-head, .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.site-head { padding: .5rem 0 1rem; border-bottom: 1px solid color-mix(in srgb, CanvasText 30%, Canvas); }
+.site-head span { font-size: .8rem; font-weight: 700; }
+.status-strip { display: flex; flex-wrap: wrap; gap: .4rem 1.5rem; padding: .9rem 0; font-size: .85rem; }
+.status-strip span { display: inline-flex; gap: .35rem; }
+.status-blocked { color: #bd3434; }
+.status-unknown { color: #9d6100; }
+.status-pass { color: #147a46; }
+.card { border: 1px solid color-mix(in srgb, CanvasText 30%, Canvas); border-radius: .6rem; padding: clamp(.8rem, 2vw, 1.4rem); margin: .7rem 0; background: color-mix(in srgb, Canvas 95%, CanvasText); }
+.card h1 { margin: 0; font-size: clamp(1.2rem, 2vw, 1.7rem); }
+.card-head p { margin: .2rem 0; }
+.countdown { display: grid; text-align: right; min-width: 9rem; }
+.countdown strong { font-size: 1.3rem; font-variant-numeric: tabular-nums; }
+.gate { display: flex; flex-wrap: wrap; gap: .5rem 1rem; padding: .7rem; border: 2px solid currentColor; border-radius: .4rem; margin-top: 1rem; }
+.facts { display: grid; grid-template-columns: minmax(10rem, 15rem) minmax(0, 1fr); gap: .45rem 1rem; }
+dt { opacity: .78; } dd { margin: 0; overflow-wrap: anywhere; }
 .mono { font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
-input, button { font: inherit; min-height: 2.8rem; border-radius: .4rem; }
-input { display: block; width: 100%; margin: .5rem 0 1rem; padding: .5rem; }
-button { border: 0; padding: .6rem 1rem; cursor: pointer; background: #8ce0d0; color: #091a20; font-weight: 700; }
-button:disabled { cursor: not-allowed; opacity: .5; }
-.actions { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: 1.5rem; }
-.actions button { flex: 1 1 10rem; }
-details { margin-top: 1rem; }
-@media (max-width: 36rem) { dl { display: block; } dt { margin-top: .8rem; } .actions { display: grid; grid-template-columns: 1fr; } }
+.actions { display: flex; gap: .7rem; margin-top: 1rem; }
+button, input { font: inherit; } button { min-height: 2.8rem; padding: .55rem 1.1rem; border-radius: .35rem; cursor: pointer; } button:disabled { opacity: .5; cursor: not-allowed; }
+.actions button { flex: 1; }
+.reasons { display: flex; flex-wrap: wrap; gap: .2rem 1.4rem; padding-left: 1.2rem; }
+.events ol { max-height: 12rem; overflow: auto; }
+.notice { border-left: 4px solid #bd3434; padding: .6rem; }
+input:not([type=hidden]) { display: block; width: 100%; margin: .5rem 0 1rem; min-height: 2.8rem; }
+a { color: inherit; } :focus-visible { outline: 3px solid #137bbf; outline-offset: 3px; }
+@media (prefers-color-scheme: dark) { .status-blocked { color: #ff8982; } .status-unknown { color: #f3c46f; } .status-pass { color: #85dfad; } }
+@media (prefers-reduced-motion: no-preference) { .arrived { animation: arrival 1.4s ease-out; } @keyframes arrival { from { box-shadow: 0 0 0 .45rem #85dfad; } to { box-shadow: 0 0 0 0 transparent; } } }
+@media (max-width: 42rem) { .site-head, .card-head { display: grid; } .countdown { text-align: left; } .facts { display: block; } dt { margin-top: .7rem; } .actions { display: grid; grid-template-columns: 1fr 1fr; } .reasons { display: block; } }

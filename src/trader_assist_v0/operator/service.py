@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import secrets
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -18,6 +19,7 @@ from starlette.templating import Jinja2Templates
 
 from .approval import OperatorBlocked, OperatorEngine
 from .contracts import OperatorConfig, OperatorCredential
+from .dashboard import build_dashboard
 from .security import OperatorSecurity
 
 ROOT = Path(__file__).resolve().parent
@@ -124,34 +126,53 @@ def create_app(
     @app.get("/", response_class=HTMLResponse)
     async def dashboard(request: Request) -> HTMLResponse:
         session = security.read(request, authenticated=True)
-        try:
-            projection, state = operator.latest()
-            package = projection.package
-            details = package.ts8_details or {}
-            blocked = state not in {"AWAITING_HUMAN_APPROVAL", "ARMED_REVIEWABLE"}
-            reason = (
-                "Old package consumed. A fresh causal trigger, package and Human "
-                "approval are required."
-                if state == "WAITING_FRESH_TRIGGER"
-                else "Package is terminal or unavailable for Human action."
-            ) if blocked else ""
-        except OperatorBlocked as exc:
-            package, details, state, blocked, reason = None, {}, "BLOCKED", True, str(exc)
         return templates.TemplateResponse(
-            request,
-            "dashboard.html",
-            {
-                "package": package,
-                "details": details,
-                "state": state,
-                "blocked": blocked,
-                "reason": reason,
-                "csrf": session.csrf,
-                "revision": operator.revision(),
-                "recent_terminal": operator.recent_terminal(),
-                "configured_mode": config.approval_mode,
-            },
+            request, "dashboard.html", dashboard_context(session.csrf)
         )
+
+    def dashboard_context(csrf: str, *, notice: str = "") -> dict[str, object]:
+        model = build_dashboard(operator, config)
+        package = model.package
+        blocked = model.package_gate != "PASS"
+        reason = (
+            "Old package consumed. A fresh causal trigger, package and Human "
+            "approval are required."
+            if model.state == "WAITING_FRESH_TRIGGER"
+            else "Package is terminal or unavailable for Human action."
+        ) if blocked else ""
+        try:
+            revision = operator.revision()
+            recent_terminal = operator.recent_terminal()
+        except Exception:
+            revision, recent_terminal = -1, None
+        return {
+            "model": model, "package": package, "details": model.details,
+            "state": model.state, "blocked": blocked, "reason": reason,
+            "csrf": csrf, "revision": revision, "recent_terminal": recent_terminal,
+            "configured_mode": config.approval_mode, "action_key": secrets.token_urlsafe(24),
+            "notice": notice,
+        }
+
+    @app.post("/action", response_class=HTMLResponse)
+    async def form_action(request: Request) -> Response:
+        session = security.read(request, authenticated=True)
+        fields = await security.check_action_form(request, session)
+        try:
+            body = ActionRequest.model_validate(fields)
+        except ValidationError as exc:
+            raise HTTPException(422, "invalid action body") from exc
+        try:
+            operator.human_action_record(
+                shadow_id=body.shadow_id, package_id=body.package_id,
+                package_hash=body.package_hash, action_key=body.action_key,
+                action=body.action, session_id=session.session_id,
+            )
+        except OperatorBlocked as exc:
+            return templates.TemplateResponse(
+                request, "dashboard.html", dashboard_context(session.csrf, notice=str(exc)),
+                status_code=409,
+            )
+        return RedirectResponse("/", status_code=303)
 
     @app.post("/api/action")
     async def action(request: Request) -> JSONResponse:
