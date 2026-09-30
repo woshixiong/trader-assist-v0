@@ -14,8 +14,16 @@ RAW_SUCCESS_LOG_INGESTION=PROHIBITED_BY_DEFAULT
 EXACT_HEAD_BINDING=REQUIRED
 ~~~
 
-Use the V5-B deterministic waiter/controller once qualified. Verify PR head
-before waiting and at terminal readback. Head drift invalidates old CI/review.
+Use the V5-B deterministic waiter/controller once qualified. The preferred
+local exact-head wait surface is `scripts/control/v5_ci_waiter.py`. When Remote
+Desktop Commander is the execution relay, launch this waiter as one long-running
+local process rather than repeatedly polling process/status output through
+Remote Desktop Commander. Preserve the existing `gh run watch` path as the
+immediate fallback if the waiter is unavailable or returns a fail-closed
+transport/query result.
+
+Verify PR head before waiting and at terminal readback. Head drift invalidates
+old CI/review.
 
 Classify a failed result before retry/mutation as transient/known flake,
 deterministic mechanical, semantic, infrastructure/transport, or unresolved.

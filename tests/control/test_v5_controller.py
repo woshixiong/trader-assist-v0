@@ -119,6 +119,25 @@ def test_canonical_readback_ci_and_push_reconciliation():
     )
     assert (
         controller.route_ci(
+            state(),
+            controller.CiObservation("e" * 40, "failure", "DETERMINISTIC_MECHANICAL"),
+        )
+        == controller.Stage.MECHANICAL_REPAIR
+    )
+    mechanical = controller.transition(
+        state(current_stage="CI_WAIT", resume_stage="CI_WAIT", semantic_repair_count=1),
+        controller.Stage.MECHANICAL_REPAIR,
+        event_key="mechanical",
+    )
+    assert mechanical.semantic_repair_count == 1
+    assert (
+        controller.transition(
+            mechanical, controller.Stage.LOCAL_VALIDATE, event_key="mechanical-validated"
+        ).current_stage
+        == controller.Stage.LOCAL_VALIDATE
+    )
+    assert (
+        controller.route_ci(
             state(semantic_repair_count=2),
             controller.CiObservation("e" * 40, "failure", "SEMANTIC"),
         )
