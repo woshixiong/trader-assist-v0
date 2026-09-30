@@ -14,11 +14,13 @@ import resource
 from collections.abc import Callable, Sequence
 from importlib.metadata import version
 from pathlib import Path
+from threading import RLock
 from typing import TYPE_CHECKING, Any, Protocol, Self, cast
 
 from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
 
 from .capture import CaptureSession, SubscriptionPolicy, recover_capture_session
+from .causal import AdmissionOutcome
 from .contracts import (
     NAUTILUS_VERSION,
     AdmittedEvent,
@@ -233,6 +235,7 @@ class NautilusE4CaptureStrategy(Strategy):
             raw_sink=None,
             evidence_store=self._store,
         )
+        self._capture_lock = RLock()
         self._continuity_streams: set[tuple[str, DataKind]] = {
             (market_id, data_kind)
             for market_id in self._policy.watch | self._policy.actionable
@@ -279,7 +282,8 @@ class NautilusE4CaptureStrategy(Strategy):
         created_ts: int,
         active_valid_ts: int,
     ) -> EvidenceState:
-        return self._session.open_structural_package(
+        with self._capture_lock:
+            return self._session.open_structural_package(
             package_id=package_id,
             opportunity_id=opportunity_id,
             thesis_id=thesis_id,
@@ -287,7 +291,69 @@ class NautilusE4CaptureStrategy(Strategy):
             expression_id=expression_id,
             created_ts=created_ts,
             active_valid_ts=active_valid_ts,
-        )
+            )
+
+    def activate_binding(self, activation: dict[str, Any]) -> None:
+        with self._capture_lock:
+            self._session.activate_binding(activation)
+
+    @property
+    def binding_activation(self) -> dict[str, Any] | None:
+        with self._capture_lock:
+            return self._session.binding_activation
+
+    def bound_packages(self) -> dict[str, dict[str, Any]]:
+        with self._capture_lock:
+            return self._session.bound_packages()
+
+    def bound_opening_intents(self) -> dict[str, dict[str, Any]]:
+        with self._capture_lock:
+            return self._session.bound_opening_intents()
+
+    def observed_ns(self) -> int:
+        return cast(int, self.clock.timestamp_ns())
+
+    def open_bound_structural_package(self, **identity: Any) -> EvidenceState:
+        with self._capture_lock:
+            identity.setdefault("created_ts", self.clock.timestamp_ns())
+            return self._session.open_bound_structural_package(**identity)
+
+    def close_bound_window(
+        self, *, package_id: str, terminal_ts: int, complete: bool, reason: str
+    ) -> None:
+        with self._capture_lock:
+            self._session.close_bound_window(
+                package_id=package_id, terminal_ts=terminal_ts,
+                complete=complete, reason=reason,
+            )
+            self._session.advance(now_ns=self.clock.timestamp_ns())
+
+    def block_bound_package(self, *, package_id: str, reason: str) -> None:
+        with self._capture_lock:
+            self._session.block_bound_package(package_id=package_id, reason=reason)
+
+    def advance_bound_windows(self) -> None:
+        with self._capture_lock:
+            self._session.advance(now_ns=self.clock.timestamp_ns())
+
+    def _admit_and_observe(
+        self, source: SourceEvent, *, admission_ts: int, durable_reason: str | None = None
+    ) -> AdmissionOutcome:
+        with self._capture_lock:
+            outcome = self._session.ingest(source, admission_ts=admission_ts)
+            if durable_reason is not None:
+                self._session.persist_durable_evidence(reason=durable_reason)
+            self._observe_bound_validity(outcome)
+            return outcome
+
+    def _observe_bound_validity(self, outcome: AdmissionOutcome) -> None:
+        event = outcome.event
+        if event is not None:
+            bound = self._session.bound_packages()
+            for package_id, package in bound.items():
+                binding = package["binding"]
+                if binding["market_id"] == event.source.market_id:
+                    self._session.observe_bound_validity(package_id=package_id, event=event)
 
     def _observe_admission(self, outcome: object) -> None:
         observer = self._admitted_event_observer
@@ -510,15 +576,17 @@ class NautilusE4CaptureStrategy(Strategy):
             self._save_warmup_state()
             return
         for bar, source in zip(ordered, sources, strict=True):
-            outcome = self._session.ingest(
-                source,
-                admission_ts=max(bar.ts_init, self.clock.timestamp_ns()),
-                historical=True,
-            )
-            # The domain observer can never see a bar that E4 cannot replay.
-            self._session.persist_durable_evidence(reason="HISTORICAL_BAR_ADMITTED")
+            with self._capture_lock:
+                outcome = self._session.ingest(
+                    source,
+                    admission_ts=max(bar.ts_init, self.clock.timestamp_ns()),
+                    historical=True,
+                )
+                # The domain observer can never see a bar that E4 cannot replay.
+                self._session.persist_durable_evidence(reason="HISTORICAL_BAR_ADMITTED")
             self._observe_admission(outcome)
-        self._session.persist_durable_evidence(reason="COMPLETED_HISTORICAL_BARS_ADMITTED")
+        with self._capture_lock:
+            self._session.persist_durable_evidence(reason="COMPLETED_HISTORICAL_BARS_ADMITTED")
         stream.mark_durable()
         self._save_warmup_state()
 
@@ -545,7 +613,7 @@ class NautilusE4CaptureStrategy(Strategy):
             true_network_receive_ts=None,
             payload=payload,
         )
-        outcome = self._session.ingest(
+        outcome = self._admit_and_observe(
             source, admission_ts=max(tick.ts_init, self.clock.timestamp_ns())
         )
         self._observe_admission(outcome)
@@ -567,7 +635,7 @@ class NautilusE4CaptureStrategy(Strategy):
             true_network_receive_ts=None,
             payload={"price": str(tick.price), "size": str(tick.size)},
         )
-        outcome = self._session.ingest(
+        outcome = self._admit_and_observe(
             source, admission_ts=max(tick.ts_init, self.clock.timestamp_ns())
         )
         self._observe_admission(outcome)
@@ -604,9 +672,18 @@ class NautilusE4CaptureStrategy(Strategy):
             payload=payload,
         )
         decision_ts = self.clock.timestamp_ns()
-        outcome = self._session.ingest(source, admission_ts=max(depth.ts_init, decision_ts))
-        self._session.persist_durable_evidence(reason="DEPTH10_ADMITTED")
-        event = outcome.event
+        admit = getattr(self, "_admit_and_observe", None)
+        if callable(admit):
+            outcome = admit(
+                source, admission_ts=max(depth.ts_init, decision_ts),
+                durable_reason="DEPTH10_ADMITTED",
+            )
+        else:
+            outcome = self._session.ingest(
+                source, admission_ts=max(depth.ts_init, decision_ts)
+            )
+            self._session.persist_durable_evidence(reason="DEPTH10_ADMITTED")
+        event = getattr(outcome, "event", None)
         rejection = (
             "DEPTH10_DUPLICATE"
             if event is None
@@ -641,10 +718,12 @@ class NautilusE4CaptureStrategy(Strategy):
 
     def on_bar(self, bar: Bar) -> None:
         source = self._bar_source(bar)
-        outcome = self._session.ingest(
-            source, admission_ts=max(bar.ts_init, self.clock.timestamp_ns())
-        )
-        self._session.persist_durable_evidence(reason="FINALIZED_BAR_CALLBACK_ADMITTED")
+        with self._capture_lock:
+            outcome = self._session.ingest(
+                source, admission_ts=max(bar.ts_init, self.clock.timestamp_ns())
+            )
+            self._session.persist_durable_evidence(reason="FINALIZED_BAR_CALLBACK_ADMITTED")
+            self._observe_bound_validity(outcome)
         self._observe_admission(outcome)
 
     def _bar_source(self, bar: Bar) -> SourceEvent:
@@ -675,16 +754,18 @@ class NautilusE4CaptureStrategy(Strategy):
     def on_socket_state(self, event: SocketStateChangedLike) -> None:
         from nautilus_trader.adapters.hyperliquid import HYPERLIQUID_CLIENT_ID
 
-        self._session.handle_socket_state_event(
-            event,
-            expected_client_id=HYPERLIQUID_CLIENT_ID,
-            required_streams=self._continuity_streams,
-        )
+        with self._capture_lock:
+            self._session.handle_socket_state_event(
+                event,
+                expected_client_id=HYPERLIQUID_CLIENT_ID,
+                required_streams=self._continuity_streams,
+            )
 
     def on_stop(self) -> None:
-        self._session.interrupt(reason="APPLICATION_STOP")
-        self._session.persist_runtime_checkpoint(reason="GRACEFUL_STOP")
-        self._session.write_operational_artifacts(health_overrides=self.capture_health)
+        with self._capture_lock:
+            self._session.interrupt(reason="APPLICATION_STOP")
+            self._session.persist_runtime_checkpoint(reason="GRACEFUL_STOP")
+            self._session.write_operational_artifacts(health_overrides=self.capture_health)
 
     def _expression_for(
         self, event: QuoteTick | TradeTick | Bar | OrderBookDepth10
