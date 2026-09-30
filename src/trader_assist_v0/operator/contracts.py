@@ -3,13 +3,40 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from trader_assist_v0.multi_asset_shadow.l1_approval import StrategyOrderPackage
+
 RUNTIME_EVIDENCE_PATH = Path("/var/lib/trader-assist-v0/three-setup-shadow/evidence.sqlite")
 OPERATOR_LEDGER_PATH = Path("/var/lib/trader-assist-v0/three-setup-operator/operator.sqlite")
+
+
+@dataclass(frozen=True)
+class DashboardEvent:
+    event_key: str
+    package_id: str
+    state: str
+    server_ms: int
+    reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class DashboardModel:
+    overall: Literal["READY", "BLOCKED", "DEGRADED", "UNKNOWN"]
+    reasons: tuple[str, ...]
+    package_gate: Literal["PASS", "BLOCKED"]
+    package: StrategyOrderPackage | None
+    details: dict[str, object]
+    state: str
+    observed_ms: int
+    events: tuple[DashboardEvent, ...]
+    events_available: bool
+    module_id: str
+    module_renderer: str
 
 
 class OperatorConfig(BaseModel):

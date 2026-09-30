@@ -376,7 +376,7 @@ def test_post_expired_view_and_browserless_durable_terminal(tmp_path: Path) -> N
         page = client.get("/")
         assert page.status_code == 200
         assert "BLOCKED · EXPIRED" in page.text
-        assert 'data-action="APPROVE" disabled' in page.text
+        assert 'data-action="APPROVE"' not in page.text
     with sqlite3.connect(config.operator_ledger_path) as connection:
         assert connection.execute(
             "SELECT state, submission_status FROM ts8_state WHERE package_id = ?",

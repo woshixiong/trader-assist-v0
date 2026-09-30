@@ -1,38 +1,65 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="card" id="dashboard" data-csrf="{{ csrf }}" data-revision="{{ revision }}">
-  <h1>Approval package</h1>
-  <p>Approval timing: {{ configured_mode }}</p>
-  <p class="state">{{ "BLOCKED" if blocked else "READY" }} · {{ state }}</p>
-  <p>ZERO_WRITE · NOT_SUBMITTED · no exchange action</p>
-  {% if recent_terminal %}
-  <p>Latest terminal evidence: {{ recent_terminal[0] }} · package {{ recent_terminal[1][:12] }}…</p>
-  {% endif %}
-  {% if blocked %}
-  <p role="status">{{ reason }}</p>
-  {% endif %}
-  {% if package %}
-  <p>Opportunity: {{ package.activation_opportunity_id }}</p>
-  <dl>
-    <dt>Market / instrument</dt><dd>{{ details.market_id }} / {{ details.instrument_id or "UNAVAILABLE" }}</dd>
-    <dt>Side / setup</dt><dd>{{ details.side }} / {{ details.setup_family }} {{ details.setup_mode or "" }}</dd>
-    <dt>Versions</dt><dd>Strategy {{ package.strategy_version }} · Policy {{ details.policy_version or "UNAVAILABLE" }} · Parameter {{ package.parameter_version }} · Registry {{ details.registry_version }} · Cost {{ details.cost_model_version }}</dd>
-    <dt>Approval mode</dt><dd>{{ details.approval_mode }}</dd>
-    <dt>Expiry (server ms)</dt><dd>{{ package.expires_server_ms }}</dd>
-    <dt>Activation trigger</dt><dd>{{ details.activation_trigger_id }}</dd>
-    <dt>Reference scenario</dt><dd>{{ details.reference_scenario }} — reference only, not account risk authority</dd>
-    <dt>Reference quantity / notional / risk budget</dt><dd>{{ details.reference_quantity }} / {{ details.reference_notional }} / {{ details.reference_risk_budget_usd }}</dd>
-    <dt>Entry / stop / TP1 / TP2</dt><dd>{{ details.planned_entry }} / {{ details.stop }} / {{ details.tp1 }} / {{ details.tp2 or "UNAVAILABLE" }}</dd>
-    <dt>Current executable / BBO / friction / depth</dt><dd>UNAVAILABLE — current guard fails closed</dd>
-    <dt>Material current diff</dt><dd>Current executable economics unavailable; no approval can create an order.</dd>
-  </dl>
-  <details><summary>Exact identity</summary><p class="mono">Package {{ package.package_id }}<br>Hash {{ package.package_hash }}<br>Parent Shadow {{ package.parent_strategy_order_id }}</p></details>
-  <p>Single use. Guard failure is terminal and requires a fresh trigger and approval.</p>
-  <div class="actions" data-shadow="{{ package.parent_strategy_order_id }}" data-package="{{ package.package_id }}" data-hash="{{ package.package_hash }}">
-    <button type="button" data-action="APPROVE" {% if blocked or state not in ("AWAITING_HUMAN_APPROVAL", "ARMED_REVIEWABLE") %}disabled{% endif %}>Approve</button>
-    <button type="button" data-action="REJECT" {% if blocked or state not in ("AWAITING_HUMAN_APPROVAL", "ARMED_REVIEWABLE") %}disabled{% endif %}>Reject</button>
+<section id="dashboard" data-csrf="{{ csrf }}" data-revision="{{ revision }}" data-package-id="{{ package.package_id if package else '' }}" data-state="{{ state }}">
+  <div class="status-strip" role="status">
+    <span>ENVIRONMENT <strong>UNKNOWN</strong></span>
+    <span>MODE <strong>{{ configured_mode }} · ZERO_WRITE · NOT_SUBMITTED</strong></span>
+    <span>OVERALL <strong class="status-{{ model.overall|lower }}">{{ model.overall }}</strong></span>
   </div>
-  <p id="action-result" role="status"></p>
+  <details class="health card" open>
+    <summary>Health and reasons</summary>
+    <ul class="reasons">{% for item in model.reasons %}<li>{{ item }}</li>{% endfor %}</ul>
+    <p>Live stream/continuity: NOT_AVAILABLE · Target-host resources: NOT_AVAILABLE · Backup: NOT_AVAILABLE</p>
+    <p>Quote value age is diagnostic only; a quiet valid quote is not a data-health failure.</p>
+  </details>
+  {% if notice %}<p role="alert" class="notice">{{ notice }}</p>{% endif %}
+  {% if package and model.module_renderer == "three_setup_nautilus" %}
+  <nav class="overview card" aria-label="Opportunity overview">
+    <strong>One current opportunity</strong>
+    <a href="#opportunity-card">{{ details.instrument_id or details.market_id }} · {{ details.side }} · {{ model.state }}</a>
+  </nav>
+  <article class="card opportunity" id="opportunity-card" tabindex="-1" data-expiry="{{ package.expires_server_ms }}" data-observed="{{ model.observed_ms }}">
+    <header class="card-head">
+      <div><h1>{{ details.instrument_id or details.market_id }} <span>{{ details.side }}</span></h1><p>Three Setup / Nautilus · {{ details.setup_family }} {{ details.setup_mode or '' }}</p></div>
+      <div class="countdown"><span>Remaining validity</span><strong data-countdown>Server expiry {{ package.expires_server_ms }}</strong></div>
+    </header>
+    <div class="gate status-{{ model.package_gate|lower }}" role="status">
+      <strong>Trade Gate: {{ model.package_gate }}</strong>
+      <span>Exact zero-write package reviewability; no execution authority</span>
+    </div>
+    <p class="state">{{ "BLOCKED" if blocked else "READY" }} · {{ state }}</p>
+    <p>ZERO_WRITE · NOT_SUBMITTED · no exchange action</p>
+    {% if blocked %}<p role="status">{{ reason }}</p>{% endif %}
+    <dl class="facts">
+      <dt>Opportunity</dt><dd>{{ package.activation_opportunity_id }}</dd>
+      <dt>Reference Notional USD / Quantity</dt><dd>{{ details.reference_notional }} / {{ details.reference_quantity }} · reference only</dd>
+      <dt>Reference risk budget USD</dt><dd>{{ details.reference_risk_budget_usd }} · not account authority</dd>
+      <dt>Entry / Stop / TP1 / TP2 prices</dt><dd>{{ details.planned_entry }} / {{ details.stop }} / {{ details.tp1 }} / {{ details.tp2 or "NOT_AVAILABLE" }}</dd>
+      <dt>Current executable / BBO / friction / depth</dt><dd>NOT_AVAILABLE · current guard fails closed</dd>
+      <dt>Version identity</dt><dd>Strategy {{ package.strategy_version }} · Policy {{ details.policy_version or "NOT_AVAILABLE" }} · Parameter {{ package.parameter_version }} · Registry {{ details.registry_version }} · Cost {{ details.cost_model_version }}</dd>
+      <dt>Activation trigger</dt><dd>{{ details.activation_trigger_id }}</dd>
+    </dl>
+    <details><summary>Exact package and provenance</summary><p class="mono">Package {{ package.package_id }}<br>Hash {{ package.package_hash }}<br>Parent Shadow {{ package.parent_strategy_order_id }}</p></details>
+    <form class="actions" method="post" action="/action" data-shadow="{{ package.parent_strategy_order_id }}" data-package="{{ package.package_id }}" data-hash="{{ package.package_hash }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <input type="hidden" name="shadow_id" value="{{ package.parent_strategy_order_id }}">
+      <input type="hidden" name="package_id" value="{{ package.package_id }}">
+      <input type="hidden" name="package_hash" value="{{ package.package_hash }}">
+      <input type="hidden" name="action_key" value="{{ action_key }}">
+      {% if model.package_gate == "PASS" %}<button type="submit" name="action" value="APPROVE" data-action="APPROVE">Approve</button>{% endif %}
+      <button type="submit" name="action" value="REJECT" data-action="REJECT" {% if blocked %}disabled{% endif %}>Reject</button>
+    </form>
+    <p id="action-result" role="status"></p>
+  </article>
+  {% elif state == "NO_OPPORTUNITY" %}
+  <section class="card idle"><h1>无机会</h1><p>No retained current Shadow opportunity.</p></section>
+  {% else %}
+  <section class="card"><h1>Opportunity unavailable</h1><p role="alert">SOURCE_OR_PACKAGE_UNAVAILABLE</p></section>
   {% endif %}
+  <details class="card events">
+    <summary>Recent operator events{% if not model.events_available %} · NOT_AVAILABLE{% endif %}</summary>
+    {% if recent_terminal %}<p>Latest terminal evidence: {{ recent_terminal[0] }} · package {{ recent_terminal[1][:12] }}…</p>{% endif %}
+    <ol>{% for event in model.events %}<li>{{ event.state }} · {{ event.package_id[:12] }}… · {{ event.server_ms }}{% if event.reasons %} · {{ event.reasons|join(', ') }}{% endif %}</li>{% endfor %}</ol>
+  </details>
 </section>
 {% endblock %}
