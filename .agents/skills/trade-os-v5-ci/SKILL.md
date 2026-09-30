@@ -12,6 +12,11 @@ current package-state locator.
 MODEL_MEDIATED_CI_POLLING=PROHIBITED
 RAW_SUCCESS_LOG_INGESTION=PROHIBITED_BY_DEFAULT
 EXACT_HEAD_BINDING=REQUIRED
+CI_WAITER_STARTED=>CURRENT_ENGINEERING_TURN_MUST_REMAIN_ACTIVE_UNTIL_TERMINAL
+USER_REPROMPT_FOR_CI_COMPLETION=PROHIBITED
+OUTER_TURN_GITHUB_CI_POLLING=PROHIBITED
+OUTER_TURN_RESULT_READBACK=SPARSE_ONLY
+TURN_CONTINUITY_UNAVAILABLE=>PAUSED_CAPABILITY_WITH_EXPLICIT_HANDOFF
 ~~~
 
 Use the V5-B deterministic waiter/controller once qualified. The preferred
@@ -21,6 +26,19 @@ local process rather than repeatedly polling process/status output through
 Remote Desktop Commander. Preserve the existing `gh run watch` path as the
 immediate fallback if the waiter is unavailable or returns a fail-closed
 transport/query result.
+
+After launching the local waiter, the CI stage is not an assistant stop point.
+The current engineering turn must remain active until the waiter emits a terminal
+result or a genuine host/tool capability failure prevents continuation. Do not
+send a final response that hands control back to the user merely because CI is
+still running, and never require the user to ask whether CI has finished.
+
+The local waiter remains the sole GitHub CI poller. The outer ChatGPT turn may
+use a non-GitHub wait primitive plus sparse Remote Desktop Commander process or
+result-file readback (normally no more often than every 60-120 seconds unless a
+terminal result is expected). Progress notes may be emitted without requiring a
+user reply. Sparse readback is transport observation only; it must not duplicate
+GitHub CI polling.
 
 Verify PR head before waiting and at terminal readback. Head drift invalidates
 old CI/review.

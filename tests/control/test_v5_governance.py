@@ -139,3 +139,14 @@ def test_context_io_document_invariants_are_required(
     monkeypatch.setattr(checker, "text", without_invariant)
     with pytest.raises(checker.CheckFailure):
         checker.check_documents(ROOT)
+
+def test_ci_turn_continuity_contract_is_present() -> None:
+    value = (ROOT / ".agents/skills/trade-os-v5-ci/SKILL.md").read_text(encoding="utf-8")
+    for needle in (
+        "CI_WAITER_STARTED=>CURRENT_ENGINEERING_TURN_MUST_REMAIN_ACTIVE_UNTIL_TERMINAL",
+        "USER_REPROMPT_FOR_CI_COMPLETION=PROHIBITED",
+        "OUTER_TURN_GITHUB_CI_POLLING=PROHIBITED",
+        "OUTER_TURN_RESULT_READBACK=SPARSE_ONLY",
+        "TURN_CONTINUITY_UNAVAILABLE=>PAUSED_CAPABILITY_WITH_EXPLICIT_HANDOFF",
+    ):
+        assert needle in value
