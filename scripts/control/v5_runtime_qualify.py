@@ -97,12 +97,12 @@ def qualify(
         },
         "primary_route_intent": {
             "status": PASS
-            if config.get("model") == "gpt-6-sol"
+            if config.get("model") == "gpt-6.1-sol"
             and config.get("model_reasoning_effort") == "medium"
             else "FAIL",
             "evidence": "static config only",
         },
-        "actual_model": observed(evidence, "actual_model", "gpt-6-sol"),
+        "actual_model": observed(evidence, "actual_model", "gpt-6.1-sol"),
         "actual_reasoning": observed(evidence, "actual_reasoning_effort", "medium"),
         "approval_policy": observed(evidence, "approval_policy", "on-request"),
         "approvals_reviewer": observed(evidence, "approvals_reviewer", "auto_review"),

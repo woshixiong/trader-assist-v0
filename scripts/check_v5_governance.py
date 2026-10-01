@@ -200,8 +200,8 @@ def check_documents(root: Path) -> None:
 def check_config(root: Path) -> None:
     with (root / ".codex/config.toml").open("rb") as f:
         c = tomllib.load(f)
-    if c.get("model") != "gpt-6-sol" or c.get("model_reasoning_effort") != "medium":
-        raise CheckFailure("V5 intended GPT-6 Sol routing mismatch")
+    if c.get("model") != "gpt-6.1-sol" or c.get("model_reasoning_effort") != "medium":
+        raise CheckFailure("V5 intended GPT-6.1 Sol routing mismatch")
     if c.get("approvals_reviewer") != "auto_review" or c.get("web_search") != "disabled":
         raise CheckFailure("V5 config safety mismatch")
 

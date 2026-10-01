@@ -27,7 +27,7 @@ def test_observed_runtime_evidence_is_validated(monkeypatch):
     monkeypatch.setattr(qualify, "probe", lambda _: {"status": "PASS", "evidence": "ok"})
     evidence = {
         "schema_version": "1",
-        "actual_model": "gpt-6-sol",
+        "actual_model": "gpt-6.1-sol",
         "actual_reasoning_effort": "medium",
         "approval_policy": "on-request",
         "approvals_reviewer": "auto_review",

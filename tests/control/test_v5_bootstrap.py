@@ -85,8 +85,8 @@ def args(repo: Path) -> argparse.Namespace:
         actual_provider="OPENAI",
         execution_surface="CODEX_CLI",
         actual_execution_surface="CODEX_CLI",
-        model="gpt-6-sol",
-        actual_model="gpt-6-sol",
+        model="gpt-6.1-sol",
+        actual_model="gpt-6.1-sol",
         reasoning="medium",
         actual_reasoning="medium",
         requested_web_search="DISABLED",
@@ -179,10 +179,10 @@ def test_v5_bootstrap_rejects_incomplete_binding(
 def test_post_merge_v5_route(repository: Path, phase: str, reasoning: str) -> None:
     bound = args(repository)
     bound.semantic_phase = phase
-    bound.model = bound.actual_model = "gpt-6-sol"
+    bound.model = bound.actual_model = "gpt-6.1-sol"
     bound.reasoning = bound.actual_reasoning = reasoning
     evidence = bootstrap.verify(bound)
-    assert evidence.model == "gpt-6-sol"
+    assert evidence.model == "gpt-6.1-sol"
     assert evidence.reasoning == reasoning
 
 

@@ -98,10 +98,10 @@ end-to-end canary has passed and the manifest-selected lifecycle is `ACTIVE`.
 ## 4. Repair routing
 
 ~~~text
-PLAN           = gpt-6-sol / medium
-IMPLEMENT      = gpt-6-sol / medium
-REPAIR 1       = gpt-6-sol / medium
-REPAIR 2       = gpt-6-sol / high
+PLAN           = gpt-6.1-sol / medium
+IMPLEMENT      = gpt-6.1-sol / medium
+REPAIR 1       = gpt-6.1-sol / medium
+REPAIR 2       = gpt-6.1-sol / high
 GPT-5.6 V5 FALLBACK = PROHIBITED
 THIRD SEMANTIC FAILURE = Engineering Control replan
 ~~~
