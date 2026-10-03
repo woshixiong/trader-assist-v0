@@ -468,7 +468,7 @@ def test_checkout_drift_rejection(tmp_path: Path, mutation: str) -> None:
 
 
 @pytest.fixture
-def bundle_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+def raw_bundle_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
     """Use the real L0 builders and existing minimal clean-source fixture."""
     release = tmp_path / "release"
     sha, tree = _candidate_repo(release, l0=True)
@@ -552,12 +552,30 @@ def bundle_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str,
     }
 
 
+@pytest.fixture
+def bundle_fixture(raw_bundle_fixture: dict[str, str]) -> dict[str, str]:
+    assert_pass(python_run("finalize", raw_bundle_fixture))
+    return raw_bundle_fixture
+
+
 @pytest.mark.parametrize(
-    "mutation", ["none", "missing", "duplicate", "extra", "malformed", "sha", "digest"]
+    "mutation",
+    [
+        "none",
+        "missing",
+        "duplicate",
+        "extra",
+        "malformed",
+        "sha",
+        "digest",
+        "order",
+        "stale",
+        "blank",
+    ],
 )
 def test_actual_anchor_capture(bundle_fixture: dict[str, str], mutation: str) -> None:
     env = bundle_fixture
-    stdout = Path(env["BUILD_ROOT"]) / "builder-stdout.txt"
+    stdout = Path(env["BUILD_ROOT"]) / "finalized-anchors.env"
     lines = stdout.read_text().splitlines()
     if mutation == "missing":
         lines.pop()
@@ -567,6 +585,12 @@ def test_actual_anchor_capture(bundle_fixture: dict[str, str], mutation: str) ->
         lines.append("EXPECTED_UNAUTHORIZED=" + "a" * 64)
     elif mutation == "malformed":
         lines[-1] = lines[-1].split("=")[0] + "=bad"
+    elif mutation == "order":
+        lines.reverse()
+    elif mutation == "blank":
+        lines.append("")
+    elif mutation == "stale":
+        lines = (stdout.parent / "builder-stdout.txt").read_text().splitlines()[1:]
     elif mutation == "sha":
         env["RELEASE_SHA"] = env["CONTROL_HEAD"]
     elif mutation == "digest":
@@ -806,3 +830,424 @@ def test_docs_preserve_transport_and_gates() -> None:
 def test_restricted_yaml_rejects_duplicate_keys_and_aliases(source: str) -> None:
     with pytest.raises(AssertionError):
         parse_workflow(source)
+
+
+def bundle_paths(bundle: Path) -> set[str]:
+    return {path.relative_to(bundle).as_posix() for path in bundle.rglob("*")}
+
+
+def test_finalization_rebinds_only_script_and_manifest(raw_bundle_fixture: dict[str, str]) -> None:
+    env = raw_bundle_fixture
+    root = Path(env["BUILD_ROOT"])
+    bundle = root / "bundle"
+    before_paths = bundle_paths(bundle)
+    before = {
+        p.relative_to(bundle).as_posix(): p.read_bytes() for p in bundle.rglob("*") if p.is_file()
+    }
+    old_anchors = builder.handoff_anchors(bundle)
+    historical = (root / "builder-stdout.txt").read_bytes()
+    assert_pass(python_run("finalize", env))
+    after = {
+        p.relative_to(bundle).as_posix(): p.read_bytes() for p in bundle.rglob("*") if p.is_file()
+    }
+    assert bundle_paths(bundle) == before_paths
+    assert {name for name in before if before[name] != after[name]} == {
+        "remote-qualification.sh",
+        "bundle-manifest.json",
+    }
+    old_manifest = json.loads(before["bundle-manifest.json"])
+    new_manifest = json.loads(after["bundle-manifest.json"])
+    assert after["bundle-manifest.json"] == canonical_json_bytes(new_manifest)
+    for old, new in zip(old_manifest["files"], new_manifest["files"], strict=True):
+        assert old["path"] == new["path"]
+        if old["path"] != "remote-qualification.sh":
+            assert old == new
+        else:
+            data = after[old["path"]]
+            assert new == {
+                "path": old["path"],
+                "size": len(data),
+                "sha256": hashlib.sha256(data).hexdigest(),
+            }
+    old_manifest["files"] = new_manifest["files"]
+    assert old_manifest == new_manifest
+    final = builder.handoff_anchors(bundle)
+    assert len(final) == 5
+    assert {key for key in final if final[key] != old_anchors[key]} == {
+        "EXPECTED_REMOTE_QUALIFICATION_SHA256",
+        "EXPECTED_BUNDLE_MANIFEST_SHA256",
+    }
+    assert (root / "builder-stdout.txt").read_bytes() == historical
+    expected_record = "".join(f"{key}={value}\n" for key, value in final.items())
+    assert (root / "finalized-anchors.env").read_text() == expected_record
+    # Historical evidence cannot participate in final capture, even when missing.
+    (root / "builder-stdout.txt").unlink()
+    assert "builder-stdout.txt" not in steps()["anchors"]["run"]
+    assert_pass(python_run("anchors", env))
+    assert (root / "handoff/anchors.env").read_text() == expected_record
+    source = before["remote-qualification.sh"].decode()
+    adapted = after["remote-qualification.sh"].decode()
+    separator = 'echo "STAGED_RELEASE_VERIFY=PASS"'
+    assert source.split(separator, 1)[1] == adapted.split(separator, 1)[1]
+    assert stat_mode(bundle / "remote-qualification.sh") == 0o750
+
+
+def stat_mode(path: Path) -> int:
+    return path.stat().st_mode & 0o777
+
+
+@pytest.mark.parametrize(
+    "mutation", ["missing", "duplicate", "unexpected", "entry_missing", "entry_duplicate"]
+)
+def test_adaptation_fails_closed(raw_bundle_fixture: dict[str, str], mutation: str) -> None:
+    env = raw_bundle_fixture
+    root = Path(env["BUILD_ROOT"])
+    script = root / "bundle/remote-qualification.sh"
+    source = script.read_text()
+    command = next(
+        line for line in source.splitlines() if "payload/scripts/verify_exact_release.py" in line
+    )
+    manifest_path = root / "bundle/bundle-manifest.json"
+    manifest = json.loads(manifest_path.read_bytes())
+    if mutation == "missing":
+        script.write_text(source.replace(command, ""))
+    elif mutation == "duplicate":
+        script.write_text(source + command + "\n")
+    elif mutation == "unexpected":
+        script.write_text(source.replace("--verify-staged", "--not-staged"))
+    else:
+        entry = next(
+            item for item in manifest["files"] if item["path"] == "remote-qualification.sh"
+        )
+        if mutation == "entry_missing":
+            manifest["files"].remove(entry)
+        else:
+            manifest["files"].append(dict(entry))
+        manifest_path.write_bytes(canonical_json_bytes(manifest))
+    before = script.read_bytes(), manifest_path.read_bytes()
+    assert python_run("finalize", env).returncode != 0
+    assert (script.read_bytes(), manifest_path.read_bytes()) == before
+    assert not (root / "finalized-anchors.env").exists()
+
+
+# Process fixtures record orchestration; only stdlib integrity/path checks run here.
+# CPython 3.12 + historical dependency compatibility remains the Ubuntu Actions gate.
+TARGET_PROCESS_FIXTURE = r"""
+import json, os, shutil, signal, subprocess, sys, tempfile
+from pathlib import Path
+args = sys.argv[1:]
+name = Path(sys.argv[0]).name
+with open(os.environ['PROCESS_RECORD'], 'a') as record:
+    record.write(json.dumps({'name': name, 'argv': args, 'executable': sys.argv[0],
+        'pythonpath': os.environ.get('PYTHONPATH'),
+        'no_bytecode': os.environ.get('PYTHONDONTWRITEBYTECODE')}) + '\n')
+failure = os.environ.get('PROCESS_FAILURE', '')
+if name == 'mktemp':
+    assert args[:1] == ['-d'] and len(args) == 2
+    if failure == 'mktemp':
+        raise SystemExit(37)
+    template = Path(args[1])
+    parent = template.parent
+    if failure == 'parent_identity':
+        parent.rename(parent.with_name(parent.name + '-old'))
+        parent.mkdir()
+    if failure == 'allocation_parent':
+        parent = Path(os.environ['ALTERNATE_TEMP'])
+    result = tempfile.mkdtemp(prefix='trade-os-verify.', dir=parent)
+    if failure == 'allocation_symlink':
+        link = parent / 'trade-os-verify.link'
+        link.symlink_to(result, target_is_directory=True)
+        result = str(link)
+    print(result)
+elif name == 'rm':
+    assert args[:2] == ['-rf', '--'] and len(args) == 3
+    if failure in ('cleanup', 'verifier_cleanup'):
+        raise SystemExit(41)
+    path = Path(args[2])
+    if path.is_symlink():
+        target = path.resolve()
+        path.unlink()
+        shutil.rmtree(target)
+    else:
+        shutil.rmtree(path)
+elif name == 'systemctl':
+    assert args == ['is-active', 'trader-assist-v0-three-setup.service']
+    print('inactive')
+elif name == 'python3.12' and '-' in args:
+    code = sys.stdin.read()
+    version = '(3, 11)' if failure == 'python_identity' else '(3, 12)'
+    if 'sys.version_info[:2]' in code:
+        code = 'import sys; sys.version_info = ' + version + '\n' + code
+    forwarded = args[args.index('-') + 1:]
+    code = 'import sys; sys.argv = ' + repr(['-', *forwarded]) + '\n' + code
+    raise SystemExit(subprocess.run([sys.executable, '-I', '-B', '-c', code]).returncode)
+elif name == 'python3.12' and 'venv' in args:
+    venv = Path(args[-1])
+    (venv / 'bin').mkdir(parents=True)
+    if failure == 'venv':
+        raise SystemExit(31)
+    shutil.copyfile(sys.argv[0], venv / 'bin/python')
+    (venv / 'bin/python').chmod(0o750)
+elif name == 'python' and 'pip' in args:
+    if failure == 'signal':
+        os.kill(os.getppid(), signal.SIGTERM)
+    if failure == 'pip':
+        raise SystemExit(32)
+elif name == 'python' and any('verify_exact_release.py' in arg for arg in args):
+    if failure in ('verifier', 'verifier_cleanup'):
+        raise SystemExit(33)
+elif name == 'python3.12' and any('three_setup_shadow_preflight.py' in arg for arg in args):
+    assert '--host-only' in args and '--host-wheel' in args
+else:
+    raise SystemExit('unexpected target process: ' + repr(args))
+"""
+
+
+@pytest.fixture
+def target_fixture(bundle_fixture: dict[str, str], tmp_path: Path) -> dict[str, str]:
+    env = dict(bundle_fixture)
+    binaries = tmp_path / "target-bin"
+    binaries.mkdir()
+    for name in ("python3.12", "mktemp", "rm", "systemctl"):
+        path = binaries / name
+        path.write_text(f"#!{sys.executable}\n" + TARGET_PROCESS_FIXTURE)
+        path.chmod(0o750)
+    parent = tmp_path / "verification parent"
+    parent.mkdir()
+    alternate = tmp_path / "alternate"
+    alternate.mkdir()
+    env.update(
+        PATH=f"{binaries}:{os.environ['PATH']}",
+        TMPDIR=str(parent),
+        ALTERNATE_TEMP=str(alternate),
+        PROCESS_RECORD=str(tmp_path / "processes.jsonl"),
+        TRADER_ASSIST_V0_DEPLOYMENT_AUTHORIZED="NO",
+    )
+    return env
+
+
+def target_run(env: dict[str, str], mode: str = "--verify") -> subprocess.CompletedProcess[str]:
+    bundle = Path(env["BUILD_ROOT"]) / "bundle"
+    anchors = builder.handoff_anchors(bundle)
+    return subprocess.run(
+        [
+            "bash",
+            str(bundle / "remote-qualification.sh"),
+            mode,
+            anchors["EXPECTED_RELEASE_SHA"],
+            anchors["EXPECTED_RELEASE_TREE"],
+            anchors["EXPECTED_RELEASE_MANIFEST_CANONICAL_DIGEST"],
+            anchors["EXPECTED_BUNDLE_MANIFEST_SHA256"],
+        ],
+        env={**os.environ, **env},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=20,
+    )
+
+
+def process_records(env: dict[str, str]) -> list[dict[str, Any]]:
+    return [json.loads(line) for line in Path(env["PROCESS_RECORD"]).read_text().splitlines()]
+
+
+@pytest.mark.parametrize(
+    "location", ["equal", "beneath", "symlink", "absent", "file", "broken_link", "newline"]
+)
+def test_temp_parent_rejected_without_bundle_creation(
+    target_fixture: dict[str, str], location: str
+) -> None:
+    env = target_fixture
+    bundle = Path(env["BUILD_ROOT"]) / "bundle"
+    outside = Path(env["TMPDIR"])
+    if location == "equal":
+        env["TMPDIR"] = str(bundle)
+    elif location == "beneath":
+        env["TMPDIR"] = str(bundle / "payload")
+    elif location == "symlink":
+        link = outside / "link"
+        link.symlink_to(bundle / "payload", target_is_directory=True)
+        env["TMPDIR"] = str(link)
+    elif location == "file":
+        env["TMPDIR"] = str(bundle / "bundle-manifest.json")
+    elif location == "broken_link":
+        link = outside / "broken"
+        link.symlink_to(outside / "missing")
+        env["TMPDIR"] = str(link)
+    elif location == "newline":
+        invalid = outside / "bad\nparent"
+        invalid.mkdir()
+        env["TMPDIR"] = str(invalid)
+    else:
+        env["TMPDIR"] = str(outside / "absent")
+    before = bundle_paths(bundle)
+    assert target_run(env).returncode != 0
+    assert bundle_paths(bundle) == before
+    records = process_records(env)
+    assert all(item["name"] != "mktemp" for item in records)
+    assert not any("venv" in item["argv"] or "pip" in item["argv"] for item in records)
+
+
+@pytest.mark.parametrize(
+    "failure, status",
+    [
+        ("", 0),
+        ("venv", 31),
+        ("pip", 32),
+        ("verifier", 33),
+        ("signal", 143),
+        ("cleanup", 1),
+        ("verifier_cleanup", 33),
+        ("parent_identity", 1),
+        ("allocation_parent", 1),
+        ("allocation_symlink", 1),
+        ("python_identity", 1),
+    ],
+)
+def test_transient_runtime_orchestration_and_status(
+    target_fixture: dict[str, str], failure: str, status: int
+) -> None:
+    env = target_fixture
+    env["PROCESS_FAILURE"] = failure
+    bundle = Path(env["BUILD_ROOT"]) / "bundle"
+    before = bundle_paths(bundle)
+    result = target_run(env)
+    assert result.returncode == status, result.stdout + result.stderr
+    assert bundle_paths(bundle) == before
+    records = process_records(env)
+    allocations = [item for item in records if item["name"] == "mktemp"]
+    if failure == "python_identity":
+        assert not allocations
+        return
+    assert len(allocations) == 1
+    assert allocations[0]["argv"] == [
+        "-d",
+        str(Path(env["TMPDIR"]).resolve() / "trade-os-verify.XXXXXXXXXX"),
+    ]
+    cleanups = [item for item in records if item["name"] == "rm"]
+    assert len(cleanups) == 1
+    allocated = Path(cleanups[0]["argv"][-1])
+    assert allocated.exists() == (failure in ("cleanup", "verifier_cleanup"))
+    venv_calls = [item for item in records if "venv" in item["argv"]]
+    pip_calls = [item for item in records if "pip" in item["argv"]]
+    verifier_calls = [
+        item for item in records if any("verify_exact_release.py" in arg for arg in item["argv"])
+    ]
+    if failure in ("parent_identity", "allocation_parent", "allocation_symlink"):
+        assert not venv_calls and not pip_calls and not verifier_calls
+        return
+    assert venv_calls[0]["argv"] == ["-I", "-B", "-m", "venv", str(allocated / "venv")]
+    if failure == "venv":
+        assert not pip_calls and not verifier_calls
+        return
+    pip = pip_calls[0]
+    assert len(pip_calls) == 1
+    assert pip["executable"] == str(allocated / "venv/bin/python")
+    assert pip["argv"] == [
+        "-I",
+        "-m",
+        "pip",
+        "--isolated",
+        "install",
+        "--require-hashes",
+        "--no-cache-dir",
+        "-r",
+        str(bundle / "payload/requirements-runtime.lock"),
+    ]
+    if failure in ("pip", "signal"):
+        assert not verifier_calls
+        return
+    verifier = verifier_calls[0]
+    assert len(verifier_calls) == 1
+    assert verifier["executable"] == pip["executable"]
+    assert verifier["argv"] == [
+        "-B",
+        str(bundle / "payload/scripts/verify_exact_release.py"),
+        "--root",
+        str(bundle / "payload"),
+        "--verify-staged",
+        str(bundle / "release-manifest.json"),
+        "--expected-release-sha",
+        env["RELEASE_SHA"],
+        "--expected-release-tree",
+        env["RELEASE_TREE"],
+        "--expected-manifest-digest",
+        builder.handoff_anchors(bundle)["EXPECTED_RELEASE_MANIFEST_CANONICAL_DIGEST"],
+    ]
+    assert verifier["pythonpath"] == f"{bundle}/payload/src:{bundle}/payload"
+    assert verifier["no_bytecode"] == "1"
+    assert (
+        records.index(allocations[0])
+        < records.index(venv_calls[0])
+        < records.index(pip)
+        < records.index(verifier)
+        < records.index(cleanups[0])
+    )
+    if not failure:
+        preflight = next(item for item in records if "--host-only" in item["argv"])
+        assert preflight["name"] == "python3.12"
+        assert records.index(cleanups[0]) < records.index(preflight)
+
+
+@pytest.mark.parametrize("mutation", ["file", "sha", "tree", "digest"])
+def test_independent_checks_precede_bootstrap(
+    target_fixture: dict[str, str], mutation: str
+) -> None:
+    env = target_fixture
+    bundle = Path(env["BUILD_ROOT"]) / "bundle"
+    if mutation == "file":
+        with (bundle / "payload/requirements-runtime.lock").open("a") as lock:
+            lock.write("CORRUPTION\n")
+    else:
+        path = bundle / "bundle-manifest.json"
+        manifest = json.loads(path.read_bytes())
+        manifest[
+            {"sha": "release_sha", "tree": "release_tree", "digest": "release_manifest_digest"}[
+                mutation
+            ]
+        ] = "a" * (64 if mutation == "digest" else 40)
+        path.write_bytes(canonical_json_bytes(manifest))
+    assert target_run(env).returncode != 0
+    records = process_records(env)
+    assert len(records) == 1 and records[0]["name"] == "python3.12"
+
+
+def test_install_authority_refusal_after_transient_cleanup(target_fixture: dict[str, str]) -> None:
+    result = target_run(target_fixture, "--install")
+    assert result.returncode == 2
+    assert "current deployment authorization is required" in result.stderr
+    records = process_records(target_fixture)
+    cleanup = next(item for item in records if item["name"] == "rm")
+    assert not Path(cleanup["argv"][-1]).exists()
+    assert not any("/opt/trader-assist-v0/venv" in item["argv"] for item in records)
+
+
+@pytest.mark.parametrize("value", [None, ""])
+def test_unset_or_empty_temp_parent_uses_explicit_fallback(
+    target_fixture: dict[str, str], monkeypatch: pytest.MonkeyPatch, value: str | None
+) -> None:
+    env = target_fixture
+    monkeypatch.delenv("TMPDIR", raising=False)
+    if value is None:
+        env.pop("TMPDIR")
+    else:
+        env["TMPDIR"] = value
+    assert_pass(target_run(env))
+    records = process_records(env)
+    allocation = next(item for item in records if item["name"] == "mktemp")
+    assert allocation["argv"] == ["-d", str(Path("/tmp").resolve() / "trade-os-verify.XXXXXXXXXX")]
+    cleanup = next(item for item in records if item["name"] == "rm")
+    assert not Path(cleanup["argv"][-1]).exists()
+
+
+def test_allocation_failure_precedes_runtime_work(target_fixture: dict[str, str]) -> None:
+    env = target_fixture
+    env["PROCESS_FAILURE"] = "mktemp"
+    parent = Path(env["TMPDIR"])
+    before = set(parent.iterdir())
+    result = target_run(env)
+    assert result.returncode == 37
+    assert set(parent.iterdir()) == before
+    records = process_records(env)
+    assert records[-1]["name"] == "mktemp"
+    assert not any(item["name"] == "rm" or "venv" in item["argv"] for item in records)

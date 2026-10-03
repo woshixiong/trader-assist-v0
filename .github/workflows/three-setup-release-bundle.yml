@@ -179,11 +179,117 @@ jobs:
             --expected-tree "$RELEASE_TREE" --rc5-wheel "${wheels[0]}" \
             --launch-artifacts "$BUILD_ROOT/launch" --output "$BUILD_ROOT/bundle" \
             | tee "$BUILD_ROOT/builder-stdout.txt"
+      - name: Bootstrap generated verifier and finalize anchors
+        id: finalize
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/control/src:$GITHUB_WORKSPACE/control" \
+            "$BUILD_ROOT/venv/bin/python" -B - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          import stat
+          from pathlib import Path
+          from scripts.build_three_setup_shadow_deployment_bundle import handoff_anchors
+          from trader_assist_v0.contracts.common import canonical_json_bytes
+
+          root = Path(os.environ['BUILD_ROOT'])
+          bundle = root / 'bundle'
+          script = bundle / 'remote-qualification.sh'
+          assert stat.S_IMODE(script.stat().st_mode) == 0o750
+          script_text = script.read_text()
+          prefix = 'PYTHONPATH="$BUNDLE_ROOT/payload/src:$BUNDLE_ROOT/payload" python3.12 -B '
+          candidates = [line for line in script_text.splitlines()
+                        if '"$BUNDLE_ROOT/payload/scripts/verify_exact_release.py"' in line]
+          assert len(candidates) == 1, 'expected exactly one historical verifier command'
+          command = candidates[0]
+          expected = (prefix + '  "$BUNDLE_ROOT/payload/scripts/verify_exact_release.py"'
+              '   --root "$BUNDLE_ROOT/payload" --verify-staged "$BUNDLE_ROOT/release-manifest.json"'
+              '   --expected-release-sha "$EXPECTED_RELEASE_SHA"'
+              '   --expected-release-tree "$EXPECTED_RELEASE_TREE"'
+              '   --expected-manifest-digest "$EXPECTED_RELEASE_MANIFEST_CANONICAL_DIGEST"')
+          assert command == expected, 'unexpected historical verifier structure'
+          bootstrap = r'''(
+          set -euo pipefail
+          export PYTHONDONTWRITEBYTECODE=1
+          temp_identity="$(python3.12 -I -B - <<'PY_TEMP_PARENT'
+          import os, sys
+          from pathlib import Path
+          assert sys.implementation.name == 'cpython' and sys.version_info[:2] == (3, 12)
+          parent = Path(os.environ.get('TMPDIR') or '/tmp').resolve(strict=True)
+          bundle = Path(os.environ['BUNDLE_ROOT']).resolve(strict=True)
+          assert parent.is_dir() and bundle.is_dir()
+          assert parent != bundle and not parent.is_relative_to(bundle), 'temporary parent inside bundle'
+          assert not any(c in str(parent) for c in '\n\r\t'), 'unsafe temporary parent'
+          identity = parent.stat()
+          print(f'{parent}\t{identity.st_dev}\t{identity.st_ino}')
+          PY_TEMP_PARENT
+          )"
+          IFS=$'\t' read -r temp_parent temp_device temp_inode <<< "$temp_identity"
+          verification_dir="$(mktemp -d "$temp_parent/trade-os-verify.XXXXXXXXXX")"
+          cleanup_verification() {
+            status=$?
+            trap - EXIT HUP INT TERM
+            if ! rm -rf -- "$verification_dir"; then
+              echo 'verification runtime cleanup failed' >&2
+              if [[ "$status" == 0 ]]; then status=1; fi
+            fi
+            exit "$status"
+          }
+          trap cleanup_verification EXIT
+          trap 'exit 129' HUP
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          python3.12 -I -B - "$temp_parent" "$temp_device" "$temp_inode" "$verification_dir" <<'PY_TEMP_ALLOCATION'
+          import sys
+          from pathlib import Path
+          parent_name, device, inode, allocation_name = sys.argv[1:]
+          parent = Path(parent_name).resolve(strict=True)
+          allocation = Path(allocation_name).resolve(strict=True)
+          bundle = Path(__import__('os').environ['BUNDLE_ROOT']).resolve(strict=True)
+          identity = parent.stat()
+          assert str(parent) == parent_name and parent.is_dir()
+          assert (identity.st_dev, identity.st_ino) == (int(device), int(inode)), 'temporary parent changed'
+          assert parent != bundle and not parent.is_relative_to(bundle)
+          assert allocation.is_dir() and allocation.parent == parent, 'allocation parent mismatch'
+          assert str(allocation) == allocation_name, 'allocation canonical path mismatch'
+          assert allocation.name.startswith('trade-os-verify.')
+          assert allocation != bundle and not allocation.is_relative_to(bundle), 'allocation inside bundle'
+          PY_TEMP_ALLOCATION
+          verification_venv="$verification_dir/venv"
+          python3.12 -I -B -m venv "$verification_venv"
+          "$verification_venv/bin/python" -I -m pip --isolated install --require-hashes --no-cache-dir \
+            -r "$BUNDLE_ROOT/payload/requirements-runtime.lock"
+          '''
+          invocation = command.replace('python3.12 -B ', '"$verification_venv/bin/python" -B ', 1)
+          replacement = bootstrap + invocation + '\n)'
+          assert script_text.count(command) == 1
+          manifest_path = bundle / 'bundle-manifest.json'
+          manifest = json.loads(manifest_path.read_bytes())
+          entries = [item for item in manifest['files'] if item['path'] == 'remote-qualification.sh']
+          assert len(entries) == 1, 'expected exactly one script manifest entry'
+          data = script_text.replace(command, replacement, 1).encode()
+          script.write_bytes(data)
+          entries[0].update(size=len(data), sha256=hashlib.sha256(data).hexdigest())
+          manifest_path.write_bytes(canonical_json_bytes(manifest))
+          assert stat.S_IMODE(script.stat().st_mode) == 0o750
+          anchors = handoff_anchors(bundle)
+          assert len(anchors) == 5
+          assert anchors['EXPECTED_RELEASE_SHA'] == os.environ['RELEASE_SHA']
+          assert anchors['EXPECTED_RELEASE_TREE'] == os.environ['RELEASE_TREE']
+          for key, value in anchors.items():
+              assert re.fullmatch(r'[0-9a-f]{40}' if key in (
+                  'EXPECTED_RELEASE_SHA', 'EXPECTED_RELEASE_TREE') else r'[0-9a-f]{64}', value)
+          with (root / 'finalized-anchors.env').open('x') as record:
+              record.write(''.join(f'{key}={value}\n' for key, value in anchors.items()))
+          PY
       - name: Capture five independent handoff anchors
         id: anchors
         run: |
           set -euo pipefail
-          "$BUILD_ROOT/venv/bin/python" -B - <<'PY'
+          PYTHONPATH="$GITHUB_WORKSPACE/control/src:$GITHUB_WORKSPACE/control" \
+            "$BUILD_ROOT/venv/bin/python" -B - <<'PY'
           import hashlib
           import json
           import os
@@ -195,14 +301,15 @@ jobs:
           expected = handoff_anchors(root / 'bundle')
           assert len(expected) == 5
           captured = {}
-          for line in (root / 'builder-stdout.txt').read_text().splitlines():
-              if not line.startswith('EXPECTED_'):
-                  continue
+          lines = (root / 'finalized-anchors.env').read_text().splitlines()
+          assert len(lines) == 5
+          for line in lines:
               key, separator, value = line.partition('=')
               assert separator and key in expected and key not in captured
               assert re.fullmatch(r'[0-9a-f]{40}' if key in (
                   'EXPECTED_RELEASE_SHA', 'EXPECTED_RELEASE_TREE') else r'[0-9a-f]{64}', value)
               captured[key] = value
+          assert list(captured) == list(expected)
           assert captured == expected
           assert captured['EXPECTED_RELEASE_SHA'] == os.environ['RELEASE_SHA']
           assert captured['EXPECTED_RELEASE_TREE'] == os.environ['RELEASE_TREE']
