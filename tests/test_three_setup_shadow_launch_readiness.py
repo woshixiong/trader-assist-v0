@@ -354,7 +354,9 @@ def test_normal_runtime_requires_credential_before_composition(tmp_path: Path) -
         asyncio.run(runtime_entry._run(args))
 
 
-def _candidate_repo(root: Path, *, secret: bool = False) -> tuple[str, str]:
+def _candidate_repo(
+    root: Path, *, secret: bool = False, l0: bool = False
+) -> tuple[str, str]:
     from scripts.verify_exact_release import REQUIRED_FILES
 
     root.mkdir()
@@ -373,6 +375,10 @@ def _candidate_repo(root: Path, *, secret: bool = False) -> tuple[str, str]:
             }
         )
     )
+    if l0:
+        config.write_bytes(
+            (Path(__file__).parents[1] / config.relative_to(root)).read_bytes()
+        )
     source = root / "src/demo.py"
     source.parent.mkdir()
     source.write_text(
@@ -738,3 +744,93 @@ def test_wrapper_failures_cannot_start_runtime(
         assert len(calls) == 1 and calls[0].endswith("three_setup_shadow_preflight.py")
     else:
         assert calls == []
+
+
+@pytest.mark.parametrize("override", [None, "missing", "cost", "bar"])
+def test_l0_bundle_retains_full_identity_without_cost_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, override: str | None,
+) -> None:
+    from datetime import UTC, datetime
+
+    from scripts.build_multi_asset_registry_seed import build_launch_identity
+    from scripts.e4_nautilus_public_data_probe import launch_bars
+    from trader_assist_v0.multi_asset_shadow.models import RegistryVersion
+    from trader_assist_v0.multi_asset_shadow.production import THREE_SETUP_L0_CONFIG_SCHEMA
+    from trader_assist_v0.multi_asset_shadow.resolution import (
+        FIRST_LAUNCH_20,
+        resolve_first_launch_20,
+    )
+
+    root = tmp_path / "candidate"
+    sha, tree = _candidate_repo(root, l0=True)
+    observed_at = datetime(2026, 9, 27, tzinfo=UTC)
+    metadata = [
+        {"universe": [{"name": r.coin, "szDecimals": 2, "maxLeverage": 10}
+                      for r in FIRST_LAUNCH_20 if r.dex == dex]}
+        for dex in ("MAIN", "xyz")
+    ]
+    resolutions = resolve_first_launch_20(
+        perp_dexes=[{"name": "main"}, {"name": "xyz"}],
+        all_perp_metas=metadata, observed_at=observed_at,
+    )
+    seed = RegistryVersion.create(
+        version="l0", created_at=observed_at, markets=tuple(r.market for r in resolutions),
+    )
+    snapshot, manifest = build_launch_identity(
+        seed=seed,
+        instruments=[SimpleNamespace(raw_symbol=r.coin, id=f"{r.coin}.HYPERLIQUID")
+                     for r in FIRST_LAUNCH_20],
+        sha=sha, tree=tree, run_id="bundle-test", observed_at_ns=1_000_000_000,
+        metadata_evidence={},
+    )
+    artifacts = tmp_path / "launch"
+    (artifacts / "e4").mkdir(parents=True)
+    for name, model in (("registry-seed.json", seed),
+                        ("e4/run-manifest.json", manifest),
+                        ("e4/pit-universe-snapshot.json", snapshot)):
+        (artifacts / name).write_text(model.model_dump_json(), encoding="utf-8")
+    bars = launch_bars(seed, snapshot)
+    (artifacts / "bar-types.json").write_bytes(canonical_json_bytes(list(bars)))
+    wheel = tmp_path / "nautilus_trader-2.0.0rc5-cp312-cp312-manylinux_2_17_x86_64.whl"
+    wheel.write_bytes(b"wheel fixture")
+    monkeypatch.setattr(bundle, "PILOT_WHEEL_SHA256", hashlib.sha256(b"wheel fixture").hexdigest())
+    arguments = dict(
+        root=root, output=tmp_path / "bundle", sha=sha, tree=tree, wheel=wheel,
+        bar_1m=bars[0] if override == "bar" else "", bar_5m="",
+        cost_version="example-cost" if override == "cost" else "",
+        launch_artifacts=None if override == "missing" else artifacts,
+    )
+    if override is not None:
+        with pytest.raises(bundle.BundleError, match="complete generated|legacy bar-pair/cost"):
+            bundle.build_bundle(**arguments)
+        assert not (tmp_path / "bundle").exists()
+        return
+    output = bundle.build_bundle(**arguments)
+    config = json.loads((output / "config/three-setup-shadow.json").read_bytes())
+    assert config["schema"] == THREE_SETUP_L0_CONFIG_SCHEMA
+    assert config["profile"] == "FIRST_LAUNCH_20_DATA_COLLECTION_ONLY"
+    assert config["cost_model"] is None
+    assert config["e4_bar_types"] == list(bars)
+    assert len(set(config["e4_bar_types"])) == 40
+    assert config["qualification_digest"] == "NOT_QUALIFIED"
+    assert (output / "identity/e4/run-manifest.json").read_bytes()
+    assert (output / "identity/e4/pit-universe-snapshot.json").read_bytes()
+    env = (output / "config/three-setup-shadow.env").read_text()
+    assert "TRADER_ASSIST_V0_THREE_SETUP_ENABLE=0" in env
+    assert "TRADER_ASSIST_V0_THREE_SETUP_MODE=DISABLED" in env
+    assert not any("notification.json" in str(path) for path in output.rglob("*"))
+
+
+def test_l0_install_stages_identity_and_service_permissions_without_service_control():
+    from scripts.build_three_setup_shadow_deployment_bundle import _remote_script
+
+    script = _remote_script("exact-rc5.whl")
+    assert "existing traderassist service identity is required" in script
+    assert "existing durable state requires separately reviewed replacement" in script
+    assert 'cp -a "$BUNDLE_ROOT/identity/."' in script
+    assert "chown -R traderassist:traderassist" in script
+    assert "chgrp -R traderassist /opt/trader-assist-v0" in script
+    assert "install -m 0640 -g traderassist" in script
+    for command in ("systemctl start", "systemctl restart", "systemctl enable",
+                    "systemctl daemon-reload", "systemctl stop"):
+        assert command not in script

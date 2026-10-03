@@ -223,7 +223,6 @@ def main() -> int:
     args = parser.parse_args()
     runtime = _read_lock("requirements-runtime.lock")
     pilot = _read_lock("requirements-nautilus-pilot.lock")
-    operator = _read_lock("requirements-operator.lock")
     expected_pilot = {_pin(PILOT_REQUIREMENT)[0]: (_pin(PILOT_REQUIREMENT)[1], PILOT_WHEEL_SHA256)}
     if pilot != expected_pilot:
         raise SystemExit("pilot lock must contain only the exact authorized rc5 Linux wheel")
@@ -235,6 +234,7 @@ def main() -> int:
         _pip_check(args.pip_check_with)
         print("target dependency closure: exact runtime + rc5 pilot; pip check PASS")
         return 0
+    operator = _read_lock("requirements-operator.lock")
     dev = _read_lock("requirements-dev.lock")
     typesafe = _read_lock("requirements-decision-model-typesafe.lock")
     _verify_direct_pins(runtime, dev, pilot, typesafe, operator)

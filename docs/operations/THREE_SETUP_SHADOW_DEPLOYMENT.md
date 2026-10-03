@@ -1,79 +1,189 @@
-# Three Setup Shadow exact-release handoff
+# FIRST_LAUNCH_20 Shadow exact-release handoff
 
-This procedure prepares and qualifies a public-data-only, NOT_SUBMITTED candidate.
-It grants no deployment, service, credential, exchange, or trading authority. Obtain
-current Operations and human authorization before any target installation or start.
+This procedure prepares the L0 public-data-only release. The profile is
+`FIRST_LAUNCH_20_DATA_COLLECTION_ONLY`: absent accepted cost authority means
+`DATA_COLLECTION_ONLY`, Strategy `NOT_EVALUABLE` with reason
+`COST_AUTHORITY_ABSENT`, and submission `NOT_SUBMITTED`. No Formal, ShadowOrder,
+or approval package may be created from missing cost authority. Example or zero
+cost coefficients are not authority. Notification delivery is disabled; normal
+L0 startup requires no notification credential and performs no notification send.
 
-1. Engineering records the reviewed full release SHA and tree, exact-head CI, and
-   the authorized E4/PIT/Registry identity. Use the accepted rc5 Linux CPython 3.12
-   wheel whose bytes match `requirements-nautilus-pilot.lock`. The operator provides
-   reviewed exact 1m/5m external LAST bar types and cost-model version. Generate
-   one folder locally with `scripts/build_three_setup_shadow_deployment_bundle.py`
-   using `--expected-sha`, `--expected-tree`, `--rc5-wheel`, `--bar-type-1m`,
-   `--bar-type-5m`, `--cost-model-version`, and an empty `--output` path outside
-   the repository. The generator requires a clean exact Git candidate.
-2. Preserve the generator's five `EXPECTED_*` values in the canonical reviewed
-   Engineering/Operations handoff, independently of the transfer folder. They
-   are the expected release SHA, tree, release-manifest canonical digest,
-   bundle-manifest raw SHA256 and remote-qualification script raw SHA256. Never
-   obtain expected values from the uploaded folder. Upload that single folder
-   unchanged through FinalShell SFTP to the reviewed unique upload path. Do not
-   mix it with a prior folder.
-3. In the already-connected FinalShell terminal, use the five values copied
-   from the canonical reviewed handoff in this bounded pre-execution block.
-   Substitute the reviewed absolute upload path; keep the values outside the
-   uploaded folder. No uploaded code runs until both raw hashes match:
+Deployment, target runtime qualification, and service start retain their current
+Human Gates. A source, CI, bundle or qualification PASS does not authorize any
+protected action. Keep activation absent, enable off and service stopped until
+separately authorized. No private API, execution client, wallet/signing, exchange
+write or real-capital path is part of L0. NautilusTrader remains exactly
+`2.0.0rc5`, using the hash-locked CPython 3.12 Linux x86_64 wheel.
 
-   ```bash
-   set -euo pipefail
-   BUNDLE_ROOT=/tmp/trade-os-deploy-ts7-REVIEWED_SHA_PREFIX
-   EXPECTED_RELEASE_SHA=REVIEWED_40_LOWERCASE_SHA
-   EXPECTED_RELEASE_TREE=REVIEWED_40_LOWERCASE_TREE
-   EXPECTED_RELEASE_MANIFEST_CANONICAL_DIGEST=REVIEWED_64_LOWERCASE_DIGEST
-   EXPECTED_BUNDLE_MANIFEST_SHA256=REVIEWED_64_LOWERCASE_DIGEST
-   EXPECTED_REMOTE_QUALIFICATION_SHA256=REVIEWED_64_LOWERCASE_DIGEST
-   test "$(sha256sum "$BUNDLE_ROOT/bundle-manifest.json" | cut -d ' ' -f 1)" = "$EXPECTED_BUNDLE_MANIFEST_SHA256"
-   test "$(sha256sum "$BUNDLE_ROOT/remote-qualification.sh" | cut -d ' ' -f 1)" = "$EXPECTED_REMOTE_QUALIFICATION_SHA256"
-   bash "$BUNDLE_ROOT/remote-qualification.sh" --verify "$EXPECTED_RELEASE_SHA" "$EXPECTED_RELEASE_TREE" "$EXPECTED_RELEASE_MANIFEST_CANONICAL_DIGEST" "$EXPECTED_BUNDLE_MANIFEST_SHA256"
-   ```
+## Generate the complete launch identity
 
-   The anchored script recomputes the release-manifest canonical digest from
-   actual bytes, checks the exact regular-file transfer path set and each file
-   hash/size, and invokes the existing no-Git staged release verifier before
-   host preflight or installation. Host preflight checks stopped/default-off
-   state and exact wheel bytes; compatibility comes from the wheel's intrinsic
-   `WHEEL` `Tag:` metadata. Target Python 3.12 must have the staged verifier's
-   import prerequisites available before this read-only verification; absence
-   fails closed. Record that prerequisite separately from the target runtime
-   and pilot venv closure.
-4. Only after a separate current deployment authorization, repeat the exact
-   pre-execution hash block and pass the same four independent release/bundle
-   arguments to the script with `--install` and the explicit authorization
-   setting described in the generated script. It refuses an existing `/opt/trader-assist-v0` install;
-   replacement requires a separately reviewed rollback plan. Installation uses
-   the runtime lock with hashes, the pilot lock with hashes, `--no-deps` and
-   `--only-binary`, and `PYTHONPATH` source rather than project installation.
-   The service and activation permit remain off/absent. A failed install must
-   leave the service stopped; record cleanup or rollback evidence before retry.
-5. Operations supplies matching E4 durable run manifest/PIT snapshot and a
-   validated Registry through their existing authority. Before any service
-   start, run `three_setup_shadow_preflight.py` with the exact staged root,
-   retained release manifest, concrete config, and independently expected SHA
-   and tree. Run `run_three_setup_shadow_runtime.py --validate-only` with the
-   same identity arguments; it needs no notification secret. Record the actual
-   target venv closure, `pip check`, import origin and preflight result.
-6. A later, separately authorized activation provides external permit,
-   enable/mode and a systemd notification credential file. The unchanged unit
-   invokes only the wrapper and retains `Restart=no`. The wrapper repeats the
-   candidate preflight before normal runtime. A failure keeps the service
-   stopped/default-off; do not create a permit or restart automatically.
+Bind the reviewed candidate's full SHA and tree. Under current public-data
+collection authority, use `scripts/build_multi_asset_registry_seed.py` with
+`--version`, `--output`, `--launch-output`, `--expected-sha`, `--expected-tree`
+and `--run-id`. Choose a new artifact directory outside product source.
+The existing canonical resolver must resolve every market without substitution:
 
-Copy the non-secret qualification evidence schema in
-`deploy/p4a/evidence/three-setup-shadow-qualification-manifest-v1.json.example`.
-Record the canonical independent anchors, exact release and bundle hashes,
-transfer path-set proof, service/permit state before and after,
-host and venv proof, validate-only result, and rollback result. Never include
-credential values, private data, tokens, keys, production DBs or raw logs.
-After merge, Q1 separately observes the public Nautilus probe, bounded
-NOT_SUBMITTED process, readiness and cohort behavior, recovery, outbox and
-SQLite integrity. A local or CI PASS is not target-host or Q1 evidence.
+```text
+BTC ETH HYPE SOL SKHX MU SNDK XYZ100 SP500 WTIOIL
+DRAM SPCX SILVER NVDA SMSN EWY GOLD XRP TSLA GOOGL
+```
+
+Official metadata and actual rc5 provider instrument objects bind Registry/PIT
+identities. Missing, delisted, duplicate or ambiguous identities stop generation.
+The output includes `registry-seed.json`, the existing staged/pending Registry,
+`e4/run-manifest.json`, `e4/pit-universe-snapshot.json` and `bar-types.json`.
+There must be exactly 40 unique external LAST streams: one 1m and one 5m bar
+for each of the canonical 20 markets. The manifest binds release SHA/tree,
+Registry hash, PIT hash, provider instruments, all bar types and subscription
+policy. Generation does not activate the Registry current pointer.
+
+From the clean exact candidate, invoke
+`scripts/build_three_setup_shadow_deployment_bundle.py` with `--expected-sha`,
+`--expected-tree`, `--rc5-wheel`, `--launch-artifacts` and a new `--output`.
+The v3 L0 bundle consumes the complete generated identity. Do not supply legacy
+bar-pair or cost overrides. The generated config has `cost_model: null` and
+starts unqualified (`qualification_digest: NOT_QUALIFIED`) unless a valid,
+exactly bound qualification artifact is explicitly provided. Unqualified
+configuration cannot authorize normal startup.
+
+## Verify the transfer and install only under its Human Gate
+
+Preserve all five emitted `EXPECTED_*` anchors in the canonical reviewed
+handoff independently of the transfer folder: release SHA, release tree,
+release-manifest canonical digest, bundle-manifest SHA256 and remote-script
+SHA256. Upload the single unchanged bundle through the existing FinalShell
+SFTP route. Never derive expected anchors from the uploaded folder.
+
+Before executing uploaded code, verify the raw bundle-manifest and remote-script
+hashes against those independent anchors. Invoke the generated
+`remote-qualification.sh --verify` with the four independent release/bundle
+arguments. It checks the regular-file path set, hashes/sizes, retained release
+identity, exact wheel compatibility and stopped/default-off state. No uploaded
+code may run before the independent hash checks.
+
+Installation requires separate current deployment authorization and the same
+independent anchors. The installer does not stop, start, restart or enable a
+service. Existing installation/config paths are refused; do not work around
+that refusal by deleting source or durable evidence. Replacement requires
+Engineering Control's bounded predecessor/rollback disposition while the
+service is already stopped and the activation permit is absent. Retain the
+old release and E4 lineage intact. A failed or unproven rollback returns to
+Engineering Control. The locked runtime/pilot environment excludes operator
+installation; target imports must resolve to the exact staged source.
+
+## Qualify the target before any normal start
+
+Under separate current target-runtime authority, qualify the full candidate
+on the bound Tokyo host using the existing rc5 capture and production paths.
+A single-instrument connectivity probe is not full-launch qualification.
+Historical bars and callback counts cannot establish live interval completeness
+or provider headroom. Every required unknown remains `INCOMPLETE`.
+
+The explicit default-off target qualification route is:
+
+```sh
+python scripts/e4_nautilus_public_data_probe.py --qualify-l0 \
+  --config-path /etc/trader-assist-v0/three-setup-shadow.json \
+  --evidence-path /var/lib/trader-assist-v0/three-setup-shadow/qualification-NEW-RUN \
+  --result-path /var/lib/trader-assist-v0/three-setup-shadow/qualification.json \
+  --run-seconds 2400
+```
+
+This command requires separate current runtime authority. It reuses the existing
+production node and consumer with new isolated evidence; it does not control a
+service. Keep the generated Registry/E4 identity intact. Qualification alone
+sets instrument refresh to zero and uses public rc5 `LoggerConfig` /
+`FileWriterConfig` through `LiveNodeBuilder.with_logging` for a dedicated,
+non-rotating TRACE JSONL file. Normal Shadow logging is unchanged.
+
+The qualification LiveNode name is the digest-bound current-run identity marker.
+The first dedicated-file record must be the native startup-header separator with
+that exact component. Pre-marker content, missing/duplicate/mixed identities,
+malformed or unmatched native evidence and setup/write/sync/path/truncation
+ambiguity are `INCOMPLETE`. No synthetic pre-build or end marker is required.
+Sync the complete regular file through `logging_sync_to_disk`; retain its exact
+path, device/inode and SHA256 in the qualification report. Raw HTTP TRACE bodies are not authority. B1d accepts control TRACE only
+from `nautilus_network::websocket::client`, with exact `Received ping frame
+(<integer> bytes)` and `Received pong` messages. Each rolling 60s window adds
+automatic pongs, protocol-pong receipts plus at most two data-connection epochs
+as the automatic-ping upper bound, and at most two planned-close controls to
+the native outbound forecast. The result must remain <=1000. Missing or
+ambiguous control evidence cannot PASS.
+
+The exact clean rc5 metadata startup sequence is `spotMeta`, `allPerpMetas`,
+`outcomeMeta`, `allPerpMetas`, `perpDexs`: five Info requests / 100 base weight.
+Any retry, fallback, transport failure or unexpected metadata request prevents
+PASS. Each of the 40 warmup dispatches must match exactly one native completion.
+Filtered callback/completion bar counts prove successful data delivery only.
+Native CandleSnapshot extra-weight debits determine actual weight; absence of a
+debit proves extra=0 only in a complete successful current-run log. Require
+actual weight <= its conservative reservation and rolling-60s warmup <=400.
+
+Native HTTP proof does not prove WebSocket outbound control counts. Missing
+provider/queue/drop/resource evidence remains `INCOMPLETE`; do not fill it with
+zero, a callback count, a forecast from another transport or an example. A
+non-PASS report cannot authorize normal startup.
+
+Record the exact 40 bar registrations plus 20 BBO, 20 trade and 20 Depth10 native
+registrations, and the rc5 request/source proof or actual counters where public.
+The metadata cohort independently requires REST weight <=600 per 60s, zero
+429/throttle events, followed by a full 60s quiet interval. L0 only delays the
+existing Nautilus history requests with a rolling-60s reservation budget of
+400; the hard maximum remains 600 with 200 reserved headroom. Reserve each
+CandleSnapshot conservatively as 20 + floor(raw maximum response rows / 60).
+Do not replace or bypass the rc5 client or limiter.
+
+After all historical warmup streams are ready, opt into exactly one bounded
+qualification reconnect through `Strategy.reconnect_socket` for
+`HYPERLIQUID_CLIENT_ID` and `hyperliquid-data-streams`. A returned call is not
+recovery proof: retain matching DISCONNECTED then CONNECTED transitions and
+all 40 streams fresh within 60s, followed by 15 consecutive live minutes.
+Each market requires at least 15 completed 1m and three completed 5m bars,
+p95 close-to-authority <=30s and maximum <=60s, with no missing, conflicting,
+future or unexplained duplicate finalized bars.
+
+Retain the frozen provider, CPU/memory/swap/disk, storage/drop and queue evidence.
+The rc5 runner queues are unbounded: physical occupancy percent is
+`NOT_APPLICABLE_UNBOUNDED`. Use public queue-state evidence and actual resource/
+storage evidence. Real finite authority-bearing buffers must show their actual
+capacity and <=80% maximum / <=20% end occupancy. Missing proof cannot PASS.
+
+Persist the resulting digest-bound `qualification.json`. Its existing `end_ns`
+is the sole completion-time authority and is included in the report digest.
+Bind the report to the candidate release SHA/tree, manifest, PIT snapshot,
+profile, PASS status and empty blockers; bind its digest in the v3 config.
+Use the non-secret qualification evidence example to retain observed results,
+independent anchors and protected-gate state. Never manufacture a PASS report
+from examples, defaults, callback counts or unavailable provider measurements.
+
+## Revalidate startup and retain the separate service-start gate
+
+Before a separately authorized normal start, run
+`scripts/three_setup_shadow_preflight.py` and the runtime's `--validate-only`
+mode against the exact staged release, concrete config and independently
+expected release anchors. The preflight validates exact E4/Registry identity,
+rc5 dependency closure/import origin, qualification digest/identity and B1b.
+The wrapper repeats preflight and retains the external activation permit,
+explicit enable/mode, exact release checks and `Restart=no`.
+
+Startup requires an exact positive integer `end_ns` (bool is invalid) and
+current wall-clock nanoseconds satisfying:
+
+```text
+0 <= now_ns - end_ns <= 3_600_000_000_000
+```
+
+Age zero and exactly 3600 seconds are permitted. Missing, malformed, nonpositive,
+future or older completion times fail closed. Qualification mtimes, config
+mtimes, process uptime, chat times and GitHub times are not authority. A stale
+qualification requires a fresh target qualification before a later process or
+service start. A continuously running process is not automatically stopped
+when the one-hour startup TTL elapses; existing continuous health/freshness/
+storage gates remain in effect. Every later fresh start checks B1b again.
+
+Only current separate service-start authorization can supply the activation
+permit and approved enable/mode and start the service. No notification file or
+endpoint is needed. Record first-live UTC, exact release/PIT/Registry identity
+and qualification reference, then follow the existing T+2h/T+24h observation
+route. Source acceptance, target qualification and service activation remain
+separate evidence and authority boundaries.

@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import shutil
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -44,6 +46,7 @@ from .shadow_records import EvidenceStore
 
 THREE_SETUP_CONFIG_SCHEMA = "trader-assist-v0/three-setup-production-config/v1"
 THREE_SETUP_E4_CONFIG_SCHEMA = "trader-assist-v0/three-setup-production-config/v2"
+THREE_SETUP_L0_CONFIG_SCHEMA = "trader-assist-v0/three-setup-production-config/v3"
 THREE_SETUP_RELEASE_MODE = "THREE_SETUP_SHADOW_RELEASE"
 THREE_SETUP_STATE_ROOT = Path("/var/lib/trader-assist-v0/three-setup-shadow")
 THREE_SETUP_EVIDENCE_STORE_PATH = THREE_SETUP_STATE_ROOT / "evidence.sqlite"
@@ -100,13 +103,16 @@ class ThreeSetupProductionConfig:
     evidence_store_path: Path
     registry_root: Path
     closed_bar_store_path: Path
-    cost_model: CostModel
+    cost_model: CostModel | None
     acknowledgement_timeout_seconds: float = 30.0
     notification_poll_seconds: float = 5.0
     e4_evidence_root: Path | None = None
     e4_manifest_path: Path | None = None
     e4_snapshot_path: Path | None = None
     e4_bar_types: tuple[str, ...] = ()
+    data_collection_only: bool = False
+    qualification_path: Path | None = None
+    qualification_digest: str | None = None
 
     def __post_init__(self) -> None:
         if len(self.release_sha) != 40 or any(
@@ -129,6 +135,8 @@ class ThreeSetupProductionConfig:
             raise ThreeSetupProductionError(
                 "notification poll interval must be between 1 and 60 seconds"
             )
+        if self.data_collection_only != (self.cost_model is None):
+            raise ThreeSetupProductionError("cost-absent route must be DATA_COLLECTION_ONLY")
         fields = (self.e4_evidence_root, self.e4_manifest_path, self.e4_snapshot_path)
         if any(value is not None for value in fields) and (
             any(value is None for value in fields) or not self.e4_bar_types
@@ -161,13 +169,23 @@ def load_three_setup_config(path: Path) -> ThreeSetupProductionConfig:
     }
     e4_fields = {"e4_evidence_root", "e4_manifest_path", "e4_snapshot_path", "e4_bar_types"}
     schema = value.get("schema")
+    l0_fields = {"profile", "qualification_path", "qualification_digest"}
+    l0 = schema == THREE_SETUP_L0_CONFIG_SCHEMA
     if not (
         (schema == THREE_SETUP_CONFIG_SCHEMA and set(value) == expected)
         or (schema == THREE_SETUP_E4_CONFIG_SCHEMA and set(value) == expected | e4_fields)
+        or (l0 and set(value) == expected | e4_fields | l0_fields)
     ):
         raise ThreeSetupProductionError("Three Setup config schema is invalid")
     cost = value["cost_model"]
-    if not isinstance(cost, dict) or set(cost) != {
+    if l0:
+        from scripts.e4_nautilus_public_data_probe import L0_PROFILE
+
+        if value["profile"] != L0_PROFILE or cost is not None:
+            raise ThreeSetupProductionError(
+                "L0 requires absent cost authority and data-only profile"
+            )
+    elif not isinstance(cost, dict) or set(cost) != {
         "version",
         "fee_bps_per_side",
         "slippage_bps_per_side",
@@ -182,7 +200,18 @@ def load_three_setup_config(path: Path) -> ThreeSetupProductionConfig:
             closed_bar_store_path=Path(
                 _exact_string(value["closed_bar_store_path"], "closed bar path")
             ),
-            cost_model=CostModel(
+            data_collection_only=l0,
+            qualification_path=(
+                Path(_exact_string(value["qualification_path"], "qualification path"))
+                if l0
+                else None
+            ),
+            qualification_digest=(
+                _exact_string(value["qualification_digest"], "qualification digest") if l0 else None
+            ),
+            cost_model=None
+            if l0
+            else CostModel(
                 version=_exact_string(cost["version"], "cost version"),
                 fee_bps_per_side=Decimal(_exact_string(cost["fee_bps_per_side"], "fee")),
                 slippage_bps_per_side=Decimal(
@@ -200,22 +229,22 @@ def load_three_setup_config(path: Path) -> ThreeSetupProductionConfig:
             ),
             e4_evidence_root=(
                 Path(_exact_string(value["e4_evidence_root"], "E4 evidence root"))
-                if schema == THREE_SETUP_E4_CONFIG_SCHEMA
+                if schema in (THREE_SETUP_E4_CONFIG_SCHEMA, THREE_SETUP_L0_CONFIG_SCHEMA)
                 else None
             ),
             e4_manifest_path=(
                 Path(_exact_string(value["e4_manifest_path"], "E4 manifest path"))
-                if schema == THREE_SETUP_E4_CONFIG_SCHEMA
+                if schema in (THREE_SETUP_E4_CONFIG_SCHEMA, THREE_SETUP_L0_CONFIG_SCHEMA)
                 else None
             ),
             e4_snapshot_path=(
                 Path(_exact_string(value["e4_snapshot_path"], "E4 snapshot path"))
-                if schema == THREE_SETUP_E4_CONFIG_SCHEMA
+                if schema in (THREE_SETUP_E4_CONFIG_SCHEMA, THREE_SETUP_L0_CONFIG_SCHEMA)
                 else None
             ),
             e4_bar_types=(
                 tuple(_exact_string(item, "E4 bar type") for item in value["e4_bar_types"])
-                if schema == THREE_SETUP_E4_CONFIG_SCHEMA
+                if schema in (THREE_SETUP_E4_CONFIG_SCHEMA, THREE_SETUP_L0_CONFIG_SCHEMA)
                 and isinstance(value["e4_bar_types"], list)
                 else ()
             ),
@@ -306,6 +335,46 @@ def validate_three_setup_e4_identity(config: ThreeSetupProductionConfig) -> None
             if not has_exact_bar(expression.instrument_id, minute):
                 raise ThreeSetupProductionError("E4 subscriptions lack selected 1m/5m market")
 
+    if config.data_collection_only:
+        from scripts.e4_nautilus_public_data_probe import validate_launch
+
+        validate_launch(selected, snapshot, manifest, config.e4_bar_types)
+
+
+def validate_l0_qualification(config: ThreeSetupProductionConfig) -> None:
+    """Normal activation requires exact, hash-bound target qualification PASS."""
+    from scripts.e4_nautilus_public_data_probe import L0_PROFILE, L0_SCHEMA
+    from trader_assist_v0.contracts.common import sha256_hex
+
+    if not config.data_collection_only or config.qualification_path is None:
+        raise ThreeSetupProductionError("L0 qualification path is required")
+    raw = config.qualification_path.read_bytes()
+    report = json.loads(raw)
+    if not isinstance(report, dict):
+        raise ThreeSetupProductionError("L0 qualification must be an object")
+    digest = report.pop("digest", None)
+    if digest != config.qualification_digest or digest != sha256_hex(canonical_json_bytes(report)):
+        raise ThreeSetupProductionError("L0 qualification digest differs")
+    assert config.e4_manifest_path is not None
+    manifest = RunManifest.model_validate_json(config.e4_manifest_path.read_bytes())
+    if (
+        report.get("schema") != L0_SCHEMA
+        or report.get("status") != "PASS"
+        or report.get("blockers") != []
+        or report.get("profile") != L0_PROFILE
+        or report.get("release_sha") != manifest.git_sha
+        or report.get("release_tree") != manifest.git_tree
+        or report.get("manifest_hash") != manifest.manifest_hash
+        or report.get("snapshot_hash") != manifest.pit_snapshot_hash
+    ):
+        raise ThreeSetupProductionError("L0 qualification is incomplete or wrong identity")
+    end_ns = report.get("end_ns")
+    if type(end_ns) is not int or end_ns <= 0:
+        raise ThreeSetupProductionError("L0 qualification completion time is invalid")
+    age_ns = time.time_ns() - end_ns
+    if not 0 <= age_ns <= 3_600_000_000_000:
+        raise ThreeSetupProductionError("L0 qualification is future or expired")
+
 
 def _journal(logger: logging.Logger, event: str, **fields: object) -> None:
     """Emit structured, non-secret operator events to journald."""
@@ -319,7 +388,7 @@ class ThreeSetupProductionApplication:
         self,
         *,
         bootstrap: MultiAssetProductionBootstrap,
-        dispatcher: OutboxDispatcher,
+        dispatcher: OutboxDispatcher | None,
         clock: Callable[[], datetime],
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         notification_poll_seconds: float = 5.0,
@@ -469,7 +538,7 @@ class ThreeSetupProductionApplication:
                 now = self.clock()
                 if now.tzinfo is not UTC:
                     raise ThreeSetupProductionError("dispatcher clock must be exact UTC")
-                results = self.dispatcher.dispatch_due(now=now)
+                results = [] if self.dispatcher is None else self.dispatcher.dispatch_due(now=now)
                 for result in results:
                     _journal(
                         self.logger,
@@ -504,13 +573,15 @@ class ThreeSetupProductionApplication:
 def compose_three_setup_application(
     *,
     config: ThreeSetupProductionConfig,
-    notification_adapter: WebhookDeliveryAdapter,
+    qualification_root: Path | None = None,
+    notification_adapter: WebhookDeliveryAdapter | None = None,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> ThreeSetupProductionApplication:
     """Bind the public Three Setup production entrypoint to E4 market truth."""
     return _compose_e4_three_setup_application(
         config=config,
+        qualification_root=qualification_root,
         notification_adapter=notification_adapter,
         clock=clock,
         sleep=sleep,
@@ -527,7 +598,7 @@ class E4ThreeSetupProductionApplication(ThreeSetupProductionApplication):
         capture: Any,
         snapshot: PitUniverseSnapshot,
         bootstrap: MultiAssetProductionBootstrap,
-        dispatcher: OutboxDispatcher,
+        dispatcher: OutboxDispatcher | None,
         clock: Callable[[], datetime],
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         notification_poll_seconds: float = 5.0,
@@ -563,13 +634,18 @@ class E4ThreeSetupProductionApplication(ThreeSetupProductionApplication):
             if self.capture.bound_packages() or self.capture.bound_opening_intents():
                 raise ThreeSetupProductionError("E4 structural state lacks activation fence")
             activation = capture_binding_activation(
-                self.bootstrap.evidence, release_sha=release_sha,
-                run_id=run_id, manifest_hash=manifest_hash,
+                self.bootstrap.evidence,
+                release_sha=release_sha,
+                run_id=run_id,
+                manifest_hash=manifest_hash,
             )
             self.capture.activate_binding(activation)
         verify_binding_activation(
-            self.bootstrap.evidence, activation, release_sha=release_sha,
-            run_id=run_id, manifest_hash=manifest_hash,
+            self.bootstrap.evidence,
+            activation,
+            release_sha=release_sha,
+            run_id=run_id,
+            manifest_hash=manifest_hash,
         )
         self._reconcile_binding()
 
@@ -596,26 +672,25 @@ class E4ThreeSetupProductionApplication(ThreeSetupProductionApplication):
             raise ThreeSetupProductionError("E4 binding activation is absent")
         run_id, manifest_hash = self._binding_identity()
         fence = verify_binding_activation(
-            self.bootstrap.evidence, activation,
+            self.bootstrap.evidence,
+            activation,
             release_sha=self.bootstrap.coordinator._release_sha,
-            run_id=run_id, manifest_hash=manifest_hash,
+            run_id=run_id,
+            manifest_hash=manifest_hash,
         )
         formals = eligible_core_binding_formals(
-            self.bootstrap.evidence, fence=fence,
+            self.bootstrap.evidence,
+            fence=fence,
             release_sha=self.bootstrap.coordinator._release_sha,
         )
         selected = self.bootstrap.registry.active() or self.bootstrap.registry.pending_version()
         if selected is None:
             raise ThreeSetupProductionError("E4 binding lacks Registry authority")
         markets = {item.identity.market_id: item for item in selected.markets}
-        expressions = {
-            item.market_id: item for item in self.snapshot.expressions
-        }
+        expressions = {item.market_id: item for item in self.snapshot.expressions}
         existing = self.capture.bound_packages()
         intents = self.capture.bound_opening_intents()
-        eligible_packages = {
-            f"m1:shadow:{formal.shadow.record_id}" for formal in formals
-        }
+        eligible_packages = {f"m1:shadow:{formal.shadow.record_id}" for formal in formals}
         if not (set(existing) | set(intents)) <= eligible_packages:
             raise ThreeSetupProductionError("E4 binding has lost its Formal domain authority")
         observed_ns = self.capture.observed_ns()
@@ -633,8 +708,10 @@ class E4ThreeSetupProductionApplication(ThreeSetupProductionApplication):
             if prior is None and intent is None and observed_ns >= horizon_ns:
                 raise ThreeSetupProductionError("eligible Formal missed its E4 opening window")
             created_ts = (
-                prior["binding"]["created_ts"] if prior is not None
-                else intent["created_ts"] if intent is not None
+                prior["binding"]["created_ts"]
+                if prior is not None
+                else intent["created_ts"]
+                if intent is not None
                 else None
             )
             opening: dict[str, Any] = dict(
@@ -652,7 +729,8 @@ class E4ThreeSetupProductionApplication(ThreeSetupProductionApplication):
             self.capture.open_bound_structural_package(**opening)
             if observed_ns >= horizon_ns:
                 self.capture.close_bound_window(
-                    package_id=package_id, terminal_ts=horizon_ns,
+                    package_id=package_id,
+                    terminal_ts=horizon_ns,
                     complete=formal.complete_outcome,
                     reason=("OUTCOME_MATURE" if formal.complete_outcome else "OUTCOME_INCOMPLETE"),
                 )
@@ -664,12 +742,15 @@ class E4ThreeSetupProductionApplication(ThreeSetupProductionApplication):
         assert activation is not None
         run_id, manifest_hash = self._binding_identity()
         fence = verify_binding_activation(
-            self.bootstrap.evidence, activation,
+            self.bootstrap.evidence,
+            activation,
             release_sha=self.bootstrap.coordinator._release_sha,
-            run_id=run_id, manifest_hash=manifest_hash,
+            run_id=run_id,
+            manifest_hash=manifest_hash,
         )
         formals = eligible_core_binding_formals(
-            self.bootstrap.evidence, fence=fence,
+            self.bootstrap.evidence,
+            fence=fence,
             release_sha=self.bootstrap.coordinator._release_sha,
         )
         session = self.capture.capture_session
@@ -693,10 +774,7 @@ class E4ThreeSetupProductionApplication(ThreeSetupProductionApplication):
                 raise ThreeSetupProductionError("E4 package checkpoint readback conflicts")
             opportunity_id = f"m1:event:{formal.market_event.record_id}"
             thesis_id = f"m1:signal:{formal.signal.record_id}"
-            facts = tuple(
-                item for item in lifecycle
-                if item.package_id == package_id
-            )
+            facts = tuple(item for item in lifecycle if item.package_id == package_id)
             opportunities = tuple(item for item in facts if item.object_id == opportunity_id)
             theses = tuple(item for item in facts if item.object_id == thesis_id)
             if (
@@ -712,11 +790,13 @@ class E4ThreeSetupProductionApplication(ThreeSetupProductionApplication):
                 raise ThreeSetupProductionError("E4 lifecycle or horizon readback conflicts")
             market_id = formal.signal.payload["market_id"]
             raw = tuple(
-                item for item in admissions
+                item
+                for item in admissions
                 if item.source.market_id == market_id
                 and item.source.data_kind.value in {"BBO", "TRADE"}
                 and binding["created_ts"] - PRE_DECISION_RETENTION_NS
-                <= item.admission_ts <= binding["horizon_ns"] + POST_TERMINAL_MICRO_NS
+                <= item.admission_ts
+                <= binding["horizon_ns"] + POST_TERMINAL_MICRO_NS
             )
             outcomes = self.bootstrap.evidence._query_records(
                 "binding.research.outcome",
@@ -729,36 +809,41 @@ class E4ThreeSetupProductionApplication(ThreeSetupProductionApplication):
             provenance = self.bootstrap.evidence.get(str(formal.signal.payload["provenance_id"]))
             if plan is None or provenance is None:
                 raise ThreeSetupProductionError("Formal plan or provenance readback is absent")
-            result.append({
-                "market_event": formal.market_event.canonical_row(),
-                "formal_signal": formal.signal.canonical_row(),
-                "shadow_order": formal.shadow.canonical_row(),
-                "plan_record": plan.canonical_row(),
-                "provenance": provenance.canonical_row(),
-                "outcomes": [item.canonical_row() for item in outcomes],
-                "package_id": package_id,
-                "binding": binding,
-                "tail": package["tail"],
-                "predecision_state": package["predecision_state"],
-                "lifecycle": [item.model_dump(mode="json") for item in facts],
-                "admissions": [item.model_dump(mode="json") for item in raw],
-                "evidence_state": package["tail"]["evidence_state"],
-                "missingness": (
-                    "ADMISSIONS_ABSENT" if not raw
-                    else "INCOMPLETE" if package["tail"]["evidence_state"] != "COMPLETE"
-                    else None
-                ),
-                "coefficient_level_after_cost_reconstruction": "NOT_PROVEN",
-            })
+            result.append(
+                {
+                    "market_event": formal.market_event.canonical_row(),
+                    "formal_signal": formal.signal.canonical_row(),
+                    "shadow_order": formal.shadow.canonical_row(),
+                    "plan_record": plan.canonical_row(),
+                    "provenance": provenance.canonical_row(),
+                    "outcomes": [item.canonical_row() for item in outcomes],
+                    "package_id": package_id,
+                    "binding": binding,
+                    "tail": package["tail"],
+                    "predecision_state": package["predecision_state"],
+                    "lifecycle": [item.model_dump(mode="json") for item in facts],
+                    "admissions": [item.model_dump(mode="json") for item in raw],
+                    "evidence_state": package["tail"]["evidence_state"],
+                    "missingness": (
+                        "ADMISSIONS_ABSENT"
+                        if not raw
+                        else "INCOMPLETE"
+                        if package["tail"]["evidence_state"] != "COMPLETE"
+                        else None
+                    ),
+                    "coefficient_level_after_cost_reconstruction": "NOT_PROVEN",
+                }
+            )
         return tuple(result)
 
     def export_core_binding_research_jsonl(self) -> bytes:
         return b"".join(
-            canonical_json_bytes(item) + b"\n"
-            for item in self.read_core_binding_research()
+            canonical_json_bytes(item) + b"\n" for item in self.read_core_binding_research()
         )
 
     async def _on_dispatch_tick(self) -> None:
+        if hasattr(self.capture, "advance_l0"):
+            self.capture.advance_l0()
         if self._binding_enabled:
             self._reconcile_binding()
 
@@ -835,9 +920,11 @@ class E4ThreeSetupProductionApplication(ThreeSetupProductionApplication):
             try:
                 results = await asyncio.gather(dispatcher_task, domain_task, return_exceptions=True)
                 for result in results:
-                    if isinstance(result, BaseException) and not isinstance(
-                        result, asyncio.CancelledError
-                    ) and cleanup_error is None:
+                    if (
+                        isinstance(result, BaseException)
+                        and not isinstance(result, asyncio.CancelledError)
+                        and cleanup_error is None
+                    ):
                         cleanup_error = result
             except BaseException as exc:
                 if cleanup_error is None:
@@ -896,7 +983,8 @@ class E4ThreeSetupProductionApplication(ThreeSetupProductionApplication):
 def _compose_e4_three_setup_application(
     *,
     config: ThreeSetupProductionConfig,
-    notification_adapter: WebhookDeliveryAdapter,
+    qualification_root: Path | None = None,
+    notification_adapter: WebhookDeliveryAdapter | None,
     clock: Callable[[], datetime],
     sleep: Callable[[float], Awaitable[None]],
 ) -> E4ThreeSetupProductionApplication:
@@ -911,14 +999,32 @@ def _compose_e4_three_setup_application(
     assert e4_evidence_root is not None
     manifest = RunManifest.model_validate_json(e4_manifest_path.read_bytes())
     snapshot = PitUniverseSnapshot.model_validate_json(e4_snapshot_path.read_bytes())
+    registry_root = config.registry_root
+    evidence_path = config.evidence_store_path
+    native_log = None
+    if qualification_root is not None:
+        if not config.data_collection_only or notification_adapter is not None:
+            raise ThreeSetupProductionError("qualification requires zero-notification data-only L0")
+        qualification_root = qualification_root.absolute()
+        if qualification_root.exists() or qualification_root.resolve() != qualification_root:
+            raise ThreeSetupProductionError(
+                "qualification requires a new, non-symlink evidence root"
+            )
+        qualification_root.mkdir(parents=True)
+        registry_root = qualification_root / "registry"
+        shutil.copytree(config.registry_root, registry_root)
+        e4_evidence_root = qualification_root / "e4"
+        E4EvidenceStore(e4_evidence_root).initialize(manifest, snapshot)
+        evidence_path = qualification_root / "evidence.sqlite"
+        native_log = qualification_root / "native.jsonl"
     e4_store = E4EvidenceStore(e4_evidence_root)
     if e4_store.load_manifest() != manifest or e4_store.load_snapshot() != snapshot:
         raise ThreeSetupProductionError("E4 identity differs from shared durable evidence")
-    config.evidence_store_path.parent.mkdir(parents=True, exist_ok=True)
-    evidence = EvidenceStore(config.evidence_store_path)
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence = EvidenceStore(evidence_path)
     holder: dict[str, E4MarketTruthProjection] = {}
     registry = MarketRegistryManager(
-        config.registry_root,
+        registry_root,
         metadata_validator=lambda market: holder["projection"].validate_market(market),
     )
     selected = registry.active() or registry.pending_version()
@@ -928,11 +1034,19 @@ def _compose_e4_three_setup_application(
     policy = SubscriptionPolicy(
         discovery=frozenset(item.market_id for item in snapshot.expressions),
         watch=frozenset(m.identity.market_id for m in selected.markets),
-        actionable=frozenset(
+        actionable=frozenset()
+        if config.data_collection_only
+        else frozenset(
             m.identity.market_id for m in selected.markets if m.lifecycle is MarketLifecycle.ACTIVE
         ),
     )
-    node = build_public_data_node()
+    if qualification_root is not None:
+        node = build_public_data_node(
+            l0=True, qualification_manifest=manifest, qualification_log=native_log,
+        )
+    else:
+        node = (build_public_data_node(l0=True) if config.data_collection_only
+                else build_public_data_node())
     capture = build_capture_strategy(
         manifest=manifest,
         snapshot=snapshot,
@@ -940,7 +1054,10 @@ def _compose_e4_three_setup_application(
         bar_types=config.e4_bar_types,
         evidence_root=e4_evidence_root,
     )
-    projection = E4MarketTruthProjection(
+    projection_type = (
+        _DataOnlyProjection if config.data_collection_only else E4MarketTruthProjection
+    )
+    projection = projection_type(
         e4_store=e4_store,
         domain_evidence=evidence,
         registry=registry,
@@ -955,6 +1072,44 @@ def _compose_e4_three_setup_application(
         raise ThreeSetupProductionError("Registry market differs from current E4 PIT metadata")
     registry.bind_e4_evidence_authority(projection)
     node.add_strategy(capture)
+    if config.data_collection_only:
+        if notification_adapter is not None:
+            raise ThreeSetupProductionError("L0 forbids notification delivery")
+        runtime = E4ThreeSetupRuntime(projection=projection, registry=registry, clock=clock)
+        composition = _DataOnlyComposition(registry, projection, evidence, runtime)
+        application = E4ThreeSetupProductionApplication(
+            node=node,
+            capture=capture,
+            snapshot=snapshot,
+            bootstrap=cast(MultiAssetProductionBootstrap, composition),
+            dispatcher=None,
+            clock=clock,
+            sleep=sleep,
+            notification_poll_seconds=config.notification_poll_seconds,
+        )
+        application._binding_enabled = False
+        if qualification_root is not None:
+            capture.enable_l0_qualification()
+        runtime.on_finalized_5m = None
+        runtime.on_maintenance_5m = None
+        runtime.on_completed_1m = None
+        runtime.on_reconnect = None
+        runtime.on_session_event = None
+        assert isinstance(projection, _DataOnlyProjection)
+        projection.on_processed = capture.record_l0_processed
+        runtime._queue = _ObservedQueue(runtime._queue.maxsize)
+        _journal(
+            application.logger,
+            "STRATEGY_EVALUATION",
+            state="NOT_EVALUABLE",
+            reason="COST_AUTHORITY_ABSENT",
+            submission_status="NOT_SUBMITTED",
+        )
+        return application
+    if config.cost_model is None or notification_adapter is None:
+        raise ThreeSetupProductionError(
+            "economic composition requires explicit cost and delivery adapters"
+        )
     bootstrap = MultiAssetProductionBootstrap.compose_e4(
         registry=registry,
         projection=projection,
@@ -974,3 +1129,54 @@ def _compose_e4_three_setup_application(
         sleep=sleep,
         notification_poll_seconds=config.notification_poll_seconds,
     )
+
+
+@dataclass
+class _DataOnlyComposition:
+    """Thin existing E4 runtime binding; constructs no economic coordinator/outbox."""
+
+    registry: MarketRegistryManager
+    data_authority: E4MarketTruthProjection
+    evidence: EvidenceStore
+    runtime: E4ThreeSetupRuntime
+    on_formalized: object | None = None
+
+    def close(self) -> None:
+        self.evidence.close()
+
+
+class _DataOnlyProjection(E4MarketTruthProjection):
+    """Observe existing durable projection processing; no Strategy evaluation."""
+
+    on_processed: Callable[[Any, int], None] | None = None
+
+    def accept(self, event: Any) -> Any:
+        result = super().accept(event)
+        if self.on_processed is not None:
+            self.on_processed(event, self.clock_ms() * 1_000_000)
+        return result
+
+
+class _ObservedQueue(asyncio.Queue[Any]):
+    """Same application-owned queue/capacity with exact put occupancy evidence."""
+
+    def __init__(self, capacity: int) -> None:
+        super().__init__(maxsize=capacity)
+        self.peak_depth = 0
+        self.overflows = 0
+
+    def put_nowait(self, item: Any) -> None:
+        try:
+            super().put_nowait(item)
+        except asyncio.QueueFull:
+            self.overflows += 1
+            raise
+        self.peak_depth = max(self.peak_depth, self.qsize())
+
+    def health(self) -> dict[str, int]:
+        return {
+            "capacity": self.maxsize,
+            "max_depth": self.peak_depth,
+            "end_depth": self.qsize(),
+            "overflows": self.overflows,
+        }

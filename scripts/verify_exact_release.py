@@ -10,7 +10,10 @@ from pathlib import Path
 from typing import Final
 
 from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
-from trader_assist_v0.multi_asset_shadow.production import THREE_SETUP_E4_CONFIG_SCHEMA
+from trader_assist_v0.multi_asset_shadow.production import (
+    THREE_SETUP_E4_CONFIG_SCHEMA,
+    THREE_SETUP_L0_CONFIG_SCHEMA,
+)
 
 RELEASE_MANIFEST_SCHEMA: Final = "trader-assist-v0/three-setup-exact-release/v2"
 REQUIRED_FILES: Final = (
@@ -19,6 +22,8 @@ REQUIRED_FILES: Final = (
     "requirements-dev.lock",
     "requirements-nautilus-pilot.lock",
     "scripts/check_dependency_lock.py",
+    "scripts/build_multi_asset_registry_seed.py",
+    "scripts/e4_nautilus_public_data_probe.py",
     "scripts/verify_exact_release.py",
     "scripts/three_setup_shadow_preflight.py",
     "scripts/build_three_setup_shadow_deployment_bundle.py",
@@ -102,7 +107,7 @@ def build_release_manifest(root: Path, *, release_sha: str, release_tree: str) -
         config = json.loads(config_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ExactReleaseError("Three Setup release config example is invalid") from exc
-    if config.get("schema") != THREE_SETUP_E4_CONFIG_SCHEMA:
+    if config.get("schema") not in (THREE_SETUP_E4_CONFIG_SCHEMA, THREE_SETUP_L0_CONFIG_SCHEMA):
         raise ExactReleaseError("release config schema contradicts production authority")
     files = [
         {
@@ -116,7 +121,7 @@ def build_release_manifest(root: Path, *, release_sha: str, release_tree: str) -
         "schema": RELEASE_MANIFEST_SCHEMA,
         "release_sha": release_sha,
         "release_tree": release_tree,
-        "config_schema": THREE_SETUP_E4_CONFIG_SCHEMA,
+        "config_schema": config["schema"],
         "runtime_lock_sha256": sha256_hex((root / "requirements-runtime.lock").read_bytes()),
         "pilot_lock_sha256": sha256_hex((root / "requirements-nautilus-pilot.lock").read_bytes()),
         "dev_lock_sha256": sha256_hex((root / "requirements-dev.lock").read_bytes()),
@@ -173,8 +178,15 @@ def verify_staged_release(
         )
 
     # Config schema
-    if manifest.get("config_schema") != THREE_SETUP_E4_CONFIG_SCHEMA:
+    if manifest.get("config_schema") not in (
+        THREE_SETUP_E4_CONFIG_SCHEMA, THREE_SETUP_L0_CONFIG_SCHEMA
+    ):
         raise ExactReleaseError("retained manifest config schema contradicts production authority")
+
+    selected_config = staged_root / "deploy/p4a/config/three-setup-shadow.json.example"
+    selected_schema = json.loads(selected_config.read_bytes()).get("schema")
+    if manifest.get("config_schema") != selected_schema:
+        raise ExactReleaseError("retained config schema differs from staged example")
 
     # Manifest digest integrity — proves the manifest has not been tampered with
     stored_digest = manifest.get("manifest_sha256")

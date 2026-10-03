@@ -154,7 +154,10 @@ def _resolve_requests(
             raise ValueError("official metadata universe is invalid")
         for raw in universe:
             if isinstance(raw, dict) and isinstance(raw.get("name"), str):
-                records[(dex, cast(str, raw["name"]))] = raw
+                key = (dex, cast(str, raw["name"]))
+                if key in records:
+                    raise ValueError("official metadata contains duplicate DEX/coin identity")
+                records[key] = raw
     resolutions: list[Resolution] = []
     for request in requests:
         raw = records.get((request.dex, request.coin))
