@@ -12,8 +12,8 @@ This document freezes the default user-operated target-host deployment transport
 The current normal operator path is:
 
 ```text
-MACOS LOCAL TERMINAL
-  -> GENERATE ONE EXACT-RELEASE DEPLOYMENT FOLDER / BUNDLE
+GITHUB_ACTIONS_LINUX_X86_64
+  -> DOWNLOAD ONE EXACT-RELEASE TRANSPORT ARCHIVE
   -> FINALSHELL FILE MANAGER / SFTP UPLOAD
   -> ALREADY-CONNECTED FINALSHELL SERVER TERMINAL
   -> ONE CONTIGUOUS REMOTE EXECUTION BLOCK
@@ -26,12 +26,13 @@ FinalShell is the operator surface. It is not a new deployment authority, source
 
 ```text
 DEFAULT_TARGET_HOST_OPERATOR_SURFACE=FINALSHELL
-LOCAL_ARTIFACT_BUILD_SURFACE=MACOS_TERMINAL
+RELEASE_BUNDLE_BUILD_SURFACE=GITHUB_ACTIONS_LINUX_X86_64
+OLD_INTEL_MAC_BUILD_DEPENDENCY=NO
 TRANSFER_SURFACE=FINALSHELL_SFTP_OR_FILE_MANAGER
 REMOTE_EXECUTION_SURFACE=ALREADY_CONNECTED_FINALSHELL_TERMINAL
 MAC_DIRECT_SSH_REQUIRED=NO
-ONE_LOCAL_GENERATION_BLOCK=DEFAULT
-ONE_TRANSFER_FOLDER=DEFAULT
+ONE_EXACT_ARTIFACT_DOWNLOAD=DEFAULT
+ONE_TRANSFER_ARCHIVE=DEFAULT
 ONE_REMOTE_EXECUTION_BLOCK=DEFAULT
 SILENT_DEPLOYMENT_TRANSPORT_SUBSTITUTION=NO
 EXACT_40_CHAR_RELEASE_SHA_REQUIRED=YES
@@ -62,25 +63,31 @@ No artifact, FinalShell session, old deployment folder, stale prompt, prior auth
 
 FinalShell workflow selection never grants deployment, runtime, service start/restart/enable, reboot, credential/private API, wallet/signing, exchange-write, order-submission or trading authority. Those remain explicit current user-retained gates.
 
-## 4. Phase A — local exact-release package generation
+## 4. Phase A — GitHub exact-release artifact generation and download
 
-Engineering/Operations should provide one contiguous ordinary macOS Terminal block that performs the complete local packaging step.
+Engineering/Operations should bind the reviewed full release SHA and tree, then
+use the manual GitHub Actions Linux x86_64 / CPython 3.12 release-bundle builder.
+The old Intel Mac is a download/transfer surface; native local generation is not
+required. Release-specific inputs and download commands are in the accepted
+Operations runbook. The workflow/control HEAD and historical product release
+SHA are separate identities; a later control HEAD must not move the release.
 
-The block should, where applicable:
+The builder must fail closed on release/tree, locked dependency, launch identity,
+manifest/hash or secret mismatch. It emits one non-secret tar.gz with the exact
+bundle, manifest and five handoff anchors. Record the exact run ID/attempt,
+artifact name, control HEAD and independently reviewed anchors. Public metadata
+observation times can change between builds; each run has its own hash binding.
+Artifact PASS grants no deployment/runtime/service authority.
 
-- resolve or use the explicitly authorized full 40-character release SHA;
-- fresh-check that the expected release remains valid before packaging;
-- obtain source from the approved local repository/worktree or another exact verified source;
-- fail closed on repository/release identity mismatch;
-- create one uniquely named deployment folder;
-- place only required non-secret deployment payload inside that folder;
-- include server-side execution script(s) needed for the bounded deployment/qualification;
-- create a manifest identifying the exact release SHA and included paths;
-- calculate cryptographic hashes for the package/payload or manifest-bound files;
-- record the expected upload destination;
-- emit a concise operator summary naming the single folder that must be uploaded.
+Download that exact run's artifact once, without rebuilding or editing it.
+GitHub's outer artifact does not preserve filesystem executable modes; the inner
+tar payload preserves `remote-qualification.sh` mode `0750`. Keep the archive
+intact through transfer. Handoff metadata stays outside the manifest-bound bundle
+and does not become independent authority by travelling in the same archive.
 
-The user should not have to manually assemble files, edit generated scripts, copy multiple unrelated payloads, configure a new macOS SSH route, or reconstruct the release from chat text.
+The user should not have to assemble payloads, edit generated scripts, install a
+native build environment, configure a new macOS SSH route or reconstruct the
+release from chat text.
 
 ### Package safety
 
@@ -99,11 +106,11 @@ Existing secure server-side credentials remain server-side unless a separately a
 
 ## 5. Phase B — FinalShell transfer
 
-After local package generation, the normal irreducible human transfer step is:
+After exact GitHub artifact download, the normal irreducible human transfer step is:
 
 1. open the already configured target host in FinalShell;
 2. use FinalShell file manager/SFTP transfer;
-3. upload the single generated deployment folder to the exact temporary destination specified by Engineering/Operations;
+3. upload the single unchanged transport archive to the exact temporary destination specified by Engineering/Operations;
 4. do not rename, edit, partially copy, unzip/rebuild, or mix files with an older deployment folder unless the generated instructions explicitly require it.
 
 The preferred remote staging location is a unique temporary path such as:
@@ -125,6 +132,8 @@ Do not ask the user to establish another SSH connection from macOS when the Fina
 The remote block should perform, where applicable:
 
 - remote staging-path preflight;
+- safe archive path/type verification and extraction into a new staging directory;
+- executable mode `0750` and independent manifest/script hash verification before running uploaded code;
 - package/manifest/hash verification before mutation;
 - exact release SHA verification;
 - host identity/state verification;
@@ -179,8 +188,8 @@ No silent substitution is allowed. Do not introduce Terraform, Ansible, a custom
 The normal workflow should require only these operator interactions:
 
 ```text
-1. PASTE ONE LOCAL MACOS TERMINAL BLOCK
-2. UPLOAD ONE GENERATED FOLDER THROUGH FINALSHELL
+1. GENERATE / DOWNLOAD ONE EXACT GITHUB ARTIFACT
+2. UPLOAD ONE UNCHANGED ARCHIVE THROUGH FINALSHELL
 3. PASTE ONE REMOTE BLOCK INTO THE ALREADY-CONNECTED FINALSHELL TERMINAL
 4. RETURN THE RESULT/EVIDENCE WHEN THE CONTROL WINDOW CANNOT ACCESS IT DIRECTLY
 ```

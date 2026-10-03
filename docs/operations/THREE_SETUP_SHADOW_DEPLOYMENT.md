@@ -15,12 +15,27 @@ separately authorized. No private API, execution client, wallet/signing, exchang
 write or real-capital path is part of L0. NautilusTrader remains exactly
 `2.0.0rc5`, using the hash-locked CPython 3.12 Linux x86_64 wheel.
 
-## Generate the complete launch identity
+## Generate and download the exact GitHub artifact
 
-Bind the reviewed candidate's full SHA and tree. Under current public-data
-collection authority, use `scripts/build_multi_asset_registry_seed.py` with
-`--version`, `--output`, `--launch-output`, `--expected-sha`, `--expected-tree`
-and `--run-id`. Choose a new artifact directory outside product source.
+Use **Three Setup exact-release bundle**
+(`.github/workflows/three-setup-release-bundle.yml`) on its accepted workflow
+ref after the separate publication/merge gates. It has only `workflow_dispatch`
+and builds on Ubuntu 24.04 / Linux x86_64 / CPython 3.12. The frozen inputs are:
+
+```text
+release_sha=a79d7d5349b5f4dbb1143e43daf6eea1f75d81f3
+release_tree=c6e53c79158eb69e1fd62d2fe7389019f9524eb5
+```
+
+The workflow checks out the control HEAD at the dispatch run's `github.sha` in
+`control/` and this historical product release in `release/`. A later control
+HEAD must not substitute its source, builders, locks or tree for the product
+release. Record both identities from the exact successful run's summary.
+It reuses the release's hashed locks, exact rc5 wheel and existing
+`scripts/build_multi_asset_registry_seed.py` and
+`scripts/build_three_setup_shadow_deployment_bundle.py`. All generated files
+stay outside product source. No local Intel Mac native generation is needed.
+
 The existing canonical resolver must resolve every market without substitution:
 
 ```text
@@ -37,22 +52,54 @@ for each of the canonical 20 markets. The manifest binds release SHA/tree,
 Registry hash, PIT hash, provider instruments, all bar types and subscription
 policy. Generation does not activate the Registry current pointer.
 
-From the clean exact candidate, invoke
-`scripts/build_three_setup_shadow_deployment_bundle.py` with `--expected-sha`,
-`--expected-tree`, `--rc5-wheel`, `--launch-artifacts` and a new `--output`.
-The v3 L0 bundle consumes the complete generated identity. Do not supply legacy
-bar-pair or cost overrides. The generated config has `cost_model: null` and
-starts unqualified (`qualification_digest: NOT_QUALIFIED`) unless a valid,
-exactly bound qualification artifact is explicitly provided. Unqualified
-configuration cannot authorize normal startup.
+The v3 L0 bundle consumes that complete identity without legacy bar-pair or
+cost overrides. Generated config has `cost_model: null` and
+`qualification_digest: NOT_QUALIFIED`, enable `0`, mode `DISABLED`, and no
+qualification artifact or activation permit. Unqualified configuration cannot
+authorize normal startup. Current public metadata and observation timestamps
+can differ across builds; each run is independently hash-bound.
+
+From the exact successful Actions run, download artifact
+`three-setup-release-<full-release-sha>-<run-id>-<run-attempt>`. The Actions page
+provides a download; alternatively use one local download command, substituting
+the exact recorded run/artifact and a new download directory:
+
+```sh
+gh run download <exact-run-id> --repo woshixiong/trader-assist-v0 \
+  --name <exact-artifact-name> --dir <new-download-directory>
+```
+
+The outer artifact contains only `three-setup-release-bundle.tar.gz`. Its inner
+payload contains `bundle/` and `handoff/{anchors.env,provenance.json}`. Never add
+handoff files to `bundle/`: the existing verifier requires an exact file set.
+GitHub upload-artifact normalizes outer filesystem permissions; preserve the
+tar.gz intact so its inner `remote-qualification.sh` retains mode `0750`.
+Artifact PASS grants no deployment/runtime/service authority. A successful
+GitHub build is not target qualification or permission to start a service.
 
 ## Verify the transfer and install only under its Human Gate
 
 Preserve all five emitted `EXPECTED_*` anchors in the canonical reviewed
 handoff independently of the transfer folder: release SHA, release tree,
 release-manifest canonical digest, bundle-manifest SHA256 and remote-script
-SHA256. Upload the single unchanged bundle through the existing FinalShell
-SFTP route. Never derive expected anchors from the uploaded folder.
+SHA256. The exact run summary emits these five keys and no sixth anchor:
+
+```text
+EXPECTED_RELEASE_SHA
+EXPECTED_RELEASE_TREE
+EXPECTED_RELEASE_MANIFEST_CANONICAL_DIGEST
+EXPECTED_BUNDLE_MANIFEST_SHA256
+EXPECTED_REMOTE_QUALIFICATION_SHA256
+```
+
+Bind those values to the exact successful run in the canonical reviewed
+Operations handoff before transfer. The archive's `anchors.env` is a convenience
+copy, not independent authority. Upload the single unchanged tar.gz through
+FinalShell SFTP/file manager. Under separate current Operations authority, use
+one contiguous block in the already-connected FinalShell server Terminal to
+check archive paths/types, extract into a new staging directory, and confirm
+`bundle/remote-qualification.sh` mode `0750`. Never rebuild on the Mac or infer
+expected anchors from the transferred archive/folder.
 
 Before executing uploaded code, verify the raw bundle-manifest and remote-script
 hashes against those independent anchors. Invoke the generated
