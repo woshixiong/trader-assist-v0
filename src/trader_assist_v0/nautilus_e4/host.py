@@ -84,6 +84,10 @@ if TYPE_CHECKING:
             self, topic: str, handler: Callable[[object], None], priority: int = 0
         ) -> None: ...
 
+        def reconnect_socket(self, client_id: object, endpoint: str) -> None: ...
+
+        def subscribe_queue_state(self) -> None: ...
+
         def subscribe_socket_state(
             self,
             client_id: object | None = None,
@@ -216,6 +220,22 @@ class NautilusE4CaptureStrategy(Strategy):
             actionable=frozenset(config.actionable_market_ids),
         )
         self._bar_types = config.bar_types
+        from scripts.e4_nautilus_public_data_probe import L0_PROFILE
+
+        self._l0 = self._manifest.capture_configuration.get("profile") == L0_PROFILE
+        self._l0_pacer: Any = None
+        self._l0_pending: list[WarmupStream] = []
+        self._l0_observation: Any = None
+        self._l0_live_ids: set[str] = set()
+        self._l0_live_peak = 0
+        self._l0_queue_states: dict[str, dict[str, object]] = {}
+        self._l0_queue_events = 0
+        self._l0_socket_events: list[dict[str, Any]] = []
+        self._l0_evidence_end_ns: int | None = None
+        self._l0_registered: set[str] = set()
+        self._l0_native_registered: list[dict[str, str]] = []
+        self._l0_raw_weight_verified = False
+        self._l0_history_requests: list[dict[str, object]] = []
         self._registered_bar_streams: set[tuple[str, DataKind]] = set()
         self._registered_depth10_streams: set[tuple[str, DataKind]] = set()
         self._markettruth_fanout = MarketTruthFanout()
@@ -284,13 +304,13 @@ class NautilusE4CaptureStrategy(Strategy):
     ) -> EvidenceState:
         with self._capture_lock:
             return self._session.open_structural_package(
-            package_id=package_id,
-            opportunity_id=opportunity_id,
-            thesis_id=thesis_id,
-            market_id=market_id,
-            expression_id=expression_id,
-            created_ts=created_ts,
-            active_valid_ts=active_valid_ts,
+                package_id=package_id,
+                opportunity_id=opportunity_id,
+                thesis_id=thesis_id,
+                market_id=market_id,
+                expression_id=expression_id,
+                created_ts=created_ts,
+                active_valid_ts=active_valid_ts,
             )
 
     def activate_binding(self, activation: dict[str, Any]) -> None:
@@ -323,8 +343,10 @@ class NautilusE4CaptureStrategy(Strategy):
     ) -> None:
         with self._capture_lock:
             self._session.close_bound_window(
-                package_id=package_id, terminal_ts=terminal_ts,
-                complete=complete, reason=reason,
+                package_id=package_id,
+                terminal_ts=terminal_ts,
+                complete=complete,
+                reason=reason,
             )
             self._session.advance(now_ns=self.clock.timestamp_ns())
 
@@ -459,6 +481,8 @@ class NautilusE4CaptureStrategy(Strategy):
 
         by_market = {item.market_id: item for item in self._expressions.values()}
         self.subscribe_socket_state()
+        if self._l0:
+            self.subscribe_queue_state()
         for raw in self._bar_types:
             bar_type = BarType.from_str(raw)
             expression = self._expressions.get(str(bar_type.instrument_id))
@@ -466,6 +490,9 @@ class NautilusE4CaptureStrategy(Strategy):
                 raise ValueError("bar subscription is outside the PIT snapshot")
             stream = (expression.market_id, DataKind.BAR)
             self.subscribe_bars(bar_type)
+            self._l0_registered.add(raw)
+            if self._l0:
+                self._l0_native_registered.append({"kind": "bar", "identity": raw})
             self._registered_bar_streams.add(stream)
             self._continuity_streams.add(stream)
         rich_markets = self._policy.watch | self._policy.actionable
@@ -475,6 +502,11 @@ class NautilusE4CaptureStrategy(Strategy):
             self.subscribe_trades(instrument_id)
             self.subscribe_book_depth10(instrument_id, BookType.L2_MBP)
             self._registered_depth10_streams.add((market_id, DataKind.DEPTH10))
+            if self._l0:
+                self._l0_native_registered.extend(
+                    {"kind": kind, "identity": str(instrument_id)}
+                    for kind in ("bbo", "trade", "depth10")
+                )
         self._session.await_continuity(required_streams=self._continuity_streams)
         self._start_historical_warmup()
 
@@ -512,6 +544,14 @@ class NautilusE4CaptureStrategy(Strategy):
         for stream in streams:
             stream.reconstruct(durable)
         self._save_warmup_state()
+        if self._l0:
+            from scripts.e4_nautilus_public_data_probe import WarmupDispatchPacer
+
+            self._l0_pacer = WarmupDispatchPacer(now_ns + 60_000_000_000)
+            self._l0_pending = [
+                stream for stream in streams if stream.readiness is not WarmupReadiness.READY
+            ]
+            return
         for stream in streams:
             if stream.readiness is WarmupReadiness.READY:
                 continue
@@ -526,6 +566,108 @@ class NautilusE4CaptureStrategy(Strategy):
             else:
                 stream.request_sent(request_id, now_ns)
             self._save_warmup_state()
+
+    def advance_l0(self) -> None:
+        """Only delays native history issuance; called by existing maintenance lane."""
+        if not self._l0 or self._l0_pacer is None:
+            return
+        from nautilus_trader.model import BarType
+
+        now_ns = self.clock.timestamp_ns()
+        while self._l0_pending:
+            stream = self._l0_pending[0]
+            # The exact inclusive native request window can contain one end slot.
+            raw_bound = stream.required + 1
+            if not self._l0_pacer.reserve(now_ns, raw_bound):
+                break
+            self._l0_pending.pop(0)
+            weight = 20 + raw_bound // 60
+            self._l0_history_requests.append(
+                {
+                    "bar_type": stream.bar_type,
+                    "coin": self._expressions[stream.instrument_id].provider_coin,
+                    "interval": "1m" if stream.duration_ns == 60_000_000_000 else "5m",
+                    "start": stream.start_ns // 1_000_000,
+                    "end": stream.end_ns // 1_000_000,
+                    "raw_max_rows": raw_bound,
+                    "reserved_weight": weight,
+                    "ts_ns": now_ns,
+                }
+            )
+            try:
+                request_id = self.request_bars(
+                    BarType.from_str(stream.bar_type), start=stream.start, end=stream.end
+                )
+            except Exception as exc:
+                stream.fail(f"NATIVE_REQUEST_{type(exc).__name__}")
+            else:
+                stream.request_sent(request_id, now_ns)
+            self._save_warmup_state()
+
+    def enable_l0_qualification(self) -> None:
+        """Default-off, bounded opt-in; never changes normal reconnect policy."""
+        if not self._l0 or self._l0_observation is not None:
+            raise ValueError("qualification requires one exact L0 opt-in")
+        from scripts.e4_nautilus_public_data_probe import QualificationObservation
+
+        self._l0_observation = QualificationObservation(tuple(self._bar_types))
+
+    def request_l0_reconnect(self) -> None:
+        from nautilus_trader.adapters.hyperliquid import HYPERLIQUID_CLIENT_ID
+
+        if self._l0_observation is None or self.warmup_health.get("readiness") != "READY":
+            raise ValueError("qualification reconnect requires current warmup readiness")
+        if self._l0_observation.requests:
+            raise ValueError("exactly one qualification reconnect is permitted")
+        self._l0_observation.request(self.clock.timestamp_ns())
+        self.reconnect_socket(HYPERLIQUID_CLIENT_ID, "hyperliquid-data-streams")
+
+    def on_queue_state(self, event: Any) -> None:
+        if not self._l0:
+            return
+        self._l0_queue_events += 1
+        key = f"{event.channel}:{event.condition}"
+        self._l0_queue_states[key] = {
+            "depth": event.queue_depth,
+            "mean_dispatch_ns": event.mean_dispatch_ns,
+            "state": str(event.state),
+            "ts_ns": event.ts_event,
+        }
+
+    def record_l0_processed(self, event: AdmittedEvent, now_ns: int) -> None:
+        if self._l0_observation is not None and event.admission_hash in self._l0_live_ids:
+            self._l0_observation.processed(
+                event.source.event_context or "",
+                event.source.ts_event,
+                now_ns,
+                sha256_hex(canonical_json_bytes(event.source.payload)),
+            )
+            self._l0_live_ids.discard(event.admission_hash)
+
+    def finish_l0_qualification(self) -> None:
+        """Freeze evidence before the qualification-owned normal shutdown."""
+        if self._l0_observation is None or self._l0_evidence_end_ns is not None:
+            raise ValueError("qualification evidence boundary is not unique")
+        self._l0_evidence_end_ns = self.clock.timestamp_ns()
+
+    @property
+    def qualification_observation(self) -> Any:
+        return self._l0_observation
+
+    @property
+    def l0_health(self) -> dict[str, Any]:
+        return {
+            "registered_bars": sorted(self._l0_registered),
+            "native_registered": list(self._l0_native_registered),
+            "history_requests": list(self._l0_history_requests),
+            "warmup_peak_weight": None if self._l0_pacer is None else self._l0_pacer.peak_weight,
+            "raw_reservations_verified": self._l0_raw_weight_verified,
+            "queue_states": dict(self._l0_queue_states),
+            "queue_events": self._l0_queue_events,
+            "socket_events": list(self._l0_socket_events),
+            "live_processing_buffer": {"capacity": 2048, "max_depth": self._l0_live_peak,
+                                       "end_depth": len(self._l0_live_ids)},
+        }
 
     def _save_warmup_state(self) -> None:
         if self._warmup is None:
@@ -675,13 +817,12 @@ class NautilusE4CaptureStrategy(Strategy):
         admit = getattr(self, "_admit_and_observe", None)
         if callable(admit):
             outcome = admit(
-                source, admission_ts=max(depth.ts_init, decision_ts),
+                source,
+                admission_ts=max(depth.ts_init, decision_ts),
                 durable_reason="DEPTH10_ADMITTED",
             )
         else:
-            outcome = self._session.ingest(
-                source, admission_ts=max(depth.ts_init, decision_ts)
-            )
+            outcome = self._session.ingest(source, admission_ts=max(depth.ts_init, decision_ts))
             self._session.persist_durable_evidence(reason="DEPTH10_ADMITTED")
         event = getattr(outcome, "event", None)
         rejection = (
@@ -724,6 +865,12 @@ class NautilusE4CaptureStrategy(Strategy):
             )
             self._session.persist_durable_evidence(reason="FINALIZED_BAR_CALLBACK_ADMITTED")
             self._observe_bound_validity(outcome)
+        if self._l0_observation is not None and outcome.event is not None:
+            if len(self._l0_live_ids) >= 2048:
+                self._l0_observation.failures.add("LIVE_PROCESSING_BUFFER_OVERFLOW")
+            else:
+                self._l0_live_ids.add(outcome.event.admission_hash)
+                self._l0_live_peak = max(self._l0_live_peak, len(self._l0_live_ids))
         self._observe_admission(outcome)
 
     def _bar_source(self, bar: Bar) -> SourceEvent:
@@ -752,6 +899,21 @@ class NautilusE4CaptureStrategy(Strategy):
         )
 
     def on_socket_state(self, event: SocketStateChangedLike) -> None:
+        if self._l0_observation is not None and self._l0_evidence_end_ns is None:
+            from nautilus_trader.adapters.hyperliquid import HYPERLIQUID_CLIENT_ID
+
+            self._l0_socket_events.append({
+                "client_id": str(event.client_id), "endpoint": event.endpoint,
+                "state": str(event.state).split(".")[-1].upper(),
+                "ts_ns": self.clock.timestamp_ns(),
+            })
+
+            if (
+                event.client_id == HYPERLIQUID_CLIENT_ID
+                and event.endpoint == "hyperliquid-data-streams"
+            ):
+                state = str(event.state).split(".")[-1].upper()
+                self._l0_observation.socket(state, self.clock.timestamp_ns())
         from nautilus_trader.adapters.hyperliquid import HYPERLIQUID_CLIENT_ID
 
         with self._capture_lock:
@@ -786,7 +948,10 @@ class NautilusE4CaptureStrategy(Strategy):
             raise ValueError("provider event instrument is outside the PIT snapshot") from exc
 
 
-def build_public_data_node() -> LiveNodeLike:
+def build_public_data_node(
+    *, l0: bool = False, qualification_manifest: RunManifest | None = None,
+    qualification_log: Path | None = None,
+) -> LiveNodeLike:
     """Build, but do not run, the current exact public-data-only LiveNode."""
     assert_public_only(env=os.environ)
     assert_exact_nautilus_version()
@@ -799,6 +964,54 @@ def build_public_data_node() -> LiveNodeLike:
     from nautilus_trader.live import LiveNode
     from nautilus_trader.model import TraderId
 
+    qualification = qualification_manifest is not None or qualification_log is not None
+    if qualification and (not l0 or qualification_manifest is None or qualification_log is None):
+        raise ValueError("qualification logging requires the exact L0 manifest and log path")
+    if l0:
+        from nautilus_trader.live import LiveNodeBuilder, LiveNodeConfig, QueueMonitorConfig
+
+        client_kwargs: dict[str, Any] = {
+            "environment": HyperliquidEnvironment.MAINNET,
+            "stale_stream_recovery_enabled": True,
+        }
+        if qualification:
+            client_kwargs["update_instruments_interval_mins"] = 0
+        config = LiveNodeConfig(
+            environment=Environment.LIVE,
+            trader_id=TraderId("TRADEOS-E4-CAPTURE"),
+            data_clients={"HYPERLIQUID": HyperliquidDataClientConfig(**client_kwargs)},
+            exec_clients={},
+            queue_monitor=QueueMonitorConfig(
+                queue_depth_trigger=1, queue_depth_clear=0,
+                mean_dispatch_ns_trigger=1, mean_dispatch_ns_clear=0,
+            ),
+        )
+        factories = {"HYPERLIQUID": HyperliquidDataClientFactory()}
+        if qualification:
+            from nautilus_trader.common import FileWriterConfig, LoggerConfig, LogLevel
+
+            from scripts.e4_nautilus_public_data_probe import native_marker
+
+            assert qualification_manifest is not None and qualification_log is not None
+            path = qualification_log.absolute()
+            if path.suffix != ".jsonl" or path.resolve() != path:
+                raise ValueError("qualification native log must be an exact JSONL path")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            logging = LoggerConfig(
+                stdout_level=LogLevel.INFO, fileout_level=LogLevel.TRACE, is_colored=False,
+                file_config=FileWriterConfig(
+                    directory=str(path.parent), file_name=path.stem,
+                    file_format="json", file_rotate=None,
+                ),
+                clear_log_file=True, fileout_sync_on_flush=True, buffered_stdout=False,
+            )
+            builder = LiveNodeBuilder.from_config(
+                native_marker(qualification_manifest), config, data_factories=factories,
+            ).with_logging(logging)
+            return cast(LiveNodeLike, builder.build())
+        return cast(LiveNodeLike, LiveNode.build(
+            "TRADEOS-E4-CAPTURE", config, data_factories=factories,
+        ))
     builder = LiveNode.builder(
         "TRADEOS-E4-CAPTURE",
         TraderId("TRADEOS-E4-CAPTURE"),

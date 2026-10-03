@@ -20,7 +20,10 @@ from scripts.verify_exact_release import (
 )
 from scripts.verify_exact_release import main as exact_release_main
 from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
-from trader_assist_v0.multi_asset_shadow.production import THREE_SETUP_E4_CONFIG_SCHEMA
+from trader_assist_v0.multi_asset_shadow.production import (
+    THREE_SETUP_E4_CONFIG_SCHEMA,
+    THREE_SETUP_L0_CONFIG_SCHEMA,
+)
 
 
 def test_repository_release_surface_binds_source_locks_deployment_and_schema() -> None:
@@ -31,6 +34,8 @@ def test_repository_release_surface_binds_source_locks_deployment_and_schema() -
         "requirements-runtime.lock",
         "requirements-dev.lock",
         "requirements-nautilus-pilot.lock",
+        "scripts/build_multi_asset_registry_seed.py",
+        "scripts/e4_nautilus_public_data_probe.py",
         "scripts/check_dependency_lock.py",
         "scripts/verify_exact_release.py",
         "scripts/three_setup_shadow_preflight.py",
@@ -46,7 +51,7 @@ def test_repository_release_surface_binds_source_locks_deployment_and_schema() -
         "src/trader_assist_v0/multi_asset_shadow/production.py",
     } <= paths
     manifest = build_release_manifest(root, release_sha="a" * 40, release_tree="b" * 40)
-    assert manifest["config_schema"] == THREE_SETUP_E4_CONFIG_SCHEMA
+    assert manifest["config_schema"] == THREE_SETUP_L0_CONFIG_SCHEMA
     assert manifest["source_file_count"] == len(paths)
     verify_manifest(
         root, json.loads(json.dumps(manifest)), release_sha="a" * 40, release_tree="b" * 40
@@ -87,6 +92,8 @@ def _write_release_surface(root: Path) -> None:
         "src/trader_assist_v0/example.py",
         "scripts/run_three_setup_shadow_runtime.py",
         "scripts/run_first_launch_public_runtime.py",
+        "scripts/build_multi_asset_registry_seed.py",
+        "scripts/e4_nautilus_public_data_probe.py",
         "scripts/check_dependency_lock.py",
         "scripts/verify_exact_release.py",
         "scripts/three_setup_shadow_preflight.py",

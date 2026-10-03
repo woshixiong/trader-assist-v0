@@ -10,7 +10,6 @@ Type=simple
 User=traderassist
 Group=traderassist
 EnvironmentFile=/etc/trader-assist-v0/three-setup-shadow.env
-LoadCredential=notification.json:/etc/trader-assist-v0/credentials/notification.json
 ExecStart=/opt/trader-assist-v0/scripts/p4a/run_three_setup_shadow_runtime.sh
 Restart=no
 KillSignal=SIGTERM

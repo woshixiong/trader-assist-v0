@@ -17,6 +17,7 @@ from trader_assist_v0.multi_asset_shadow.production import (
     ThreeSetupProductionError,
     compose_three_setup_application,
     load_three_setup_config,
+    validate_l0_qualification,
     validate_three_setup_e4_identity,
 )
 from trader_assist_v0.runtime.first_launch_notification import HttpsWebhookTransport
@@ -28,6 +29,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--mode", default="")
     parser.add_argument("--config-path", type=Path, default=THREE_SETUP_CONFIG_PATH)
     parser.add_argument("--notification-credential-file", type=Path)
+    parser.add_argument("--data-collection-only", action="store_true")
     parser.add_argument("--validate-only", action="store_true")
     parser.add_argument("--release-manifest", type=Path)
     parser.add_argument("--staged-root", type=Path)
@@ -59,19 +61,29 @@ async def _run(arguments: argparse.Namespace) -> None:
             pip_check_with=arguments.pip_check_with,
         )
         return
-    if arguments.notification_credential_file is None:
-        raise ThreeSetupProductionError("normal runtime requires notification credential file")
-    config = load_three_setup_config(arguments.config_path)
-    validate_three_setup_e4_identity(config)
-    notification = _load_credential_file(
-        arguments.notification_credential_file, timeout_seconds=10.0
-    )
-    application = compose_three_setup_application(
-        config=config,
-        notification_adapter=mature_discord_delivery_adapter(
-            config=notification, transport=HttpsWebhookTransport()
-        ),
-    )
+    if arguments.data_collection_only:
+        if arguments.notification_credential_file is not None:
+            raise ThreeSetupProductionError("L0 forbids notification credentials")
+        config = load_three_setup_config(arguments.config_path)
+        if not config.data_collection_only:
+            raise ThreeSetupProductionError("L0 requires data-only config")
+        validate_three_setup_e4_identity(config)
+        validate_l0_qualification(config)
+        application = compose_three_setup_application(config=config)
+    else:
+        if arguments.notification_credential_file is None:
+            raise ThreeSetupProductionError("normal runtime requires notification credential file")
+        config = load_three_setup_config(arguments.config_path)
+        validate_three_setup_e4_identity(config)
+        notification = _load_credential_file(
+            arguments.notification_credential_file, timeout_seconds=10.0
+        )
+        application = compose_three_setup_application(
+            config=config,
+            notification_adapter=mature_discord_delivery_adapter(
+                config=notification, transport=HttpsWebhookTransport()
+            ),
+        )
     shutdown = asyncio.Event()
     loop = asyncio.get_running_loop()
     for signum in (signal.SIGINT, signal.SIGTERM):

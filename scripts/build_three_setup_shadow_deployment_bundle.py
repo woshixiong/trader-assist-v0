@@ -9,6 +9,7 @@ import json
 import re
 import shutil
 from pathlib import Path
+from typing import cast
 
 from scripts.check_dependency_lock import PILOT_WHEEL_SHA256
 from scripts.verify_exact_release import (
@@ -18,7 +19,11 @@ from scripts.verify_exact_release import (
     release_paths,
 )
 from trader_assist_v0.contracts.common import canonical_json_bytes
-from trader_assist_v0.multi_asset_shadow.production import THREE_SETUP_E4_CONFIG_SCHEMA
+from trader_assist_v0.multi_asset_shadow.production import (
+    THREE_SETUP_E4_CONFIG_SCHEMA,
+    THREE_SETUP_L0_CONFIG_SCHEMA,
+    ThreeSetupProductionConfig,
+)
 
 
 class BundleError(ValueError):
@@ -61,6 +66,7 @@ export BUNDLE_ROOT
 python3.12 -I -B - <<'PY_VERIFY'
 import hashlib, json, os, re, stat
 from pathlib import Path
+from typing import cast
 root = Path(os.environ['BUNDLE_ROOT'])
 sha = os.environ['EXPECTED_RELEASE_SHA']
 tree = os.environ['EXPECTED_RELEASE_TREE']
@@ -156,13 +162,24 @@ echo "PREINSTALL_VERIFY=PASS; SERVICE=STOPPED; ACTIVATION=DEFAULT_OFF"
 [[ ! -e /etc/trader-assist-v0/three-setup-shadow.env ]] || {
   echo "existing env requires separate rollback handling" >&2; exit 2;
 }
-install -d -m 0750 /opt/trader-assist-v0
+id traderassist >/dev/null 2>&1 || {
+  echo "existing traderassist service identity is required" >&2; exit 2;
+}
+getent group traderassist >/dev/null || {
+  echo "existing traderassist group is required" >&2; exit 2;
+}
+if [[ -d "$BUNDLE_ROOT/identity" ]]; then
+  [[ ! -e /var/lib/trader-assist-v0/three-setup-shadow ]] || {
+    echo "existing durable state requires separately reviewed replacement" >&2; exit 2;
+  }
+fi
+install -d -m 0750 -g traderassist /opt/trader-assist-v0
 cp -a "$BUNDLE_ROOT/payload/." /opt/trader-assist-v0/
 cp "$BUNDLE_ROOT/release-manifest.json" /opt/trader-assist-v0/three-setup-release-manifest.json
-install -d -m 0750 /etc/trader-assist-v0
-install -m 0640 "$BUNDLE_ROOT/config/three-setup-shadow.json" \
+install -d -m 0750 -g traderassist /etc/trader-assist-v0
+install -m 0640 -g traderassist "$BUNDLE_ROOT/config/three-setup-shadow.json" \
   /etc/trader-assist-v0/three-setup-shadow.json
-install -m 0640 "$BUNDLE_ROOT/config/three-setup-shadow.env" \
+install -m 0640 -g traderassist "$BUNDLE_ROOT/config/three-setup-shadow.env" \
   /etc/trader-assist-v0/three-setup-shadow.env
 python3.12 -m venv --without-pip /opt/trader-assist-v0/venv
 python3.12 -m pip --python /opt/trader-assist-v0/venv install --require-hashes \
@@ -170,6 +187,17 @@ python3.12 -m pip --python /opt/trader-assist-v0/venv install --require-hashes \
 python3.12 -m pip --python /opt/trader-assist-v0/venv install --require-hashes \
   --no-deps --only-binary=:all: --no-index --find-links "$BUNDLE_ROOT" \
   -r /opt/trader-assist-v0/requirements-nautilus-pilot.lock
+chgrp -R traderassist /opt/trader-assist-v0
+chmod -R g+rX /opt/trader-assist-v0
+if [[ -d "$BUNDLE_ROOT/identity" ]]; then
+  install -d -m 0750 -o traderassist -g traderassist \
+    /var/lib/trader-assist-v0/three-setup-shadow
+  cp -a "$BUNDLE_ROOT/identity/." /var/lib/trader-assist-v0/three-setup-shadow/
+  chown -R traderassist:traderassist /var/lib/trader-assist-v0/three-setup-shadow
+fi
+install -m 0644 /opt/trader-assist-v0/deploy/p4a/systemd/trader-assist-v0-three-setup.service \
+  /etc/systemd/system/trader-assist-v0-three-setup.service
+# Unit installation does not reload, start, restart or enable the service.
 export PYTHONPATH=/opt/trader-assist-v0/src:/opt/trader-assist-v0
 /opt/trader-assist-v0/venv/bin/python /opt/trader-assist-v0/scripts/check_dependency_lock.py \
   --verify-target-runtime-installed --staged-source /opt/trader-assist-v0/src \
@@ -199,7 +227,8 @@ def build_bundle(
     wheel: Path,
     bar_1m: str,
     bar_5m: str,
-    cost_version: str,
+    cost_version: str = "",
+    launch_artifacts: Path | None = None,
 ) -> Path:
     exact_clean_head(root, expected_head=sha)
     exact_clean_tree(root, expected_tree=tree)
@@ -211,15 +240,44 @@ def build_bundle(
         raise BundleError("bundle destination already exists")
     release = build_release_manifest(root, release_sha=sha, release_tree=tree)
     example = json.loads((root / "deploy/p4a/config/three-setup-shadow.json.example").read_text())
-    if example.get("schema") != THREE_SETUP_E4_CONFIG_SCHEMA:
-        raise BundleError("release example is not active E4 v2")
-    if not bar_1m.endswith("-1-MINUTE-LAST-EXTERNAL") or not bar_5m.endswith(
-        "-5-MINUTE-LAST-EXTERNAL"
-    ):
-        raise BundleError("exact external 1m and 5m bar types are required")
+    launch = None
+    if example.get("schema") == THREE_SETUP_L0_CONFIG_SCHEMA:
+        if launch_artifacts is None:
+            raise BundleError("L0 requires complete generated launch artifacts")
+        from scripts.e4_nautilus_public_data_probe import validate_launch
+        from trader_assist_v0.multi_asset_shadow.models import RegistryVersion
+        from trader_assist_v0.nautilus_e4.contracts import PitUniverseSnapshot, RunManifest
+
+        def regular(relative: str) -> bytes:
+            path = launch_artifacts / relative
+            if not path.is_file() or path.is_symlink():
+                raise BundleError("launch artifact is absent or non-regular")
+            _reject_secret(path)
+            return path.read_bytes()
+
+        seed = RegistryVersion.model_validate_json(regular("registry-seed.json"))
+        snapshot = PitUniverseSnapshot.model_validate_json(regular("e4/pit-universe-snapshot.json"))
+        manifest = RunManifest.model_validate_json(regular("e4/run-manifest.json"))
+        bars = tuple(json.loads(regular("bar-types.json")))
+        validate_launch(seed, snapshot, manifest, bars)
+        if manifest.git_sha != sha or manifest.git_tree != tree:
+            raise BundleError("launch artifacts differ from exact candidate SHA/tree")
+        if cost_version or bar_1m or bar_5m:
+            raise BundleError("L0 does not accept legacy bar-pair/cost overrides")
+        example["e4_bar_types"] = list(bars)
+        example["cost_model"] = None
+        launch = (seed, snapshot, manifest)
+    elif example.get("schema") == THREE_SETUP_E4_CONFIG_SCHEMA:
+        # Retained explicit v2 reader/fixtures; the real L0 example never enters this route.
+        if not bar_1m.endswith("-1-MINUTE-LAST-EXTERNAL") or not bar_5m.endswith(
+            "-5-MINUTE-LAST-EXTERNAL"
+        ):
+            raise BundleError("exact external 1m and 5m bar types are required")
+        example["e4_bar_types"] = [bar_1m, bar_5m]
+        example["cost_model"]["version"] = cost_version
+    else:
+        raise BundleError("release example is not an accepted E4 schema")
     example["release_sha"] = sha
-    example["e4_bar_types"] = [bar_1m, bar_5m]
-    example["cost_model"]["version"] = cost_version
     try:
         payload = output / "payload"
         for path in release_paths(root):
@@ -227,6 +285,35 @@ def build_bundle(
             target = payload / path.relative_to(root)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(path, target)
+        if launch is not None:
+            from trader_assist_v0.multi_asset_shadow.registry import MarketRegistryManager
+            from trader_assist_v0.nautilus_e4.storage import EvidenceStore
+
+            seed, snapshot, manifest = launch
+            identity_root = output / "identity"
+            EvidenceStore(identity_root / "e4").initialize(manifest, snapshot)
+            registry = MarketRegistryManager(
+                identity_root / "registry", metadata_validator=lambda market: market in seed.markets
+            )
+            registry.stage(seed)
+            registry.request_apply(seed.version)
+            assert launch_artifacts is not None
+            qualification = launch_artifacts / "qualification.json"
+            if qualification.exists():
+                from types import SimpleNamespace
+
+                from trader_assist_v0.multi_asset_shadow.production import validate_l0_qualification
+
+                regular("qualification.json")
+                report = json.loads(qualification.read_bytes())
+                digest = report.get("digest")
+                validate_l0_qualification(cast(ThreeSetupProductionConfig, SimpleNamespace(
+                    data_collection_only=True, qualification_path=qualification,
+                    qualification_digest=digest,
+                    e4_manifest_path=identity_root / "e4/run-manifest.json",
+                )))
+                example["qualification_digest"] = digest
+                shutil.copyfile(qualification, identity_root / "qualification.json")
         (output / "config").mkdir(parents=True)
         (output / "config/three-setup-shadow.json").write_bytes(canonical_json_bytes(example))
         (output / "config/three-setup-shadow.env").write_text(
@@ -282,9 +369,10 @@ def main() -> int:
     parser.add_argument("--expected-sha", required=True)
     parser.add_argument("--expected-tree", required=True)
     parser.add_argument("--rc5-wheel", type=Path, required=True)
-    parser.add_argument("--bar-type-1m", required=True)
-    parser.add_argument("--bar-type-5m", required=True)
-    parser.add_argument("--cost-model-version", required=True)
+    parser.add_argument("--bar-type-1m", default="")
+    parser.add_argument("--bar-type-5m", default="")
+    parser.add_argument("--cost-model-version", default="")
+    parser.add_argument("--launch-artifacts", type=Path)
     args = parser.parse_args()
     path = build_bundle(
         root=args.root.resolve(),
@@ -295,6 +383,7 @@ def main() -> int:
         bar_1m=args.bar_type_1m,
         bar_5m=args.bar_type_5m,
         cost_version=args.cost_model_version,
+        launch_artifacts=args.launch_artifacts,
     )
     print(f"THREE_SETUP_BUNDLE={path}")
     for key, value in handoff_anchors(path).items():

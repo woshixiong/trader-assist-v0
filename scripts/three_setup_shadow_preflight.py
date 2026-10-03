@@ -92,7 +92,9 @@ def verify_candidate(
     from scripts.verify_exact_release import verify_staged_release
     from trader_assist_v0.multi_asset_shadow.production import (
         THREE_SETUP_E4_CONFIG_SCHEMA,
+        THREE_SETUP_L0_CONFIG_SCHEMA,
         load_three_setup_config,
+        validate_l0_qualification,
         validate_three_setup_e4_identity,
     )
     from trader_assist_v0.nautilus_e4.contracts import RunManifest
@@ -106,12 +108,14 @@ def verify_candidate(
         expected_manifest_digest=expected_manifest_digest,
     )
     raw_config = json.loads(config_path.read_text(encoding="utf-8"))
-    if raw_config.get("schema") != THREE_SETUP_E4_CONFIG_SCHEMA:
+    if raw_config.get("schema") not in (THREE_SETUP_E4_CONFIG_SCHEMA, THREE_SETUP_L0_CONFIG_SCHEMA):
         raise PreflightError("deploy config must be active E4 v2")
     config = load_three_setup_config(config_path)
     if config.release_sha != expected_sha:
         raise PreflightError("config release SHA differs from exact release")
     validate_three_setup_e4_identity(config)
+    if config.data_collection_only:
+        validate_l0_qualification(config)
     assert config.e4_manifest_path is not None
     e4 = RunManifest.model_validate_json(config.e4_manifest_path.read_bytes())
     if e4.git_sha != expected_sha or e4.git_tree != expected_tree:
