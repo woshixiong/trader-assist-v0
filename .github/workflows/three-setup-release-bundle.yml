@@ -214,7 +214,7 @@ jobs:
                   from scripts.build_three_setup_shadow_deployment_bundle import SECRET_VALUE
                   data = path.read_bytes()
                   assert not SECRET_VALUE.search(data)
-                  assert b'-----BEGIN PRIVATE KEY-----' not in data
+                  assert (b'-----BEGIN ' + b'PRIVATE KEY-----') not in data
                   assert b'https://discord.com/api/webhooks/' not in data
               return path.read_bytes()
 
