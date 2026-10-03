@@ -32,7 +32,6 @@ jobs:
       CONTROL_HEAD: ${{ github.sha }}
       PYTHONDONTWRITEBYTECODE: '1'
       PYTHONPATH: ${{ github.workspace }}/release/src:${{ github.workspace }}/release
-      BUILD_ROOT: ${{ runner.temp }}/l0-release-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Validate frozen inputs
         id: inputs
@@ -42,6 +41,39 @@ jobs:
           [[ "$INPUT_RELEASE_TREE" =~ ^[0-9a-f]{40}$ ]]
           test "$INPUT_RELEASE_SHA" = "$RELEASE_SHA"
           test "$INPUT_RELEASE_TREE" = "$RELEASE_TREE"
+      - name: Initialize runtime build root
+        id: build_root
+        run: |
+          set -euo pipefail
+          : "${RUNNER_TEMP:?RUNNER_TEMP must be set and non-empty}"
+          : "${GITHUB_ENV:?GITHUB_ENV must be set and non-empty}"
+
+          case "${GITHUB_RUN_ID:-}" in
+            ''|*[!0-9]*)
+              printf '%s\n' 'GITHUB_RUN_ID must contain only ASCII digits' >&2
+              exit 1
+              ;;
+          esac
+          case "${GITHUB_RUN_ATTEMPT:-}" in
+            ''|*[!0-9]*)
+              printf '%s\n' 'GITHUB_RUN_ATTEMPT must contain only ASCII digits' >&2
+              exit 1
+              ;;
+          esac
+
+          case "$RUNNER_TEMP" in
+            *$'\n'*|*$'\r'*)
+              printf '%s\n' 'RUNNER_TEMP must not contain line breaks' >&2
+              exit 1
+              ;;
+          esac
+
+          if ! printf 'BUILD_ROOT=%s/l0-release-%s-%s\n' \
+            "$RUNNER_TEMP" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
+            >> "$GITHUB_ENV"; then
+            printf '%s\n' 'Failed to persist BUILD_ROOT through GITHUB_ENV' >&2
+            exit 1
+          fi
       - name: Checkout exact control HEAD
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -120,8 +152,18 @@ jobs:
         id: builders
         run: |
           set -euo pipefail
-          [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ ]]
-          [[ "$GITHUB_RUN_ATTEMPT" =~ ^[0-9]+$ ]]
+          case "${GITHUB_RUN_ID:-}" in
+            ''|*[!0-9]*)
+              printf '%s\n' 'GITHUB_RUN_ID must contain only ASCII digits' >&2
+              exit 1
+              ;;
+          esac
+          case "${GITHUB_RUN_ATTEMPT:-}" in
+            ''|*[!0-9]*)
+              printf '%s\n' 'GITHUB_RUN_ATTEMPT must contain only ASCII digits' >&2
+              exit 1
+              ;;
+          esac
           run_id="l0-${RELEASE_SHA:0:12}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           wheels=("$BUILD_ROOT"/wheels/*.whl)
           test "${#wheels[@]}" = 1
