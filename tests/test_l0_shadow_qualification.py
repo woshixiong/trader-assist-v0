@@ -255,7 +255,7 @@ def test_native_complete_log_no_debit_proves_zero_extra_not_callback_count(tmp_p
 
 @pytest.mark.parametrize("mutation", ["pre_marker", "missing_marker", "duplicate_marker",
                                      "mixed_run", "duplicate_completion", "missing_completion",
-                                     "malformed", "retry", "unsynced", "unterminated"])
+                                     "malformed", "malformed_retry", "unsynced", "unterminated"])
 def test_native_log_current_run_ambiguity_is_incomplete(tmp_path, mutation):
     import json
 
@@ -277,7 +277,7 @@ def test_native_log_current_run_ambiguity_is_incomplete(tmp_path, mutation):
         records.pop(2)
     elif mutation == "malformed":
         records[2].pop("timestamp")
-    elif mutation == "retry":
+    elif mutation == "malformed_retry":
         records.insert(2, dict(timestamp=3 * NS, level="WARN",
                                component="nautilus_hyperliquid::http::client",
                                message="Transient error; retrying: 408"))
@@ -436,3 +436,243 @@ assert callable(native_marker)
         capture_output=True, text=True, check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+# F1 fixtures use the exact rc5 Rust Debug endpoint and zero-based retry attempt.
+def retry_endpoint(dispatch):
+    import json
+
+    return (f'CandleSnapshot {{ req: CandleSnapshotRequest {{ '
+            f'coin: {json.dumps(dispatch["coin"])}, interval: {json.dumps(dispatch["interval"])}, '
+            f'start_time: {dispatch["start"]}, end_time: {dispatch["end"]} }} }}')
+
+
+def retry_record(endpoint, timestamp, *, attempt=0, status=408, wait_ms=10):
+    return dict(timestamp=timestamp, level="WARN", component="nautilus_hyperliquid::http::client",
+                message=f"Transient error; retrying: endpoint={endpoint}, attempt={attempt}, "
+                        f"status={status}, wait_ms={wait_ms}")
+
+
+def write_retry_fixture(path, records):
+    import json
+
+    path.write_text("".join(json.dumps(r) + "\n" for r in
+                            sorted(records, key=lambda r: r["timestamp"])))
+
+
+def add_candle_retries(ledger, records, *, request_index=0, count=1, status=408):
+    dispatch = ledger[request_index]
+    for record in records:
+        if record["message"] == f'Fetched 59 bars for {dispatch["bar_type"]}':
+            record["timestamp"] = dispatch["ts_ns"] + NS
+    for attempt in range(count):
+        records.append(retry_record(retry_endpoint(dispatch),
+                                    dispatch["ts_ns"] + (attempt + 1) * 100_000_000,
+                                    attempt=attempt, status=status))
+
+
+@pytest.mark.parametrize("status", [408, 500, 502, 503, 599])
+def test_f1_matched_transient_adds_exact_base_weight_and_never_passes(tmp_path, status):
+    manifest, ledger, records, path = native_log_fixture(tmp_path)
+    baseline = parse_fixture(manifest, ledger, path)
+    add_candle_retries(ledger, records, status=status)
+    write_retry_fixture(path, records)
+    report = parse_fixture(manifest, ledger, path)
+    assert report["status"] == "FAIL"
+    assert report["blockers"] == ["NATIVE_TRANSIENT_RETRY_ZERO_PREDICATE_FAILED"]
+    assert report["native_retry_count"] == 1
+    assert report["warmup_weight_per_60s"] == baseline["warmup_weight_per_60s"] + 20 == 400
+    assert report["rest_weight_per_60s"] == baseline["rest_weight_per_60s"] + 20
+    assert report["matched_retries"] == [dict(
+        request_id=ledger[0]["bar_type"], cohort="warmup", endpoint=retry_endpoint(ledger[0]),
+        attempt=0, status=status, wait_ms=10, ts_ns=ledger[0]["ts_ns"] + 100_000_000,
+        base_weight=20,
+    )]
+
+
+@pytest.mark.parametrize("request_count,retries,expected", [(1, 2, 420), (1, 3, 440), (4, 3, 620)])
+def test_f1_each_retry_charged_once_and_frozen_rest_budgets_fail(
+    tmp_path, request_count, retries, expected,
+):
+    manifest, ledger, records, path = native_log_fixture(tmp_path)
+    for index in range(request_count):
+        add_candle_retries(ledger, records, request_index=index, count=retries, status=503)
+    write_retry_fixture(path, records)
+    report = parse_fixture(manifest, ledger, path)
+    assert report["status"] == "FAIL"
+    assert report["native_retry_count"] == request_count * retries
+    assert sum(r["base_weight"] for r in report["matched_retries"]) == 20 * request_count * retries
+    assert report["warmup_weight_per_60s"] == expected
+    assert report["rest_weight_per_60s"] == expected
+    assert "NATIVE_REST_BUDGET_EXCEEDED" in report["blockers"]
+    assert "NATIVE_TRANSIENT_RETRY_EVIDENCE_INCOMPLETE" not in report["blockers"]
+
+
+def test_f1_retry_weight_exact_rolling_boundary():
+    from scripts.e4_nautilus_public_data_probe import _rolling_weight
+
+    retry_ns = 62 * NS
+    assert _rolling_weight([(retry_ns, 20), (retry_ns + 60 * NS, 400)]) == 400
+    assert _rolling_weight([(retry_ns + 1, 20), (retry_ns + 60 * NS, 400)]) == 420
+    assert _rolling_weight([(retry_ns, 20), (retry_ns + 60 * NS, 600)]) == 600
+    assert _rolling_weight([(retry_ns + 1, 20), (retry_ns + 60 * NS, 600)]) == 620
+
+
+@pytest.mark.parametrize("mutation", [
+    "other_status", "malformed_status", "negative_attempt", "bool_attempt", "missing_attempt",
+    "negative_wait", "bool_wait", "zero_wait", "malformed_endpoint", "unmatched_coin",
+    "unmatched_interval", "unmatched_start", "unmatched_end", "unexpected_endpoint",
+    "duplicate", "duplicate_attempt", "missing_attempt_zero", "attempt_gap", "attempt_exhausted",
+    "before_dispatch", "after_completion", "wait_after_completion", "wait_overlaps_next_retry",
+    "wrong_component", "wrong_level", "after_success_debit",
+])
+def test_f1_malformed_unbound_or_impossible_retry_is_incomplete(tmp_path, mutation):
+    manifest, ledger, records, path = native_log_fixture(tmp_path)
+    add_candle_retries(ledger, records, count=2 if mutation in (
+        "duplicate_attempt", "attempt_gap", "wait_overlaps_next_retry"
+    ) else 1)
+    retry = next(r for r in records if r["message"].startswith("Transient error;"))
+    message = retry["message"]
+    substitutions = {
+        "other_status": ("status=408", "status=404"),
+        "malformed_status": ("status=408", "status=408x"),
+        "negative_attempt": ("attempt=0", "attempt=-1"),
+        "bool_attempt": ("attempt=0", "attempt=true"),
+        "missing_attempt": (", attempt=0", ""),
+        "negative_wait": ("wait_ms=10", "wait_ms=-1"),
+        "bool_wait": ("wait_ms=10", "wait_ms=true"),
+        "zero_wait": ("wait_ms=10", "wait_ms=0"),
+        "malformed_endpoint": ("CandleSnapshot { req:", "CandleSnapshot { other:"),
+        "unmatched_coin": (f'coin: "{ledger[0]["coin"]}"', 'coin: "unauthorized"'),
+        "unmatched_interval": ('interval: "1m"', 'interval: "15m"'),
+        "unmatched_start": ('start_time: 1000000', 'start_time: 1000001'),
+        "unmatched_end": (f'end_time: {ledger[0]["end"]}', 'end_time: 1'),
+        "unexpected_endpoint": (retry_endpoint(ledger[0]), "Meta { dex: None }"),
+        "missing_attempt_zero": ("attempt=0", "attempt=1"),
+        "attempt_exhausted": ("attempt=0", "attempt=3"),
+        "wait_after_completion": ("wait_ms=10", "wait_ms=1000"),
+        "wait_overlaps_next_retry": ("wait_ms=10", "wait_ms=101"),
+    }
+    if mutation in substitutions:
+        old, new = substitutions[mutation]
+        assert old in message
+        retry["message"] = message.replace(old, new)
+    elif mutation == "duplicate":
+        records.append(dict(retry))
+    elif mutation in ("duplicate_attempt", "attempt_gap"):
+        second = [r for r in records if r["message"].startswith("Transient error;")][1]
+        attempt = 0 if mutation == "duplicate_attempt" else 2
+        second["message"] = second["message"].replace("attempt=1", f"attempt={attempt}")
+    elif mutation == "before_dispatch":
+        retry["timestamp"] = ledger[0]["ts_ns"] - 1
+    elif mutation == "after_completion":
+        retry["timestamp"] = ledger[0]["ts_ns"] + 2 * NS
+    elif mutation == "wrong_component":
+        retry["component"] = "nautilus_hyperliquid::data"
+    elif mutation == "wrong_level":
+        retry["level"] = "DEBUG"
+    elif mutation == "after_success_debit":
+        records.append(dict(timestamp=ledger[0]["ts_ns"] + 1, level="DEBUG",
+                            component="nautilus_hyperliquid::http::client",
+                            message="Info debited extra weight: "
+                                    f"endpoint={retry_endpoint(ledger[0])}, base_w=20, extra=1"))
+    write_retry_fixture(path, records)
+    report = parse_fixture(manifest, ledger, path)
+    assert report["status"] == "INCOMPLETE"
+    assert ("NATIVE_TRANSIENT_RETRY_EVIDENCE_INCOMPLETE" in report["blockers"]
+            or "NATIVE_RECORD_MALFORMED_UNMATCHED_OR_DUPLICATE" in report["blockers"])
+
+
+@pytest.mark.parametrize("endpoint", ["SpotMeta", "OutcomeMeta", "PerpDexs"])
+def test_f1_metadata_retry_charged_but_not_pass(tmp_path, endpoint):
+    manifest, ledger, records, path = native_log_fixture(tmp_path)
+    records.append(retry_record(endpoint, NS + 100_000_000, status=503))
+    write_retry_fixture(path, records)
+    report = parse_fixture(manifest, ledger, path)
+    assert report["status"] == "FAIL"
+    assert report["blockers"] == ["NATIVE_TRANSIENT_RETRY_ZERO_PREDICATE_FAILED"]
+    assert report["native_retry_count"] == 1
+    assert report["matched_retries"][0]["cohort"] == "metadata"
+    assert report["matched_retries"][0]["request_id"] == endpoint
+    assert report["warmup_weight_per_60s"] == 380
+    assert report["rest_weight_per_60s"] == 380
+    # Metadata's own exact accounting is 100 source-bound base + 20 per retry.
+    from scripts.e4_nautilus_public_data_probe import _rolling_weight
+
+    events = [(report["metadata_end_ns"], report["metadata_weight"])] + [
+        (r["ts_ns"], r["base_weight"]) for r in report["matched_retries"]
+    ]
+    assert _rolling_weight(events) == 120
+
+
+def test_f1_two_all_perp_metadata_requests_require_unique_native_phase(tmp_path):
+    manifest, ledger, records, path = native_log_fixture(tmp_path)
+    records.extend([
+        retry_record("AllPerpMetas", NS + 100_000_000),
+        dict(timestamp=NS + 500_000_000, level="DEBUG",
+             component="nautilus_hyperliquid::http::client",
+             message="Populated asset indices map (count=20)"),
+        retry_record("AllPerpMetas", NS + 700_000_000),
+    ])
+    write_retry_fixture(path, records)
+    report = parse_fixture(manifest, ledger, path)
+    assert report["status"] == "FAIL"
+    assert report["native_retry_count"] == 2
+    assert [r["request_id"] for r in report["matched_retries"]] == [
+        "AllPerpMetas:0", "AllPerpMetas:1",
+    ]
+    records = [r for r in records if not r["message"].startswith("Populated asset indices")]
+    write_retry_fixture(path, records)
+    report = parse_fixture(manifest, ledger, path)
+    assert report["status"] == "INCOMPLETE"
+    assert report["native_retry_count"] == 0
+
+
+@pytest.mark.parametrize("mutation", [
+    "after_bootstrap", "backwards_endpoint", "extra_request", "fallback",
+])
+def test_f1_metadata_impossible_or_unexpected_retry_is_incomplete(tmp_path, mutation):
+    manifest, ledger, records, path = native_log_fixture(tmp_path)
+    records.append(retry_record("SpotMeta", NS + 100_000_000))
+    if mutation == "after_bootstrap":
+        records[-1]["timestamp"] = 3 * NS
+    elif mutation == "backwards_endpoint":
+        records.append(retry_record("OutcomeMeta", NS + 50_000_000))
+    elif mutation == "extra_request":
+        records.append(retry_record("SpotMeta", NS + 200_000_000))
+    elif mutation == "fallback":
+        records.append(dict(timestamp=NS + 500_000_000, level="WARN",
+                            component="nautilus_hyperliquid::http::client",
+                            message="Failed to load allPerpMetas, falling back to meta: error"))
+    write_retry_fixture(path, records)
+    report = parse_fixture(manifest, ledger, path)
+    assert report["status"] == "INCOMPLETE"
+    assert report["blockers"]
+
+
+def test_f1_429_retry_and_terminal_rate_limit_failure_remain_fail_closed(tmp_path):
+    manifest, ledger, records, path = native_log_fixture(tmp_path)
+    records.append(dict(timestamp=ledger[0]["ts_ns"], level="WARN",
+                        component="nautilus_hyperliquid::http::client",
+                        message="429 Too Many Requests; backing off: "
+                                f"endpoint={retry_endpoint(ledger[0])}, attempt=0, wait_ms=10"))
+    write_retry_fixture(path, records)
+    report = parse_fixture(manifest, ledger, path)
+    assert report["status"] == "FAIL"
+    assert report["http_429"] == 1
+    assert "NATIVE_HTTP_429_RETRY" in report["blockers"]
+    records[-1]["message"] = "request failed: rate limit exceeded"
+    write_retry_fixture(path, records)
+    report = parse_fixture(manifest, ledger, path)
+    assert report["status"] != "PASS"
+
+
+def test_f1_transport_failure_remains_request_failure(tmp_path):
+    manifest, ledger, records, path = native_log_fixture(tmp_path)
+    records.append(dict(timestamp=ledger[0]["ts_ns"], level="ERROR",
+                        component="nautilus_hyperliquid::http::client",
+                        message="transport error: connection failed"))
+    write_retry_fixture(path, records)
+    report = parse_fixture(manifest, ledger, path)
+    assert report["status"] != "PASS"
+    assert "NATIVE_RETRY_FALLBACK_OR_FAILURE" in report["blockers"]

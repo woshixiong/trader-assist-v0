@@ -403,6 +403,7 @@ def parse_native_http_log(
         "file_identity": list(file_identity), "rc5_source": RC5_SOURCE,
         "begin_marker": native_marker(manifest), "metadata_requests": 5,
         "metadata_weight": 100, "matched_requests": [],
+        "native_retry_count": 0, "matched_retries": [], "http_429": 0,
     }
     if sync_succeeded is not True:
         blockers.add("NATIVE_LOG_SYNC_UNPROVEN")
@@ -470,6 +471,11 @@ def parse_native_http_log(
     metadata_ns: int | None = None
     completions: dict[str, int] = {}
     debits: dict[str, tuple[int, int]] = {}
+    retries: list[tuple[int, int, str, int, int, int]] = []
+    completion_indices: dict[str, int] = {}
+    metadata_index: int | None = None
+    populated_indices: list[tuple[int, int]] = []
+    run_start_ns: int | None = None
     for index, record in enumerate(records):
         try:
             if not isinstance(record, dict):
@@ -493,6 +499,7 @@ def parse_native_http_log(
                 if message == NATIVE_STARTUP_SEPARATOR:
                     if index == 0:
                         begins += 1
+                        run_start_ns = timestamp
                     elif begins != 1:
                         blockers.add("NATIVE_LOG_RUN_BOUNDARY_AMBIGUITY")
                     # Native headers contain separators at both ends. A second
@@ -517,11 +524,30 @@ def parse_native_http_log(
                 raise ValueError("unmatched native component")
             if not native:
                 continue
+            if message.startswith("429 Too Many Requests;"):
+                result["http_429"] += 1
+                blockers.add("NATIVE_HTTP_429_RETRY")
+                continue
+            if message.startswith("Transient error; retrying:"):
+                match = re.fullmatch(
+                    r"Transient error; retrying: endpoint=(.+), attempt=(0|[1-9]\d*), "
+                    r"status=(408|5\d{2}), wait_ms=([1-9]\d*)", message,
+                )
+                if (match is None or component != "nautilus_hyperliquid::http::client"
+                        or level.upper() not in ("WARN", "WARNING")):
+                    blockers.add("NATIVE_TRANSIENT_RETRY_EVIDENCE_INCOMPLETE")
+                else:
+                    retries.append((index, timestamp, match[1], int(match[2]),
+                                    int(match[3]), int(match[4])))
+                continue
             if level.upper() in ("WARNING", "WARN", "ERROR", "CRITICAL"):
                 blockers.add("NATIVE_RETRY_FALLBACK_OR_FAILURE")
+            if re.fullmatch(r"Populated asset indices map \(count=\d+\)", message):
+                populated_indices.append((index, timestamp))
             if re.fullmatch(r"Bootstrapped \d+ instruments with \d+ coin mappings", message):
                 bootstraps += 1
                 metadata_ns = timestamp
+                metadata_index = index
             elif message.startswith("Fetched "):
                 match = re.fullmatch(r"Fetched (\d+) bars for (.+)", message)
                 if match is None or match[2] not in ledger or match[2] in completions:
@@ -529,6 +555,7 @@ def parse_native_http_log(
                 if timestamp < ledger[match[2]]["ts_ns"]:
                     raise ValueError("completion before dispatch")
                 completions[match[2]] = timestamp
+                completion_indices[match[2]] = index
             elif message.startswith("Info debited extra weight:"):
                 match = re.fullmatch(
                     r"Info debited extra weight: endpoint=(CandleSnapshot .+), "
@@ -565,7 +592,92 @@ def parse_native_http_log(
         blockers.add("NATIVE_METADATA_COHORT_INCOMPLETE")
     if set(completions) != set(ledger) or len(completions) != 40:
         blockers.add("NATIVE_COMPLETION_COHORT_INCOMPLETE")
-    events: list[tuple[int, int]] = []
+    # Retry authority is the exact native WARN record, never callback length.
+    # rc5 attempt starts at zero and permits three retry records per request.
+    retry_sequences: dict[str, tuple[int, int, int]] = {}
+    warmup_retries: list[tuple[int, int]] = []
+    metadata_retries: list[tuple[int, int]] = []
+    metadata_order = {"SpotMeta": 0, "AllPerpMetas:0": 1, "OutcomeMeta": 2,
+                      "AllPerpMetas:1": 3, "PerpDexs": 4}
+    last_metadata_order = -1
+    candle_pattern = (
+        r'CandleSnapshot \{ req: CandleSnapshotRequest \{ coin: ("(?:[^"\\]|\\.)*"), '
+        r'interval: ("(?:[^"\\]|\\.)*"), start_time: (0|[1-9]\d*), '
+        r'end_time: (0|[1-9]\d*) \} \}'
+    )
+    for index, timestamp, endpoint, attempt, status, wait_ms in retries:
+        try:
+            if attempt >= 3:
+                raise ValueError("rc5 retry attempt exhausted")
+            candle = re.fullmatch(candle_pattern, endpoint)
+            if candle is not None:
+                request_key = (json.loads(candle[1]), json.loads(candle[2]),
+                               int(candle[3]), int(candle[4]))
+                bar = identities.get(request_key)
+                if (bar is None or bar not in completions
+                        or timestamp < ledger[bar]["ts_ns"]
+                        or index >= completion_indices[bar]
+                        or timestamp + wait_ms * 1_000_000 > completions[bar]):
+                    raise ValueError("retry outside authorized warmup lifecycle")
+                if bar in debits and (timestamp > debits[bar][1]
+                                     or timestamp + wait_ms * 1_000_000 > debits[bar][1]):
+                    raise ValueError("retry after successful response debit")
+                request_id = bar
+                cohort = "warmup"
+            elif endpoint in ("SpotMeta", "AllPerpMetas", "OutcomeMeta", "PerpDexs"):
+                if (run_start_ns is None or metadata_ns is None or metadata_index is None
+                        or not run_start_ns <= timestamp < metadata_ns
+                        or index >= metadata_index
+                        or timestamp + wait_ms * 1_000_000 > metadata_ns):
+                    raise ValueError("retry outside startup metadata lifecycle")
+                request_id = endpoint
+                # allPerpMetas occurs twice; the native completion of instrument
+                # definitions separates the two source-bound startup requests.
+                if endpoint == "AllPerpMetas":
+                    if len(populated_indices) != 1:
+                        raise ValueError("metadata occurrence is not uniquely bound")
+                    populated_index, populated_ns = populated_indices[0]
+                    phase = 0 if index < populated_index else 1
+                    if ((phase == 0 and timestamp + wait_ms * 1_000_000 > populated_ns)
+                            or (phase == 1 and timestamp < populated_ns)):
+                        raise ValueError("metadata retry crosses request phase")
+                    request_id += f":{phase}"
+                elif populated_indices:
+                    if len(populated_indices) != 1:
+                        raise ValueError("ambiguous startup metadata phase")
+                    populated_index, populated_ns = populated_indices[0]
+                    early = endpoint in ("SpotMeta", "OutcomeMeta")
+                    if ((early and (index >= populated_index
+                                    or timestamp + wait_ms * 1_000_000 > populated_ns))
+                            or (not early and (index <= populated_index
+                                               or timestamp < populated_ns))):
+                        raise ValueError("metadata retry in impossible startup phase")
+                order = metadata_order[request_id]
+                if order < last_metadata_order:
+                    raise ValueError("metadata request order differs from rc5 startup")
+                last_metadata_order = order
+                cohort = "metadata"
+            else:
+                raise ValueError("unexpected retry endpoint")
+            previous = retry_sequences.get(request_id)
+            if previous is None:
+                if attempt != 0:
+                    raise ValueError("missing initial retry attempt")
+            elif (attempt != previous[0] + 1 or index <= previous[1]
+                  or timestamp < previous[2]):
+                raise ValueError("duplicate/impossible retry sequence")
+            retry_sequences[request_id] = (attempt, index, timestamp + wait_ms * 1_000_000)
+            evidence = dict(request_id=request_id, cohort=cohort, endpoint=endpoint,
+                            attempt=attempt, status=status, wait_ms=wait_ms,
+                            ts_ns=timestamp, base_weight=20)
+            result["matched_retries"].append(evidence)
+            (warmup_retries if cohort == "warmup" else metadata_retries).append((timestamp, 20))
+        except (KeyError, TypeError, ValueError):
+            blockers.add("NATIVE_TRANSIENT_RETRY_EVIDENCE_INCOMPLETE")
+    result["native_retry_count"] = len(result["matched_retries"])
+    if result["native_retry_count"]:
+        blockers.add("NATIVE_TRANSIENT_RETRY_ZERO_PREDICATE_FAILED")
+    events: list[tuple[int, int]] = list(warmup_retries)
     for bar, dispatch in ledger.items():
         if bar not in completions:
             continue
@@ -585,13 +697,18 @@ def parse_native_http_log(
     peak = _rolling_weight(events)
     result["warmup_weight_per_60s"] = peak
     result["rest_weight_per_60s"] = _rolling_weight(
-        events + ([] if metadata_ns is None else [(metadata_ns, 100)])
+        events + metadata_retries + ([] if metadata_ns is None else [(metadata_ns, 100)])
     )
     if peak > 400 or result["rest_weight_per_60s"] > 600:
         blockers.add("NATIVE_REST_BUDGET_EXCEEDED")
     result["metadata_end_ns"] = metadata_ns
     result["matched_debits"] = len(debits)
     result["blockers"] = sorted(blockers)
+    if result["http_429"]:
+        result["status"] = "FAIL"
+    elif blockers and blockers <= {"NATIVE_TRANSIENT_RETRY_ZERO_PREDICATE_FAILED",
+                                   "NATIVE_REST_BUDGET_EXCEEDED"}:
+        result["status"] = "FAIL"
     if not blockers:
         result.update(status="PASS", http_429=0, native_retry_count=0,
                       provider_throttle_events=0, transport_failures=0,
