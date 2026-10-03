@@ -32,7 +32,6 @@ jobs:
       CONTROL_HEAD: ${{ github.sha }}
       PYTHONDONTWRITEBYTECODE: '1'
       PYTHONPATH: ${{ github.workspace }}/release/src:${{ github.workspace }}/release
-      BUILD_ROOT: ${{ runner.temp }}/l0-release-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Validate frozen inputs
         id: inputs
@@ -42,6 +41,21 @@ jobs:
           [[ "$INPUT_RELEASE_TREE" =~ ^[0-9a-f]{40}$ ]]
           test "$INPUT_RELEASE_SHA" = "$RELEASE_SHA"
           test "$INPUT_RELEASE_TREE" = "$RELEASE_TREE"
+      - name: Initialize runner build root
+        id: build_root
+        run: |
+          set -euo pipefail
+          test -n "${RUNNER_TEMP:-}"
+          test -n "${GITHUB_ENV:-}"
+          case "$GITHUB_RUN_ID" in
+            (""|*[!0-9]*) exit 31 ;;
+          esac
+          case "$GITHUB_RUN_ATTEMPT" in
+            (""|*[!0-9]*) exit 32 ;;
+          esac
+          build_root="${RUNNER_TEMP%/}/l0-release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          test ! -e "$build_root"
+          printf 'BUILD_ROOT=%s\n' "$build_root" >> "$GITHUB_ENV"
       - name: Checkout exact control HEAD
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:

@@ -175,6 +175,31 @@ def test_structure_and_authority() -> None:
     assert job["env"]["RELEASE_SHA"] == SHA and job["env"]["RELEASE_TREE"] == TREE
     assert job["env"]["CONTROL_HEAD"] == "${{ github.sha }}"
     assert "/release/src:" in job["env"]["PYTHONPATH"]
+    assert "BUILD_ROOT" not in job["env"]
+    assert all("runner." not in str(value) for value in job["env"].values())
+    step_ids = [step.get("id") for step in job["steps"]]
+    assert step_ids[:2] == ["inputs", "build_root"]
+    build_root_index = step_ids.index("build_root")
+    assert all(
+        "BUILD_ROOT" not in json.dumps(step, sort_keys=True)
+        for step in job["steps"][:build_root_index]
+    )
+    for index, step in enumerate(job["steps"]):
+        if index != build_root_index and "BUILD_ROOT" in json.dumps(step, sort_keys=True):
+            assert index > build_root_index
+    build_root = steps()["build_root"]["run"]
+    for required in (
+        'test -n "${RUNNER_TEMP:-}"',
+        'test -n "${GITHUB_ENV:-}"',
+        'case "$GITHUB_RUN_ID" in',
+        '(""|*[!0-9]*) exit 31 ;;',
+        'case "$GITHUB_RUN_ATTEMPT" in',
+        '(""|*[!0-9]*) exit 32 ;;',
+        'build_root="${RUNNER_TEMP%/}/l0-release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"',
+        'test ! -e "$build_root"',
+        'printf \'BUILD_ROOT=%s\\n\' "$build_root" >> "$GITHUB_ENV"',
+    ):
+        assert required in build_root
     actions = [step for step in job["steps"] if "uses" in step]
     assert [action["uses"] for action in actions] == [
         "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
@@ -255,6 +280,71 @@ def test_structure_and_authority() -> None:
             )
             for code in re.findall(r"<<'PY'\n(.*?)\nPY\n", step["run"], re.DOTALL):
                 compile(code, step["name"], "exec")
+
+
+def test_build_root_runtime_initialization(tmp_path: Path) -> None:
+    runner_temp = tmp_path / "runner-temp"
+    github_env = tmp_path / "github-env"
+    env = {
+        "RUNNER_TEMP": str(runner_temp),
+        "GITHUB_ENV": str(github_env),
+        "GITHUB_RUN_ID": "123456",
+        "GITHUB_RUN_ATTEMPT": "7",
+    }
+    assert_pass(shell_run("build_root", tmp_path, env))
+    expected = runner_temp / "l0-release-123456-7"
+    assert github_env.read_text() == f"BUILD_ROOT={expected}\n"
+
+    exported = dict(
+        line.split("=", 1) for line in github_env.read_text().splitlines() if line
+    )
+    consumer = subprocess.run(
+        ["bash", "-c", 'test "$BUILD_ROOT" = "$EXPECTED_BUILD_ROOT"'],
+        cwd=tmp_path,
+        env={**os.environ, **exported, "EXPECTED_BUILD_ROOT": str(expected)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert_pass(consumer)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "value"),
+    [
+        ("missing_runner_temp", ""),
+        ("missing_github_env", ""),
+        ("bad_run_id", "abc"),
+        ("bad_run_attempt", "1x"),
+        ("preexisting", ""),
+    ],
+)
+def test_build_root_runtime_initialization_fails_closed(
+    tmp_path: Path, mutation: str, value: str
+) -> None:
+    runner_temp = tmp_path / "runner-temp"
+    github_env = tmp_path / "github-env"
+    env = {
+        "RUNNER_TEMP": str(runner_temp),
+        "GITHUB_ENV": str(github_env),
+        "GITHUB_RUN_ID": "123456",
+        "GITHUB_RUN_ATTEMPT": "7",
+    }
+    if mutation == "missing_runner_temp":
+        env.pop("RUNNER_TEMP")
+    elif mutation == "missing_github_env":
+        env.pop("GITHUB_ENV")
+    elif mutation == "bad_run_id":
+        env["GITHUB_RUN_ID"] = value
+    elif mutation == "bad_run_attempt":
+        env["GITHUB_RUN_ATTEMPT"] = value
+    else:
+        (runner_temp / "l0-release-123456-7").mkdir(parents=True)
+
+    result = shell_run("build_root", tmp_path, env)
+    assert result.returncode != 0
+    if github_env.exists():
+        assert github_env.read_text() == ""
 
 
 @pytest.mark.parametrize(
