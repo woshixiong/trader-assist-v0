@@ -11,6 +11,7 @@ import math
 import os
 import re
 import stat
+import sys
 import threading
 import time
 from collections import deque
@@ -19,6 +20,9 @@ from datetime import datetime
 from itertools import pairwise
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
 from trader_assist_v0.multi_asset_shadow.models import RegistryVersion

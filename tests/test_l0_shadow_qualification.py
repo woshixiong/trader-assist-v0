@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -404,3 +407,32 @@ def test_b1d_http_trace_is_never_control_authority(tmp_path):
                                         'raw HTTP response {"pong": true}', 62 * NS)])
     assert report["status"] == "INCOMPLETE"
     assert "WS_CONTROL_TRACE_MISSING" in report["blockers"]
+
+
+def test_direct_probe_bootstrap_resolves_repository_scripts(tmp_path):
+    repo = Path(__file__).resolve().parents[1]
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(repo / "src")
+    script = repo / "scripts/e4_nautilus_public_data_probe.py"
+    result = subprocess.run(
+        [sys.executable, str(script), "--help"], cwd=tmp_path, env=env,
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "--qualify-l0" in result.stdout
+    code = f"""
+import runpy
+import sys
+sys.argv = ['e4_nautilus_public_data_probe.py', '--help']
+try:
+    runpy.run_path({str(script)!r}, run_name='__main__')
+except SystemExit as exc:
+    assert exc.code == 0
+from scripts.e4_nautilus_public_data_probe import native_marker
+assert callable(native_marker)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code], cwd=tmp_path, env=env,
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr

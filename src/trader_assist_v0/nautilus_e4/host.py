@@ -988,7 +988,7 @@ def build_public_data_node(
         )
         factories = {"HYPERLIQUID": HyperliquidDataClientFactory()}
         if qualification:
-            from nautilus_trader.common import FileWriterConfig, LoggerConfig
+            from nautilus_trader.common import FileWriterConfig, LoggerConfig, LogLevel
 
             from scripts.e4_nautilus_public_data_probe import native_marker
 
@@ -998,7 +998,7 @@ def build_public_data_node(
                 raise ValueError("qualification native log must be an exact JSONL path")
             path.parent.mkdir(parents=True, exist_ok=True)
             logging = LoggerConfig(
-                stdout_level="INFO", fileout_level="TRACE", is_colored=False,
+                stdout_level=LogLevel.INFO, fileout_level=LogLevel.TRACE, is_colored=False,
                 file_config=FileWriterConfig(
                     directory=str(path.parent), file_name=path.stem,
                     file_format="json", file_rotate=None,
