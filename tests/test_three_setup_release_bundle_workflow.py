@@ -175,6 +175,24 @@ def test_structure_and_authority() -> None:
     assert job["env"]["RELEASE_SHA"] == SHA and job["env"]["RELEASE_TREE"] == TREE
     assert job["env"]["CONTROL_HEAD"] == "${{ github.sha }}"
     assert "/release/src:" in job["env"]["PYTHONPATH"]
+    assert "BUILD_ROOT" not in job["env"]
+    assert "runner.temp" not in json.dumps(job["env"])
+    initializers = [step for step in job["steps"] if step.get("id") == "build_root"]
+    assert len(initializers) == 1
+    initializer = initializers[0]
+    assert set(initializer) == {"name", "id", "run"}
+    assert job["steps"][0]["id"] == "inputs"
+    assert job["steps"][1] == initializer
+    assert job["steps"][2]["name"] == "Checkout exact control HEAD"
+    for index, step in enumerate(job["steps"]):
+        if step is not initializer and "BUILD_ROOT" in json.dumps(step):
+            assert index > 1
+    assert not re.search(r"\b(?:mkdir|install|touch)\b", initializer["run"])
+    dependencies = steps()["dependencies"]["run"]
+    absence = 'test ! -e "$BUILD_ROOT"'
+    creation = 'mkdir -p "$BUILD_ROOT/wheels" "$BUILD_ROOT/package-source"'
+    assert absence in dependencies and creation in dependencies
+    assert dependencies.index(absence) < dependencies.index(creation)
     actions = [step for step in job["steps"] if "uses" in step]
     assert [action["uses"] for action in actions] == [
         "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
@@ -255,6 +273,150 @@ def test_structure_and_authority() -> None:
             )
             for code in re.findall(r"<<'PY'\n(.*?)\nPY\n", step["run"], re.DOTALL):
                 compile(code, step["name"], "exec")
+
+
+INVALID_RUN_IDENTIFIERS = [
+    None, "", "abc", "-1", "+1", "1.0", " 123", "123 ", "1 23",
+    "123\n456", "123\r456", "123\r\n456", "\uff11\uff12\uff13", "\u0661\u0662\u0663",
+    "123/../escape", "$(touch injected)", "123; touch injected",
+]
+RUNTIME_VARIABLES = ("RUNNER_TEMP", "GITHUB_ENV", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT")
+
+
+def runtime_shell_run(
+    step_id: str, cwd: Path, env: dict[str, str], *, errexit: bool = True
+) -> subprocess.CompletedProcess[str]:
+    # Remove runner variables so unset cases cannot inherit ambient CI values.
+    clean_env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in (*RUNTIME_VARIABLES, "BUILD_ROOT")
+    }
+    code = steps()[step_id]["run"]
+    if not errexit:
+        assert code.startswith("set -euo pipefail\n")
+        code = code.replace("set -euo pipefail\n", "set -uo pipefail\n", 1)
+    return subprocess.run(
+        ["bash", "-c", code],
+        cwd=cwd,
+        env={**clean_env, **env},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def initializer_env(tmp_path: Path) -> dict[str, str]:
+    runner_temp = tmp_path / "runner temp with spaces"
+    runner_temp.mkdir()
+    environment = tmp_path / "github-env"
+    environment.write_text("UNRELATED=preserved\n")
+    return {
+        "RUNNER_TEMP": str(runner_temp),
+        "GITHUB_ENV": str(environment),
+        "GITHUB_RUN_ID": "123",
+        "GITHUB_RUN_ATTEMPT": "1",
+    }
+
+
+@pytest.mark.parametrize("run_id,attempt", [("123", "1"), ("0", "0"), ("00123", "0001")])
+def test_runtime_initializer_assignment_and_propagation(
+    tmp_path: Path, run_id: str, attempt: str
+) -> None:
+    env = initializer_env(tmp_path)
+    env.update(GITHUB_RUN_ID=run_id, GITHUB_RUN_ATTEMPT=attempt)
+    expected = f"{env['RUNNER_TEMP']}/l0-release-{run_id}-{attempt}"
+    assert_pass(runtime_shell_run("build_root", tmp_path, env))
+    text = Path(env["GITHUB_ENV"]).read_text()
+    assert text == f"UNRELATED=preserved\nBUILD_ROOT={expected}\n"
+    assert not Path(expected).exists()
+    assert list(Path(env["RUNNER_TEMP"]).iterdir()) == []
+    propagated = dict(line.split("=", 1) for line in text.splitlines())
+    # Model the next step by supplying parsed data, never sourcing the env file.
+    result = subprocess.run(
+        [sys.executable, "-B", "-c", "import os; print(os.environ['BUILD_ROOT'])"],
+        env={**os.environ, **propagated},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert_pass(result)
+    assert result.stdout == expected + "\n"
+
+
+def test_runtime_initializer_per_run_and_attempt_uniqueness(tmp_path: Path) -> None:
+    env = initializer_env(tmp_path)
+    paths = set()
+    for run_id, attempt in [("123", "1"), ("124", "1"), ("123", "2")]:
+        Path(env["GITHUB_ENV"]).write_text("")
+        env.update(GITHUB_RUN_ID=run_id, GITHUB_RUN_ATTEMPT=attempt)
+        assert_pass(runtime_shell_run("build_root", tmp_path, env))
+        paths.add(Path(env["GITHUB_ENV"]).read_text().strip().split("=", 1)[1])
+    assert len(paths) == 3
+    assert list(Path(env["RUNNER_TEMP"]).iterdir()) == []
+
+
+@pytest.mark.parametrize("variable", ["GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT"])
+@pytest.mark.parametrize("value", INVALID_RUN_IDENTIFIERS)
+@pytest.mark.parametrize("errexit", [True, False])
+def test_runtime_initializer_rejects_invalid_identifiers(
+    tmp_path: Path, variable: str, value: str | None, errexit: bool
+) -> None:
+    env = initializer_env(tmp_path)
+    if value is None:
+        env.pop(variable)
+    else:
+        env[variable] = value
+    result = runtime_shell_run("build_root", tmp_path, env, errexit=errexit)
+    assert result.returncode != 0
+    assert f"{variable} must contain only ASCII digits" in result.stderr
+    assert Path(env["GITHUB_ENV"]).read_text() == "UNRELATED=preserved\n"
+    assert list(Path(env["RUNNER_TEMP"]).iterdir()) == []
+    assert not (tmp_path / "injected").exists()
+
+
+@pytest.mark.parametrize("variable", ["RUNNER_TEMP", "GITHUB_ENV"])
+@pytest.mark.parametrize("value", [None, ""])
+def test_runtime_initializer_requires_runner_paths(
+    tmp_path: Path, variable: str, value: str | None
+) -> None:
+    env = initializer_env(tmp_path)
+    original = dict(env)
+    if value is None:
+        env.pop(variable)
+    else:
+        env[variable] = value
+    result = runtime_shell_run("build_root", tmp_path, env)
+    assert result.returncode != 0
+    assert f"{variable} must be set and non-empty" in result.stderr
+    assert Path(original["GITHUB_ENV"]).read_text() == "UNRELATED=preserved\n"
+    assert list(Path(original["RUNNER_TEMP"]).iterdir()) == []
+
+
+@pytest.mark.parametrize("line_break", ["\n", "\r", "\r\n"])
+def test_runtime_initializer_rejects_temp_path_line_breaks(
+    tmp_path: Path, line_break: str
+) -> None:
+    env = initializer_env(tmp_path)
+    original_temp = Path(env["RUNNER_TEMP"])
+    env["RUNNER_TEMP"] += line_break + "INJECTED=value"
+    result = runtime_shell_run("build_root", tmp_path, env)
+    assert result.returncode != 0
+    assert "RUNNER_TEMP must not contain line breaks" in result.stderr
+    assert Path(env["GITHUB_ENV"]).read_text() == "UNRELATED=preserved\n"
+    assert list(original_temp.iterdir()) == []
+    assert not Path(env["RUNNER_TEMP"]).exists()
+
+
+def test_runtime_initializer_fails_on_environment_append(tmp_path: Path) -> None:
+    env = initializer_env(tmp_path)
+    env["GITHUB_ENV"] = str(tmp_path / "environment-directory")
+    Path(env["GITHUB_ENV"]).mkdir()
+    result = runtime_shell_run("build_root", tmp_path, env, errexit=False)
+    assert result.returncode != 0
+    assert "Failed to persist BUILD_ROOT through GITHUB_ENV" in result.stderr
+    assert list(Path(env["GITHUB_ENV"]).iterdir()) == []
+    assert list(Path(env["RUNNER_TEMP"]).iterdir()) == []
 
 
 @pytest.mark.parametrize(
@@ -592,6 +754,19 @@ def test_only_release_builders_are_called_and_failure_is_not_masked(tmp_path: Pa
         assert "--bar-type-1m" not in call and "--cost-model-version" not in call
     assert calls[0][calls[0].index("--launch-output") + 1] == str(root / "launch")
     assert calls[1][calls[1].index("--launch-artifacts") + 1] == str(root / "launch")
+    recorded_calls = (root / "argv.jsonl").read_bytes()
+    for variable in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT"):
+        for value in INVALID_RUN_IDENTIFIERS:
+            invalid_env = dict(env)
+            if value is None:
+                invalid_env.pop(variable)
+            else:
+                invalid_env[variable] = value
+            result = runtime_shell_run("builders", tmp_path, invalid_env, errexit=False)
+            assert result.returncode != 0
+            assert f"{variable} must contain only ASCII digits" in result.stderr
+            assert (root / "argv.jsonl").read_bytes() == recorded_calls
+            assert not (tmp_path / "injected").exists()
     (tmp_path / "release/scripts/build_three_setup_shadow_deployment_bundle.py").write_text(
         "raise SystemExit(9)\n"
     )
