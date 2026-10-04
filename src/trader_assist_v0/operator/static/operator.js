@@ -29,6 +29,9 @@ if (dashboard) {
   }
   let refreshing = false;
   let actionPending = false;
+  let actionEpoch = 0;
+  let refreshQueued = false;
+  let queuedFocus = false;
   function markStale() {
     dashboard.dataset.freshness = "STALE";
     const status = dashboard.querySelector("[data-browser-status]");
@@ -36,17 +39,26 @@ if (dashboard) {
     dashboard.querySelectorAll(".actions button").forEach((button) => { button.disabled = true; });
   }
   async function updateDashboard(focusCard = false) {
-    if (refreshing || actionPending) return;
+    if (refreshing || actionPending) {
+      refreshQueued = true;
+      queuedFocus ||= focusCard;
+      return;
+    }
+    focusCard ||= queuedFocus;
+    refreshQueued = false;
+    queuedFocus = false;
     refreshing = true;
+    const epoch = actionEpoch;
     try {
       const response = await fetch("/", { credentials: "same-origin", cache: "no-store" });
+      if (epoch !== actionEpoch || actionPending) return;
       if (!response.ok) { markStale(); return; }
       const documentFromServer = new DOMParser().parseFromString(await response.text(), "text/html");
+      if (epoch !== actionEpoch || actionPending) return;
       const next = documentFromServer.getElementById("dashboard");
       if (!next || !["PASS", "BLOCKED"].includes(next.dataset.packageGate)) {
         markStale(); return;
       }
-      if (actionPending) return;
       const newOpportunity = next.dataset.packageId && next.dataset.packageId !== dashboard.dataset.packageId;
       // Health changes independently of package and ledger revision. Every
       // successful authoritative GET replaces the entire current server view.
@@ -60,8 +72,12 @@ if (dashboard) {
       if (focusCard) dashboard.querySelector(".opportunity")?.focus({ preventScroll: true });
       if (focusCard) dashboard.querySelector(".opportunity")?.scrollIntoView({ block: "start" });
       if (newOpportunity) dashboard.querySelector(".opportunity")?.classList.add("arrived");
-    } catch (_) { markStale(); }
-    finally { refreshing = false; }
+    } catch (_) {
+      if (epoch === actionEpoch && !actionPending) markStale();
+    } finally {
+      refreshing = false;
+      if (refreshQueued && !actionPending) void updateDashboard();
+    }
   }
   document.addEventListener("submit", async (event) => {
     const form = event.target;
@@ -70,6 +86,9 @@ if (dashboard) {
     const submitter = event.submitter;
     if (!(submitter instanceof HTMLButtonElement) || submitter.disabled || actionPending ||
         dashboard.dataset.freshness === "STALE") return;
+    // A pre-action GET cannot restore controls after this transition. Its
+    // completion drains one queued authoritative refresh after the action.
+    actionEpoch += 1;
     actionPending = true;
     const fields = new FormData(form);
     const buttons = form.querySelectorAll("button");

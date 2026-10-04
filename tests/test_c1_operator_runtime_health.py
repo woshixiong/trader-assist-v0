@@ -493,14 +493,65 @@ async function click(...responses) {
   const before = requests.length;
   intervals.get(5000)(); intervals.get(5000)();
   assert.equal(requests.length, before + 1); // bounded in-flight refresh
+  pending.push({text: "PASS"}); // overlapping requests coalesce into one follow-up
   resolve({ok: true, text: async () => "PASS"});
   await flush();
+  assert.equal(requests.length, before + 2);
   assert(!current.buttons[0].disabled);
   assert.equal(pending.length, 0);
+
+  // Exact regression: old GET A -> action completes/fails -> old A resolves
+  // -> A never replaces DOM -> fresh GET B runs -> only B can restore controls.
+  // Exercise both awaited fetch headers and awaited response body, all action
+  // outcomes, and PASS/BLOCKED/failed authoritative B states.
+  for (const phase of ["headers", "body"]) {
+    for (const outcome of ["success", "blocked", "network"]) {
+      for (const gate of ["PASS", "BLOCKED", "non-OK"]) {
+        await tick({text: "PASS"});
+        let resolveOld;
+        let resolveFresh;
+        const old = new Promise(r => { resolveOld = r; });
+        const fresh = new Promise(r => { resolveFresh = r; });
+        const start = requests.length;
+        pending.push({wait: phase === "headers" ? old : Promise.resolve({
+          ok: true, text: () => old,
+        })});
+        intervals.get(5000)();
+        await flush();
+        const actionResponse = {path: "/api/action", ok: outcome !== "blocked",
+                                error: outcome === "network"};
+        await click(actionResponse, {wait: fresh});
+        const postAction = current;
+        assert.deepEqual(requests.slice(start), ["/", "/api/action"]);
+        assert(current.buttons.every(b => b.disabled));
+        events.listeners.revision({data: "2"}); // also coalesces; never lost
+        resolveOld(phase === "headers" ? {ok: true, text: async () => "PASS"} : "PASS");
+        await flush();
+        assert.equal(current, postAction, `${phase}/${outcome}/${gate}: old A replaced DOM`);
+        assert.deepEqual(requests.slice(start), ["/", "/api/action", "/"]);
+        assert(current.buttons.every(b => b.disabled)); // B still pending
+        resolveFresh({ok: gate !== "non-OK", text: async () => gate});
+        await flush();
+        if (gate === "non-OK") {
+          assert.equal(current, postAction);
+          assert.equal(current.dataset.freshness, "STALE");
+          assert(current.buttons.every(b => b.disabled));
+        } else {
+          assert.notEqual(current, postAction);
+          assert.equal(current.dataset.packageGate, gate);
+          assert.equal(current.buttons[0].disabled, gate !== "PASS");
+        }
+        assert.equal(pending.length, 0);
+        assert.equal(requests.length, start + 3); // no extra loop/parallel GET
+      }
+    }
+  }
+  process.stdout.write("C1 action/refresh ordering regression PASS (18 interleavings)\n");
   process.stdout.write("C1 browser recovery PASS\n");
 })().catch(error => { console.error(error); process.exitCode = 1; });
 ''', encoding="utf-8")
     result = subprocess.run([node, str(harness), str(script)], capture_output=True, text=True,
                             timeout=10, check=False)
     assert result.returncode == 0, result.stderr
+    assert "C1 action/refresh ordering regression PASS (18 interleavings)" in result.stdout
     assert "C1 browser recovery PASS" in result.stdout
