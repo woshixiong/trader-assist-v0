@@ -28,6 +28,7 @@ from .projection import (
     project_preauthorized_armed,
     prove_later_activation,
 )
+from .runtime_health import read_runtime_health
 
 
 class OperatorBlocked(ValueError):
@@ -260,6 +261,10 @@ class OperatorEngine:
                 finally:
                     connection.close()
                 raise OperatorBlocked("package expired")
+            if action == "APPROVE":
+                health = read_runtime_health(self.config.runtime_evidence_path, now_ms=decision_ms)
+                if not health.ready:
+                    raise OperatorBlocked(", ".join(health.reasons))
             connection, ledger = self._ledger()
             try:
                 result = ledger.ts8_action(

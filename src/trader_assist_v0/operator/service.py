@@ -4,21 +4,30 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
+import logging
 import secrets
+import sqlite3
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from dataclasses import replace
+from html import escape
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import Response
 from starlette.templating import Jinja2Templates
 
+from trader_assist_v0.multi_asset_shadow.shadow_records.records import RecordError
+
 from .approval import OperatorBlocked, OperatorEngine
-from .contracts import OperatorConfig, OperatorCredential
+from .contracts import OperatorConfig, OperatorCredential, ReconcilerStatus
 from .dashboard import build_dashboard
 from .security import OperatorSecurity
 
@@ -48,15 +57,34 @@ def create_app(
     security = OperatorSecurity(config, credential)
     operator = engine or OperatorEngine(config)
     templates = Jinja2Templates(directory=str(ROOT / "templates"))
+    logger = logging.getLogger("trader_assist_v0.operator")
 
     async def reconcile_loop() -> None:
         while True:
+            started = time.monotonic_ns()
+            previous: ReconcilerStatus = app.state.reconciler_status
+            error: str | None = None
             try:
                 await asyncio.to_thread(operator.reconcile_once)
-            except Exception:
-                # Only the operator loop is affected; the next bounded wake
-                # re-reads durable pending rows. Never signal Nautilus control.
-                pass
+            except Exception as exc:
+                # The background boundary keeps the process alive, but defects
+                # are loud: traceback plus visible status, never silent success.
+                error = type(exc).__name__[:128]
+                logger.exception(json.dumps({
+                    "event": "OPERATOR_RECONCILER_FAILURE", "error_type": error,
+                    "consecutive_failures": min(previous.consecutive_failures + 1, 2**31 - 1),
+                }, sort_keys=True))
+            observed = time.time_ns() // 1_000_000
+            app.state.reconciler_status = ReconcilerStatus(
+                last_pass_ms=observed,
+                last_success_ms=observed if error is None else previous.last_success_ms,
+                last_duration_ms=min((time.monotonic_ns() - started) // 1_000_000, 2**31 - 1),
+                current_error=error,
+                consecutive_failures=(
+                    0 if error is None else min(previous.consecutive_failures + 1, 2**31 - 1)
+                ),
+                failure_count=min(previous.failure_count + int(error is not None), 2**31 - 1),
+            )
             await asyncio.sleep(config.reconcile_interval_ms / 1000)
 
     @asynccontextmanager
@@ -70,6 +98,7 @@ def create_app(
                 await task
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    app.state.reconciler_status = ReconcilerStatus()
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(config.allowed_hosts))
     app.mount("/static", StaticFiles(directory=str(ROOT / "static")), name="static")
 
@@ -126,9 +155,10 @@ def create_app(
     @app.get("/", response_class=HTMLResponse)
     async def dashboard(request: Request) -> HTMLResponse:
         session = security.read(request, authenticated=True)
-        return templates.TemplateResponse(
-            request, "dashboard.html", dashboard_context(session.csrf)
-        )
+        return await run_in_threadpool(render_dashboard, request, session.csrf)
+
+    def render_dashboard(request: Request, csrf: str) -> HTMLResponse:
+        return templates.TemplateResponse(request, "dashboard.html", dashboard_context(csrf))
 
     def dashboard_context(csrf: str, *, notice: str = "") -> dict[str, object]:
         model = build_dashboard(operator, config)
@@ -143,14 +173,23 @@ def create_app(
         try:
             revision = operator.revision()
             recent_terminal = operator.recent_terminal()
-        except Exception:
+        except (OperatorBlocked, sqlite3.Error, RecordError):
             revision, recent_terminal = -1, None
+            model = replace(model, reasons=(*model.reasons, "OPERATOR_METADATA_UNAVAILABLE"))
+            if model.overall == "READY":
+                model = replace(model, overall="DEGRADED")
+        status: ReconcilerStatus = app.state.reconciler_status
+        if status.current_error is not None:
+            model = replace(model, reasons=(*model.reasons, "OPERATOR_RECONCILER_FAILED"))
+            if model.overall == "READY":
+                model = replace(model, overall="DEGRADED")
         return {
             "model": model, "package": package, "details": model.details,
             "state": model.state, "blocked": blocked, "reason": reason,
             "csrf": csrf, "revision": revision, "recent_terminal": recent_terminal,
             "configured_mode": config.approval_mode, "action_key": secrets.token_urlsafe(24),
             "notice": notice,
+            "reconciler": status,
         }
 
     @app.post("/action", response_class=HTMLResponse)
@@ -162,14 +201,15 @@ def create_app(
         except ValidationError as exc:
             raise HTTPException(422, "invalid action body") from exc
         try:
-            operator.human_action_record(
+            await run_in_threadpool(operator.human_action_record,
                 shadow_id=body.shadow_id, package_id=body.package_id,
                 package_hash=body.package_hash, action_key=body.action_key,
                 action=body.action, session_id=session.session_id,
             )
         except OperatorBlocked as exc:
-            return templates.TemplateResponse(
-                request, "dashboard.html", dashboard_context(session.csrf, notice=str(exc)),
+            return HTMLResponse(
+                '<!doctype html><html><body><p role="alert">Action blocked: '
+                + escape(str(exc)) + '</p><a href="/">Current dashboard</a></body></html>',
                 status_code=409,
             )
         return RedirectResponse("/", status_code=303)
@@ -183,7 +223,7 @@ def create_app(
         except (ValidationError, ValueError) as exc:
             raise HTTPException(422, "invalid action body") from exc
         try:
-            result = operator.human_action_record(
+            result = await run_in_threadpool(operator.human_action_record,
                 shadow_id=body.shadow_id,
                 package_id=body.package_id,
                 package_hash=body.package_hash,
@@ -207,8 +247,8 @@ def create_app(
             last = -1
             while not await request.is_disconnected():
                 try:
-                    current = operator.revision()
-                except Exception:
+                    current = await run_in_threadpool(operator.revision)
+                except (OperatorBlocked, sqlite3.Error, RecordError):
                     current = last
                 if current != last:
                     yield f"event: revision\ndata: {current}\n\n"

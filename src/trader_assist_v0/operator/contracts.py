@@ -13,6 +13,44 @@ from trader_assist_v0.multi_asset_shadow.l1_approval import StrategyOrderPackage
 
 RUNTIME_EVIDENCE_PATH = Path("/var/lib/trader-assist-v0/three-setup-shadow/evidence.sqlite")
 OPERATOR_LEDGER_PATH = Path("/var/lib/trader-assist-v0/three-setup-operator/operator.sqlite")
+RUNTIME_HEALTH_FILENAME = "operator-runtime-health.json"
+
+
+class RuntimeHealthSnapshot(BaseModel):
+    """Disposable observations of existing E4 facts, never runtime authority."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    schema_version: Literal["C1_RUNTIME_HEALTH_V1"]
+    observed_ms: int = Field(ge=0)
+    publication_interval_ms: int = Field(ge=1000, le=60_000)
+    running: bool
+    data_ready: bool
+    stream_health: Literal["HEALTHY", "DISCONNECTED", "REESTABLISHING"]
+    continuity_requirements_remaining: int = Field(ge=0)
+    warmup_readiness: Literal["READY", "NOT_READY"]
+    storage_failures: int = Field(ge=0)
+    registry_version: str = Field(min_length=1, max_length=256)
+
+
+@dataclass(frozen=True)
+class RuntimeHealthView:
+    snapshot: RuntimeHealthSnapshot | None
+    reasons: tuple[str, ...]
+
+    @property
+    def ready(self) -> bool:
+        return self.snapshot is not None and not self.reasons
+
+
+@dataclass(frozen=True)
+class ReconcilerStatus:
+    last_pass_ms: int | None = None
+    last_success_ms: int | None = None
+    last_duration_ms: int = 0
+    current_error: str | None = None
+    consecutive_failures: int = 0
+    failure_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -37,6 +75,7 @@ class DashboardModel:
     events_available: bool
     module_id: str
     module_renderer: str
+    runtime_health: RuntimeHealthView
 
 
 class OperatorConfig(BaseModel):

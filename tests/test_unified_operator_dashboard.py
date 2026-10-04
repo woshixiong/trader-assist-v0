@@ -10,7 +10,12 @@ from urllib.parse import urlencode
 
 import pytest
 from fastapi.testclient import TestClient
-from test_three_setup_operator_contracts import make_config, make_credential, make_source
+from test_three_setup_operator_contracts import (
+    make_config,
+    make_credential,
+    make_health,
+    make_source,
+)
 
 from trader_assist_v0.multi_asset_shadow.l1_approval import ApprovalMode, HumanApprovalLedger
 from trader_assist_v0.multi_asset_shadow.shadow_records.store import EvidenceStore
@@ -34,14 +39,14 @@ def _authenticated_client(tmp_path: Path) -> tuple[TestClient, dict[str, str]]:
     return client, fields
 
 
-def test_one_current_reference_only_card_and_unknown_health(tmp_path: Path) -> None:
+def test_one_current_reference_only_card_and_runtime_health(tmp_path: Path) -> None:
     make_source(tmp_path / "runtime.sqlite", created_ms=time.time_ns() // 1_000_000)
     client, fields = _authenticated_client(tmp_path)
     try:
         page = client.get("/")
         assert page.text.count('id="opportunity-card"') == 1
         assert "Trade Gate: PASS" in page.text
-        assert "OVERALL <strong class=\"status-unknown\">UNKNOWN" in page.text
+        assert "OVERALL <strong class=\"status-ready\">READY" in page.text
         assert "reference only" in page.text
         assert "NOT_AVAILABLE" in page.text
         assert "Margin USD" not in page.text
@@ -59,7 +64,11 @@ def test_missing_source_blocks_and_valid_empty_source_is_idle(tmp_path: Path) ->
     with EvidenceStore(config.runtime_evidence_path):
         pass
     model = build_dashboard(OperatorEngine(config), config)
-    assert model.state == "NO_OPPORTUNITY" and model.overall == "UNKNOWN"
+    assert model.state == "NO_OPPORTUNITY" and model.overall == "BLOCKED"
+    make_health(config.runtime_evidence_path, observed_ms=time.time_ns() // 1_000_000)
+    model = build_dashboard(OperatorEngine(config), config)
+    assert model.state == "NO_OPPORTUNITY" and model.overall == "READY"
+    assert model.package_gate == "BLOCKED"
 
 
 def test_fixed_module_registry_fails_closed() -> None:
@@ -157,3 +166,39 @@ def test_recent_events_are_bounded_and_deterministic(tmp_path: Path) -> None:
     assert available and len(events) == EVENT_LIMIT
     assert events[0].event_key == f"event-{EVENT_LIMIT + 4:03}"
     assert events[-1].event_key == "event-005"
+
+
+def test_c1_operational_read_failure_preserves_rendered_shell_and_health(tmp_path: Path) -> None:
+    make_source(tmp_path / "runtime.sqlite", created_ms=time.time_ns() // 1_000_000)
+    client, _fields = _authenticated_client(tmp_path)
+    try:
+        (tmp_path / "runtime.sqlite").write_bytes(b"corrupt source database")
+        page = client.get("/")
+        assert page.status_code == 200 and 'id="dashboard"' in page.text
+        assert "SOURCE_OR_PACKAGE_UNAVAILABLE" in page.text
+        assert "Stream: HEALTHY" in page.text
+        assert 'data-action="APPROVE"' not in page.text
+    finally:
+        client.__exit__(None, None, None)
+
+
+def test_c1_form_rejection_is_escaped_and_does_not_render_display(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from trader_assist_v0.operator import service
+
+    make_source(tmp_path / "runtime.sqlite", created_ms=time.time_ns() // 1_000_000)
+    client, fields = _authenticated_client(tmp_path)
+    try:
+        make_health(tmp_path / "runtime.sqlite", observed_ms=time.time_ns() // 1_000_000,
+                    stream_health="DISCONNECTED")
+        def display_must_not_run(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("action invoked display projection")
+        monkeypatch.setattr(service, "build_dashboard", display_must_not_run)
+        response = client.post("/action", data={**fields, "action": "APPROVE"},
+                               headers={"Origin": "https://operator.test"}, follow_redirects=False)
+        assert response.status_code == 409
+        assert "RUNTIME_STREAM_NOT_HEALTHY" in response.text
+        assert 'href="/"' in response.text
+    finally:
+        client.__exit__(None, None, None)

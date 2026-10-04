@@ -1,15 +1,21 @@
 {% extends "base.html" %}
 {% block content %}
-<section id="dashboard" data-csrf="{{ csrf }}" data-revision="{{ revision }}" data-package-id="{{ package.package_id if package else '' }}" data-state="{{ state }}">
+<section id="dashboard" data-csrf="{{ csrf }}" data-revision="{{ revision }}" data-package-id="{{ package.package_id if package else '' }}" data-state="{{ state }}" data-package-gate="{{ model.package_gate }}">
   <div class="status-strip" role="status">
     <span>ENVIRONMENT <strong>UNKNOWN</strong></span>
     <span>MODE <strong>{{ configured_mode }} · ZERO_WRITE · NOT_SUBMITTED</strong></span>
     <span>OVERALL <strong class="status-{{ model.overall|lower }}">{{ model.overall }}</strong></span>
   </div>
+  <p data-browser-status role="status">Current server view</p>
   <details class="health card" open>
     <summary>Health and reasons</summary>
     <ul class="reasons">{% for item in model.reasons %}<li>{{ item }}</li>{% endfor %}</ul>
-    <p>Live stream/continuity: NOT_AVAILABLE · Target-host resources: NOT_AVAILABLE · Backup: NOT_AVAILABLE</p>
+    {% set health = model.runtime_health.snapshot %}
+    {% if health %}
+    <p>Runtime running: {{ health.running }} · Data ready: {{ health.data_ready }} · Stream: {{ health.stream_health }} · Continuity pending: {{ health.continuity_requirements_remaining }} · Warmup: {{ health.warmup_readiness }} · Storage failures: {{ health.storage_failures }} · Observed: {{ health.observed_ms }}</p>
+    {% else %}<p>Runtime health: NOT_AVAILABLE</p>{% endif %}
+    <p>Target-host resources: NOT_AVAILABLE · Backup: NOT_AVAILABLE</p>
+    <p>Reconciler: {{ reconciler.current_error or 'NO_CURRENT_FAILURE' }} · Last pass: {{ reconciler.last_pass_ms or 'NOT_AVAILABLE' }} · Last success: {{ reconciler.last_success_ms or 'NOT_AVAILABLE' }} · Consecutive failures: {{ reconciler.consecutive_failures }} · Total failures: {{ reconciler.failure_count }} · Last duration: {{ reconciler.last_duration_ms }} ms</p>
     <p>Quote value age is diagnostic only; a quiet valid quote is not a data-health failure.</p>
   </details>
   {% if notice %}<p role="alert" class="notice">{{ notice }}</p>{% endif %}

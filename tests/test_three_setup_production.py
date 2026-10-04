@@ -1431,3 +1431,126 @@ def test_explicit_operator_shutdown_is_clean() -> None:
     shutdown.set()
     asyncio.run(application.run(shutdown))  # type: ignore[attr-defined]
     assert dispatcher.closed and store.closed  # type: ignore[attr-defined]
+
+
+def test_c1_health_publication_projects_existing_facts_atomically(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from trader_assist_v0.operator.contracts import RUNTIME_HEALTH_FILENAME
+    from trader_assist_v0.operator.runtime_health import read_runtime_health
+
+    config, node, capture = _e4_composition_fixture(tmp_path, monkeypatch)
+    application = production.compose_three_setup_application(
+        config=config, notification_adapter=WebhookDeliveryAdapter(
+            client=Webhook(), config=WebhookConfig(url="https://example.invalid/hook")
+        ), clock=Clock().now,
+    )
+    assert isinstance(application, production.E4ThreeSetupProductionApplication)
+    application._node_handle = node
+    node.is_running = True
+    existing = application.e4_runtime.readiness_snapshot()
+    observed = int(application.clock().timestamp() * 1000)
+    path = config.evidence_store_path.with_name(RUNTIME_HEALTH_FILENAME)
+    path.write_bytes(b"partial old projection")
+    async def exercise() -> None:
+        await application._on_dispatch_tick()
+        projected = read_runtime_health(config.evidence_store_path, now_ms=observed)
+        assert projected.snapshot is not None
+        assert projected.snapshot.data_ready == existing.data_ready
+        assert projected.snapshot.registry_version == existing.registry_version
+        assert projected.snapshot.running is True
+        assert projected.snapshot.stream_health == capture.capture_health["stream_health"]
+        assert projected.snapshot.warmup_readiness == capture.warmup_health["readiness"]
+        assert projected.snapshot.storage_failures == capture.capture_health["storage_failures"]
+        # Different existing service users: public projection is readable,
+        # but only the producer owns write permission. No host ACL changes.
+        assert path.stat().st_mode & 0o777 == 0o644
+        first = json.loads(path.read_bytes())
+        capture.capture_health["stream_health"] = "REESTABLISHING"
+        capture.capture_health["continuity_requirements_remaining"] = 1
+        await application._on_dispatch_tick()
+        recovering = read_runtime_health(config.evidence_store_path, now_ms=observed)
+        assert "RUNTIME_STREAM_NOT_HEALTHY" in recovering.reasons
+        assert "RUNTIME_CONTINUITY_PENDING" in recovering.reasons
+        assert json.loads(path.read_bytes()) != first
+        assert not list(path.parent.glob(path.name + ".*"))
+    try:
+        asyncio.run(exercise())
+    finally:
+        application.bootstrap.close()
+        application.projection.close()
+
+
+def test_c1_publication_failure_does_not_kill_supervised_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    config, node, _capture = _e4_composition_fixture(tmp_path, monkeypatch)
+    application = production.compose_three_setup_application(
+        config=config, notification_adapter=WebhookDeliveryAdapter(
+            client=Webhook(), config=WebhookConfig(url="https://example.invalid/hook")
+        ), clock=Clock().now,
+    )
+    assert isinstance(application, production.E4ThreeSetupProductionApplication)
+    def fail_publication(_path: Path, _payload: str) -> None:
+        raise PermissionError("injected snapshot publication failure")
+    monkeypatch.setattr(production, "_atomic_operator_health", fail_publication)
+    ticks = 0
+    original = application._on_dispatch_tick
+    async def exercise() -> None:
+        shutdown = asyncio.Event()
+        async def tick() -> None:
+            nonlocal ticks
+            await original()
+            ticks += 1
+            if ticks == 2:
+                assert node.is_running
+                shutdown.set()
+        monkeypatch.setattr(application, "_on_dispatch_tick", tick)
+        await asyncio.wait_for(application.run(shutdown), 4)
+    with caplog.at_level(logging.INFO, logger="trader_assist_v0.three_setup"):
+        asyncio.run(exercise())
+    events = [json.loads(r.message)["event"] for r in caplog.records]
+    assert ticks == 2 and events.count("OPERATOR_HEALTH_PUBLICATION_FAILURE") == 2
+    assert "PRODUCTION_CHILD_EXIT_UNEXPECTED" not in events
+    assert node.run_async_calls == 1 and node.stop_calls == 1 and node.disposed
+
+
+def test_c1_atomic_replace_failure_preserves_previous_snapshot_and_cleans_temp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "operator-runtime-health.json"
+    path.write_text("previous")
+    def fail_replace(_source: object, _destination: object) -> None:
+        raise OSError("injected atomic replace failure")
+    monkeypatch.setattr(production.os, "replace", fail_replace)
+    with pytest.raises(OSError):
+        production._atomic_operator_health(path, "next")
+    assert path.read_text() == "previous"
+    assert not list(tmp_path.glob(path.name + ".*"))
+
+
+def test_c1_existing_health_read_failure_is_contained_but_defect_surfaces(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    config, _node, _capture = _e4_composition_fixture(tmp_path, monkeypatch)
+    application = production.compose_three_setup_application(
+        config=config, notification_adapter=WebhookDeliveryAdapter(
+            client=Webhook(), config=WebhookConfig(url="https://example.invalid/hook")
+        ), clock=Clock().now,
+    )
+    assert isinstance(application, production.E4ThreeSetupProductionApplication)
+    def corrupt_read() -> object:
+        raise ValueError("corrupt retained storage batch")
+    def defect() -> object:
+        raise RuntimeError("injected programming defect")
+    try:
+        monkeypatch.setattr(application.e4_runtime, "readiness_snapshot", corrupt_read)
+        with caplog.at_level(logging.ERROR, logger="trader_assist_v0.three_setup"):
+            asyncio.run(application._publish_operator_health())
+        assert "OPERATOR_HEALTH_PUBLICATION_FAILURE" in caplog.text
+        monkeypatch.setattr(application.e4_runtime, "readiness_snapshot", defect)
+        with pytest.raises(RuntimeError, match="programming defect"):
+            asyncio.run(application._publish_operator_health())
+    finally:
+        application.bootstrap.close()
+        application.projection.close()
