@@ -3,7 +3,7 @@
 import os
 import subprocess
 import sys
-from decimal import Decimal
+from decimal import Decimal, localcontext
 
 import pytest
 from test_research_data_contracts import dataset
@@ -16,6 +16,7 @@ from trader_assist_v0.research_replay.contracts import ResearchRunSpec, digest
 from trader_assist_v0.research_replay.harness import (
     CandidatePlan,
     ContextFrame,
+    _canonical_decision_metrics,
     snapshot,
     trial_identity,
     validate_inputs,
@@ -27,6 +28,34 @@ from trader_assist_v0.research_replay.reporting import (
     pair,
     summarize,
 )
+
+
+def test_derived_decision_metrics_canonicalize_repeating_ratios_before_validation():
+    names = (
+        "progress_bps", "adverse_bps", "high_water_bps", "giveback_fraction",
+        "net_r", "cumulative_cost_bps",
+    )
+    with localcontext() as arithmetic:
+        arithmetic.prec = 80
+        repeating = Decimal(1) / Decimal(6)
+    with pytest.raises(ValueError, match="canonical wire length"):
+        context(giveback_fraction=repeating)
+    outputs = []
+    for precision in (6, 28, 80):
+        with localcontext() as ambient:
+            ambient.prec = precision
+            metrics = _canonical_decision_metrics(**dict.fromkeys(names, repeating))
+            assert set(metrics.values()) == {Decimal("0.166666666667")}
+            bound = context(**metrics)
+            assert type(bound).model_validate_json(bound.model_dump_json()) == bound
+            outputs.append((bound.record_hash, bound.model_dump_json()))
+    assert outputs[0] == outputs[1] == outputs[2]
+    assert _canonical_decision_metrics(
+        progress_bps=Decimal("-1.0000000000005"),
+        net_r=Decimal("1.0000000000015"),
+    ) == {"progress_bps": Decimal("-1.000000000000"), "net_r": Decimal("1.000000000002")}
+    with pytest.raises(ValueError, match="nonfinite"):
+        _canonical_decision_metrics(net_r=Decimal("NaN"))
 
 
 def candidate(**updates):

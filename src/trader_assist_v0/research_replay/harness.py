@@ -35,12 +35,18 @@ from .contracts import (
     ResearchRunSpec,
     decimal80,
     digest,
+    wire,
 )
 from .evidence import require_pipeline
 from .lifecycle import BlockPlan, TrialLedger, VisibilityPolicy
 from .paths import funding_settlement, measure_path, net_cash
 from .policies import PolicyAction, PolicyContext, PolicySpec, evaluate
 from .reporting import CandidateResult, CounterfactualPathRef, Pair, bundle_fingerprint, pair
+
+
+def _canonical_decision_metrics(**values: Decimal) -> dict[str, Decimal]:
+    """Bind derived context arithmetic to the existing research wire precision."""
+    return {name: Decimal(wire(value)) for name, value in values.items()}
 
 
 class CandidatePlan(BoundRecord):
@@ -459,6 +465,16 @@ def _native_candidate(
                 / (opportunity.entry * run.cost.size)
                 * 10_000
             )
+            updates.update(
+                _canonical_decision_metrics(
+                    **{
+                        name: value
+                        for name, value in updates.items()
+                        if isinstance(value, Decimal)
+                    },
+                    cumulative_cost_bps=fees_bps,
+                )
+            )
             c = PolicyContext.create(
                 **{
                     **c.model_dump(exclude={"record_hash"}),
@@ -466,7 +482,6 @@ def _native_candidate(
                     "thesis_valid": valid,
                     "attempts": len(attempts),
                     "max_attempts": candidate.max_attempts,
-                    "cumulative_cost_bps": fees_bps,
                     "cost_budget_bps": candidate.cost_budget_bps,
                     "since_scratch_ns": c.at - state["last_scratch"],
                 }
