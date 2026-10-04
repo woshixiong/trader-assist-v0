@@ -1,0 +1,44 @@
+{
+  "version": "B_RUN_V1",
+  "record_hash": "db5e09f7292fdf8db95920388ee3e057c8aa1f83bca6d440b5b60e4971204f3e",
+  "package": "CAUSAL_RESEARCH_DERIVATION_STRATEGY_REPLAY_FOUNDATION_1",
+  "base": "ba7c1424b8beb06b15f4254b6864e8d87b93531b",
+  "release": "ba7c1424b8beb06b15f4254b6864e8d87b93531b",
+  "runtime": "R0_ENGINEERING_FIXTURE",
+  "strategy_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "dataset_hashes": [
+    "982140a47dd519290c0d29d6fd64299a7382ee644af11cfbc6333d88d8837ea4"
+  ],
+  "feature_hashes": [],
+  "policy_hashes": [
+    "a0bfd00a3308af86b3f2d5ead2a2517f7fbecd81aa7b7ccad30a34850848b388"
+  ],
+  "roster_hash": "aecc95e8ab75e7e059600605ee56483539b53ab2563ad471311d1b736b96ac20",
+  "cost": {
+    "version": "B_COST_V1",
+    "record_hash": "71f08450e749c6819da8d99f4a1a3d11165a2ae154fc1f5c821a1602a4486613",
+    "maker_bps": "2",
+    "taker_bps": "5",
+    "slippage_bps": "0",
+    "additional_cost_bps": "0",
+    "delay_ns": 1,
+    "quote_age_ns": 100,
+    "size": "0.01",
+    "fill_model_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "fee_profile": "R0_configured",
+    "funding_profile": "R0_signed",
+    "passive_touch_equals_fill": false,
+    "trigger_equals_fill": false
+  },
+  "horizon_ns": 100,
+  "max_observations": 100,
+  "max_candidates": 4,
+  "trial_ledger_hash": "e5a4faab510b756a08dc44a007ad9c23d9a1abc874fe2ad9ed3eb2c401b8d81a",
+  "block_plan_hash": "4109b5e7c35d3770d23ecfa06b6fe9971187ee995dcb6211a8f74044587d552b",
+  "visibility_hash": "ce82a95e81477179875338653361ce52971bc1cf63196e8649ae43400f4cb47c",
+  "correlation_method": "RETAINED_R0_EPISODE",
+  "seed": 7,
+  "claim": "PIPELINE_CORRECTNESS_ONLY",
+  "ambiguity": "CONSERVATIVE_STOP_FIRST",
+  "consumption": "REPLAY"
+}
