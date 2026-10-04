@@ -12,8 +12,8 @@ import threading
 import time
 from pathlib import Path
 
-import httpx
 import pytest
+from starlette.requests import Request
 from test_three_setup_operator_contracts import (
     make_config,
     make_credential,
@@ -32,6 +32,57 @@ from trader_assist_v0.operator.security import OperatorSecurity
 
 def _now() -> int:
     return time.time_ns() // 1_000_000
+
+
+def _request(
+    method: str,
+    path: str,
+    *,
+    cookie: str,
+    origin: str | None = None,
+    csrf: str | None = None,
+    json_body: dict[str, str] | None = None,
+) -> Request:
+    body = b"" if json_body is None else json.dumps(json_body).encode()
+    headers = [
+        (b"host", b"operator.test"),
+        (b"cookie", f"__Host-ts8-session={cookie}".encode()),
+    ]
+    if origin is not None:
+        headers.append((b"origin", origin.encode()))
+    if csrf is not None:
+        headers.append((b"x-csrf-token", csrf.encode()))
+    if json_body is not None:
+        headers.append((b"content-type", b"application/json"))
+
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": method,
+            "scheme": "https",
+            "path": path,
+            "raw_path": path.encode(),
+            "query_string": b"",
+            "headers": headers,
+            "client": ("127.0.0.1", 12345),
+            "server": ("operator.test", 443),
+        },
+        receive,
+    )
+
+
+def _endpoint(app: object, path: str, method: str) -> object:
+    return next(
+        route.endpoint
+        for route in app.routes  # type: ignore[attr-defined]
+        if getattr(route, "path", "") == path
+        and method in (getattr(route, "methods", set()) or set())
+    )
 
 
 @pytest.mark.parametrize("raw", [
@@ -194,52 +245,64 @@ def test_slow_display_or_sse_does_not_block_event_loop_or_action(
     entered, release = threading.Event(), threading.Event()
     owner = threading.get_ident()
     original = service.build_dashboard if surface == "dashboard" else engine.revision
+
     def slow(*args: object, **kwargs: object) -> object:
         assert threading.get_ident() != owner
         entered.set()
         assert release.wait(5)
         return original(*args, **kwargs)  # type: ignore[arg-type]
+
     if surface == "dashboard":
         monkeypatch.setattr(service, "build_dashboard", slow)
     else:
         monkeypatch.setattr(engine, "revision", slow)
+
     async def exercise() -> None:
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="https://operator.test",
-        ) as client:
-            client.cookies.set("__Host-ts8-session", cookie)
-            iterator = None
-            if surface == "dashboard":
-                display = asyncio.create_task(client.get("/"))
-            else:
-                endpoint = next(r.endpoint for r in app.routes
-                                if getattr(r, "path", "") == "/events")
-                class RequestStub:
-                    def __init__(self) -> None:
-                        self.cookies = {"__Host-ts8-session": cookie}
-                    async def is_disconnected(self) -> bool:
-                        return False
-                response = await endpoint(RequestStub())
-                iterator = response.body_iterator
-                display = asyncio.create_task(anext(iterator))
-            try:
-                assert await asyncio.to_thread(entered.wait, 2)
-                # This scheduling turn and real POST complete while display is held.
-                await asyncio.sleep(0)
-                result = await asyncio.wait_for(client.post("/api/action", json={
-                    "shadow_id": package.parent_strategy_order_id,
-                    "package_id": package.package_id, "package_hash": package.package_hash,
-                    "action_key": "independent-action-123456", "action": "APPROVE",
-                }, headers={"Origin": config.allowed_origin, "X-CSRF-Token": session.csrf}), 2)
-                assert result.status_code == 200
-                assert result.json()["submission_status"] == "NOT_SUBMITTED"
-                assert not display.done()
-            finally:
-                release.set()
-                await asyncio.wait_for(display, 2)
-                if iterator is not None:
-                    await iterator.aclose()
+        dashboard_endpoint = _endpoint(app, "/", "GET")
+        events_endpoint = _endpoint(app, "/events", "GET")
+        action_endpoint = _endpoint(app, "/api/action", "POST")
+        iterator = None
+        if surface == "dashboard":
+            display = asyncio.create_task(
+                dashboard_endpoint(_request("GET", "/", cookie=cookie))  # type: ignore[operator]
+            )
+        else:
+            response = await events_endpoint(  # type: ignore[operator]
+                _request("GET", "/events", cookie=cookie)
+            )
+            iterator = response.body_iterator
+            display = asyncio.create_task(anext(iterator))
+        try:
+            assert await asyncio.to_thread(entered.wait, 2)
+            await asyncio.sleep(0)
+            result = await asyncio.wait_for(
+                action_endpoint(  # type: ignore[operator]
+                    _request(
+                        "POST",
+                        "/api/action",
+                        cookie=cookie,
+                        origin=config.allowed_origin,
+                        csrf=session.csrf,
+                        json_body={
+                            "shadow_id": package.parent_strategy_order_id,
+                            "package_id": package.package_id,
+                            "package_hash": package.package_hash,
+                            "action_key": "independent-action-123456",
+                            "action": "APPROVE",
+                        },
+                    )
+                ),
+                2,
+            )
+            assert result.status_code == 200
+            assert json.loads(result.body)["submission_status"] == "NOT_SUBMITTED"
+            assert not display.done()
+        finally:
+            release.set()
+            await asyncio.wait_for(display, 2)
+            if iterator is not None:
+                await iterator.aclose()
+
     asyncio.run(exercise())
 
 
@@ -250,15 +313,18 @@ def test_reconciler_failure_visible_nonblocking_and_automatically_clears(
     make_source(config.runtime_evidence_path, created_ms=_now())
     engine = OperatorEngine(config)
     calls = 0
+
     def reconcile() -> int:
         nonlocal calls
         calls += 1
         if calls == 1:
             raise sqlite3.OperationalError("injected reconciler failure")
         return 0
+
     monkeypatch.setattr(engine, "reconcile_once", reconcile)
     app = service.create_app(config, make_credential(), engine=engine)
     session, cookie = OperatorSecurity(config, make_credential()).issue(authenticated=True)
+
     async def wait_status(failing: bool) -> ReconcilerStatus:
         async with asyncio.timeout(2):
             while True:
@@ -266,30 +332,42 @@ def test_reconciler_failure_visible_nonblocking_and_automatically_clears(
                 if status.last_pass_ms is not None and bool(status.current_error) == failing:
                     return status
                 await asyncio.sleep(0.001)
+
     async def exercise() -> None:
+        dashboard_endpoint = _endpoint(app, "/", "GET")
+        action_endpoint = _endpoint(app, "/api/action", "POST")
         async with app.router.lifespan_context(app):
             failed = await wait_status(True)
             assert failed.consecutive_failures == failed.failure_count == 1
             assert failed.last_success_ms is None
-            transport = httpx.ASGITransport(app=app)
-            async with httpx.AsyncClient(
-            transport=transport, base_url="https://operator.test",
-        ) as client:
-                client.cookies.set("__Host-ts8-session", cookie)
-                page = await client.get("/")
-                assert "OPERATOR_RECONCILER_FAILED" in page.text
-                assert "Trade Gate: PASS" in page.text
-                package = engine.latest()[0].package
-                result = await client.post("/api/action", json={
-                    "shadow_id": package.parent_strategy_order_id, "package_id": package.package_id,
-                    "package_hash": package.package_hash,
-                    "action_key": "reconciler-independent-1234",
-                    "action": "APPROVE",
-                }, headers={"Origin": config.allowed_origin, "X-CSRF-Token": session.csrf})
-                assert result.status_code == 200
+            page = await dashboard_endpoint(  # type: ignore[operator]
+                _request("GET", "/", cookie=cookie)
+            )
+            text = page.body.decode()
+            assert "OPERATOR_RECONCILER_FAILED" in text
+            assert "Trade Gate: PASS" in text
+            package = engine.latest()[0].package
+            result = await action_endpoint(  # type: ignore[operator]
+                _request(
+                    "POST",
+                    "/api/action",
+                    cookie=cookie,
+                    origin=config.allowed_origin,
+                    csrf=session.csrf,
+                    json_body={
+                        "shadow_id": package.parent_strategy_order_id,
+                        "package_id": package.package_id,
+                        "package_hash": package.package_hash,
+                        "action_key": "reconciler-independent-1234",
+                        "action": "APPROVE",
+                    },
+                )
+            )
+            assert result.status_code == 200
             recovered = await wait_status(False)
             assert recovered.consecutive_failures == 0 and recovered.failure_count == 1
             assert recovered.last_success_ms is not None and recovered.last_duration_ms >= 0
+
     with caplog.at_level(logging.ERROR, logger="trader_assist_v0.operator"):
         asyncio.run(exercise())
     record = next(r for r in caplog.records if "OPERATOR_RECONCILER_FAILURE" in r.message)
