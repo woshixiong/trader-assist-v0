@@ -1,6 +1,7 @@
 """Read-only projections composed outside Package A's raw authority namespace."""
 
 from pathlib import Path
+from typing import Any
 
 from trader_assist_v0.multi_asset_shadow.shadow_records.records import (
     Candidate,
@@ -13,7 +14,7 @@ from trader_assist_v0.multi_asset_shadow.shadow_records.records import (
 )
 from trader_assist_v0.nautilus_e4.contracts import AdmittedEvent
 from trader_assist_v0.nautilus_e4.storage import EvidenceStore
-from trader_assist_v0.research_data.admission import AdmissionObservation
+from trader_assist_v0.research_data.admission import AdmissionObservation, _AdmissionMechanics
 from trader_assist_v0.research_data.contracts import DatasetManifest
 from trader_assist_v0.research_data.storage import ReferenceReplayReader
 
@@ -33,6 +34,12 @@ def bind_domain_records(
 ) -> Opportunity:
     """Retain lawful original domain IDs/hashes without manufacturing a FormalSignal."""
     require_pipeline(dataset)
+    return _bind_domain_records(opportunity, records)
+
+
+def _bind_domain_records(
+    opportunity: Opportunity, records: tuple[ImmutableRecord, ...]
+) -> Opportunity:
     opportunity = Opportunity.model_validate_json(opportunity.model_dump_json())
     supported = {
         MarketEvent,
@@ -94,17 +101,25 @@ def read_external(
 def project_external(
     reader: ReferenceReplayReader, raw: AdmissionObservation, registry_hash: str
 ) -> Observation:
-    ds = require_pipeline(reader.admission.dataset)
+    require_pipeline(reader.admission.dataset)
+    return Observation.create(**_external_fields(reader.admission, raw, registry_hash))
+
+
+def _external_fields(
+    admission: _AdmissionMechanics, raw: AdmissionObservation, registry_hash: str
+) -> dict[str, Any]:
+    admission._require_access()
+    ds = admission.dataset
     raw = AdmissionObservation.model_validate_json(raw.model_dump_json())
-    event = reader.admission.validate(raw.event, raw.evaluated_at_ns)
+    event = admission.validate(raw.event, raw.evaluated_at_ns)
     if not raw.admitted or raw.duplicate:
         raise ValueError("only admitted unique facts are projected")
-    mapping = reader.admission.resolver.resolve(
+    mapping = admission.resolver.resolve(
         event.provider,
         event.instrument_id,
         event.timestamps.ts_event,
         raw.evaluated_at_ns,
-        production=reader.admission.production,
+        production=admission.production,
     )
     p = event.payload
     flat: tuple[tuple[str, str], ...]
@@ -144,7 +159,7 @@ def project_external(
         coverage_end=ds.end_ns,
     )
     ts = event.timestamps
-    return Observation.create(
+    return dict(
         version="B_OBSERVATION_V1",
         evidence=ref,
         kind=p.kind,
@@ -169,6 +184,20 @@ def read_e4(
     registry_hash: str,
 ) -> tuple[Observation, ...]:
     ds = require_pipeline(dataset)  # before manifest/catalog/market evidence I/O
+    return tuple(
+        Observation.create(**fields)
+        for fields in _e4_fields(store, ds, expected_manifest, expected_snapshot, registry_hash)
+    )
+
+
+def _e4_fields(
+    store: EvidenceStore,
+    ds: DatasetManifest,
+    expected_manifest: str,
+    expected_snapshot: str,
+    registry_hash: str,
+) -> tuple[dict[str, Any], ...]:
+    """Authority-neutral projection, called only after a concrete before-I/O gate."""
     manifest = store.load_manifest()
     snapshot = store.load_snapshot()
     if manifest.manifest_hash != expected_manifest or snapshot.snapshot_hash != expected_snapshot:
@@ -229,7 +258,7 @@ def read_e4(
         else:
             values = tuple(sorted((k, str(v)) for k, v in payload.items() if v is not None))
         result.append(
-            Observation.create(
+            dict(
                 version="B_OBSERVATION_V1",
                 evidence=ref,
                 kind=kind,

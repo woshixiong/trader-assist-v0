@@ -33,10 +33,13 @@ from .contracts import (
     Observation,
     Opportunity,
     ResearchRunSpec,
+    _ObservationFields,
+    checked_observation,
     decimal80,
     digest,
     wire,
 )
+from .dev_contracts import DevRunSpec
 from .evidence import require_pipeline
 from .lifecycle import BlockPlan, TrialLedger, VisibilityPolicy
 from .paths import funding_settlement, measure_path, net_cash
@@ -178,20 +181,13 @@ def validate_inputs(
     blocks: BlockPlan,
     visibility: VisibilityPolicy,
 ) -> None:
+    if type(run) is not ResearchRunSpec or any(type(r) is not Observation for r in rows):
+        raise TypeError("S0 requires concrete pipeline run and observations")
     run = ResearchRunSpec.model_validate_json(run.model_dump_json())
     datasets = tuple(require_pipeline(d) for d in datasets)  # first: no byte hashing before gate
     if tuple(d.record_hash for d in datasets) != run.dataset_hashes:
         raise ValueError("dataset identity mismatch")
-    if len(rows) > run.max_observations or len(candidates) > run.max_candidates:
-        raise ValueError("bounded observations/candidates exceeded")
-    if not candidates or len({c.record_hash for c in candidates}) != len(candidates):
-        raise ValueError("empty/duplicate candidate roster")
-    if tuple(c.record_hash for c in candidates) != run.policy_hashes:
-        raise ValueError("fixed candidate roster mismatch")
-    if digest("B_ROSTER", tuple(o.record_hash for o in roster)) != run.roster_hash:
-        raise ValueError("frozen opportunity roster mismatch")
-    if len({o.opportunity_id for o in roster}) != len(roster):
-        raise ValueError("duplicate opportunity")
+    _validate_roster(run, rows, roster, candidates)
     for value in (ledger, blocks, visibility):
         type(value).model_validate_json(value.model_dump_json())
     if (ledger.record_hash, blocks.record_hash, visibility.record_hash) != (
@@ -215,9 +211,38 @@ def validate_inputs(
     allowed_variants = {t.semantic_hash for t in ledger.trials}
     if not {trial_identity(run, c) for c in candidates} <= allowed_variants:
         raise ValueError("unlogged material candidate")
+    _validate_replay_evidence(run, datasets, rows, roster, candidates, frames)
+
+
+def _validate_roster(
+    run: ResearchRunSpec | DevRunSpec,
+    rows: tuple[_ObservationFields, ...],
+    roster: tuple[Opportunity, ...],
+    candidates: tuple[CandidatePlan, ...],
+) -> None:
+    if len(rows) > run.max_observations or len(candidates) > run.max_candidates:
+        raise ValueError("bounded observations/candidates exceeded")
+    if not candidates or len({c.record_hash for c in candidates}) != len(candidates):
+        raise ValueError("empty/duplicate candidate roster")
+    if tuple(c.record_hash for c in candidates) != run.policy_hashes:
+        raise ValueError("fixed candidate roster mismatch")
+    if digest("B_ROSTER", tuple(o.record_hash for o in roster)) != run.roster_hash:
+        raise ValueError("frozen opportunity roster mismatch")
+    if len({o.opportunity_id for o in roster}) != len(roster):
+        raise ValueError("duplicate opportunity")
+
+
+def _validate_replay_evidence(
+    run: ResearchRunSpec | DevRunSpec,
+    datasets: tuple[DatasetManifest, ...],
+    rows: tuple[_ObservationFields, ...],
+    roster: tuple[Opportunity, ...],
+    candidates: tuple[CandidatePlan, ...],
+    frames: tuple[ContextFrame, ...],
+) -> None:
     manifests = {d.record_hash: d for d in datasets}
     for raw in rows:
-        row = Observation.model_validate_json(raw.model_dump_json())
+        row = checked_observation(raw)
         ref = row.evidence
         ds = manifests.get(ref.dataset_hash)
         if ds is None or (ref.source_tier, ref.exposure_state) != (
@@ -292,6 +317,15 @@ def snapshot(
     candidate: CandidatePlan,
     frame: ContextFrame,
 ) -> DecisionSnapshot:
+    return _snapshot(run, opportunity, candidate, frame)
+
+
+def _snapshot(
+    run: ResearchRunSpec | DevRunSpec,
+    opportunity: Opportunity,
+    candidate: CandidatePlan,
+    frame: ContextFrame,
+) -> DecisionSnapshot:
     action = evaluate(candidate.participation, frame.context)
     return DecisionSnapshot.create(
         version="B_DECISION_V1",
@@ -309,10 +343,10 @@ def snapshot(
 
 @decimal80
 def _native_candidate(
-    run: ResearchRunSpec,
+    run: ResearchRunSpec | DevRunSpec,
     opportunity: Opportunity,
     candidate: CandidatePlan,
-    rows: tuple[Observation, ...],
+    rows: tuple[_ObservationFields, ...],
     frames: tuple[ContextFrame, ...],
     events: tuple[AdmittedEvent, ...],
     instrument: object,
@@ -477,9 +511,7 @@ def _native_candidate(
             updates.update(
                 _canonical_decision_metrics(
                     **{
-                        name: value
-                        for name, value in updates.items()
-                        if isinstance(value, Decimal)
+                        name: value for name, value in updates.items() if isinstance(value, Decimal)
                     },
                     cumulative_cost_bps=fees_bps,
                 )
@@ -507,7 +539,7 @@ def _native_candidate(
                 if attempts:
                     action = evaluate(candidate.reentry, c)
                 else:
-                    snap = snapshot(
+                    snap = _snapshot(
                         run,
                         opportunity,
                         candidate,
@@ -722,7 +754,7 @@ def _native_candidate(
         if state["pending_order"] is not None:
             limitations.add("NATIVE_PARTIAL_OR_NONFILL")
         if not decisions:
-            decisions.append(snapshot(run, opportunity, candidate, frames[0]))
+            decisions.append(_snapshot(run, opportunity, candidate, frames[0]))
         path_snapshot = first_entry_trigger.snapshot if first_entry_trigger else decisions[0]
         path = measure_path(
             path_snapshot, opportunity, rows, as_of=opportunity.decision_ns + run.horizon_ns
@@ -871,6 +903,58 @@ def replay(
     funding_applicable: bool,
 ) -> ReplayBundle:
     validate_inputs(run, datasets, rows, roster, candidates, frames, ledger, blocks, visibility)
+    results, pairs, counterfactuals = _replay_results(
+        run,
+        rows,
+        roster,
+        candidates,
+        frames,
+        events=events,
+        instruments=instruments,
+        execution=execution,
+        cashflows=cashflows,
+        funding_complete=funding_complete,
+        funding_applicable=funding_applicable,
+    )
+    artifacts = tuple(
+        sorted(
+            (
+                ("inputs", digest("B_INPUTS", tuple(r.record_hash for r in rows))),
+                ("frames", digest("B_FRAMES", tuple(f.record_hash for f in frames))),
+                ("results", digest("B_RESULTS", tuple(r.record_hash for r in results))),
+                ("pairs", digest("B_PAIRS", tuple(p.record_hash for p in pairs))),
+                (
+                    "counterfactuals",
+                    digest("B_COUNTERFACTUALS", tuple(c.record_hash for c in counterfactuals)),
+                ),
+            )
+        )
+    )
+    return ReplayBundle.create(
+        version="B_BUNDLE_V1",
+        run_hash=run.record_hash,
+        results=tuple(results),
+        pairs=tuple(pairs),
+        artifacts=artifacts,
+        fingerprint=bundle_fingerprint(run.record_hash, artifacts),
+        counterfactuals=tuple(counterfactuals),
+    )
+
+
+def _replay_results(
+    run: ResearchRunSpec | DevRunSpec,
+    rows: tuple[_ObservationFields, ...],
+    roster: tuple[Opportunity, ...],
+    candidates: tuple[CandidatePlan, ...],
+    frames: tuple[ContextFrame, ...],
+    *,
+    events: tuple[AdmittedEvent, ...],
+    instruments: dict[str, object],
+    execution: ExecutionModelConfig,
+    cashflows: tuple[CashFlow, ...],
+    funding_complete: bool,
+    funding_applicable: bool,
+) -> tuple[tuple[CandidateResult, ...], tuple[Pair, ...], tuple[CounterfactualPathRef, ...]]:
     if len(frames) > run.max_observations or len(roster) > run.max_observations:
         raise ValueError("bounded frames/roster exceeded")
     results: list[CandidateResult] = []
@@ -925,26 +1009,4 @@ def replay(
                         reason="SAME_MODEL_REFERENCE_TIME; NO_OPTIMAL_FUTURE_ENTRY",
                     )
                 )
-    artifacts = tuple(
-        sorted(
-            (
-                ("inputs", digest("B_INPUTS", tuple(r.record_hash for r in rows))),
-                ("frames", digest("B_FRAMES", tuple(f.record_hash for f in frames))),
-                ("results", digest("B_RESULTS", tuple(r.record_hash for r in results))),
-                ("pairs", digest("B_PAIRS", tuple(p.record_hash for p in pairs))),
-                (
-                    "counterfactuals",
-                    digest("B_COUNTERFACTUALS", tuple(c.record_hash for c in counterfactuals)),
-                ),
-            )
-        )
-    )
-    return ReplayBundle.create(
-        version="B_BUNDLE_V1",
-        run_hash=run.record_hash,
-        results=tuple(results),
-        pairs=tuple(pairs),
-        artifacts=artifacts,
-        fingerprint=bundle_fingerprint(run.record_hash, artifacts),
-        counterfactuals=tuple(counterfactuals),
-    )
+    return tuple(results), tuple(pairs), tuple(counterfactuals)

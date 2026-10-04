@@ -216,3 +216,59 @@ opening, indispensable Package C evidence, or inability to honor accepted A raw
 contracts require CONTROL_REPLAN. This library never authorizes production
 promotion, Mark Ready, merge, deletion, deployment, service/cloud changes,
 credentials/private APIs, signing, exchange writes, autonomous trading or capital.
+
+
+## Separate DEV research route (R2 enablement)
+
+S0 APIs, serialized identities, rights checks and PIPELINE_CORRECTNESS_ONLY claims remain
+unchanged. DEV is a sibling route: DevAccessAuthority + DevPreregistration +
+DevTrialLedger -> read_external_dev/read_e4_dev -> replay_dev -> DEV diagnostics and
+bounded canonical_summary. DatasetManifest.require_access() remains an S0 gate.
+DEV never becomes sacrificial data or an S0 run internally.
+
+Only DEV_EXPOSED with exact STRATEGY_DEV_RESEARCH rights, satisfied attribution and
+retention, Strategy/question/role/cut/visibility and frozen preregistration bindings is
+admitted. Readers gate before filesystem resolution or E4 store loads. Every other
+exposure, sealed/reserve and Forward/R6 input is refused. This package provides no
+reclassification or diagnostic unlock. Immutable upstream dataset/rights hashes must
+already match; readers cannot rewrite evidence to repair lineage.
+
+Before a real experiment, canonical non-outcome inventory and run authority must freeze
+roles, parameter sets, independent MarketEvent/cluster/cell counts, budgets, original
+Thesis risk denominators and numerical selection gates. Typed locators must match this
+frozen authority; contract hashes are integrity evidence, not independent approval.
+R0/synthetic rehearsals cannot establish performance evidence. No real evidence is
+opened by the engineering tests.
+
+S1/G0 -> S2/G1 -> S3/G2 loss then G3 re-entry -> S4/G4 exit then G5 add -> S5/G6
+context is prospective. Missing or failed predecessors stop progression. The immutable
+ledger registers material variants before replay; result-informed children bind prior
+visible completion receipts. Completions append to the prereplay cut. Selection requires
+an exact extended completion cut, not a caller's assertion of success. Identical
+operational reproductions do not debit material variants; economic cost/delay/data/seed
+changes do. Research repair count is distinct from engineering repairs and bounded by
+the frozen preregistration (maximum one in this package).
+
+The single Package-B native rc5 loop remains the execution owner. Native Hyperliquid
+CryptoPerpetual, healthy retained E4 opportunities, lawful domain lineage, marketable
+L1_MBP and matched fill/fee/funding prerequisites remain mandatory. External-only bars
+cannot synthesize or repair Hyperliquid truth; unavailable prerequisites yield explicit
+MORE_EVIDENCE_REQUIRED/errors. There is no second simulator, Strategy engine or cost model.
+
+Detailed local diagnostics retain paired paths, Attempts/fills/cashflows, attribution,
+false-positive/negative labels and original-risk Thesis R. Their row/byte limits and
+visibility are checked against the authenticated bundle. Canonical egress is a fixed
+aggregate schema: independent counts, economic/risk/coverage/concentration metrics,
+limitations and identities. It contains no provider bytes, source paths, fine timestamps,
+per-event/market/account IDs or unrestricted dictionaries. Aggregate or local output can
+be withheld by visibility. Cluster ranges are descriptive; no inferential estimator is
+claimed. Unavailable, ambiguous, incomplete and suppressed opportunities cannot improve
+selection through omission. RESEARCH_LEADER is only a DEV preference, never production,
+OOS/Forward or execution permission. Reserve scenarios remain metadata-only.
+
+The DEV fingerprint binds the exact Strategy, code commit/tree, environment/lock,
+dataset/rights/mapping/registry/universe, preregistration/ledger, cost/funding/friction,
+execution/seed/report and output artifacts. New DEV identities require no S0, raw-store,
+database, runtime or production-schema migration. Inclusion in a future release artifact
+creates no service or current Three Setup economics/policy change. Real runs, certification,
+production integration, deployment and protected actions require their separate authority.

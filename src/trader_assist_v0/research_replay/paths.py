@@ -7,11 +7,14 @@ from .contracts import (
     CashFlow,
     DecisionSnapshot,
     Fill,
-    Observation,
     Opportunity,
     PathResult,
+    checked_observation,
     decimal80,
     digest,
+)
+from .contracts import (
+    _ObservationFields as Observation,
 )
 
 
@@ -24,6 +27,7 @@ def measure_path(
     as_of: int,
     fill: Fill | None = None,
 ) -> PathResult:
+    rows = tuple(checked_observation(r) for r in rows)
     snapshot = DecisionSnapshot.model_validate_json(snapshot.model_dump_json())
     opportunity = Opportunity.model_validate_json(opportunity.model_dump_json())
     if fill:
@@ -38,7 +42,7 @@ def measure_path(
     selected = tuple(
         sorted(
             (
-                Observation.model_validate_json(r.model_dump_json())
+                checked_observation(r)
                 for r in rows
                 if start <= r.ts_event <= min(end, as_of) and r.known_at <= as_of
             ),
@@ -238,8 +242,8 @@ def funding_settlement(
     profile_hash: str,
 ) -> CashFlow:
     """Signed native-position cash flow from retained exact-venue public settlement evidence."""
-    rate = Observation.model_validate_json(rate.model_dump_json())
-    mark = Observation.model_validate_json(mark.model_dump_json())
+    rate = checked_observation(rate)
+    mark = checked_observation(mark)
     if (
         rate.evidence.owner != "HL_E4"
         or mark.evidence.owner != "HL_E4"

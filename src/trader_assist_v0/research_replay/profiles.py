@@ -9,7 +9,8 @@ from trader_assist_v0.contracts.common import FiniteDecimal
 from trader_assist_v0.research_data.contracts import BoundRecord
 
 from .alignment import result
-from .contracts import FeatureObservation, FeatureSpec, Observation
+from .contracts import FeatureObservation, FeatureSpec
+from .contracts import _ObservationFields as Observation
 from .microstructure import window_rows
 
 
