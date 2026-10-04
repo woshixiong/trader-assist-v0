@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -18,7 +20,11 @@ from trader_assist_v0.multi_asset_shadow.shadow_records.records import (
     StrategyEvaluation,
 )
 from trader_assist_v0.multi_asset_shadow.shadow_records.store import EvidenceStore
-from trader_assist_v0.operator.contracts import OperatorConfig, OperatorCredential
+from trader_assist_v0.operator.contracts import (
+    RUNTIME_HEALTH_FILENAME,
+    OperatorConfig,
+    OperatorCredential,
+)
 
 
 def make_source(
@@ -139,7 +145,28 @@ def make_source(
                 for record in records
             ],
         )
+    make_health(path, observed_ms=min(created_ms, time.time_ns() // 1_000_000))
     return shadow.record_id
+
+
+def make_health(evidence_path: Path, *, observed_ms: int, **overrides: object) -> Path:
+    """Explicit synthetic runtime observation; never provider evidence."""
+    value = {
+        "schema_version": "C1_RUNTIME_HEALTH_V1",
+        "observed_ms": observed_ms,
+        "publication_interval_ms": 5000,
+        "running": True,
+        "data_ready": True,
+        "stream_health": "HEALTHY",
+        "continuity_requirements_remaining": 0,
+        "warmup_readiness": "READY",
+        "storage_failures": 0,
+        "registry_version": "registry-v1",
+        **overrides,
+    }
+    path = evidence_path.with_name(RUNTIME_HEALTH_FILENAME)
+    path.write_text(json.dumps(value), encoding="utf-8")
+    return path
 
 
 def make_config(

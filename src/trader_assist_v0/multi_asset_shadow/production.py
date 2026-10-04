@@ -10,7 +10,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import shutil
+import sqlite3
+import tempfile
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -18,6 +21,8 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
+
+from pydantic import ValidationError
 
 from trader_assist_v0.contracts.common import canonical_json_bytes
 from trader_assist_v0.nautilus_e4.capture import SubscriptionPolicy
@@ -28,9 +33,10 @@ from trader_assist_v0.nautilus_e4.contracts import (
     RunManifest,
 )
 from trader_assist_v0.nautilus_e4.storage import EvidenceStore as E4EvidenceStore
+from trader_assist_v0.operator.contracts import RUNTIME_HEALTH_FILENAME, RuntimeHealthSnapshot
 
 from .bootstrap import BoundaryReport, MultiAssetProductionBootstrap
-from .e4_markettruth import E4MarketTruthProjection
+from .e4_markettruth import E4MarketTruthProjection, E4ProjectionError
 from .integration import (
     M1_BINDING_CONTRACT,
     capture_binding_activation,
@@ -53,6 +59,24 @@ THREE_SETUP_EVIDENCE_STORE_PATH = THREE_SETUP_STATE_ROOT / "evidence.sqlite"
 THREE_SETUP_REGISTRY_ROOT = THREE_SETUP_STATE_ROOT / "registry"
 THREE_SETUP_CLOSED_BAR_STORE_PATH = THREE_SETUP_STATE_ROOT / "closed-bars.sqlite"
 THREE_SETUP_CONFIG_PATH = Path("/etc/trader-assist-v0/three-setup-shadow.json")
+
+
+def _atomic_operator_health(path: Path, payload: str) -> None:
+    """Disposable same-directory publication; no durable evidence or handshake."""
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent, prefix=path.name + ".", delete=False
+        ) as output:
+            temporary = Path(output.name)
+            output.write(payload)
+            # Existing separate Operator user reads public readiness facts.
+            # Only this disposable artifact is readable; no host ACL changes.
+            os.fchmod(output.fileno(), 0o644)
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 class ThreeSetupProductionError(ValueError):
@@ -613,6 +637,7 @@ class E4ThreeSetupProductionApplication(ThreeSetupProductionApplication):
             logger=logger,
         )
         self.node = node
+        self._node_handle: Any = None
         self.capture = capture
         self._binding_enabled = hasattr(capture, "activate_binding")
         self.snapshot = snapshot
@@ -846,6 +871,42 @@ class E4ThreeSetupProductionApplication(ThreeSetupProductionApplication):
             self.capture.advance_l0()
         if self._binding_enabled:
             self._reconcile_binding()
+        await self._publish_operator_health()
+
+    async def _publish_operator_health(self) -> None:
+        """Copy existing facts; publication never controls E4 or its dispatcher."""
+        try:
+            # Runtime readiness uses an owner-thread in-memory SQLite projection.
+            try:
+                readiness = self.e4_runtime.readiness_snapshot()
+                capture = self.capture.capture_health
+                warmup = self.capture.warmup_health
+            except ValueError as exc:
+                # Existing storage/readiness APIs use ValueError for corrupt
+                # retained data. Contain it only at this read boundary; do not
+                # blanket-catch defects in the producer or file publisher.
+                raise E4ProjectionError("existing runtime health data unavailable") from exc
+            snapshot = RuntimeHealthSnapshot.model_validate({
+                "schema_version": "C1_RUNTIME_HEALTH_V1",
+                "observed_ms": int(self.clock().timestamp() * 1000),
+                "publication_interval_ms": int(self.notification_poll_seconds * 1000),
+                "running": self._node_handle is not None and self._node_handle.is_running,
+                "data_ready": readiness.data_ready,
+                "stream_health": capture.get("stream_health"),
+                "continuity_requirements_remaining": capture.get(
+                    "continuity_requirements_remaining"
+                ),
+                "warmup_readiness": warmup.get("readiness"),
+                "storage_failures": capture.get("storage_failures"),
+                "registry_version": readiness.registry_version,
+            })
+            path = self.bootstrap.evidence.path.with_name(RUNTIME_HEALTH_FILENAME)
+            await asyncio.to_thread(_atomic_operator_health, path, snapshot.model_dump_json())
+        except (OSError, sqlite3.Error, E4ProjectionError, ValidationError) as exc:
+            self.logger.error(json.dumps({
+                "event": "OPERATOR_HEALTH_PUBLICATION_FAILURE",
+                "error_type": type(exc).__name__,
+            }, sort_keys=True))
 
     def _on_domain_error(self, market_id: str, admission_hash: str, error_type: str) -> None:
         _journal(
@@ -869,6 +930,7 @@ class E4ThreeSetupProductionApplication(ThreeSetupProductionApplication):
             registry_content_hash=active.content_hash,
         )
         handle = self.node.handle()
+        self._node_handle = handle
         dispatcher_task = asyncio.create_task(self._dispatch_loop(shutdown))
         domain_task = asyncio.create_task(self.e4_runtime.run(shutdown))
         node_task = asyncio.create_task(self.node.run_async())
