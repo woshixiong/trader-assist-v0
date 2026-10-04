@@ -78,6 +78,155 @@ def _assert_required_nautilus_available() -> None:
         raise AssertionError("authoritative G4 CI requires the exact Nautilus distribution")
 
 
+@REQUIRES_NAUTILUS
+def test_package_b_real_native_replay_delayed_fills_counterfactual_and_isolation():
+    """R0 B composition on rc5; no mock fills or legacy CandidateManifest coercion."""
+    from test_nautilus_vnext_g4_catalog_bridge import MARKET, NATIVE_INSTRUMENT, replay_admitted
+    from test_research_data_contracts import dataset
+    from test_research_replay_contracts import changed, cost, opportunity, raw
+    from test_research_replay_harness import candidate as b_candidate
+    from test_research_replay_harness import run_fixture
+    from test_research_replay_policies import context, policy
+
+    from trader_assist_v0.nautilus_e4.contracts import DataKind
+    from trader_assist_v0.research_replay.contracts import digest
+    from trader_assist_v0.research_replay.harness import ContextFrame, replay
+
+    _assert_required_nautilus_available()
+    events = tuple(
+        replay_admitted(
+            i,
+            DataKind.BBO,
+            payload={
+                "bid_price": bid,
+                "ask_price": ask,
+                "bid_size": "2.000",
+                "ask_size": "3.000",
+            },
+        )
+        for i, (bid, ask) in enumerate(
+            (
+                ("1999.0", "2001.0"),
+                ("2000.0", "2002.0"),
+                ("2001.0", "2003.0"),
+                ("2009.0", "2011.0"),
+                ("2008.0", "2010.0"),
+                ("2007.0", "2009.0"),
+            ),
+            1,
+        )
+    )
+    ds = dataset(
+        source="NAUTILUS_HYPERLIQUID",
+        venue="HYPERLIQUID",
+        instruments=(NATIVE_INSTRUMENT,),
+        datatypes=("BBO",),
+        end_ns=10000,
+    )
+    rows = []
+    for event in events:
+        source = event.source
+        row = raw(
+            source.ts_event,
+            known=event.admission_ts,
+            ordinal=event.admission_ordinal,
+            ds=ds,
+            values={
+                "bid": str(source.payload["bid_price"]),
+                "ask": str(source.payload["ask_price"]),
+                "bid_size": str(source.payload["bid_size"]),
+                "ask_size": str(source.payload["ask_size"]),
+            },
+        )
+        row = changed(
+            row,
+            ts_init=source.ts_init,
+            evidence=changed(
+                row.evidence,
+                source_hash=event.admission_hash,
+                instrument=NATIVE_INSTRUMENT,
+                expression=MARKET,
+            ),
+        )
+        rows.append(row)
+    op = opportunity(
+        market_id=MARKET,
+        decision_ns=12,
+        knowledge_ns=12,
+        entry=Decimal("2000"),
+        stop=Decimal("1900"),
+        target=Decimal("2005"),
+        prefix_hashes=(rows[0].record_hash,),
+    )
+    reference = b_candidate(exit=policy("E", "E1"))
+    waiting = changed(reference, participation=policy("EA", "EA3"), role="CHALLENGER")
+    frames = tuple(
+        ContextFrame.create(
+            version="B_FRAME_V1",
+            opportunity_hash=op.record_hash,
+            context=context(
+                at=r.known_at,
+                source_cutoff=r.known_at,
+                input_hashes=(r.record_hash,),
+                price_core=True,
+            ),
+            features=(),
+        )
+        for r in rows
+    )
+    model = ExecutionModelConfig(
+        book_type="L1_MBP",
+        order_primitive=OrderPrimitive.MARKETABLE,
+        prob_fill_on_limit=Decimal(0),
+        prob_slippage=Decimal(0),
+        trade_execution=False,
+        queue_position=False,
+        liquidity_consumption=True,
+        fill_limit_at_price=False,
+        fill_stop_at_price=False,
+        random_seed=7,
+        execution_model_limited=True,
+    )
+    bound_cost = cost(
+        delay_ns=15, fill_model_hash=digest("B_NATIVE_EXECUTION", model.model_dump(mode="json"))
+    )
+    args = run_fixture(
+        rows=tuple(rows),
+        op=op,
+        candidates=(reference, waiting),
+        frames=frames,
+        cost_model=bound_cost,
+        ds=ds,
+    )
+    first = replay(
+        *args,
+        events=events,
+        instruments={MARKET: native_hyperliquid_instrument()},
+        execution=model,
+        funding_complete=False,
+        funding_applicable=False,
+    )
+    second = replay(
+        *args,
+        events=events,
+        instruments={MARKET: native_hyperliquid_instrument()},
+        execution=model,
+        funding_complete=False,
+        funding_applicable=False,
+    )
+    filled, suppressed = first.results
+    assert first.fingerprint == second.fingerprint
+    assert len(filled.fills) == 2 and filled.outstanding_size == 0
+    assert filled.fills[0].price == Decimal("2003.0")
+    assert filled.fills[0].ts >= 27
+    assert filled.fills[1].price == Decimal("2007.0")
+    assert filled.terminal == "COMPLETE" and suppressed.terminal == "SUPPRESSED"
+    assert not suppressed.fills and suppressed.snapshots[0].decision == "WAIT"
+    assert first.counterfactuals[0].snapshot_hash == suppressed.snapshots[0].record_hash
+    assert first.counterfactuals[0].result.fills == filled.fills
+    assert first.pairs[0].comparable and first.pairs[0].opportunity_hash == op.record_hash
+
+
 def candidate(candidate_id: str) -> CandidateManifest:
     config = CandidateConfig(
         entry_activation=EntryActivation.EA1,
