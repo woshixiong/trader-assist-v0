@@ -314,7 +314,7 @@ def test_exact_rc5_native_callback_and_catalog_roundtrip(exact_rc5, tmp_path, ki
             instrument,
             price("10"),
             size("2"),
-            model.AggressorSide.BUYER,
+            model.AggressorSide.BUY,
             model.TradeId("synthetic-one"),
             600_000_000_000,
             600_000_000_001,
