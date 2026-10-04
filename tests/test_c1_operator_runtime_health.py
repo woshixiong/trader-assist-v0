@@ -34,6 +34,14 @@ def _now() -> int:
     return time.time_ns() // 1_000_000
 
 
+def _logical_sqlite_snapshot(path: Path) -> tuple[str, ...]:
+    """Compare logical database state, not unstable SQLite page bytes."""
+    uri = path.resolve().as_uri() + "?mode=ro"
+    with sqlite3.connect(uri, uri=True) as connection:
+        connection.execute("PRAGMA query_only = ON")
+        return tuple(connection.iterdump())
+
+
 def _request(
     method: str,
     path: str,
@@ -178,7 +186,7 @@ def test_new_approve_rereads_health_but_committed_replay_does_not(tmp_path: Path
         "package_hash": package.package_hash, "action_key": "health-reread-action-1234",
         "action": "APPROVE", "session_id": "session",
     }
-    runtime_before = config.runtime_evidence_path.read_bytes()
+    runtime_before = _logical_sqlite_snapshot(config.runtime_evidence_path)
     assert build_dashboard(engine, config).package_gate == "PASS"
     path = make_health(config.runtime_evidence_path, observed_ms=now, stream_health="DISCONNECTED")
     with pytest.raises(OperatorBlocked, match="STREAM_NOT_HEALTHY"):
@@ -189,7 +197,7 @@ def test_new_approve_rereads_health_but_committed_replay_does_not(tmp_path: Path
     with pytest.raises(OperatorBlocked, match="HEALTH_STALE"):
         engine.human_action_record(**args, now_ms=now + 15_001)
     result = engine.human_action_record(**args, now_ms=now + 1)
-    assert config.runtime_evidence_path.read_bytes() == runtime_before
+    assert _logical_sqlite_snapshot(config.runtime_evidence_path) == runtime_before
     path.unlink()
     config.runtime_evidence_path.unlink()
     assert engine.human_action_record(**args, now_ms=now + 20_000) == result
