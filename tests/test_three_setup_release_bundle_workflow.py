@@ -232,10 +232,7 @@ def test_structure_and_authority() -> None:
         "ssh ",
         "scp ",
         "sftp ",
-        "sudo ",
         "aws ",
-        "systemctl ",
-        "--install",
         "--qualify-l0",
         "LiveNode",
         "eval ",
@@ -246,6 +243,15 @@ def test_structure_and_authority() -> None:
     ):
         assert prohibited not in executable
     assert "${{" not in executable
+    for step in job["steps"]:
+        if "run" in step and step.get("id") != "simulation":
+            assert "sudo" not in step["run"]
+            assert "systemctl" not in step["run"]
+            assert "--install" not in step["run"]
+    simulation = steps()["simulation"]["run"]
+    assert "['systemctl', 'is-active', UNIT]" in simulation
+    for command in ("daemon-reload", "start", "restart", "enable", "reboot"):
+        assert not re.search(r"systemctl.{0,30}[\"']" + command + r"[\"']", simulation)
     dependencies = steps()["dependencies"]["run"]
     for required in (
         "--require-hashes",
@@ -631,6 +637,9 @@ def test_real_bundle_archive_round_trip_and_control_separation(
     shutil.rmtree(root / "round-trip")
     assert_pass(python_run("transport", env))
     assert archive.read_bytes() == archive_bytes
+    (root / "simulation-archive.sha256").write_text(
+        hashlib.sha256(archive_bytes).hexdigest() + "\n"
+    )
     assert_pass(shell_run("terminal", Path(env["GITHUB_WORKSPACE"]), env))
     summary = Path(env["GITHUB_STEP_SUMMARY"]).read_text()
     assert f"CONTROL_HEAD={env['CONTROL_HEAD']}" in summary
@@ -1251,3 +1260,145 @@ def test_allocation_failure_precedes_runtime_work(target_fixture: dict[str, str]
     records = process_records(env)
     assert records[-1]["name"] == "mktemp"
     assert not any(item["name"] == "rm" or "venv" in item["argv"] for item in records)
+
+
+
+def simulation_namespace() -> dict[str, Any]:
+    code = python_block("simulation")
+    assert code.endswith("main()")
+    namespace: dict[str, Any] = {}
+    exec(compile(code.removesuffix("main()"), "simulation-functions", "exec"), namespace)
+    return namespace
+
+
+def test_disposable_simulation_composition() -> None:
+    job = parse_workflow(WORKFLOW.read_text())["jobs"]["build-release-bundle"]
+    ids = [step.get("id") for step in job["steps"]]
+    assert ids.index("transport") < ids.index("simulation") < ids.index("terminal")
+    assert ids.index("simulation") < len(ids) - 1
+    code = python_block("simulation")
+    for required in (
+        "root / 'three-setup-release-bundle.tar.gz'", "'--same-permissions'",
+        "'--no-same-owner'", "len(lines) == 5", "mode) == 0o750",
+        "digest(script) == anchors[KEYS[4]]", "digest(bundle / 'bundle-manifest.json')",
+        "provenance['control_head']", "execute('--verify')", "execute('--install')",
+        "env['TMPDIR'] = str(temp)", "temp.glob('trade-os-verify.*')",
+        "identity('passwd') is None and identity('group') is None",
+        "'groupadd', '--system'", "'useradd', '--system', '--no-create-home'",
+        "TRADER_ASSIST_V0_DEPLOYMENT_AUTHORIZED=YES", "--verify-target-runtime-installed",
+        "--expected-release-sha", "--expected-release-tree", "--expected-manifest-digest",
+        "cost_model", "NOT_QUALIFIED", "three-setup-activation-permit",
+        "TRADER_ASSIST_V0_THREE_SETUP_ENABLE", "TRADER_ASSIST_V0_THREE_SETUP_MODE",
+        "== '0'", "== 'DISABLED'", "finally:", "status = status or 1",
+        "assert digest(archive) == original_digest", "simulation-archive.sha256",
+        "include-system-site-packages = false", "--pip-check-with",
+    ):
+        assert required in code
+    assert code.index("try:\n        scratch") < code.index("'groupadd', '--system'")
+    assert code.index("execute('--verify')") < code.index("'groupadd', '--system'")
+    assert code.index("execute('--install')") < code.index("errors = cleanup(")
+    assert "root / 'bundle'" not in code and "builder-stdout" not in code
+    assert "apt-get" not in code and "brew install" not in code
+    assert code.count("TRADER_ASSIST_V0_DEPLOYMENT_AUTHORIZED=YES") == 1
+    assert "record.is_file()" in steps()["terminal"]["run"]
+
+
+@pytest.mark.parametrize("mutation", ["none", "hash", "anchors", "unsafe_member"])
+def test_simulation_final_archive_preflight(
+    bundle_fixture: dict[str, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    env = bundle_fixture
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    assert_pass(python_run("anchors", env))
+    assert_pass(python_run("transport", env))
+    root = Path(env["BUILD_ROOT"])
+    archive = root / "three-setup-release-bundle.tar.gz"
+    original = archive.read_bytes()
+    if mutation != "none":
+        with tarfile.open(archive, "r:gz") as source:
+            members = [(member, source.extractfile(member).read() if member.isfile() else None)
+                       for member in source.getmembers()]
+        import io
+        with tarfile.open(archive, "w:gz") as target:
+            for member, data in members:
+                if mutation == "hash" and member.name == "bundle/remote-qualification.sh":
+                    data += b"\n# changed\n"
+                    member.size = len(data)
+                if mutation == "anchors" and member.name == "handoff/anchors.env":
+                    data += b"EXTRA=bad\n"
+                    member.size = len(data)
+                target.addfile(member, io.BytesIO(data) if data is not None else None)
+            if mutation == "unsafe_member":
+                member = tarfile.TarInfo("../escape")
+                member.size = 1
+                target.addfile(member, io.BytesIO(b"x"))
+    # Execution authority must survive removal of the mutable builder bundle.
+    shutil.rmtree(root / "bundle")
+    stage = tmp_path / "simulation staging"
+    stage.mkdir()
+    namespace = simulation_namespace()
+    if mutation == "none":
+        anchors = namespace["extract"](archive, stage)
+        assert len(anchors) == 5
+        assert stat_mode(stage / "bundle/remote-qualification.sh") == 0o750
+        assert archive.read_bytes() == original
+    else:
+        with pytest.raises(AssertionError):
+            namespace["extract"](archive, stage)
+        if mutation == "unsafe_member":
+            assert not list(stage.iterdir())
+
+
+def test_simulation_cleanup_owned_inventory(tmp_path: Path) -> None:
+    namespace = simulation_namespace()
+    created = tmp_path / "created"
+    created.mkdir()
+    sentinel = tmp_path / "preexisting"
+    sentinel.write_text("preserve")
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    namespace["DESTINATIONS"] = (created,)
+    calls = []
+    records = {"passwd": "user-record", "group": "group-record"}
+    namespace["identity"] = lambda kind: records[kind]
+    def fake_run(args: list[str]) -> None:
+        calls.append(args)
+        assert args[:2] == ["sudo", "-n"]
+        if args[2] == "rm":
+            path = Path(args[-1])
+            assert path in (created, scratch)
+            shutil.rmtree(path)
+        else:
+            records["passwd" if args[2] == "userdel" else "group"] = None
+    namespace["run"] = fake_run
+    assert namespace["cleanup"](True, "user-record", "group-record", scratch) == []
+    assert not created.exists() and not scratch.exists()
+    assert sentinel.read_text() == "preserve"
+    assert [call[2] for call in calls] == ["rm", "userdel", "groupdel", "rm"]
+    calls.clear()
+    assert namespace["cleanup"](False, None, None, None) == []
+    assert not calls
+    def failed_run(args: list[str]) -> None:
+        raise OSError("cleanup failed")
+    namespace["run"] = failed_run
+    assert namespace["cleanup"](True, None, None, None)
+
+
+@pytest.mark.parametrize("original_status", [0, 37])
+def test_simulation_cleanup_failure_preserves_original_status(original_status: int) -> None:
+    namespace = simulation_namespace()
+    tree = ast.parse(python_block("simulation"))
+    main = next(
+        node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main"
+    )
+    guarded = next(node for node in main.body if isinstance(node, ast.Try))
+    # Execute the actual finally status logic, excluding its signal-handler teardown.
+    namespace.update(
+        status=original_status, install_owned=False, user_record=None, group_record=None,
+        scratch=None, archive=None, original_digest="unchanged",
+        cleanup=lambda *args: ["cleanup failed"], digest=lambda path: "unchanged",
+    )
+    block = ast.Module(body=guarded.finalbody[1:], type_ignores=[])
+    exec(compile(ast.fix_missing_locations(block), "simulation-cleanup-status", "exec"), namespace)
+    assert namespace["status"] == (original_status or 1)
