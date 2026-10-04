@@ -2814,6 +2814,7 @@ def test_ga05_disconnect_then_reconnect_uses_begin_reconnect(tmp_path: Path) -> 
     try:
         runtime.activate(now=NOW)
         shutdown_event = asyncio.Event()
+        status_messages: list[str] = []
 
         # First connection: 3 acks + context → READY, then disconnect
         ws1 = _FakeWebSocket(_ack_and_context_frames(), disconnect_after=4)
@@ -2832,7 +2833,7 @@ def test_ga05_disconnect_then_reconnect_uses_begin_reconnect(tmp_path: Path) -> 
                     recover_snapshot=_recovery_frames,
                     websocket_factory=factory,
                     websocket_url="wss://test",
-                    status=lambda msg: None,
+                    status=status_messages.append,
                     shutdown_event=shutdown_event,
                 )
             )
@@ -2851,7 +2852,7 @@ def test_ga05_disconnect_then_reconnect_uses_begin_reconnect(tmp_path: Path) -> 
                     break
                 await asyncio.sleep(0.01)
             assert len(factory.created) == 2
-            assert runtime._reconnect_attempt >= 1
+            assert "EVENT reconnect-attempt" in status_messages
             # Wait for second READY (via begin_reconnect)
             for _ in range(400):
                 if runtime.is_ready:

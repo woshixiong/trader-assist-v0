@@ -477,6 +477,287 @@ jobs:
           assert verify_bundle(extracted / 'bundle') == bundle_files
           assert files_under(extracted / 'handoff') == handoff_files
           PY
+      - name: Disposable final transport verify and install
+        id: simulation
+        run: |
+          set -euo pipefail
+          python3.12 -I -B - <<'PY'
+          import hashlib
+          import json
+          import os
+          import platform
+          import re
+          import signal
+          import stat
+          import subprocess
+          import sys
+          import tarfile
+          import tempfile
+          from pathlib import Path
+
+          KEYS = (
+              'EXPECTED_RELEASE_SHA', 'EXPECTED_RELEASE_TREE',
+              'EXPECTED_RELEASE_MANIFEST_CANONICAL_DIGEST',
+              'EXPECTED_BUNDLE_MANIFEST_SHA256', 'EXPECTED_REMOTE_QUALIFICATION_SHA256',
+          )
+          DESTINATIONS = (
+              Path('/opt/trader-assist-v0'), Path('/etc/trader-assist-v0'),
+              Path('/var/lib/trader-assist-v0'),
+              Path('/etc/systemd/system/trader-assist-v0-three-setup.service'),
+          )
+          UNIT = 'trader-assist-v0-three-setup.service'
+
+
+          def run(args, **kwargs):
+              return subprocess.run(args, check=True, text=True, **kwargs)
+
+
+          def digest(path):
+              return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+          def absent(path):
+              return not path.exists() and not path.is_symlink()
+
+
+          def inactive():
+              result = subprocess.run(['systemctl', 'is-active', UNIT], text=True,
+                                      capture_output=True, check=False)
+              assert result.returncode in (3, 4) and result.stdout.strip() in (
+                  'inactive', 'unknown'), 'service active or service-manager query failed'
+
+
+          def identity(kind):
+              result = subprocess.run(['getent', kind, 'traderassist'], text=True,
+                                      capture_output=True, check=False)
+              assert result.returncode in (0, 2), 'identity lookup failed'
+              return result.stdout.strip() if result.returncode == 0 else None
+
+
+          def extract(archive, stage):
+              with tarfile.open(archive, 'r:gz') as tar:
+                  names = {}
+                  for member in tar.getmembers():
+                      name = member.name.rstrip('/') if member.isdir() else member.name
+                      assert name and not name.startswith('/') and '\\' not in name
+                      assert all(p not in ('', '.', '..') for p in name.split('/'))
+                      assert name not in names, 'duplicate archive member'
+                      assert member.isfile() or member.isdir(), 'unsafe archive type'
+                      assert not member.mode & 0o7000, 'privileged archive mode'
+                      assert name.split('/')[0] in ('bundle', 'handoff')
+                      names[name] = member.isdir()
+                  assert names.get('bundle') and names.get('handoff')
+                  for name in names:
+                      for parent in Path(name).parents:
+                          if str(parent) != '.':
+                              assert names.get(parent.as_posix()), 'invalid archive parent'
+              run(['tar', '--same-permissions', '--no-same-owner', '-xzf', str(archive),
+                   '-C', str(stage)])
+              assert {p.name for p in stage.iterdir()} == {'bundle', 'handoff'}
+              for path in stage.rglob('*'):
+                  assert stat.S_ISREG(path.lstat().st_mode) or stat.S_ISDIR(path.lstat().st_mode)
+              assert {p.name for p in (stage / 'handoff').iterdir()} == {'anchors.env', 'provenance.json'}
+              script = stage / 'bundle/remote-qualification.sh'
+              assert stat.S_ISREG(script.lstat().st_mode)
+              assert stat.S_IMODE(script.lstat().st_mode) == 0o750
+              lines = (stage / 'handoff/anchors.env').read_text().splitlines()
+              assert len(lines) == 5
+              anchors = {}
+              for key, line in zip(KEYS, lines, strict=True):
+                  name, separator, value = line.partition('=')
+                  assert separator and name == key and name not in anchors
+                  assert re.fullmatch(r'[0-9a-f]{40}' if key in KEYS[:2] else r'[0-9a-f]{64}', value)
+                  anchors[name] = value
+              assert anchors[KEYS[0]] == os.environ['RELEASE_SHA']
+              assert anchors[KEYS[1]] == os.environ['RELEASE_TREE']
+              provenance = json.loads((stage / 'handoff/provenance.json').read_bytes())
+              assert provenance['control_head'] == os.environ['CONTROL_HEAD']
+              assert provenance['release_sha'] == anchors[KEYS[0]]
+              assert provenance['release_tree'] == anchors[KEYS[1]]
+              assert digest(stage / 'bundle/bundle-manifest.json') == anchors[KEYS[3]]
+              assert digest(script) == anchors[KEYS[4]]
+              manifest = json.loads((stage / 'bundle/bundle-manifest.json').read_bytes())
+              assert manifest['release_sha'] == anchors[KEYS[0]]
+              assert manifest['release_tree'] == anchors[KEYS[1]]
+              assert manifest['release_manifest_digest'] == anchors[KEYS[2]]
+              assert manifest['activation'] == 'DEFAULT_OFF' and manifest['service'] == 'STOPPED'
+              return anchors
+
+
+          def cleanup(install_owned, user_record, group_record, scratch):
+              errors = []
+              def attempt(action):
+                  try:
+                      action()
+                  except BaseException as exc:
+                      errors.append(str(exc))
+              if install_owned:
+                  for path in DESTINATIONS:
+                      attempt(lambda path=path: run(['sudo', '-n', 'rm', '-rf', '--', str(path)]))
+                  for path in DESTINATIONS:
+                      if not absent(path):
+                          errors.append(f'cleanup left {path}')
+              for kind, record, command in (
+                  ('passwd', user_record, 'userdel'), ('group', group_record, 'groupdel'),
+              ):
+                  if record:
+                      def remove(kind=kind, record=record, command=command):
+                          current = identity(kind)
+                          if current is None:
+                              return
+                          assert current == record, 'simulation identity changed'
+                          run(['sudo', '-n', command, 'traderassist'])
+                          assert identity(kind) is None, 'simulation identity remains'
+                      attempt(remove)
+              if scratch:
+                  attempt(lambda: run(['sudo', '-n', 'rm', '-rf', '--', str(scratch)]))
+                  if not absent(scratch):
+                      errors.append('simulation scratch remains')
+              return errors
+
+
+          def main():
+              assert platform.system() == 'Linux' and platform.machine() == 'x86_64'
+              assert sys.implementation.name == 'cpython' and sys.version_info[:2] == (3, 12)
+              assert os.environ['RUNNER_ENVIRONMENT'] == 'github-hosted'
+              assert Path('/etc/os-release').read_text().find('VERSION_ID="24.04"') >= 0
+              root = Path(os.environ['BUILD_ROOT']).resolve(strict=True)
+              archive = root / 'three-setup-release-bundle.tar.gz'
+              original_digest = digest(archive)
+              parent = Path(os.environ['RUNNER_TEMP']).resolve(strict=True)
+              assert parent.is_dir() and not parent.is_relative_to(root)
+              env = {k: v for k, v in os.environ.items() if not k.startswith('PIP_') and k not in (
+                  'PYTHONPATH', 'PYTHONHOME', 'VIRTUAL_ENV', 'TRADER_ASSIST_V0_DEPLOYMENT_AUTHORIZED')}
+              env['PYTHONDONTWRITEBYTECODE'] = '1'
+              scratch = None
+              user_record = group_record = None
+              install_owned = False
+              status = 0
+              def interrupted(signum, frame):
+                  raise SystemExit(128 + signum)
+              for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+                  signal.signal(signum, interrupted)
+              # Cleanup is registered by this try/finally before scratch, identity or install mutation.
+              try:
+                  scratch = Path(tempfile.mkdtemp(prefix='trade-os-simulation.', dir=parent))
+                  assert scratch.parent == parent and not scratch.is_relative_to(root)
+                  stage = scratch / 'staging'
+                  stage.mkdir()
+                  temp = scratch / 'tmp'
+                  temp.mkdir()
+                  env['TMPDIR'] = str(temp)
+                  anchors = extract(archive, stage)
+                  bundle = stage / 'bundle'
+                  script = bundle / 'remote-qualification.sh'
+                  expected = [anchors[key] for key in KEYS[:4]]
+                  # Fail on missing capabilities; never provision OS packages or global dependencies.
+                  run(['python3.12', '-I', '-B', '-c',
+                       'import math, hashlib, venv, ensurepip, sys; '
+                       'assert sys.implementation.name == "cpython" and sys.version_info[:2] == (3, 12)'], env=env)
+                  run(['python3.12', '-I', '-m', 'pip', '--version'], env=env)
+                  run(['python3.12', '-I', '-m', 'venv', str(scratch / 'probe')], env=env)
+                  run([str(scratch / 'probe/bin/python'), '-I', '-m', 'pip', '--version'], env=env)
+                  privileged_env = ['sudo', '-n', 'env', '-i', f'PATH={env["PATH"]}',
+                                    f'TMPDIR={temp}', 'PYTHONDONTWRITEBYTECODE=1']
+                  run(privileged_env + ['python3.12', '-I', '-c',
+                                       'import sys; assert sys.executable == ' + repr(sys.executable)], env=env)
+                  for path in DESTINATIONS:
+                      assert absent(path), f'preexisting deployment path: {path}'
+                  assert identity('passwd') is None and identity('group') is None, 'preexisting traderassist identity'
+                  inactive()
+                  def execute(mode):
+                      assert digest(script) == anchors[KEYS[4]]
+                      assert digest(bundle / 'bundle-manifest.json') == anchors[KEYS[3]]
+                      command = ['bash', str(script), mode, *expected]
+                      if mode == '--install':
+                          command = privileged_env + ['TRADER_ASSIST_V0_DEPLOYMENT_AUTHORIZED=YES'] + command
+                      result = run(command, env=env, capture_output=True)
+                      for marker in ('BUNDLE_HASH_VERIFY=PASS', 'STAGED_RELEASE_VERIFY=PASS',
+                                     'PREINSTALL_VERIFY=PASS; SERVICE=STOPPED; ACTIVATION=DEFAULT_OFF'):
+                          assert marker in result.stdout, f'missing {marker}'
+                      if mode == '--install':
+                          assert 'INSTALL_VERIFIED=PASS; SERVICE=STOPPED; ACTIVATION=DEFAULT_OFF' in result.stdout
+                      assert not list(temp.glob('trade-os-verify.*')), 'verification temp leak'
+                      print(f'DISPOSABLE_{mode[2:].upper()}=PASS', flush=True)
+                  execute('--verify')
+                  run(['sudo', '-n', 'groupadd', '--system', 'traderassist'])
+                  group_record = identity('group')
+                  assert group_record
+                  run(['sudo', '-n', 'useradd', '--system', '--no-create-home',
+                       '--gid', 'traderassist', '--shell', '/usr/sbin/nologin', 'traderassist'])
+                  user_record = identity('passwd')
+                  assert user_record
+                  install_owned = True
+                  print('AUTHORITY=DISPOSABLE_CI_SIMULATION_ONLY_NO_TARGET_DEPLOYMENT', flush=True)
+                  execute('--install')
+                  # The installed interpreter checks exact staged release and dependency closure.
+                  installed = DESTINATIONS[0]
+                  target_env = privileged_env + [f'PYTHONPATH={installed}/src:{installed}']
+                  run(target_env + [str(installed / 'venv/bin/python'), '-B',
+                                   str(installed / 'scripts/verify_exact_release.py'), '--root', str(installed),
+                                   '--verify-staged', str(installed / 'three-setup-release-manifest.json'),
+                                   '--expected-release-sha', expected[0], '--expected-release-tree', expected[1],
+                                   '--expected-manifest-digest', expected[2]], env=env)
+                  run(target_env + [str(installed / 'venv/bin/python'), '-B',
+                                   str(installed / 'scripts/check_dependency_lock.py'),
+                                   '--verify-target-runtime-installed', '--staged-source', str(installed / 'src'),
+                                   '--pip-check-with', sys.executable], env=env)
+                  # Read root-owned config/identity with the same interpreter, without runtime qualification.
+                  postcheck = r'''
+          import json, sys
+          from pathlib import Path
+          bundle = Path(sys.argv[1])
+          installed = Path('/opt/trader-assist-v0')
+          config_root = Path('/etc/trader-assist-v0')
+          assert not (config_root / 'three-setup-activation-permit').exists()
+          for name in ('three-setup-shadow.json', 'three-setup-shadow.env'):
+              assert (config_root / name).read_bytes() == (bundle / 'config' / name).read_bytes()
+          config = json.loads((config_root / 'three-setup-shadow.json').read_bytes())
+          assert config['cost_model'] is None and config['qualification_digest'] == 'NOT_QUALIFIED'
+          values = dict(line.split('=', 1) for line in (config_root / 'three-setup-shadow.env').read_text().splitlines())
+          assert values['TRADER_ASSIST_V0_THREE_SETUP_ENABLE'] == '0'
+          assert values['TRADER_ASSIST_V0_THREE_SETUP_MODE'] == 'DISABLED'
+          assert (installed / 'three-setup-release-manifest.json').read_bytes() == (bundle / 'release-manifest.json').read_bytes()
+          for name in ('requirements-runtime.lock', 'requirements-nautilus-pilot.lock'):
+              assert (installed / name).read_bytes() == (bundle / 'payload' / name).read_bytes()
+          assert 'include-system-site-packages = false' in (installed / 'venv/pyvenv.cfg').read_text()
+          assert Path('/etc/systemd/system/trader-assist-v0-three-setup.service').read_bytes() == (bundle / 'payload/deploy/p4a/systemd/trader-assist-v0-three-setup.service').read_bytes()
+          if (bundle / 'identity').is_dir():
+              identity_files = {p.relative_to(bundle / 'identity'): p.read_bytes() for p in (bundle / 'identity').rglob('*') if p.is_file()}
+              state = Path('/var/lib/trader-assist-v0/three-setup-shadow')
+              assert {p.relative_to(state): p.read_bytes() for p in state.rglob('*') if p.is_file()} == identity_files
+          '''
+                  run(privileged_env + ['python3.12', '-I', '-B', '-c', postcheck, str(bundle)], env=env)
+                  inactive()
+                  assert not list(temp.glob('trade-os-verify.*'))
+              except BaseException as exc:
+                  status = exc.returncode if isinstance(exc, subprocess.CalledProcessError) else (
+                      exc.code if isinstance(exc, SystemExit) and isinstance(exc.code, int) else 1)
+                  status = status or 1
+                  print(f'disposable simulation failed: {exc}', file=sys.stderr)
+                  if isinstance(exc, subprocess.CalledProcessError):
+                      print(exc.stdout or '', file=sys.stderr)
+                      print(exc.stderr or '', file=sys.stderr)
+              finally:
+                  for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+                      signal.signal(signum, signal.SIG_IGN)
+                  errors = cleanup(install_owned, user_record, group_record, scratch)
+                  try:
+                      assert digest(archive) == original_digest, 'transport archive changed'
+                  except BaseException as exc:
+                      errors.append(str(exc))
+                  if errors:
+                      print('\n'.join(errors), file=sys.stderr)
+                      status = status or 1
+              if status:
+                  raise SystemExit(status)
+              # This digest is an integrity checkpoint, not release/handoff authority.
+              (root / 'simulation-archive.sha256').write_text(original_digest + '\n')
+              print('DISPOSABLE_E2E=PASS; CLEANUP=PASS; ARCHIVE_UNCHANGED=PASS')
+
+
+          main()
+          PY
       - name: Terminal identity and handoff summary
         id: terminal
         run: |
@@ -485,6 +766,15 @@ jobs:
           test "$(git -C release rev-parse HEAD)" = "$RELEASE_SHA"
           test "$(git -C release rev-parse 'HEAD^{tree}')" = "$RELEASE_TREE"
           test -z "$(git -C release status --porcelain=v1 --untracked-files=all)"
+          python -I -B - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          root = Path(os.environ['BUILD_ROOT'])
+          record = root / 'simulation-archive.sha256'
+          assert record.is_file(), 'disposable simulation checkpoint missing'
+          assert hashlib.sha256((root / 'three-setup-release-bundle.tar.gz').read_bytes()).hexdigest() == record.read_text().strip()
+          PY
           {
             printf 'CONTROL_HEAD=%s\nRUN_ID=%s\nRUN_ATTEMPT=%s\n' "$CONTROL_HEAD" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
             printf 'ARTIFACT=three-setup-release-%s-%s-%s\n' "$RELEASE_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
