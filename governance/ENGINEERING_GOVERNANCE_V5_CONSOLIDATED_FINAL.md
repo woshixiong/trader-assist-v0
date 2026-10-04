@@ -537,11 +537,36 @@ AUTHORITY_TYPE=EXECUTION_TRANSPORT_ONLY
 HARD_DEPENDENCY=NO
 ~~~
 
-Remote Desktop Commander is the preferred local execution relay when connected
-and quota is available. It has no engineering or protected-action authority.
-If unavailable, preserve the exact canonical checkpoint and generate one exact
-human Terminal command or block; do not rerun semantic work, consume repair
-budget, or change package, thread, worktree, authority, or executor.
+Remote Desktop Commander is a quota-limited local execution relay and is
+preferred only when the required action genuinely needs local desktop/process
+execution and no canonical/native lower-cost surface can perform the equivalent
+action. It has no engineering or protected-action authority.
+
+Before every RDC call, all of the following must hold:
+
+~~~text
+LOCAL_ONLY_ACTION_OR_EVIDENCE_REQUIRED=YES
+NO_CANONICAL_OR_NATIVE_LOWER_COST_EQUIVALENT=YES
+CALL_ADVANCES_STATE_OR_RETURNS_DECISIVE_EVIDENCE=YES
+RELATED_LOCAL_OPERATIONS_BUNDLED=YES
+~~~
+
+Routine GitHub reads/writes, CI/status polling, repeated progress reads,
+redundant unchanged identity readback, rereading canonically available files,
+and blind connectivity retry loops through RDC are prohibited. The normal local
+stage target is at most one RDC start/resume call and zero routine progress
+reads; one bounded result read is allowed only for a concrete abnormal or
+interactive need. Additional calls require concrete technical necessity.
+
+Automation continuity remains higher priority than RDC quota minimization:
+never introduce routine human relay solely to save RDC calls when RDC is
+genuinely required for a local-only automated action.
+
+If RDC is unavailable or quota-exhausted, preserve the exact canonical
+checkpoint and generate one exact human Terminal command or block; do not rerun
+semantic work, consume repair budget, or change package, thread, worktree,
+authority, or executor. On transport/network failure, use the existing bounded
+retry/fallback contract and never create an RDC retry storm.
 
 Before a real local push containing `.github/workflows/**`, require:
 
