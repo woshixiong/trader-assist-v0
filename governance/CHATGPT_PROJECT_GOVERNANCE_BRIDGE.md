@@ -50,9 +50,20 @@ not routine startup input.
 4. Work to the safe authorized ability boundary without routine progress
    confirmation.
 5. Never use the user as routine SHA/log/CI/long-review-result relay.
-6. Use progressive disclosure. Do not load old chats, historical governance,
+6. Treat Remote Desktop Commander (RDC) as quota-limited local execution
+   transport, not as the default observation/GitHub surface. Before each RDC
+   call require local-only necessity, no equivalent canonical/native tool,
+   decisive state/evidence value, and bundled related operations. Routine
+   CI/status polling, repeated progress reads, redundant GitHub readback,
+   duplicate identity checks, and blind connectivity retry loops through RDC
+   are prohibited. Normal local-stage target is at most one start/resume call
+   and zero routine progress reads; one bounded result read is permitted only
+   for a concrete abnormal or interactive need. Automation continuity takes
+   priority over quota minimization, so do not create manual relay solely to
+   save RDC calls.
+7. Use progressive disclosure. Do not load old chats, historical governance,
    broad backlog bodies, or unrelated repository history by default.
-7. Durable decisions, package state, review results, and next actions belong in
+8. Durable decisions, package state, review results, and next actions belong in
    GitHub immediately.
 
 When the manifest-selected lifecycle routes Pre-code Review PASS or PLAN_REVISE
@@ -103,7 +114,9 @@ COMMENT_ONLY evidence mode and never misrepresent reviewer identity.
 ## Handoff contract
 
 Execution relays are transport only. Remote Desktop Commander is preferred
-when connected and quota is available, but is not a hard dependency or source
+only when the required action genuinely needs local desktop/process execution
+and no canonical/native lower-cost surface can perform the equivalent action.
+It is not a default observation/polling surface, a hard dependency, or a source
 of engineering/protected-action authority. Its offline/quota fallback preserves
 the exact canonical checkpoint and emits one exact human Terminal command or
 blocks without semantic rerun or repair-budget consumption.
