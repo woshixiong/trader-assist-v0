@@ -1,6 +1,7 @@
 """Offline composition contracts; installed rc5 proof is authoritative only in CI."""
 
 import importlib
+import json
 import os
 from importlib.metadata import PackageNotFoundError, version
 from types import SimpleNamespace
@@ -340,3 +341,91 @@ def test_exact_rc5_native_callback_and_catalog_roundtrip(exact_rc5, tmp_path, ki
     store = ReferenceDatasetStore(tmp_path, catalog=catalog)
     store.write_native(kind, [native], observer.ledger.admission)
     assert list(tmp_path.rglob("*.parquet"))
+
+
+@pytest.mark.parametrize("batch", [False, True], ids=["scalar", "list"])
+def test_exact_rc5_binance_oi_request_historical_response_route(exact_rc5, monkeypatch, batch):
+    """Issue the real native request on a registered, unstarted node; inject its offline reply."""
+    live = importlib.import_module("nautilus_trader.live")
+    trading = importlib.import_module("nautilus_trader.trading")
+    native_node_type = live.LiveNode
+    captured = []
+
+    class NodeCapture:
+        @staticmethod
+        def build(*args, **kwargs):
+            node = native_node_type.build(*args, **kwargs)
+
+            class Capture:
+                def add_strategy(self, strategy):
+                    captured.append(strategy)
+                    node.add_strategy(strategy)
+
+                def dispose(self):
+                    node.dispose()
+
+            return Capture()
+
+    monkeypatch.setattr(live, "LiveNode", NodeCapture)
+    value = spec("BINANCE", "USD_M")
+    observer = node_observer(value)
+    node = build_external_reference_node(value, observer)
+    try:
+        strategy = captured[0]
+        # Suppress unrelated subscription commands only. OI uses the real rc5 request_data.
+        for name in (
+            "subscribe_bars",
+            "subscribe_quotes",
+            "subscribe_trades",
+            "subscribe_mark_prices",
+            "subscribe_index_prices",
+            "subscribe_funding_rates",
+        ):
+            monkeypatch.setattr(type(strategy), name, lambda *args, **kwargs: None)
+        commands = []
+
+        def request_and_deliver(self, data_type, client):
+            request_id = trading.Strategy.request_data(self, data_type, client)
+            commands.append((data_type, client, request_id))
+            # Exact rc5 native serde envelope, synthetic sacrificial payload only.
+            response = exact_rc5.CustomData.from_json_bytes(
+                json.dumps(
+                    {
+                        "type": "BinanceFuturesOpenInterest",
+                        "data_type": {
+                            "type_name": data_type.type_name,
+                            "metadata": data_type.metadata,
+                        },
+                        "payload": {
+                            "instrument_id": value.instruments[0],
+                            "open_interest": "123.45",
+                            "ts_event": 600_000_000_000,
+                            "ts_init": 600_000_000_001,
+                        },
+                    }
+                ).encode()
+            )
+            assert exact_rc5.custom_data_backend_kind(response) == "native"
+            assert type(response.data).__name__ == "BinanceFuturesOpenInterest"
+            # Offline delivery at the frozen rc5 request callback, not observer.on_native/on_data.
+            self.on_historical_data([response] if batch else response)
+            return request_id
+
+        monkeypatch.setattr(type(strategy), "request_data", request_and_deliver)
+        strategy.on_start()
+        assert len(commands) == 1
+        data_type, client, request_id = commands[0]
+        assert data_type.type_name == "BinanceFuturesOpenInterest"
+        assert data_type.metadata == {"instrument_id": value.instruments[0]}
+        assert str(client) == "BINANCE" and request_id
+        assert len(observer.ledger.observations) == 1
+        event = observer.ledger.observations[0].event
+        assert event.authority == "EXTERNAL_REFERENCE" and event.provider == "BINANCE"
+        assert event.payload.oi == "123.45"
+        assert event.payload.oi_ccy is None and event.payload.oi_usd is None
+        assert event.timestamps.ts_event == 600_000_000_000
+        assert event.timestamps.true_network_receive_ts is None
+        with pytest.raises(ValueError, match="CustomData"):
+            strategy.on_historical_data(SimpleNamespace(open_interest="123.45"))
+    finally:
+        node.dispose()

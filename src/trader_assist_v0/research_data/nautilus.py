@@ -338,9 +338,23 @@ def build_external_reference_node(
         def on_funding_rate(self, data: Any) -> None:
             observer.on_native("FUNDING", data)
 
-        def on_data(self, data: Any) -> None:
-            if type(data).__name__ == "BinanceFuturesOpenInterest":
-                observer.on_native("OI", data)
+        def on_historical_data(self, data: Any) -> None:
+            # rc5 request_data responses arrive here, as CustomData or list[CustomData].
+            # There is no OI subscription in this composition, hence no on_data route.
+            if spec.provider != "BINANCE":
+                return
+            from nautilus_trader.adapters.binance import BinanceFuturesOpenInterest
+
+            records = data if isinstance(data, list) else [data]
+            for record in records:
+                if not isinstance(record, model.CustomData):
+                    raise ValueError("historical custom response requires rc5 CustomData")
+                if record.data_type.type_name != "BinanceFuturesOpenInterest":
+                    continue
+                payload = record.data
+                if not isinstance(payload, BinanceFuturesOpenInterest):
+                    raise ValueError("Binance OI response payload/type mismatch")
+                observer.on_native("OI", payload)
 
     node = LiveNode.build(
         "ExternalReference",
