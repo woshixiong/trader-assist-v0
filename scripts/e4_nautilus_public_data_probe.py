@@ -266,7 +266,7 @@ def evaluate_qualification(
     if (not isinstance(native, dict) or native.get("status") != "PASS"
             or not isinstance(binding, dict) or binding.get("status") != "PASS"
             or any(binding.get(key) != native.get(key) for key in (
-                "path", "file_identity", "sha256", "begin_marker", "rc5_source",
+                "path", "file_identity", "file_state", "sha256", "begin_marker", "rc5_source",
             ))
             or native.get("blockers") != [] or native.get("rc5_source") != RC5_SOURCE
             or not isinstance(native.get("sha256"), str)
@@ -282,7 +282,7 @@ def evaluate_qualification(
                                                   if isinstance(native, dict) else None)
             or not isinstance(native, dict)
             or any(control_evidence.get(key) != native.get(key) for key in (
-                "path", "file_identity", "begin_marker",
+                "path", "file_identity", "file_state", "begin_marker",
             ))
             or control_evidence.get("rc5_source") != RC5_SOURCE):
         blockers.append("WS_CONTROL_PROOF_INCOMPLETE")
@@ -413,7 +413,7 @@ CANDLE_ENDPOINT_PATTERN = (
 
 def _read_bound_native_log(
     path: Path, *, file_identity: tuple[int, int], begin_marker: str,
-) -> tuple[bytes, list[dict[str, Any]]]:
+) -> tuple[bytes, list[dict[str, Any]], tuple[int, int, int, int, int]]:
     """One stable, complete, unique-envelope rc5 run, independently of predicates."""
     before = path.lstat()
     if (not stat.S_ISREG(before.st_mode) or (before.st_dev, before.st_ino) != file_identity
@@ -427,9 +427,11 @@ def _read_bound_native_log(
         raw = stream.read()
         after = os.fstat(stream.fileno())
     final = path.lstat()
-    def identity(state: os.stat_result) -> tuple[int, int, int, int]:
-        return state.st_dev, state.st_ino, state.st_size, state.st_mtime_ns
-    if identity(before) != identity(after) or identity(after) != identity(final):
+    def identity(state: os.stat_result) -> tuple[int, int, int, int, int]:
+        # ctime also detects same-byte replacement when Linux reuses the inode.
+        return state.st_dev, state.st_ino, state.st_size, state.st_mtime_ns, state.st_ctime_ns
+    if (identity(before) != identity(opened) or identity(opened) != identity(after)
+            or identity(after) != identity(final)):
         raise ValueError("native log changed during read")
     if not raw.endswith(b"\n"):
         raise ValueError("native log incomplete")
@@ -460,7 +462,7 @@ def _read_bound_native_log(
                 titles += 1
                 if titles > 1:
                     raise ValueError("duplicate native header")
-    return raw, records
+    return raw, records, identity(final)
 
 
 def _instrument_bookkeeping(component: str, level: str, message: str) -> bool:
@@ -512,11 +514,12 @@ def parse_native_http_log(
     if sync_succeeded is not True:
         blockers.add("NATIVE_LOG_SYNC_UNPROVEN")
     try:
-        raw, records = _read_bound_native_log(
+        raw, records, file_state = _read_bound_native_log(
             path, file_identity=file_identity, begin_marker=native_marker(manifest),
         )
         result["sha256"] = sha256_hex(raw)
-        result["log_binding"].update(sha256=result["sha256"],
+        result["file_state"] = list(file_state)
+        result["log_binding"].update(sha256=result["sha256"], file_state=list(file_state),
                                      status="PASS" if sync_succeeded is True else "INCOMPLETE")
     except (OSError, KeyError, ValueError, TypeError, UnicodeError):
         result["blockers"] = sorted(blockers | {"NATIVE_LOG_FILE_OR_PARSE_AMBIGUITY"})
@@ -827,6 +830,7 @@ def parse_native_ws_controls(
     result: dict[str, Any] = dict(status="INCOMPLETE", blockers=[], windows=[],
                                   path=str(path), sha256=native_http.get("sha256"),
                                   file_identity=native_http.get("file_identity"),
+                                  file_state=native_http.get("file_state"),
                                   begin_marker=native_http.get("begin_marker"),
                                   rc5_source=RC5_SOURCE,
                                   epochs=epochs, close_reserve=close_reserve,
@@ -838,13 +842,15 @@ def parse_native_ws_controls(
                 or binding.get("rc5_source") != RC5_SOURCE or binding.get("path") != str(path)
                 or binding.get("begin_marker") != native_http.get("begin_marker")
                 or binding.get("file_identity") != native_http.get("file_identity")
+                or binding.get("file_state") != native_http.get("file_state")
                 or binding.get("sha256") != native_http.get("sha256")):
             raise ValueError("current-run immutable native binding is absent")
-        raw, records = _read_bound_native_log(
+        raw, records, file_state = _read_bound_native_log(
             path, file_identity=tuple(binding["file_identity"]),
             begin_marker=binding["begin_marker"],
         )
-        if sha256_hex(raw) != binding["sha256"]:
+        if (sha256_hex(raw) != binding["sha256"]
+                or list(file_state) != binding["file_state"]):
             raise ValueError("native file binding changed")
         if (not records or records[0]["component"] != native_http.get("begin_marker")
                 or records[0]["message"] != NATIVE_STARTUP_SEPARATOR):
@@ -1339,11 +1345,12 @@ async def _run_l0_qualification(args: argparse.Namespace) -> tuple[int, dict[str
         binding = native["log_binding"]
         if binding["status"] != "PASS":
             raise ValueError("native file binding is unproven")
-        raw, records = _read_bound_native_log(
+        raw, records, file_state = _read_bound_native_log(
             log_path, file_identity=tuple(binding["file_identity"]),
             begin_marker=binding["begin_marker"],
         )
-        if sha256_hex(raw) != binding["sha256"]:
+        if (sha256_hex(raw) != binding["sha256"]
+                or list(file_state) != binding["file_state"]):
             raise ValueError("native forecast file changed")
         first_ns = _log_timestamp_ns(records[0]["timestamp"])
         end_ns = max(_log_timestamp_ns(r["timestamp"]) for r in records) + 1

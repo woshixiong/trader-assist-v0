@@ -1129,6 +1129,34 @@ def test_planned_ws_backoff_requires_unique_source_request_and_epoch(tmp_path, m
     assert (ws["status"] == "PASS") is (mutation is None)
 
 
+def test_ws_rechecks_ctime_even_with_identical_inode_mtime_size_and_bytes(tmp_path, monkeypatch):
+    from scripts.e4_nautilus_public_data_probe import parse_native_ws_controls
+
+    manifest, ledger, records, path = native_log_fixture(tmp_path)
+    add_controls(records)
+    write_retry_fixture(path, records)
+    native, original_ws = ws_parse_fixture(manifest, ledger, path)
+    assert native["status"] == original_ws["status"] == "PASS"
+    before = path.lstat()
+    assert native["log_binding"]["file_state"] == [
+        before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns,
+    ]
+    # Model Linux inode reuse with restored mtime and identical content: ctime
+    # is the only changed witness. Keep the existing real replacement test intact.
+    reused = SimpleNamespace(st_mode=before.st_mode, st_dev=before.st_dev,
+                             st_ino=before.st_ino, st_size=before.st_size,
+                             st_mtime_ns=before.st_mtime_ns, st_ctime_ns=before.st_ctime_ns + 1)
+    lstat = Path.lstat
+    monkeypatch.setattr(Path, "lstat", lambda target, *a, **kw:
+                        reused if target == path else lstat(target, *a, **kw))
+    monkeypatch.setattr(os, "fstat", lambda _fd: reused)
+    ws = parse_native_ws_controls(path, native_http=native,
+                                  epochs=[dict(start_ns=NS, end_ns=200 * NS)],
+                                  outbound_forecast=[(62 * NS, 100)], close_reserve=2)
+    assert ws["status"] == "INCOMPLETE"
+    assert ws["blockers"] == ["WS_CONTROL_FILE_EPOCH_OR_FORECAST_INCOMPLETE"]
+
+
 def resource_sample(ts_ns, **changes):
     return dict(ts_ns=ts_ns, memory_used_percent=20, cpu_percent=5, swap_activity=0,
                 root_used_percent=20, root_7d_projection_percent=25) | changes
