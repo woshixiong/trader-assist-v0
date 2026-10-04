@@ -12,7 +12,7 @@ from test_research_replay_lifecycle import blocks, ledger, visibility
 from test_research_replay_paths import decision
 from test_research_replay_policies import context, policy
 
-from trader_assist_v0.research_replay.contracts import ResearchRunSpec, digest
+from trader_assist_v0.research_replay.contracts import Attempt, Fill, ResearchRunSpec, digest
 from trader_assist_v0.research_replay.harness import (
     CandidatePlan,
     ContextFrame,
@@ -24,6 +24,7 @@ from trader_assist_v0.research_replay.harness import (
 from trader_assist_v0.research_replay.paths import measure_path
 from trader_assist_v0.research_replay.reporting import (
     CandidateResult,
+    EntryTrigger,
     bundle_fingerprint,
     pair,
     summarize,
@@ -131,9 +132,12 @@ def run_fixture(*, rows=None, op=None, candidates=None, frames=None, cost_model=
     return run, (ds,), rows, (op,), candidates, frames, trial_ledger, blocks(), visibility()
 
 
-def result(*, policy_hash=H, cash=Decimal(0), participation="PASS", **updates):
-    op = opportunity()
-    snap = changed(decision(op), decision=participation)
+def result(*, op=None, policy_hash=H, cash=Decimal(0), participation="PASS", **updates):
+    op = op or opportunity()
+    snap = changed(
+        decision(op), decision=participation, policy_hash=policy_hash,
+        cost_hash=updates.get("cost_hash", cost().record_hash),
+    )
     path = measure_path(snap, op, (raw(150),), as_of=200)
     args = dict(
         version="B_CANDIDATE_RESULT_V1",
@@ -199,9 +203,114 @@ def test_wait_pass_nonfill_denominator_and_matched_costs():
     summary = summarize((left,), (paired, pair(left, missing)))
     assert summary.roster_count == 1 and summary.paired_count == 1 and summary.unmatched_count == 1
     with pytest.raises(ValueError, match="matched-cost"):
-        pair(left, changed(right, cost_hash="c" * 64))
+        pair(left, result(policy_hash="b" * 64, participation="WAIT", cost_hash="c" * 64))
     with pytest.raises(ValueError, match="one candidate"):
         summarize((left, right), ())
+
+
+def first_entry_result():
+    run, _, rows, (op,), (plan,), _, *_ = run_fixture()
+    wait_context = context(price_core=False)
+    take_context = context(
+        at=150, source_cutoff=150, input_hashes=(rows[1].record_hash,), price_core=True,
+    )
+    snaps = tuple(
+        snapshot(run, op, plan, ContextFrame.create(
+            version="B_FRAME_V1", opportunity_hash=op.record_hash, context=c, features=(),
+        )) for c in (wait_context, take_context)
+    )
+    from trader_assist_v0.research_replay.policies import evaluate
+
+    action = evaluate(plan.participation, take_context)
+    receipt = EntryTrigger.create(
+        version="B_ENTRY_TRIGGER_V1", snapshot=snaps[1], context=take_context, action=action,
+    )
+    fill = Fill(ts=170, price=Decimal(103), size=Decimal(1), direction="BUY", fee=Decimal(0),
+                source_hash=rows[1].record_hash)
+    attempt = Attempt.create(
+        version="B_ATTEMPT_V1", thesis_id=op.thesis_id, policy_hash=plan.record_hash,
+        index=1, trigger_ns=150, fill=fill, exit_fill=None, state="PROBE_OPEN",
+        fresh_condition_hash=take_context.record_hash, reason=action.reason,
+    )
+    forward = (*rows, raw(170), raw(190))
+    return result(
+        op=op, policy_hash=plan.record_hash, snapshots=snaps, entry_trigger=receipt,
+        actions=(action,), policy_action_hashes=(action.record_hash,),
+        fills=(fill,), fill_hashes=(digest("B_NATIVE_FILL", fill.model_dump(mode="json")),),
+        attempts=(attempt,), attempt_hashes=(attempt.record_hash,),
+        trigger_path=measure_path(snaps[1], op, forward, as_of=200),
+        fill_path=measure_path(snaps[1], op, forward, as_of=200, fill=fill),
+        terminal="UNFINISHED", outstanding_size=Decimal(1),
+    )
+
+
+def test_first_entry_contract_retains_wait_history_and_rejects_false_lineage():
+    observed = first_entry_result()
+    wait, take = observed.snapshots
+    assert (wait.decision, take.decision) == ("WAIT", "TAKE")
+    assert observed.entry_trigger.snapshot == take
+    assert (
+        observed.trigger_path.snapshot_hash == observed.fill_path.snapshot_hash == take.record_hash
+    )
+    assert observed.fills[0].ts > take.decision_ns
+    assert CandidateResult.model_validate_json(observed.model_dump_json()) == observed
+    unfilled = changed(
+        observed, fills=(), fill_hashes=(), attempts=(), attempt_hashes=(), fill_path=None,
+        terminal="NO_SUBMIT", outstanding_size=Decimal(0),
+    )
+    assert unfilled.entry_trigger == observed.entry_trigger and unfilled.fill_path is None
+    mutations = (
+        {"entry_trigger": None},
+        {"snapshots": (take, wait)},
+        {"snapshots": (wait,)},
+        {"trigger_path": changed(observed.trigger_path, snapshot_hash=wait.record_hash)},
+        {"fill_path": changed(observed.fill_path, snapshot_hash=wait.record_hash)},
+        {"fill_path": None},
+        {"terminal": "SUPPRESSED"},
+        {"actions": (), "policy_action_hashes": ()},
+    )
+    for mutation in mutations:
+        with pytest.raises(ValueError):
+            changed(observed, **mutation)
+    wrong_attempt = changed(observed.attempts[0], trigger_ns=151)
+    with pytest.raises(ValueError, match="first native fill"):
+        changed(observed, attempts=(wrong_attempt,), attempt_hashes=(wrong_attempt.record_hash,))
+    receipt = observed.entry_trigger
+    for mutation in (
+        {"snapshot": wait},
+        {"context": changed(receipt.context, at=151)},
+        {"action": changed(receipt.action, context_hash=H)},
+        {"action": changed(receipt.action, action="HOLD")},
+    ):
+        with pytest.raises(ValueError, match="lineage"):
+            changed(receipt, **mutation)
+    suppressed = result(participation="WAIT")
+    assert suppressed.entry_trigger is None and suppressed.fill_path is None
+    with pytest.raises(ValueError):
+        changed(suppressed, entry_trigger=receipt)
+
+
+def test_first_entry_contract_cannot_rebind_top_level_paths_to_later_reentry():
+    first = first_entry_result()
+    receipt = first.entry_trigger
+    later_context = changed(receipt.context, at=190, source_cutoff=190)
+    later_action = changed(receipt.action, action="REENTER", context_hash=later_context.record_hash)
+    later_snapshot = changed(receipt.snapshot, decision_ns=190)
+    later_receipt = EntryTrigger.create(
+        version="B_ENTRY_TRIGGER_V1", snapshot=later_snapshot, context=later_context,
+        action=later_action,
+    )
+    history = changed(
+        first, snapshots=(*first.snapshots, later_snapshot),
+        actions=(*first.actions, later_action),
+        policy_action_hashes=(*first.policy_action_hashes, later_action.record_hash),
+    )
+    assert history.entry_trigger == receipt
+    with pytest.raises(ValueError, match="first entry"):
+        changed(
+            history, entry_trigger=later_receipt,
+            trigger_path=changed(history.trigger_path, snapshot_hash=later_snapshot.record_hash),
+        )
 
 
 def test_fresh_process_prefix_and_fingerprint_reproduction():

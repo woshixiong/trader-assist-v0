@@ -10,7 +10,33 @@ from trader_assist_v0.research_data.contracts import BoundRecord
 
 from .contracts import Attempt, CashFlow, DecisionSnapshot, Fill, PathResult, digest
 from .lifecycle import VisibilityPolicy
-from .policies import PolicyAction
+from .policies import PolicyAction, PolicyContext
+
+
+class EntryTrigger(BoundRecord):
+    """Immutable receipt captured when the first entry action is queued."""
+
+    snapshot: DecisionSnapshot
+    context: PolicyContext
+    action: PolicyAction
+
+    @model_validator(mode="after")
+    def lineage(self) -> Self:
+        s, c, a = self.snapshot, self.context, self.action
+        if (
+            s.decision != "TAKE"
+            or a.participation != "TAKE"
+            or a.action not in {"ENTER", "REENTER"}
+            or a.context_hash != c.record_hash
+            or s.decision_ns != c.at
+            or s.prefix_hashes != c.input_hashes
+            or s.feature_hashes != c.feature_hashes
+            or s.reasons != (a.reason,)
+            or not c.evaluable
+            or not c.thesis_valid
+        ):
+            raise ValueError("entry trigger snapshot/context/action lineage mismatch")
+        return self
 
 
 class CandidateResult(BoundRecord):
@@ -39,6 +65,7 @@ class CandidateResult(BoundRecord):
     fills: tuple[Fill, ...] = ()
     actions: tuple[PolicyAction, ...] = ()
     cashflows: tuple[CashFlow, ...] = ()
+    entry_trigger: EntryTrigger | None = None
 
     @model_validator(mode="after")
     def evidence_binding(self) -> Self:
@@ -49,8 +76,48 @@ class CandidateResult(BoundRecord):
             or self.policy_action_hashes != tuple(a.record_hash for a in self.actions)
         ):
             raise ValueError("candidate result evidence binding mismatch")
-        if self.trigger_path.snapshot_hash != self.snapshots[0].record_hash:
+        if tuple(s.decision_ns for s in self.snapshots) != tuple(
+            sorted({s.decision_ns for s in self.snapshots})
+        ) or any(
+            (s.opportunity_hash, s.policy_hash, s.cost_hash)
+            != (self.opportunity_hash, self.candidate_hash, self.cost_hash)
+            for s in self.snapshots
+        ):
+            raise ValueError("snapshot history identity/order mismatch")
+        entries = tuple(a for a in self.actions if a.action in {"ENTER", "REENTER"})
+        if self.entry_trigger is None:
+            if entries or self.fills or self.attempts or self.fill_path is not None:
+                raise ValueError("entry evidence requires explicit first trigger lineage")
+            bound = self.snapshots[0]
+        else:
+            receipt = self.entry_trigger
+            bound = receipt.snapshot
+            if bound not in self.snapshots or not entries or entries[0] != receipt.action:
+                raise ValueError("first entry trigger not bound to retained snapshot/action")
+            if self.terminal == "SUPPRESSED":
+                raise ValueError("suppressed result cannot carry an entry trigger")
+            if self.fills:
+                if (
+                    not self.attempts
+                    or self.attempts[0].fill != self.fills[0]
+                    or self.attempts[0].trigger_ns != bound.decision_ns
+                    or self.attempts[0].fresh_condition_hash != receipt.context.record_hash
+                    or self.attempts[0].policy_hash != self.candidate_hash
+                    or self.fills[0].ts < bound.decision_ns
+                    or self.fill_path is None
+                ):
+                    raise ValueError("first native fill/attempt trigger lineage mismatch")
+            elif self.attempts or self.fill_path is not None:
+                raise ValueError("unfilled trigger cannot carry fill-basis evidence")
+        if (
+            self.trigger_path.basis != "TRIGGER"
+            or self.trigger_path.snapshot_hash != bound.record_hash
+        ):
             raise ValueError("path bound to wrong decision snapshot")
+        if self.fill_path is not None and (
+            self.fill_path.basis != "FILL" or self.fill_path.snapshot_hash != bound.record_hash
+        ):
+            raise ValueError("fill path bound to wrong first entry snapshot")
         return self
 
 

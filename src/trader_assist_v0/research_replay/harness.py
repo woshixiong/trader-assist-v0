@@ -41,7 +41,14 @@ from .evidence import require_pipeline
 from .lifecycle import BlockPlan, TrialLedger, VisibilityPolicy
 from .paths import funding_settlement, measure_path, net_cash
 from .policies import PolicyAction, PolicyContext, PolicySpec, evaluate
-from .reporting import CandidateResult, CounterfactualPathRef, Pair, bundle_fingerprint, pair
+from .reporting import (
+    CandidateResult,
+    CounterfactualPathRef,
+    EntryTrigger,
+    Pair,
+    bundle_fingerprint,
+    pair,
+)
 
 
 def _canonical_decision_metrics(**values: Decimal) -> dict[str, Decimal]:
@@ -379,6 +386,7 @@ def _native_candidate(
     if not frames or frames[0].context.at != opportunity.decision_ns:
         raise ValueError("original causal decision frame required")
     decisions: list[DecisionSnapshot] = []
+    first_entry_trigger: EntryTrigger | None = None
     actions: list[PolicyAction] = []
     fills: list[Fill] = []
     attempts: list[Attempt] = []
@@ -407,6 +415,7 @@ def _native_candidate(
             state["pending"] = (action, at + run.cost.delay_ns)
 
     def on_quote(self: Any, quote: Any) -> None:
+        nonlocal first_entry_trigger
         now = int(quote.ts_init)
         row = quotes.get(now)
         if row is None or row.evidence.owner != "HL_E4":
@@ -509,9 +518,8 @@ def _native_candidate(
                             features=frame.features,
                         ),
                     )
-                    decisions.append(snap)
                     action = evaluate(candidate.participation, c)
-                    if counterfactual and len(decisions) == 1 and valid and c.evaluable:
+                    if counterfactual and not decisions and valid and c.evaluable:
                         action = PolicyAction.create(
                             version="B_ACTION_V1",
                             policy_hash=candidate.participation.record_hash,
@@ -521,10 +529,23 @@ def _native_candidate(
                             fraction=Decimal(1),
                             reason="PREREGISTERED_COUNTERFACTUAL_TAKE",
                         )
+                        # The scenario owns a TAKE snapshot; the observed suppression stays intact.
+                        snap = DecisionSnapshot.create(
+                            **{
+                                **snap.model_dump(exclude={"record_hash"}),
+                                "decision": action.participation,
+                                "reasons": (action.reason,),
+                            }
+                        )
+                    decisions.append(snap)
                     if snap.decision in {"PASS", "BLOCKED", "NOT_EVALUABLE"} and not counterfactual:
                         state["terminal"] = True
                 actions.append(action)
                 if action.action in {"ENTER", "REENTER"}:
+                    if first_entry_trigger is None and state["pending"] is None:
+                        first_entry_trigger = EntryTrigger.create(
+                            version="B_ENTRY_TRIGGER_V1", snapshot=snap, context=c, action=action
+                        )
                     queue(action, c.at)
             elif state["position"] != 0 and state["pending_order"] is None:
                 loss = evaluate(candidate.loss, c)
@@ -702,13 +723,14 @@ def _native_candidate(
             limitations.add("NATIVE_PARTIAL_OR_NONFILL")
         if not decisions:
             decisions.append(snapshot(run, opportunity, candidate, frames[0]))
+        path_snapshot = first_entry_trigger.snapshot if first_entry_trigger else decisions[0]
         path = measure_path(
-            decisions[0], opportunity, rows, as_of=opportunity.decision_ns + run.horizon_ns
+            path_snapshot, opportunity, rows, as_of=opportunity.decision_ns + run.horizon_ns
         )
         first_fill = fills[0] if fills else None
         fill_path = (
             measure_path(
-                decisions[0],
+                path_snapshot,
                 opportunity,
                 rows,
                 as_of=opportunity.decision_ns + run.horizon_ns,
@@ -824,6 +846,7 @@ def _native_candidate(
             fills=tuple(fills),
             actions=tuple(actions),
             cashflows=relevant,
+            entry_trigger=first_entry_trigger,
         )
     finally:
         engine.dispose()

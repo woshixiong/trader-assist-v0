@@ -79,7 +79,8 @@ def _assert_required_nautilus_available() -> None:
 
 
 @REQUIRES_NAUTILUS
-def test_package_b_real_native_replay_delayed_fills_counterfactual_and_isolation():
+@pytest.mark.parametrize("wait_then_take", (False, True), ids=("suppressed", "wait-to-take"))
+def test_package_b_real_native_replay_delayed_fills_counterfactual_and_isolation(wait_then_take):
     """R0 B composition on rc5; no mock fills or legacy CandidateManifest coercion."""
     from test_nautilus_vnext_g4_catalog_bridge import MARKET, NATIVE_INSTRUMENT, replay_admitted
     from test_research_data_contracts import dataset
@@ -93,6 +94,18 @@ def test_package_b_real_native_replay_delayed_fills_counterfactual_and_isolation
     from trader_assist_v0.research_replay.harness import ContextFrame, replay
 
     _assert_required_nautilus_available()
+    quotes = (
+        ("1999.0", "2001.0"),
+        ("2000.0", "2002.0"),
+        ("2001.0", "2003.0"),
+        ("2009.0", "2011.0"),
+        ("2008.0", "2010.0"),
+        ("2007.0", "2009.0"),
+    )
+    if wait_then_take:
+        # This large excursion precedes the later trigger and must never enter its metrics.
+        quotes = (quotes[0], ("2500.0", "2502.0"), *quotes[2:],
+                  ("2006.0", "2008.0"), ("2005.0", "2007.0"))
     events = tuple(
         replay_admitted(
             i,
@@ -104,17 +117,7 @@ def test_package_b_real_native_replay_delayed_fills_counterfactual_and_isolation
                 "ask_size": "3.000",
             },
         )
-        for i, (bid, ask) in enumerate(
-            (
-                ("1999.0", "2001.0"),
-                ("2000.0", "2002.0"),
-                ("2001.0", "2003.0"),
-                ("2009.0", "2011.0"),
-                ("2008.0", "2010.0"),
-                ("2007.0", "2009.0"),
-            ),
-            1,
-        )
+        for i, (bid, ask) in enumerate(quotes, 1)
     )
     ds = dataset(
         source="NAUTILUS_HYPERLIQUID",
@@ -169,10 +172,11 @@ def test_package_b_real_native_replay_delayed_fills_counterfactual_and_isolation
                 source_cutoff=r.known_at,
                 input_hashes=(r.record_hash,),
                 price_core=True,
+                profile_confirmation=wait_then_take and i >= 2,
             ),
             features=(),
         )
-        for r in rows
+        for i, r in enumerate(rows)
     )
     model = ExecutionModelConfig(
         book_type="L1_MBP",
@@ -214,16 +218,64 @@ def test_package_b_real_native_replay_delayed_fills_counterfactual_and_isolation
         funding_complete=False,
         funding_applicable=False,
     )
-    filled, suppressed = first.results
+    filled, challenger = first.results
     assert first.fingerprint == second.fingerprint
     assert len(filled.fills) == 2 and filled.outstanding_size == 0
     assert filled.fills[0].price == Decimal("2003.0")
     assert filled.fills[0].ts >= 27
     assert filled.fills[1].price == Decimal("2007.0")
-    assert filled.terminal == "COMPLETE" and suppressed.terminal == "SUPPRESSED"
-    assert not suppressed.fills and suppressed.snapshots[0].decision == "WAIT"
-    assert first.counterfactuals[0].snapshot_hash == suppressed.snapshots[0].record_hash
+    assert filled.terminal == "COMPLETE"
+    assert challenger.snapshots[0].decision == "WAIT"
+    scenario = first.counterfactuals[0].result
+    assert first.counterfactuals[0].snapshot_hash == challenger.snapshots[0].record_hash
     assert first.counterfactuals[0].result.fills == filled.fills
+    assert scenario.entry_trigger.snapshot == scenario.snapshots[0]
+    assert scenario.snapshots[0].decision == "TAKE"
+    assert scenario.entry_trigger.snapshot.record_hash != challenger.snapshots[0].record_hash
+    if wait_then_take:
+        take = challenger.snapshots[2]
+        assert tuple(s.decision for s in challenger.snapshots[:3]) == ("WAIT", "WAIT", "TAKE")
+        assert tuple(s.decision_ns for s in challenger.snapshots) == tuple(
+            sorted(s.decision_ns for s in challenger.snapshots)
+        )
+        assert take.decision_ns == rows[2].known_at
+        assert challenger.entry_trigger.snapshot == take
+        assert challenger.entry_trigger.action.action == "ENTER"
+        assert challenger.entry_trigger.action == next(
+            a for a in challenger.actions if a.action == "ENTER"
+        )
+        assert (
+            challenger.trigger_path.snapshot_hash
+            == challenger.fill_path.snapshot_hash == take.record_hash
+        )
+        assert len(challenger.fills) == 2 and challenger.outstanding_size == 0
+        assert challenger.fills[0].price == Decimal("2010.0")
+        assert challenger.fills[0].ts >= take.decision_ns + bound_cost.delay_ns
+        assert challenger.fills[1].price == Decimal("2005.0")
+        assert challenger.fills[1].ts > challenger.fills[0].ts
+        assert challenger.fills[1].ts >= rows[5].known_at + bound_cost.delay_ns
+        assert challenger.attempts[0].trigger_ns == take.decision_ns
+        assert challenger.attempts[0].fill == challenger.fills[0]
+        assert challenger.terminal == "COMPLETE"
+        assert challenger.trigger_path.basis == "TRIGGER"
+        assert challenger.fill_path.basis == "FILL"
+        assert challenger.trigger_path.market_mfe == Decimal(10)
+        assert challenger.trigger_path.first_favorable_ns == rows[3].ts_event
+        assert rows[1].record_hash not in challenger.trigger_path.input_hashes
+        assert challenger.trigger_path.input_hashes == tuple(
+            r.record_hash for r in rows if r.ts_event >= take.decision_ns
+        )
+        assert challenger.fill_path.input_hashes == tuple(
+            r.record_hash for r in rows if r.ts_event >= challenger.fills[0].ts
+        )
+        assert challenger.fill_path.market_mae == Decimal(-4)
+        assert scenario.entry_trigger.snapshot.decision_ns == challenger.snapshots[0].decision_ns
+        assert scenario.entry_trigger.snapshot.record_hash != take.record_hash
+        assert rows[1].record_hash in scenario.trigger_path.input_hashes
+        assert scenario.trigger_path.market_mfe == Decimal(501)
+    else:
+        assert challenger.terminal == "SUPPRESSED" and not challenger.fills
+        assert challenger.entry_trigger is None and challenger.fill_path is None
     assert first.pairs[0].comparable and first.pairs[0].opportunity_hash == op.record_hash
 
 
