@@ -6,17 +6,20 @@ from .contracts import (
     Availability,
     FeatureObservation,
     FeatureSpec,
-    Observation,
     PropagationLabel,
+    checked_observation,
     decimal80,
     wire,
+)
+from .contracts import (
+    _ObservationFields as Observation,
 )
 
 GOOD = frozenset({"AVAILABLE_VERIFIED", "COMPLETE"})
 
 
 def eligible(row: Observation, spec: FeatureSpec, t: int, knowledge: int) -> Availability:
-    row = Observation.model_validate_json(row.model_dump_json())
+    row = checked_observation(row)
     ref = row.evidence
     if row.ts_event > t or row.known_at > knowledge or (row.bar_end and row.bar_end > t):
         return "MISSING_SOURCE"
@@ -130,6 +133,7 @@ def result(
 
 
 def mid(row: Observation) -> Decimal:
+    row = checked_observation(row)
     bid, ask = row.number("bid"), row.number("ask")
     if not 0 < bid <= ask:
         raise ValueError("invalid BBO")
@@ -250,8 +254,8 @@ def propagation(
     as_of: int,
 ) -> PropagationLabel:
     """Forward response is released separately, never appended to the impulse prefix."""
-    impulse = Observation.model_validate_json(impulse.model_dump_json())
-    previous = Observation.model_validate_json(previous.model_dump_json())
+    impulse = checked_observation(impulse)
+    previous = checked_observation(previous)
     spec = FeatureSpec.model_validate_json(spec.model_dump_json())
     if horizon_ns <= 0 or horizon_ns > spec.window_ns or impulse.kind not in {"BBO", "TRADE"}:
         raise ValueError("registered bounded quote/trade impulse required")

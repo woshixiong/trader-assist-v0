@@ -4,7 +4,8 @@ import json
 from decimal import Decimal, localcontext
 
 from .alignment import eligible, mid, result
-from .contracts import Availability, FeatureObservation, FeatureSpec, Observation
+from .contracts import Availability, FeatureObservation, FeatureSpec
+from .contracts import _ObservationFields as Observation
 
 
 def window_rows(
@@ -13,6 +14,9 @@ def window_rows(
     t: int,
     knowledge: int,
 ) -> tuple[tuple[Observation, ...], Availability]:
+    from .contracts import checked_observation
+
+    rows = tuple(checked_observation(r) for r in rows)
     spec = FeatureSpec.model_validate_json(spec.model_dump_json())
     prefix = tuple(
         r

@@ -5,7 +5,12 @@ from typing import Any
 
 from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
 
-from .admission import AdmissionObservation, ExternalReferenceAdmission, ExternalReferenceLedger
+from .admission import (
+    AdmissionObservation,
+    ExternalReferenceAdmission,
+    ExternalReferenceLedger,
+    _AdmissionMechanics,
+)
 from .contracts import BoundRecord
 
 
@@ -102,35 +107,43 @@ class ReferenceReplayReader:
         admission = self.admission
         # Rights/lifecycle checked before opening any evidence, including sealed files.
         admission.dataset.require_access("PIPELINE_CORRECTNESS_ONLY", admission.satisfied)
-        path = path.resolve()
-        path.relative_to(self.store.root)
-        with path.open("rb") as handle:
-            raw = handle.read(self.store.max_bytes + 1)
-        if len(raw) > self.store.max_bytes or sha256_hex(raw) != checksum:
-            raise ValueError("sidecar size/checksum mismatch")
-        sidecar = EvidenceSidecar.model_validate_json(raw)
+        return _read_verified(self.store, admission, path, checksum)
+
+
+def _read_verified(
+    store: ReferenceDatasetStore, admission: _AdmissionMechanics, path: Path, checksum: str
+) -> tuple[AdmissionObservation, ...]:
+    """Shared bounded replay; callers must first pass their concrete authority guard."""
+    admission._require_access()
+    path = path.resolve()
+    path.relative_to(store.root)
+    with path.open("rb") as handle:
+        raw = handle.read(store.max_bytes + 1)
+    if len(raw) > store.max_bytes or sha256_hex(raw) != checksum:
+        raise ValueError("sidecar size/checksum mismatch")
+    sidecar = EvidenceSidecar.model_validate_json(raw)
+    if (
+        sidecar.dataset_hash != admission.dataset.record_hash
+        or sidecar.mapping_hash != admission.resolver.snapshot.record_hash
+        or sidecar.policy_hash != admission.policy.record_hash
+        or sidecar.capability_hashes != tuple(c.record_hash for c in admission.capabilities)
+    ):
+        raise ValueError("replay evidence binding mismatch")
+    for relative, digest in sidecar.catalog_files:
+        file = (store.root / relative).resolve()
+        file.relative_to(store.root)
+        with file.open("rb") as handle:
+            raw_file = handle.read(store.max_bytes + 1)
+        if len(raw_file) > store.max_bytes or sha256_hex(raw_file) != digest:
+            raise ValueError("catalog binding checksum mismatch")
+    for data in sidecar.source_bytes_hex:
+        bytes.fromhex(data)
+    ledger = ExternalReferenceLedger(admission)
+    for observation in sidecar.observations:
         if (
-            sidecar.dataset_hash != admission.dataset.record_hash
-            or sidecar.mapping_hash != admission.resolver.snapshot.record_hash
-            or sidecar.policy_hash != admission.policy.record_hash
-            or sidecar.capability_hashes != tuple(c.record_hash for c in admission.capabilities)
+            ledger.observe(observation.event, evaluated_at_ns=observation.evaluated_at_ns)
+            != observation
         ):
-            raise ValueError("replay evidence binding mismatch")
-        for relative, digest in sidecar.catalog_files:
-            file = (self.store.root / relative).resolve()
-            file.relative_to(self.store.root)
-            with file.open("rb") as handle:
-                raw_file = handle.read(self.store.max_bytes + 1)
-            if len(raw_file) > self.store.max_bytes or sha256_hex(raw_file) != digest:
-                raise ValueError("catalog binding checksum mismatch")
-        for data in sidecar.source_bytes_hex:
-            bytes.fromhex(data)
-        ledger = ExternalReferenceLedger(admission)
-        for observation in sidecar.observations:
-            if (
-                ledger.observe(observation.event, evaluated_at_ns=observation.evaluated_at_ns)
-                != observation
-            ):
-                raise ValueError("non-deterministic/tampered admission replay")
-        # Validate complete evidence before returning any observation.
-        return tuple(ledger.observations)
+            raise ValueError("non-deterministic/tampered admission replay")
+    # Validate complete evidence before returning any observation.
+    return tuple(ledger.observations)

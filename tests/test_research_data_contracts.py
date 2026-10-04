@@ -76,3 +76,19 @@ def test_receive_not_fabricated_and_conversion_bound():
     assert TimestampProvenance(**args).true_network_receive_ts is None
     with pytest.raises(ValueError):
         TimestampProvenance(**{**args, "ts_event": 100})
+
+
+def test_dev_native_composition_on_existing_exact_rc5_ci_surface():
+    """E4 CI already executes this file on locked Linux/Python3.12/rc5."""
+    import importlib.util
+    import os
+
+    if importlib.util.find_spec("nautilus_trader") is None:
+        if os.environ.get("NAUTILUS_G4_REQUIRED") == "1":
+            pytest.fail("authoritative rc5 surface cannot skip DEV native composition")
+        pytest.skip("native DEV comparison requires existing exact-rc5 CI surface")
+    from test_research_replay_dev_harness import (
+        test_matched_s0_dev_real_native_results_and_fingerprints,
+    )
+
+    test_matched_s0_dev_real_native_results_and_fingerprints()

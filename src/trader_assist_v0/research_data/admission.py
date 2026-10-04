@@ -43,7 +43,7 @@ class AdmissionObservation(BoundRecord):
     quality: ReferenceQuality
 
 
-class ExternalReferenceAdmission:
+class _AdmissionMechanics:
     def __init__(
         self,
         dataset: DatasetManifest,
@@ -62,7 +62,7 @@ class ExternalReferenceAdmission:
         )
         self.production = production
         self.satisfied = satisfied
-        self.dataset.require_access("PIPELINE_CORRECTNESS_ONLY", satisfied)
+        self._require_access()
         if self.dataset.mapping_hash != resolver.snapshot.record_hash:
             raise ValueError("dataset mapping binding mismatch")
         keys = [
@@ -73,9 +73,12 @@ class ExternalReferenceAdmission:
         for capability in self.capabilities:
             capability.require_core_proof()
 
+    def _require_access(self) -> None:
+        raise NotImplementedError("guarded concrete admission required")
+
     def validate(self, event: ExternalReferenceEvent, knowledge_ns: int) -> ExternalReferenceEvent:
         event = ExternalReferenceEvent.model_validate_json(event.model_dump_json())
-        self.dataset.require_access("PIPELINE_CORRECTNESS_ONLY", self.satisfied)
+        self._require_access()
         rights = self.dataset.rights
         assert rights is not None
         if (
@@ -115,10 +118,15 @@ class ExternalReferenceAdmission:
         return event
 
 
+class ExternalReferenceAdmission(_AdmissionMechanics):
+    def _require_access(self) -> None:
+        self.dataset.require_access("PIPELINE_CORRECTNESS_ONLY", self.satisfied)
+
+
 class ExternalReferenceLedger:
     """Bounded evidence annotations, not a reconnect or order-book engine."""
 
-    def __init__(self, admission: ExternalReferenceAdmission) -> None:
+    def __init__(self, admission: _AdmissionMechanics) -> None:
         self.admission = admission
         self.observations: list[AdmissionObservation] = []
         self._seen: dict[tuple[str, ...], str] = {}

@@ -103,7 +103,7 @@ class EvidenceRef(BoundRecord):
         return self
 
 
-class Observation(BoundRecord):
+class _ObservationFields(BoundRecord):
     """Disposable research projection, never accepted as an E4 market event."""
 
     evidence: EvidenceRef
@@ -121,8 +121,6 @@ class Observation(BoundRecord):
 
     @model_validator(mode="after")
     def validate_values(self) -> Self:
-        if self.evidence.exposure_state not in {"SACRIFICIAL", "CONTAMINATED"}:
-            raise PermissionError("non-pipeline evidence forbidden in research projection")
         if len(dict(self.values)) != len(self.values):
             raise ValueError("duplicate observation value")
         if self.kind == "BAR" and self.bar_end is None:
@@ -144,6 +142,25 @@ class Observation(BoundRecord):
             "OBSERVED": self.known_at,
             "INIT": self.ts_init,
         }[variant]
+
+
+class Observation(_ObservationFields):
+    """S0 concrete identity and access semantics are preserved."""
+
+    @model_validator(mode="after")
+    def pipeline_only(self) -> Self:
+        if self.evidence.exposure_state not in {"SACRIFICIAL", "CONTAMINATED"}:
+            raise PermissionError("non-pipeline evidence forbidden in research projection")
+        return self
+
+
+def checked_observation(value: _ObservationFields) -> _ObservationFields:
+    """Closed concrete ingress, never a configurable exposure gate."""
+    from .dev_contracts import DevObservation
+
+    if type(value) not in (Observation, DevObservation):
+        raise TypeError("only concrete S0 or DEV observations accepted")
+    return type(value).model_validate_json(value.model_dump_json())
 
 
 class FeatureSpec(BoundRecord):
