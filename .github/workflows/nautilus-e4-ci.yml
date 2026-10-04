@@ -261,7 +261,7 @@ jobs:
       - name: Focused E4 Capture gates
         run: |
           /tmp/trader-assist-e4-venv/bin/python -m pytest -q \
-            tests/test_nautilus_e4_*.py
+            tests/test_nautilus_e4_*.py tests/test_l0_shadow_qualification.py
       - name: Offline research data exact-rc5 qualification
         run: |
           /tmp/trader-assist-e4-venv/bin/python -m pytest -q tests/test_research_data_*.py

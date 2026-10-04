@@ -262,7 +262,12 @@ def evaluate_qualification(
     ):
         blockers.append("REST_COHORT_PROOF_INCOMPLETE")
     native = provider.get("native_http_evidence")
+    binding = native.get("log_binding") if isinstance(native, dict) else None
     if (not isinstance(native, dict) or native.get("status") != "PASS"
+            or not isinstance(binding, dict) or binding.get("status") != "PASS"
+            or any(binding.get(key) != native.get(key) for key in (
+                "path", "file_identity", "file_state", "sha256", "begin_marker", "rc5_source",
+            ))
             or native.get("blockers") != [] or native.get("rc5_source") != RC5_SOURCE
             or not isinstance(native.get("sha256"), str)
             or re.fullmatch(r"[0-9a-f]{64}", native["sha256"]) is None
@@ -275,6 +280,10 @@ def evaluate_qualification(
             or control_evidence.get("blockers") != []
             or control_evidence.get("sha256") != (native.get("sha256")
                                                   if isinstance(native, dict) else None)
+            or not isinstance(native, dict)
+            or any(control_evidence.get(key) != native.get(key) for key in (
+                "path", "file_identity", "file_state", "begin_marker",
+            ))
             or control_evidence.get("rc5_source") != RC5_SOURCE):
         blockers.append("WS_CONTROL_PROOF_INCOMPLETE")
     if len(resources) < 16:
@@ -392,6 +401,100 @@ def _rolling_weight(events: list[tuple[int, int]]) -> int:
     return peak
 
 
+HTTP_COMPONENT = "nautilus_hyperliquid::http::client"
+DATA_COMPONENT = "nautilus_hyperliquid::data"
+NATIVE_LEVELS = ("TRACE", "DEBUG", "INFO", "WARNING", "WARN", "ERROR", "CRITICAL")
+CANDLE_ENDPOINT_PATTERN = (
+    r'CandleSnapshot \{ req: CandleSnapshotRequest \{ coin: ("(?:[^"\\]|\\.)*"), '
+    r'interval: ("(?:[^"\\]|\\.)*"), start_time: (0|[1-9]\d*), '
+    r'end_time: (0|[1-9]\d*) \} \}'
+)
+
+
+def _read_bound_native_log(
+    path: Path, *, file_identity: tuple[int, int], begin_marker: str,
+) -> tuple[bytes, list[dict[str, Any]], tuple[int, int, int, int, int]]:
+    """One stable, complete, unique-envelope rc5 run, independently of predicates."""
+    before = path.lstat()
+    if (not stat.S_ISREG(before.st_mode) or (before.st_dev, before.st_ino) != file_identity
+            or path.resolve() != path.absolute()
+            or set(path.parent.glob(path.name + "*")) != {path}):
+        raise ValueError("native file identity/rotation/path ambiguity")
+    with path.open("rb") as stream:
+        opened = os.fstat(stream.fileno())
+        if (opened.st_dev, opened.st_ino) != file_identity:
+            raise ValueError("native file changed at open")
+        raw = stream.read()
+        after = os.fstat(stream.fileno())
+    final = path.lstat()
+    def identity(state: os.stat_result) -> tuple[int, int, int, int, int]:
+        # ctime also detects same-byte replacement when Linux reuses the inode.
+        return state.st_dev, state.st_ino, state.st_size, state.st_mtime_ns, state.st_ctime_ns
+    if (identity(before) != identity(opened) or identity(opened) != identity(after)
+            or identity(after) != identity(final)):
+        raise ValueError("native log changed during read")
+    if not raw.endswith(b"\n"):
+        raise ValueError("native log incomplete")
+    records = [json.loads(line, object_pairs_hook=_unique_object)
+               for line in raw.decode("utf-8").splitlines()]
+    if not records:
+        raise ValueError("native log empty")
+    seen: set[bytes] = set()
+    titles = 0
+    for index, record in enumerate(records):
+        if not isinstance(record, dict):
+            raise ValueError("native envelope malformed")
+        encoded = canonical_json_bytes(record)
+        if encoded in seen:
+            raise ValueError("duplicate native envelope")
+        seen.add(encoded)
+        component, message, level = record["component"], record["message"], record["level"]
+        if (not all(isinstance(v, str) for v in (component, message, level))
+                or level not in NATIVE_LEVELS):
+            raise ValueError("native envelope fields malformed")
+        _log_timestamp_ns(record["timestamp"])
+        if index == 0 and (component != begin_marker or message != NATIVE_STARTUP_SEPARATOR):
+            raise ValueError("native pre-marker content")
+        if component.startswith(NATIVE_MARKER_PREFIX):
+            if component != begin_marker:
+                raise ValueError("mixed native run")
+            if message.strip().startswith("NAUTILUS TRADER -"):
+                titles += 1
+                if titles > 1:
+                    raise ValueError("duplicate native header")
+    return raw, records, identity(final)
+
+
+def _instrument_bookkeeping(component: str, level: str, message: str) -> bool:
+    """rc5 HTTP-module instrument warnings are owned by overall safety, not REST."""
+    return component == HTTP_COMPONENT and level in ("WARN", "WARNING") and any(
+        re.fullmatch(pattern, message) is not None for pattern in (
+            r"Missing cached Hyperliquid instrument for dex='[^']*' raw_symbol='[^']*'",
+            r"Dropping Hyperliquid instrument: sanitized symbol '[^']*' collides with "
+            r"an earlier def \(raw_symbol='[^']*'\)",
+            r"Instrument '[^']*' carries no 'asset_index' info value; leaving the cached "
+            r"asset index unchanged",
+            r"Instrument '[^']*' carries no 'asset_index' info value and has no cached "
+            r"asset index; orders for it will be rejected",
+        )
+    )
+
+
+def _non_http_data_record(component: str, message: str) -> bool:
+    return component == DATA_COMPONENT and any(
+        re.fullmatch(pattern, message) is not None for pattern in (
+            r"WebSocket error: .+",
+            r"Failed targeted (?:l2Book|bbo) resubscribe for .+: .+",
+            r"Requested full WebSocket reconnect after failed targeted stream recovery",
+            r"Hyperliquid stale stream recovery disabled: "
+            r"stale_stream_recovery_cooldown_secs must be positive",
+            r"Unsupported custom data (?:subscription|unsubscription): .+",
+            r"Instrument .+ not found in cache",
+            r"Failed to send instrument: .+",
+        )
+    )
+
+
 def parse_native_http_log(
     path: Path, *, manifest: RunManifest, dispatches: list[dict[str, Any]],
     file_identity: tuple[int, int], sync_succeeded: bool,
@@ -405,34 +508,20 @@ def parse_native_http_log(
         "metadata_weight": 100, "matched_requests": [],
         "native_retry_count": 0, "matched_retries": [], "http_429": 0,
     }
+    result["log_binding"] = dict(status="INCOMPLETE", path=str(path),
+                                 file_identity=list(file_identity),
+                                 begin_marker=native_marker(manifest), rc5_source=RC5_SOURCE)
     if sync_succeeded is not True:
         blockers.add("NATIVE_LOG_SYNC_UNPROVEN")
     try:
-        before = path.lstat()
-        if (not stat.S_ISREG(before.st_mode)
-                or (before.st_dev, before.st_ino) != file_identity
-                or path.resolve() != path.absolute()
-                or set(path.parent.glob(path.name + "*")) != {path}):
-            raise ValueError("native file identity/rotation/path ambiguity")
-        with path.open("rb") as stream:
-            opened = os.fstat(stream.fileno())
-            if (opened.st_dev, opened.st_ino) != file_identity:
-                raise ValueError("native file changed at open")
-            raw = stream.read()
-            after = os.fstat(stream.fileno())
-        final = path.lstat()
-        if ((after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
-                != (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
-                or (final.st_dev, final.st_ino, final.st_size, final.st_mtime_ns)
-                != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
-                or not raw.endswith(b"\n")):
-            raise ValueError("native log is not a complete stable file")
+        raw, records, file_state = _read_bound_native_log(
+            path, file_identity=file_identity, begin_marker=native_marker(manifest),
+        )
         result["sha256"] = sha256_hex(raw)
-        records = [json.loads(line, object_pairs_hook=_unique_object)
-                   for line in raw.decode("utf-8").splitlines()]
-        if not records:
-            raise ValueError("empty native file")
-    except (OSError, ValueError, TypeError, UnicodeError):
+        result["file_state"] = list(file_state)
+        result["log_binding"].update(sha256=result["sha256"], file_state=list(file_state),
+                                     status="PASS" if sync_succeeded is True else "INCOMPLETE")
+    except (OSError, KeyError, ValueError, TypeError, UnicodeError):
         result["blockers"] = sorted(blockers | {"NATIVE_LOG_FILE_OR_PARSE_AMBIGUITY"})
         return result
     ledger: dict[str, dict[str, Any]] = {}
@@ -452,6 +541,18 @@ def parse_native_http_log(
                     raise ValueError("malformed dispatch")
             if dispatch["interval"] not in ("1m", "5m"):
                 raise ValueError("malformed dispatch interval")
+            minute = 1 if dispatch["interval"] == "1m" else 5
+            expressions = manifest.capture_configuration["expressions"]
+            if not isinstance(expressions, list) or not all(
+                isinstance(e, dict) for e in expressions
+            ):
+                raise ValueError("manifest expression mapping malformed")
+            if not any(
+                bar == f"{e['instrument_id']}-{minute}-MINUTE-LAST-EXTERNAL"
+                and dispatch["coin"] == e["provider_coin"]
+                for e in expressions
+            ):
+                raise ValueError("dispatch differs from manifest provider identity")
             interval_ms = 60_000 if dispatch["interval"] == "1m" else 300_000
             rows = (dispatch["end"] - dispatch["start"]) // interval_ms + 1
             if (rows <= 0 or dispatch["raw_max_rows"] < rows
@@ -465,9 +566,7 @@ def parse_native_http_log(
             ledger[bar] = dispatch
     except (KeyError, TypeError, ValueError):
         blockers.add("NATIVE_DISPATCH_LEDGER_INCOMPLETE")
-    begins = bootstraps = 0
-    title_count = 0
-    seen_records: set[bytes] = set()
+    bootstraps = 0
     metadata_ns: int | None = None
     completions: dict[str, int] = {}
     debits: dict[str, tuple[int, int]] = {}
@@ -475,56 +574,56 @@ def parse_native_http_log(
     completion_indices: dict[str, int] = {}
     metadata_index: int | None = None
     populated_indices: list[tuple[int, int]] = []
-    run_start_ns: int | None = None
+    run_start_ns = _log_timestamp_ns(records[0]["timestamp"])
     for index, record in enumerate(records):
         try:
-            if not isinstance(record, dict):
-                raise ValueError("native record must be an object")
-            encoded_record = canonical_json_bytes(record)
-            if encoded_record in seen_records:
-                raise ValueError("duplicate native record")
-            seen_records.add(encoded_record)
-            message, component = record["message"], record["component"]
-            if not isinstance(message, str) or not isinstance(component, str):
-                raise ValueError("native message/component malformed")
+            message, component, level = record["message"], record["component"], record["level"]
             timestamp = _log_timestamp_ns(record["timestamp"])
-            level = record["level"]
-            if not isinstance(level, str) or level.upper() not in (
-                "TRACE", "DEBUG", "INFO", "WARNING", "WARN", "ERROR", "CRITICAL"
-            ):
-                raise ValueError("native level malformed")
-            if component.startswith(NATIVE_MARKER_PREFIX):
-                if component != native_marker(manifest):
-                    blockers.add("NATIVE_LOG_RUN_BOUNDARY_AMBIGUITY")
-                if message == NATIVE_STARTUP_SEPARATOR:
-                    if index == 0:
-                        begins += 1
-                        run_start_ns = timestamp
-                    elif begins != 1:
-                        blockers.add("NATIVE_LOG_RUN_BOUNDARY_AMBIGUITY")
-                    # Native headers contain separators at both ends. A second
-                    # header is rejected below by the repeated title record.
-                if message.strip().startswith("NAUTILUS TRADER -") :
-                    title_count += 1
-                    if title_count > 1:
-                        blockers.add("NATIVE_LOG_RUN_BOUNDARY_AMBIGUITY")
-            if index == 0 and (component != native_marker(manifest)
-                              or message != NATIVE_STARTUP_SEPARATOR):
-                blockers.add("NATIVE_LOG_PRE_MARKER_CONTENT")
-            if begins != 1:
-                blockers.add("NATIVE_LOG_RUN_BOUNDARY_AMBIGUITY")
-            if level.upper() == "TRACE":
-                # B1d controls are audited separately; raw HTTP is never authority.
+            # Evidence-shaped records cannot escape ownership checks via TRACE or
+            # another adapter namespace. Levels here bind exact rc5 call sites.
+            owner = None
+            expected_levels: tuple[str, ...] = ()
+            if message.startswith(("Fetched ", "Bootstrapped ")):
+                owner, expected_levels = DATA_COMPONENT, ("DEBUG",)
+            elif message.startswith(("Info debited extra weight:", "Populated asset indices map")):
+                owner, expected_levels = HTTP_COMPONENT, ("DEBUG",)
+            elif message.startswith(("429 Too Many Requests;", "Transient error; retrying:")):
+                owner, expected_levels = HTTP_COMPONENT, ("WARN", "WARNING")
+            if owner is not None and (component != owner or level not in expected_levels):
+                raise ValueError("HTTP evidence owner/level differs from rc5 source")
+            failure_owner = None
+            if message.startswith(("request_bars failed:", "Failed to send bars response:",
+                                   "Failed to convert candle to bar:")):
+                failure_owner = DATA_COMPONENT
+            elif message.startswith((
+                "Failed to load Hyperliquid", "Failed to load allPerpMetas",
+                "Failed to parse Hyperliquid", "Failed to load perpDexs",
+                "Skipping Hyperliquid outcome metadata:",
+            )):
+                failure_owner = HTTP_COMPONENT
+            if failure_owner is not None:
+                blockers.add("NATIVE_HTTP_REQUEST_METADATA_OR_TRANSPORT_FAILURE")
+                if component != failure_owner:
+                    raise ValueError("HTTP failure owner differs from rc5 source")
+            if _instrument_bookkeeping(component, level, message):
                 continue
-            native = component.startswith("nautilus_hyperliquid::")
-            relevant = (message.startswith(("Fetched ", "Info debited extra weight:",
-                                           "Bootstrapped ", "429 Too Many Requests;",
-                                           "Transient error; retrying:")))
-            if relevant and not native:
-                raise ValueError("unmatched native component")
-            if not native:
+            if _non_http_data_record(component, message):
+                continue
+            if component not in (HTTP_COMPONENT, DATA_COMPONENT):
+                continue
+            if component == HTTP_COMPONENT and message.startswith((
+                "transport error:", "request failed:",
+            )):
+                blockers.add("NATIVE_HTTP_REQUEST_METADATA_OR_TRANSPORT_FAILURE")
+            if level == "TRACE":
+                # Raw HTTP TRACE is never proof of response weight or controls.
                 continue
             if message.startswith("429 Too Many Requests;"):
+                if re.fullmatch(
+                    r"429 Too Many Requests; backing off: endpoint=.+, "
+                    r"attempt=(0|[1-9]\d*), wait_ms=([1-9]\d*)", message,
+                ) is None:
+                    raise ValueError("malformed native 429 evidence")
                 result["http_429"] += 1
                 blockers.add("NATIVE_HTTP_429_RETRY")
                 continue
@@ -542,9 +641,15 @@ def parse_native_http_log(
                 continue
             if level.upper() in ("WARNING", "WARN", "ERROR", "CRITICAL"):
                 blockers.add("NATIVE_RETRY_FALLBACK_OR_FAILURE")
-            if re.fullmatch(r"Populated asset indices map \(count=\d+\)", message):
+            if message.startswith("Populated asset indices map"):
+                if re.fullmatch(r"Populated asset indices map \(count=\d+\)", message) is None:
+                    raise ValueError("malformed metadata phase")
                 populated_indices.append((index, timestamp))
-            if re.fullmatch(r"Bootstrapped \d+ instruments with \d+ coin mappings", message):
+            if message.startswith("Bootstrapped "):
+                if re.fullmatch(
+                    r"Bootstrapped \d+ instruments with \d+ coin mappings", message,
+                ) is None:
+                    raise ValueError("malformed metadata completion")
                 bootstraps += 1
                 metadata_ns = timestamp
                 metadata_index = index
@@ -564,6 +669,8 @@ def parse_native_http_log(
                 if match is None:
                     raise ValueError("unexpected/malformed native debit")
                 endpoint = match[1]
+                if re.fullmatch(CANDLE_ENDPOINT_PATTERN, endpoint) is None:
+                    raise ValueError("debit endpoint differs from rc5 grammar")
                 fields: dict[str, Any] = {}
                 for name in ("coin", "interval", "start_time", "end_time"):
                     expression = (rf'{name}: ("(?:[^"\\]|\\.)*")'
@@ -586,8 +693,6 @@ def parse_native_http_log(
                 blockers.add("UNEXPECTED_OR_AMBIGUOUS_NATIVE_HTTP_RECORD")
         except (KeyError, TypeError, ValueError):
             blockers.add("NATIVE_RECORD_MALFORMED_UNMATCHED_OR_DUPLICATE")
-    if begins != 1:
-        blockers.add("NATIVE_LOG_RUN_BOUNDARY_AMBIGUITY")
     if bootstraps != 1 or metadata_ns is None:
         blockers.add("NATIVE_METADATA_COHORT_INCOMPLETE")
     if set(completions) != set(ledger) or len(completions) != 40:
@@ -600,16 +705,11 @@ def parse_native_http_log(
     metadata_order = {"SpotMeta": 0, "AllPerpMetas:0": 1, "OutcomeMeta": 2,
                       "AllPerpMetas:1": 3, "PerpDexs": 4}
     last_metadata_order = -1
-    candle_pattern = (
-        r'CandleSnapshot \{ req: CandleSnapshotRequest \{ coin: ("(?:[^"\\]|\\.)*"), '
-        r'interval: ("(?:[^"\\]|\\.)*"), start_time: (0|[1-9]\d*), '
-        r'end_time: (0|[1-9]\d*) \} \}'
-    )
     for index, timestamp, endpoint, attempt, status, wait_ms in retries:
         try:
             if attempt >= 3:
                 raise ValueError("rc5 retry attempt exhausted")
-            candle = re.fullmatch(candle_pattern, endpoint)
+            candle = re.fullmatch(CANDLE_ENDPOINT_PATTERN, endpoint)
             if candle is not None:
                 request_key = (json.loads(candle[1]), json.loads(candle[2]),
                                int(candle[3]), int(candle[4]))
@@ -723,26 +823,35 @@ def parse_native_ws_controls(
     path: Path, *, native_http: dict[str, Any], epochs: list[dict[str, int]],
     outbound_forecast: list[tuple[int, int]], close_reserve: int,
     native_constant_upper_bound: int = 0,
+    planned_reconnect_request_ns: int | None = None,
 ) -> dict[str, Any]:
     """B1d: control TRACE plus source-bound native dispatches, never HTTP bodies."""
     blockers: set[str] = set()
     result: dict[str, Any] = dict(status="INCOMPLETE", blockers=[], windows=[],
                                   path=str(path), sha256=native_http.get("sha256"),
+                                  file_identity=native_http.get("file_identity"),
+                                  file_state=native_http.get("file_state"),
+                                  begin_marker=native_http.get("begin_marker"),
                                   rc5_source=RC5_SOURCE,
                                   epochs=epochs, close_reserve=close_reserve,
                                   native_constant_upper_bound=native_constant_upper_bound,
                                   outbound_forecast=outbound_forecast)
     try:
-        if native_http.get("status") != "PASS" or native_http.get("blockers") != []:
-            raise ValueError("current-run complete native evidence is absent")
-        raw = path.read_bytes()
-        state = path.lstat()
-        if (not stat.S_ISREG(state.st_mode) or path.resolve() != path.absolute()
-                or [state.st_dev, state.st_ino] != native_http.get("file_identity")
-                or sha256_hex(raw) != native_http.get("sha256")):
+        binding = native_http.get("log_binding")
+        if (not isinstance(binding, dict) or binding.get("status") != "PASS"
+                or binding.get("rc5_source") != RC5_SOURCE or binding.get("path") != str(path)
+                or binding.get("begin_marker") != native_http.get("begin_marker")
+                or binding.get("file_identity") != native_http.get("file_identity")
+                or binding.get("file_state") != native_http.get("file_state")
+                or binding.get("sha256") != native_http.get("sha256")):
+            raise ValueError("current-run immutable native binding is absent")
+        raw, records, file_state = _read_bound_native_log(
+            path, file_identity=tuple(binding["file_identity"]),
+            begin_marker=binding["begin_marker"],
+        )
+        if (sha256_hex(raw) != binding["sha256"]
+                or list(file_state) != binding["file_state"]):
             raise ValueError("native file binding changed")
-        records = [json.loads(line, object_pairs_hook=_unique_object)
-                   for line in raw.decode().splitlines()]
         if (not records or records[0]["component"] != native_http.get("begin_marker")
                 or records[0]["message"] != NATIVE_STARTUP_SEPARATOR):
             raise ValueError("current-run native header missing")
@@ -769,6 +878,7 @@ def parse_native_ws_controls(
     pongs: list[int] = []
     seen: set[bytes] = set()
     previous_timestamp = 0
+    planned = _planned_ws_lifecycle(records, epochs, planned_reconnect_request_ns)
     for record in records:
         try:
             encoded = canonical_json_bytes(record)
@@ -801,7 +911,21 @@ def parse_native_ws_controls(
                  or component.startswith("nautilus_hyperliquid::websocket"))
                     and (level.upper() in ("WARN", "WARNING", "ERROR", "CRITICAL")
                          or "throttle" in message.lower() or "retry" in message.lower())):
-                raise ValueError("native WS retry/throttle/failure")
+                if canonical_json_bytes(record) not in planned:
+                    raise ValueError("native WS retry/throttle/failure")
+            if component == DATA_COMPONENT and message.startswith((
+                "WebSocket error:", "Failed targeted ", "Requested full WebSocket reconnect",
+            )):
+                raise ValueError("native data-owned WS failure")
+            if (component == WS_CONTROL_COMPONENT and message.startswith((
+                "Reconnect aborted", "Reconnect interrupted", "Backoff interrupted",
+                "Skipping reconnect handlers",
+            ))):
+                raise ValueError("reconnect lifecycle did not complete")
+            if (component == WS_CONTROL_COMPONENT
+                    and message.startswith(("Backing off", "Reconnection attempt"))
+                    and canonical_json_bytes(record) not in planned):
+                raise ValueError("unbound reconnect lifecycle")
         except (KeyError, TypeError, ValueError):
             blockers.add("WS_CONTROL_TRACE_AMBIGUITY_OR_FAILURE")
     if not pongs:
@@ -833,6 +957,55 @@ def parse_native_ws_controls(
     if not blockers:
         result["status"] = "PASS"
     return result
+
+
+def _planned_ws_lifecycle(
+    records: list[dict[str, Any]], epochs: list[dict[str, int]], request_ns: int | None,
+) -> set[bytes]:
+    """rc5 controller delay + first attempt, uniquely inside the requested gap."""
+    if type(request_ns) is not int or len(epochs) != 2:
+        return set()
+    candidates = [r for r in records if r["component"] == WS_CONTROL_COMPONENT
+                  and r["message"].startswith(("Backing off", "Reconnection attempt"))]
+    delays = [r for r in candidates if r["message"].startswith("Backing off")]
+    attempts = [r for r in candidates if r["message"].startswith("Reconnection attempt")]
+    if len(delays) > 1 or len(attempts) != 1:
+        return set()
+    attempt = attempts[0]
+    attempt_ns = _log_timestamp_ns(attempt["timestamp"])
+    if (attempt["level"] != "DEBUG"
+            or re.fullmatch(r"Reconnection attempt 1 of (unlimited|[1-9]\d*)",
+                            attempt["message"]) is None
+            or not request_ns <= epochs[0]["end_ns"] <= attempt_ns <= epochs[1]["start_ns"]):
+        return set()
+    if delays:
+        delay = delays[0]
+        match = re.fullmatch(r"Backing off for ((?:0|[1-9]\d*)(?:\.\d+)?)s\.\.\.",
+                             delay["message"])
+        delay_ns = _log_timestamp_ns(delay["timestamp"])
+        if (match is None or delay["level"] not in ("WARN", "WARNING")
+                or records.index(delay) >= records.index(attempt)
+                or not epochs[0]["end_ns"] <= delay_ns < attempt_ns
+                or float(match[1]) <= 0 or not math.isfinite(float(match[1]))
+                or delay_ns + math.ceil(float(match[1]) * 1e9) > attempt_ns):
+            return set()
+    return {canonical_json_bytes(r) for r in candidates}
+
+
+def _apply_ws_proof(provider: dict[str, Any], control: dict[str, Any]) -> None:
+    native = provider.get("native_http_evidence", {})
+    for key in ("provider_throttle_events", "transport_failures"):
+        if (control.get("status") != "PASS" or native.get("status") != "PASS"):
+            if provider.get(key) == 0:
+                provider.pop(key)
+    if control.get("status") != "PASS":
+        return
+    provider.update(ws_connections=1, ws_new_connections_per_60s=2,
+                    ws_active_plus_pending_subscriptions=100,
+                    ws_outbound_messages_per_60s=control["max_rolling_60s"],
+                    unrecovered_subscription_failures=0,
+                    unplanned_disconnects=0, oom_or_process_kill=0)
+    # Shared zeros require every owner. Preserve positives and unknown HTTP state.
 
 
 PASS = 0
@@ -985,6 +1158,85 @@ def _run_live(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
 
 
 
+@dataclass
+class _ResourceSchedule:
+    """Absolute measured slots, a finite tail, and no invented catch-up samples."""
+
+    overall_deadline: float
+    anchor: float | None = None
+    next_sample: float = 0.0
+    attempts: int = 0
+
+    @property
+    def deadline(self) -> float:
+        return min(self.overall_deadline, self.anchor + 930 if self.anchor is not None
+                   else self.overall_deadline)
+
+    def due(self, now: float) -> bool:
+        return now >= self.next_sample and now <= self.deadline and self.attempts < 33
+
+    def attempted(self, now: float, *, accepted: bool) -> None:
+        self.attempts += 1
+        if self.anchor is None and accepted:
+            self.anchor = now
+        self.next_sample = (now + 30 if self.anchor is None else
+                            self.anchor + (math.floor((now - self.anchor) / 30) + 1) * 30)
+
+    @staticmethod
+    def complete(resources: list[dict[str, Any]]) -> bool:
+        return (len(resources) >= 16
+                and resources[-1]["ts_ns"] - resources[0]["ts_ns"] >= 900_000_000_000
+                and all(0 < b["ts_ns"] - a["ts_ns"] <= 60_000_000_000
+                        for a, b in pairwise(resources)))
+
+
+@dataclass
+class _ResourceSampler:
+    previous_cpu: tuple[int, int] | None = None
+    swap_baseline: tuple[int, int] | None = None
+    initial_bytes: int = 0
+    initial_sample_ns: int | None = None
+
+    def collect(self, root: Path) -> dict[str, Any]:
+        memory = {line.split()[0].rstrip(":"): int(line.split()[1])
+                  for line in Path("/proc/meminfo").read_text().splitlines()}
+        cpu = [int(v) for v in Path("/proc/stat").read_text().splitlines()[0].split()[1:9]]
+        if len(cpu) != 8 or any(v < 0 for v in cpu):
+            raise ValueError("CPU fields incomplete")
+        current_cpu = (sum(cpu), cpu[3] + cpu[4])
+        cpu_percent = 0.0
+        if self.previous_cpu is not None:
+            delta = current_cpu[0] - self.previous_cpu[0]
+            idle = current_cpu[1] - self.previous_cpu[1]
+            if delta <= 0 or not 0 <= idle <= delta:
+                raise ValueError("CPU sampling is ambiguous")
+            cpu_percent = 100 * (1 - idle / delta)
+        swaps = dict(line.split() for line in Path("/proc/vmstat").read_text().splitlines())
+        current_swap = (int(swaps["pswpin"]), int(swaps["pswpout"]))
+        baseline = self.swap_baseline or current_swap
+        if any(current < start for current, start in zip(current_swap, baseline, strict=True)):
+            raise ValueError("swap sampling is ambiguous")
+        filesystem = os.statvfs("/")
+        total = filesystem.f_blocks * filesystem.f_frsize
+        used = (filesystem.f_blocks - filesystem.f_bfree) * filesystem.f_frsize
+        evidence_bytes = sum(p.stat().st_size for p in root.rglob("*") if p.is_file())
+        # Timestamp only after every field is actually measured successfully.
+        now = time.time_ns()
+        initial_ns = self.initial_sample_ns if self.initial_sample_ns is not None else now
+        initial_bytes = self.initial_bytes if self.initial_sample_ns is not None else evidence_bytes
+        duration = max(1, now - initial_ns) / 1e9
+        projected = used + max(0, evidence_bytes - initial_bytes) / duration * 604800
+        sample = dict(ts_ns=now, memory_used_percent=100 * (
+            1 - memory["MemAvailable"] / memory["MemTotal"]), cpu_percent=cpu_percent,
+            swap_activity=sum(current_swap) - sum(baseline), root_used_percent=100 * used / total,
+            root_7d_projection_percent=100 * projected / total)
+        if any(not math.isfinite(v) or v < 0 for v in sample.values()):
+            raise ValueError("resource measurement invalid")
+        self.previous_cpu, self.swap_baseline = current_cpu, baseline
+        self.initial_sample_ns, self.initial_bytes = initial_ns, initial_bytes
+        return sample
+
+
 async def _run_l0_qualification(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     """Use the existing production node/consumer only; never start a host service."""
     from nautilus_trader.common import logging_sync_to_disk
@@ -1020,13 +1272,10 @@ async def _run_l0_qualification(args: argparse.Namespace) -> tuple[int, dict[str
     resources: list[dict[str, Any]] = []
     sample_failures: list[str] = []
     queue_cohorts: list[dict[str, Any]] = []
-    previous_cpu: tuple[int, int] | None = None
-    swap_baseline: tuple[int, int] | None = None
-    initial_bytes = 0
-    initial_sample_ns = None
-    next_sample = 0.0
+    sampler = _ResourceSampler()
+    schedule = _ResourceSchedule(started + args.run_seconds)
     try:
-        while not run.done() and time.monotonic() - started < args.run_seconds:
+        while not run.done() and time.monotonic() < schedule.deadline:
             now = time.time_ns()
             if file_identity is None and log_path.exists():
                 state = log_path.lstat()
@@ -1035,48 +1284,23 @@ async def _run_l0_qualification(args: argparse.Namespace) -> tuple[int, dict[str
             if capture.warmup_health.get("readiness") == "READY" and not observation.requests:
                 capture.request_l0_reconnect()
             if observation.window_start_ns is not None:
-                if time.monotonic() >= next_sample:
+                if schedule.due(time.monotonic()):
+                    accepted = False
                     try:
-                        memory = {line.split()[0].rstrip(":"): int(line.split()[1])
-                                  for line in Path("/proc/meminfo").read_text().splitlines()}
-                        cpu = [int(v) for v in Path("/proc/stat").read_text().splitlines()[0]
-                               .split()[1:9]]
-                        current_cpu = (sum(cpu), cpu[3] + cpu[4])
-                        cpu_percent = 0.0
-                        if previous_cpu is not None:
-                            delta = current_cpu[0] - previous_cpu[0]
-                            if delta <= 0:
-                                raise ValueError("CPU sampling is ambiguous")
-                            cpu_percent = 100 * (1 - (current_cpu[1] - previous_cpu[1]) / delta)
-                        previous_cpu = current_cpu
-                        swaps = dict(line.split() for line in Path("/proc/vmstat").read_text()
-                                     .splitlines())
-                        current_swap = (int(swaps["pswpin"]), int(swaps["pswpout"]))
-                        if swap_baseline is None:
-                            swap_baseline = current_swap
-                        swap_delta = sum(current_swap) - sum(swap_baseline)
-                        filesystem = os.statvfs("/")
-                        total = filesystem.f_blocks * filesystem.f_frsize
-                        used = (filesystem.f_blocks - filesystem.f_bfree) * filesystem.f_frsize
-                        evidence_bytes = sum(p.stat().st_size for p in root.rglob("*")
-                                             if p.is_file())
-                        if initial_sample_ns is None:
-                            initial_sample_ns, initial_bytes = now, evidence_bytes
-                        duration = max(1, now - initial_sample_ns) / 1e9
-                        projected = (used + max(0, evidence_bytes - initial_bytes)
-                                     / duration * 604800)
-                        resources.append(dict(
-                            ts_ns=now, memory_used_percent=100 * (
-                                1 - memory["MemAvailable"] / memory["MemTotal"]),
-                            cpu_percent=cpu_percent, swap_activity=swap_delta,
-                            root_used_percent=100 * used / total,
-                            root_7d_projection_percent=100 * projected / total,
-                        ))
-                        queue_cohorts.append(dict(capture.l0_health["queue_states"]))
-                    except (OSError, KeyError, ValueError, ZeroDivisionError):
+                        sample = sampler.collect(root)
+                        cohort = dict(capture.l0_health["queue_states"])
+                        resources.append(sample)
+                        queue_cohorts.append(cohort)
+                        accepted = True
+                    except (OSError, KeyError, ValueError, ZeroDivisionError, IndexError):
                         sample_failures.append("TARGET_RESOURCE_SAMPLE_INCOMPLETE")
-                    next_sample = time.monotonic() + 60
-                if now >= observation.window_start_ns + 900_000_000_000:
+                    schedule.attempted(time.monotonic(), accepted=accepted)
+                # The original BAR cutoff cannot preempt the final measured sample.
+                if (now >= observation.window_start_ns + 900_000_000_000
+                        and schedule.complete(resources)):
+                    break
+                if schedule.attempts >= 33:
+                    sample_failures.append("TARGET_RESOURCE_SAMPLE_BOUND_EXHAUSTED")
                     break
             await asyncio.sleep(0.1)
     finally:
@@ -1105,15 +1329,29 @@ async def _run_l0_qualification(args: argparse.Namespace) -> tuple[int, dict[str
     counts = {kind: sum(r["kind"] == kind for r in registrations)
               for kind in ("bar", "bbo", "trade", "depth10")}
     unique = {(r["kind"], r["identity"]) for r in registrations}
+    expected_registrations = {("bar", bar) for bar in observation.bars}
+    expected_registrations.update(
+        (kind, expression.instrument_id) for expression in application.snapshot.expressions
+        for kind in ("bbo", "trade", "depth10")
+    )
     forecast = {}
     if (counts == {"bar": 40, "bbo": 20, "trade": 20, "depth10": 20}
-            and len(unique) == 100 and set(health["registered_bars"]) == set(observation.bars)):
+            and len(unique) == 100 and unique == expected_registrations
+            and set(health["registered_bars"]) == set(observation.bars)):
         forecast = dict(bars=40, bbo=20, trade=20, depth10=20,
                         native_subscriptions=100, rc5_source=RC5_SOURCE)
     control: dict[str, Any] = dict(status="INCOMPLETE", blockers=["WS_CONTROL_BINDING_MISSING"])
     try:
-        records = [json.loads(line, object_pairs_hook=_unique_object)
-                   for line in log_path.read_text().splitlines()]
+        binding = native["log_binding"]
+        if binding["status"] != "PASS":
+            raise ValueError("native file binding is unproven")
+        raw, records, file_state = _read_bound_native_log(
+            log_path, file_identity=tuple(binding["file_identity"]),
+            begin_marker=binding["begin_marker"],
+        )
+        if (sha256_hex(raw) != binding["sha256"]
+                or list(file_state) != binding["file_state"]):
+            raise ValueError("native forecast file changed")
         first_ns = _log_timestamp_ns(records[0]["timestamp"])
         end_ns = max(_log_timestamp_ns(r["timestamp"]) for r in records) + 1
         if (not forecast or observation.disconnected_ns is None
@@ -1130,6 +1368,7 @@ async def _run_l0_qualification(args: argparse.Namespace) -> tuple[int, dict[str
             raise ValueError("extra/unplanned data connection epoch")
         epochs = [dict(start_ns=first_ns, end_ns=observation.disconnected_ns),
                   dict(start_ns=observation.connected_ns, end_ns=end_ns)]
+        planned = _planned_ws_lifecycle(records, epochs, observation.request_ns)
         native_outbound = [(first_ns, 0)]
         # Retain both exact 100-request cohorts as an upper bound in every window.
         registration_upper = 200
@@ -1137,28 +1376,31 @@ async def _run_l0_qualification(args: argparse.Namespace) -> tuple[int, dict[str
         # conservatively including delayed/catch-up ticks.
         heartbeat_upper = (end_ns - first_ns + 29_999_999_999) // 30_000_000_000 + 1
         for r in records:
-            if (r["component"] == "nautilus_hyperliquid::websocket::handler"
-                    and re.fullmatch(r"Sending unsubscribe payload \([0-9]+ bytes\)",
-                                     r["message"])):
+            if r["message"].startswith("Sending unsubscribe payload"):
+                if (r["component"] != "nautilus_hyperliquid::websocket::handler"
+                        or r["level"] != "DEBUG"
+                        or re.fullmatch(r"Sending unsubscribe payload \([0-9]+ bytes\)",
+                                        r["message"]) is None):
+                    raise ValueError("unbound native unsubscribe forecast")
                 registration_upper += 1
-            if r["level"] in ("WARN", "WARNING", "ERROR", "CRITICAL"):
-                raise ValueError("native warning/error prevents zero-failure proof")
+            if (r["level"] in ("WARN", "WARNING", "ERROR", "CRITICAL")
+                    and canonical_json_bytes(r) not in planned
+                    and (r["component"] not in (HTTP_COMPONENT, DATA_COMPONENT)
+                         or _instrument_bookkeeping(r["component"], r["level"], r["message"])
+                         or _non_http_data_record(r["component"], r["message"]))):
+                sample_failures.append("NATIVE_NON_HTTP_SAFETY_FAILURE_OR_AMBIGUITY")
         control = parse_native_ws_controls(
             log_path, native_http=native, epochs=epochs,
             outbound_forecast=native_outbound, close_reserve=2,
             native_constant_upper_bound=heartbeat_upper + registration_upper,
+            planned_reconnect_request_ns=observation.request_ns,
         )
         control["adapter_heartbeat_whole_run_upper_bound"] = heartbeat_upper
         control["socket_events"] = socket_events
-        if control["status"] == "PASS":
-            provider.update(ws_connections=1, ws_new_connections_per_60s=2,
-                            ws_active_plus_pending_subscriptions=100,
-                            ws_outbound_messages_per_60s=control["max_rolling_60s"],
-                            provider_throttle_events=0, unrecovered_subscription_failures=0,
-                            unplanned_disconnects=0, oom_or_process_kill=0)
     except (OSError, KeyError, TypeError, ValueError):
         sample_failures.append("WS_NATIVE_FORECAST_EPOCH_OR_ZERO_PREDICATE_INCOMPLETE")
     provider["native_ws_control_evidence"] = control
+    _apply_ws_proof(provider, control)
     capture_health = capture.capture_health
     provider["storage_failures"] = capture_health.get("storage_failures")
     queue = application.e4_runtime._queue

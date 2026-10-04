@@ -29,6 +29,8 @@ from trader_assist_v0.nautilus_e4.capture import SubscriptionPolicy
 from trader_assist_v0.nautilus_e4.contracts import (
     POST_TERMINAL_MICRO_NS,
     PRE_DECISION_RETENTION_NS,
+    AdmittedEvent,
+    DataKind,
     PitUniverseSnapshot,
     RunManifest,
 )
@@ -1160,6 +1162,7 @@ def _compose_e4_three_setup_application(
         assert isinstance(projection, _DataOnlyProjection)
         projection.on_processed = capture.record_l0_processed
         runtime._queue = _ObservedQueue(runtime._queue.maxsize)
+        capture.set_admitted_event_observer(_DataOnlyBarObserver(runtime))
         _journal(
             application.logger,
             "STRATEGY_EVALUATION",
@@ -1205,6 +1208,24 @@ class _DataOnlyComposition:
 
     def close(self) -> None:
         self.evidence.close()
+
+
+@dataclass(frozen=True)
+class _DataOnlyBarObserver:
+    """Select downstream demand after unchanged full E4 admission and retention."""
+
+    runtime: E4ThreeSetupRuntime
+
+    def __call__(
+        self, event: AdmittedEvent, provider_instrument: object | None = None,
+    ) -> None:
+        if not isinstance(event, AdmittedEvent) or not isinstance(event.source.data_kind, DataKind):
+            raise ThreeSetupProductionError("invalid typed E4 admission")
+        if event.source.data_kind is DataKind.BAR:
+            self.runtime.offer_admission(event, provider_instrument)
+        elif event.source.data_kind not in (DataKind.BBO, DataKind.TRADE,
+                                       DataKind.DEPTH10, DataKind.CONTEXT):
+            raise ThreeSetupProductionError("unsupported E4 downstream demand")
 
 
 class _DataOnlyProjection(E4MarketTruthProjection):
