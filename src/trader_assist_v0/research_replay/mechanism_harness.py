@@ -23,6 +23,7 @@ from .dev_lifecycle import (
     DevVisibilityPolicy,
     require_predecessor,
 )
+from .dev_reporting import ProspectiveSelectionCandidate, select_prospective_candidate
 from .lifecycle import BlockPlan
 from .mechanism import (
     _evaluate_mechanism_candidate,
@@ -361,7 +362,26 @@ def summarize_mechanism(
     pairs: tuple[MechanismPair, ...],
     pre: DevPreregistration,
     inventory: DatasetInventoryManifest,
+    *,
+    run: MechanismRunSpec,
+    candidates: tuple[MechanismCandidate, ...],
 ) -> MechanismSummary:
+    if (
+        pre.candidate_order != run.candidate_hashes
+        or run.candidate_hashes != tuple(c.record_hash for c in candidates)
+        or len(pre.complexity) != len(candidates)
+        or tuple(c.participation.code for c in candidates) != CODES
+        or pre.champion_hash != candidates[0].record_hash
+        or any(
+            (c.config_hash, c.risk_hash) != (run.config_hash, pre.original_risk_hash)
+            for c in candidates
+        )
+    ):
+        raise ValueError("exact prospective candidate/order/complexity binding required")
+    identities = {
+        c.participation.code: (c.record_hash, i, pre.complexity[i])
+        for i, c in enumerate(candidates)
+    }
     ops = {o.record_hash: o for o in roster}
     by_cell: dict[tuple[str, str], list[MechanismResult]] = defaultdict(list)
     for r in results:
@@ -531,14 +551,41 @@ def summarize_mechanism(
     )
     champion = [m for m in metrics if m.code == CHAMPION]
     coherent = any(m.coherent for m in champion)
-    leader = any(
-        m.coherent
-        and m.paired_delta_r is not None
-        and m.paired_delta_r
-        > max(pre.gates.minimum_incremental_r, pre.gates.equivalence_tolerance_r)
-        for m in metrics
-        if m.code != CHAMPION
-    )
+    selections = []
+    for cell in sorted({m.cell for m in metrics}):
+        cell_ops = [o for o in roster if _cell(o) == cell]
+        edge_candidates = [c for c in candidates if applicable(cell_ops[0], c.participation.code)]
+        cell_metrics = {m.code: m for m in metrics if m.cell == cell}
+        if len(cell_metrics) != sum(m.cell == cell for m in metrics) or set(cell_metrics) != {
+            c.participation.code for c in edge_candidates
+        }:
+            raise ValueError("complete unique applicable comparison edge required")
+        rows = []
+        for c in edge_candidates:
+            code = c.participation.code
+            m = cell_metrics[code]
+            candidate_hash, order, complexity = identities[code]
+            rows.append(
+                ProspectiveSelectionCandidate(
+                    candidate_hash=candidate_hash,
+                    preregistered_order=order,
+                    complexity=complexity,
+                    sufficient=m.sufficient,
+                    eligible=m.coherent,
+                    after_cost_thesis_r=m.after_cost_thesis_r,
+                    paired_delta_r=ZERO if code == CHAMPION else m.paired_delta_r,
+                )
+            )
+        selections.append(
+            select_prospective_candidate(
+                tuple(rows),
+                champion_hash=pre.champion_hash,
+                equivalence_tolerance_r=pre.gates.equivalence_tolerance_r,
+                minimum_incremental_r=pre.gates.minimum_incremental_r,
+            )
+        )
+    leader = any(s.disposition == "RESEARCH_LEADER" for s in selections)
+    keep = any(s.disposition == "KEEP_CURRENT" for s in selections)
     disposition = (
         "MORE_EVIDENCE_REQUIRED"
         if unavailable_cohorts or any(m.incomplete_count for m in metrics)
@@ -547,7 +594,7 @@ def summarize_mechanism(
         else "RESEARCH_LEADER"
         if leader
         else "KEEP_CURRENT"
-        if coherent
+        if keep
         else "REJECT"
     )
     stop = performance and sufficient and not coherent and not leader
@@ -688,7 +735,13 @@ def authenticate_bundle(bundle: MechanismBundle) -> None:
     if (bundle.roster, bundle.results, bundle.pairs) != (roster, results, pairs):
         raise ValueError("incomplete/forged causal denominator or modeled economics")
     expected = summarize_mechanism(
-        roster, results, pairs, bundle.ledger.preregistration, bundle.inventory
+        roster,
+        results,
+        pairs,
+        bundle.ledger.preregistration,
+        bundle.inventory,
+        run=bundle.run,
+        candidates=bundle.candidates,
     )
     if bundle.summary != expected or bundle.artifacts != _artifacts(
         bundle.observations, roster, results, pairs, expected
@@ -724,7 +777,9 @@ def replay_mechanism(
         s0_preparation_hash=s0_preparation_hash,
     )
     roster, results, pairs = _outputs(rows, run, config, candidates, as_of_ns=as_of_ns)
-    summary = summarize_mechanism(roster, results, pairs, ledger.preregistration, inventory)
+    summary = summarize_mechanism(
+        roster, results, pairs, ledger.preregistration, inventory, run=run, candidates=candidates
+    )
     values: dict[str, Any] = dict(
         version="MECHANISM_BUNDLE_V1",
         run=run,

@@ -731,7 +731,9 @@ def test_registered_risk_diagnostics_and_hard_stop(tmp_path):
         r1_ref=canonical,
         run_authority_ref=canonical,
     )
-    summary = harness.summarize_mechanism((op,), results, pairs, pre, args[2])
+    summary = harness.summarize_mechanism(
+        (op,), results, pairs, pre, args[2], run=args[0], candidates=args[7]
+    )
     baseline = next(m for m in summary.metrics if m.code == BASELINES[2])
     assert baseline.drawdown_r > 0 and baseline.tail_loss_r > 0
     assert baseline.longest_losing_streak == 1 and baseline.fee_cash > 0
@@ -741,3 +743,228 @@ def test_registered_risk_diagnostics_and_hard_stop(tmp_path):
     real_run = changed(args[0], evidence_kind="RIGHTS_AUTHORIZED_DEV")
     with pytest.raises(ValueError):
         read((real_run, *args[1:]))
+
+
+def selection_fixture(tmp_path, edges, *, complexity=(3, 1, 1, 1, 1), empirical=True):
+    """In-memory reporting evidence; never admitted as an empirical replay bundle."""
+    args = fixture(tmp_path, count=4, config_updates={"decision_start_ns": STEP * 2})
+    rows = read(args)
+    prototype = opportunity(args, rows)
+    ops, results = [], []
+    for i, (family, mode, scores) in enumerate(edges):
+        op = changed(
+            prototype,
+            family=family,
+            mode=mode,
+            market_event_id=f"event-{i}",
+            thesis_id=f"thesis-{i}",
+            cluster_id=f"cluster-{i}",
+        )
+        ops.append(op)
+        for c in args[7]:
+            r = pure._evaluate_mechanism_candidate(
+                op, c, op.decisions, rows, args[6], as_of_ns=STEP * 100
+            )
+            value = Decimal(scores.get(c.participation.code, "0"))
+            if pure.applicable(op, c.participation.code):
+                r = changed(
+                    r,
+                    entry=None,
+                    exit=None,
+                    terminal="COMPLETE",
+                    net_r=value,
+                    net_cash=value * r.original_risk_cash,
+                    funding_cash=Decimal(0),
+                    additional_cash=Decimal(0),
+                )
+            results.append(r)
+    pairs = harness.pair_results(tuple(ops), tuple(results), args[7])
+    canonical = "https://github.com/woshixiong/trader-assist-v0/issues/161#issuecomment-1"
+    pre = changed(
+        args[3].preregistration,
+        complexity=complexity,
+        mandatory_cells=tuple(sorted({harness._cell(o) for o in ops})),
+        gates=changed(
+            args[3].preregistration.gates,
+            equivalence_tolerance_r=Decimal("0.1"),
+            minimum_incremental_r=Decimal("0.2"),
+        ),
+        **(
+            {
+                "evidence_kind": "RIGHTS_AUTHORIZED_DEV",
+                "r0_ref": canonical,
+                "r1_ref": canonical,
+                "run_authority_ref": canonical,
+            }
+            if empirical
+            else {}
+        ),
+    )
+    return args, tuple(ops), tuple(results), pairs, pre
+
+
+def selection_summary(data, **updates):
+    args, ops, results, pairs, pre = data
+    return harness.summarize_mechanism(
+        ops,
+        results,
+        pairs,
+        updates.pop("pre", pre),
+        args[2],
+        run=updates.pop("run", args[0]),
+        candidates=updates.pop("candidates", args[7]),
+        **updates,
+    )
+
+
+@pytest.mark.parametrize("baseline_r", ["1.05", "0.95", "0.9"])
+def test_edge_simpler_equivalence_beats_old_threshold(tmp_path, baseline_r):
+    data = selection_fixture(
+        tmp_path, [("SWEEP_RECLAIM", "NOT_APPLICABLE", {CHAMPION: "1", BASELINES[0]: baseline_r})]
+    )
+    summary = selection_summary(data)
+    assert summary.disposition == "RESEARCH_LEADER" and not summary.stop_broad_optimization
+    metric = next(m for m in summary.metrics if m.code == BASELINES[0])
+    assert metric.paired_delta_r < max(
+        data[-1].gates.minimum_incremental_r, data[-1].gates.equivalence_tolerance_r
+    )
+    assert summary == selection_summary(data)
+
+
+@pytest.mark.parametrize(
+    "baseline_r,expected", [("1.05", "KEEP_CURRENT"), ("1.2", "RESEARCH_LEADER")]
+)
+def test_edge_complex_challenger_minimum_boundary(tmp_path, baseline_r, expected):
+    data = selection_fixture(
+        tmp_path,
+        [("SWEEP_RECLAIM", "NOT_APPLICABLE", {CHAMPION: "1", BASELINES[0]: baseline_r})],
+        complexity=(1, 3, 3, 3, 3),
+    )
+    assert selection_summary(data).disposition == expected
+
+
+def test_edge_ineligible_champion_no_unproven_alternate(tmp_path):
+    data = selection_fixture(
+        tmp_path,
+        [
+            (
+                "BREAKOUT_RETEST",
+                "STANDARD",
+                {CHAMPION: "-0.01", BASELINES[1]: "0.05", BASELINES[2]: "0.04"},
+            )
+        ],
+        complexity=(1, 2, 3, 3, 3),
+    )
+    summary = selection_summary(data)
+    assert summary.disposition == "REJECT" and summary.stop_broad_optimization
+
+
+def test_complete_edges_isolated_and_global_aggregation(tmp_path, monkeypatch):
+    observed = []
+    owner = harness.select_prospective_candidate
+
+    def spy(rows, **kwargs):
+        decision = owner(rows, **kwargs)
+        observed.append((rows, decision))
+        return decision
+
+    monkeypatch.setattr(harness, "select_prospective_candidate", spy)
+    edges = [
+        (
+            "BREAKOUT_RETEST",
+            "MICRO_FAST",
+            {CHAMPION: "1", BASELINES[1]: "0.95", BASELINES[2]: "0.9"},
+        ),
+        ("BREAKOUT_RETEST", "STANDARD", {CHAMPION: "1", BASELINES[1]: "0.1", BASELINES[2]: "0.1"}),
+        ("RANGE_EDGE_REJECTION", "NOT_APPLICABLE", {CHAMPION: "1", BASELINES[3]: "0.1"}),
+    ]
+    data = selection_fixture(tmp_path, edges)
+    assert selection_summary(data).disposition == "RESEARCH_LEADER"
+    candidates = data[0][7]
+    breakout_hashes = {candidates[i].record_hash for i in (0, 2, 3)}
+    breakout = [d for rows, d in observed if {r.candidate_hash for r in rows} == breakout_hashes]
+    assert len(breakout) == 2
+    assert {d.disposition for d in breakout} == {"KEEP_CURRENT", "RESEARCH_LEADER"}
+    original_micro = next(d for d in breakout if d.disposition == "RESEARCH_LEADER")
+    observed.clear()
+    altered = selection_fixture(
+        tmp_path,
+        [
+            edges[0],
+            ("BREAKOUT_RETEST", "STANDARD", {CHAMPION: "1", BASELINES[1]: "9", BASELINES[2]: "10"}),
+            edges[2],
+        ],
+        complexity=(3, 1, 1, 1, 0),
+    )
+    assert selection_summary(altered).disposition == "RESEARCH_LEADER"
+    assert observed[0][1] == original_micro  # Sorted MICRO_FAST edge is unaffected.
+    assert {r.candidate_hash for r in observed[0][0]} == breakout_hashes
+    assert (
+        selection_summary(selection_fixture(tmp_path, [edges[1], edges[2]])).disposition
+        == "KEEP_CURRENT"
+    )
+
+
+@pytest.mark.parametrize("attack", ["reorder", "run_hashes", "duplicate", "complexity"])
+def test_summary_exact_prospective_binding(tmp_path, attack):
+    data = selection_fixture(
+        tmp_path, [("SWEEP_RECLAIM", "NOT_APPLICABLE", {CHAMPION: "1", BASELINES[0]: "0.95"})]
+    )
+    args = data[0]
+    kwargs = {}
+    if attack == "reorder":
+        kwargs["candidates"] = (args[7][0], *reversed(args[7][1:]))
+    elif attack == "run_hashes":
+        kwargs["run"] = args[0].model_copy(
+            update={"candidate_hashes": tuple(reversed(args[0].candidate_hashes))}
+        )
+    elif attack == "duplicate":
+        kwargs["candidates"] = (args[7][0],) * 5
+    else:
+        kwargs["pre"] = data[-1].model_copy(update={"complexity": (1,)})
+    with pytest.raises(ValueError, match="binding"):
+        selection_summary(data, **kwargs)
+
+
+def test_synthetic_insufficient_incomplete_reject_and_revalidation(tmp_path):
+    edges = [("SWEEP_RECLAIM", "NOT_APPLICABLE", {CHAMPION: "1", BASELINES[0]: "0.95"})]
+    data = selection_fixture(tmp_path, edges, empirical=False)
+    summary = selection_summary(data)
+    assert (
+        summary.disposition == "INSUFFICIENT"
+        and not summary.performance_evidence
+        and not summary.stop_broad_optimization
+    )
+    real = selection_fixture(tmp_path, edges)
+    assert (
+        selection_summary(real, pre=changed(real[-1], minimum_events=2)).disposition
+        == "INSUFFICIENT"
+    )
+    args, ops, results, pairs, pre = real
+    missing = tuple(
+        changed(r, terminal="NOT_EVALUABLE", net_cash=None, net_r=None)
+        if r.code == BASELINES[0]
+        else r
+        for r in results
+    )
+    incomplete = (args, ops, missing, harness.pair_results(ops, missing, args[7]), pre)
+    assert selection_summary(incomplete).disposition == "MORE_EVIDENCE_REQUIRED"
+    assert (
+        selection_summary(
+            selection_fixture(
+                tmp_path,
+                [("SWEEP_RECLAIM", "NOT_APPLICABLE", {CHAMPION: "-1", BASELINES[0]: "-2"})],
+            )
+        ).disposition
+        == "REJECT"
+    )
+    bundle = replay(args)
+    assert bundle.fingerprint == replay(args).fingerprint
+    forged = changed(
+        bundle.summary,
+        disposition="RESEARCH_LEADER"
+        if bundle.summary.disposition != "RESEARCH_LEADER"
+        else "REJECT",
+    )
+    with pytest.raises(ValueError):
+        changed(bundle, summary=forged)

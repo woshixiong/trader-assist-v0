@@ -201,3 +201,117 @@ def test_rights_visibility_withholds_channels_and_enforces_bounds():
     bundle, policy = bundle_fixture(visibility=changed(dev_visibility(), max_bytes=1))
     with pytest.raises(ValueError, match="byte"):
         canonical_summary(bundle, policy, completed(bundle))
+
+
+def test_retained_equivalence_canonical_golden_before_owner_extraction():
+    from trader_assist_v0.contracts.common import sha256_hex
+
+    summary = summary_for(cash=(Decimal(1), Decimal("1.01")))
+    assert summary.disposition == "RESEARCH_LEADER"
+    assert summary.record_hash == "e86ba0847c5314b3b53245838535f825fdbdd3dbc0462808ad2876cad39af04b"
+    assert sha256_hex(canonical_json_bytes(summary.model_dump(mode="json"))) == (
+        "4501494df7222a744cbeb1e0008557909cf9da29dfe5d97a9d2bf8a8b23d6a89"
+    )
+
+
+def selection_row(name, order, complexity, score, delta, **updates):
+    from trader_assist_v0.research_replay.dev_reporting import ProspectiveSelectionCandidate
+
+    return ProspectiveSelectionCandidate(
+        candidate_hash=name,
+        preregistered_order=order,
+        complexity=complexity,
+        sufficient=updates.get("sufficient", True),
+        eligible=updates.get("eligible", True),
+        after_cost_thesis_r=Decimal(score) if score is not None else None,
+        paired_delta_r=Decimal(delta) if delta is not None else None,
+    )
+
+
+def select_rows(*rows, minimum="0.2", tolerance="0.1"):
+    from trader_assist_v0.research_replay.dev_reporting import select_prospective_candidate
+
+    return select_prospective_candidate(
+        rows,
+        champion_hash="champion",
+        equivalence_tolerance_r=Decimal(tolerance),
+        minimum_incremental_r=Decimal(minimum),
+    )
+
+
+def test_shared_selector_inclusive_band_complexity_order_and_incremental_boundaries():
+    champion = selection_row("champion", 0, 3, "1", "0")
+    simpler = selection_row("simple", 2, 1, "0.9", "-0.1")
+    assert select_rows(champion, simpler).selected_hash == "simple"
+    assert select_rows(champion, simpler) == select_rows(champion, simpler)
+    assert (
+        select_rows(champion, selection_row("simple", 2, 1, "0.899", "-0.101")).selected_hash
+        == "champion"
+    )
+    tie = selection_row("tie", 4, 1, "1", "0")
+    assert select_rows(champion, simpler, tie).selected_hash == "simple"
+    # More complex equivalent candidate cannot cross the incremental gate.
+    challenger = selection_row("complex", 3, 4, "1.1", "0.1")
+    assert select_rows(champion, challenger).selected_hash == "champion"
+    assert (
+        select_rows(champion, selection_row("complex", 3, 4, "1.2", "0.2")).selected_hash
+        == "complex"
+    )
+    bad_champion = selection_row("champion", 0, 3, "1", "0", eligible=False)
+    # No fallback to a second challenger after the best eligible choice fails.
+    fallback = select_rows(bad_champion, challenger, selection_row("other", 4, 5, "1.05", "0.3"))
+    assert fallback.selected_hash is None and fallback.disposition == "REJECT"
+    assert (
+        select_rows(champion, selection_row("simple", 1, 1, "1", "0", sufficient=False)).disposition
+        == "INSUFFICIENT"
+    )
+    assert (
+        select_rows(champion, selection_row("simple", 1, 1, None, None)).disposition
+        == "MORE_EVIDENCE_REQUIRED"
+    )
+    assert (
+        select_rows(
+            bad_champion, selection_row("simple", 1, 1, "1", "0", eligible=False)
+        ).disposition
+        == "REJECT"
+    )
+
+
+@pytest.mark.parametrize(
+    "malformation",
+    [
+        "empty",
+        "duplicate",
+        "unsorted",
+        "negative_complexity",
+        "negative_order",
+        "nan",
+        "negative_gate",
+        "wrong_champion",
+    ],
+)
+def test_shared_selector_rejects_malformed_inputs(malformation):
+    from dataclasses import replace
+
+    a = selection_row("champion", 0, 3, "1", "0")
+    b = selection_row("simple", 1, 1, "1", "0")
+    rows = (a, b)
+    kwargs = {}
+    if malformation == "empty":
+        rows = ()
+    elif malformation == "duplicate":
+        rows = (a, replace(b, candidate_hash="champion"))
+    elif malformation == "unsorted":
+        rows = (a, replace(b, preregistered_order=0))
+    elif malformation == "negative_complexity":
+        rows = (a, replace(b, complexity=-1))
+    elif malformation == "negative_order":
+        rows = (replace(a, preregistered_order=-1), b)
+    elif malformation == "nan":
+        rows = (a, replace(b, after_cost_thesis_r=Decimal("NaN")))
+    elif malformation == "negative_gate":
+        kwargs = {"minimum": "-1"}
+    elif malformation == "wrong_champion":
+        rows = (b,)
+    with pytest.raises(ValueError):
+        select_rows(*rows, **kwargs)

@@ -1,9 +1,14 @@
 # G0 external mechanism replay V1
 
 Package `C_G0_EXTERNAL_MECHANISM_REPLAY_1` adds an offline external-bar research
-route. [Plan V2](https://github.com/woshixiong/trader-assist-v0/issues/161#issuecomment-5987160672)
-inherits [Plan V1](https://github.com/woshixiong/trader-assist-v0/issues/161#issuecomment-5985506847)
-semantics unchanged, with [fresh V2 Pre-code PASS](https://github.com/woshixiong/trader-assist-v0/issues/161#issuecomment-5987332321).
+route. [Plan V3](https://github.com/woshixiong/trader-assist-v0/issues/161#issuecomment-5987565251),
+[Refreeze 2](https://github.com/woshixiong/trader-assist-v0/issues/161#issuecomment-5987514882)
+and [fresh V3 Pre-code PASS](https://github.com/woshixiong/trader-assist-v0/issues/161#issuecomment-5987760911)
+retain the V1/V2 research semantics and move full/native validation to qualified
+GitHub CI. [Refreeze 3 / Repair 1](https://github.com/woshixiong/trader-assist-v0/issues/161#issuecomment-5988276922),
+[Plan V4](https://github.com/woshixiong/trader-assist-v0/issues/161#issuecomment-5988355720)
+and [fresh V4 Pre-code PASS](https://github.com/woshixiong/trader-assist-v0/issues/161#issuecomment-5993379947)
+repair shared reporting ownership and this document's final topology.
 [Issue #280 V1.2](https://github.com/woshixiong/trader-assist-v0/issues/280) controls
 rights, staged disclosure, preregistration and the permitted evidence claim.
 
@@ -11,7 +16,9 @@ The route claims `MECHANISM_VALIDATION`; every economic result/fill is labeled
 `SYNTHETIC_VENUE_OVERLAY`. Generated engineering fixtures cannot establish an
 empirical Strategy edge or select a research leader. There is no certification,
 native Hyperliquid execution, production promotion, parameter optimization,
-S2–S5, ML, provider, dependency, workflow, service or order interface.
+S2–S5, ML, provider, dependency, service or order interface. The sole workflow
+addition is the retained native DEV regression on the existing qualified E4
+CI surface; it adds no execution or production authority.
 
 ## Owners and APIs
 
@@ -46,9 +53,34 @@ KERNEL_SCHEMA_VERSION=1
 `StrategyPackageManifest`, `scan_cross_section`, scanner continuation and
 `evaluate_strategy` retain Strategy ownership. No Setup logic or thresholds are
 copied. `replay_dev`, `_native_candidate` and native fills remain unchanged.
-The sole existing-file change binds the historical R2B scope test to its reviewed
-HEAD; inventory/access behavior is unchanged. External rows always retain
-`EXTERNAL_REFERENCE` ownership.
+The historical R2B inventory scope guard was absorbed upstream by PR #294;
+`tests/test_research_inventory_manifest.py` is absent from the PR #295 diff and
+is not edited by Repair 1. Its original historical allowlist and inventory/access
+protections remain intact. External rows retain `EXTERNAL_REFERENCE` ownership.
+
+`dev_reporting.select_prospective_candidate` is the sole prospective
+simpler-on-equivalence selection owner. Retained `summarize_dev` delegates with
+unchanged valid-input output bytes. `summarize_mechanism` receives keyword `run`
+and `candidates` and requires `pre.candidate_order == run.candidate_hashes ==
+tuple(c.record_hash for c in candidates)` with exact complexity alignment.
+Eligibility stays caller-owned. The pure helper filters eligible candidates,
+forms the inclusive preregistered equivalence band around best after-cost Thesis
+R, and selects lowest preregistered complexity then stable preregistered order.
+A non-simpler challenger below the strict minimum incremental gate falls back
+only to eligible Champion, with no second-challenger fallback. A genuinely
+simpler equivalent candidate may win even with a small negative paired delta.
+
+Package C calls that helper independently for each existing
+family/mode/side/regime cell: Champion versus sweep; Champion versus both close
+and Donchian within each breakout mode; Champion versus range. No unrelated
+family/mode participates in another edge. Champion's selector-only self delta
+is zero; diagnostic paired metrics remain unchanged. Global disposition
+aggregates only edge decisions, after unavailable/incomplete MORE_EVIDENCE and
+insufficient/non-performance gates: any selected baseline gives RESEARCH_LEADER,
+otherwise any selected Champion gives KEEP_CURRENT, otherwise REJECT. Synthetic
+engineering evidence cannot establish empirical selection. Sufficient performance
+evidence with no coherent Champion and no edge-selected baseline retains the
+hard stop and diagnostic action, with no S2–S5 progression.
 
 ## Access before source I/O
 
@@ -171,5 +203,22 @@ current scanner/kernel owners, access spies, claims, causal prefixes, matched
 risk/model arithmetic, same-bar/gap behavior, omission/tamper/fingerprint and
 visibility. Retained native replay, DEV lifecycle/reporting, R2B inventory and
 kernel/scanner tests prove unchanged owners. No real data is opened for this
-package. Required existing CI and fresh Final Independent Review remain gates;
+package. The final candidate includes the unchanged E4 step
+`Retained native DEV replay exact-rc5 qualification`, executing exactly:
+
+```text
+/tmp/trader-assist-e4-venv/bin/python -m pytest -q tests/test_research_replay_dev_harness.py::test_matched_s0_dev_real_native_results_and_fingerprints
+```
+
+It runs after existing Linux x86_64 / Python3.12 / Nautilus 2.0.0rc5 identity
+proof, using the existing hashed environment, with failure propagated to the
+job and no conditionalization or broad test expansion. V0 contracts CI is the
+authoritative full Ubuntu/Python3.12 repository pytest+mypy surface; E4 is the
+authoritative retained native rc5 surface. The selected test must execute and
+pass, not merely skip. Failed-head CI PASS is historical evidence and cannot
+accept a repaired head. All required checks must PASS on the repaired exact
+HEAD before fresh Final Independent Review. Local Linux rc5 unavailability
+moves the gate to that qualified surface; it does not waive it.
+
+Required existing CI and fresh Final Independent Review remain gates;
 Mark Ready, merge and protected operations require separate human authority.
