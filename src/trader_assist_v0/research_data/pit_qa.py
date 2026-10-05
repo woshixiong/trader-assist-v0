@@ -1468,21 +1468,17 @@ def _check_rows(request: PitQaRequest, rows: tuple[QaRow, ...]) -> list[QaFindin
                         _finding(QaDomain.D, "D_OUTLIER_BOUND", QaStatus(outlier.severity), row)
                     )
             if price_prior and relative is not None:
-                contiguous = (
-                    s.payload_kind == "BAR" and price_prior.source.bar_end_ns == s.bar_start_ns
-                )
-                if s.payload_kind != "BAR":
+                if s.payload_kind == "BAR":
+                    contiguous = price_prior.source.bar_end_ns == s.bar_start_ns
+                elif s.payload_kind == "CONTEXT":
+                    # Same-context history selects the predecessor; only the shared run
+                    # proves continuity across all intervening CONTEXT observations.
+                    contiguous = price_history is not None and price_history[1] == sequence_run
+                else:
                     contiguous = (
                         s.sequence is not None
                         and price_prior.source.sequence is not None
-                        and (
-                            s.sequence == price_prior.source.sequence + 1
-                            or (
-                                s.payload_kind == "CONTEXT"
-                                and price_history is not None
-                                and price_history[1] == sequence_run
-                            )
-                        )
+                        and s.sequence == price_prior.source.sequence + 1
                     )
                 same_session = bool(
                     request.sessions

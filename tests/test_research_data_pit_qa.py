@@ -1374,16 +1374,13 @@ def test_repair1_outlier_bbo_adjacent_sides(side, first, second):
 @pytest.mark.parametrize(
     "field,noise", [("MARK", "INDEX"), ("INDEX", "ORACLE"), ("ORACLE", "MARK")]
 )
-@pytest.mark.parametrize("noise_sequence,current_sequence", [(0, 1), (1, 2)])
-def test_repair1_outlier_context_adjacent_interleaving(
-    field, noise, noise_sequence, current_sequence
-):
+def test_repair1_outlier_context_adjacent_interleaving(field, noise):
     req = _repair1_price_rows(
         "CONTEXT",
         (
             (field, 0, (("value", "100"),)),
-            (noise, noise_sequence, (("value", "900"),)),
-            (field, current_sequence, (("value", "200"),)),
+            (noise, 1, (("value", "900"),)),
+            (field, 2, (("value", "200"),)),
         ),
     )
     _repair1_assert_outlier(req, "D_OUTLIER_ADJACENT")
@@ -1455,3 +1452,76 @@ def test_repair1_outlier_context_interleaved_sequence_gap_not_invented():
         ),
     )
     assert "D_OUTLIER_ADJACENT" not in codes(req)
+
+
+@pytest.mark.parametrize(
+    "field,noise", [("MARK", "INDEX"), ("INDEX", "ORACLE"), ("ORACLE", "MARK")]
+)
+@pytest.mark.parametrize(
+    "sequences,adjacent",
+    [
+        ((0, 3, 1), False),
+        ((0, 1, 2), True),
+        ((0, 3, 4), False),
+        ((0, 1, 3), False),
+        ((0, 0, 1), False),
+        ((0, 1, 1), False),
+        ((2, 1, 3), False),
+        ((0, None, 1), False),
+        ((None, 1, 2), False),
+        ((0, 1, None), False),
+    ],
+)
+def test_repair2_context_shared_run_is_sole_adjacency_proof(field, noise, sequences, adjacent):
+    req = _repair1_price_rows(
+        "CONTEXT",
+        tuple(
+            (context, sequence, (("value", value),))
+            for context, sequence, value in zip(
+                (field, noise, field), sequences, ("100", "900", "200"), strict=True
+            )
+        ),
+    )
+    domain = next(d for d in result(req).domains if d.domain.value == "D")
+    findings = [f for f in domain.findings if f.reason_code == "D_OUTLIER_ADJACENT"]
+    assert [f.ordinals for f in findings] == ([(2,)] if adjacent else [])
+    if adjacent:
+        _repair1_assert_outlier(req, "D_OUTLIER_ADJACENT")
+
+
+@pytest.mark.parametrize("field", ["MARK", "INDEX", "ORACLE"])
+@pytest.mark.parametrize("noise", ["PREMIUM", "FUNDING"])
+@pytest.mark.parametrize("gap_sequence", [3, 0, None])
+def test_repair2_context_new_observation_seeds_run_after_gap(field, noise, gap_sequence):
+    req = _repair1_price_rows(
+        "CONTEXT",
+        (
+            (field, 0, (("value", "100"),)),
+            (noise, gap_sequence, (("value", "-1"),)),
+            (field, 4, (("value", "200"),)),
+            (noise, 5, (("value", "-1"),)),
+            (field, 6, (("value", "400"),)),
+        ),
+    )
+    _repair1_assert_outlier(req, "D_OUTLIER_ADJACENT")
+    domain = next(d for d in result(req).domains if d.domain.value == "D")
+    assert [f.ordinals for f in domain.findings if f.reason_code == "D_OUTLIER_ADJACENT"] == [(4,)]
+    assert "D_OUTLIER_BOUND" not in {f.reason_code for f in domain.findings}
+
+
+@pytest.mark.parametrize("field", ["MARK", "INDEX", "ORACLE"])
+def test_repair2_context_price_interleaving_recovers_after_gap(field):
+    noise = "INDEX" if field != "INDEX" else "MARK"
+    req = _repair1_price_rows(
+        "CONTEXT",
+        (
+            (field, 0, (("value", "100"),)),
+            (noise, 3, (("value", "900"),)),
+            (field, 4, (("value", "200"),)),
+            (noise, 5, (("value", "900"),)),
+            (field, 6, (("value", "400"),)),
+        ),
+    )
+    _repair1_assert_outlier(req, "D_OUTLIER_ADJACENT")
+    domain = next(d for d in result(req).domains if d.domain.value == "D")
+    assert [f.ordinals for f in domain.findings if f.reason_code == "D_OUTLIER_ADJACENT"] == [(4,)]
