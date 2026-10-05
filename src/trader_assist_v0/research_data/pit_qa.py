@@ -1200,6 +1200,8 @@ def _check_rows(request: PitQaRequest, rows: tuple[QaRow, ...]) -> list[QaFindin
     native: dict[tuple[object, ...], QaRow] = {}
     bars: dict[tuple[object, ...], QaRow] = {}
     latest: dict[tuple[str, ...], QaRow] = {}
+    outlier_latest: dict[tuple[str, ...], tuple[QaRow, int]] = {}
+    sequence_runs: dict[tuple[str, ...], int] = {}
     by_hash = {r.key.input_record_hash: r for r in rows}
     tolerance = _number(request.policy.comparison_tolerance)
     if tolerance is None or tolerance < 0:
@@ -1434,46 +1436,79 @@ def _check_rows(request: PitQaRequest, rows: tuple[QaRow, ...]) -> list[QaFindin
                                     row,
                                 )
                             )
-        price = values.get("close", values.get("price", values.get("bid")))
-        if s.context_field in {"MARK", "INDEX", "ORACLE"}:
-            price = values.get("value")
-        if outlier and price is not None:
+        price_fields = {
+            "BAR": ("open", "high", "low", "close"),
+            "TRADE": ("price",),
+            "BBO": ("bid", "ask"),
+        }.get(s.payload_kind, ())
+        if s.payload_kind == "CONTEXT" and s.context_field in {"MARK", "INDEX", "ORACLE"}:
+            price_fields = ("value",)
+        stream = _stream(row)
+        sequence_run = sequence_runs.get(stream, 0)
+        if prior and (
+            s.sequence is None
+            or prior.source.sequence is None
+            or s.sequence != prior.source.sequence + 1
+        ):
+            sequence_run += 1
+        sequence_runs[stream] = sequence_run
+        price_stream = (*stream, (s.context_field or "") if s.payload_kind == "CONTEXT" else "")
+        price_history = outlier_latest.get(price_stream)
+        price_prior = price_history[0] if price_history else None
+        if outlier and price_fields:
             if aux is None or aux.price_unit != outlier.price_unit:
                 out.append(_finding(QaDomain.D, "D_OUTLIER_UNITS_UNPROVEN", _INS, row))
             lower, upper, relative = thresholds
-            if (lower is not None and price < lower) or (upper is not None and price > upper):
-                out.append(_finding(QaDomain.D, "D_OUTLIER_BOUND", QaStatus(outlier.severity), row))
-            if prior and relative is not None:
-                old_price = _number(
-                    dict(prior.source.values).get("close", dict(prior.source.values).get("price"))
+            for field in price_fields:
+                price = values.get(field)
+                if price is not None and (
+                    (lower is not None and price < lower) or (upper is not None and price > upper)
+                ):
+                    out.append(
+                        _finding(QaDomain.D, "D_OUTLIER_BOUND", QaStatus(outlier.severity), row)
+                    )
+            if price_prior and relative is not None:
+                contiguous = (
+                    s.payload_kind == "BAR" and price_prior.source.bar_end_ns == s.bar_start_ns
                 )
-                contiguous = s.payload_kind == "BAR" and prior.source.bar_end_ns == s.bar_start_ns
                 if s.payload_kind != "BAR":
                     contiguous = (
                         s.sequence is not None
-                        and prior.source.sequence is not None
-                        and s.sequence == prior.source.sequence + 1
+                        and price_prior.source.sequence is not None
+                        and (
+                            s.sequence == price_prior.source.sequence + 1
+                            or (
+                                s.payload_kind == "CONTEXT"
+                                and price_history is not None
+                                and price_history[1] == sequence_run
+                            )
+                        )
                     )
                 same_session = bool(
                     request.sessions
                     and any(
                         i.instrument_id == s.instrument_id
-                        and i.open_ns <= prior.source.event_ns <= s.event_ns < i.close_ns
+                        and i.open_ns <= price_prior.source.event_ns <= s.event_ns < i.close_ns
                         for i in request.sessions.open_intervals
                     )
                 )
-                if (
-                    contiguous
-                    and (outlier.compare_across_sessions or same_session)
-                    and old_price is not None
-                    and old_price > 0
-                ):
-                    if abs(price / old_price - 1) > relative:
-                        out.append(
-                            _finding(
-                                QaDomain.D, "D_OUTLIER_ADJACENT", QaStatus(outlier.severity), row
-                            )
-                        )
+                if contiguous and (outlier.compare_across_sessions or same_session):
+                    old_values: dict[str, str] = dict(price_prior.source.values)
+                    adjacent_fields = ("close",) if s.payload_kind == "BAR" else price_fields
+                    for field in adjacent_fields:
+                        price, old_price = values.get(field), _number(old_values.get(field))
+                        if price is not None and old_price is not None and old_price > 0:
+                            if abs(price / old_price - 1) > relative:
+                                out.append(
+                                    _finding(
+                                        QaDomain.D,
+                                        "D_OUTLIER_ADJACENT",
+                                        QaStatus(outlier.severity),
+                                        row,
+                                    )
+                                )
+        if price_fields:
+            outlier_latest[price_stream] = (row, sequence_run)
         latest[_stream(row)] = row
     return out
 

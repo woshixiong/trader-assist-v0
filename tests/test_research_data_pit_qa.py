@@ -1249,3 +1249,209 @@ def test_every_adjusted_price_field_needs_raw_proof():
     assert "B_RAW_PRICE_FIELDS_CONFLICT" in codes(
         req.model_copy(update={"adjustments": (adjustment,)})
     )
+
+
+@pytest.mark.parametrize(
+    "field,updates,count",
+    [
+        ("open", {"open": "1101", "high": "1102"}, 2),
+        ("high", {"high": "5000"}, 1),
+        ("low", {"low": "0.5"}, 1),
+        ("close", {"close": "1101", "high": "1102"}, 2),
+    ],
+)
+def test_repair1_outlier_bounds_all_bar_fields(field, updates, count):
+    req = fixture()
+    assert result(req).overall_qa_eligibility == QaStatus.PASS
+    event = replace_bound(req.events[0], payload=req.events[0].payload.model_copy(update=updates))
+    req = evidence_for(req.model_copy(update={"events": (event, req.events[1])}))
+    observed = result(req)
+    domain = next(d for d in observed.domains if d.domain.value == "D")
+    assert len([f for f in domain.findings if f.reason_code == "D_OUTLIER_BOUND"]) == count
+    assert "D_OHLC_CONFLICT" not in {f.reason_code for f in domain.findings}
+    assert domain.status == observed.overall_qa_eligibility == QaStatus.FAIL
+    assert (
+        dict(qa_rows_from_events(req.events, knowledge_ns=K).rows[0].source.values)[field]
+        == updates[field]
+    )
+
+
+def _repair1_price_rows(kind, observations, *, relative="0.5", severity="FAIL"):
+    req = fixture()
+    template = qa_rows_from_events(req.events, knowledge_ns=K).rows[0].source
+    records = tuple(
+        replace_bound(
+            template,
+            payload_kind=kind,
+            native_id=f"price-{n}",
+            event_ns=S + n,
+            source_ts=str(S + n),
+            sequence=sequence,
+            context_field=context,
+            values=values,
+            bar_start_ns=None,
+            bar_end_ns=None,
+            interval_ns=None,
+            timestamp_meaning=None,
+            finalized=None,
+        )
+        for n, (context, sequence, values) in enumerate(observations)
+    )
+    bounds = replace_bound(
+        req.policy.outlier, maximum_adjacent_relative_change=relative, severity=severity
+    )
+    return evidence_for(
+        req.model_copy(
+            update={
+                "events": None,
+                "diagnostic_records": records,
+                "policy": replace_bound(req.policy, outlier=bounds),
+            }
+        )
+    )
+
+
+def _repair1_assert_outlier(request, reason, severity="FAIL"):
+    observed = result(request)
+    domain = next(d for d in observed.domains if d.domain.value == "D")
+    findings = [f for f in domain.findings if f.reason_code == reason]
+    assert findings and all(f.status.value == severity for f in findings)
+    assert domain.status.value == severity
+    assert observed.overall_qa_eligibility != QaStatus.PASS
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        (("bid", "0.5"), ("ask", "100"), ("bid_size", "1"), ("ask_size", "1")),
+        (("bid", "100"), ("ask", "1001"), ("bid_size", "1"), ("ask_size", "1")),
+    ],
+)
+@pytest.mark.parametrize("severity", ["WARN", "FAIL"])
+def test_repair1_outlier_bbo_bound_sides(values, severity):
+    req = _repair1_price_rows("BBO", ((None, 0, values),), severity=severity)
+    _repair1_assert_outlier(req, "D_OUTLIER_BOUND", severity)
+
+
+@pytest.mark.parametrize(
+    "kind,context,values",
+    [
+        ("TRADE", None, (("price", "1001"), ("size", "1"))),
+        *[("CONTEXT", field, (("value", "1001"),)) for field in ("MARK", "INDEX", "ORACLE")],
+    ],
+)
+def test_repair1_outlier_trade_and_price_context_bounds(kind, context, values):
+    _repair1_assert_outlier(_repair1_price_rows(kind, ((context, 0, values),)), "D_OUTLIER_BOUND")
+
+
+@pytest.mark.parametrize("field", ["PREMIUM", "FUNDING"])
+def test_repair1_outlier_signed_context_not_price(field):
+    req = _repair1_price_rows(
+        "CONTEXT", ((field, 0, (("value", "-5000"),)), (field, 1, (("value", "5000"),)))
+    )
+    domain = next(d for d in result(req).domains if d.domain.value == "D")
+    assert domain.status == QaStatus.PASS
+    assert not any(f.reason_code.startswith("D_OUTLIER_") for f in domain.findings)
+
+
+@pytest.mark.parametrize(
+    "side,first,second",
+    [
+        ("bid", ("100", "300"), ("200", "300")),
+        ("ask", ("100", "110"), ("100", "220")),
+    ],
+)
+def test_repair1_outlier_bbo_adjacent_sides(side, first, second):
+    values = tuple(
+        (None, n, (("bid", bid), ("ask", ask), ("bid_size", "1"), ("ask_size", "1")))
+        for n, (bid, ask) in enumerate((first, second))
+    )
+    req = _repair1_price_rows("BBO", values)
+    _repair1_assert_outlier(req, "D_OUTLIER_ADJACENT")
+    assert dict(req.diagnostic_records[1].values)[side] == second[0 if side == "bid" else 1]
+
+
+@pytest.mark.parametrize(
+    "field,noise", [("MARK", "INDEX"), ("INDEX", "ORACLE"), ("ORACLE", "MARK")]
+)
+@pytest.mark.parametrize("noise_sequence,current_sequence", [(0, 1), (1, 2)])
+def test_repair1_outlier_context_adjacent_interleaving(
+    field, noise, noise_sequence, current_sequence
+):
+    req = _repair1_price_rows(
+        "CONTEXT",
+        (
+            (field, 0, (("value", "100"),)),
+            (noise, noise_sequence, (("value", "900"),)),
+            (field, current_sequence, (("value", "200"),)),
+        ),
+    )
+    _repair1_assert_outlier(req, "D_OUTLIER_ADJACENT")
+    domain = next(d for d in result(req).domains if d.domain.value == "D")
+    assert [f.ordinals for f in domain.findings if f.reason_code == "D_OUTLIER_ADJACENT"] == [(2,)]
+    stable = replace_bound(req.diagnostic_records[2], values=(("value", "100"),))
+    req = evidence_for(
+        req.model_copy(update={"diagnostic_records": (*req.diagnostic_records[:2], stable)})
+    )
+    assert next(d for d in result(req).domains if d.domain.value == "D").status == QaStatus.PASS
+
+
+@pytest.mark.parametrize(
+    "kind,context,values",
+    [
+        ("TRADE", None, (("price", "100"), ("size", "1"))),
+        ("BBO", None, (("bid", "100"), ("ask", "101"), ("bid_size", "1"), ("ask_size", "1"))),
+        ("CONTEXT", "MARK", (("value", "100"),)),
+    ],
+)
+def test_repair1_outlier_price_units_fail_closed(kind, context, values):
+    req = _repair1_price_rows(kind, ((context, 0, values),))
+    for unit in (None, "EUR"):
+        assert "D_OUTLIER_UNITS_UNPROVEN" in codes(update_aux(req, price_unit=unit))
+        assert (
+            next(
+                d for d in result(update_aux(req, price_unit=unit)).domains if d.domain.value == "D"
+            ).status
+            != QaStatus.PASS
+        )
+
+
+@pytest.mark.parametrize(
+    "kind,values",
+    [
+        ("OI", (("oi", "5000"), ("oi_ccy", "5000"), ("oi_usd", "5000"))),
+        ("DEPTH", (("price", "5000"),)),
+    ],
+)
+def test_repair1_outlier_nonprice_payload_not_reclassified(kind, values):
+    req = _repair1_price_rows(kind, ((None, 0, values),))
+    assert "D_OUTLIER_BOUND" not in codes(req)
+    assert "D_OUTLIER_ADJACENT" not in codes(req)
+
+
+def test_repair1_outlier_trade_adjacent_and_contiguity():
+    req = _repair1_price_rows(
+        "TRADE",
+        (
+            (None, 0, (("price", "100"), ("size", "1"))),
+            (None, 1, (("price", "200"), ("size", "1"))),
+        ),
+    )
+    _repair1_assert_outlier(req, "D_OUTLIER_ADJACENT")
+    second = replace_bound(req.diagnostic_records[1], sequence=3)
+    req = evidence_for(
+        req.model_copy(update={"diagnostic_records": (req.diagnostic_records[0], second)})
+    )
+    assert "D_OUTLIER_ADJACENT" not in codes(req)
+
+
+def test_repair1_outlier_context_interleaved_sequence_gap_not_invented():
+    req = _repair1_price_rows(
+        "CONTEXT",
+        (
+            ("MARK", 0, (("value", "100"),)),
+            ("INDEX", 3, (("value", "900"),)),
+            ("MARK", 4, (("value", "200"),)),
+        ),
+    )
+    assert "D_OUTLIER_ADJACENT" not in codes(req)
