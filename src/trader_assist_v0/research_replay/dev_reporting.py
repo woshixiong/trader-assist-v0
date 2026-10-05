@@ -1,6 +1,8 @@
 """Bounded DEV diagnostics and fixed aggregate egress; research selection only."""
 
+from dataclasses import dataclass
 from decimal import Decimal
+from itertools import pairwise
 from typing import Literal, Self
 
 from pydantic import Field, model_validator
@@ -358,6 +360,98 @@ def _completed_cut(bundle: DevEvidenceBundle, completed: DevTrialLedger) -> DevT
     return completed
 
 
+@dataclass(frozen=True)
+class ProspectiveSelectionCandidate:
+    candidate_hash: str
+    preregistered_order: int
+    complexity: int
+    sufficient: bool
+    eligible: bool
+    after_cost_thesis_r: Decimal | None
+    paired_delta_r: Decimal | None
+
+
+@dataclass(frozen=True)
+class ProspectiveSelectionDecision:
+    selected_hash: str | None
+    disposition: ResearchDisposition
+
+
+def select_prospective_candidate(
+    candidates: tuple[ProspectiveSelectionCandidate, ...],
+    *,
+    champion_hash: str,
+    equivalence_tolerance_r: Decimal,
+    minimum_incremental_r: Decimal,
+) -> ProspectiveSelectionDecision:
+    """Select only within a caller-authenticated prospective comparison edge."""
+    if (
+        not candidates
+        or candidates[0].candidate_hash != champion_hash
+        or len({c.candidate_hash for c in candidates}) != len(candidates)
+        or any(not c.candidate_hash for c in candidates)
+        or any(
+            type(c.preregistered_order) is not int
+            or c.preregistered_order < 0
+            or type(c.complexity) is not int
+            or c.complexity < 0
+            or type(c.sufficient) is not bool
+            or type(c.eligible) is not bool
+            for c in candidates
+        )
+        or any(a.preregistered_order >= b.preregistered_order for a, b in pairwise(candidates))
+    ):
+        raise ValueError("exact ordered prospective selection candidates required")
+    gates = (equivalence_tolerance_r, minimum_incremental_r)
+    values = (
+        *gates,
+        *(
+            v
+            for c in candidates
+            for v in (c.after_cost_thesis_r, c.paired_delta_r)
+            if v is not None
+        ),
+    )
+    if any(not isinstance(v, Decimal) or not v.is_finite() for v in values) or any(
+        g < 0 for g in gates
+    ):
+        raise ValueError("finite prospective selection metrics and nonnegative gates required")
+    if not all(c.sufficient for c in candidates):
+        return ProspectiveSelectionDecision(None, ResearchDisposition.INSUFFICIENT)
+    if any(c.after_cost_thesis_r is None or c.paired_delta_r is None for c in candidates):
+        return ProspectiveSelectionDecision(None, ResearchDisposition.MORE_EVIDENCE_REQUIRED)
+    qualified = [c for c in candidates if c.eligible]
+    if not qualified:
+        return ProspectiveSelectionDecision(None, ResearchDisposition.REJECT)
+    best = max(
+        qualified, key=lambda c: (c.after_cost_thesis_r or Decimal(0), -c.preregistered_order)
+    )
+    near = [
+        c
+        for c in qualified
+        if (best.after_cost_thesis_r or Decimal(0)) - (c.after_cost_thesis_r or Decimal(0))
+        <= equivalence_tolerance_r
+    ]
+    chosen = min(near, key=lambda c: (c.complexity, c.preregistered_order))
+    champion = candidates[0]
+    if (
+        chosen.candidate_hash != champion_hash
+        and (chosen.paired_delta_r or Decimal(0)) < minimum_incremental_r
+        and chosen.complexity >= champion.complexity
+    ):
+        selected = champion_hash if champion.eligible else None
+    else:
+        selected = chosen.candidate_hash
+    disposition = (
+        ResearchDisposition.KEEP_CURRENT
+        if selected == champion_hash
+        else ResearchDisposition.RESEARCH_LEADER
+        if selected
+        else ResearchDisposition.REJECT
+    )
+    return ProspectiveSelectionDecision(selected, disposition)
+
+
 def summarize_dev(
     bundle: DevEvidenceBundle, visibility: DevVisibilityPolicy, completed: DevTrialLedger
 ) -> DevSummary:
@@ -386,43 +480,24 @@ def summarize_dev(
             and m.incomplete_count == 0
         )
 
-    selected: str | None = None
-    if not all(m.sufficient for m in metrics):
-        disposition = ResearchDisposition.INSUFFICIENT
-    elif any(m.after_cost_thesis_r is None or m.paired_delta_r is None for m in metrics):
-        disposition = ResearchDisposition.MORE_EVIDENCE_REQUIRED
-    else:
-        baseline = metrics[0]
-        qualified = [(i, m) for i, m in enumerate(metrics) if eligible(m)]
-        if not qualified:
-            disposition = ResearchDisposition.REJECT
-        else:
-            best_i, best = max(
-                qualified, key=lambda item: (item[1].after_cost_thesis_r or Decimal(0), -item[0])
+    selection = select_prospective_candidate(
+        tuple(
+            ProspectiveSelectionCandidate(
+                candidate_hash=m.candidate_hash,
+                preregistered_order=i,
+                complexity=pre.complexity[i],
+                sufficient=m.sufficient,
+                eligible=eligible(m),
+                after_cost_thesis_r=m.after_cost_thesis_r,
+                paired_delta_r=m.paired_delta_r,
             )
-            # Equivalence is prospective: prefer the lowest registered complexity.
-            near = [
-                (i, m)
-                for i, m in qualified
-                if (best.after_cost_thesis_r or Decimal(0)) - (m.after_cost_thesis_r or Decimal(0))
-                <= gates.equivalence_tolerance_r
-            ]
-            chosen_i, chosen = min(near, key=lambda item: (pre.complexity[item[0]], item[0]))
-            if (
-                chosen_i != 0
-                and (chosen.paired_delta_r or Decimal(0)) < gates.minimum_incremental_r
-                and pre.complexity[chosen_i] >= pre.complexity[0]
-            ):
-                selected = baseline.candidate_hash if eligible(baseline) else None
-            else:
-                selected = chosen.candidate_hash
-            disposition = (
-                ResearchDisposition.KEEP_CURRENT
-                if selected == pre.champion_hash
-                else ResearchDisposition.RESEARCH_LEADER
-                if selected
-                else ResearchDisposition.REJECT
-            )
+            for i, m in enumerate(metrics)
+        ),
+        champion_hash=pre.champion_hash,
+        equivalence_tolerance_r=gates.equivalence_tolerance_r,
+        minimum_incremental_r=gates.minimum_incremental_r,
+    )
+    selected, disposition = selection.selected_hash, selection.disposition
     setups: dict[str, int] = {}
     for op in bundle.roster:
         setups[op.setup] = setups.get(op.setup, 0) + 1

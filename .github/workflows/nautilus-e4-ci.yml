@@ -265,6 +265,9 @@ jobs:
       - name: Offline research data exact-rc5 qualification
         run: |
           /tmp/trader-assist-e4-venv/bin/python -m pytest -q tests/test_research_data_*.py
+      - name: Retained native DEV replay exact-rc5 qualification
+        run: |
+          /tmp/trader-assist-e4-venv/bin/python -m pytest -q tests/test_research_replay_dev_harness.py::test_matched_s0_dev_real_native_results_and_fingerprints
       - name: E3 reference regressions
         run: |
           /tmp/trader-assist-e4-venv/bin/python -m pytest -q \
