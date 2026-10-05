@@ -37,6 +37,7 @@ from trader_assist_v0.research_inventory import (
 
 H = "a" * 64
 BASE = "6b8b6dae0850237166de0e1c28b1baa6773850b8"
+R2B_ACCEPTED_HEAD = "69d100172154a1fe723a3c08166ad6705c1f49d6"
 ALLOWED = {
     "src/trader_assist_v0/research_inventory/__init__.py",
     "src/trader_assist_v0/research_inventory/contracts.py",
@@ -598,14 +599,19 @@ def test_exact_changed_path_allowlist():
         return subprocess.run(["git", "-C", str(root), *args], check=True,
                               capture_output=True).stdout
 
-    tracked = set(filter(None, git("diff", "--name-only", BASE, "--").decode().splitlines()))
-    untracked = set(filter(None, git(
-        "ls-files", "--others", "--exclude-standard",
+    # Prove the accepted historical package, independently of later checkout changes.
+    tracked = set(filter(None, git(
+        "diff", "--name-only", BASE, R2B_ACCEPTED_HEAD, "--",
     ).decode().splitlines()))
-    assert tracked | untracked == ALLOWED
+    assert tracked == ALLOWED
     base_paths = set(git("ls-tree", "-r", "--name-only", BASE).decode().splitlines())
     assert not ALLOWED & base_paths
     assert len(R2_PATHS) == 26
-    assert not (tracked | untracked) & R2_PATHS
-    assert all((root / name).is_file() for name in ALLOWED)
-    assert not git("diff", "--diff-filter=DMRT", "--name-only", BASE, "--").strip()
+    assert not tracked & R2_PATHS
+    accepted_paths = set(git(
+        "ls-tree", "-r", "--name-only", R2B_ACCEPTED_HEAD,
+    ).decode().splitlines())
+    assert ALLOWED <= accepted_paths
+    assert not git(
+        "diff", "--diff-filter=DMRT", "--name-only", BASE, R2B_ACCEPTED_HEAD, "--",
+    ).strip()
