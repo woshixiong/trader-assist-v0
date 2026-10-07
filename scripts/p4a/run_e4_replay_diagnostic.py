@@ -520,7 +520,7 @@ def _minimal_child_env(work: Path) -> dict[str, str]:
 
 
 def _run_credential_probe(
-    args: argparse.Namespace, expected: dict[str, object], env: dict[str, str]
+    args: argparse.Namespace, expected: dict[str, dict[str, object]], env: dict[str, str]
 ) -> dict[str, object]:
     command = [
         str(args.staged_python),
@@ -643,7 +643,7 @@ def _verifier_argv(args: argparse.Namespace, scratch: Path) -> list[str]:
 
 def _run_verifier_child(
     args: argparse.Namespace, work: Path, env: dict[str, str]
-) -> tuple[dict[str, object], float]:
+) -> tuple[dict[str, Any], float]:
     scratch = work / "verifier"
     scratch.mkdir(mode=0o770)
     os.chown(scratch, 0, REPLAY_GID)
@@ -734,7 +734,7 @@ def _decode_mount_field(value: str) -> str:
 
 def _work_mount_evidence(work: Path) -> dict[str, object]:
     target = str(work.resolve(strict=True))
-    found: dict[str, object] | None = None
+    found: dict[str, Any] | None = None
     for line in Path("/proc/self/mountinfo").read_text(encoding="utf-8").splitlines():
         left, separator, right = line.partition(" - ")
         if not separator:
@@ -920,7 +920,7 @@ def _source_bindings_from_host(
 
 
 def _proof_inventory(proof: Path) -> list[dict[str, object]]:
-    values = []
+    values: list[dict[str, object]] = []
     for name in PROOF_FILES:
         proof_path = proof / name
         if proof_path.is_file() and not proof_path.is_symlink():
@@ -953,7 +953,7 @@ def _finalize_proof(
     if not readback:
         export_status = "FAIL"
         blockers.append("PROOF_POST_FSYNC_READBACK_MISMATCH")
-    manifest = {
+    manifest: dict[str, Any] = {
         "schema": "trade-os/e4-replay-proof-manifest/v1",
         "files": files,
         "directory_fsync_completion": True,
@@ -996,7 +996,7 @@ def _inside_unit(args: argparse.Namespace) -> int:
     blockers: list[str] = []
     source_document: dict[str, object] | None = None
     unit_document: dict[str, object] | None = None
-    child_document: dict[str, object] | None = None
+    child_document: dict[str, Any] | None = None
     source_identities: dict[str, object] | None = None
     controller_status = "PRE_VERIFIER_FAILURE"
 
