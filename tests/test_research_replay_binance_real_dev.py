@@ -15,6 +15,7 @@ from test_research_data_binance_research_transport import (
 from test_research_data_contracts import H
 from test_research_replay_dev_access import authority, prereg
 
+import trader_assist_v0.research_replay.binance_real_dev as binance_real_dev_module
 from trader_assist_v0.contracts.common import sha256_hex
 from trader_assist_v0.research_data.admission import AdmissionPolicy
 from trader_assist_v0.research_data.binance_archive import (
@@ -41,7 +42,6 @@ from trader_assist_v0.research_inventory.contracts import (
     InventoryRole,
     InventoryState,
 )
-import trader_assist_v0.research_replay.binance_real_dev as binance_real_dev_module
 from trader_assist_v0.research_replay.binance_real_dev import (
     FrozenRealDevCandidate,
     _require_historical_bar_only,
