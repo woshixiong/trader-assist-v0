@@ -20,6 +20,7 @@ from scripts.e4_nautilus_public_data_probe import (
     evaluate_qualification,
     launch_bars,
 )
+from trader_assist_v0.contracts.common import sha256_hex
 from trader_assist_v0.multi_asset_shadow.models import RegistryVersion
 from trader_assist_v0.multi_asset_shadow.production import (
     THREE_SETUP_CLOSED_BAR_STORE_PATH,
@@ -1400,6 +1401,11 @@ def test_actual_qualification_loop_measures_bounded_resource_tail(tmp_path, monk
         return sample
 
     monkeypatch.setattr(probe._ResourceSampler, "collect", collect)
+    monkeypatch.setattr(probe._VerifierTrail, "read", staticmethod(verifier_resource_fixture))
+    monkeypatch.setattr(probe.os, "statvfs", lambda _: SimpleNamespace(
+        f_blocks=1000, f_frsize=1000, f_bfree=800))
+    monkeypatch.setattr(probe.os, "statvfs", lambda _: SimpleNamespace(
+        f_blocks=1000, f_frsize=1000, f_bfree=800))
     early_exit = asyncio.Event()
 
     async def run(shutdown):
@@ -1428,9 +1434,14 @@ def test_actual_qualification_loop_measures_bounded_resource_tail(tmp_path, monk
         assert report["resources"] == measured
         assert len(measured) <= 33 and clock.now <= 933
         assert finished == [True]
+        assert [r["phase"] for r in report["verifier_resources"]["entries"]] == list(
+            probe._VerifierTrail.PHASES)
+        without_digest = dict(report)
+        digest = without_digest.pop("digest")
+        assert digest == probe.sha256_hex(probe.canonical_json_bytes(without_digest))
         assert all(stream["count"] in (15, 3) for stream in report["streams"].values())
         if scenario in ("drift", "delayed_first"):
-            assert exit_code == probe.PASS and report["status"] == "PASS"
+            assert exit_code == probe.PASS and report["status"] == "PASS", report["blockers"]
             assert len(measured) >= 16
             assert measured[-1]["ts_ns"] - measured[0]["ts_ns"] >= 900 * NS
             assert measured[-1]["ts_ns"] > observation.window_start_ns + 900 * NS
@@ -1522,3 +1533,605 @@ def test_ws_unknown_proof_cannot_preserve_shared_zero():
                     transport_failures=1)
     _apply_ws_proof(provider, {"status": "INCOMPLETE"})
     assert "provider_throttle_events" not in provider and provider["transport_failures"] == 1
+
+
+def verifier_resource_fixture(**changes):
+    return dict(rss_bytes=32 * 1024 * 1024, process_lifetime_hwm_bytes=40 * 1024 * 1024,
+                mem_total_bytes=1024 * 1024 * 1024, mem_available_bytes=800 * 1024 * 1024,
+                swap_total_bytes=0, swap_free_bytes=0, pswpin=0, pswpout=0) | changes
+
+
+def bound_session(path, manifest, **kwargs):
+    from scripts import e4_nautilus_public_data_probe as probe
+
+    state = path.lstat()
+    return probe._NativeEvidence(path, (state.st_dev, state.st_ino),
+                                 probe.native_marker(manifest), **kwargs)
+
+
+@pytest.mark.parametrize("separator", ["\n", "\r\n", "\r", "\v", "\f", "\x1c", "\x1d",
+                                       "\x1e", "\x85", "\u2028", "\u2029"])
+def test_streaming_splitlines_matches_original_at_chunk_boundaries(
+    tmp_path, monkeypatch, separator,
+):
+    import json
+
+    from scripts import e4_nautilus_public_data_probe as probe
+
+    manifest, ledger, records, path = native_log_fixture(tmp_path)
+    records.append(dict(timestamp=200 * NS, level="TRACE", component="other", message="café"))
+    raw = (separator.join(json.dumps(r, ensure_ascii=False) for r in records) + "\n").encode()
+    path.write_bytes(raw)
+    monkeypatch.setattr(probe, "NATIVE_CHUNK_BYTES", 7)
+    with bound_session(path, manifest) as session:
+        session.bind()
+        assert session.binding["sha256"] == sha256_hex(raw)
+        assert session.summary["record_count"] == len(raw.decode().splitlines())
+        assert probe.parse_native_http_log(
+            path, manifest=manifest, dispatches=ledger, file_identity=session.file_identity,
+            sync_succeeded=True, _session=session)["status"] == "PASS"
+
+
+@pytest.mark.parametrize("mutation", ["duplicate", "canonical_duplicate", "nested_keys", "empty",
+                                     "unicode", "truncated", "oversized", "title", "symlink"])
+def test_streaming_binding_adversarial_envelopes(tmp_path, mutation):
+    import json
+
+    from scripts import e4_nautilus_public_data_probe as probe
+
+    manifest, _, records, path = native_log_fixture(tmp_path)
+    if mutation in ("duplicate", "canonical_duplicate"):
+        with path.open("a") as stream:
+            stream.write(json.dumps(records[-1],
+                                    sort_keys=mutation == "canonical_duplicate") + "\n")
+    elif mutation == "nested_keys":
+        path.write_bytes(path.read_bytes() + b'{"extra":{"a":1,"a":2}}\n')
+    elif mutation == "empty":
+        path.write_bytes(b"")
+    elif mutation == "unicode":
+        path.write_bytes(path.read_bytes() + b'\xff\n')
+    elif mutation == "truncated":
+        with path.open("r+b") as stream:
+            stream.truncate(path.stat().st_size - 1)
+    elif mutation == "oversized":
+        path.write_bytes(path.read_bytes() + b"x" * (probe.NATIVE_ENVELOPE_BYTES + 1) + b"\n")
+    elif mutation == "title":
+        for timestamp in (200 * NS, 201 * NS):
+            records.append(dict(timestamp=timestamp, component=probe.native_marker(manifest),
+                                level="INFO", message="NAUTILUS TRADER - duplicate"))
+        write_retry_fixture(path, records)
+    elif mutation == "symlink":
+        target = tmp_path / "retained"
+        path.rename(target)
+        path.symlink_to(target)
+    with pytest.raises(probe._NATIVE_ERRORS), bound_session(path, manifest) as session:
+        session.bind()
+
+
+@pytest.mark.parametrize("phase", ["bind", "http", "ws"])
+@pytest.mark.parametrize("mutation", ["append", "replace", "rewrite", "rotate", "truncate"])
+def test_every_streaming_pass_rejects_deterministic_mutation(
+    tmp_path, monkeypatch, phase, mutation,
+):
+    from scripts import e4_nautilus_public_data_probe as probe
+
+    manifest, ledger, records, path = native_log_fixture(tmp_path)
+    records.append(dict(timestamp=200 * NS, level="TRACE", component=probe.WS_CONTROL_COMPONENT,
+                        message="Received pong"))
+    write_retry_fixture(path, records)
+    original = probe._NativeEvidence.records
+    pass_number = 0
+    target = {"bind": 0, "http": 1, "ws": 2}[phase]
+
+    def records_with_barrier(self, **kwargs):
+        nonlocal pass_number
+        current = pass_number
+        pass_number += 1
+        for ordinal, record in enumerate(original(self, **kwargs)):
+            yield record
+            if current == target and ordinal == 0:
+                raw = path.read_bytes()
+                before = path.stat()
+                if mutation == "append":
+                    with path.open("ab") as stream:
+                        stream.write(b" \n")
+                elif mutation == "replace":
+                    replacement = tmp_path / "replacement"
+                    replacement.write_bytes(raw)
+                    replacement.replace(path)
+                elif mutation == "rewrite":
+                    path.write_bytes(raw)
+                    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+                elif mutation == "rotate":
+                    (tmp_path / "native.jsonl.1").write_bytes(b"rotated")
+                else:
+                    with path.open("r+b") as stream:
+                        stream.truncate(100)
+
+    monkeypatch.setattr(probe._NativeEvidence, "records", records_with_barrier)
+    with bound_session(path, manifest) as session:
+        if phase == "bind":
+            with pytest.raises(probe._NATIVE_ERRORS):
+                session.bind()
+            assert not session.binding and not session.pass_complete
+            return
+        session.bind()
+        native = probe.parse_native_http_log(path, manifest=manifest, dispatches=ledger,
+                                            file_identity=session.file_identity,
+                                            sync_succeeded=True, _session=session)
+        if phase == "http":
+            assert native["status"] == "INCOMPLETE"
+        else:
+            assert native["status"] == "PASS"
+            ws = probe.parse_native_ws_controls(
+                path, native_http=native, epochs=[dict(start_ns=NS, end_ns=300 * NS)],
+                outbound_forecast=[(NS, 100)], close_reserve=2, _session=session)
+            assert ws["status"] == "INCOMPLETE"
+
+
+def test_partial_iteration_cannot_publish_binding(tmp_path):
+    manifest, _, _, path = native_log_fixture(tmp_path)
+    with bound_session(path, manifest) as session:
+        iterator = session.records(initial=True)
+        next(iterator)
+        iterator.close()
+        assert session.binding == {} and session.pass_complete is False
+    assert session.temporary is None and session.db is None
+
+
+@pytest.mark.parametrize("fault", ["budget", "disk_full", "corruption", "cleanup"])
+def test_index_faults_are_incomplete_and_cleanup_is_not_suppressed(tmp_path, monkeypatch, fault):
+    import sqlite3
+
+    from scripts import e4_nautilus_public_data_probe as probe
+
+    manifest, ledger, _, path = native_log_fixture(tmp_path)
+    if fault == "budget":
+        monkeypatch.setattr(probe, "NATIVE_INDEX_BYTES", 4096)
+    elif fault in ("disk_full", "corruption"):
+        original = probe._NativeEvidence.execute
+
+        def faulted(self, sql, parameters=()):
+            if sql.startswith("INSERT INTO envelopes"):
+                raise sqlite3.OperationalError("database or disk is full" if fault == "disk_full"
+                                               else "database disk image is malformed")
+            return original(self, sql, parameters)
+
+        monkeypatch.setattr(probe._NativeEvidence, "execute", faulted)
+    else:
+        original = probe.tempfile.TemporaryDirectory.cleanup
+
+        def cleanup(self):
+            original(self)
+            raise OSError("deterministic cleanup failure")
+
+        monkeypatch.setattr(probe.tempfile.TemporaryDirectory, "cleanup", cleanup)
+    report = parse_fixture(manifest, ledger, path)
+    assert report["status"] == "INCOMPLETE"
+    assert report["blockers"] == ["NATIVE_LOG_FILE_OR_PARSE_AMBIGUITY"]
+
+
+def test_disk_backed_ws_windows_match_exhaustive_reference_and_cap_diagnostics(tmp_path):
+    from scripts import e4_nautilus_public_data_probe as probe
+
+    controls = [(probe.WS_CONTROL_COMPONENT, "Received pong", (10 + i) * NS) for i in range(120)]
+    controls += [(probe.WS_CONTROL_COMPONENT, "Received ping frame (0 bytes)", (10 + i) * NS)
+                 for i in range(120)]
+    controls.sort(key=lambda c: c[2])
+    epochs = [dict(start_ns=NS, end_ns=300 * NS)]
+    forecast = [(62 * NS, 100), (122 * NS, 100)]
+    report = control_fixture(tmp_path, controls, epochs=epochs, forecast=forecast)
+    points = sorted({t for _, _, t in controls} | {t for t, _ in forecast} | {NS})
+    expected = []
+    for right in points:
+        left = right - 60 * NS
+        count = sum(left < t <= right for _, _, t in controls)
+        expected.append(count + sum(w for t, w in forecast if left < t <= right) + 1 + 2)
+    assert report["status"] == "PASS"
+    assert report["max_rolling_60s"] == max(expected)
+    assert report["windows_evaluated"] == len(points)
+    assert len(report["windows"]) == probe.NATIVE_WINDOW_DIAGNOSTICS
+    assert report["auto_pong_count"] == report["protocol_pong_rx_count"] == 120
+
+
+@pytest.mark.parametrize("fault", [None, "missing", "memory", "swap", "write"])
+def test_verifier_trail_is_persisted_bounded_and_fail_closed(tmp_path, monkeypatch, fault):
+    import json
+
+    from scripts import e4_nautilus_public_data_probe as probe
+
+    _, _, _, path = native_log_fixture(tmp_path)
+    samples = 0
+
+    def read():
+        nonlocal samples
+        samples += 1
+        if fault == "missing":
+            raise KeyError("VmHWM")
+        changes = {}
+        if fault == "memory":
+            changes["mem_available_bytes"] = 0
+        if fault == "swap":
+            changes["pswpout"] = samples
+        return verifier_resource_fixture(**changes)
+
+    monkeypatch.setattr(probe._VerifierTrail, "read", staticmethod(read))
+    trail = probe._VerifierTrail(tmp_path / "verifier-resources.json", path)
+    if fault == "write":
+        monkeypatch.setattr(probe, "_atomic_json", lambda *_: (_ for _ in ()).throw(OSError()))
+    for phase in trail.PHASES:
+        trail.mark(phase)
+        for _ in range(10):
+            trail.progress()
+    assert len(trail.entries) == 5
+    assert [entry["phase"] for entry in trail.entries] == list(trail.PHASES)
+    assert bool(trail.blockers) is (fault is not None)
+    if fault != "write":
+        persisted = json.loads(trail.path.read_text())
+        assert len(persisted["entries"]) == 5
+        assert len(persisted["maxima"]) <= 5
+
+
+@pytest.mark.parametrize("kind", ["e4.jsonl", "database.sqlite", "database.sqlite-wal",
+                                  "unknown.tmp", "nested/native.jsonl", "nested/index.sqlite"])
+def test_disk_projection_excludes_only_owned_diagnostics(tmp_path, monkeypatch, kind):
+    from scripts import e4_nautilus_public_data_probe as probe
+
+    native = tmp_path / "native.jsonl"
+    native.write_bytes(b"x" * 100)
+    metadata = native.stat()
+    sampler = probe._ResourceSampler(initial_bytes=0, initial_sample_ns=NS)
+    sampler.exclude(native, (metadata.st_dev, metadata.st_ino))
+    monkeypatch.setattr(probe.os, "statvfs", lambda _: SimpleNamespace(
+        f_blocks=1000, f_frsize=1000, f_bfree=800))
+    monkeypatch.setattr(probe.time, "time_ns", lambda: 61 * NS)
+    before = sampler.disk_snapshot(tmp_path)
+    assert before["root_used_percent"] == before["root_7d_projection_percent"] == 20
+    production = tmp_path / kind
+    production.parent.mkdir(parents=True, exist_ok=True)
+    production.write_bytes(b"x" * 100)
+    native.write_bytes(b"x" * 500)
+    after = sampler.disk_snapshot(tmp_path)
+    assert after["root_used_percent"] == 20
+    assert after["excluded_diagnostic_bytes"] == 500
+    assert after["included_bytes"] == 100
+    assert after["root_7d_projection_percent"] > 70
+    assert sampler.disk_snapshot(tmp_path, 30 * NS)["root_7d_projection_percent"] > after[
+        "root_7d_projection_percent"]
+
+
+@pytest.mark.parametrize("replacement", ["inode", "symlink", "removed"])
+def test_disk_exclusion_identity_cannot_hide_replacement(tmp_path, replacement):
+    from scripts import e4_nautilus_public_data_probe as probe
+
+    path = tmp_path / "native.jsonl"
+    path.write_bytes(b"diagnostic")
+    state = path.stat()
+    sampler = probe._ResourceSampler()
+    sampler.exclude(path, (state.st_dev, state.st_ino))
+    replacement_path = tmp_path / "production"
+    replacement_path.write_bytes(b"production")
+    if replacement == "inode":
+        replacement_path.replace(path)
+    else:
+        path.unlink()
+        if replacement == "symlink":
+            path.symlink_to(replacement_path)
+    with pytest.raises((OSError, ValueError)):
+        sampler.disk_snapshot(tmp_path)
+
+
+def replay_fixture(tmp_path, monkeypatch, *, facts=False):
+    import json
+
+    from scripts import e4_nautilus_public_data_probe as probe
+
+    source = tmp_path / "source"
+    source.mkdir()
+    manifest, ledger, records, path = native_log_fixture(source)
+    records.append(dict(timestamp=200 * NS, level="TRACE", component=probe.WS_CONTROL_COMPONENT,
+                        message="Received pong"))
+    write_retry_fixture(path, records)
+    manifest_path = source / "manifest.json"
+    manifest_path.write_text(manifest.model_dump_json())
+    scratch = tmp_path / "replay"
+    scratch.mkdir()
+    monkeypatch.setattr(probe._VerifierTrail, "read", staticmethod(verifier_resource_fixture))
+    facts_path = None
+    if facts:
+        facts_path = source / "facts.json"
+        values = dict(sync_succeeded=True, dispatches=ledger,
+                      epochs=[dict(start_ns=NS, end_ns=300 * NS)],
+                      outbound_forecast=[(NS, 0)], close_reserve=2,
+                      native_constant_upper_bound=210, planned_reconnect_request_ns=None)
+        facts_path.write_text(json.dumps(dict(
+            schema="l0-native-replay-facts/v1", manifest_hash=manifest.manifest_hash,
+            native_sha256=sha256_hex(path.read_bytes()), facts=values,
+            locators={key: "retained-test-fact:" + key for key in values})))
+    return SimpleNamespace(replay_native_log=path, manifest=manifest_path,
+                           replay_facts=facts_path, verifier_scratch_root=scratch,
+                           result_path=scratch / "replay.json")
+
+
+@pytest.mark.parametrize("facts", [False, True])
+def test_replay_preserves_historical_identity_and_cannot_mint_qualification(
+    tmp_path, monkeypatch, facts,
+):
+    from scripts import e4_nautilus_public_data_probe as probe
+
+    args = replay_fixture(tmp_path, monkeypatch, facts=facts)
+    before = args.replay_native_log.stat()
+    raw = args.replay_native_log.read_bytes()
+    code, report = probe._run_native_replay(args)
+    assert code == 0 and report["status"] == "REPLAY_STRUCTURAL_COMPLETE"
+    assert report["qualification_authority"] is False
+    assert "end_ns" not in report and "digest" not in report and "profile" not in report
+    assert report["structural_binding"] == "PASS" and report["no_file_mutation"] == "PROVEN"
+    assert report["bounded_rss"] == "PROVEN"
+    assert report["http"]["status"] == ("PASS" if facts else "UNAVAILABLE")
+    assert report["ws"]["status"] == ("PASS" if facts else "UNAVAILABLE")
+    assert bool(report["unavailable_facts"]) is (not facts)
+    assert args.replay_native_log.read_bytes() == raw
+    assert probe._file_state(before) == probe._file_state(args.replay_native_log.stat())
+    assert not list(args.verifier_scratch_root.glob("l0-verifier-*"))
+
+
+@pytest.mark.parametrize("mutation", ["qualification_name", "existing", "hardlink", "wrong_sha",
+                                     "wrong_manifest", "missing_locator", "unsynced"])
+def test_replay_output_and_historical_fact_guards(tmp_path, monkeypatch, mutation):
+    import json
+
+    from scripts import e4_nautilus_public_data_probe as probe
+
+    args = replay_fixture(tmp_path, monkeypatch, facts=True)
+    if mutation == "qualification_name":
+        args.result_path = args.verifier_scratch_root / "qualification.json"
+    elif mutation == "existing":
+        args.result_path.write_text("retain")
+    elif mutation == "hardlink":
+        os.link(args.replay_native_log, args.result_path)
+    else:
+        document = json.loads(args.replay_facts.read_text())
+        if mutation == "wrong_sha":
+            document["native_sha256"] = "0" * 64
+        elif mutation == "wrong_manifest":
+            document["manifest_hash"] = "0" * 64
+        elif mutation == "missing_locator":
+            document["locators"] = {}
+        else:
+            document["facts"]["sync_succeeded"] = False
+        args.replay_facts.write_text(json.dumps(document))
+    if mutation in ("qualification_name", "existing", "hardlink"):
+        with pytest.raises(ValueError):
+            probe._run_native_replay(args)
+    else:
+        _, result = probe._run_native_replay(args)
+        assert result["http"]["status"] != "PASS"
+        assert result["ws"]["status"] != "PASS"
+        assert result["qualification_authority"] is False
+
+
+@pytest.mark.skipif(sys.platform != "linux" or sys.version_info[:2] != (3, 12),
+                    reason="authoritative Linux/Python3.12 bounded-memory proof required")
+def test_large_native_evidence_under_hard_memory_envelope(tmp_path):
+    """Old raw+decode architecture cannot fit 384 MiB into RLIMIT_AS=512 MiB."""
+    import json
+
+    from scripts import e4_nautilus_public_data_probe as probe
+
+    worker = r'''
+import json, resource, sys
+from pathlib import Path
+from scripts import e4_nautilus_public_data_probe as p
+from trader_assist_v0.nautilus_e4.contracts import RunManifest
+resource.setrlimit(resource.RLIMIT_AS, (512*1024*1024, 512*1024*1024))
+root=Path(sys.argv[1]); expected=sys.argv[2]
+manifest=RunManifest.model_validate_json((root/'manifest.json').read_bytes())
+ledger=json.loads((root/'ledger.json').read_text())
+path=root/'native.jsonl'; state=path.stat()
+try:
+ with p._NativeEvidence(path,(state.st_dev,state.st_ino),p.native_marker(manifest),root) as session:
+  session.bind()
+  http=p.parse_native_http_log(path,manifest=manifest,dispatches=ledger,
+                              file_identity=session.file_identity,
+                              sync_succeeded=True,_session=session)
+  assert http['status']=='PASS',http
+  ws=p.parse_native_ws_controls(path,native_http=http,
+       epochs=[dict(start_ns=session.summary['first_ns'],end_ns=session.summary['max_ns']+1)],
+       outbound_forecast=[(session.summary['first_ns'],0)],close_reserve=2,
+       native_constant_upper_bound=210,_session=session)
+  assert ws['status']=='PASS',ws
+  assert expected=='PASS'
+  detail=dict(count=session.summary['record_count'],index=session.index_peak_bytes,
+              max_envelope=session.summary['max_envelope_bytes'],
+              http=http['status'],ws=ws['status'])
+except p._NATIVE_ERRORS as error:
+ assert expected=='INCOMPLETE',repr(error)
+ detail=dict(status='INCOMPLETE',error_type=type(error).__name__)
+peak=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024
+assert peak <= 256*1024*1024,peak
+print(json.dumps(dict(detail,peak_rss=peak)))
+'''
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join((str(Path.cwd() / "src"), str(Path.cwd()))))
+
+    def generate(name, size, payload):
+        root = tmp_path / name
+        root.mkdir()
+        manifest, ledger, records, path = native_log_fixture(root)
+        with path.open("ab") as stream:
+            stream.write(json.dumps(dict(timestamp=200 * NS, level="TRACE",
+                                         component=probe.WS_CONTROL_COMPONENT,
+                                         message="Received pong")).encode() + b"\n")
+            written, index = stream.tell(), 0
+            while written < size:
+                line = json.dumps(dict(timestamp=201 * NS, level="TRACE", component="diagnostic",
+                                       message="x" * payload, sequence=index)).encode() + b"\n"
+                stream.write(line)
+                written += len(line)
+                index += 1
+        (root / "manifest.json").write_text(manifest.model_dump_json())
+        (root / "ledger.json").write_text(json.dumps(ledger))
+        return root, path, records[-1]
+
+    def measure(root, expected="PASS"):
+        result = subprocess.run([sys.executable, "-c", worker, str(root), expected],
+                                cwd=Path.cwd(), env=env, capture_output=True,
+                                text=True, timeout=600)
+        assert result.returncode == 0, result.stderr[-4000:]
+        return json.loads(result.stdout)
+
+    small, _, _ = generate("small", 16 * 1024 * 1024, 4096)
+    small_result = measure(small)
+    large, path, duplicate = generate("large", 384 * 1024 * 1024, 4096)
+    result = measure(large)
+    legacy = r"""
+import resource, sys
+resource.setrlimit(resource.RLIMIT_AS, (512*1024*1024, 512*1024*1024))
+try:
+ with open(sys.argv[1], 'rb') as stream:
+  raw = stream.read()
+ decoded = raw.decode('utf-8')
+except MemoryError:
+ print('LEGACY_FULL_READ_DECODE_EXCEEDS_ENVELOPE')
+else:
+ raise AssertionError('legacy allocations unexpectedly fit the reviewed memory envelope')
+"""
+    old = subprocess.run([sys.executable, "-c", legacy, str(path)],
+                         capture_output=True, text=True, timeout=60)
+    assert old.returncode == 0, old.stderr
+    assert old.stdout.strip() == "LEGACY_FULL_READ_DECODE_EXCEEDS_ENVELOPE"
+    assert result["peak_rss"] <= small_result["peak_rss"] + 32 * 1024 * 1024
+    assert result["http"] == result["ws"] == "PASS"
+    assert result["index"] < probe.NATIVE_INDEX_BYTES
+    # Exercise late failures on the same full-sized evidence, without a second file copy.
+    original_size = path.stat().st_size
+    with path.open("ab") as stream:
+        stream.write(json.dumps(duplicate, sort_keys=True).encode() + b"\n")
+    assert measure(large, "INCOMPLETE")["status"] == "INCOMPLETE"
+    with path.open("r+b") as stream:
+        stream.truncate(original_size - 1)
+    assert measure(large, "INCOMPLETE")["status"] == "INCOMPLETE"
+    many, _, _ = generate("many-small", 128 * 1024 * 1024, 32)
+    many_result = measure(many)
+    assert many_result["count"] > result["count"] * 5
+    assert many_result["peak_rss"] <= small_result["peak_rss"] + 32 * 1024 * 1024
+
+
+def test_http_retry_candidates_and_native_warning_summary_remain_bounded(tmp_path):
+    import json
+
+    from scripts import e4_nautilus_public_data_probe as probe
+
+    manifest, ledger, _, path = native_log_fixture(tmp_path)
+    with path.open("a") as stream:
+        for index in range(5000):
+            stream.write(json.dumps(dict(timestamp=NS + index, level="WARN",
+                                         component=probe.HTTP_COMPONENT,
+                                         message="Transient error; retrying: endpoint=unbound, "
+                                                 "attempt=0, status=503, wait_ms=1")) + "\n")
+            stream.write(json.dumps(dict(timestamp=NS + index, level="WARN", component="other",
+                                         message=f"unrelated warning {index}")) + "\n")
+    with bound_session(path, manifest) as session:
+        session.bind()
+        assert session.summary["safety_warning_count"] == 5000
+        assert len(session.summary["lifecycle"]) == 0
+        report = probe.parse_native_http_log(path, manifest=manifest, dispatches=ledger,
+                                            file_identity=session.file_identity,
+                                            sync_succeeded=True, _session=session)
+        assert report["status"] == "INCOMPLETE"
+        assert report["matched_retries"] == []
+        assert len(report["blockers"]) < 10
+        assert len(json.dumps(report)) < 100_000
+
+
+def test_native_summary_reconnect_candidate_overflow_is_compact(tmp_path):
+    import json
+
+    from scripts import e4_nautilus_public_data_probe as probe
+
+    manifest, _, _, path = native_log_fixture(tmp_path)
+    with path.open("a") as stream:
+        for index in range(3000):
+            stream.write(json.dumps(dict(timestamp=100 * NS + index, level="DEBUG",
+                                         component=probe.WS_CONTROL_COMPONENT,
+                                         message="Reconnection attempt 1 of unlimited")) + "\n")
+    with bound_session(path, manifest) as session:
+        session.bind()
+        assert session.summary["attempt_count"] == 3000
+        assert len(session.summary["lifecycle"]) == 1
+        epochs = [dict(start_ns=NS, end_ns=90 * NS),
+                  dict(start_ns=110 * NS, end_ns=300 * NS)]
+        assert probe._planned_ws_lifecycle(session.summary, epochs, 89 * NS) == set()
+
+
+def test_exact_index_artifacts_excluded_but_unknown_scratch_file_included(tmp_path):
+    from scripts import e4_nautilus_public_data_probe as probe
+
+    manifest, _, _, path = native_log_fixture(tmp_path)
+    sampler = probe._ResourceSampler()
+    with bound_session(path, manifest, scratch_root=tmp_path) as session:
+        session.bind()
+        sampler.exclude(path, session.file_identity)
+        for artifact, identity in session.artifacts.items():
+            if artifact.exists():
+                sampler.exclude(artifact, identity)
+        unexpected = Path(session.temporary.name) / "durable.sqlite-wal"
+        unexpected.write_bytes(b"production" * 20)
+        snapshot = sampler.disk_snapshot(tmp_path)
+        assert snapshot["included_bytes"] == unexpected.stat().st_size
+        assert snapshot["excluded_diagnostic_bytes"] == (path.stat().st_size
+                                                         + session.scratch_bytes())
+
+
+@pytest.mark.parametrize("phase", ["PRE_NATIVE_BIND", "POST_NATIVE_BIND", "POST_HTTP_VERIFY",
+                                  "POST_WS_VERIFY", "PRE_REPORT_WRITE"])
+def test_resource_trail_keeps_prior_checkpoint_when_stage_write_fails(tmp_path, monkeypatch, phase):
+    import json
+
+    from scripts import e4_nautilus_public_data_probe as probe
+
+    _, _, _, path = native_log_fixture(tmp_path)
+    monkeypatch.setattr(probe._VerifierTrail, "read", staticmethod(verifier_resource_fixture))
+    trail = probe._VerifierTrail(tmp_path / "resources.json", path)
+    original = probe._atomic_json
+
+    def write(destination, payload):
+        if payload["entries"][-1]["phase"] == phase:
+            raise OSError("checkpoint unavailable")
+        original(destination, payload)
+
+    monkeypatch.setattr(probe, "_atomic_json", write)
+    for current in trail.PHASES:
+        trail.mark(current)
+        if current == phase:
+            break
+    assert "POSTRUN_VERIFIER_RESOURCE_WRITE_FAILED" in trail.blockers
+    if phase != "PRE_NATIVE_BIND":
+        assert len(json.loads(trail.path.read_text())["entries"]) == len(trail.entries) - 1
+
+
+def test_replay_cli_never_initializes_native_or_live_application(tmp_path, monkeypatch, capsys):
+    import json
+    from types import ModuleType
+
+    from scripts import e4_nautilus_public_data_probe as probe
+    from trader_assist_v0.multi_asset_shadow import production
+
+    host = ModuleType("trader_assist_v0.nautilus_e4.host")
+    host.assert_exact_nautilus_version = lambda: pytest.fail("replay initialized native runtime")
+    monkeypatch.setitem(sys.modules, "trader_assist_v0.nautilus_e4.host", host)
+    args = replay_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(production, "compose_three_setup_application",
+                        lambda **_: pytest.fail("replay cannot compose live application"))
+    monkeypatch.setattr(host, "assert_exact_nautilus_version",
+                        lambda: pytest.fail("replay cannot initialize native runtime"))
+    monkeypatch.setattr(sys, "argv", ["probe", "--replay-native-log", str(args.replay_native_log),
+                                     "--manifest", str(args.manifest), "--verifier-scratch-root",
+                                     str(args.verifier_scratch_root), "--result-path",
+                                     str(args.result_path)])
+    assert probe.main() == 0
+    report = json.loads(args.result_path.read_text())
+    assert report["qualification_authority"] is False
+    assert json.loads(capsys.readouterr().out)["status"] == "REPLAY_STRUCTURAL_COMPLETE"
+    with pytest.raises(ValueError):
+        probe.main()  # The diagnostic result itself cannot be overwritten on a retry.
