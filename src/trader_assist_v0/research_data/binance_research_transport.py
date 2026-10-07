@@ -10,15 +10,23 @@ import ssl
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from urllib.parse import urlsplit
 from typing import Any
+from urllib.parse import urlsplit
 
 from trader_assist_v0.research_data.binance_archive import (
-    HOST, MAX_CHECKSUM_BYTES, MAX_ZIP_BYTES, ArchiveObject, ChecksumReceipt,
-    HttpResponse, checked_http_response, checksum_receipt, require_frozen_object,
+    HOST,
+    MAX_CHECKSUM_BYTES,
+    MAX_ZIP_BYTES,
+    ArchiveObject,
+    ChecksumReceipt,
+    HttpResponse,
+    checked_http_response,
+    checksum_receipt,
+    require_frozen_object,
 )
 from trader_assist_v0.research_data.contracts import (
-    IntendedUseEligibility, SourceRightsProvenance,
+    IntendedUseEligibility,
+    SourceRightsProvenance,
 )
 
 TERMS_URL = (
