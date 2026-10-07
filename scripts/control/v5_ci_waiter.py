@@ -48,8 +48,8 @@ NON_RETRYABLE_MARKERS = (
 )
 # The 401/403/429 family is intentionally excluded even if the response also
 # contains retryable words such as "timeout", "503" or "connection reset".
-REJECT_HTTP = re.compile(r"(?<!\\d)(?:401|403|429)(?!\\d)")
-TRANSIENT_HTTP = re.compile(r"(?<!\\d)(?:408|500|502|503|504)(?!\\d)")
+REJECT_HTTP = re.compile(r"(?<!\d)(?:401|403|429)(?!\d)")
+TRANSIENT_HTTP = re.compile(r"(?<!\d)(?:408|500|502|503|504)(?!\d)")
 
 
 class WaiterError(RuntimeError):
