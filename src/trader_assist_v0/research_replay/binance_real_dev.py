@@ -12,29 +12,53 @@ from pathlib import Path
 from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
 from trader_assist_v0.research_data.admission import ExternalReferenceLedger
 from trader_assist_v0.research_data.binance_archive import (
-    MAX_ZIP_BYTES, ArchiveObject, ChecksumReceipt, checked_http_response,
-    frozen_archive_objects, parse_verified_daily_zip, require_receipt,
+    MAX_ZIP_BYTES,
+    ArchiveObject,
+    ChecksumReceipt,
+    checked_http_response,
+    frozen_archive_objects,
+    parse_verified_daily_zip,
+    require_receipt,
 )
 from trader_assist_v0.research_data.binance_research_transport import (
-    MockOnlyResearchTransport, PinnedHttpsResearchTransport, require_candidate_rights,
+    MockOnlyResearchTransport,
+    PinnedHttpsResearchTransport,
+    require_candidate_rights,
 )
 from trader_assist_v0.research_data.contracts import (
-    BarPayload, CapabilityState, ControlReplan, DatasetManifest,
-    ExternalReferenceEvent, SourceMode, SourceRightsProvenance,
+    BarPayload,
+    CapabilityState,
+    ControlReplan,
+    DatasetManifest,
+    ExternalReferenceEvent,
+    SourceMode,
+    SourceRightsProvenance,
     TimestampProvenance,
 )
 from trader_assist_v0.research_data.mapping import PitReferenceResolver
 from trader_assist_v0.research_data.storage import EvidenceSidecar
 from trader_assist_v0.research_inventory.builder import validate_inventory_manifest
 from trader_assist_v0.research_inventory.contracts import (
-    DatasetInventoryManifest, InventoryRole, InventoryState,
+    DatasetInventoryManifest,
+    InventoryRole,
+    InventoryState,
 )
 from trader_assist_v0.research_replay.dev_archive import (
-    ENVELOPE_BYTES, G0_QUESTION, G0_STRATEGY, PreparedDailySidecar,
-    metadata_for_object, metadata_ledger,
+    ENVELOPE_BYTES,
+    G0_QUESTION,
+    G0_STRATEGY,
+    PreparedDailySidecar,
+    metadata_for_object,
+    metadata_ledger,
 )
-from trader_assist_v0.research_replay.dev_evidence import DevExternalAdmission, read_external_dev
-from trader_assist_v0.research_replay.dev_lifecycle import DevPreregistration, DevVisibilityPolicy
+from trader_assist_v0.research_replay.dev_evidence import (
+    DevExternalAdmission,
+    read_external_dev,
+)
+from trader_assist_v0.research_replay.dev_lifecycle import (
+    DevPreregistration,
+    DevVisibilityPolicy,
+)
 
 REAL_MAX_SIDECAR_BYTES = 4_000_000
 
