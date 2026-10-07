@@ -155,7 +155,47 @@ CHANGED_OR_UNKNOWN_PREDICATE=>FAIL_CLOSED_WITHOUT_CONSUMING_AUTHORIZATION
 
 Merge never implies deployment/runtime/trading authority.
 
-## 8. Active governance boundary
+## 8. Frozen Route B/CI efficiency candidate (Packet 1)
+
+A frozen small Route B package is implemented by a **fresh ordinary ChatGPT
+High** Writer through the approved GitHub-native surface, not through Codex or
+Remote Desktop Commander. Route A is deterministic/no-model, C retains the
+original Codex primary and exact Pre-code thread/worktree resume, and D is
+Engineering Control-only. Identity, role, stage, canonical independent Pre-code
+PASS, nonduplicate semantic event and exact head must be established before
+the admitted entrypoint can execute. A pure controller guard cannot police
+provider calls deliberately made outside that entrypoint.
+
+Before validation select the Control-frozen qualified evidence surface: local
+focused checks where available; GitHub V0 Ubuntu/Python 3.12 whole-repository
+tests; GitHub E4 Linux x86_64/Python 3.12/Nautilus 2.0.0rc5 native tests; or
+separately **human-authorized** target-host evidence. Prefer existing qualified
+GitHub native CI over emulating its environment on a limited Mac. A missing,
+skipped, wrong-head or unexecuted required test is not a PASS.
+
+Use the deterministic waiter for status polling, **60 s by default**. Only
+classified transient GitHub *reads* use **10 s retry** (max **20 consecutive**
+failures; reset after successful poll), with overall timeout preserved.
+401/403/429, rate limit/quota, auth, permission and semantic failure do not
+receive fast network retries. Writes with ambiguous outcomes require canonical
+readback before any retry. Neither Codex nor RDC is a CI polling agent.
+
+Use a single existing same-head CI run when it meets all frozen requirements;
+do not duplicate-dispatch on an existing valid run. Final independent-review
+readiness requires exact-head completed PASS on *all* frozen required checks,
+plus native proof that their mandatory test steps really executed. Pending,
+skipped or missing proof blocks reviewer admission. The fresh Reviewer reads
+the GitHub PR/evidence directly and writes the full result back to GitHub;
+do not use RDC to relay native evidence. Material tool/session/retry changes
+require independent tool acceptance and separate user activation authority.
+
+**Packet 2 is not implemented or qualified here:** macOS foreground Terminal
+visibility, provider-native Codex session/transport retry and recovery remain
+a separately frozen and reviewed pilot. This candidate does not create a
+ChatGPT callback or authorize a new executor, provider, deployment, runtime,
+target-host test, credential or trade operation.
+
+## 9. Active governance boundary
 
 The activation merge, V5-B controller/bootstrap/consistency validation, baseline
 CLI/GPT-6/permission/auto-review/network qualification, protected-action
