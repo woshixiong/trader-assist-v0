@@ -834,3 +834,152 @@ def test_l0_install_stages_identity_and_service_permissions_without_service_cont
     for command in ("systemctl start", "systemctl restart", "systemctl enable",
                     "systemctl daemon-reload", "systemctl stop"):
         assert command not in script
+
+
+def _load_replay_controller():
+    import importlib.util
+
+    path = Path(__file__).parents[1] / "scripts/p4a/run_e4_replay_diagnostic.py"
+    spec = importlib.util.spec_from_file_location("run_e4_replay_diagnostic_test", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_replay_controller_frozen_systemd_contract(tmp_path: Path) -> None:
+    controller = _load_replay_controller()
+    replay_root = Path("/var/tmp/trade-os-replay-37566655478-1")
+    stage_root = Path("/opt/trader-assist-v0-replay-only-37566655478-1")
+    args = SimpleNamespace(
+        replay_root=replay_root,
+        stage_root=stage_root,
+        staged_python=stage_root / "runtime-venv/bin/python3.12",
+        verifier=stage_root / "bundle/payload/scripts/e4_nautilus_public_data_probe.py",
+        native_log=Path("/var/lib/trader-assist-v0/e4/native.jsonl"),
+        manifest=Path("/var/lib/trader-assist-v0/e4/run-manifest.json"),
+        replay_facts=None,
+        unit_name="trade-os-e4-replay-diagnostic.service",
+        production_service="trader-assist-v0-three-setup.service",
+        activation_permit=Path("/etc/trader-assist-v0/three-setup-activation-permit"),
+    )
+    properties = controller._systemd_properties(
+        work=replay_root / "work",
+        proof=replay_root / "proof",
+        stage_root=stage_root,
+        native_log=args.native_log,
+        manifest=args.manifest,
+        replay_facts=None,
+    )
+    assert {
+        "ProtectSystem=strict",
+        "ProtectHome=yes",
+        "PrivateNetwork=yes",
+        "PrivateDevices=yes",
+        "NoNewPrivileges=yes",
+        "CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_KILL",
+        "MemoryMax=1280M",
+        "TasksMax=16",
+        "RuntimeMaxSec=2400s",
+        "Restart=no",
+        "PrivateTmp=no",
+    }.issubset(set(properties))
+    assert (
+        f"TemporaryFileSystem={replay_root / 'work'}:"
+        "size=768M,nosuid,nodev,noexec,mode=0770,uid=0,gid=988"
+    ) in properties
+    assert all(
+        not any(value.startswith(name + "=") for value in properties)
+        for name in controller.FORBIDDEN_SYSTEMD_PROPERTIES
+    )
+    command = controller.build_systemd_run_argv(
+        args,
+        {
+            "mem_available_bytes": controller.PRESTART_MEMAVAILABLE_MIN_BYTES,
+            "swap_counters": {"pswpin": 0, "pswpout": 0},
+            "source_bindings": {},
+        },
+    )
+    assert command[:6] == [
+        "systemd-run",
+        "--unit",
+        args.unit_name,
+        "--wait",
+        "--collect",
+        "--service-type=exec",
+    ]
+    assert "--execute-authorized-replay" in command
+    assert controller.REPLAY_UID == 999
+    assert controller.REPLAY_GID == 988
+    assert controller.CHILD_DEADLINE_SECONDS == 1800
+    assert controller.EVIDENCE_ALLOWANCE_SECONDS == 300
+    assert controller.RUNTIME_MAX_SECONDS == 2400
+    assert controller.WORK_TMPFS_MAX_BYTES == 768 * 1024 * 1024
+    assert controller.CGROUP_MEMORY_MAX_BYTES == 1280 * 1024 * 1024
+    assert controller.PRESTART_MEMAVAILABLE_MIN_BYTES == 1408 * 1024 * 1024
+    assert controller.VERIFIER_HWM_MAX_BYTES == 256 * 1024 * 1024
+    assert controller.TASKS_MAX == 16
+
+
+def test_replay_controller_bounded_stream_retains_cap_and_hashes_full_stream(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = _load_replay_controller()
+    monkeypatch.setattr(controller, "STREAM_RETAIN_MAX_BYTES", 32)
+    payload = b"0123456789" * 20
+    output = tmp_path / "child.log"
+    capture = controller._BoundedCapture(io.BytesIO(payload), output)
+    capture.start()
+    capture.join()
+    evidence = capture.payload()
+    assert output.read_bytes() == payload[:32]
+    assert evidence["byte_count"] == len(payload)
+    assert evidence["retained_bytes"] == 32
+    assert evidence["full_stream_sha256"] == hashlib.sha256(payload).hexdigest()
+    assert evidence["truncation_marker"] == "TRUNCATED=YES"
+
+
+def test_replay_controller_complete_surviving_work_inventory(tmp_path: Path) -> None:
+    controller = _load_replay_controller()
+    work = tmp_path / "work"
+    nested = work / "verifier"
+    nested.mkdir(parents=True)
+    retained = nested / "scratch.sqlite"
+    retained.write_bytes(b"retained-scratch")
+    inventory = controller._work_inventory(work)
+    entry = next(item for item in inventory["entries"] if item["path"] == "verifier/scratch.sqlite")
+    assert entry["type"] == "regular"
+    assert entry["size"] == len(b"retained-scratch")
+    assert entry["sha256"] == hashlib.sha256(b"retained-scratch").hexdigest()
+    assert inventory["regular_file_count"] == 1
+    assert inventory["total_regular_file_bytes"] == len(b"retained-scratch")
+
+    (work / "unexpected-link").symlink_to(retained)
+    with pytest.raises(controller.ReplayControllerError, match="non-regular special entry"):
+        controller._work_inventory(work)
+
+
+def test_replay_controller_release_and_runbook_binding() -> None:
+    from scripts.verify_exact_release import REQUIRED_FILES
+
+    assert "scripts/p4a/run_e4_replay_diagnostic.py" in REQUIRED_FILES
+    root = Path(__file__).parents[1]
+    controller_source = (root / "scripts/p4a/run_e4_replay_diagnostic.py").read_text()
+    for fragment in (
+        "stdin=subprocess.DEVNULL",
+        "close_fds=True",
+        "shell=False",
+        '"PYTHONDONTWRITEBYTECODE": "1"',
+        '"PYTHONNOUSERSITE": "1"',
+        '"TMPDIR": str(temp)',
+        '"TMP": str(temp)',
+        '"TEMP": str(temp)',
+        '"HOME": str(home)',
+        '"XDG_CACHE_HOME": str(cache)',
+    ):
+        assert fragment in controller_source
+    runbook = (root / "docs/operations/THREE_SETUP_SHADOW_DEPLOYMENT.md").read_text()
+    assert "scripts/p4a/run_e4_replay_diagnostic.py" in runbook
+    assert "complete surviving-WORK inventory" in runbook
+    assert "complete-WORK byte-copy contract is superseded" in runbook
