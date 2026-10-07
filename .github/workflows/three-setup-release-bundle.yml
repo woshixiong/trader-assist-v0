@@ -7,12 +7,12 @@ name: Three Setup exact-release bundle
         description: Frozen reviewed product release SHA
         type: string
         required: true
-        default: ea565fd51793904de33523c7c621f81904331c03
+        default: 1d8e8ca08f4f526f72b2253acf3c9a71defdbe7b
       release_tree:
         description: Frozen reviewed product release tree
         type: string
         required: true
-        default: ba5050f82ea0bc5305ba271ce898768ed68719b0
+        default: 2daee287c155fa33e8af5894f3825d7eddb09e70
 
 permissions:
   contents: read
@@ -25,8 +25,8 @@ jobs:
       run:
         shell: bash
     env:
-      RELEASE_SHA: ea565fd51793904de33523c7c621f81904331c03
-      RELEASE_TREE: ba5050f82ea0bc5305ba271ce898768ed68719b0
+      RELEASE_SHA: 1d8e8ca08f4f526f72b2253acf3c9a71defdbe7b
+      RELEASE_TREE: 2daee287c155fa33e8af5894f3825d7eddb09e70
       INPUT_RELEASE_SHA: ${{ inputs.release_sha }}
       INPUT_RELEASE_TREE: ${{ inputs.release_tree }}
       CONTROL_HEAD: ${{ github.sha }}
