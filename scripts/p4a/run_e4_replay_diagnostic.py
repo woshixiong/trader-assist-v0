@@ -318,3 +318,333 @@ def _systemd_properties(
 
 def build_systemd_run_argv(
     args: argparse.Namespace, host_preflight: dict[str, object]
+) -> list[str]:
+    work = args.replay_root / "work"
+    proof = args.replay_root / "proof"
+    properties = _systemd_properties(
+        work=work,
+        proof=proof,
+        stage_root=args.stage_root,
+        native_log=args.native_log,
+        manifest=args.manifest,
+        replay_facts=args.replay_facts,
+    )
+    internal = [
+        str(args.staged_python),
+        "-B",
+        str(Path(__file__).absolute()),
+        "--inside-unit",
+        "--execute-authorized-replay",
+        "--unit-name",
+        args.unit_name,
+        "--replay-root",
+        str(args.replay_root),
+        "--stage-root",
+        str(args.stage_root),
+        "--staged-python",
+        str(args.staged_python),
+        "--verifier",
+        str(args.verifier),
+        "--native-log",
+        str(args.native_log),
+        "--manifest",
+        str(args.manifest),
+        "--production-service",
+        args.production_service,
+        "--activation-permit",
+        str(args.activation_permit),
+        "--host-preflight",
+        _encode_internal(host_preflight),
+    ]
+    if args.replay_facts is not None:
+        internal.extend(("--replay-facts", str(args.replay_facts)))
+    command = [
+        "systemd-run",
+        "--unit",
+        args.unit_name,
+        "--wait",
+        "--collect",
+        "--service-type=exec",
+    ]
+    command.extend(f"--property={value}" for value in properties)
+    command.append("--")
+    command.extend(internal)
+    return command
+
+
+def _drop_replay_credentials() -> None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    pr_set_no_new_privs = 38
+    if libc.prctl(pr_set_no_new_privs, 1, 0, 0, 0) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+    os.setgroups([])
+    os.setgid(REPLAY_GID)
+    os.setuid(REPLAY_UID)
+
+
+def _status_fields() -> dict[str, str]:
+    wanted = {"Uid", "Gid", "Groups", "CapEff", "NoNewPrivs"}
+    result: dict[str, str] = {}
+    for line in Path("/proc/self/status").read_text(encoding="ascii").splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        if key in wanted:
+            result[key] = value.strip()
+    return result
+
+
+def _probe_one_source(path: Path, expected: dict[str, object]) -> dict[str, object]:
+    flags_common = getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    fd = os.open(path, os.O_RDONLY | flags_common)
+    try:
+        state = os.fstat(fd)
+        if state.st_dev != expected.get("dev") or state.st_ino != expected.get("inode"):
+            raise ReplayControllerError(f"read-only probe identity mismatch: {path}")
+    finally:
+        os.close(fd)
+    denials: dict[str, str] = {}
+    for label, mode in (("O_WRONLY", os.O_WRONLY), ("O_RDWR", os.O_RDWR)):
+        try:
+            write_fd = os.open(path, mode | flags_common)
+        except OSError as exc:
+            if exc.errno != errno.EROFS:
+                raise ReplayControllerError(
+                    f"{label} must fail with EROFS for {path}; got errno={exc.errno}"
+                ) from exc
+            denials[label] = "EROFS"
+        else:
+            os.close(write_fd)
+            raise ReplayControllerError(f"{label} unexpectedly succeeded for {path}")
+    return {
+        "path": str(path),
+        "read_only": "PASS",
+        "dev": expected["dev"],
+        "inode": expected["inode"],
+        "write_denials": denials,
+    }
+
+
+def _probe_child(args: argparse.Namespace) -> int:
+    expected = _decode_internal(args.probe_expected)
+    status_fields = _status_fields()
+    expected_uid = str(REPLAY_UID)
+    expected_gid = str(REPLAY_GID)
+    if os.getuid() != REPLAY_UID or os.geteuid() != REPLAY_UID:
+        raise ReplayControllerError("probe UID is not exact replay UID")
+    if os.getgid() != REPLAY_GID or os.getegid() != REPLAY_GID:
+        raise ReplayControllerError("probe GID is not exact replay GID")
+    if os.getgroups():
+        raise ReplayControllerError("probe supplementary groups are not empty")
+    if int(status_fields.get("CapEff", "1"), 16) != 0:
+        raise ReplayControllerError("probe effective capabilities are not empty")
+    if status_fields.get("NoNewPrivs") != "1":
+        raise ReplayControllerError("probe no-new-privileges is not active")
+    uid_fields = status_fields.get("Uid", "").split()
+    gid_fields = status_fields.get("Gid", "").split()
+    if not uid_fields or any(value != expected_uid for value in uid_fields):
+        raise ReplayControllerError("probe /proc UID state is inconsistent")
+    if not gid_fields or any(value != expected_gid for value in gid_fields):
+        raise ReplayControllerError("probe /proc GID state is inconsistent")
+
+    sources = []
+    for key, source_path in (("native_log", args.native_log), ("manifest", args.manifest)):
+        binding = expected.get(key)
+        if not isinstance(binding, dict):
+            raise ReplayControllerError("probe expected source binding is missing")
+        sources.append(_probe_one_source(source_path, binding))
+    if args.replay_facts is not None:
+        binding = expected.get("replay_facts")
+        if not isinstance(binding, dict):
+            raise ReplayControllerError("probe expected facts binding is missing")
+        sources.append(_probe_one_source(args.replay_facts, binding))
+
+    sentinel = args.proof_dir / ".child-write-probe"
+    try:
+        proof_fd = os.open(
+            sentinel,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0),
+            0o600,
+        )
+    except OSError as exc:
+        if exc.errno not in (errno.EACCES, errno.EROFS, errno.EPERM):
+            raise ReplayControllerError(f"unexpected PROOF denial errno={exc.errno}") from exc
+        proof_denial = errno.errorcode.get(exc.errno, str(exc.errno))
+    else:
+        os.close(proof_fd)
+        try:
+            sentinel.unlink()
+        except OSError:
+            pass
+        raise ReplayControllerError("replay identity unexpectedly wrote DURABLE_PROOF")
+
+    print(
+        _canonical_bytes(
+            {
+                "uid": REPLAY_UID,
+                "gid": REPLAY_GID,
+                "supplementary_groups": [],
+                "cap_eff": 0,
+                "no_new_privileges": True,
+                "sources": sources,
+                "proof_write_denial": proof_denial,
+            }
+        ).decode()
+    )
+    return 0
+
+
+def _minimal_child_env(work: Path) -> dict[str, str]:
+    home = work / "home"
+    temp = work / "tmp"
+    cache = work / "cache"
+    for directory in (home, temp, cache):
+        if directory.exists() or directory.is_symlink():
+            raise ReplayControllerError(f"child environment path collision: {directory}")
+        directory.mkdir(mode=0o770)
+        os.chown(directory, 0, REPLAY_GID)
+        os.chmod(directory, 0o770)
+    return {
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "HOME": str(home),
+        "TMPDIR": str(temp),
+        "TMP": str(temp),
+        "TEMP": str(temp),
+        "SQLITE_TMPDIR": str(temp),
+        "XDG_CACHE_HOME": str(cache),
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONNOUSERSITE": "1",
+    }
+
+
+def _run_credential_probe(
+    args: argparse.Namespace, expected: dict[str, object], env: dict[str, str]
+) -> dict[str, object]:
+    command = [
+        str(args.staged_python),
+        "-B",
+        str(Path(__file__).absolute()),
+        "--probe-child",
+        "--native-log",
+        str(args.native_log),
+        "--manifest",
+        str(args.manifest),
+        "--proof-dir",
+        str(args.replay_root / "proof"),
+        "--probe-expected",
+        _encode_internal(expected),
+    ]
+    if args.replay_facts is not None:
+        command.extend(("--replay-facts", str(args.replay_facts)))
+    completed = subprocess.run(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        preexec_fn=_drop_replay_credentials,
+        close_fds=True,
+        shell=False,
+        check=False,
+        timeout=60,
+    )
+    if completed.returncode != 0:
+        raise ReplayControllerError(
+            "exact replay-credential read-only probe failed: "
+            + completed.stderr.decode("utf-8", "replace")[-2048:]
+        )
+    try:
+        value = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise ReplayControllerError("credential probe did not emit canonical JSON") from exc
+    if not isinstance(value, dict):
+        raise ReplayControllerError("credential probe output is not an object")
+    return value
+
+
+class _BoundedCapture(threading.Thread):
+    def __init__(self, stream: Any, path: Path) -> None:
+        super().__init__(daemon=True)
+        self.stream = stream
+        self.path = path
+        self.digest = hashlib.sha256()
+        self.byte_count = 0
+        self.retained_bytes = 0
+        self.error: BaseException | None = None
+
+    def run(self) -> None:
+        fd = -1
+        try:
+            fd = os.open(
+                self.path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0),
+                0o600,
+            )
+            while True:
+                data = self.stream.read(COPY_CHUNK_BYTES)
+                if not data:
+                    break
+                self.digest.update(data)
+                self.byte_count += len(data)
+                if self.retained_bytes < STREAM_RETAIN_MAX_BYTES:
+                    retained = data[: STREAM_RETAIN_MAX_BYTES - self.retained_bytes]
+                    view = memoryview(retained)
+                    while view:
+                        written = os.write(fd, view)
+                        if written <= 0:
+                            raise ReplayControllerError(f"short bounded-log write: {self.path}")
+                        view = view[written:]
+                    self.retained_bytes += len(retained)
+            os.fsync(fd)
+        except BaseException as exc:  # surfaced in supervisor thread
+            self.error = exc
+        finally:
+            if fd >= 0:
+                os.close(fd)
+            try:
+                self.stream.close()
+            except Exception:
+                pass
+
+    def payload(self) -> dict[str, object]:
+        if self.error is not None:
+            raise ReplayControllerError(f"stream capture failed: {self.path}") from self.error
+        return {
+            "full_stream_sha256": self.digest.hexdigest(),
+            "byte_count": self.byte_count,
+            "retained_bytes": self.retained_bytes,
+            "retain_cap_bytes": STREAM_RETAIN_MAX_BYTES,
+            "truncated": self.byte_count > self.retained_bytes,
+            "truncation_marker": (
+                "TRUNCATED=YES" if self.byte_count > self.retained_bytes else "TRUNCATED=NO"
+            ),
+        }
+
+
+def _verifier_argv(args: argparse.Namespace, scratch: Path) -> list[str]:
+    command = [
+        str(args.staged_python),
+        "-B",
+        str(args.verifier),
+        "--replay-native-log",
+        str(args.native_log),
+        "--manifest",
+        str(args.manifest),
+        "--verifier-scratch-root",
+        str(scratch),
+        "--result-path",
+        str(scratch / "replay-diagnostic.json"),
+    ]
+    if args.replay_facts is not None:
+        command.extend(("--replay-facts", str(args.replay_facts)))
+    return command
+
+
+def _run_verifier_child(
+    args: argparse.Namespace, work: Path, env: dict[str, str]
+) -> dict[str, object]:
+    scratch = work / "verifier"
+    scratch.mkdir(mode=0o770)
+    os.chown(scratch, 0, REPLAY_GID)
