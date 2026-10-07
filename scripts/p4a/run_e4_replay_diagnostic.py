@@ -648,3 +648,333 @@ def _run_verifier_child(
     scratch = work / "verifier"
     scratch.mkdir(mode=0o770)
     os.chown(scratch, 0, REPLAY_GID)
+    os.chmod(scratch, 0o770)
+    if any(scratch.iterdir()):
+        raise ReplayControllerError("verifier scratch must begin empty")
+
+    command = _verifier_argv(args, scratch)
+    started_ns = time.time_ns()
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        preexec_fn=_drop_replay_credentials,
+        close_fds=True,
+        shell=False,
+        start_new_session=True,
+    )
+    assert process.stdout is not None and process.stderr is not None
+    stdout_capture = _BoundedCapture(process.stdout, work / "child.stdout.log")
+    stderr_capture = _BoundedCapture(process.stderr, work / "child.stderr.log")
+    stdout_capture.start()
+    stderr_capture.start()
+
+    timed_out = False
+    term_sent = False
+    kill_sent = False
+    try:
+        returncode = process.wait(timeout=CHILD_DEADLINE_SECONDS)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        term_sent = True
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            returncode = process.wait(timeout=TERM_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            kill_sent = True
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            returncode = process.wait()
+    stdout_capture.join()
+    stderr_capture.join()
+    finished_ns = time.time_ns()
+    return {
+        "argv": command,
+        "started_ns": started_ns,
+        "finished_ns": finished_ns,
+        "deadline_seconds": CHILD_DEADLINE_SECONDS,
+        "term_grace_seconds": TERM_GRACE_SECONDS,
+        "timed_out": timed_out,
+        "sigterm_sent": term_sent,
+        "sigkill_sent": kill_sent,
+        "returncode": returncode,
+        "signal": -returncode if returncode < 0 else None,
+        "stdout": stdout_capture.payload(),
+        "stderr": stderr_capture.payload(),
+    }
+
+
+def _decode_mount_field(value: str) -> str:
+    return (
+        value.replace("\\040", " ")
+        .replace("\\011", "\t")
+        .replace("\\012", "\n")
+        .replace("\\134", "\\")
+    )
+
+
+def _work_mount_evidence(work: Path) -> dict[str, object]:
+    target = str(work.resolve(strict=True))
+    found: dict[str, object] | None = None
+    for line in Path("/proc/self/mountinfo").read_text(encoding="utf-8").splitlines():
+        left, separator, right = line.partition(" - ")
+        if not separator:
+            continue
+        left_fields = left.split()
+        right_fields = right.split()
+        if len(left_fields) < 6 or len(right_fields) < 3:
+            continue
+        mount_point = _decode_mount_field(left_fields[4])
+        if mount_point != target:
+            continue
+        mount_options = set(left_fields[5].split(","))
+        super_options = set(right_fields[2].split(","))
+        found = {
+            "mount_point": mount_point,
+            "mount_options": sorted(mount_options),
+            "fs_type": right_fields[0],
+            "mount_source": right_fields[1],
+            "super_options": sorted(super_options),
+        }
+        break
+    if found is None or found["fs_type"] != "tmpfs":
+        raise ReplayControllerError("WORK is not the exact transient tmpfs")
+    options = set(found["mount_options"])
+    if not {"rw", "nosuid", "nodev", "noexec"}.issubset(options):
+        raise ReplayControllerError("WORK tmpfs mount options are incomplete")
+    state = work.lstat()
+    if state.st_uid != 0 or state.st_gid != REPLAY_GID or stat.S_IMODE(state.st_mode) != 0o770:
+        raise ReplayControllerError("WORK tmpfs ownership/mode is not exact")
+    stats = os.statvfs(work)
+    total_bytes = stats.f_frsize * stats.f_blocks
+    if total_bytes > WORK_TMPFS_MAX_BYTES:
+        raise ReplayControllerError("WORK tmpfs allocation exceeds 768MiB")
+    found.update(
+        {
+            "uid": state.st_uid,
+            "gid": state.st_gid,
+            "mode": stat.S_IMODE(state.st_mode),
+            "allocation_bytes": total_bytes,
+            "allocation_max_bytes": WORK_TMPFS_MAX_BYTES,
+        }
+    )
+    return found
+
+
+def _systemd_unit_evidence(
+    unit_name: str, expected_properties: tuple[str, ...]
+) -> dict[str, object]:
+    names = (
+        "ProtectSystem",
+        "ProtectHome",
+        "PrivateNetwork",
+        "PrivateDevices",
+        "NoNewPrivileges",
+        "CapabilityBoundingSet",
+        "MemoryMax",
+        "TasksMax",
+        "RuntimeMaxUSec",
+        "Restart",
+        "PrivateTmp",
+        "BindReadOnlyPaths",
+        "ReadWritePaths",
+        "TemporaryFileSystem",
+    )
+    completed = subprocess.run(
+        ("systemctl", "show", unit_name, "--no-pager", *(f"--property={name}" for name in names)),
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        check=False,
+        close_fds=True,
+    )
+    if completed.returncode != 0:
+        raise ReplayControllerError("cannot read back transient systemd properties")
+    actual: dict[str, str] = {}
+    for line in completed.stdout.splitlines():
+        if "=" in line:
+            key, value = line.split("=", 1)
+            actual[key] = value
+    required = {
+        "ProtectSystem": "strict",
+        "ProtectHome": "yes",
+        "PrivateNetwork": "yes",
+        "PrivateDevices": "yes",
+        "NoNewPrivileges": "yes",
+        "MemoryMax": str(CGROUP_MEMORY_MAX_BYTES),
+        "TasksMax": str(TASKS_MAX),
+        "Restart": "no",
+        "PrivateTmp": "no",
+    }
+    for key, value in required.items():
+        if actual.get(key) != value:
+            raise ReplayControllerError(f"transient unit property mismatch: {key}")
+    caps = {item.lower() for item in actual.get("CapabilityBoundingSet", "").split()}
+    if caps != {"cap_setuid", "cap_setgid", "cap_kill"}:
+        raise ReplayControllerError("transient unit capability set mismatch")
+    runtime = actual.get("RuntimeMaxUSec", "")
+    if runtime not in ("40min", "2400s", "2400000000"):
+        raise ReplayControllerError("transient unit RuntimeMaxSec mismatch")
+    return {
+        "unit": unit_name,
+        "requested": list(expected_properties),
+        "actual": actual,
+        "forbidden_properties_absent_from_request": all(
+            not any(value.startswith(name + "=") for value in expected_properties)
+            for name in FORBIDDEN_SYSTEMD_PROPERTIES
+        ),
+    }
+
+
+def _work_inventory(work: Path) -> dict[str, object]:
+    root_state = work.lstat()
+    entries: list[dict[str, object]] = [
+        {
+            "path": ".",
+            "type": "directory",
+            "mode": stat.S_IMODE(root_state.st_mode),
+            "uid": root_state.st_uid,
+            "gid": root_state.st_gid,
+            "size": root_state.st_size,
+        }
+    ]
+    regular_count = 0
+    total_regular_bytes = 0
+    stack = [work]
+    while stack:
+        directory = stack.pop()
+        children = sorted(os.scandir(directory), key=lambda item: item.name, reverse=True)
+        for item in children:
+            item_path = Path(item.path)
+            state = item_path.lstat()
+            relative = item_path.relative_to(work).as_posix()
+            common = {
+                "path": relative,
+                "mode": stat.S_IMODE(state.st_mode),
+                "uid": state.st_uid,
+                "gid": state.st_gid,
+                "size": state.st_size,
+            }
+            if stat.S_ISDIR(state.st_mode):
+                entries.append({**common, "type": "directory"})
+                stack.append(item_path)
+                continue
+            if not stat.S_ISREG(state.st_mode):
+                raise ReplayControllerError(f"WORK contains non-regular special entry: {relative}")
+            if state.st_nlink != 1:
+                raise ReplayControllerError(f"WORK contains hardlink ambiguity: {relative}")
+            digest, size = _hash_path(item_path)
+            if size != state.st_size:
+                raise ReplayControllerError(f"WORK file changed during inventory: {relative}")
+            regular_count += 1
+            total_regular_bytes += size
+            entries.append({**common, "type": "regular", "sha256": digest})
+    entries.sort(key=lambda entry: str(entry["path"]))
+    return {
+        "schema": "trade-os/e4-replay-work-inventory/v1",
+        "entry_count": len(entries),
+        "regular_file_count": regular_count,
+        "total_regular_file_bytes": total_regular_bytes,
+        "entries": entries,
+    }
+
+
+def _source_bindings_from_host(
+    args: argparse.Namespace, host_preflight: dict[str, Any]
+) -> dict[str, dict[str, object]]:
+    names = [("native_log", args.native_log), ("manifest", args.manifest)]
+    if args.replay_facts is not None:
+        names.append(("replay_facts", args.replay_facts))
+    expected: dict[str, dict[str, object]] = {}
+    host_bindings = host_preflight.get("source_bindings")
+    if not isinstance(host_bindings, dict):
+        raise ReplayControllerError("host source binding evidence is missing")
+    for name, source_path in names:
+        binding = host_bindings.get(name)
+        if not isinstance(binding, dict):
+            raise ReplayControllerError(f"host source binding is missing: {name}")
+        current_binding = _file_binding(source_path)
+        if current_binding != binding:
+            raise ReplayControllerError(f"source drift before replay credential probe: {name}")
+        expected[name] = current_binding
+    return expected
+
+
+def _proof_inventory(proof: Path) -> list[dict[str, object]]:
+    values = []
+    for name in PROOF_FILES:
+        proof_path = proof / name
+        if proof_path.is_file() and not proof_path.is_symlink():
+            digest, size = _hash_path(proof_path)
+            values.append({"path": name, "sha256": digest, "size": size})
+    return values
+
+
+def _readback_exact(proof: Path, files: list[dict[str, object]]) -> bool:
+    for entry in files:
+        proof_path = proof / str(entry["path"])
+        digest, size = _hash_path(proof_path)
+        if digest != entry["sha256"] or size != entry["size"]:
+            return False
+    return True
+
+
+def _finalize_proof(
+    proof: Path,
+    *,
+    export_status: str,
+    blockers: list[str],
+    source_binding: dict[str, object] | None,
+    unit_properties: dict[str, object] | None,
+) -> dict[str, object]:
+    _fsync_dir(proof)
+    files = _proof_inventory(proof)
+    readback = _readback_exact(proof, files)
+    if not readback:
+        export_status = "FAIL"
+        blockers.append("PROOF_POST_FSYNC_READBACK_MISMATCH")
+    manifest = {
+        "schema": "trade-os/e4-replay-proof-manifest/v1",
+        "files": files,
+        "directory_fsync_completion": True,
+        "post_fsync_readback_sha256_equality": readback,
+        "source_binding": source_binding,
+        "unit_properties_bound": unit_properties is not None,
+        "DURABLE_EVIDENCE_EXPORT": export_status,
+        "blockers": sorted(set(blockers)),
+    }
+    final_bytes = _write_json_replace(proof / "proof-manifest.json", manifest)
+    with (proof / "proof-manifest.json").open("rb") as stream:
+        if stream.read() != final_bytes:
+            manifest["DURABLE_EVIDENCE_EXPORT"] = "FAIL"
+            manifest["blockers"] = sorted(
+                set(manifest["blockers"] + ["PROOF_MANIFEST_SELF_READBACK_MISMATCH"])
+            )
+            _write_json_replace(proof / "proof-manifest.json", manifest)
+    _fsync_dir(proof)
+    return manifest
+
+
+def _inside_unit(args: argparse.Namespace) -> int:
+    if os.geteuid() != 0:
+        raise ReplayControllerError("transient replay controller supervisor must run as root")
+    host_preflight = _decode_internal(args.host_preflight)
+    work = args.replay_root / "work"
+    proof = args.replay_root / "proof"
+    if not work.is_dir() or not proof.is_dir():
+        raise ReplayControllerError("WORK/PROOF runtime roots are unavailable")
+    proof_state = proof.lstat()
+    if (
+        proof_state.st_uid != 0
+        or proof_state.st_gid != 0
+        or stat.S_IMODE(proof_state.st_mode) != 0o750
+    ):
+        raise ReplayControllerError("PROOF must be root-owned mode 0750")
+
