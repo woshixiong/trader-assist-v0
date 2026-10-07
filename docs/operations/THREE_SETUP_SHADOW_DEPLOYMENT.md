@@ -23,8 +23,8 @@ ref after the separate publication/merge gates. It has only `workflow_dispatch`
 and builds on Ubuntu 24.04 / Linux x86_64 / CPython 3.12. The frozen inputs are:
 
 ```text
-release_sha=ea565fd51793904de33523c7c621f81904331c03
-release_tree=ba5050f82ea0bc5305ba271ce898768ed68719b0
+release_sha=1d8e8ca08f4f526f72b2253acf3c9a71defdbe7b
+release_tree=2daee287c155fa33e8af5894f3825d7eddb09e70
 ```
 
 The workflow checks out the control HEAD at the dispatch run's `github.sha` in
