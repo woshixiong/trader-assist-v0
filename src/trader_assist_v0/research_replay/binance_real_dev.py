@@ -20,7 +20,7 @@ from trader_assist_v0.research_data.binance_research_transport import (
 )
 from trader_assist_v0.research_data.contracts import (
     BarPayload, CapabilityState, ControlReplan, DatasetManifest,
-    ExternalReferenceEvent, ProviderCapability, SourceMode, SourceRightsProvenance,
+    ExternalReferenceEvent, SourceMode, SourceRightsProvenance,
     TimestampProvenance,
 )
 from trader_assist_v0.research_data.mapping import PitReferenceResolver
@@ -140,8 +140,14 @@ class FrozenRealDevCandidate:
             if by_url[obj.zip_url] != expected:
                 raise PermissionError("rights/dataset/checksum/role immutable binding mismatch")
         pre = DevPreregistration.model_validate_json(self.preregistration.model_dump_json())
-        dev = tuple(by_url[o.zip_url].record_hash for o in objects if o.role_intent == "CURRENT_DEV")
-        reserves = tuple(by_url[o.zip_url].record_hash for o in objects if o.role_intent != "CURRENT_DEV")
+        dev = tuple(
+            by_url[o.zip_url].record_hash
+            for o in objects if o.role_intent == "CURRENT_DEV"
+        )
+        reserves = tuple(
+            by_url[o.zip_url].record_hash
+            for o in objects if o.role_intent != "CURRENT_DEV"
+        )
         if (
             pre.stage != "S1" or pre.group != "G0"
             or pre.evidence_kind != "RIGHTS_AUTHORIZED_DEV"
@@ -179,8 +185,13 @@ class FrozenRealDevCandidate:
                 raise PermissionError("operative R2B allocation/rights mismatch")
             if role == InventoryRole.CURRENT_DEV:
                 if row.inventory_state != InventoryState.AVAILABLE:
-                    raise ControlReplan("verified CURRENT_DEV inventory unavailable; checksum is not coverage")
-            elif row.dataset.exposure_state != "UNSEEN_SEALED" or row.inventory_state == InventoryState.AVAILABLE:
+                    raise ControlReplan(
+                        "verified CURRENT_DEV inventory unavailable; checksum is not coverage"
+                    )
+            elif (
+                row.dataset.exposure_state != "UNSEEN_SEALED"
+                or row.inventory_state == InventoryState.AVAILABLE
+            ):
                 raise PermissionError("reserve must remain sealed and non-available")
         if set(pre.dataset_hashes) & set(pre.reserve_hashes):
             raise PermissionError("DEV/reserve overlap forbidden")
@@ -364,8 +375,9 @@ def prepare_real_dev_sidecar(
         raise TypeError("exact pinned stdlib transport required")
     # The transport itself independently refuses I/O; never substitute a mock
     # path or a caller-provided callback as real run authority.
+    rights = admission.dataset.rights
+    assert rights is not None
     transport.request(
-        obj, "ZIP", rights=admission.dataset.rights,
-        satisfied=candidate.satisfied_constraints,
+        obj, "ZIP", rights=rights, satisfied=candidate.satisfied_constraints,
     )
     raise PermissionError("REAL_PROVIDER_IO_NOT_AUTHORIZED")
