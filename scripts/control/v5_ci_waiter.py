@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import time
 from collections.abc import Callable, Iterable
@@ -26,11 +27,29 @@ RETRYABLE_MARKERS = (
     "connection refused",
     "could not resolve",
     "temporary failure",
-    "502",
-    "503",
-    "504",
-    "rate limit",
+    "network is unreachable",
+    "connection aborted",
 )
+NON_RETRYABLE_MARKERS = (
+    "rate limit",
+    "rate-limit",
+    "secondary rate",
+    "retry-after",
+    "too many requests",
+    "quota",
+    "permission",
+    "forbidden",
+    "unauthorized",
+    "authentication",
+    "bad credentials",
+    "oauth",
+    "resource not accessible",
+    "abuse detection",
+)
+# The 401/403/429 family is intentionally excluded even if the response also
+# contains retryable words such as "timeout", "503" or "connection reset".
+REJECT_HTTP = re.compile(r"(?<!\\d)(?:401|403|429)(?!\\d)")
+TRANSIENT_HTTP = re.compile(r"(?<!\\d)(?:408|500|502|503|504)(?!\\d)")
 
 
 class WaiterError(RuntimeError):
@@ -75,12 +94,22 @@ def _run_gh_json(args: list[str]) -> Any:
             stdin=subprocess.DEVNULL,
             timeout=30,
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    except subprocess.TimeoutExpired as exc:
         raise RetryableTransportError(str(exc)) from exc
+    except OSError as exc:
+        # Failure to spawn gh (including local permission errors) is not a
+        # network read failure; repeated fast retries cannot repair it.
+        raise QueryError(f"gh invocation failed: {exc}") from exc
     if proc.returncode != 0:
         message = (proc.stderr or proc.stdout).strip()
         lowered = message.lower()
-        if any(marker in lowered for marker in RETRYABLE_MARKERS):
+        if REJECT_HTTP.search(lowered) or any(
+            marker in lowered for marker in NON_RETRYABLE_MARKERS
+        ):
+            raise QueryError(message[:500] or f"gh exited {proc.returncode}")
+        if TRANSIENT_HTTP.search(lowered) or any(
+            marker in lowered for marker in RETRYABLE_MARKERS
+        ):
             raise RetryableTransportError(message[:500])
         raise QueryError(message[:500] or f"gh exited {proc.returncode}")
     try:
@@ -178,9 +207,17 @@ def wait_for_ci(
     gh_json: Callable[[list[str]], Any] = _run_gh_json,
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
+    retry_seconds: float = 10.0,
 ) -> WaitResult:
     if not required_checks:
         raise ValueError("at least one required check is required")
+    if (
+        poll_seconds < 0
+        or retry_seconds <= 0
+        or max_transport_failures < 1
+        or max_wait_seconds <= 0
+    ):
+        raise ValueError("invalid CI poll/retry/timeout bounds")
     start = monotonic()
     transport_failures = 0
     checks: list[CheckState] = []
@@ -216,6 +253,9 @@ def wait_for_ci(
                     return result
 
             checks = read_check_runs(repo, expected_head, required_checks, gh_json)
+            # A complete successful poll clears the *consecutive* transport
+            # failure counter, even while required CI remains pending.
+            transport_failures = 0
             terminal, failed = _check_terminal(checks, required_checks)
             if terminal:
                 terminal_head = read_pr_head(repo, pr_number, gh_json)
@@ -255,7 +295,7 @@ def wait_for_ci(
                 )
                 _write_result(result, result_file)
                 return result
-            sleep(min(max(poll_seconds, 1.0), 60.0))
+            sleep(retry_seconds)
             continue
         except QueryError as exc:
             result = WaitResult(
@@ -280,6 +320,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--expected-head", required=True)
     p.add_argument("--required-check", action="append", required=True, dest="required_checks")
     p.add_argument("--poll-seconds", type=float, default=60.0)
+    p.add_argument("--retry-seconds", type=float, default=10.0)
     p.add_argument("--max-transport-failures", type=int, default=20)
     p.add_argument("--max-wait-seconds", type=float, default=10800.0)
     p.add_argument("--result-file", type=Path)
@@ -297,6 +338,7 @@ def main(argv: list[str] | None = None) -> int:
         max_transport_failures=args.max_transport_failures,
         max_wait_seconds=args.max_wait_seconds,
         result_file=args.result_file,
+        retry_seconds=args.retry_seconds,
     )
     return {
         "SUCCESS": 0,
