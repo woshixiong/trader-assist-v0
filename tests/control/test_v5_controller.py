@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import importlib.util
 import sys
 from pathlib import Path
@@ -497,8 +498,6 @@ def test_final_review_fail_closes_on_missing_wrong_head_or_unexecuted_steps():
         lambda x: x["e4-capture"]["steps"][0].update(conclusion="skipped"),
         lambda x: x["e4-capture"]["steps"][0].update(started_at=None),
     ):
-        import copy
-
         jobs = copy.deepcopy(kwargs["job_evidence"])
         mutation(jobs)
         assert controller.final_review_readiness(
