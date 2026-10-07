@@ -17,8 +17,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-# Nonretryable authorization/quota failures take precedence over any TLS/5xx
-# words in the same CLI diagnostic. Unknown failures fail closed.
+# Nonretryable authorization/quota/query-semantic failures take precedence
+# over any TLS/5xx words in the same CLI diagnostic. Unknown failures fail closed.
 NONRETRYABLE_WORDS = (
     "rate limit",
     "rate-limit",
@@ -43,11 +43,14 @@ NONRETRYABLE_WORDS = (
     "unknown field",
 )
 NONRETRYABLE_AUTH = re.compile(r"\bauth\b", re.IGNORECASE)
+NONRETRYABLE_SEMANTIC_RESOLUTION = re.compile(
+    r"\bcould not resolve to\b", re.IGNORECASE
+)
 NONRETRYABLE_HTTP = re.compile(r"(?<!\d)(?:401|403|429)(?!\d)")
 TRANSIENT_NETWORK = re.compile(
     r"\b(?:tls|ssl|eof)\b|"
     r"\b(?:connection (?:reset|refused|closed|aborted)|"
-    r"could not resolve|temporary failure|network is unreachable|"
+    r"could not resolve host|temporary failure|network is unreachable|"
     r"context deadline exceeded|i/o timeout|"
     r"(?:connection|network|read|request) timed? out|timed out)\b",
     re.IGNORECASE,
@@ -66,7 +69,11 @@ def _is_transient_read_error(message: str) -> bool:
     lowered = message.lower()
     if any(word in lowered for word in NONRETRYABLE_WORDS):
         return False
-    if NONRETRYABLE_HTTP.search(lowered) or NONRETRYABLE_AUTH.search(lowered):
+    if (
+        NONRETRYABLE_HTTP.search(lowered)
+        or NONRETRYABLE_AUTH.search(lowered)
+        or NONRETRYABLE_SEMANTIC_RESOLUTION.search(lowered)
+    ):
         return False
     return bool(
         TRANSIENT_NETWORK.search(message) or TRANSIENT_HTTP.search(message)

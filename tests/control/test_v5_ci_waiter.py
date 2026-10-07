@@ -267,13 +267,33 @@ def test_nonretryable_auth_quota_and_ambiguous_errors_take_precedence(message):
 @pytest.mark.parametrize(
     "message",
     [
+        "GraphQL: Could not resolve to a Repository with the name 'owner/missing'.",
+        "GraphQL: Could not resolve to a PullRequest with the number of 302.",
+        (
+            "GraphQL: Could not resolve to a Repository with the name "
+            "'owner/missing'. HTTP 503 Service Unavailable"
+        ),
+        (
+            "GraphQL: Could not resolve to a PullRequest with the number of 302. "
+            "TLS EOF"
+        ),
+    ],
+)
+def test_github_semantic_resolution_errors_take_precedence(message):
+    assert waiter._is_transient_read_error(message) is False
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
         "HTTP 408: Request Timeout", "HTTP 500: Internal Server Error",
         "HTTP 502: Bad Gateway", "status 503",
         "response status 504", "500 Internal Server Error",
         "502 Bad Gateway", "503 Service Unavailable", "504 Gateway Timeout",
         "TLS handshake EOF", "SSL handshake failure", "unexpected EOF",
         "connection reset by peer", "connection refused",
-        "could not resolve host", "temporary failure in name resolution",
+        "Could not resolve host: api.github.com",
+        "temporary failure in name resolution",
         "context deadline exceeded", "i/o timeout",
     ],
 )
