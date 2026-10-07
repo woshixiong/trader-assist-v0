@@ -299,3 +299,35 @@ def test_read_canonical_comment_uses_single_exact_comment_endpoint(
     assert captured["stdin"] is subprocess.DEVNULL
     assert captured["timeout"] == 30
     assert "issues/256/comments" not in " ".join(captured["command"])
+
+
+def test_codex_bootstrap_rejects_canonical_route_b_even_when_bound(repository: Path) -> None:
+    bound = args(repository)
+    state = bootstrap._V5.parse_state(CANONICAL_COMMENTS[bound.package_state_locator])
+    bound.route = "B_SMALL_FROZEN_BOUNDED_ORDINARY_CHATGPT_HIGH"
+    from dataclasses import replace
+
+    rebound = replace(state, route=bound.route)
+    CANONICAL_COMMENTS[bound.package_state_locator] = bootstrap._V5.serialize_state(rebound)
+    with pytest.raises(bootstrap.BootstrapError, match="requires canonical Route C"):
+        bootstrap.verify(bound)
+
+
+@pytest.mark.parametrize("phase", ["IMPLEMENT", "REPAIR_1", "REPAIR_2"])
+def test_codex_resume_cannot_be_bypassed_with_false_flag(
+    repository: Path, phase: str
+) -> None:
+    bound = args(repository)
+    bound.semantic_phase = phase
+    bound.reasoning = bound.actual_reasoning = "high" if phase == "REPAIR_2" else "medium"
+    bound.resume_required = False
+    bound.resume_verifiable = False
+    with pytest.raises(bootstrap.BootstrapError, match="PAUSED_CAPABILITY"):
+        bootstrap.verify(bound)
+
+
+def test_codex_bootstrap_denies_consistently_spoofed_executor(repository: Path) -> None:
+    bound = args(repository)
+    bound.requested_executor = bound.actual_executor = "OTHER"
+    with pytest.raises(bootstrap.BootstrapError, match="must be canonical"):
+        bootstrap.verify(bound)
