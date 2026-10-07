@@ -6,34 +6,53 @@ from hashlib import sha256
 
 import pytest
 from test_research_data_binance_archive import zipped
-from test_research_data_binance_research_transport import CONSTRAINTS, mock_rights, response
+from test_research_data_binance_research_transport import (
+    CONSTRAINTS,
+    mock_rights,
+    response,
+)
 from test_research_data_contracts import H
 from test_research_replay_dev_access import authority, prereg
 
 from trader_assist_v0.contracts.common import sha256_hex
 from trader_assist_v0.research_data.admission import AdmissionPolicy
 from trader_assist_v0.research_data.binance_archive import (
-    DAY_NS, ChecksumReceipt, frozen_archive_objects, checksum_receipt,
+    DAY_NS,
+    ChecksumReceipt,
+    checksum_receipt,
+    frozen_archive_objects,
 )
 from trader_assist_v0.research_data.binance_research_transport import (
-    MockOnlyResearchTransport, PinnedHttpsResearchTransport,
+    MockOnlyResearchTransport,
+    PinnedHttpsResearchTransport,
 )
 from trader_assist_v0.research_data.contracts import ProviderCapability, SourceMode
 from trader_assist_v0.research_data.mapping import (
-    PitReferenceResolver, ReferenceMappingInterval, ReferenceMappingSnapshot,
+    PitReferenceResolver,
+    ReferenceMappingInterval,
+    ReferenceMappingSnapshot,
 )
 from trader_assist_v0.research_inventory.builder import _binding, build_inventory_manifest
 from trader_assist_v0.research_inventory.contracts import (
-    AllocationItem, InventoryAllocationSpec, InventoryRole, InventoryState,
+    AllocationItem,
+    InventoryAllocationSpec,
+    InventoryRole,
+    InventoryState,
 )
-from trader_assist_v0.research_replay.dev_archive import G0_QUESTION, G0_STRATEGY
-from trader_assist_v0.research_replay.dev_evidence import DevExternalAdmission, read_external_dev
-from trader_assist_v0.research_replay.dev_lifecycle import DevVisibilityPolicy
 from trader_assist_v0.research_replay.binance_real_dev import (
-    FrozenRealDevCandidate, _require_historical_bar_only, bind_candidate_real_dataset,
-    prepare_mock_real_dev_sidecar, prepare_real_dev_sidecar,
+    FrozenRealDevCandidate,
+    _require_historical_bar_only,
+    bind_candidate_real_dataset,
+    prepare_mock_real_dev_sidecar,
+    prepare_real_dev_sidecar,
     require_complete_frozen_receipts,
 )
+from trader_assist_v0.research_replay.dev_archive import G0_QUESTION, G0_STRATEGY
+from trader_assist_v0.research_replay.dev_evidence import (
+    DevExternalAdmission,
+    read_external_dev,
+)
+from trader_assist_v0.research_replay.dev_lifecycle import DevVisibilityPolicy
 
 RETRIEVED = 1790000000000000000
 R0_REF = "https://github.com/woshixiong/trader-assist-v0/issues/161#issuecomment-6017065560"
@@ -275,7 +294,7 @@ def test_real_transport_is_still_denied_after_all_mock_readiness(tmp_path, monke
 
 def test_backdated_or_synthetic_mapping_is_not_historical_proof():
     objects, _, _, proofs, datasets, _, _, _ = fixture()
-    obj, ds, proof = objects[0], datasets[0], proofs[0]
+    obj, _, proof = objects[0], datasets[0], proofs[0]
     good = mapping().records[0]
     bad_record = ReferenceMappingInterval.create(**{
         **good.model_dump(exclude={"record_hash", "known_at", "recorded_at"}),
