@@ -69,6 +69,12 @@ def verify_canonical_state(args: argparse.Namespace, exact_tree: str) -> None:
         state = _V5.parse_state(read_canonical_comment(args.package_state_locator))
     except _V5.ControlError as exc:
         raise BootstrapError(f"canonical package state is invalid: {exc}") from exc
+    try:
+        family = _V5.route_family(state.route)
+    except _V5.ControlError as exc:
+        raise BootstrapError(f"invalid canonical execution route: {exc}") from exc
+    if family != "C":
+        raise BootstrapError("Codex bootstrap requires canonical Route C")
     bindings = (
         ("package id", args.package_id, state.package_id),
         ("governance epoch", args.governance_epoch, state.governance_epoch),
@@ -127,6 +133,12 @@ def verify(args: argparse.Namespace) -> V5BootstrapEvidence:
         "REPAIR_1": ("gpt-6.1-sol", "medium"),
         "REPAIR_2": ("gpt-6.1-sol", "high"),
     }
+    if (
+        args.requested_executor != "CODEX"
+        or args.execution_surface != "CODEX_CLI"
+        or args.requested_provider != "OPENAI"
+    ):
+        raise BootstrapError("Codex bootstrap executor/provider/surface must be canonical")
     if args.semantic_phase not in expected_route:
         raise BootstrapError("unsupported post-merge V5 semantic phase")
     if (args.model, args.reasoning) != expected_route[args.semantic_phase]:
@@ -171,7 +183,11 @@ def verify(args: argparse.Namespace) -> V5BootstrapEvidence:
     for label, requested, actual in pairs:
         if requested != actual:
             raise BootstrapError(f"{label} mismatch")
-    if args.resume_required and (
+    # The historical flag is not an opt-out for implementation/repair resumes.
+    resume_required = args.resume_required or args.semantic_phase in {
+        "IMPLEMENT", "REPAIR_1", "REPAIR_2"
+    }
+    if resume_required and (
         not args.resume_verifiable
         or args.codex_thread_id != args.actual_codex_thread_id
         or args.worktree_identity != args.actual_worktree_identity
