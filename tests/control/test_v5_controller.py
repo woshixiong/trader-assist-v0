@@ -503,3 +503,88 @@ def test_final_review_fail_closes_on_missing_wrong_head_or_unexecuted_steps():
         assert controller.final_review_readiness(
             current, **{**kwargs, "job_evidence": jobs}
         ).decision == "CONTROL_REPLAN"
+
+
+@pytest.mark.parametrize(
+    ("surface", "extra"),
+    [
+        ("LOCAL_FOCUSED", {}),
+        ("GITHUB_V0", {"os": "Linux", "python": "3.12", "whole_repo": True}),
+        (
+            "GITHUB_E4_NATIVE",
+            {
+                "os": "Linux",
+                "arch": "x86_64",
+                "python": "3.12",
+                "nautilus": "2.0.0rc5",
+            },
+        ),
+    ],
+)
+def test_validation_surface_accepts_only_truthful_frozen_execution(surface, extra):
+    evidence = {
+        "head": "e" * 40,
+        "qualified": True,
+        "executed": True,
+        "skipped": False,
+        **extra,
+    }
+    assert controller.validate_test_surface_obligation(
+        required_surface=surface,
+        expected_head="e" * 40,
+        evidence=evidence,
+    ) == surface
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda x: x.update(head="0" * 40),
+        lambda x: x.update(qualified=False),
+        lambda x: x.update(executed=False),
+        lambda x: x.update(skipped=True),
+        lambda x: x.update(nautilus="2.0.0rc4"),
+        lambda x: x.update(arch="arm64"),
+        lambda x: x.pop("python"),
+    ],
+)
+def test_e4_native_surface_missing_wrong_head_or_skipped_is_not_pass(mutation):
+    evidence = {
+        "head": "e" * 40,
+        "qualified": True,
+        "executed": True,
+        "skipped": False,
+        "os": "Linux",
+        "arch": "x86_64",
+        "python": "3.12",
+        "nautilus": "2.0.0rc5",
+    }
+    mutation(evidence)
+    with pytest.raises(controller.ControlError):
+        controller.validate_test_surface_obligation(
+            required_surface="GITHUB_E4_NATIVE",
+            expected_head="e" * 40,
+            evidence=evidence,
+        )
+
+
+def test_target_host_validation_retains_explicit_human_gate():
+    evidence = {
+        "head": "e" * 40,
+        "qualified": True,
+        "executed": True,
+        "skipped": False,
+        "target_host": True,
+    }
+    with pytest.raises(controller.ControlError, match="HUMAN_GATE"):
+        controller.validate_test_surface_obligation(
+            required_surface="TARGET_HOST",
+            expected_head="e" * 40,
+            evidence=evidence,
+        )
+    assert controller.validate_test_surface_obligation(
+        required_surface="TARGET_HOST",
+        expected_head="e" * 40,
+        evidence=evidence,
+        target_host_authorized=True,
+    ) == "TARGET_HOST"
