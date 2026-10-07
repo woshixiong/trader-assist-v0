@@ -17,11 +17,7 @@ from trader_assist_v0.research_data.binance_archive import (
     HttpResponse,
     frozen_archive_objects,
 )
-from trader_assist_v0.research_data.contracts import (
-    ProviderCapability,
-    SourceMode,
-    SourceRightsProvenance,
-)
+from trader_assist_v0.research_data.contracts import ProviderCapability, SourceMode
 from trader_assist_v0.research_data.mapping import (
     PitReferenceResolver,
     ReferenceMappingInterval,
@@ -418,7 +414,7 @@ def test_transport_identity_and_sha_fail_without_sidecar_io(tmp_path):
         prepare_current_dev_sidecar(
             item, proof, bound, inventory, vis, opener=redirected, output_root=tmp_path
         )
-    with pytest.raises(ValueError, match="SHA256"):
+    with pytest.raises(PermissionError, match="binding mismatch"):
         prepare_current_dev_sidecar(
             item, replace(proof, archive_sha256="b" * 64), bound,
             # The receipt/dataset guard rejects changed checksum before raw I/O.
