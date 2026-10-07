@@ -16,6 +16,7 @@ from trader_assist_v0.multi_asset_shadow.strategy_kernel.types import (
     ScannerState,
 )
 from trader_assist_v0.nautilus_pilot.strategy_package import StrategyPackageManifest
+from trader_assist_v0.research_data.contracts import SourceMode
 
 from .contracts import decimal80, digest, wire
 from .dev_contracts import DevObservation
@@ -75,8 +76,33 @@ def bar_view(row: DevObservation, config: MechanismConfig) -> Bar:
     )
 
 
+def _retrospective_finalized_import_bar(row: DevObservation) -> bool:
+    return (
+        row.evidence.owner == "EXTERNAL_REFERENCE"
+        and row.evidence.source_mode == SourceMode.FREE_REFERENCE_IMPORT
+        and row.kind == "BAR"
+        and row.bar_end is not None
+        and dict(row.values).get("finalized") == "True"
+    )
+
+
+def _bar_replay_clock(row: DevObservation) -> int:
+    if _retrospective_finalized_import_bar(row):
+        assert row.bar_end is not None
+        return row.bar_end
+    return max(row.bar_end or 0, row.known_at)
+
+
 def healthy(row: DevObservation, at: int) -> bool:
     e = row.evidence
+    if _retrospective_finalized_import_bar(row):
+        assert row.bar_end is not None
+        return (
+            row.ts_event <= at
+            and row.bar_end <= at
+            and e.valid_from <= row.ts_event < e.valid_to
+            and not set(row.quality) - {"COMPLETE", "AVAILABLE_VERIFIED"}
+        )
     return (
         row.known_at <= at
         and row.ts_event <= at
@@ -138,8 +164,9 @@ def derive_mechanism_opportunities(
     if any(r.evidence.expression not in markets for r in rows):
         raise ValueError("evidence outside frozen universe")
     bars = tuple(r for r in rows if r.kind == "BAR")
-    # Decision times are data finality AND knowledge; no late fact travels backward.
-    times = sorted({max(r.bar_end or 0, r.known_at) for r in bars})
+    # Retrospective finalized imports replay at historical finality while retaining
+    # their actual later acquisition/mapping provenance on the observation itself.
+    times = sorted({_bar_replay_clock(r) for r in bars})
     ledgers = {m: EventLedger() for m in markets}
     scanner_states: dict[str, scanner.ScannerCandidate] = {}
     last_candle: dict[str, str] = {}

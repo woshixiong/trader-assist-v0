@@ -21,6 +21,7 @@ from trader_assist_v0.research_data.admission import AdmissionPolicy, ExternalRe
 from trader_assist_v0.research_data.contracts import (
     BarPayload,
     ExternalReferenceEvent,
+    SourceMode,
     TimestampProvenance,
 )
 from trader_assist_v0.research_data.mapping import PitReferenceResolver
@@ -61,6 +62,9 @@ def fixture(
     config_updates=None,
     dataset_updates=None,
     state="AVAILABLE",
+    source_mode=SourceMode.HISTORY,
+    observed_at_ns=None,
+    mapping_known_at=1,
 ):
     config = MechanismConfig.create(
         version="MECHANISM_CONFIG_V1",
@@ -117,8 +121,15 @@ def fixture(
         )
         for code in CODES
     )
-    maps = snapshot(mapping(valid_from=1, valid_to=STEP * 1000, known_at=1, recorded_at=1))
-    cap = capability(datatype="BAR_5M", source_mode="HISTORY")
+    maps = snapshot(
+        mapping(
+            valid_from=1,
+            valid_to=STEP * 1000,
+            known_at=mapping_known_at,
+            recorded_at=mapping_known_at,
+        )
+    )
+    cap = capability(datatype="BAR_5M", source_mode=source_mode)
     policy = AdmissionPolicy.create(
         version="1", stale_after_ns=STEP, sequence_semantics="CONTIGUOUS", max_observations=1000
     )
@@ -184,6 +195,7 @@ def fixture(
     log = ExternalReferenceLedger(admission)
     for index in range(count):
         start = (index + 1) * STEP
+        observed = start + STEP if observed_at_ns is None else observed_at_ns
         price = Decimal(100) + index * 2
         payload = BarPayload(
             interval_minutes=5,
@@ -208,19 +220,19 @@ def fixture(
             dataset_hash=ds.record_hash,
             capability_hash=cap.record_hash,
             rights_hash=ds.rights.record_hash,
-            source_mode="HISTORY",
+            source_mode=source_mode,
             native_id=str(index),
             sequence=index + 1,
             timestamps=TimestampProvenance(
                 source_ts=str(start),
                 source_unit="ns",
                 ts_event=start,
-                observed_at_ns=start + STEP,
+                observed_at_ns=observed,
                 receive_provenance="NOT_EXPOSED",
             ),
             payload=payload,
         )
-        log.observe(event, evaluated_at_ns=start + STEP)
+        log.observe(event, evaluated_at_ns=observed)
     sidecar = EvidenceSidecar.create(
         version="1",
         dataset_hash=ds.record_hash,
@@ -540,6 +552,75 @@ def test_missing_future_mapping_delay_and_path_cannot_improve(tmp_path):
             ),
             args[6],
         )
+
+
+def test_free_reference_import_replays_at_historical_finality_without_backdating(tmp_path):
+    late_observation = STEP * 90
+    late_mapping = STEP * 80
+    args = fixture(
+        tmp_path,
+        count=4,
+        config_updates={"decision_start_ns": STEP * 2},
+        source_mode=SourceMode.FREE_REFERENCE_IMPORT,
+        observed_at_ns=late_observation,
+        mapping_known_at=late_mapping,
+    )
+    rows = read(args)
+    first, next_bar = rows[:2]
+    assert first.known_at == late_observation
+    assert first.evidence.mapping_known_at == late_mapping
+    assert first.evidence.mapping_recorded_at == late_mapping
+    assert pure._bar_replay_clock(first) == first.bar_end
+    assert pure.healthy(first, first.bar_end)
+    assert not pure.healthy(next_bar, first.bar_end)
+
+    op = opportunity(args, rows)
+    candidate = next(c for c in args[7] if c.participation.code == op.decisions[0].code)
+    assert next_bar.bar_end is not None
+    early = pure.evaluate_mechanism_candidate(
+        op,
+        candidate,
+        op.decisions,
+        rows,
+        args[6],
+        as_of_ns=next_bar.bar_end - 1,
+    )
+    assert early.net_r is None
+
+    result = pure.evaluate_mechanism_candidate(
+        op,
+        candidate,
+        op.decisions,
+        rows,
+        args[6],
+        as_of_ns=STEP * 100,
+    )
+    assert result.terminal == "COMPLETE"
+    assert result.entry is not None
+    assert result.entry.ts == int(dict(next_bar.values)["start_ns"])
+    assert result.entry.source_hash == next_bar.record_hash
+    assert result.entry.ts < first.known_at
+
+
+def test_non_import_replay_clock_keeps_knowledge_and_mapping_causality(tmp_path):
+    late_observation = STEP * 90
+    late_mapping = STEP * 80
+    args = fixture(
+        tmp_path,
+        count=1,
+        source_mode=SourceMode.HISTORY,
+        observed_at_ns=late_observation,
+        mapping_known_at=late_mapping,
+    )
+    row = read(args)[0]
+    assert pure._bar_replay_clock(row) == late_observation
+    assert not pure.healthy(row, row.bar_end)
+    assert pure.healthy(row, late_observation)
+
+    live = changed(row, evidence=changed(row.evidence, source_mode=SourceMode.LIVE))
+    assert pure._bar_replay_clock(live) == late_observation
+    assert not pure.healthy(live, live.bar_end)
+    assert pure.healthy(live, late_observation)
 
 
 def test_owner_composition_causal_prefix_and_baseline_only(tmp_path, monkeypatch):

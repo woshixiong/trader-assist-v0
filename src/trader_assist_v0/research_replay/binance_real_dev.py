@@ -399,7 +399,7 @@ def _prepare_real_form_sidecar(
         raise ValueError("retrospective local observation time required")
     ds, c = admission.dataset, admission.capabilities[0]
     ledger = ExternalReferenceLedger(admission)
-    for bar in bars:
+    for sequence, bar in enumerate(bars, start=1):
         event_ns = bar.open_ms * 1_000_000
         event = ExternalReferenceEvent.create(
             version=event_version,
@@ -408,7 +408,8 @@ def _prepare_real_form_sidecar(
             dataset_hash=ds.record_hash, capability_hash=c.record_hash,
             rights_hash=ds.rights.record_hash if ds.rights else "",
             source_mode=SourceMode.FREE_REFERENCE_IMPORT,
-            native_id=f"{obj.symbol}:{bar.open_ms}", sequence=None,
+            # Derived from the strict parser-proven daily order; not provider-native.
+            native_id=f"{obj.symbol}:{bar.open_ms}", sequence=sequence,
             timestamps=TimestampProvenance(
                 source_ts=str(bar.open_ms), source_unit="ms", ts_event=event_ns,
                 observed_at_ns=observed_at_ns,
