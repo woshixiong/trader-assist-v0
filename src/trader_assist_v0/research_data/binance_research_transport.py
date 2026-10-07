@@ -169,7 +169,10 @@ def mock_checksum_receipt(
     retrieved_at_ns: int,
     retrieval_identity: str = "synthetic://offline-fixture",
 ) -> ChecksumReceipt:
-    if type(mock) is not MockOnlyResearchTransport or not retrieval_identity.startswith("synthetic://"):
+    if (
+        type(mock) is not MockOnlyResearchTransport
+        or not retrieval_identity.startswith("synthetic://")
+    ):
         raise PermissionError("fake-only checksum path")
     response = mock.request(obj, "CHECKSUM")
     raw = checked_http_response(
