@@ -296,7 +296,7 @@ def require_before_mock_zip(
     if rights is None:
         raise PermissionError("no real rights identity")
     candidate.require_frozen(rights)
-    if ds.rights.synthetic or admission.preregistration != candidate.preregistration:
+    if rights.synthetic or admission.preregistration != candidate.preregistration:
         raise PermissionError("synthetic evidence or different prereg is not real DEV")
     match = [r for r in candidate.receipts if r.zip_url == obj.zip_url]
     if len(match) != 1 or match[0] != receipt:
