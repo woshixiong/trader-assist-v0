@@ -1,67 +1,84 @@
 # G0 R3 real DEV research admission — V1
 
-**Package:** `G0_R3_BINANCE_REAL_DEV_RESEARCH_ADMISSION_1`  
-**Stage:** code and mock-only acceptance. **No real Binance request is authorized or performed.**
+**Current package:** `G0_R3_BINANCE_LOCAL_FILE_DEV_INGRESS_1`  
+**Stage:** bounded local-file DEV ingress acceptance. **No real Binance network request is authorized or performed by Trade OS.**
 
-Canonical freeze: Issue #161 comment
-[`6032019360`](https://github.com/woshixiong/trader-assist-v0/issues/161#issuecomment-6032019360),
+Current freeze: Issue #161 comments
+[`6036824279`](https://github.com/woshixiong/trader-assist-v0/issues/161#issuecomment-6036824279),
+[`6036832356`](https://github.com/woshixiong/trader-assist-v0/issues/161#issuecomment-6036832356),
 Pre-code PASS
-[`6031360994`](https://github.com/woshixiong/trader-assist-v0/issues/161#issuecomment-6031360994),
-package state
-[`6031296775`](https://github.com/woshixiong/trader-assist-v0/issues/161#issuecomment-6031296775),
-and bounded research-use decision
-[`6031272423`](https://github.com/woshixiong/trader-assist-v0/issues/161#issuecomment-6031272423).
-The Writer is Route B ordinary ChatGPT High and this PR changes only the five
-frozen additive paths.
+[`6036978993`](https://github.com/woshixiong/trader-assist-v0/issues/161#issuecomment-6036978993),
+and Writer handoff
+[`6037014299`](https://github.com/woshixiong/trader-assist-v0/issues/161#issuecomment-6037014299).
+The retained real-form admission contract originated in
+`G0_R3_BINANCE_REAL_DEV_RESEARCH_ADMISSION_1`; this package changes only the
+three frozen existing paths and does not modify Rights, Mapping, Inventory, DEV,
+Sidecar, mechanism replay, Nautilus, Strategy, CI, deployment, or execution owners.
 
 ## What this package admits
 
-The package implements a separate real-form R3 DEV composition without changing
-the merged PR #299 synthetic-only adapter or any existing Rights, R2B Inventory,
-Mapping, DEV, Sidecar, Nautilus, Strategy, CI, deployment, or execution owner.
+Trade OS now accepts **already-downloaded** exact Binance Public Data files from
+an explicit local input root:
+
+```text
+OFFICIAL_OR_STANDARD_EXTERNAL_ACQUISITION
+-> LOCAL .CHECKSUM FILES
+-> EXISTING checksum_receipt / Rights / roster / Inventory / preregistration
+-> LOCAL CURRENT_DEV ZIP ONLY
+-> EXISTING parse_verified_daily_zip
+-> EXISTING EvidenceSidecar(version=1) / read_external_dev
+```
+
+Trade OS does not own provider acquisition. No downloader, HTTP client, retry
+loop, proxy, subprocess wrapper, provider SDK, database/catalog, second backtest
+engine, optimizer, walk-forward framework, or Nautilus migration is introduced.
 
 The immutable archive universe remains exactly:
 
 | Intended role | Physical source identity | Count | Payload state |
 | --- | --- | ---: | --- |
-| CURRENT_DEV | 2024-01-01 through 2024-02-29 daily USD-M 5m ZIP | 240 | real I/O CLOSED |
-| FUTURE_DEV_RESERVE | 2024-03 and 2024-04 monthly USD-M 5m ZIP | 8 | SEALED; ZIP/CSV forbidden |
-| CERTIFICATION_RESERVE | 2024-05 and 2024-06 monthly USD-M 5m ZIP | 8 | SEALED; ZIP/CSV forbidden |
+| CURRENT_DEV | 2024-01-01 through 2024-02-29 daily USD-M 5m ZIP | 240 | local ZIP allowed only after full existing pre-I/O gates |
+| FUTURE_DEV_RESERVE | 2024-03 and 2024-04 monthly USD-M 5m ZIP | 8 | SEALED; checksum identity only |
+| CERTIFICATION_RESERVE | 2024-05 and 2024-06 monthly USD-M 5m ZIP | 8 | SEALED; checksum identity only |
 
-All 256 independent `.CHECKSUM` receipt identities are required before the
-whole-roster candidate can become ready. A missing, duplicated, revised, or
-substituted object fails closed. A checksum is only an identity; it does not
-claim payload coverage, 288-row completeness, historical exchange mechanics,
-or a strategy result.
+All 256 independent `.CHECKSUM` identities are required before a CURRENT_DEV
+payload can be opened. A missing, duplicated, revised, substituted, or
+rights-incompatible object fails closed. A checksum remains only an identity; it
+does not claim payload coverage, 288-row completeness, historical exchange
+mechanics, or a strategy result.
 
-## Rights and real-network boundary
+## Rights, staged disclosure, and local filesystem boundary
 
-`SourceRightsProvenance(eligibility=ALLOWED, synthetic=false)` is treated as a
-conditional contract shape, not a trusted rights issuer. The candidate must bind
-the exact pinned Vision Dataset Terms V1.0 URL/date/hash and the exact Control
-decision, carry nonempty attribution/retention constraints, and satisfy those
-constraints.
+`SourceRightsProvenance(eligibility=ALLOWED, synthetic=false)` remains a
+conditional contract shape, not a trusted rights issuer. The exact pinned terms
+and current candidate constraints must pass the existing
+`require_candidate_rights(...)` owner **before local checksum filesystem
+access**.
 
-This package contains **no executable real-network transport implementation at
-all**. `PinnedHttpsResearchTransport` is only a fail-closed contract
-placeholder: it can validate the exact frozen object/kind and the candidate
-rights shape, but it then unconditionally raises
-`REAL_PROVIDER_IO_NOT_AUTHORIZED`. There is no network-capable helper, trusted
-issuer variable, boolean, callback, environment switch, caller-provided object,
-or monkeypatch target in PR #303 that can activate provider I/O.
+Local checksum ingress then:
 
-A future independently reviewed package must add the actual provider transport
-together with its trusted issuer/run gate and renewed terms/access evidence.
-That future package must independently prove the complete rights/runtime chain
-before every real provider request and preserve reserve ZIP/CSV sealing. Nothing
-in this code/mock package grants or pre-installs that capability.
+- confines the resolved path to an explicit input root;
+- requires the exact frozen `<ZIP>.CHECKSUM` basename;
+- enforces the existing checksum byte bound;
+- delegates parsing and identity creation to the existing
+  `checksum_receipt(...)`;
+- records the caller-supplied retrospective retrieval time and local retrieval
+  identity;
+- permits checksum identity for CURRENT_DEV and both reserve roles.
 
-## Existing-owner composition and historical claims
+Reserve ZIP/CSV payloads remain sealed. A reserve ZIP request is rejected by the
+existing pure pre-I/O composition gate before payload path resolution, open, or
+read. For CURRENT_DEV, the same gate requires the full 256-receipt and
+256-manifest roster, exact Inventory, exact 240+16 preregistration split, DEV
+authority/visibility/constraints, no DEV/reserve overlap, and historical BAR_5M
+mapping before any local payload filesystem access.
 
-The real-form candidate composes, rather than replaces:
+## Existing-owner composition and parser authority
 
-- `frozen_archive_objects`, `HttpResponse`, `checked_http_response`,
-  `checksum_receipt`, and `parse_verified_daily_zip`;
+The local bridge composes, rather than replaces:
+
+- `frozen_archive_objects`, `checksum_receipt`, `require_receipt`, and
+  `parse_verified_daily_zip`;
 - `SourceRightsProvenance`, `DatasetManifest`, and
   `ReferenceMappingSnapshot`;
 - `build_inventory_manifest` / `validate_inventory_manifest`;
@@ -69,62 +86,75 @@ The real-form candidate composes, rather than replaces:
   `DevAccessAuthority`, `DevExternalAdmission`, and `read_external_dev`;
 - the existing `EvidenceSidecar(version=1)`.
 
-A runnable candidate must bind 240 CURRENT_DEV manifest hashes plus sixteen
-distinct reserve hashes in one G0/S1 preregistration, with no overlap. The
-existing Inventory must cover all 256 identities. CURRENT_DEV must already be
-operative `AVAILABLE`; checksum metadata alone cannot assert that fact.
-Reserves remain `UNSEEN_SEALED` and non-available.
+For a CURRENT_DEV ZIP, the local bridge only performs bounded path confinement
+and bounded byte reading after the full existing gate. SHA-first verification,
+safe ZIP-member rules, strict headerless 12-column USD-M rows, epoch-ms checks,
+exact 288 ordered finalized five-minute bars, CRC/path/size rules, and CSV
+semantics remain owned by `parse_verified_daily_zip(...)`.
 
-Historical mapping is limited to the offline `BAR_5M` archive-mechanism claim.
-It must be `HISTORICAL` / `AVAILABLE_VERIFIED`, recorded no later than the
-retrospective receipt knowledge time, and resolve the exact Binance USD-M
-symbol/cut. Unknown 2024 `price_tick` and `size_step` are explicitly
-`UNVERIFIED_OUTSIDE_BAR_SCOPE`; current `exchangeInfo`, synthetic metadata,
-or a backdated `known_at` cannot manufacture 2024 PIT microstructure truth.
+Historical mapping remains limited to the offline `BAR_5M` mechanism claim.
+Unknown 2024 `price_tick` and `size_step` remain
+`UNVERIFIED_OUTSIDE_BAR_SCOPE`; current exchange metadata, synthetic metadata,
+or backdated knowledge time cannot manufacture 2024 PIT microstructure truth.
 
-When a future separately authorized daily payload is eventually admitted, the
-existing parser remains SHA-first and requires one safe ZIP member, strict
-headerless 12-column USD-M rows, 13-digit epoch-ms, exact 288 ordered finalized
-5-minute bars and bounded size/CRC/path semantics. Event timestamps use the
-historical open time while `observed_at_ns` is the actual retrospective
-retrieval time; `true_network_receive_ts=None` and
-`receive_provenance=NOT_EXPOSED`.
+A successfully admitted local daily object produces the existing real-form event
+and sidecar shape. Event time remains the historical bar open time, while
+`observed_at_ns` is the caller-supplied retrospective local observation time.
+`true_network_receive_ts=None`, `receive_provenance=NOT_EXPOSED`,
+`source_bytes_hex=()`, and `catalog_files=()` are retained. No raw Binance
+ZIP/CSV bytes or sidecar payloads belong in GitHub.
 
-One daily object maps to one existing bounded sidecar with
-`source_bytes_hex=()` and `catalog_files=()`. The adapter verifies the
-existing `read_external_dev` roundtrip. No raw provider ZIP/CSV, sidecar,
-provider rows, or unapproved derived metrics belong in GitHub.
+## Provider acquisition ownership
 
-## Mock-only acceptance
+External acquisition is commodity infrastructure. The run operator may use exact
+official Binance Public Data object URLs with official or standard maintained
+tools outside Trade OS. Tool output is not trusted merely because a helper
+returned it: the frozen object roster and SHA-256 receipt validation remain the
+authority.
 
-Tests generate their own CSV/ZIP bytes, fake all 256 checksum receipts, and use
-`MockOnlyResearchTransport`, an in-memory response table with no network
-implementation. Even when tests construct a `synthetic=false`,
-`eligibility=ALLOWED` rights-shaped object, it is explicitly a hypothetical
-real-form fixture and is never represented as Binance-sourced evidence.
+The existing `PinnedHttpsResearchTransport` remains fail-closed and
+non-executable. It is not promoted into a provider client, and this package does
+not create a future obligation to build one. Reserve payload acquisition/open is
+not authorized for convenience.
 
-The adversarial matrix covers pinned terms/rights mismatch, missing constraints,
-transport-module static/source proof of no real-network capability, direct
-caller-created `ALLOWED` rights that still fail closed, reserve ZIP rejection,
-mock-only no-socket behavior, redirect/non-200/oversize and wrong URL, exact
-240+8+8 roster, missing/duplicate/revised receipts, full prereg/inventory
-binding, historical-mapping backdating, SHA-first strict archive parsing through
-the existing owner, sidecar collision, bounded output, and existing-reader
-replay. Existing lower-level archive tests continue to own unsafe
-ZIP/CRC/path/header/time/CSV cases.
+## Acceptance coverage
+
+Tests generate all checksum/ZIP fixtures locally and make zero real Binance
+requests. They prove:
+
+- invalid rights fail before checksum filesystem access;
+- checksum path escape, wrong basename, oversize, and malformed content fail;
+- local checksum ingress delegates to the existing receipt semantics;
+- reserve checksum identity is allowed;
+- reserve ZIP and incomplete 256-candidate requests fail before payload
+  filesystem access;
+- a valid full fake 256 identity plus exact fake CURRENT_DEV ZIP produces one
+  bounded real-form sidecar through the existing parser and DEV reader;
+- ZIP SHA mismatch and malformed archives still fail in the existing parser;
+- source bytes remain absent from the sidecar;
+- the existing mock-only path remains valid;
+- no network/subprocess/downloader capability is added.
+
+Existing lower-level archive tests continue to own the detailed unsafe
+ZIP/CRC/path/header/time/CSV adversarial matrix.
 
 ## Explicit non-claims and next gates
 
-This code/CI package proves only deterministic **mock behavior**. It does not
-prove current legal eligibility, actual Binance checksum availability, archive
-payload coverage, historical tick/step, live/PIT semantics, a G0 strategy edge,
+This package does not prove current legal eligibility, actual Binance checksum
+availability, archive coverage, historical tick/step, a G0 strategy edge,
 profitability, reserve contents, production readiness, or execution authority.
 
-A later real-data run requires, separately and in order: current terms and
-access eligibility evidence, genuine 256 checksum identities, historically
-defensible BAR_5M mapping evidence, operative full-roster Inventory, exact
-rights-bound preregistration and run authority, independent review, and a future
-independently reviewed package that adds the actual provider transport together
-with its trusted issuer/run gate. Deployment, service mutation, private API,
-exchange write, order, autonomous trading, Mark Ready and merge remain separate
-protected gates.
+After this package eventually passes exact-head CI, fresh Final Independent
+Review, and merge, the retained run-level route is:
+
+```text
+EXTERNAL OFFICIAL/STANDARD ACQUISITION OF EXACT .CHECKSUM FILES
+-> BUILD/FREEZE 256 RECEIPTS + RIGHTS/MAPPING/INVENTORY/PREREG
+-> EXTERNAL ACQUISITION OF CURRENT_DEV ZIP ONLY
+-> LOCAL INGEST TO EXISTING SIDECARS
+-> EXISTING G0 MECHANISM REPLAY
+```
+
+Real provider acquisition, real G0 replay, reserve payload access, deployment,
+service mutation, private API, exchange write, order actions, autonomous
+trading, Mark Ready, and merge remain separate retained gates.

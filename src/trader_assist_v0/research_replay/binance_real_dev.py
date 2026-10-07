@@ -1,8 +1,9 @@
-"""Independent R3 real-DEV contract composition, mock-only until run-level admission.
+"""Independent R3 real-DEV composition with bounded local-file ingress.
 
-A pinned rights-shaped fixture is NOT a trusted rights issuer. Every possible
-real provider call remains disabled by binance_research_transport in Phase A.
-The only runnable ZIP entrypoint below consumes an in-memory fake HTTP object.
+Provider acquisition remains external to Trade OS. This module accepts only
+already-downloaded exact .CHECKSUM and CURRENT_DEV ZIP files, preserving the
+existing rights, parser, inventory, DEV-admission, and sidecar owners. The
+fail-closed provider-network placeholder remains non-executable.
 """
 from __future__ import annotations
 
@@ -12,12 +13,16 @@ from pathlib import Path
 from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
 from trader_assist_v0.research_data.admission import ExternalReferenceLedger
 from trader_assist_v0.research_data.binance_archive import (
+    MAX_CHECKSUM_BYTES,
     MAX_ZIP_BYTES,
     ArchiveObject,
+    BinanceKline,
     ChecksumReceipt,
     checked_http_response,
+    checksum_receipt,
     frozen_archive_objects,
     parse_verified_daily_zip,
+    require_frozen_object,
     require_receipt,
 )
 from trader_assist_v0.research_data.binance_research_transport import (
@@ -61,6 +66,69 @@ from trader_assist_v0.research_replay.dev_lifecycle import (
 )
 
 REAL_MAX_SIDECAR_BYTES = 4_000_000
+
+
+def _read_confined_local_file(
+    input_root: Path,
+    local_path: Path,
+    *,
+    expected_name: str,
+    limit: int,
+) -> bytes:
+    """Read one exact already-downloaded file, confined to an explicit root."""
+    if not isinstance(input_root, Path) or not isinstance(local_path, Path):
+        raise TypeError("pathlib.Path input root/path required")
+    if type(expected_name) is not str or not expected_name:
+        raise TypeError("exact expected local basename required")
+    if type(limit) is not int or limit <= 0:
+        raise TypeError("positive local byte bound required")
+    root = input_root.resolve()
+    if not root.is_dir():
+        raise ValueError("local input root must be an existing directory")
+    resolved = local_path.resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise PermissionError("local archive path escapes explicit input root") from exc
+    if resolved.name != expected_name:
+        raise ValueError("local archive basename does not match frozen object")
+    if not resolved.is_file():
+        raise ValueError("local archive path must be an existing regular file")
+    size = resolved.stat().st_size
+    if size <= 0 or size > limit:
+        raise ValueError("bounded local file exceeded")
+    with resolved.open("rb") as handle:
+        raw = handle.read(size)
+    if len(raw) != size or resolved.stat().st_size != size:
+        raise ValueError("local archive changed during bounded read")
+    return raw
+
+
+def read_local_checksum_receipt(
+    obj: ArchiveObject,
+    *,
+    input_root: Path,
+    checksum_path: Path,
+    rights: SourceRightsProvenance,
+    satisfied: frozenset[str],
+    retrieved_at_ns: int,
+    retrieval_identity: str,
+) -> ChecksumReceipt:
+    """Admit one local .CHECKSUM identity after rights, never provider I/O."""
+    require_candidate_rights(rights, satisfied)
+    require_frozen_object(obj)
+    raw = _read_confined_local_file(
+        input_root,
+        checksum_path,
+        expected_name=obj.zip_name + ".CHECKSUM",
+        limit=MAX_CHECKSUM_BYTES,
+    )
+    return checksum_receipt(
+        obj,
+        raw,
+        retrieved_at_ns=retrieved_at_ns,
+        retrieval_identity=retrieval_identity,
+    )
 
 
 def require_complete_frozen_receipts(
@@ -313,28 +381,28 @@ def require_before_mock_zip(
     _require_historical_bar_only(obj, receipt, admission)
 
 
-def prepare_mock_real_dev_sidecar(
-    obj: ArchiveObject, receipt: ChecksumReceipt, admission: DevExternalAdmission,
-    candidate: FrozenRealDevCandidate, *,
-    mock: MockOnlyResearchTransport, output_root: Path, registry_hash: str,
+def _prepare_real_form_sidecar(
+    obj: ArchiveObject,
+    receipt: ChecksumReceipt,
+    admission: DevExternalAdmission,
+    candidate: FrozenRealDevCandidate,
+    bars: tuple[BinanceKline, ...],
+    *,
+    output_root: Path,
+    registry_hash: str,
+    observed_at_ns: int,
+    event_version: str,
+    raw_semantics: str,
 ) -> PreparedDailySidecar:
-    """Simulated hypothetical real admission using FAKE data and MOCK HTTP ONLY."""
-    require_before_mock_zip(obj, receipt, admission, candidate)
-    if type(mock) is not MockOnlyResearchTransport:
-        raise TypeError("only mock transport is executable in this package")
-    response = mock.request(obj, "ZIP")
-    raw = checked_http_response(
-        response, expected_url=obj.zip_url, limit=MAX_ZIP_BYTES,
-    )
-    bars = parse_verified_daily_zip(
-        obj, raw, receipt, finalized_as_of_ns=receipt.retrieved_at_ns,
-    )
+    """Build the existing bounded sidecar shape from already-verified bars."""
+    if type(observed_at_ns) is not int or observed_at_ns < obj.end_ns:
+        raise ValueError("retrospective local observation time required")
     ds, c = admission.dataset, admission.capabilities[0]
     ledger = ExternalReferenceLedger(admission)
     for bar in bars:
         event_ns = bar.open_ms * 1_000_000
         event = ExternalReferenceEvent.create(
-            version="G0_BINANCE_REAL_DEV_MOCK_WIRE_V1",
+            version=event_version,
             provider="BINANCE", venue="BINANCE_UM", product="USD_M_FUTURES",
             instrument_id=obj.symbol, mapping_hash=ds.mapping_hash,
             dataset_hash=ds.record_hash, capability_hash=c.record_hash,
@@ -343,7 +411,7 @@ def prepare_mock_real_dev_sidecar(
             native_id=f"{obj.symbol}:{bar.open_ms}", sequence=None,
             timestamps=TimestampProvenance(
                 source_ts=str(bar.open_ms), source_unit="ms", ts_event=event_ns,
-                observed_at_ns=receipt.retrieved_at_ns,
+                observed_at_ns=observed_at_ns,
                 true_network_receive_ts=None, receive_provenance="NOT_EXPOSED",
             ),
             payload=BarPayload(
@@ -354,9 +422,9 @@ def prepare_mock_real_dev_sidecar(
                 close=bar.close, volume=bar.volume,
             ),
         )
-        observed = ledger.observe(event, evaluated_at_ns=receipt.retrieved_at_ns)
+        observed = ledger.observe(event, evaluated_at_ns=observed_at_ns)
         if not observed.admitted or observed.duplicate or observed.out_of_order:
-            raise ValueError("noncanonical daily real-form mock observation")
+            raise ValueError("noncanonical daily real-form observation")
     if len(ledger.observations) != 288:
         raise ValueError("incomplete daily source")
     sidecar = EvidenceSidecar.create(
@@ -364,8 +432,7 @@ def prepare_mock_real_dev_sidecar(
         mapping_hash=admission.resolver.snapshot.record_hash,
         capability_hashes=(c.record_hash,), policy_hash=admission.policy.record_hash,
         observations=tuple(ledger.observations), source_bytes_hex=(),
-        raw_semantics="OFFLINE_5M_FAKE_PROVIDER_FIXTURE; NETWORK_RECEIVE_NOT_EXPOSED",
-        catalog_files=(),
+        raw_semantics=raw_semantics, catalog_files=(),
     )
     encoded = canonical_json_bytes(sidecar.model_dump(mode="json"))
     if len(encoded) > min(ENVELOPE_BYTES, candidate.visibility.max_bytes, REAL_MAX_SIDECAR_BYTES):
@@ -382,9 +449,65 @@ def prepare_mock_real_dev_sidecar(
         row.ts_receive is not None or row.receive_provenance != "NOT_EXPOSED"
         for row in replay
     ):
-        raise ValueError("existing DEV reader failed real-form mock roundtrip")
+        raise ValueError("existing DEV reader failed real-form roundtrip")
     return PreparedDailySidecar(
         path, digest, sidecar.record_hash, ds.record_hash, len(replay), len(encoded),
+    )
+
+
+def prepare_mock_real_dev_sidecar(
+    obj: ArchiveObject, receipt: ChecksumReceipt, admission: DevExternalAdmission,
+    candidate: FrozenRealDevCandidate, *,
+    mock: MockOnlyResearchTransport, output_root: Path, registry_hash: str,
+) -> PreparedDailySidecar:
+    """Simulated hypothetical real admission using FAKE data and MOCK HTTP ONLY."""
+    require_before_mock_zip(obj, receipt, admission, candidate)
+    if type(mock) is not MockOnlyResearchTransport:
+        raise TypeError("only mock transport is executable in this path")
+    response = mock.request(obj, "ZIP")
+    raw = checked_http_response(
+        response, expected_url=obj.zip_url, limit=MAX_ZIP_BYTES,
+    )
+    bars = parse_verified_daily_zip(
+        obj, raw, receipt, finalized_as_of_ns=receipt.retrieved_at_ns,
+    )
+    return _prepare_real_form_sidecar(
+        obj, receipt, admission, candidate, bars,
+        output_root=output_root, registry_hash=registry_hash,
+        observed_at_ns=receipt.retrieved_at_ns,
+        event_version="G0_BINANCE_REAL_DEV_MOCK_WIRE_V1",
+        raw_semantics="OFFLINE_5M_FAKE_PROVIDER_FIXTURE; NETWORK_RECEIVE_NOT_EXPOSED",
+    )
+
+
+def prepare_local_real_dev_sidecar(
+    obj: ArchiveObject,
+    receipt: ChecksumReceipt,
+    admission: DevExternalAdmission,
+    candidate: FrozenRealDevCandidate,
+    *,
+    input_root: Path,
+    zip_path: Path,
+    output_root: Path,
+    registry_hash: str,
+    observed_at_ns: int,
+) -> PreparedDailySidecar:
+    """Consume one already-downloaded CURRENT_DEV ZIP after the full pre-I/O gate."""
+    require_before_mock_zip(obj, receipt, admission, candidate)
+    if type(observed_at_ns) is not int or observed_at_ns < obj.end_ns:
+        raise ValueError("retrospective local observation time required")
+    raw = _read_confined_local_file(
+        input_root, zip_path, expected_name=obj.zip_name, limit=MAX_ZIP_BYTES,
+    )
+    bars = parse_verified_daily_zip(
+        obj, raw, receipt, finalized_as_of_ns=observed_at_ns,
+    )
+    return _prepare_real_form_sidecar(
+        obj, receipt, admission, candidate, bars,
+        output_root=output_root, registry_hash=registry_hash,
+        observed_at_ns=observed_at_ns,
+        event_version="G0_BINANCE_REAL_DEV_LOCAL_FILE_WIRE_V1",
+        raw_semantics="OFFLINE_5M_EXTERNAL_LOCAL_FILE; NETWORK_RECEIVE_NOT_EXPOSED",
     )
 
 
@@ -393,7 +516,7 @@ def prepare_real_dev_sidecar(
     candidate: FrozenRealDevCandidate, *,
     transport: PinnedHttpsResearchTransport, output_root: Path, registry_hash: str,
 ) -> PreparedDailySidecar:
-    """Non-executable future boundary; no real provider or filesystem I/O."""
+    """Fail-closed provider boundary; local-file ingress is the executable path."""
     require_before_mock_zip(obj, receipt, admission, candidate)
     if type(transport) is not PinnedHttpsResearchTransport:
         raise TypeError("exact pinned stdlib transport required")
