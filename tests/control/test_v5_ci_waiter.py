@@ -256,6 +256,8 @@ def test_head_only_read_does_not_reset_transport_failure_count():
         "HTTP 500: unauthorized", "resource not accessible: TLS EOF",
         "HTTP 500: insufficient scope", "HTTP 503: rate-limit",
         "request id 5029999", "record 502", "query returned invalid JSON",
+        "auth failed; HTTP 502 TLS", "invalid query; HTTP 503",
+        "rate_limit exceeded; TLS EOF",
     ],
 )
 def test_nonretryable_auth_quota_and_ambiguous_errors_take_precedence(message):
@@ -394,3 +396,8 @@ def test_checkpoint_result_file_remains_atomic_and_cli_defaults(tmp_path):
     assert args.poll_seconds == 60.0
     assert args.transport_retry_seconds == 10.0
     assert args.max_transport_failures == 20
+
+
+def test_transport_failure_cap_cannot_be_raised_above_20():
+    with pytest.raises(ValueError, match="between 1 and 20"):
+        call(gh_fixture(), max_transport_failures=21)

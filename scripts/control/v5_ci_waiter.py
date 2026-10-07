@@ -35,7 +35,14 @@ NONRETRYABLE_WORDS = (
     "resource not accessible",
     "token expired",
     "bad token",
+    "rate_limit",
+    "invalid query",
+    "query parse",
+    "query syntax",
+    "malformed query",
+    "unknown field",
 )
+NONRETRYABLE_AUTH = re.compile(r"\bauth\b", re.IGNORECASE)
 NONRETRYABLE_HTTP = re.compile(r"(?<!\d)(?:401|403|429)(?!\d)")
 TRANSIENT_NETWORK = re.compile(
     r"\b(?:tls|ssl|eof)\b|"
@@ -59,7 +66,7 @@ def _is_transient_read_error(message: str) -> bool:
     lowered = message.lower()
     if any(word in lowered for word in NONRETRYABLE_WORDS):
         return False
-    if NONRETRYABLE_HTTP.search(lowered):
+    if NONRETRYABLE_HTTP.search(lowered) or NONRETRYABLE_AUTH.search(lowered):
         return False
     return bool(
         TRANSIENT_NETWORK.search(message) or TRANSIENT_HTTP.search(message)
@@ -218,8 +225,8 @@ def wait_for_ci(
 ) -> WaitResult:
     if not required_checks:
         raise ValueError("at least one required check is required")
-    if max_transport_failures < 1:
-        raise ValueError("max_transport_failures must be positive")
+    if not 1 <= max_transport_failures <= 20:
+        raise ValueError("max_transport_failures must be between 1 and 20")
     if transport_retry_seconds < 0:
         raise ValueError("transport_retry_seconds cannot be negative")
     start = monotonic()
