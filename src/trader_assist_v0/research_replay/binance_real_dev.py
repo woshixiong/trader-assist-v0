@@ -494,6 +494,8 @@ def prepare_local_real_dev_sidecar(
 ) -> PreparedDailySidecar:
     """Consume one already-downloaded CURRENT_DEV ZIP after the full pre-I/O gate."""
     require_before_mock_zip(obj, receipt, admission, candidate)
+    if type(observed_at_ns) is not int or observed_at_ns < obj.end_ns:
+        raise ValueError("retrospective local observation time required")
     raw = _read_confined_local_file(
         input_root, zip_path, expected_name=obj.zip_name, limit=MAX_ZIP_BYTES,
     )
