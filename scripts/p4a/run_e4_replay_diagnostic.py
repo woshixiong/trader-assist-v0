@@ -978,3 +978,269 @@ def _inside_unit(args: argparse.Namespace) -> int:
     ):
         raise ReplayControllerError("PROOF must be root-owned mode 0750")
 
+    evidence_deadline: float | None = None
+    blockers: list[str] = []
+    source_document: dict[str, object] | None = None
+    unit_document: dict[str, object] | None = None
+    child_document: dict[str, object] | None = None
+    controller_status = "PRE_VERIFIER_FAILURE"
+
+    try:
+        requested_properties = _systemd_properties(
+            work=work,
+            proof=proof,
+            stage_root=args.stage_root,
+            native_log=args.native_log,
+            manifest=args.manifest,
+            replay_facts=args.replay_facts,
+        )
+        mount = _work_mount_evidence(work)
+        unit_document = _systemd_unit_evidence(args.unit_name, requested_properties)
+        unit_document["work_tmpfs"] = mount
+        unit_document["memory_policy"] = {
+            "MemoryMax_bytes": CGROUP_MEMORY_MAX_BYTES,
+            "prestart_MemAvailable_min_bytes": PRESTART_MEMAVAILABLE_MIN_BYTES,
+            "verifier_HWM_accept_max_bytes": VERIFIER_HWM_MAX_BYTES,
+            "TasksMax": TASKS_MAX,
+            "RuntimeMaxSec": RUNTIME_MAX_SECONDS,
+            "Restart": "no",
+        }
+        _write_json_exclusive(proof / "unit-properties.json", unit_document)
+
+        expected = _source_bindings_from_host(args, host_preflight)
+        env = _minimal_child_env(work)
+        probe = _run_credential_probe(args, expected, env)
+        source_document = {"pre_host": expected, "replay_credential_probe": probe}
+        _write_json_exclusive(proof / "source-binding.json", source_document)
+
+        child_document = _run_verifier_child(args, work, env)
+        evidence_deadline = time.monotonic() + EVIDENCE_ALLOWANCE_SECONDS
+
+        post: dict[str, dict[str, object]] = {}
+        for name, source_path in (
+            ("native_log", args.native_log),
+            ("manifest", args.manifest),
+        ):
+            post[name] = _file_binding(source_path)
+        if args.replay_facts is not None:
+            post["replay_facts"] = _file_binding(args.replay_facts)
+        if post != expected:
+            blockers.append("ORIGINAL_SOURCE_POSTRUN_DRIFT")
+        source_document["post_run"] = post
+        source_document["unchanged"] = post == expected
+        _write_json_replace(proof / "source-binding.json", source_document)
+
+        swap_start = host_preflight.get("swap_counters")
+        swap_end = _swap_counters()
+        if not isinstance(swap_start, dict) or swap_end != swap_start:
+            blockers.append("SWAP_ACTIVITY_NONZERO")
+        child_document["swap_start"] = swap_start
+        child_document["swap_end"] = swap_end
+        child_document["swap_activity_zero"] = swap_end == swap_start
+        _write_json_exclusive(proof / "child-exit.json", child_document)
+
+        if evidence_deadline is not None and time.monotonic() > evidence_deadline:
+            blockers.append("DURABLE_EVIDENCE_ALLOWANCE_EXCEEDED")
+        inventory = _work_inventory(work)
+        _write_json_exclusive(proof / "work-inventory.json", inventory)
+
+        authoritative = {
+            "replay-diagnostic.json": work / "verifier/replay-diagnostic.json",
+            "replay-verifier-resources.json": work / "verifier/replay-verifier-resources.json",
+            "child.stdout.log": work / "child.stdout.log",
+            "child.stderr.log": work / "child.stderr.log",
+        }
+        copied: dict[str, dict[str, object]] = {}
+        for name, source in authoritative.items():
+            if not source.is_file() or source.is_symlink():
+                blockers.append(f"MISSING_AUTHORITATIVE_ARTIFACT:{name}")
+                continue
+            copied[name] = _stream_copy_exclusive(source, proof / name)
+            if evidence_deadline is not None and time.monotonic() > evidence_deadline:
+                blockers.append("DURABLE_EVIDENCE_ALLOWANCE_EXCEEDED")
+                break
+
+        child_returncode = int(child_document["returncode"])
+        controller_status = (
+            "REPLAY_DIAGNOSTIC_CHILD_COMPLETE"
+            if child_returncode == 0
+            else "REPLAY_DIAGNOSTIC_CHILD_FAILED"
+        )
+        controller_result = {
+            "schema": "trade-os/e4-replay-controller-result/v1",
+            "status": controller_status,
+            "qualification_authority": False,
+            "replay_child_returncode": child_returncode,
+            "child_timed_out": bool(child_document["timed_out"]),
+            "normal_child_deadline_seconds": CHILD_DEADLINE_SECONDS,
+            "durable_evidence_allowance_seconds": EVIDENCE_ALLOWANCE_SECONDS,
+            "outer_runtime_max_seconds": RUNTIME_MAX_SECONDS,
+            "prestart_MemAvailable_bytes": host_preflight.get("mem_available_bytes"),
+            "prestart_MemAvailable_min_bytes": PRESTART_MEMAVAILABLE_MIN_BYTES,
+            "work_tmpfs_cap_bytes": WORK_TMPFS_MAX_BYTES,
+            "verifier_HWM_accept_max_bytes": VERIFIER_HWM_MAX_BYTES,
+            "copied_authoritative_artifacts": copied,
+            "complete_surviving_work_inventory": True,
+            "full_scratch_byte_copy": False,
+            "blockers": sorted(set(blockers)),
+        }
+        _write_json_exclusive(proof / "controller-result.json", controller_result)
+    except Exception as exc:
+        blockers.append(f"CONTROLLER_FAILURE:{type(exc).__name__}:{exc}")
+        try:
+            if not (proof / "controller-result.json").exists():
+                _write_json_exclusive(
+                    proof / "controller-result.json",
+                    {
+                        "schema": "trade-os/e4-replay-controller-result/v1",
+                        "status": controller_status,
+                        "qualification_authority": False,
+                        "blockers": sorted(set(blockers)),
+                    },
+                )
+        except Exception:
+            pass
+
+    export_status = "PASS" if not blockers and child_document is not None else "FAIL"
+    manifest = _finalize_proof(
+        proof,
+        export_status=export_status,
+        blockers=blockers,
+        source_binding=source_document,
+        unit_properties=unit_document,
+    )
+    if manifest["DURABLE_EVIDENCE_EXPORT"] != "PASS":
+        print("DURABLE_EVIDENCE_EXPORT=FAIL")
+        return 3
+    print("DURABLE_EVIDENCE_EXPORT=PASS")
+    assert child_document is not None
+    return 0 if int(child_document["returncode"]) == 0 else 2
+
+
+def _outer(args: argparse.Namespace) -> int:
+    if not args.execute_authorized_replay:
+        raise ReplayControllerError("replay execution requires --execute-authorized-replay")
+    if os.geteuid() != 0:
+        raise ReplayControllerError("replay controller must run as root")
+    for name, runtime_path in (
+        ("stage root", args.stage_root),
+        ("replay root", args.replay_root),
+    ):
+        if not runtime_path.is_absolute() or runtime_path.is_symlink() or not runtime_path.is_dir():
+            raise ReplayControllerError(
+                f"{name} must be an existing absolute non-symlink directory"
+            )
+    _require_absolute_regular(args.staged_python, name="staged python")
+    _require_absolute_regular(args.verifier, name="verifier")
+    _require_absolute_regular(args.native_log, name="native log")
+    _require_absolute_regular(args.manifest, name="manifest")
+    if args.replay_facts is not None:
+        _require_absolute_regular(args.replay_facts, name="replay facts")
+    _require_beneath(args.staged_python, args.stage_root, name="staged python")
+    _require_beneath(args.verifier, args.stage_root, name="verifier")
+    _require_beneath(Path(__file__).absolute(), args.stage_root, name="controller")
+
+    default_off = _assert_production_default_off(args.production_service, args.activation_permit)
+    mem_available = _mem_available_bytes()
+    if mem_available < PRESTART_MEMAVAILABLE_MIN_BYTES:
+        raise ReplayControllerError("MemAvailable is below frozen 1408MiB admission floor")
+    source_bindings: dict[str, dict[str, object]] = {
+        "native_log": _file_binding(args.native_log),
+        "manifest": _file_binding(args.manifest),
+    }
+    if args.replay_facts is not None:
+        source_bindings["replay_facts"] = _file_binding(args.replay_facts)
+    host_preflight: dict[str, object] = {
+        "mem_available_bytes": mem_available,
+        "mem_available_min_bytes": PRESTART_MEMAVAILABLE_MIN_BYTES,
+        "swap_counters": _swap_counters(),
+        "source_bindings": source_bindings,
+        "default_off": default_off,
+    }
+
+    work = args.replay_root / "work"
+    proof = args.replay_root / "proof"
+    _ensure_new_directory(work, mode=0o770, uid=0, gid=REPLAY_GID)
+    _ensure_new_directory(proof, mode=0o750, uid=0, gid=0)
+    command = build_systemd_run_argv(args, host_preflight)
+    completed = subprocess.run(
+        command,
+        stdin=subprocess.DEVNULL,
+        check=False,
+        close_fds=True,
+        shell=False,
+    )
+    manifest_path = proof / "proof-manifest.json"
+    if not manifest_path.is_file() or manifest_path.is_symlink():
+        print("REPLAY_EVIDENCE_RETENTION_UNPROVEN=YES")
+        return 4
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        print("REPLAY_EVIDENCE_RETENTION_UNPROVEN=YES")
+        return 4
+    if manifest.get("DURABLE_EVIDENCE_EXPORT") != "PASS":
+        print("DURABLE_EVIDENCE_EXPORT=FAIL")
+        return 3
+    print("DURABLE_EVIDENCE_EXPORT=PASS")
+    return completed.returncode
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--execute-authorized-replay", action="store_true")
+    parser.add_argument("--inside-unit", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--probe-child", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--unit-name", default="trade-os-e4-replay-diagnostic.service")
+    parser.add_argument("--replay-root", type=Path)
+    parser.add_argument("--stage-root", type=Path)
+    parser.add_argument("--staged-python", type=Path)
+    parser.add_argument("--verifier", type=Path)
+    parser.add_argument("--native-log", type=Path)
+    parser.add_argument("--manifest", type=Path)
+    parser.add_argument("--replay-facts", type=Path)
+    parser.add_argument("--production-service", default="trader-assist-v0-three-setup.service")
+    parser.add_argument(
+        "--activation-permit",
+        type=Path,
+        default=Path("/etc/trader-assist-v0/three-setup-activation-permit"),
+    )
+    parser.add_argument("--host-preflight", help=argparse.SUPPRESS)
+    parser.add_argument("--probe-expected", help=argparse.SUPPRESS)
+    parser.add_argument("--proof-dir", type=Path, help=argparse.SUPPRESS)
+    return parser
+
+
+def _require_runtime_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    required = ("replay_root", "stage_root", "staged_python", "verifier", "native_log", "manifest")
+    missing = [name for name in required if getattr(args, name) is None]
+    if missing:
+        parser.error("missing required replay controller arguments: " + ", ".join(missing))
+
+
+def main(argv: tuple[str, ...] | None = None) -> int:
+    parser = _parser()
+    args = parser.parse_args(argv)
+    try:
+        if args.probe_child:
+            if (
+                args.native_log is None
+                or args.manifest is None
+                or args.proof_dir is None
+                or args.probe_expected is None
+            ):
+                parser.error("internal probe arguments are incomplete")
+            return _probe_child(args)
+        _require_runtime_args(parser, args)
+        if args.inside_unit:
+            if not args.execute_authorized_replay or args.host_preflight is None:
+                parser.error("internal unit arguments are incomplete")
+            return _inside_unit(args)
+        return _outer(args)
+    except ReplayControllerError as exc:
+        print(f"REPLAY_CONTROLLER_FAILED={exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
