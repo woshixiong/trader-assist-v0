@@ -644,7 +644,7 @@ def _verifier_argv(args: argparse.Namespace, scratch: Path) -> list[str]:
 
 def _run_verifier_child(
     args: argparse.Namespace, work: Path, env: dict[str, str]
-) -> dict[str, object]:
+) -> tuple[dict[str, object], float]:
     scratch = work / "verifier"
     scratch.mkdir(mode=0o770)
     os.chown(scratch, 0, REPLAY_GID)
@@ -692,10 +692,21 @@ def _run_verifier_child(
             except ProcessLookupError:
                 pass
             returncode = process.wait()
-    stdout_capture.join()
-    stderr_capture.join()
+    evidence_deadline = time.monotonic() + EVIDENCE_ALLOWANCE_SECONDS
+    surviving_process_group = False
+    try:
+        os.killpg(process.pid, 0)
+    except ProcessLookupError:
+        pass
+    else:
+        surviving_process_group = True
+        os.killpg(process.pid, signal.SIGKILL)
+    for capture in (stdout_capture, stderr_capture):
+        capture.join(timeout=max(0.0, evidence_deadline - time.monotonic()))
+        if capture.is_alive():
+            raise ReplayControllerError("child stream did not drain within evidence allowance")
     finished_ns = time.time_ns()
-    return {
+    document = {
         "argv": command,
         "started_ns": started_ns,
         "finished_ns": finished_ns,
@@ -706,9 +717,11 @@ def _run_verifier_child(
         "sigkill_sent": kill_sent,
         "returncode": returncode,
         "signal": -returncode if returncode < 0 else None,
+        "surviving_process_group_killed": surviving_process_group,
         "stdout": stdout_capture.payload(),
         "stderr": stderr_capture.payload(),
     }
+    return document, evidence_deadline
 
 
 def _decode_mount_field(value: str) -> str:
@@ -932,6 +945,7 @@ def _finalize_proof(
     export_status: str,
     blockers: list[str],
     source_binding: dict[str, object] | None,
+    source_identities: dict[str, object] | None,
     unit_properties: dict[str, object] | None,
 ) -> dict[str, object]:
     _fsync_dir(proof)
@@ -946,6 +960,7 @@ def _finalize_proof(
         "directory_fsync_completion": True,
         "post_fsync_readback_sha256_equality": readback,
         "source_binding": source_binding,
+        "controller_verifier_source_identities": source_identities,
         "unit_properties_bound": unit_properties is not None,
         "DURABLE_EVIDENCE_EXPORT": export_status,
         "blockers": sorted(set(blockers)),
@@ -983,6 +998,7 @@ def _inside_unit(args: argparse.Namespace) -> int:
     source_document: dict[str, object] | None = None
     unit_document: dict[str, object] | None = None
     child_document: dict[str, object] | None = None
+    source_identities: dict[str, object] | None = None
     controller_status = "PRE_VERIFIER_FAILURE"
 
     try:
@@ -1008,13 +1024,25 @@ def _inside_unit(args: argparse.Namespace) -> int:
         _write_json_exclusive(proof / "unit-properties.json", unit_document)
 
         expected = _source_bindings_from_host(args, host_preflight)
+        host_identities = host_preflight.get("source_identities")
+        source_identities = {
+            "controller": _file_binding(Path(__file__).absolute()),
+            "verifier": _file_binding(args.verifier),
+        }
+        if not isinstance(host_identities, dict) or source_identities != host_identities:
+            raise ReplayControllerError("controller/verifier source identity drift")
+        source_document = {
+            "pre_host": expected,
+            "controller_verifier_source_identities": source_identities,
+            "replay_credential_probe": "PENDING",
+        }
+        _write_json_exclusive(proof / "source-binding.json", source_document)
         env = _minimal_child_env(work)
         probe = _run_credential_probe(args, expected, env)
-        source_document = {"pre_host": expected, "replay_credential_probe": probe}
-        _write_json_exclusive(proof / "source-binding.json", source_document)
+        source_document["replay_credential_probe"] = probe
+        _write_json_replace(proof / "source-binding.json", source_document)
 
-        child_document = _run_verifier_child(args, work, env)
-        evidence_deadline = time.monotonic() + EVIDENCE_ALLOWANCE_SECONDS
+        child_document, evidence_deadline = _run_verifier_child(args, work, env)
 
         post: dict[str, dict[str, object]] = {}
         for name, source_path in (
@@ -1107,6 +1135,7 @@ def _inside_unit(args: argparse.Namespace) -> int:
         export_status=export_status,
         blockers=blockers,
         source_binding=source_document,
+        source_identities=source_identities,
         unit_properties=unit_document,
     )
     if manifest["DURABLE_EVIDENCE_EXPORT"] != "PASS":
@@ -1155,6 +1184,10 @@ def _outer(args: argparse.Namespace) -> int:
         "mem_available_min_bytes": PRESTART_MEMAVAILABLE_MIN_BYTES,
         "swap_counters": _swap_counters(),
         "source_bindings": source_bindings,
+        "source_identities": {
+            "controller": _file_binding(Path(__file__).absolute()),
+            "verifier": _file_binding(args.verifier),
+        },
         "default_off": default_off,
     }
 
