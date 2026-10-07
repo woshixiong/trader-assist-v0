@@ -5,7 +5,6 @@ No real Binance market payload is authorized here. No network client is supplied
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
