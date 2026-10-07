@@ -235,6 +235,556 @@ The final disk check preserves the live rate denominator and conservative
 projection; verifier time cannot dilute durable growth. The resource trail
 itself remains included durable output.
 
+## Accepted-contract candidate: isolated replay-only diagnostic deployment
+
+> **Effective status:** This subsection is a **proposed Operations contract
+> amendment** until its one-file Draft PR has passed fresh Final Independent
+> Review, received distinct current human Mark Ready and merge authorizations,
+> been merged into `main`, and received a fresh independent Operations
+> acceptance. A Plan V2 PASS, artifact build, staging verification, this text on
+> an unmerged branch, and any earlier host inventory confer **no** target action.
+> The operator's executable FinalShell block must be generated and independently
+> checked **only after** contract effectiveness and the specific human gate.
+> No command in this section authorizes present deployment or replay.
+
+### Purpose, legal scope, and terminal status
+
+`REPLAY_ONLY_ISOLATED_DIAGNOSTIC_DEPLOYMENT` is a narrowly defined, new,
+diagnostic-only form of deployment: a hash-verified repaired release is placed
+in a *new*, uniquely owned staging root; its exact locked Python 3.12/rc5
+runtime is installed entirely inside that root and independently verified;
+the repaired source is available **only** for subsequent offline replay of
+the retained, original failed-run native log. It does not replace, install
+into, or run the predecessor service. Only after this Operations amendment is
+effective, separately accepted and the deployment is actually verified on
+target may `REPLAY_ONLY_DIAGNOSTIC_DEPLOYMENT_ACCEPTED=YES` satisfy the
+existing phrase "after ... deployment of this repair" **solely for this
+historical diagnostic replay prerequisite**. A copied archive, hash check,
+`--verify`, or an unaccepted staged root alone does **not** satisfy it.
+
+At every point on this route record `NORMAL_RELEASE_DEPLOYED=NO`,
+`NORMAL_TARGET_QUALIFICATION=NO`, `SERVICE_START_AUTHORIZED=NO`,
+`REPLAY_AUTHORIZED=NO` until a later *separate*, current human replay gate.
+`--install` against the occupied normal roots is **PROHIBITED**. In
+particular `--verify` is **staged integrity/default-off proof**, never
+installation or acceptance of a replacement deployment. A diagnostic replay
+result, even a structural PASS, is never `qualification.json`, startup TTL,
+a target-live 2400s qualification, or an exchange/trading authorization.
+These definitions do not amend Product/Security limits or the normal deployment
+and service-start gates elsewhere in this document.
+
+### Frozen identity and independent authority inputs
+
+Do not substitute control `main`, a later rebuilt artifact, or the
+archive's own `handoff/anchors.env` for these **external** identities:
+
+| Object | Exact frozen identity |
+| --- | --- |
+| Repaired product release commit | `1d8e8ca08f4f526f72b2253acf3c9a71defdbe7b` |
+| Repaired product release tree | `2daee287c155fa33e8af5894f3825d7eddb09e70` |
+| Successful bundle workflow | Run `37566655478`, attempt `1`, job `112615806940` |
+| Single GitHub artifact | ID `11459171241`, `three-setup-release-1d8e8ca08f4f526f72b2253acf3c9a71defdbe7b-37566655478-1` |
+| Exact artifact expiry | `2026-10-21T03:26:20Z`; unavailable/expired means replan, **not** alternate download |
+| Independent release SHA anchor | `1d8e8ca08f4f526f72b2253acf3c9a71defdbe7b` |
+| Independent release tree anchor | `2daee287c155fa33e8af5894f3825d7eddb09e70` |
+| Independent canonical release-manifest digest | `008abcd4ca9e1b95327e226de577665f292b55cffb6054b680916869ee31f85a` |
+| Independent raw bundle-manifest SHA256 | `55917a384abe6f8ea6251068d59293620a26036d8298d31decfb41ac943efc75` |
+| Independent raw remote-qualification.sh SHA256 | `eb537d6ad26b05f09c4fa6f6c2c38c0d745806e57ccfea28a1630dff463dfb36` |
+
+The five external anchor **source** is Issue #163 exact comment
+[`6030468275`](https://github.com/woshixiong/trader-assist-v0/issues/163#issuecomment-6030468275),
+bound to that successful run/job, not the transferred archive. The separately
+reported outer GitHub **ZIP** SHA256 is
+`b138ba4d4e4b2bf5e8cd90d436d5d2fe8808d82d7dcbb0ef884fdafc4ef34783`;
+it is **not** the inner `three-setup-release-bundle.tar.gz` SHA256, nor
+a sixth release anchor. Before *any* FinalShell SFTP/transfer, download
+only the exact artifact into a new local directory, independently inspect the
+one-member outer ZIP, measure the **inner tar.gz** SHA256 over its actual bytes,
+bind the tar name/hash/size and artifact ID/run/attempt to a canonical GitHub
+pre-transfer evidence record outside both archives, and verify that record
+again on target. A missing inner digest or a mismatch stops **before SFTP**.
+
+The failed-run **predecessor evidence** must remain a different immutable
+identity: old release `ea565fd51793904de33523c7c621f81904331c03`,
+old tree `ba5050f82ea0bc5305ba271ce898768ed68719b0`,
+original `e4/run-manifest.json` **recorded `manifest_hash` field**
+`9d13c0ee77dd3c123b667ac0151ce24d681357d0429ad8116182eb945aa7bdf4`
+(the field was read but its canonical digest was **not** independently
+recomputed), and original `native.jsonl` **379189199 bytes**, SHA256
+`453d725caa6cdbcc47003417fc1cb8545dd28359e14914f068debcd5c3d57155`.
+These are historical identities; the new bundle's `e4/run-manifest.json`
+must **never** be used as the replay `--manifest`. Record the repaired
+verifier's source SHA256 separately.
+
+### Phase D0 — contractual and read-only target preflight
+
+Require all of: effective merged Operations contract; fresh independent
+Operations acceptance; separately recorded, **current exact-scoped human
+authorization for isolated diagnostic target deployment** (including new
+path creation, transfer, private namespace mount and isolated dependency
+installation); renewed read-only host inventory and available artifact.
+No preauthorization is inferred from Phase A build, Plan/Review PASS or an
+earlier deployment attempt. The operator surface is the already-configured
+FinalShell Tokyo host (`ip-172-26-10-127`), *subject to fresh host identity
+verification*. No deployment or download/transfer to host is allowed before
+this phase's gate; the local artifact digest is measured before transfer.
+
+Preflight the entire path chain using `lstat`/`openat`-style non-following
+checks and retained filesystem/mount identity. The following paths must not
+preexist in **any** form (including dangling symlink), alias an existing
+device/inode, be a mountpoint, or traverse an untrusted symlink:
+
+* New stage: `/opt/trader-assist-v0-replay-only-37566655478-1`.
+* Separate new persistent replay container root:
+  `/var/tmp/trade-os-replay-37566655478-1`. It is an ordinary host-filesystem
+  container and is **never** itself the replay tmpfs mountpoint.
+
+Require trusted, non-symlink parents, safe mount boundaries, no hardlink or
+bind-mount alias, verified free memory/disk/inodes, a preexisting
+`traderassist` account/group and an operator with exactly the capabilities
+needed for the later separately authorized actions. Require the original
+predecessor service currently **inactive/dead and disabled**, absent
+activation permit, default-off configuration, and unmodified original
+release/log/E4 state. A host-state mismatch, path collision, missing kernel
+namespace or runtime facility, insufficient resources or unprovable ownership
+is `CONTROL_REPLAN` **before any mutation**. Never create/clear an old root
+to make the installer work.
+
+After the gate, make only the two *new* roots with `O_EXCL`/non-following
+creation and immediately capture dev/inode/owner/group/mode/mount identities.
+Stage must be `root:traderassist`, mode `0750`; all stage subdirectories
+are confined under it. The replay container root is newly owned, inaccessible
+to other users and initially empty. Its later `work/` and `proof/` children
+are created only after the separate replay human gate and fresh replay preflight;
+the root itself remains persistent host storage rather than a mountpoint. Grant
+replay-only data access through
+existing permitted read rights, not by `chmod`/`chown` of historical files.
+Preserve, without byte, timestamp, permission or service changes:
+`/opt/trader-assist-v0`, `/etc/trader-assist-v0`,
+`/var/lib/trader-assist-v0`, all old E4 lineage/native logs, systemd units,
+environment/credentials and any activation permit state. Do not reload,
+enable, start, stop or restart any service.
+
+### Phase D1 — one exact archive, inspect before extraction, hash before code
+
+Only the independently hashed inner `three-setup-release-bundle.tar.gz`
+may be transferred intact through FinalShell SFTP into the owned new stage.
+Verify its exact recorded SHA256 and byte size on target against the **outside**
+GitHub pre-transfer evidence. Do not trust the archive's own anchors.
+
+Using **trusted host-provided Python 3.12 standard-library archive inspection**
+(not transferred code), enumerate all tar members **before extracting any**;
+reject absolute paths, `..`/`.`/empty components, backslashes, duplicate or
+case-ambiguous normalized names, links of either kind, devices, FIFOs, sockets,
+sparse/PAX path overrides, unknown types, setuid/setgid/sticky bits, unexpected
+owners/modes, excessive names/count/sizes and any path not underneath the
+exact `bundle/` or `handoff/` prefixes. Require only regular files and
+directories, at most 4096 members, per-file at most 512 MiB and cumulative
+declared regular-file bytes at most 1 GiB; enforce these limits *while
+streaming extraction*, not merely from untrusted headers. Refuse all existing
+destinations and create files exclusively without following links; ignore
+archive numeric owner/group, apply the new stage's accepted ownership and
+least privileges. Extraction may touch **only** the new root. The expected
+payload is `bundle/` plus external-authority-free
+`handoff/{anchors.env,provenance.json}`; `handoff` has no execution or
+authority status.
+
+Before *any* transferred script/bytecode/module executes, check **raw bytes**
+of `bundle/bundle-manifest.json` =
+`55917a384abe6f8ea6251068d59293620a26036d8298d31decfb41ac943efc75`,
+and `bundle/remote-qualification.sh` =
+`eb537d6ad26b05f09c4fa6f6c2c38c0d745806e57ccfea28a1630dff463dfb36`.
+Then, with a **trusted external** verifier, parse the raw manifest and enforce
+the complete manifest-declared regular-file path set, hashes, byte sizes, no
+unlisted/duplicate file or directory symlink, the canonical repaired release
+SHA/tree/manifest digest, exact Linux wheel hash, and remote-script mode
+**0750**. Recheck owner/inode/path ancestry after extraction. If these
+prerequisites fail, **no transferred code may run**. Never modify/re-sign the
+archive, verifier, signed script, embedded manifest, dependencies or installer.
+
+### Phase D2 — strictly contained Python 3.12 / NautilusTrader rc5
+
+The exact extracted repaired source is
+`STAGE/bundle/payload/src` (with script source beneath
+`STAGE/bundle/payload/scripts`), never the old
+`/opt/trader-assist-v0`. Here `STAGE` denotes the *new, preflighted*
+stage root, not an unrestricted shell variable. Within **that same root only**
+create:
+
+* `runtime-venv/`: dedicated CPython **3.12**, created with
+  `python3.12 -m venv --without-pip`; runtime distributions **only**
+  from the entire immutable `payload/requirements-runtime.lock` and
+  `payload/requirements-nautilus-pilot.lock` (no `pip`/tooling distribution
+  inside this exact-runtime venv). Every runtime requirement is version-pinned
+  with SHA256; install from checked hashes and wheels only, never an sdist.
+* `pip-tool-venv/`: separate, contained **installation/verification tooling
+  only** using CPython 3.12 + its supplied `ensurepip`; it must never
+  enter runtime `sys.path`, `PYTHONPATH` or native replay execution.
+  Independently retain its interpreter/`pip --python` capability, command
+  origin and tooling provenance. The tool environment is an implementation
+  aid within the same approved new root, **not** a second runtime, product
+  release or provider. If this bounded separation is unavailable, fail closed.
+
+The no-`pip` runtime is necessary because the frozen
+`check_dependency_lock.py --verify-target-runtime-installed` rejects
+**all** distributions outside the exact runtime+rc5 locks. The frozen
+`--pip-check-with` implementation needs an interpreter **with pip** to
+invoke `pip --python <runtime-interpreter> check`; supply the accepted
+**isolated pip-tool-venv interpreter** for that argument, not the old venv
+or a host/global/user-site runtime. Use the pip tool's
+`pip --python <runtime-venv>` for installation and pip-check. No global
+`pip install` and no package insertion into the original root. Reject a
+pip version unable to check the pip-free venv this way.
+
+Set and prove `HOME`, `TMPDIR`, `PIP_CACHE_DIR`,
+`XDG_CACHE_HOME`, `PYTHONPYCACHEPREFIX` (or
+`PYTHONDONTWRITEBYTECODE=1`), `PYTHONNOUSERSITE=1`,
+`PIP_CONFIG_FILE=/dev/null`, `PIP_DISABLE_PIP_VERSION_CHECK=1`,
+`PIP_NO_INPUT=1`, `PYTHONSAFEPATH=1`, and pip index / trusted-host
+configuration so **every** cache/temp/download/build/write target is an owned
+new stage path; disable unapproved extra indexes, proxy credential helpers
+and private package APIs. Public pinned/hash-verified Python wheels may be
+fetched only from the explicitly accepted public index with no secrets.
+Install runtime lock with `--require-hashes --only-binary=:all:` and the
+exact rc5 `nautilus-trader==2.0.0rc5` **Linux x86_64 CPython 3.12 wheel**
+with SHA256
+`eab45fafd2312deda1236554c49a9798bfc76bc8465af864878e2f70189ebebe`
+using `--require-hashes --no-deps --only-binary=:all: --no-index` and
+`--find-links` restricted to the independently checked inner bundle.
+No wheel substitution, new lock, unreviewed network or user-site package.
+
+**Mandatory signed-script interpreter seam:** the immutable
+`remote-qualification.sh --verify` calls `python3.12` **by name** three
+times; its first call uses `-I -B` and ignores `PYTHONPATH`.
+For the entire signed `--verify` invocation, set a sanitized explicit
+`PATH` with `STAGE/runtime-venv/bin` first; invalidate shell command
+hashing and prove `command -v python3.12` resolves **inside the approved
+runtime-venv/bin**. Run that exact command both with normal flags and
+`-I -B` and independently prove `sys.executable`/its invoked venv
+entrypoint, `sys.version_info[:2] == (3,12)`, `sys.prefix` equals the
+approved runtime venv, `sys.base_prefix` is the inspected trusted base
+interpreter, user-site disabled and `sys.path` has **no** predecessor,
+global third-party or tool-venv packages. A venv's symlink to its trusted
+CPython executable and base standard library is permitted; **importing
+third-party code from the base interpreter is not**. A mismatched
+`python3.12` command resolution immediately stops; never patch the
+signed script or mask the mismatch with only `PYTHONPATH`.
+
+Only **after** D1 hashes and D2 interpreter preflight, run the existing
+signed script **unchanged** with exactly these four independently retained
+arguments (no `--install`):
+
+~~~sh
+# Future gated operator recipe fragment ONLY; not an authorization to execute.
+bundle/remote-qualification.sh --verify \
+  1d8e8ca08f4f526f72b2253acf3c9a71defdbe7b \
+  2daee287c155fa33e8af5894f3825d7eddb09e70 \
+  008abcd4ca9e1b95327e226de577665f292b55cffb6054b680916869ee31f85a \
+  55917a384abe6f8ea6251068d59293620a26036d8298d31decfb41ac943efc75
+~~~
+
+Run it with cwd/physical `BUNDLE_ROOT=STAGE/bundle` as the script computes,
+the controlled runtime-venv-first `PATH`, trusted no-secret environment and
+no implicit `sudo` environment reset. Then run the frozen exact
+`payload/scripts/check_dependency_lock.py
+--verify-target-runtime-installed --staged-source STAGE/bundle/payload/src
+--pip-check-with STAGE/pip-tool-venv/bin/python3.12` **using
+`STAGE/runtime-venv/bin/python3.12`**, cwd
+`STAGE/bundle/payload` (so the lock-relative reads are exact), and set
+`PYTHONPATH` exclusively to the verified
+`STAGE/bundle/payload/src:STAGE/bundle/payload`. Independently execute
+the pip-tool interpreter's `-m pip --python
+STAGE/runtime-venv/bin/python3.12 check`. Capture a fresh full
+`sys.path`, `site`, `importlib.metadata` distribution closure, runtime
+`sys.prefix`, rc5 version/module/wheel origin, project import
+`trader_assist_v0.__file__` under the checked extracted source, verified
+source binding and absence of `/opt/trader-assist-v0` or any global/user-site
+third-party import. Reconfirm `Restart=no`, default enable=0/mode=DISABLED,
+inactive/disabled unit and **absent** activation permit. Unknown import
+origin, pip error, stale artifact or altered source is `CONTROL_REPLAN`.
+
+### Phase D3 — separate replay gate, original-file immutability and real disk cap
+
+**After** D0–D2 actually pass and a complete, independently accepted target
+deployment record exists in GitHub, Engineering Control may record
+`REPLAY_ONLY_DIAGNOSTIC_DEPLOYMENT_ACCEPTED=YES`
+(`NORMAL_RELEASE_DEPLOYED=NO` still). This is *not* replay permission.
+Acquire a **new, explicit current human authorization for the original
+379189199-byte log replay**, with fresh host/resource/old-log preflight and
+a separately specified output path. Neither deployment authorization nor
+an earlier Plan/Review grants this second gate.
+
+Use only the **old** `native.jsonl` and **old** `e4/run-manifest.json`
+opened read-only from their resolved original locations. Under non-following
+open/stat checks, prove original manifest's recorded SHA/tree and
+`manifest_hash` field; separately recompute and retain the canonical
+manifest digest (do not silently treat the original recorded field as an
+independently verified digest). Verify native log's exact 379189199-byte
+SHA256 and stream-bound dev/inode/size/mtime/ctime at **pre-open, open,
+per-pass and post-close**. Reject symlinks, hardlinks/path alias or changed
+content and any unproven source/manifest mapping. No alteration of old
+timestamps, mode or source; if historic read access is unavailable, stop for
+Control, not `chmod`/copy-to-live.
+
+The already-approved persistent replay container is fixed as:
+
+~~~text
+REPLAY_ROOT=/var/tmp/trade-os-replay-37566655478-1
+WORK_MOUNT=$REPLAY_ROOT/work
+DURABLE_PROOF=$REPLAY_ROOT/proof
+~~~
+
+`REPLAY_ROOT` is the newly created, exclusively controlled host-filesystem
+container from D0 and **is not a tmpfs mountpoint**. Only after the separate
+replay human gate and fresh exact preflight may the supervisor create the two
+previously absent children with non-following/exclusive path checks:
+
+* `WORK_MOUNT`: an empty mountpoint. Inside the replay's **private mount
+  namespace only**, cover it with a tmpfs mounted using
+  `size=768m,nosuid,nodev,noexec,mode=0700,uid=<TRADERASSIST_UID>,gid=<TRADERASSIST_GID>`.
+* `DURABLE_PROOF`: an ordinary durable host-filesystem sibling under the
+  same pre-authorized `REPLAY_ROOT`, owned by the trusted namespace
+  supervisor/control identity with mode no broader than `0750`. The replay
+  identity has **no write permission** to this directory while replay runs.
+
+The 768 MiB limit remains the **hard total replay work/scratch/result
+filesystem cap**, not a free-space estimate and not SQLite's 512 MiB
+per-database limit. It covers DB/WAL/journal, verifier scratch/index,
+resource trail, Python/cache/temp files, replay result, and captured
+stdout/stderr/exit evidence. Replay `--verifier-scratch-root`,
+`--result-path`, `HOME`, `TMPDIR`, `SQLITE_TMPDIR`, `XDG_CACHE_HOME`,
+and Python cache/temp destinations must all resolve below `WORK_MOUNT`.
+The unprivileged replay process must have **no writable path outside this
+capped tmpfs**. It may read the verified staged runtime/source and original
+historical inputs, but may not write predecessor `/opt`, `/etc`,
+`/var/lib`, home, host-global temp/cache, `DURABLE_PROOF`, or any other
+host root. Durable export below is a trusted **post-process evidence-retention
+step**, not a second replay scratch/work path.
+
+Before mounting, fresh-resolve and record the existing replay identity's
+numeric IDs:
+
+~~~sh
+# Future gated operator recipe fragment ONLY.
+TRADERASSIST_UID="$(id -u traderassist)"
+TRADERASSIST_GID="$(id -g traderassist)"
+~~~
+
+Use the existing `traderassist` account as the frozen replay identity unless
+fresh preflight proves it cannot satisfy the accepted read-only source
+contract; that case is **CONTROL_REPLAN**, never permission repair. The future
+reviewed operator block must mount the private tmpfs using those **numeric**
+`uid=` and `gid=` values plus `mode=0700`. Inside the same namespace,
+independently prove with `findmnt`, `stat`, and `statfs` that the
+filesystem is tmpfs; the total allocation is bounded at 768 MiB or stricter;
+`nosuid,nodev,noexec` are present; the mount-visible root numeric UID/GID
+equal `TRADERASSIST_UID/TRADERASSIST_GID`; mode is `0700`; propagation is
+private; and host-namespace mounts are unchanged.
+
+Before replay, use a trusted bounded privilege-drop primitive such as
+`setpriv --reuid "$TRADERASSIST_UID" --regid "$TRADERASSIST_GID" --clear-groups --no-new-privs`
+(or an equally bounded standard OS primitive) to perform an exact
+write/read/delete probe under the intended replay identity against
+`WORK_MOUNT`; then prove the mount is empty again. Separately prove that the
+same identity can open the original `native.jsonl` and original
+`e4/run-manifest.json` **read-only**, cannot open either for write, and
+cannot write `DURABLE_PROOF`. Do not `chmod`, `chown`, copy, or otherwise
+repair historical permissions. Any identity mismatch, required host-wide
+permission change, inability to drop privilege, or failed least-privilege
+probe is **CONTROL_REPLAN**. Replay itself must never run as root.
+
+**Total scratch cap is mandatory.** The later reviewed and human-authorized
+single-block recipe must use a **private, per-replay mount namespace**
+(e.g. util-linux `unshare --mount --propagation private`) and cover only
+`WORK_MOUNT` inside that namespace. Check namespace creation, private
+propagation, exact mount source/options/hard-cap, mount identity,
+namespace-local visibility, host mounts unchanged, and bounded `statfs`
+allocation **before any replay write**. No underlying work writes outside the
+namespace, host-global mount, `/etc/fstab` change, mount-service mutation,
+old-root permission change, or fallback to an uncapped directory is allowed.
+Require enough memory/swap headroom for the tmpfs and enough durable
+disk/inodes for a worst-case **<=768 MiB** export plus an explicit safety
+margin. If namespace capability, namespace-safe mount, enforceable cap, memory,
+swap, durable disk/inodes, or exact ownership cannot be proven:
+**STOP/CONTROL_REPLAN**.
+
+Run a trusted namespace supervisor that remains alive **after the unprivileged
+replay child terminates**. Launch only that child as `traderassist` inside
+the same private namespace, using the already verified
+`runtime-venv/bin/python3.12 -B` and exact repaired extracted source, with
+`PYTHONDONTWRITEBYTECODE=1`, no network/private API and no application,
+node, exchange, socket, systemd or service calls. Redirect replay stdout and
+stderr into new exclusive files under `WORK_MOUNT`. Accept only these replay
+flags, with future independently resolved original paths and a new exclusive
+result filename below `WORK_MOUNT`:
+
+~~~sh
+# Future separately authorized replay fragment; execute ONLY inside
+# the verified private 768 MiB work tmpfs after the second gate.
+STAGE/runtime-venv/bin/python3.12 -B \
+  STAGE/bundle/payload/scripts/e4_nautilus_public_data_probe.py \
+  --replay-native-log ORIGINAL_NATIVE_JSONL \
+  --manifest ORIGINAL_E4_RUN_MANIFEST_JSON \
+  --verifier-scratch-root WORK_MOUNT \
+  --result-path WORK_MOUNT/replay-diagnostic.json
+# Add --replay-facts ORIGINAL_AUTHENTIC_FACTS_JSON only if independently proven.
+~~~
+
+The displayed names `STAGE`, `ORIGINAL_*`, `WORK_MOUNT`,
+`DURABLE_PROOF`, and `TRADERASSIST_*` are **non-executable contract
+placeholders**, not permission to choose paths or identities without
+Engineering Control's later exact operator block. Reject all live
+flags/config/qualification outputs, preexisting result/work content,
+symlink/hardlink overwrite, `qualification.json` basename, and any replay
+output outside `WORK_MOUNT`. Constrain scratch verifier to the frozen 64 KiB
+read chunks, 1 MiB maximum envelopes, 4 MiB SQLite cache, <=512 MiB DB,
+bounded journal/transactions and 64 retained WS diagnostic windows plus
+peak/first-failure evidence. Require **process-survived** and recorded
+RSS/VmHWM <=256 MiB, independent host MemAvailable/swap/no-pressure and
+resource index peak/total scratch-cap proof. Cap exhaustion, OOM, missing
+resource-trail phase, original-log mutation or threshold breach is an explicit
+diagnostic failure; never label it PASS.
+
+The namespace must **not normally exit or unmount** when the replay child
+terminates. Whether the child exits 0, exits diagnostically nonzero, or receives
+an ordinary signal, the still-alive trusted supervisor must perform this
+mandatory pre-exit evidence freeze/export sequence while the private namespace
+still exists:
+
+1. Record the replay child's **exact exit status** as capped evidence under
+   `WORK_MOUNT`.
+2. Stop all replay writers and prove no surviving replay descendant still has
+   the work tree open for write.
+3. Remount the same tmpfs filesystem **read-only inside the private namespace**
+   (or use an equally strong namespace-local write freeze), then verify RO
+   state and unchanged mount identity.
+4. Enumerate the **complete remaining work tree** using non-following checks.
+   Permit only directories and regular files; reject path escape, symlink,
+   special file, regular-file hardlink alias, unexpected owner/mode, or any
+   other ownership/path anomaly. Compute exact file count, per-file byte size,
+   total regular-file bytes and SHA256 for **every** retained regular file.
+   The supervisor must serialize this exact namespace work-tree manifest for
+   durable retention.
+5. Export **the complete remaining work evidence**, not just the final JSON,
+   into the fresh `DURABLE_PROOF` sibling using trusted host tooling with
+   exclusive creation and no-follow semantics. Include, where present,
+   `replay-diagnostic.json`, `replay-verifier-resources.json`, captured
+   stdout/stderr/exit evidence, and every verifier scratch/index/journal
+   artifact that survives replay. Never invent an absent artifact.
+6. Hard-bound replay-origin durable export to **<=768 MiB total**. The source
+   is already bounded by the tmpfs, and no replay-origin byte outside that
+   capped source may be exported. `DURABLE_PROOF` remains non-writable by the
+   replay child and cannot be used to bypass the scratch cap.
+7. `fsync` each exported regular file. Exclusively create a durable export
+   manifest containing source/destination path-relative names, exact sizes,
+   SHA256 values, replay exit code, original-log/manifest binding,
+   namespace/mount identity, numeric replay UID/GID/mode, work-tree total
+   bytes/file count, and the export total; `fsync` that manifest and the
+   proof directory. Then re-open and re-read **every** durable destination and
+   verify exact size/SHA256 equality against the frozen namespace work-tree
+   manifest and export manifest.
+8. Only after `DURABLE_EVIDENCE_EXPORT=PASS` **and** post-fsync checksum
+   readback PASS may the supervisor permit normal namespace exit/unmount.
+   Namespace exit is not cleanup of `DURABLE_PROOF`; retain the durable proof
+   root for canonical GitHub evidence/adjudication with no automatic deletion.
+
+The export mechanism may write **only** to the pre-authorized
+`DURABLE_PROOF` sibling. It may not copy historical inputs, mutate old roots,
+create arbitrary host paths, use network/private APIs, or perform service
+operations.
+
+Error-path retention is fail-closed. If the replay child fails while the
+supervisor survives, perform the **same** read-only freeze, complete export,
+fsync and readback sequence before namespace exit and preserve the failed
+diagnostic evidence. If freeze/export/hash/fsync/readback fails, do **not**
+claim replay evidence or PASS: retain any already-created durable proof bytes
+without auto-cleanup, record `DURABLE_EVIDENCE_EXPORT=FAIL`, and return
+`CONTROL_REPLAN`. The recipe must not intentionally exit/unmount a namespace
+containing the only surviving evidence while a bounded export/readback path
+remains. If the namespace supervisor itself is forcibly lost (for example
+SIGKILL or host failure) before durable export, classify
+`REPLAY_EVIDENCE_RETENTION_UNPROVEN`; no replay acceptance and no blind
+rerun. Return to Engineering Control using whatever durable terminal/GitHub
+evidence survived. This exceptional loss is never relabelled as successful
+preservation. Under every branch, predecessor roots, historical evidence,
+systemd/default-off state and activation-permit state remain untouched; no
+automatic cleanup occurs.
+
+Historical semantic facts, if used, must be **authentic independently retained**
+`l0-native-replay-facts/v1`, <=1 MiB, with original `manifest_hash`,
+`native_sha256`, the original `dispatches`, `sync_succeeded` and
+available `epochs`, `outbound_forecast`, `close_reserve`,
+`native_constant_upper_bound`, `planned_reconnect_request_ns`, each
+supplied fact bound to a nonempty durable locator. Missing/uncertain facts
+mean **structural-only**, preserve `unavailable_facts` and
+`UNAVAILABLE_FACTS_REQUIRE_CONTROL_DISPOSITION`, and return to
+Engineering Control before any semantic promotion or new 2400s qualification.
+Do not fabricate facts or interpret structural PASS as historical semantic
+or live-ready PASS.
+
+### Evidence packet, stop conditions, preservation and future gates
+
+Serialize to canonical GitHub evidence **before** moving to each subsequent
+gate: this merged Operations amendment and independent acceptance; exact
+operator/human deployment approval; host/parent and old-root identities;
+exact artifact/run/attempt, **five external anchors**, measured independent
+inner tar.gz SHA256 and transfer match; inspected member set/limits/modes;
+pre-execution raw hashes; new stage dev/inode/ownership; exact
+runtime/pip-tool venv identities, locked distribution closure and rc5 wheel;
+full `python3.12` resolution under signed `-I` and normal execution;
+raw source/import origins; signed `--verify` output and default-off state.
+
+Only then distinguish `REPLAY_ONLY_DIAGNOSTIC_DEPLOYMENT_ACCEPTED=YES`
+from permanent `NORMAL_RELEASE_DEPLOYED=NO` and record the **separate current
+human replay approval**. After replay, canonical durable evidence must come
+from `DURABLE_PROOF`, not a vanished tmpfs path, and must include all of:
+
+* original log/manifest source-bound proof and unchanged metadata;
+* resolved numeric `traderassist` UID/GID plus mount-visible UID/GID/mode;
+* namespace/mount identity, private propagation and enforced 768 MiB hard cap;
+* least-privilege `WORK_MOUNT` write/read/delete probe, original-input
+  read-only/no-write probe, and proof that replay cannot write
+  `DURABLE_PROOF`;
+* replay child's exact exit code and process-survival disposition;
+* complete frozen namespace work-tree manifest, exact file count, per-file
+  sizes/SHA256 and total bytes;
+* durable proof export manifest, replay-origin export total **<=768 MiB**,
+  per-file fsync, proof-directory fsync and post-fsync full readback
+  size/SHA256 equality;
+* `DURABLE_EVIDENCE_EXPORT=PASS` as a mandatory precondition before **any**
+  replay result may advance;
+* final diagnostic result, complete verifier resource trail, VmHWM/RSS
+  <=256 MiB, result schema/status/blockers, missing-fact disposition and
+  result checksum, all read from the durable proof copy.
+
+`UNAVAILABLE_FACTS_REQUIRE_CONTROL_DISPOSITION` remains mandatory whenever
+historical semantic facts are absent or uncertain. No example, unsigned
+`anchors.env`, tmpfs-only path, partial export or previous PASS fills absent
+proof.
+
+`FAIL_CLOSED/CONTROL_REPLAN` is required on any new Architecture/Operations
+authority issue; main/product/artifact drift; expired artifact; signature,
+transfer, archive, manifest, code or wheel mismatch; path/link/mount collision;
+missing namespace/quota/tool/host capacity; mixed runtime import; original
+file/inode/hash/metadata drift; inability to enforce the total cap;
+service/permit/default-off state deviation; undocumented network/write;
+Replay structural/semantic resource blocker; or absent independent human gate.
+At failure leave service **inactive/disabled**, permit **absent** and the
+predecessor, `/etc`, `/var/lib`, log and all retained E4 history untouched.
+Do **not** use `--install`, replace old roots, restart, roll back *through*
+the predecessor, or automatically delete partly created new stage/scratch.
+Contain and retain the new, exclusively owned paths for investigation; any
+cleanup is a **different, scoped human-authorized** action requiring fresh
+owner/dev/inode/mount and path confinement proof. No cleanup of old material
+is ever implicit.
+
+A later normal release replacement/deployment, 2400-second **live**
+qualification, service activation/enable/restart, private-API activity,
+exchange/order actions and trading each remain **distinct** human/authority
+gates. Neither an accepted isolated replay nor this Operations amendment
+removes their original safety and validation contracts.
+
+
 ## Mandatory retained-log replay before another live qualification
 
 After separately authorized merge, release and deployment of this repair,
