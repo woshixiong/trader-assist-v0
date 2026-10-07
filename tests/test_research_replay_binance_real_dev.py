@@ -29,12 +29,13 @@ from trader_assist_v0.research_data.binance_research_transport import (
     MockOnlyResearchTransport,
     PinnedHttpsResearchTransport,
 )
-from trader_assist_v0.research_data.contracts import ProviderCapability, SourceMode
+from trader_assist_v0.research_data.contracts import CapabilityState, ProviderCapability, SourceMode
 from trader_assist_v0.research_data.mapping import (
     PitReferenceResolver,
     ReferenceMappingInterval,
     ReferenceMappingSnapshot,
 )
+from trader_assist_v0.research_data.storage import EvidenceSidecar
 from trader_assist_v0.research_inventory.builder import _binding, build_inventory_manifest
 from trader_assist_v0.research_inventory.contracts import (
     AllocationItem,
@@ -205,7 +206,7 @@ def fixture(first_payload: bytes | None = None):
     )
     policy = AdmissionPolicy.create(
         version="G0_REAL_DEV_MOCK_ADMISSION_V1",
-        stale_after_ns=DAY_NS, sequence_semantics="UNKNOWN", max_observations=288,
+        stale_after_ns=DAY_NS, sequence_semantics="CONTIGUOUS", max_observations=288,
     )
     admission = DevExternalAdmission(
         datasets[0], PitReferenceResolver(snap), (cap,), policy, auth, pre,
@@ -353,6 +354,15 @@ def test_local_current_dev_full_gate_parser_and_existing_reader_roundtrip(tmp_pa
     assert all(row.ts_receive is None for row in replay)
     assert all(row.receive_provenance == "NOT_EXPOSED" for row in replay)
     assert all(row.known_at == observed for row in replay)
+    sidecar = EvidenceSidecar.model_validate_json(prepared.path.read_text())
+    assert tuple(observation.event.sequence for observation in sidecar.observations) == tuple(
+        range(1, 289)
+    )
+    assert all(
+        observation.quality.states == (CapabilityState.AVAILABLE_VERIFIED,)
+        for observation in sidecar.observations
+    )
+    assert all(row.quality == ("AVAILABLE_VERIFIED",) for row in replay)
     encoded = prepared.path.read_bytes()
     assert b'"source_bytes_hex":[]' in encoded
     assert payload not in encoded
