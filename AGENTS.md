@@ -74,6 +74,26 @@ Additional RDC calls require a concrete technical necessity. On transport/networ
 failure, preserve the exact checkpoint and use the existing bounded retry/fallback
 contract; never create an RDC retry storm.
 
+### Execution defaults — operational clarification only
+
+These defaults clarify how to apply the existing V5 route and transport rules.
+They do not add stages, change lifecycle/authority, or modify controller, CI,
+review, repair, or protected-action behavior.
+
+- Follow the frozen V5 route exactly. Route B uses an ordinary ChatGPT Writer;
+  Route C uses Codex CLI; Pre-code and Final Independent Review use a fresh
+  ordinary ChatGPT High context. Do not substitute executors.
+- When Route C genuinely requires local execution, use RDC only to start or
+  resume one visible foreground Terminal/Codex session. Do not use RDC for
+  routine progress polling.
+- On a clearly transient local Codex network interruption, wait 10 seconds and
+  retry/resume the same task/session when available. This is a local Codex
+  transport rule; it does not change CI polling or CI waiter behavior.
+- When the local Mac cannot authoritatively represent the required test
+  environment, do not repeatedly rebuild or repair the local environment for
+  parity. Use the already-qualified GitHub CI or other existing authoritative
+  environment.
+
 Every actor works to its safe authorized ability boundary. Routine continuation,
 SHA/CI/log relay, and long review-result relay through the user are prohibited.
 
