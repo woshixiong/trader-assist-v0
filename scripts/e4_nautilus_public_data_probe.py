@@ -458,7 +458,7 @@ class _NativeEvidence:
             self.temporary = tempfile.TemporaryDirectory(prefix="l0-verifier-",
                 dir=(self.scratch_root or Path(tempfile.gettempdir())).resolve())
             index = Path(self.temporary.name) / "index.sqlite"
-            self.db = sqlite3.connect(index, timeout=0)
+            self.db = sqlite3.Connection(index, timeout=0)
             self.db.execute("PRAGMA page_size=4096")
             self.db.execute("PRAGMA mmap_size=0")
             self.db.execute("PRAGMA cache_size=-4096")
