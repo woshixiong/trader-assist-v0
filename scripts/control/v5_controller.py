@@ -329,6 +329,47 @@ def validate_independent_reviewer_admission(
         raise ControlError("reviewer must be independent ordinary ChatGPT High read-only")
 
 
+def validate_test_surface_obligation(
+    *,
+    required_surface: str,
+    expected_head: str,
+    evidence: Mapping[str, Any],
+    target_host_authorized: bool = False,
+) -> str:
+    """Validate a Control-frozen test surface without inventing substitute proof."""
+    allowed = {"LOCAL_FOCUSED", "GITHUB_V0", "GITHUB_E4_NATIVE", "TARGET_HOST"}
+    if required_surface not in allowed:
+        raise ControlError("unknown or unfrozen validation surface")
+    if evidence.get("head") != expected_head:
+        raise ControlError("STALE_REBIND: validation evidence head mismatch")
+    if evidence.get("qualified") is not True:
+        raise ControlError("validation surface is not qualified")
+    if evidence.get("executed") is not True or evidence.get("skipped") is True:
+        raise ControlError("required validation was not actually executed")
+
+    if required_surface == "GITHUB_V0":
+        if evidence.get("os") != "Linux" or evidence.get("python") != "3.12":
+            raise ControlError("V0 GitHub validation environment is not qualified")
+        if evidence.get("whole_repo") is not True:
+            raise ControlError("V0 whole-repository test proof is missing")
+    elif required_surface == "GITHUB_E4_NATIVE":
+        required_native = {
+            "os": "Linux",
+            "arch": "x86_64",
+            "python": "3.12",
+            "nautilus": "2.0.0rc5",
+        }
+        if any(evidence.get(key) != value for key, value in required_native.items()):
+            raise ControlError("E4 native rc5 validation identity mismatch")
+    elif required_surface == "TARGET_HOST":
+        if not target_host_authorized:
+            raise ControlError("HUMAN_GATE: target-host validation is not authorized")
+        if evidence.get("target_host") is not True:
+            raise ControlError("target-host proof is missing")
+
+    return required_surface
+
+
 @dataclass(frozen=True)
 class ReviewReadiness:
     decision: str
