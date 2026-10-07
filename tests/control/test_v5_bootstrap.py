@@ -4,6 +4,7 @@ import argparse
 import importlib.util
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -305,8 +306,6 @@ def test_codex_bootstrap_rejects_canonical_route_b_even_when_bound(repository: P
     bound = args(repository)
     state = bootstrap._V5.parse_state(CANONICAL_COMMENTS[bound.package_state_locator])
     bound.route = "B_SMALL_FROZEN_BOUNDED_ORDINARY_CHATGPT_HIGH"
-    from dataclasses import replace
-
     rebound = replace(state, route=bound.route)
     CANONICAL_COMMENTS[bound.package_state_locator] = bootstrap._V5.serialize_state(rebound)
     with pytest.raises(bootstrap.BootstrapError, match="requires canonical Route C"):
