@@ -29,6 +29,25 @@ authority/acceptance.
 Codex writes a canonical Plan/handoff and emits one complete prompt for a fresh
 ordinary ChatGPT Pre-code Review.
 
+## 1A. Frozen route selection and RDC necessity
+
+The active V5 constitution already defines A = deterministic/mechanical
+(provider-native or zero-model), B = small frozen bounded semantic work
+(fresh ordinary ChatGPT Writer), C = large coherent multi-step coding
+(manifest-selected Codex CLI), and D = unresolved architecture/security/
+authority ambiguity (Engineering Control resolves and refreezes).
+Engineering Control freezes the route; a user does not routinely choose
+Codex versus ordinary ChatGPT once authority and evidence fix it. Route
+selection alone is **not** actual-provider/model-identity attestation.
+The Codex profile in section 4 applies to Route C, not a global ban on
+the frozen ordinary ChatGPT Route B.
+
+AGENTS.md already requires the four-part RDC necessity test: local-only
+action/evidence, no native lower-cost equivalent, a decisive call, and
+bundled operations. GitHub-native Issue/PR/file/CI evidence requires **zero**
+RDC calls and no model-mediated status polling. RDC is a transport, not
+an authority or routine CI monitor. These restrictions are unchanged.
+
 ## 2. Fresh Pre-code Review
 
 The user opens a fresh ordinary ChatGPT window with the supplied review prompt.
@@ -167,3 +186,33 @@ The manifest-selected lifecycle is now `ACTIVE`. The lifecycle, same-thread
 resume, CI, review, protected-action, and transport rules above are unchanged.
 V5-C cleanup remains a separate later scope and does not block normal product
 development.
+
+
+## 9. Exact-head CI transport and native evidence (P1A only)
+
+The existing deterministic `scripts/control/v5_ci_waiter.py` retains its
+**60-second default** normal pending-CI poll. Only a *positively classified*
+transient **read** error (HTTP 408/500/502/503/504, TLS/EOF/connection reset)
+uses the independent `--transport-retry-seconds` timer (**10 seconds default**),
+with a maximum of **20 consecutive transport failures** before
+`PAUSED_TRANSPORT`. A complete valid check-runs read resets the count;
+a PR-head-only read does not. The overall deadline, pre-wait and terminal
+exact-head checks, structured checkpoint, and `gh run watch` fallback remain.
+Auth/permission/OAuth/401/403/429, rate limits, quotas, missing CLI executable,
+ambiguous queries, writes and semantic failures are **not** rapid-retried.
+
+GitHub's qualified Ubuntu/Python 3.12 CI provides authoritative native test
+execution. Exact NautilusTrader **2.0.0rc5** evidence belongs to the
+qualified Nautilus GitHub jobs, not to an unqualified local Mac environment.
+Required `contracts`, `nautilus-pilot`, `vnext-g4` and `e4-capture` must
+have terminal **PASS at the current exact PR HEAD**, with relevant native
+steps actually executed; skipped, missing, old-head or unexecuted results
+are not PASS. Local macOS absence is not evidence of running Linux/rc5 tests.
+CI green is necessary, not independent Final Review or tool activation.
+
+P1A deliberately does **not** implement/fix the original blocked PR #300's
+B1/B2/B3 controller and Final Review admission findings or B4 actual-provider
+identity-attestation defect. Their evidence and separate closure remain with
+Engineering Control. Packet 2's Mac foreground Terminal execution is deferred.
+Neither this guide nor a CI success grants Mark Ready, merge, deployment,
+runtime, credential, wallet, exchange/order or real-capital authority.

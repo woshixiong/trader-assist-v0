@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import time
 from collections.abc import Callable, Iterable
@@ -16,21 +17,53 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-RETRYABLE_MARKERS = (
-    "eof",
-    "tls",
-    "ssl",
-    "timeout",
-    "timed out",
-    "connection reset",
-    "connection refused",
-    "could not resolve",
-    "temporary failure",
-    "502",
-    "503",
-    "504",
+# Nonretryable authorization/quota failures take precedence over any TLS/5xx
+# words in the same CLI diagnostic. Unknown failures fail closed.
+NONRETRYABLE_WORDS = (
     "rate limit",
+    "rate-limit",
+    "quota",
+    "oauth",
+    "authentication",
+    "authorization",
+    "unauthorized",
+    "forbidden",
+    "permission",
+    "credentials",
+    "credential",
+    "insufficient scope",
+    "resource not accessible",
+    "token expired",
+    "bad token",
 )
+NONRETRYABLE_HTTP = re.compile(r"(?<!\d)(?:401|403|429)(?!\d)")
+TRANSIENT_NETWORK = re.compile(
+    r"\b(?:tls|ssl|eof)\b|"
+    r"\b(?:connection (?:reset|refused|closed|aborted)|"
+    r"could not resolve|temporary failure|network is unreachable|"
+    r"context deadline exceeded|i/o timeout|"
+    r"(?:connection|network|read|request) timed? out|timed out)\b",
+    re.IGNORECASE,
+)
+TRANSIENT_HTTP = re.compile(
+    r"\b(?:http(?:/\d+(?:\.\d+)?)?|status(?: code)?|"
+    r"response(?: status)?|returned|error)\s*[:=]?\s+"
+    r"(?:408|500|502|503|504)\b|"
+    r"\b(?:408 request timeout|500 internal server error|"
+    r"502 bad gateway|503 service unavailable|504 gateway timeout)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_transient_read_error(message: str) -> bool:
+    lowered = message.lower()
+    if any(word in lowered for word in NONRETRYABLE_WORDS):
+        return False
+    if NONRETRYABLE_HTTP.search(lowered):
+        return False
+    return bool(
+        TRANSIENT_NETWORK.search(message) or TRANSIENT_HTTP.search(message)
+    )
 
 
 class WaiterError(RuntimeError):
@@ -75,12 +108,15 @@ def _run_gh_json(args: list[str]) -> Any:
             stdin=subprocess.DEVNULL,
             timeout=30,
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise RetryableTransportError(str(exc)) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RetryableTransportError("gh read timed out") from exc
+    except OSError as exc:
+        # A missing binary, process-spawn or OS-permission fault is not
+        # evidence of transient GitHub read connectivity.
+        raise QueryError(f"gh launch failed: {exc}") from exc
     if proc.returncode != 0:
         message = (proc.stderr or proc.stdout).strip()
-        lowered = message.lower()
-        if any(marker in lowered for marker in RETRYABLE_MARKERS):
+        if _is_transient_read_error(message):
             raise RetryableTransportError(message[:500])
         raise QueryError(message[:500] or f"gh exited {proc.returncode}")
     try:
@@ -178,15 +214,20 @@ def wait_for_ci(
     gh_json: Callable[[list[str]], Any] = _run_gh_json,
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
+    transport_retry_seconds: float = 10.0,
 ) -> WaitResult:
     if not required_checks:
         raise ValueError("at least one required check is required")
+    if max_transport_failures < 1:
+        raise ValueError("max_transport_failures must be positive")
+    if transport_retry_seconds < 0:
+        raise ValueError("transport_retry_seconds cannot be negative")
     start = monotonic()
     transport_failures = 0
     checks: list[CheckState] = []
 
     while True:
-        if monotonic() - start > max_wait_seconds:
+        if monotonic() - start >= max_wait_seconds:
             result = WaitResult(
                 "TIMEOUT",
                 expected_head,
@@ -216,6 +257,9 @@ def wait_for_ci(
                     return result
 
             checks = read_check_runs(repo, expected_head, required_checks, gh_json)
+            # Only a complete, structurally valid check-runs read proves recovery.
+            # A PR-head-only success must never reset consecutive read failures.
+            transport_failures = 0
             terminal, failed = _check_terminal(checks, required_checks)
             if terminal:
                 terminal_head = read_pr_head(repo, pr_number, gh_json)
@@ -255,7 +299,10 @@ def wait_for_ci(
                 )
                 _write_result(result, result_file)
                 return result
-            sleep(min(max(poll_seconds, 1.0), 60.0))
+            remaining = max_wait_seconds - (monotonic() - start)
+            if remaining <= 0:
+                continue  # The outer hard deadline wins on the next iteration.
+            sleep(min(transport_retry_seconds, remaining))
             continue
         except QueryError as exc:
             result = WaitResult(
@@ -280,6 +327,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--expected-head", required=True)
     p.add_argument("--required-check", action="append", required=True, dest="required_checks")
     p.add_argument("--poll-seconds", type=float, default=60.0)
+    p.add_argument("--transport-retry-seconds", type=float, default=10.0)
     p.add_argument("--max-transport-failures", type=int, default=20)
     p.add_argument("--max-wait-seconds", type=float, default=10800.0)
     p.add_argument("--result-file", type=Path)
@@ -294,6 +342,7 @@ def main(argv: list[str] | None = None) -> int:
         expected_head=args.expected_head,
         required_checks=args.required_checks,
         poll_seconds=args.poll_seconds,
+        transport_retry_seconds=args.transport_retry_seconds,
         max_transport_failures=args.max_transport_failures,
         max_wait_seconds=args.max_wait_seconds,
         result_file=args.result_file,
