@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
@@ -175,6 +176,244 @@ def validate_resume_identity(
         raise ControlError(
             "PAUSED_CAPABILITY: exact Codex thread/worktree resume is unavailable or mismatched"
         )
+
+
+
+def route_family(route: str) -> str:
+    """Recognize a frozen V5 family, including legacy bare 'C', without guessing."""
+    if not isinstance(route, str) or not re.fullmatch(r"[ABCD](?:_[A-Z0-9_]+)?", route):
+        raise ControlError("invalid frozen execution route")
+    return route[0]
+
+
+def _require_independent_precode(
+    state: PackageState, evidence: Mapping[str, str] | None
+) -> None:
+    """Caller must fresh-read this exact canonical comment; a PASS string is not proof."""
+    if evidence is None:
+        raise ControlError("canonical independent Pre-code PASS evidence missing")
+    required = {
+        "REVIEW_TYPE": "PRE_CODE",
+        "DECISION": "PASS",
+        "FAIL_ROUTE": "NONE",
+        "RESULT_EGRESS": "GITHUB_CANONICAL",
+        "REVIEWER_MODE": "FRESH_ORDINARY_CHATGPT_READ_ONLY",
+        "PACKAGE_ID": state.package_id,
+        "FROZEN_BASE": state.exact_base,
+    }
+    if any(evidence.get(key) != value for key, value in required.items()):
+        raise ControlError("canonical independent Pre-code evidence is incomplete or mismatched")
+    if not evidence.get("REVIEW_RESULT_KEY") or not evidence.get("PLAN_REF"):
+        raise ControlError("canonical independent Pre-code evidence lacks review/plan binding")
+    locator = evidence.get("CANONICAL_REF", "")
+    match = re.fullmatch(
+        r"https://github\.com/[^/]+/[^/]+/issues/\d+#issuecomment-(\d+)", locator
+    )
+    if match is None or not any(
+        item.endswith("PRECODE_PASS_" + match.group(1))
+        for item in state.completed_work
+    ):
+        raise ControlError("independent Pre-code PASS is not bound to canonical package state")
+
+
+def validate_execution_admission(
+    state: PackageState,
+    *,
+    requested_route: str,
+    actor: str,
+    stage: str,
+    event_key: str,
+    observed_head: str,
+    authorized_identity: Mapping[str, str],
+    actual_identity: Mapping[str, str],
+    precode_evidence: Mapping[str, str] | None = None,
+    codex_thread_id: str = "",
+    worktree_identity: str = "",
+    resume_verifiable: bool = False,
+) -> None:
+    """Pure guard for the *admitted* entrypoint, not a universal provider bypass guard.
+
+    The caller supplies fresh canonical route/evidence and independently observed
+    actual runtime identity. Matching caller strings alone is NOT runtime proof.
+    """
+    validate_state(state)
+    family = route_family(state.route)
+    if requested_route != state.route or route_family(requested_route) != family:
+        raise ControlError("frozen execution route mismatch")
+    if observed_head != state.exact_head:
+        raise ControlError("STALE_REBIND: execution head mismatch")
+    if stage != state.current_stage or stage in {
+        Stage.PAUSED_CAPABILITY, Stage.PAUSED_QUOTA, Stage.PAUSED_TRANSPORT
+    }:
+        raise ControlError("execution stage is not current or is paused")
+    if not event_key or event_key in state.completed_work:
+        raise ControlError("duplicate or missing semantic execution event")
+
+    required_identity_fields = ("executor", "provider", "surface", "model", "reasoning")
+    if any(
+        field not in authorized_identity
+        or field not in actual_identity
+        or authorized_identity[field] != actual_identity[field]
+        for field in required_identity_fields
+    ):
+        raise ControlError("requested/actual/frozen executor identity mismatch")
+
+    executor = authorized_identity["executor"]
+    surface = authorized_identity["surface"]
+    model = authorized_identity["model"]
+    reasoning = authorized_identity["reasoning"]
+    if family == "A":
+        if (
+            actor != "DETERMINISTIC_CONTROLLER"
+            or executor != "NONE"
+            or model not in {"", "NONE"}
+            or stage not in {"LOCAL_VALIDATE", "PUBLISH", "CI_WAIT", "MECHANICAL_REPAIR"}
+        ):
+            raise ControlError("Route A admits mechanical no-model execution only")
+    elif family == "B":
+        if (
+            actor != "WRITER"
+            or executor != "FRESH_ORDINARY_CHATGPT_WRITER"
+            or surface != "CHATGPT_ORDINARY_GITHUB_NATIVE"
+            or not model
+            or reasoning != "HIGH"
+            or stage not in {"IMPLEMENT", "REPAIR_1", "REPAIR_2"}
+        ):
+            raise ControlError("Route B requires frozen fresh ordinary ChatGPT High Writer")
+        _require_independent_precode(state, precode_evidence)
+    elif family == "C":
+        if (
+            actor != "WRITER"
+            or executor != "CODEX"
+            or surface != "CODEX_CLI"
+            or not model
+            or reasoning not in {"medium", "high"}
+            or stage not in {"PLAN", "IMPLEMENT", "REPAIR_1", "REPAIR_2"}
+        ):
+            raise ControlError("Route C requires frozen Codex primary executor")
+        if stage != "PLAN":
+            _require_independent_precode(state, precode_evidence)
+            validate_resume_identity(
+                state, codex_thread_id, worktree_identity, resume_verifiable
+            )
+    else:
+        if (
+            actor != "ENGINEERING_CONTROL"
+            or executor != "NONE"
+            or model not in {"", "NONE"}
+            or stage not in {"CONTROL_FREEZE", "CONTROL_REPLAN", "STALE_REBIND"}
+        ):
+            raise ControlError("Route D is Engineering Control only")
+
+
+def validate_independent_reviewer_admission(
+    state: PackageState,
+    *,
+    observed_head: str,
+    actor: str,
+    surface: str,
+    reasoning: str,
+    read_only: bool,
+) -> None:
+    """Reviewers remain fresh ordinary ChatGPT High and code read-only."""
+    if observed_head != state.exact_head:
+        raise ControlError("STALE_REBIND: reviewer head mismatch")
+    if state.current_stage not in {"PRECODE_REVIEW", "FINAL_INDEPENDENT_REVIEW"}:
+        raise ControlError("reviewer invoked at wrong stage")
+    if (
+        actor != "FRESH_INDEPENDENT_REVIEWER"
+        or surface != "CHATGPT_ORDINARY_GITHUB_NATIVE"
+        or reasoning != "HIGH"
+        or not read_only
+    ):
+        raise ControlError("reviewer must be independent ordinary ChatGPT High read-only")
+
+
+@dataclass(frozen=True)
+class ReviewReadiness:
+    decision: str
+    blockers: tuple[str, ...] = ()
+
+
+def final_review_readiness(
+    state: PackageState,
+    *,
+    observed_head: str,
+    required_checks: list[str],
+    checks: list[Mapping[str, Any]],
+    mandatory_steps: Mapping[str, list[str]],
+    job_evidence: Mapping[str, Mapping[str, Any]],
+) -> ReviewReadiness:
+    """Admit a final reviewer only after genuine executed exact-head CI proof.
+
+    Required checks and mandatory step names are Control-frozen caller inputs,
+    never inferred from green status alone. Jobs/steps require native readback.
+    """
+    if observed_head != state.exact_head:
+        return ReviewReadiness("STALE_REBIND", ("PR head drift",))
+    if state.ci_head != state.exact_head:
+        return ReviewReadiness("CONTROL_REPLAN", ("unbound exact-head CI",))
+    if state.current_stage not in {
+        "CI_WAIT", "OPTIONAL_INTERNAL_REVIEW", "FINAL_REVIEW_READY"
+    }:
+        return ReviewReadiness("CONTROL_REPLAN", ("review gate stage mismatch",))
+    if not required_checks or len(required_checks) != len(set(required_checks)):
+        return ReviewReadiness("CONTROL_REPLAN", ("missing/duplicate frozen required CI",))
+    if not mandatory_steps or any(
+        not steps or name not in required_checks for name, steps in mandatory_steps.items()
+    ):
+        return ReviewReadiness("CONTROL_REPLAN", ("mandatory test inventory missing",))
+
+    latest: dict[str, Mapping[str, Any]] = {}
+    for check in checks:
+        name = check.get("name")
+        if name not in required_checks:
+            continue
+        if check.get("head_sha") != state.exact_head:
+            return ReviewReadiness("STALE_REBIND", (f"{name}: check head mismatch",))
+        check_id = check.get("id")
+        if not isinstance(check_id, int) or check_id <= 0:
+            return ReviewReadiness("CONTROL_REPLAN", (f"{name}: unbound check run",))
+        if name not in latest or check_id > int(latest[name]["id"]):
+            latest[name] = check
+    if any(name not in latest for name in required_checks):
+        return ReviewReadiness("WAIT", ("required CI check missing/pending",))
+    if any(latest[name].get("status") != "completed" for name in required_checks):
+        return ReviewReadiness("WAIT", ("required CI still running",))
+    if any(latest[name].get("conclusion") != "success" for name in required_checks):
+        return ReviewReadiness("CONTROL_REPLAN", ("required CI failed/skipped/cancelled",))
+
+    for name, required in mandatory_steps.items():
+        job = job_evidence.get(name)
+        if not job or any(
+            (
+                job.get("head_sha") != state.exact_head,
+                job.get("check_run_id") != latest[name]["id"],
+                not isinstance(job.get("run_id"), int),
+                not job.get("run_id"),
+                job.get("status") != "completed",
+                job.get("conclusion") != "success",
+            )
+        ):
+            return ReviewReadiness("CONTROL_REPLAN", (f"{name}: job execution unproven",))
+        steps = job.get("steps")
+        if not isinstance(steps, list):
+            return ReviewReadiness("CONTROL_REPLAN", (f"{name}: no executed steps",))
+        for required_name in required:
+            matches = [step for step in steps if step.get("name") == required_name]
+            if len(matches) != 1 or any(
+                (
+                    matches[0].get("status") != "completed",
+                    matches[0].get("conclusion") != "success",
+                    not isinstance(matches[0].get("number"), int),
+                    not matches[0].get("started_at"),
+                    not matches[0].get("completed_at"),
+                )
+            ):
+                return ReviewReadiness(
+                    "CONTROL_REPLAN", (f"{name}: mandatory step {required_name} unproven",)
+                )
+    return ReviewReadiness("READY")
 
 
 def transition(
