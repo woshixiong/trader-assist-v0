@@ -11,6 +11,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from urllib.parse import urlsplit
+from typing import Any
 
 from trader_assist_v0.research_data.binance_archive import (
     HOST, MAX_CHECKSUM_BYTES, MAX_ZIP_BYTES, ArchiveObject, ChecksumReceipt,
@@ -85,7 +86,9 @@ def _exact_url(obj: ArchiveObject, kind: str) -> tuple[str, int]:
 
 
 class _RejectRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
+    def redirect_request(
+        self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str
+    ) -> None:
         raise ValueError("redirect prohibited for Binance archive transport")
 
 
