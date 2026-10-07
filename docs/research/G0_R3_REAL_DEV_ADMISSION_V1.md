@@ -42,20 +42,19 @@ the exact pinned Vision Dataset Terms V1.0 URL/date/hash and the exact Control
 decision, carry nonempty attribution/retention constraints, and satisfy those
 constraints.
 
-That still cannot open the network in this package. Applicable current general
-ToU, jurisdiction/non-circumvention, third-party restrictions, Final Review,
-exact run authority, and unchanged terms are not independently executable facts
-here. `PinnedHttpsResearchTransport` therefore fails with
-`REAL_PROVIDER_IO_NOT_AUTHORIZED` before stdlib HTTPS. There is intentionally
-no caller boolean, arbitrary `ALLOWED` object, callback, environment variable,
-or test flag that can activate provider I/O.
+This package contains **no executable real-network transport implementation at
+all**. `PinnedHttpsResearchTransport` is only a fail-closed contract
+placeholder: it can validate the exact frozen object/kind and the candidate
+rights shape, but it then unconditionally raises
+`REAL_PROVIDER_IO_NOT_AUTHORIZED`. There is no network-capable helper, trusted
+issuer variable, boolean, callback, environment switch, caller-provided object,
+or monkeypatch target in PR #303 that can activate provider I/O.
 
-The dormant stdlib HTTPS primitive is pinned to `https://data.binance.vision`,
-uses TLS verification, disables proxies and redirects, sends no credentials,
-performs one bounded request with no retry, and enforces the existing
-`MAX_CHECKSUM_BYTES` / `MAX_ZIP_BYTES` owners. It remains unreachable until
-a separately reviewed Control package installs an independently verifiable run
-issuer. Reserve ZIP/CSV remains forbidden even after such a later change.
+A future independently reviewed package must add the actual provider transport
+together with its trusted issuer/run gate and renewed terms/access evidence.
+That future package must independently prove the complete rights/runtime chain
+before every real provider request and preserve reserve ZIP/CSV sealing. Nothing
+in this code/mock package grants or pre-installs that capability.
 
 ## Existing-owner composition and historical claims
 
@@ -105,12 +104,14 @@ implementation. Even when tests construct a `synthetic=false`,
 real-form fixture and is never represented as Binance-sourced evidence.
 
 The adversarial matrix covers pinned terms/rights mismatch, missing constraints,
-real-network zero-call, redirect/non-200/oversize and wrong URL, exact
-240+8+8 roster, missing/duplicate/revised receipts, reserve ZIP zero-read,
-full prereg/inventory binding, historical-mapping backdating, SHA-first strict
-archive parsing through the existing owner, sidecar collision, bounded output,
-and existing-reader replay. Existing lower-level archive tests continue to own
-unsafe ZIP/CRC/path/header/time/CSV cases.
+transport-module static/source proof of no real-network capability, direct
+caller-created `ALLOWED` rights that still fail closed, reserve ZIP rejection,
+mock-only no-socket behavior, redirect/non-200/oversize and wrong URL, exact
+240+8+8 roster, missing/duplicate/revised receipts, full prereg/inventory
+binding, historical-mapping backdating, SHA-first strict archive parsing through
+the existing owner, sidecar collision, bounded output, and existing-reader
+replay. Existing lower-level archive tests continue to own unsafe
+ZIP/CRC/path/header/time/CSV cases.
 
 ## Explicit non-claims and next gates
 
@@ -122,7 +123,8 @@ profitability, reserve contents, production readiness, or execution authority.
 A later real-data run requires, separately and in order: current terms and
 access eligibility evidence, genuine 256 checksum identities, historically
 defensible BAR_5M mapping evidence, operative full-roster Inventory, exact
-rights-bound preregistration and run authority, independent review, and a new
-Control authorization that replaces the deliberately unconfigured network
-issuer. Deployment, service mutation, private API, exchange write, order,
-autonomous trading, Mark Ready and merge remain separate protected gates.
+rights-bound preregistration and run authority, independent review, and a future
+independently reviewed package that adds the actual provider transport together
+with its trusted issuer/run gate. Deployment, service mutation, private API,
+exchange write, order, autonomous trading, Mark Ready and merge remain separate
+protected gates.

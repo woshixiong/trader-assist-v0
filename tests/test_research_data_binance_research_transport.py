@@ -1,11 +1,15 @@
 """Mock-only transport contract tests; NEVER open a live network connection."""
 from __future__ import annotations
 
+import ast
+import inspect
+import socket
 from dataclasses import replace
 from hashlib import sha256
 
 import pytest
 
+import trader_assist_v0.research_data.binance_research_transport as transport_module
 from trader_assist_v0.research_data.binance_archive import (
     DAY_NS,
     MAX_CHECKSUM_BYTES,
@@ -32,11 +36,16 @@ CONSTRAINTS = frozenset({"ATTRIBUTION_RETAINED", "LICENSE_RETAINED"})
 def mock_rights(**kw):
     data = dict(
         version="G0_RIGHTS_SHAPE_MOCK_V1",
-        terms_locator=TERMS_URL, observed_version="1.0",
-        observed_date="2026-08-26", terms_hash=TERMS_SHA256,
-        intended_use="STRATEGY_DEV_RESEARCH", eligibility="ALLOWED",
-        decision_locator=DECISION_URL, attribution_constraints=("ATTRIBUTION_RETAINED",),
-        retention_constraints=("LICENSE_RETAINED",), synthetic=False,
+        terms_locator=TERMS_URL,
+        observed_version="1.0",
+        observed_date="2026-08-26",
+        terms_hash=TERMS_SHA256,
+        intended_use="STRATEGY_DEV_RESEARCH",
+        eligibility="ALLOWED",
+        decision_locator=DECISION_URL,
+        attribution_constraints=("ATTRIBUTION_RETAINED",),
+        retention_constraints=("LICENSE_RETAINED",),
+        synthetic=False,
     )
     data.update(kw)
     return SourceRightsProvenance.create(**data)
@@ -44,8 +53,55 @@ def mock_rights(**kw):
 
 def response(url, body, *, status=200, redirected=False):
     return HttpResponse(
-        url, status, (("Content-Length", str(len(body))),), body, redirected,
+        url,
+        status,
+        (("Content-Length", str(len(body))),),
+        body,
+        redirected,
     )
+
+
+def test_candidate_module_has_no_executable_real_network_surface():
+    source = inspect.getsource(transport_module)
+    tree = ast.parse(source)
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module)
+
+    blocked_imports = {
+        "ssl",
+        "socket",
+        "http.client",
+        "urllib.request",
+        "urllib.error",
+        "urllib3",
+        "requests",
+        "aiohttp",
+        "httpx",
+        "subprocess",
+        "importlib",
+    }
+    assert imported.isdisjoint(blocked_imports)
+    assert not hasattr(transport_module, "_bounded_stdlib_https")
+    assert not hasattr(transport_module, "_RejectRedirect")
+    assert not hasattr(transport_module, "REAL_NETWORK_ISSUER")
+
+    lowered = source.lower()
+    for forbidden in (
+        "__import__(",
+        "getenv(",
+        "environ[",
+        "environ.get",
+        "urlopen(",
+        "build_opener(",
+        "open_connection(",
+        "create_connection(",
+        "curl ",
+    ):
+        assert forbidden not in lowered
 
 
 def test_pinned_full_identity_roster_and_reserve_no_payload():
@@ -68,12 +124,16 @@ def test_pinned_full_identity_roster_and_reserve_no_payload():
     "kw",
     [
         dict(terms_locator="https://evil.example/terms"),
-        dict(terms_hash="b" * 64), dict(observed_version="2.0"),
+        dict(terms_hash="b" * 64),
+        dict(observed_version="2.0"),
         dict(observed_date="2024-01-01"),
         dict(decision_locator="synthetic://forged"),
-        dict(eligibility="UNKNOWN"), dict(eligibility="PROHIBITED"),
-        dict(synthetic=True), dict(intended_use="LIVE_SIGNAL"),
-        dict(attribution_constraints=()), dict(retention_constraints=()),
+        dict(eligibility="UNKNOWN"),
+        dict(eligibility="PROHIBITED"),
+        dict(synthetic=True),
+        dict(intended_use="LIVE_SIGNAL"),
+        dict(attribution_constraints=()),
+        dict(retention_constraints=()),
     ],
 )
 def test_fake_caller_rights_never_elevate_unpinned_claims(kw):
@@ -89,24 +149,39 @@ def test_rights_constraint_satisfaction_required_even_in_fake_shape():
 
 def test_real_network_denied_even_with_perfect_fake_rights_and_no_socket(monkeypatch):
     def never_network(*args, **kwargs):
-        pytest.fail("external HTTP was reached in mock-only phase")
+        pytest.fail("external socket was reached in mock-only phase")
 
-    monkeypatch.setattr("urllib.request.build_opener", never_network)
+    monkeypatch.setattr(socket, "socket", never_network)
     item = frozen_archive_objects()[0]
     client = PinnedHttpsResearchTransport()
     for kind in ("CHECKSUM", "ZIP"):
         with pytest.raises(PermissionError, match="REAL_PROVIDER_IO_NOT_AUTHORIZED"):
             client.request(item, kind, rights=mock_rights(), satisfied=CONSTRAINTS)
+
+    # Arbitrary caller-created attributes cannot activate a code path that does not
+    # consult them; there is no package-owned issuer/switch target to monkeypatch.
+    monkeypatch.setattr(transport_module, "REAL_NETWORK_ISSUER", object(), raising=False)
+    with pytest.raises(PermissionError, match="REAL_PROVIDER_IO_NOT_AUTHORIZED"):
+        client.request(item, "CHECKSUM", rights=mock_rights(), satisfied=CONSTRAINTS)
+
     bad = replace(item, zip_url=item.zip_url.replace("https://", "http://"))
     with pytest.raises(ValueError):
         client.request(bad, "CHECKSUM", rights=mock_rights(), satisfied=CONSTRAINTS)
-    reserve = next(obj for obj in frozen_archive_objects()
-                   if obj.role_intent == "CERTIFICATION_RESERVE")
+
+    reserve = next(
+        obj
+        for obj in frozen_archive_objects()
+        if obj.role_intent == "CERTIFICATION_RESERVE"
+    )
     with pytest.raises(PermissionError, match="reserve"):
         client.request(reserve, "ZIP", rights=mock_rights(), satisfied=CONSTRAINTS)
 
 
-def test_in_memory_checksum_receipt_is_not_provider_evidence():
+def test_in_memory_checksum_receipt_is_not_provider_evidence(monkeypatch):
+    def never_network(*args, **kwargs):
+        pytest.fail("mock-only path attempted to create a socket")
+
+    monkeypatch.setattr(socket, "socket", never_network)
     item = frozen_archive_objects()[0]
     digest = sha256(b"purely generated synthetic test fixture").hexdigest()
     checksum = (digest + "  " + item.zip_name + "\n").encode("ascii")
@@ -137,11 +212,13 @@ def test_mock_http_rejects_redirect_html_oversize_wrong_path_and_duplicate():
         MockOnlyResearchTransport((good, good)).request(item, "CHECKSUM")
     with pytest.raises(ValueError):
         mock_checksum_receipt(
-            item, MockOnlyResearchTransport((good,)),
+            item,
+            MockOnlyResearchTransport((good,)),
             retrieved_at_ns=item.end_ns + DAY_NS,
         )
-    other_host = replace(item, zip_url=item.zip_url.replace(
-        "data.binance.vision", "other.example"
-    ))
+    other_host = replace(
+        item,
+        zip_url=item.zip_url.replace("data.binance.vision", "other.example"),
+    )
     with pytest.raises(ValueError):
         _exact_url(other_host, "CHECKSUM")

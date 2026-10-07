@@ -1,16 +1,13 @@
-"""Opt-in, pinned Binance Vision transport; real network is CLOSED in this phase.
+"""Pinned Binance Vision research transport contracts; real network is absent.
 
 No provider requests are permitted by G0_R3_BINANCE_REAL_DEV_RESEARCH_ADMISSION_1.
-The implementation of HTTPS is deliberately unreachable until a separately
-reviewed, independently verifiable runtime issuer is installed by Control.
+This module intentionally contains no executable provider-network transport.
+A future independently reviewed package must add any real transport together
+with its trusted issuer/run gate and renewed terms/access evidence.
 """
 from __future__ import annotations
 
-import ssl
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
-from typing import Any
 from urllib.parse import urlsplit
 
 from trader_assist_v0.research_data.binance_archive import (
@@ -38,10 +35,6 @@ DECISION_URL = (
     "https://github.com/woshixiong/trader-assist-v0/issues/161"
     "#issuecomment-6031272423"
 )
-# No authorization issuer or pinned final-review/run decision exists in this
-# package. A caller-supplied "ALLOWED" record, booleans, or fake review URL
-# MUST NEVER turn on provider I/O.
-REAL_NETWORK_ISSUER = None
 
 
 def require_candidate_rights(
@@ -82,9 +75,13 @@ def _exact_url(obj: ArchiveObject, kind: str) -> tuple[str, int]:
     url = obj.checksum_url if kind == "CHECKSUM" else obj.zip_url
     parts = urlsplit(url)
     if (
-        parts.scheme != "https" or parts.netloc != "data.binance.vision"
-        or parts.username is not None or parts.password is not None
-        or parts.query or parts.fragment or parts.port is not None
+        parts.scheme != "https"
+        or parts.netloc != "data.binance.vision"
+        or parts.username is not None
+        or parts.password is not None
+        or parts.query
+        or parts.fragment
+        or parts.port is not None
         or not parts.path.startswith("/data/futures/um/")
         or url != (obj.zip_url + ".CHECKSUM" if kind == "CHECKSUM" else obj.zip_url)
         or not url.startswith(HOST + "/")
@@ -93,68 +90,24 @@ def _exact_url(obj: ArchiveObject, kind: str) -> tuple[str, int]:
     return url, MAX_CHECKSUM_BYTES if kind == "CHECKSUM" else MAX_ZIP_BYTES
 
 
-class _RejectRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(
-        self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str
-    ) -> None:
-        raise ValueError("redirect prohibited for Binance archive transport")
-
-
-def _bounded_stdlib_https(url: str, limit: int, timeout_seconds: float) -> HttpResponse:
-    """Single TLS-verified GET, no proxy, redirect, auth, retries, or disk output.
-
-    This private primitive is not a grant to call Binance: callers must pass
-    the runtime issuer check in PinnedHttpsResearchTransport first.
-    """
-    if urlsplit(url).netloc != "data.binance.vision" or not url.startswith(HOST + "/"):
-        raise PermissionError("unapproved provider")
-    if not 0 < timeout_seconds <= 15 or limit not in {MAX_CHECKSUM_BYTES, MAX_ZIP_BYTES}:
-        raise ValueError("unbounded transport configuration")
-    opener = urllib.request.build_opener(
-        urllib.request.ProxyHandler({}),
-        _RejectRedirect(),
-        urllib.request.HTTPSHandler(context=ssl.create_default_context()),
-    )
-    request = urllib.request.Request(
-        url, method="GET",
-        headers={"Accept-Encoding": "identity", "User-Agent": "TradeOS-research-admission/1"},
-    )
-    try:
-        with opener.open(request, timeout=timeout_seconds) as response:
-            body = response.read(limit + 1)
-            headers = tuple(response.headers.items())
-            result = HttpResponse(
-                response.geturl(), response.status, headers, body,
-                redirected=response.geturl() != url,
-            )
-    except urllib.error.HTTPError as exc:
-        raise ValueError("non-200 Binance archive response") from exc
-    return HttpResponse(
-        url, 200, result.headers,
-        checked_http_response(result, expected_url=url, limit=limit),
-    )
-
-
 @dataclass(frozen=True, slots=True)
 class PinnedHttpsResearchTransport:
-    """REAL I/O is fail-closed pending a new independently reviewed issuer."""
-
-    timeout_seconds: float = 10.0
+    """Fail-closed contract placeholder; contains no real network implementation."""
 
     def request(
-        self, obj: ArchiveObject, kind: str, *,
-        rights: SourceRightsProvenance, satisfied: frozenset[str],
+        self,
+        obj: ArchiveObject,
+        kind: str,
+        *,
+        rights: SourceRightsProvenance,
+        satisfied: frozenset[str],
     ) -> HttpResponse:
         _exact_url(obj, kind)
         require_candidate_rights(rights, satisfied)
-        if REAL_NETWORK_ISSUER is None:
-            raise PermissionError(
-                "REAL_PROVIDER_IO_NOT_AUTHORIZED: independent ToU, jurisdiction, "
-                "third-party, final-review and hash-bound run gate not issued"
-            )
-        # Never accept a caller-created permit: a future independently audited
-        # control change must replace the unconfigured issuer and add tests.
-        raise PermissionError("REAL_PROVIDER_IO_NOT_AUTHORIZED")
+        raise PermissionError(
+            "REAL_PROVIDER_IO_NOT_AUTHORIZED: this package contains no executable "
+            "real-network transport"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,8 +140,13 @@ def mock_checksum_receipt(
         raise PermissionError("fake-only checksum path")
     response = mock.request(obj, "CHECKSUM")
     raw = checked_http_response(
-        response, expected_url=obj.checksum_url, limit=MAX_CHECKSUM_BYTES
+        response,
+        expected_url=obj.checksum_url,
+        limit=MAX_CHECKSUM_BYTES,
     )
     return checksum_receipt(
-        obj, raw, retrieved_at_ns=retrieved_at_ns, retrieval_identity=retrieval_identity,
+        obj,
+        raw,
+        retrieved_at_ns=retrieved_at_ns,
+        retrieval_identity=retrieval_identity,
     )
