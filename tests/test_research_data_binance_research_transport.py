@@ -7,11 +7,20 @@ from hashlib import sha256
 import pytest
 
 from trader_assist_v0.research_data.binance_archive import (
-    DAY_NS, MAX_CHECKSUM_BYTES, MAX_ZIP_BYTES, HttpResponse, frozen_archive_objects,
+    DAY_NS,
+    MAX_CHECKSUM_BYTES,
+    MAX_ZIP_BYTES,
+    HttpResponse,
+    frozen_archive_objects,
 )
 from trader_assist_v0.research_data.binance_research_transport import (
-    DECISION_URL, TERMS_SHA256, TERMS_URL, MockOnlyResearchTransport,
-    PinnedHttpsResearchTransport, _exact_url, mock_checksum_receipt,
+    DECISION_URL,
+    TERMS_SHA256,
+    TERMS_URL,
+    MockOnlyResearchTransport,
+    PinnedHttpsResearchTransport,
+    _exact_url,
+    mock_checksum_receipt,
     require_candidate_rights,
 )
 from trader_assist_v0.research_data.contracts import SourceRightsProvenance
