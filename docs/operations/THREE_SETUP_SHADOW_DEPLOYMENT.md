@@ -203,6 +203,97 @@ Use the non-secret qualification evidence example to retain observed results,
 independent anchors and protected-gate state. Never manufacture a PASS report
 from examples, defaults, callback counts or unavailable provider measurements.
 
+## Post-run verifier resources and production disk growth
+
+Native evidence is bound with incremental SHA256, exact path/device/inode/size/
+mtime/ctime checks before/open/after each pass, final LF, and current-run startup
+identity. Canonical-envelope SHA256 keys in a private SQLite index reject
+repeated envelopes; duplicate JSON keys fail before canonicalization. HTTP and
+WS passes recheck the same immutable binding. No raw whole-log object or
+all-record collection is retained.
+
+Verifier budgets are 64 KiB input chunks, 1 MiB envelopes, a 4 MiB SQLite cache,
+a 512 MiB database, bounded journal/transactions, and 64 ordinary WS diagnostic
+windows plus the exact peak and first failing window. Every candidate rolling
+window is evaluated; diagnostic retention does not limit the proof. Budget,
+index, mutation, parse or scratch-cleanup failures cannot PASS.
+
+The separately persisted `verifier-resources.json` records PRE_NATIVE_BIND,
+POST_NATIVE_BIND, POST_HTTP_VERIFY, POST_WS_VERIFY and PRE_REPORT_WRITE. It
+contains RSS, process-lifetime VmHWM, MemTotal/MemAvailable, swap capacity and
+counters/deltas, native-log/index bytes, timestamps and elapsed time. Periodic
+checks retain scalar maxima only. Missing evidence, host memory above 80%, swap
+activity or trail-write failure blocks qualification. These samples never pad
+or alter the original >=900-second live resource window.
+
+Actual root usage still measures the whole filesystem, including TRACE and
+scratch. Seven-day projected additional growth excludes only the exact owned
+qualification TRACE identity and exact tracked temporary index artifacts.
+Production E4/evidence/database/WAL and unknown files remain included, even
+when their basenames resemble diagnostics. Identity ambiguity fails closed.
+The final disk check preserves the live rate denominator and conservative
+projection; verifier time cannot dilute durable growth. The resource trail
+itself remains included durable output.
+
+## Mandatory retained-log replay before another live qualification
+
+After separately authorized merge, release and deployment of this repair,
+replay the retained approximately 379,189,199-byte failed-run native log before
+any second 2400-second live qualification. Bind the original failed-run
+manifest, not the repaired release's manifest. The replay reports the verifier
+source SHA256 separately from historical release SHA/tree.
+
+Resolve retained paths and create a new dedicated scratch directory under the
+authorized target execution procedure. The result path must be new, inside
+that directory, and cannot be named `qualification.json`. The replay rejects
+existing outputs, symlinks/hard-link overwrites and live/config arguments. It
+constructs no application, opens no provider connection and performs no service
+operation. Its only writes are dedicated scratch/resource/result artifacts.
+
+```sh
+: "${RETAINED_NATIVE_LOG:?resolve original native.jsonl}"
+: "${RETAINED_MANIFEST:?resolve original failed-run manifest}"
+: "${DEDICATED_SCRATCH_ROOT:?resolve new dedicated scratch directory}"
+: "${DEDICATED_REPLAY_RESULT:?resolve new result inside scratch directory}"
+python scripts/e4_nautilus_public_data_probe.py \
+  --replay-native-log "$RETAINED_NATIVE_LOG" \
+  --manifest "$RETAINED_MANIFEST" \
+  --verifier-scratch-root "$DEDICATED_SCRATCH_ROOT" \
+  --result-path "$DEDICATED_REPLAY_RESULT"
+```
+
+Without historical facts this proves current retained-file structure and
+resources only. `unavailable_facts` and
+`UNAVAILABLE_FACTS_REQUIRE_CONTROL_DISPOSITION` explicitly preserve the gap;
+they are not a waiver or qualification evidence. Add `--replay-facts` only for a
+retained, independently located facts document with:
+
+- `schema: l0-native-replay-facts/v1`, original `manifest_hash`, and exact
+  `native_sha256`;
+- `facts`: original `dispatches`, `sync_succeeded`, and, where available,
+  `epochs`, `outbound_forecast`, `close_reserve`,
+  `native_constant_upper_bound`, `planned_reconnect_request_ns`;
+- `locators`: a nonempty durable evidence locator for each supplied fact.
+
+The facts document is bounded to 1 MiB. Do not manufacture missing facts,
+claim a new sync proves historical completion, or replace missing transitions
+with defaults. HTTP and WS predicates replay independently where their facts
+are available, retaining the original sync requirement and exact source-bound
+semantics. A structural PASS cannot conceal a semantic blocker.
+
+Required pre-live disposition is structural binding PASS, process survival,
+RSS/HWM <=256 MiB, no evidence mutation, and explicit semantic disposition.
+Inspect measured maximum envelope size and index peak demand as well. Any
+structural, resource, semantic, missing-fact or budget blocker returns to
+Engineering Control before live qualification. A local Mac test skip does not
+prove the Linux memory envelope.
+
+Replay has a separate diagnostic schema/status and no qualification digest,
+profile or completion `end_ns`. It cannot mint qualification PASS, refresh the
+one-hour TTL or replace qualification.json. Replay success does not authorize
+live qualification or service activation. Keep the separate runtime gates,
+20 markets, 2400-second route and DEFAULT_OFF state intact.
+
 ## Revalidate startup and retain the separate service-start gate
 
 Before a separately authorized normal start, run

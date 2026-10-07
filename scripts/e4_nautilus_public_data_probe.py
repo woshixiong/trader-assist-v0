@@ -6,17 +6,24 @@ from __future__ import annotations
 import argparse
 import asyncio
 import calendar
+import codecs
+import hashlib
 import json
 import math
 import os
 import re
+import sqlite3
 import stat
 import sys
+import tempfile
 import threading
 import time
 from collections import deque
+from collections.abc import Callable, Iterator
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from datetime import datetime
+from heapq import merge
 from itertools import pairwise
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -411,58 +418,238 @@ CANDLE_ENDPOINT_PATTERN = (
 )
 
 
-def _read_bound_native_log(
-    path: Path, *, file_identity: tuple[int, int], begin_marker: str,
-) -> tuple[bytes, list[dict[str, Any]], tuple[int, int, int, int, int]]:
-    """One stable, complete, unique-envelope rc5 run, independently of predicates."""
-    before = path.lstat()
-    if (not stat.S_ISREG(before.st_mode) or (before.st_dev, before.st_ino) != file_identity
-            or path.resolve() != path.absolute()
-            or set(path.parent.glob(path.name + "*")) != {path}):
-        raise ValueError("native file identity/rotation/path ambiguity")
-    with path.open("rb") as stream:
-        opened = os.fstat(stream.fileno())
-        if (opened.st_dev, opened.st_ino) != file_identity:
-            raise ValueError("native file changed at open")
-        raw = stream.read()
-        after = os.fstat(stream.fileno())
-    final = path.lstat()
-    def identity(state: os.stat_result) -> tuple[int, int, int, int, int]:
-        # ctime also detects same-byte replacement when Linux reuses the inode.
-        return state.st_dev, state.st_ino, state.st_size, state.st_mtime_ns, state.st_ctime_ns
-    if (identity(before) != identity(opened) or identity(opened) != identity(after)
-            or identity(after) != identity(final)):
-        raise ValueError("native log changed during read")
-    if not raw.endswith(b"\n"):
-        raise ValueError("native log incomplete")
-    records = [json.loads(line, object_pairs_hook=_unique_object)
-               for line in raw.decode("utf-8").splitlines()]
-    if not records:
-        raise ValueError("native log empty")
-    seen: set[bytes] = set()
-    titles = 0
-    for index, record in enumerate(records):
-        if not isinstance(record, dict):
-            raise ValueError("native envelope malformed")
-        encoded = canonical_json_bytes(record)
-        if encoded in seen:
-            raise ValueError("duplicate native envelope")
-        seen.add(encoded)
+NATIVE_CHUNK_BYTES = 64 * 1024
+NATIVE_ENVELOPE_BYTES = 1024 * 1024
+NATIVE_INDEX_BYTES = 512 * 1024 * 1024
+NATIVE_TRANSACTION_RECORDS = 1024
+NATIVE_WINDOW_DIAGNOSTICS = 64
+_LINE_END = re.compile(r"\r\n|[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]")
+_NATIVE_ERRORS = (OSError, KeyError, ValueError, TypeError, UnicodeError,
+                  sqlite3.Error, OverflowError, RecursionError)
+
+
+def _file_state(state: os.stat_result) -> tuple[int, int, int, int, int]:
+    return state.st_dev, state.st_ino, state.st_size, state.st_mtime_ns, state.st_ctime_ns
+
+
+class _NativeEvidence:
+    """Stable read-only source, bounded Python state, quota-limited disk index."""
+
+    def __init__(self, path: Path, file_identity: tuple[int, int], begin_marker: str,
+                 scratch_root: Path | None = None,
+                 progress: Callable[[], None] | None = None) -> None:
+        self.path, self.file_identity, self.begin_marker = path, file_identity, begin_marker
+        self.scratch_root, self.progress = scratch_root, progress
+        self.binding: dict[str, Any] = {}
+        self.summary: dict[str, Any] = dict(record_count=0, first_ns=0, max_ns=0,
+                                           max_envelope_bytes=0, unsubscribes=0,
+                                           unsubscribe_invalid=False, lifecycle=[],
+                                           delay_count=0, attempt_count=0,
+                                           safety_warning_count=0)
+        self.temporary: tempfile.TemporaryDirectory[str] | None = None
+        self.db: sqlite3.Connection | None = None
+        self.artifacts: dict[Path, tuple[int, int]] = {}
+        self.index_peak_bytes = 0
+        self.pass_complete = False
+        self._writes = 0
+
+    def __enter__(self) -> _NativeEvidence:
+        try:
+            self.temporary = tempfile.TemporaryDirectory(prefix="l0-verifier-",
+                dir=(self.scratch_root or Path(tempfile.gettempdir())).resolve())
+            index = Path(self.temporary.name) / "index.sqlite"
+            self.db = sqlite3.connect(index, timeout=0)
+            self.db.execute("PRAGMA page_size=4096")
+            self.db.execute("PRAGMA mmap_size=0")
+            self.db.execute("PRAGMA cache_size=-4096")
+            self.db.execute("PRAGMA temp_store=FILE")
+            self.db.execute("PRAGMA journal_mode=DELETE")
+            self.db.execute(f"PRAGMA max_page_count={NATIVE_INDEX_BYTES // 4096}")
+            self.db.execute("CREATE TABLE envelopes (digest BLOB PRIMARY KEY) WITHOUT ROWID")
+            self.db.execute("CREATE TABLE retries (ordinal INTEGER PRIMARY KEY, payload TEXT)")
+            self.db.execute("CREATE TABLE controls "
+                            "(ordinal INTEGER PRIMARY KEY, ts INTEGER, kind INTEGER)")
+            self.db.execute("CREATE INDEX controls_time ON controls(ts,ordinal)")
+            self.db.execute("CREATE TABLE points (ts INTEGER PRIMARY KEY) WITHOUT ROWID")
+            self.db.commit()
+            self.scratch_bytes()
+            return self
+        except BaseException:
+            self.close()
+            raise
+
+    def __exit__(self, *_: Any) -> None:
+        self.close()
+
+    def close(self) -> None:
+        try:
+            if self.db is not None:
+                self.db.close()
+                self.db = None
+        finally:
+            if self.temporary is not None:
+                self.temporary.cleanup()
+                self.temporary = None
+
+    def scratch_bytes(self) -> int:
+        total = 0
+        if self.temporary is not None:
+            for name in ("index.sqlite", "index.sqlite-journal"):
+                path = Path(self.temporary.name) / name
+                if path.exists():
+                    state = path.lstat()
+                    identity = state.st_dev, state.st_ino
+                    if not stat.S_ISREG(state.st_mode) or path.resolve() != path.absolute():
+                        raise ValueError("verifier scratch identity ambiguity")
+                    previous = self.artifacts.get(path)
+                    # DELETE journals are recreated between bounded transactions.
+                    if name == "index.sqlite" and previous is not None and previous != identity:
+                        raise ValueError("verifier index replaced")
+                    self.artifacts[path] = identity
+                    total += state.st_size
+        self.index_peak_bytes = max(self.index_peak_bytes, total)
+        if total > NATIVE_INDEX_BYTES + 16 * 1024 * 1024:
+            raise ValueError("verifier scratch budget exhausted")
+        return total
+
+    def execute(self, sql: str, parameters: tuple[Any, ...] = ()) -> sqlite3.Cursor:
+        if self.db is None:
+            raise ValueError("verifier index closed")
+        cursor = self.db.execute(sql, parameters)
+        self._writes += 1
+        if self._writes % NATIVE_TRANSACTION_RECORDS == 0:
+            self.db.commit()
+            self.scratch_bytes()
+        return cursor
+
+    def _state(self) -> os.stat_result:
+        state = self.path.lstat()
+        if (not stat.S_ISREG(state.st_mode)
+                or (state.st_dev, state.st_ino) != self.file_identity
+                or self.path.resolve() != self.path.absolute()):
+            raise ValueError("native file identity/path ambiguity")
+        with os.scandir(self.path.parent) as entries:
+            for entry in entries:
+                if entry.name.startswith(self.path.name) and entry.name != self.path.name:
+                    raise ValueError("native rotation ambiguity")
+        return state
+
+    def records(self, *, initial: bool = False) -> Iterator[dict[str, Any]]:
+        """PASS is unavailable until EOF, final LF, state and digest all agree."""
+        self.pass_complete = False
+        before = self._state()
+        digest = hashlib.sha256()
+        decoder = codecs.getincrementaldecoder("utf-8")()
+        pending, last_byte, count, titles = "", b"", 0, 0
+        since_progress = 0
+        with self.path.open("rb") as stream:
+            opened = os.fstat(stream.fileno())
+            if _file_state(opened) != _file_state(before):
+                raise ValueError("native file changed at open")
+            if not initial and list(_file_state(before)) != self.binding.get("file_state"):
+                raise ValueError("native file binding changed")
+            while True:
+                chunk = stream.read(NATIVE_CHUNK_BYTES)
+                digest.update(chunk)
+                if chunk:
+                    last_byte = chunk[-1:]
+                pending += decoder.decode(chunk, final=not chunk)
+                consumed = 0
+                for match in _LINE_END.finditer(pending):
+                    if chunk and match.group() == "\r" and match.end() == len(pending):
+                        break  # CRLF may cross the chunk boundary.
+                    line = pending[consumed:match.start()]
+                    consumed = match.end()
+                    size = len(line.encode("utf-8"))
+                    if size > NATIVE_ENVELOPE_BYTES:
+                        raise ValueError("native envelope budget exhausted")
+                    record = json.loads(line, object_pairs_hook=_unique_object)
+                    if not isinstance(record, dict):
+                        raise ValueError("native envelope malformed")
+                    component, message, level = (record["component"], record["message"],
+                                                 record["level"])
+                    if (not all(isinstance(v, str) for v in (component, message, level))
+                            or level not in NATIVE_LEVELS):
+                        raise ValueError("native envelope fields malformed")
+                    timestamp = _log_timestamp_ns(record["timestamp"])
+                    if count == 0 and (component != self.begin_marker
+                                       or message != NATIVE_STARTUP_SEPARATOR):
+                        raise ValueError("native pre-marker content")
+                    if component.startswith(NATIVE_MARKER_PREFIX):
+                        if component != self.begin_marker:
+                            raise ValueError("mixed native run")
+                        if message.strip().startswith("NAUTILUS TRADER -"):
+                            titles += 1
+                            if titles > 1:
+                                raise ValueError("duplicate native header")
+                    if initial:
+                        self.execute("INSERT INTO envelopes VALUES (?)",
+                                     (hashlib.sha256(canonical_json_bytes(record)).digest(),))
+                        self._summarize(record, count, timestamp, size)
+                    count += 1
+                    yield record
+                pending = pending[consumed:]
+                if len(pending.encode("utf-8")) > NATIVE_ENVELOPE_BYTES:
+                    raise ValueError("native envelope budget exhausted")
+                since_progress += len(chunk)
+                if since_progress >= 8 * 1024 * 1024:
+                    self.scratch_bytes()
+                    if self.progress is not None:
+                        self.progress()
+                    since_progress = 0
+                if not chunk:
+                    break
+            after = os.fstat(stream.fileno())
+        final = self._state()
+        if pending or last_byte != b"\n" or count == 0:
+            raise ValueError("native log incomplete")
+        if not (_file_state(before) == _file_state(opened)
+                == _file_state(after) == _file_state(final)):
+            raise ValueError("native log changed during read")
+        binding = dict(path=str(self.path), file_identity=list(self.file_identity),
+                       file_state=list(_file_state(final)), sha256=digest.hexdigest(),
+                       begin_marker=self.begin_marker, rc5_source=RC5_SOURCE)
+        if initial:
+            if self.db is None:
+                raise ValueError("verifier index closed")
+            self.db.commit()
+            self.scratch_bytes()
+            self.binding = binding
+        elif binding != self.binding:
+            raise ValueError("native digest binding changed")
+        self.pass_complete = True
+
+    def bind(self) -> None:
+        for _ in self.records(initial=True):
+            pass
+
+    def _summarize(self, record: dict[str, Any], ordinal: int, timestamp: int,
+                   size: int) -> None:
+        summary = self.summary
+        summary["record_count"] += 1
+        if ordinal == 0:
+            summary["first_ns"] = timestamp
+        summary["max_ns"] = max(summary["max_ns"], timestamp)
+        summary["max_envelope_bytes"] = max(summary["max_envelope_bytes"], size)
         component, message, level = record["component"], record["message"], record["level"]
-        if (not all(isinstance(v, str) for v in (component, message, level))
-                or level not in NATIVE_LEVELS):
-            raise ValueError("native envelope fields malformed")
-        _log_timestamp_ns(record["timestamp"])
-        if index == 0 and (component != begin_marker or message != NATIVE_STARTUP_SEPARATOR):
-            raise ValueError("native pre-marker content")
-        if component.startswith(NATIVE_MARKER_PREFIX):
-            if component != begin_marker:
-                raise ValueError("mixed native run")
-            if message.strip().startswith("NAUTILUS TRADER -"):
-                titles += 1
-                if titles > 1:
-                    raise ValueError("duplicate native header")
-    return raw, records, identity(final)
+        if (component == WS_CONTROL_COMPONENT
+                and message.startswith(("Backing off", "Reconnection attempt"))):
+            key = "delay_count" if message.startswith("Backing off") else "attempt_count"
+            summary[key] += 1
+            if summary[key] == 1:
+                summary["lifecycle"].append(dict(record=record, ordinal=ordinal))
+        if message.startswith("Sending unsubscribe payload"):
+            summary["unsubscribes"] += 1
+            if (component != "nautilus_hyperliquid::websocket::handler" or level != "DEBUG"
+                    or re.fullmatch(r"Sending unsubscribe payload \([0-9]+ bytes\)",
+                                    message) is None):
+                summary["unsubscribe_invalid"] = True
+        if (level in ("WARN", "WARNING", "ERROR", "CRITICAL")
+                and (component not in (HTTP_COMPONENT, DATA_COMPONENT)
+                     or _instrument_bookkeeping(component, level, message)
+                     or _non_http_data_record(component, message))):
+            summary["safety_warning_count"] += 1
+
 
 
 def _instrument_bookkeeping(component: str, level: str, message: str) -> bool:
@@ -498,8 +685,35 @@ def _non_http_data_record(component: str, message: str) -> bool:
 def parse_native_http_log(
     path: Path, *, manifest: RunManifest, dispatches: list[dict[str, Any]],
     file_identity: tuple[int, int], sync_succeeded: bool,
+    _session: _NativeEvidence | None = None,
+) -> dict[str, Any]:
+    try:
+        with ExitStack() as stack:
+            session = _session
+            if session is None:
+                session = stack.enter_context(_NativeEvidence(
+                    path, file_identity, native_marker(manifest)))
+                session.bind()
+            if (session.path != path or session.file_identity != file_identity
+                    or session.begin_marker != native_marker(manifest) or not session.binding):
+                raise ValueError("native session binding differs")
+            return _parse_native_http_log(session, manifest, dispatches, sync_succeeded)
+    except _NATIVE_ERRORS as exc:
+        return dict(status="INCOMPLETE", path=str(path), file_identity=list(file_identity),
+                    begin_marker=native_marker(manifest), rc5_source=RC5_SOURCE,
+                    sha256=None, log_binding=dict(status="INCOMPLETE"),
+                    blockers=sorted({"NATIVE_LOG_FILE_OR_PARSE_AMBIGUITY"}
+                                    | ({"NATIVE_LOG_SYNC_UNPROVEN"}
+                                       if sync_succeeded is not True else set())),
+                    error_type=type(exc).__name__)
+
+
+def _parse_native_http_log(
+    session: _NativeEvidence, manifest: RunManifest, dispatches: list[dict[str, Any]],
+    sync_succeeded: bool,
 ) -> dict[str, Any]:
     """Only complete current-run native DEBUG evidence can establish HTTP weights."""
+    path, file_identity = session.path, session.file_identity
     blockers: set[str] = set()
     result: dict[str, Any] = {
         "status": "INCOMPLETE", "path": str(path), "sha256": None,
@@ -513,24 +727,18 @@ def parse_native_http_log(
                                  begin_marker=native_marker(manifest), rc5_source=RC5_SOURCE)
     if sync_succeeded is not True:
         blockers.add("NATIVE_LOG_SYNC_UNPROVEN")
-    try:
-        raw, records, file_state = _read_bound_native_log(
-            path, file_identity=file_identity, begin_marker=native_marker(manifest),
-        )
-        result["sha256"] = sha256_hex(raw)
-        result["file_state"] = list(file_state)
-        result["log_binding"].update(sha256=result["sha256"], file_state=list(file_state),
-                                     status="PASS" if sync_succeeded is True else "INCOMPLETE")
-    except (OSError, KeyError, ValueError, TypeError, UnicodeError):
-        result["blockers"] = sorted(blockers | {"NATIVE_LOG_FILE_OR_PARSE_AMBIGUITY"})
-        return result
+    result.update(sha256=session.binding["sha256"], file_state=session.binding["file_state"])
+    result["log_binding"].update(session.binding,
+                                 status="PASS" if sync_succeeded is True else "INCOMPLETE")
+    session.execute("DELETE FROM retries")
     ledger: dict[str, dict[str, Any]] = {}
     identities: dict[tuple[str, str, int, int], str] = {}
     try:
         expected_bars = manifest.capture_configuration["bar_types"]
         if (not isinstance(expected_bars, list)
                 or not all(isinstance(bar, str) for bar in expected_bars)
-                or len(dispatches) != 40 or len(set(expected_bars)) != 40):
+                or len(dispatches) != 40 or len(expected_bars) != 40
+                or len(set(expected_bars)) != 40):
             raise ValueError("exact 40-request ledger is required")
         for dispatch in dispatches:
             bar = dispatch["bar_type"]
@@ -570,12 +778,12 @@ def parse_native_http_log(
     metadata_ns: int | None = None
     completions: dict[str, int] = {}
     debits: dict[str, tuple[int, int]] = {}
-    retries: list[tuple[int, int, str, int, int, int]] = []
     completion_indices: dict[str, int] = {}
     metadata_index: int | None = None
-    populated_indices: list[tuple[int, int]] = []
-    run_start_ns = _log_timestamp_ns(records[0]["timestamp"])
-    for index, record in enumerate(records):
+    populated_count = 0
+    populated_candidate = (0, 0)
+    run_start_ns = session.summary["first_ns"]
+    for index, record in enumerate(session.records()):
         try:
             message, component, level = record["message"], record["component"], record["level"]
             timestamp = _log_timestamp_ns(record["timestamp"])
@@ -636,15 +844,17 @@ def parse_native_http_log(
                         or level.upper() not in ("WARN", "WARNING")):
                     blockers.add("NATIVE_TRANSIENT_RETRY_EVIDENCE_INCOMPLETE")
                 else:
-                    retries.append((index, timestamp, match[1], int(match[2]),
-                                    int(match[3]), int(match[4])))
+                    session.execute("INSERT INTO retries VALUES (?,?)",
+                                    (index, json.dumps([index, timestamp, match[1], int(match[2]),
+                                                        int(match[3]), int(match[4])])))
                 continue
             if level.upper() in ("WARNING", "WARN", "ERROR", "CRITICAL"):
                 blockers.add("NATIVE_RETRY_FALLBACK_OR_FAILURE")
             if message.startswith("Populated asset indices map"):
                 if re.fullmatch(r"Populated asset indices map \(count=\d+\)", message) is None:
                     raise ValueError("malformed metadata phase")
-                populated_indices.append((index, timestamp))
+                populated_count += 1
+                populated_candidate = (index, timestamp)
             if message.startswith("Bootstrapped "):
                 if re.fullmatch(
                     r"Bootstrapped \d+ instruments with \d+ coin mappings", message,
@@ -705,7 +915,11 @@ def parse_native_http_log(
     metadata_order = {"SpotMeta": 0, "AllPerpMetas:0": 1, "OutcomeMeta": 2,
                       "AllPerpMetas:1": 3, "PerpDexs": 4}
     last_metadata_order = -1
-    for index, timestamp, endpoint, attempt, status, wait_ms in retries:
+    for retry_number, (payload,) in enumerate(
+            session.execute("SELECT payload FROM retries ORDER BY ordinal")):
+        if retry_number % NATIVE_TRANSACTION_RECORDS == 0 and session.progress is not None:
+            session.progress()
+        index, timestamp, endpoint, attempt, status, wait_ms = json.loads(payload)
         try:
             if attempt >= 3:
                 raise ValueError("rc5 retry attempt exhausted")
@@ -734,18 +948,18 @@ def parse_native_http_log(
                 # allPerpMetas occurs twice; the native completion of instrument
                 # definitions separates the two source-bound startup requests.
                 if endpoint == "AllPerpMetas":
-                    if len(populated_indices) != 1:
+                    if populated_count != 1:
                         raise ValueError("metadata occurrence is not uniquely bound")
-                    populated_index, populated_ns = populated_indices[0]
+                    populated_index, populated_ns = populated_candidate
                     phase = 0 if index < populated_index else 1
                     if ((phase == 0 and timestamp + wait_ms * 1_000_000 > populated_ns)
                             or (phase == 1 and timestamp < populated_ns)):
                         raise ValueError("metadata retry crosses request phase")
                     request_id += f":{phase}"
-                elif populated_indices:
-                    if len(populated_indices) != 1:
+                elif populated_count:
+                    if populated_count != 1:
                         raise ValueError("ambiguous startup metadata phase")
-                    populated_index, populated_ns = populated_indices[0]
+                    populated_index, populated_ns = populated_candidate
                     early = endpoint in ("SpotMeta", "OutcomeMeta")
                     if ((early and (index >= populated_index
                                     or timestamp + wait_ms * 1_000_000 > populated_ns))
@@ -824,8 +1038,32 @@ def parse_native_ws_controls(
     outbound_forecast: list[tuple[int, int]], close_reserve: int,
     native_constant_upper_bound: int = 0,
     planned_reconnect_request_ns: int | None = None,
+    _session: _NativeEvidence | None = None,
+) -> dict[str, Any]:
+    try:
+        with ExitStack() as stack:
+            session = _session
+            if session is None:
+                binding = native_http["log_binding"]
+                session = stack.enter_context(_NativeEvidence(
+                    path, tuple(binding["file_identity"]), binding["begin_marker"]))
+                session.bind()
+            return _parse_native_ws_controls(
+                session, native_http, epochs, outbound_forecast, close_reserve,
+                native_constant_upper_bound, planned_reconnect_request_ns)
+    except _NATIVE_ERRORS as exc:
+        return dict(status="INCOMPLETE", path=str(path),
+                    blockers=["WS_CONTROL_FILE_EPOCH_OR_FORECAST_INCOMPLETE"],
+                    error_type=type(exc).__name__)
+
+
+def _parse_native_ws_controls(
+    session: _NativeEvidence, native_http: dict[str, Any], epochs: list[dict[str, int]],
+    outbound_forecast: list[tuple[int, int]], close_reserve: int,
+    native_constant_upper_bound: int, planned_reconnect_request_ns: int | None,
 ) -> dict[str, Any]:
     """B1d: control TRACE plus source-bound native dispatches, never HTTP bodies."""
+    path = session.path
     blockers: set[str] = set()
     result: dict[str, Any] = dict(status="INCOMPLETE", blockers=[], windows=[],
                                   path=str(path), sha256=native_http.get("sha256"),
@@ -845,16 +1083,8 @@ def parse_native_ws_controls(
                 or binding.get("file_state") != native_http.get("file_state")
                 or binding.get("sha256") != native_http.get("sha256")):
             raise ValueError("current-run immutable native binding is absent")
-        raw, records, file_state = _read_bound_native_log(
-            path, file_identity=tuple(binding["file_identity"]),
-            begin_marker=binding["begin_marker"],
-        )
-        if (sha256_hex(raw) != binding["sha256"]
-                or list(file_state) != binding["file_state"]):
+        if any(session.binding.get(key) != binding.get(key) for key in session.binding):
             raise ValueError("native file binding changed")
-        if (not records or records[0]["component"] != native_http.get("begin_marker")
-                or records[0]["message"] != NATIVE_STARTUP_SEPARATOR):
-            raise ValueError("current-run native header missing")
         if type(native_constant_upper_bound) is not int or native_constant_upper_bound < 0:
             raise ValueError("native source forecast reserve is malformed")
         if type(close_reserve) is not int or not 0 <= close_reserve <= 2:
@@ -868,23 +1098,20 @@ def parse_native_ws_controls(
                     or not 0 < start < end or start < previous_end):
                 raise ValueError("malformed/unplanned connection epoch")
             previous_end = end
-        if not outbound_forecast or any(type(t) is not int or type(w) is not int
+        if not outbound_forecast or len(outbound_forecast) > 200 or any(
+                type(t) is not int or type(w) is not int
                                         or t <= 0 or w < 0 for t, w in outbound_forecast):
             raise ValueError("native outbound forecast missing/malformed")
     except (OSError, UnicodeError, KeyError, TypeError, ValueError):
         result["blockers"] = ["WS_CONTROL_FILE_EPOCH_OR_FORECAST_INCOMPLETE"]
         return result
-    pings: list[int] = []
-    pongs: list[int] = []
-    seen: set[bytes] = set()
+    ping_count = pong_count = 0
+    session.execute("DELETE FROM controls")
+    session.execute("DELETE FROM points")
     previous_timestamp = 0
-    planned = _planned_ws_lifecycle(records, epochs, planned_reconnect_request_ns)
-    for record in records:
+    planned = _planned_ws_lifecycle(session.summary, epochs, planned_reconnect_request_ns)
+    for ordinal, record in enumerate(session.records()):
         try:
-            encoded = canonical_json_bytes(record)
-            if encoded in seen:
-                raise ValueError("duplicate native record")
-            seen.add(encoded)
             timestamp = _log_timestamp_ns(record["timestamp"])
             component, message, level = record["component"], record["message"], record["level"]
             if not all(isinstance(v, str) for v in (component, message, level)):
@@ -902,9 +1129,11 @@ def parse_native_ws_controls(
                 if not any(e["start_ns"] <= timestamp <= e["end_ns"] for e in epochs):
                     raise ValueError("control outside known data connection epoch")
                 if re.fullmatch(r"Received ping frame \([0-9]+ bytes\)", message):
-                    pings.append(timestamp)
+                    ping_count += 1
+                    session.execute("INSERT INTO controls VALUES (?,?,?)", (ordinal, timestamp, 0))
                 elif message == "Received pong":
-                    pongs.append(timestamp)
+                    pong_count += 1
+                    session.execute("INSERT INTO controls VALUES (?,?,?)", (ordinal, timestamp, 1))
                 else:
                     raise ValueError("malformed control message")
             if ((component.startswith("nautilus_network::websocket")
@@ -928,50 +1157,79 @@ def parse_native_ws_controls(
                 raise ValueError("unbound reconnect lifecycle")
         except (KeyError, TypeError, ValueError):
             blockers.add("WS_CONTROL_TRACE_AMBIGUITY_OR_FAILURE")
-    if not pongs:
+    if not pong_count:
         blockers.add("WS_CONTROL_TRACE_MISSING")
-    points = sorted(set(pings + pongs + [t for t, _ in outbound_forecast]
-                        + [e["start_ns"] for e in epochs]))
-    peak = 0
+    for timestamp, _ in outbound_forecast:
+        session.execute("INSERT OR IGNORE INTO points VALUES (?)", (timestamp,))
+    for epoch in epochs:
+        session.execute("INSERT OR IGNORE INTO points VALUES (?)", (epoch["start_ns"],))
+    # Merge two indexed cursors; no UNION/sort temporary database or Python point set.
+    points = merge((row[0] for row in session.execute(
+                       "SELECT ts FROM controls ORDER BY ts,ordinal")),
+                   (row[0] for row in session.execute("SELECT ts FROM points ORDER BY ts")))
+    entering = iter(session.execute("SELECT ts,kind FROM controls ORDER BY ts,ordinal"))
+    leaving = iter(session.execute("SELECT ts,kind FROM controls ORDER BY ts,ordinal"))
+    enter = next(entering, None)
+    leave = next(leaving, None)
+    active = [0, 0]
+    peak = evaluated = 0
+    peak_window = first_failure = None
+    previous_right = None
     for right in points:
+        if right == previous_right:
+            continue
+        previous_right = right
         left = right - 60_000_000_000
-        auto_pong = sum(left < t <= right for t in pings)
-        protocol_pong = sum(left < t <= right for t in pongs)
+        while enter is not None and enter[0] <= right:
+            active[enter[1]] += 1
+            enter = next(entering, None)
+        while leave is not None and leave[0] <= left:
+            active[leave[1]] -= 1
+            leave = next(leaving, None)
+        auto_pong, protocol_pong = active
         intersecting = sum(e["start_ns"] <= right and e["end_ns"] > left for e in epochs)
         auto_ping = protocol_pong + intersecting
         native_outbound = (sum(w for t, w in outbound_forecast if left < t <= right)
                            + native_constant_upper_bound)
         upper = native_outbound + auto_pong + auto_ping + close_reserve
+        window = dict(end_ns=right, auto_pong_count=auto_pong,
+                      protocol_pong_rx_count=protocol_pong, epochs_intersecting=intersecting,
+                      auto_ping_upper_bound=auto_ping, native_outbound_forecast=native_outbound,
+                      close_control_reserve=close_reserve, outbound_upper_bound=upper)
         if intersecting > 2 or upper > 1000:
             blockers.add("WS_OUTBOUND_OR_EPOCH_CEILING")
+            if first_failure is None:
+                first_failure = window
+        if peak_window is None or upper > peak:
+            peak_window = window
         peak = max(peak, upper)
-        result["windows"].append(dict(end_ns=right, auto_pong_count=auto_pong,
-                                      protocol_pong_rx_count=protocol_pong,
-                                      epochs_intersecting=intersecting,
-                                      auto_ping_upper_bound=auto_ping,
-                                      native_outbound_forecast=native_outbound,
-                                      close_control_reserve=close_reserve,
-                                      outbound_upper_bound=upper))
+        evaluated += 1
+        if len(result["windows"]) < NATIVE_WINDOW_DIAGNOSTICS:
+            result["windows"].append(window)
+        if evaluated % NATIVE_TRANSACTION_RECORDS == 0 and session.progress is not None:
+            session.progress()
     result.update(blockers=sorted(blockers), max_rolling_60s=peak,
-                  auto_pong_count=len(pings), protocol_pong_rx_count=len(pongs))
+                  auto_pong_count=ping_count, protocol_pong_rx_count=pong_count,
+                  windows_evaluated=evaluated, windows_retained=len(result["windows"]),
+                  peak_window=peak_window, first_failing_window=first_failure)
     if not blockers:
         result["status"] = "PASS"
     return result
 
 
 def _planned_ws_lifecycle(
-    records: list[dict[str, Any]], epochs: list[dict[str, int]], request_ns: int | None,
+    summary: dict[str, Any], epochs: list[dict[str, int]], request_ns: int | None,
 ) -> set[bytes]:
     """rc5 controller delay + first attempt, uniquely inside the requested gap."""
     if type(request_ns) is not int or len(epochs) != 2:
         return set()
-    candidates = [r for r in records if r["component"] == WS_CONTROL_COMPONENT
-                  and r["message"].startswith(("Backing off", "Reconnection attempt"))]
-    delays = [r for r in candidates if r["message"].startswith("Backing off")]
-    attempts = [r for r in candidates if r["message"].startswith("Reconnection attempt")]
-    if len(delays) > 1 or len(attempts) != 1:
+    if summary["delay_count"] > 1 or summary["attempt_count"] != 1:
         return set()
-    attempt = attempts[0]
+    candidates = summary["lifecycle"]
+    delays = [c for c in candidates if c["record"]["message"].startswith("Backing off")]
+    attempts = [c for c in candidates if c["record"]["message"].startswith("Reconnection attempt")]
+    attempt_entry = attempts[0]
+    attempt = attempt_entry["record"]
     attempt_ns = _log_timestamp_ns(attempt["timestamp"])
     if (attempt["level"] != "DEBUG"
             or re.fullmatch(r"Reconnection attempt 1 of (unlimited|[1-9]\d*)",
@@ -979,17 +1237,18 @@ def _planned_ws_lifecycle(
             or not request_ns <= epochs[0]["end_ns"] <= attempt_ns <= epochs[1]["start_ns"]):
         return set()
     if delays:
-        delay = delays[0]
+        delay_entry = delays[0]
+        delay = delay_entry["record"]
         match = re.fullmatch(r"Backing off for ((?:0|[1-9]\d*)(?:\.\d+)?)s\.\.\.",
                              delay["message"])
         delay_ns = _log_timestamp_ns(delay["timestamp"])
         if (match is None or delay["level"] not in ("WARN", "WARNING")
-                or records.index(delay) >= records.index(attempt)
+                or delay_entry["ordinal"] >= attempt_entry["ordinal"]
                 or not epochs[0]["end_ns"] <= delay_ns < attempt_ns
                 or float(match[1]) <= 0 or not math.isfinite(float(match[1]))
                 or delay_ns + math.ceil(float(match[1]) * 1e9) > attempt_ns):
             return set()
-    return {canonical_json_bytes(r) for r in candidates}
+    return {canonical_json_bytes(c["record"]) for c in candidates}
 
 
 def _apply_ws_proof(provider: dict[str, Any], control: dict[str, Any]) -> None:
@@ -1036,10 +1295,7 @@ def _external_minute_bar_type(instrument_id: str) -> str:
 def _write_result(path: Path | None, payload: dict[str, Any]) -> None:
     encoded = canonical_json_bytes(payload) + b"\n"
     if path is not None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_suffix(path.suffix + ".tmp")
-        temporary.write_bytes(encoded)
-        temporary.replace(path)
+        _atomic_json(path, payload)
     print(encoded.decode().strip())
 
 
@@ -1190,12 +1446,143 @@ class _ResourceSchedule:
                         for a, b in pairwise(resources)))
 
 
+def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
+    encoded = canonical_json_bytes(payload) + b"\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    if path.is_symlink() or temporary.is_symlink():
+        raise ValueError("result path symlink ambiguity")
+    with temporary.open("xb") as stream:
+        stream.write(encoded)
+        stream.flush()
+        os.fsync(stream.fileno())
+    temporary.replace(path)
+
+
+class _VerifierTrail:
+    PHASES = ("PRE_NATIVE_BIND", "POST_NATIVE_BIND", "POST_HTTP_VERIFY",
+              "POST_WS_VERIFY", "PRE_REPORT_WRITE")
+
+    def __init__(self, path: Path, native_path: Path) -> None:
+        self.path, self.native_path = path, native_path
+        self.entries: list[dict[str, Any]] = []
+        self.blockers: set[str] = set()
+        self.baseline: tuple[int, int] | None = None
+        self.started = time.monotonic()
+        self.maxima: dict[str, int | float] = {}
+        self.session: _NativeEvidence | None = None
+
+    @staticmethod
+    def read() -> dict[str, int]:
+        def fields(path: str) -> dict[str, int]:
+            return {line.split()[0].rstrip(":"): int(line.split()[1])
+                    for line in Path(path).read_text().splitlines()
+                    if len(line.split()) >= 2 and line.split()[1].isdigit()}
+        process = fields("/proc/self/status")
+        memory = fields("/proc/meminfo")
+        swap = fields("/proc/vmstat")
+        values = dict(rss_bytes=process["VmRSS"] * 1024,
+                      process_lifetime_hwm_bytes=process["VmHWM"] * 1024,
+                      mem_total_bytes=memory["MemTotal"] * 1024,
+                      mem_available_bytes=memory["MemAvailable"] * 1024,
+                      swap_total_bytes=memory["SwapTotal"] * 1024,
+                      swap_free_bytes=memory["SwapFree"] * 1024,
+                      pswpin=swap["pswpin"], pswpout=swap["pswpout"])
+        if (any(type(v) is not int or v < 0 for v in values.values())
+                or not 0 <= values["mem_available_bytes"] <= values["mem_total_bytes"]
+                or values["mem_total_bytes"] == 0
+                or values["rss_bytes"] > values["process_lifetime_hwm_bytes"]
+                or values["swap_free_bytes"] > values["swap_total_bytes"]):
+            raise ValueError("verifier resource fields malformed")
+        return values
+
+    def sample(self) -> dict[str, Any]:
+        try:
+            values: dict[str, Any] = self.read()
+            current = values["pswpin"], values["pswpout"]
+            if self.baseline is None:
+                self.baseline = current
+            if any(v < b for v, b in zip(current, self.baseline, strict=True)):
+                raise ValueError("verifier swap counters regressed")
+            values["swap_activity"] = sum(current) - sum(self.baseline)
+            values["memory_used_percent"] = 100 * (1 - values["mem_available_bytes"]
+                                                    / values["mem_total_bytes"])
+            values["native_log_bytes"] = self.native_path.lstat().st_size
+            values["index_bytes"] = self.session.scratch_bytes() if self.session else 0
+            if values["memory_used_percent"] > 80:
+                self.blockers.add("POSTRUN_VERIFIER_RESOURCE_CEILING")
+            if values["swap_activity"] != 0:
+                self.blockers.add("POSTRUN_VERIFIER_SWAP_ACTIVITY")
+            for key in ("rss_bytes", "process_lifetime_hwm_bytes", "memory_used_percent",
+                        "swap_activity", "index_bytes"):
+                self.maxima[key] = max(self.maxima.get(key, 0), values[key])
+            return dict(values, ts_ns=time.time_ns(),
+                        elapsed_seconds=time.monotonic() - self.started,
+                        measurement_status="MEASURED")
+        except _NATIVE_ERRORS:
+            self.blockers.add("POSTRUN_VERIFIER_RESOURCE_FIELDS_INCOMPLETE")
+            return dict(ts_ns=time.time_ns(), measurement_status="INCOMPLETE")
+
+    def progress(self) -> None:
+        self.sample()  # Scalar maxima only; never retain periodic samples.
+
+    def mark(self, phase: str, *, completed: bool = True) -> None:
+        if len(self.entries) >= len(self.PHASES) or phase != self.PHASES[len(self.entries)]:
+            raise ValueError("verifier phase ordering differs")
+        self.entries.append(dict(self.sample(), phase=phase, completed=completed))
+        try:
+            _atomic_json(self.path, self.payload())
+        except _NATIVE_ERRORS:
+            self.blockers.add("POSTRUN_VERIFIER_RESOURCE_WRITE_FAILED")
+
+    def payload(self) -> dict[str, Any]:
+        return dict(schema="l0-postrun-verifier-resources/v1", entries=self.entries,
+                    maxima=self.maxima, blockers=sorted(self.blockers))
+
+
 @dataclass
 class _ResourceSampler:
     previous_cpu: tuple[int, int] | None = None
     swap_baseline: tuple[int, int] | None = None
     initial_bytes: int = 0
     initial_sample_ns: int | None = None
+    exclusions: dict[Path, tuple[int, int]] = field(default_factory=dict)
+
+    def exclude(self, path: Path, identity: tuple[int, int]) -> None:
+        if len(self.exclusions) >= 3 and path not in self.exclusions:
+            raise ValueError("diagnostic exclusion cardinality exceeded")
+        previous = self.exclusions.get(path)
+        if previous is not None and previous != identity and path.name != "index.sqlite-journal":
+            raise ValueError("diagnostic identity changed")
+        self.exclusions[path] = identity
+
+    def disk_snapshot(self, root: Path, duration_ns: int | None = None) -> dict[str, Any]:
+        filesystem = os.statvfs("/")
+        total = filesystem.f_blocks * filesystem.f_frsize
+        used = (filesystem.f_blocks - filesystem.f_bfree) * filesystem.f_frsize
+        included = excluded = 0
+        for path in root.rglob("*"):
+            if path in self.exclusions:
+                state = path.lstat()
+                if (not stat.S_ISREG(state.st_mode) or path.resolve() != path.absolute()
+                        or (state.st_dev, state.st_ino) != self.exclusions[path]):
+                    raise ValueError("diagnostic exclusion identity ambiguity")
+                excluded += state.st_size
+            elif path.is_file():
+                included += path.stat().st_size
+        for path in self.exclusions:
+            if path.name == "native.jsonl" and not path.exists():
+                raise ValueError("qualification TRACE disappeared")
+        now = time.time_ns()
+        initial_ns = self.initial_sample_ns if self.initial_sample_ns is not None else now
+        initial_bytes = self.initial_bytes if self.initial_sample_ns is not None else included
+        duration = max(1, duration_ns if duration_ns is not None else now - initial_ns) / 1e9
+        projected = used + max(0, included - initial_bytes) / duration * 604800
+        return dict(measured_ns=now, root_used_percent=100 * used / total,
+                    root_7d_projection_percent=100 * projected / total,
+                    included_bytes=included, excluded_diagnostic_bytes=excluded,
+                    diagnostic_exclusions=[dict(path=str(path), file_identity=list(identity))
+                                           for path, identity in self.exclusions.items()])
 
     def collect(self, root: Path) -> dict[str, Any]:
         memory = {line.split()[0].rstrip(":"): int(line.split()[1])
@@ -1216,20 +1603,17 @@ class _ResourceSampler:
         baseline = self.swap_baseline or current_swap
         if any(current < start for current, start in zip(current_swap, baseline, strict=True)):
             raise ValueError("swap sampling is ambiguous")
-        filesystem = os.statvfs("/")
-        total = filesystem.f_blocks * filesystem.f_frsize
-        used = (filesystem.f_blocks - filesystem.f_bfree) * filesystem.f_frsize
-        evidence_bytes = sum(p.stat().st_size for p in root.rglob("*") if p.is_file())
+        disk = self.disk_snapshot(root)
+        evidence_bytes = disk["included_bytes"]
         # Timestamp only after every field is actually measured successfully.
-        now = time.time_ns()
+        now = disk["measured_ns"]
         initial_ns = self.initial_sample_ns if self.initial_sample_ns is not None else now
         initial_bytes = self.initial_bytes if self.initial_sample_ns is not None else evidence_bytes
-        duration = max(1, now - initial_ns) / 1e9
-        projected = used + max(0, evidence_bytes - initial_bytes) / duration * 604800
         sample = dict(ts_ns=now, memory_used_percent=100 * (
             1 - memory["MemAvailable"] / memory["MemTotal"]), cpu_percent=cpu_percent,
-            swap_activity=sum(current_swap) - sum(baseline), root_used_percent=100 * used / total,
-            root_7d_projection_percent=100 * projected / total)
+            swap_activity=sum(current_swap) - sum(baseline),
+            root_used_percent=disk["root_used_percent"],
+            root_7d_projection_percent=disk["root_7d_projection_percent"])
         if any(not math.isfinite(v) or v < 0 for v in sample.values()):
             raise ValueError("resource measurement invalid")
         self.previous_cpu, self.swap_baseline = current_cpu, baseline
@@ -1287,6 +1671,8 @@ async def _run_l0_qualification(args: argparse.Namespace) -> tuple[int, dict[str
                 if schedule.due(time.monotonic()):
                     accepted = False
                     try:
+                        if file_identity is not None:
+                            sampler.exclude(log_path, file_identity)
                         sample = sampler.collect(root)
                         cohort = dict(capture.l0_health["queue_states"])
                         resources.append(sample)
@@ -1313,92 +1699,121 @@ async def _run_l0_qualification(args: argparse.Namespace) -> tuple[int, dict[str
         sync_succeeded = synced is None or synced is True
     except Exception:
         sample_failures.append("NATIVE_LOG_SYNC_UNPROVEN")
-    health = capture.l0_health
-    native = parse_native_http_log(
-        log_path, manifest=manifest, dispatches=health["history_requests"],
-        file_identity=file_identity or (-1, -1), sync_succeeded=sync_succeeded,
-    )
-    provider = dict(native)
-    provider["native_http_evidence"] = native
-    provider["rest_weight_per_60s"] = native.get("rest_weight_per_60s")
-    # Native socket/outbound counts and every zero predicate require exact proof.
-    # An unknown is retained rather than synthesized from observed data callbacks.
-    if resources:
-        provider["swap_activity"] = max(r["swap_activity"] for r in resources)
-    registrations = health["native_registered"]
-    counts = {kind: sum(r["kind"] == kind for r in registrations)
-              for kind in ("bar", "bbo", "trade", "depth10")}
-    unique = {(r["kind"], r["identity"]) for r in registrations}
-    expected_registrations = {("bar", bar) for bar in observation.bars}
-    expected_registrations.update(
-        (kind, expression.instrument_id) for expression in application.snapshot.expressions
-        for kind in ("bbo", "trade", "depth10")
-    )
-    forecast = {}
-    if (counts == {"bar": 40, "bbo": 20, "trade": 20, "depth10": 20}
-            and len(unique) == 100 and unique == expected_registrations
-            and set(health["registered_bars"]) == set(observation.bars)):
-        forecast = dict(bars=40, bbo=20, trade=20, depth10=20,
-                        native_subscriptions=100, rc5_source=RC5_SOURCE)
-    control: dict[str, Any] = dict(status="INCOMPLETE", blockers=["WS_CONTROL_BINDING_MISSING"])
-    try:
-        binding = native["log_binding"]
-        if binding["status"] != "PASS":
-            raise ValueError("native file binding is unproven")
-        raw, records, file_state = _read_bound_native_log(
-            log_path, file_identity=tuple(binding["file_identity"]),
-            begin_marker=binding["begin_marker"],
+    trail = _VerifierTrail(root / "verifier-resources.json", log_path)
+    trail.baseline = sampler.swap_baseline
+    trail.mark("PRE_NATIVE_BIND")
+    postrun_disk: dict[str, Any] = {}
+    with ExitStack() as stack:
+        session = None
+        try:
+            session = stack.enter_context(_NativeEvidence(
+                log_path, file_identity or (-1, -1), native_marker(manifest),
+                scratch_root=root, progress=trail.progress))
+            trail.session = session
+            session.bind()
+        except _NATIVE_ERRORS:
+            sample_failures.append("NATIVE_LOG_FILE_OR_PARSE_AMBIGUITY")
+        trail.mark("POST_NATIVE_BIND", completed=session is not None and bool(session.binding))
+        health = capture.l0_health
+        native = (parse_native_http_log(
+            log_path, manifest=manifest, dispatches=health["history_requests"],
+            file_identity=file_identity or (-1, -1), sync_succeeded=sync_succeeded,
+            _session=session,
+        ) if session is not None else dict(
+            status="INCOMPLETE", log_binding=dict(status="INCOMPLETE"),
+            blockers=["NATIVE_LOG_FILE_OR_PARSE_AMBIGUITY"]))
+        trail.mark("POST_HTTP_VERIFY", completed=native.get("status") in ("PASS", "FAIL"))
+        provider = dict(native)
+        provider["native_http_evidence"] = native
+        provider["rest_weight_per_60s"] = native.get("rest_weight_per_60s")
+        # Native socket/outbound counts and every zero predicate require exact proof.
+        # An unknown is retained rather than synthesized from observed data callbacks.
+        if resources:
+            provider["swap_activity"] = max(r["swap_activity"] for r in resources)
+        registrations = health["native_registered"]
+        counts = {kind: sum(r["kind"] == kind for r in registrations)
+                  for kind in ("bar", "bbo", "trade", "depth10")}
+        unique = {(r["kind"], r["identity"]) for r in registrations}
+        expected_registrations = {("bar", bar) for bar in observation.bars}
+        expected_registrations.update(
+            (kind, expression.instrument_id) for expression in application.snapshot.expressions
+            for kind in ("bbo", "trade", "depth10")
         )
-        if (sha256_hex(raw) != binding["sha256"]
-                or list(file_state) != binding["file_state"]):
-            raise ValueError("native forecast file changed")
-        first_ns = _log_timestamp_ns(records[0]["timestamp"])
-        end_ns = max(_log_timestamp_ns(r["timestamp"]) for r in records) + 1
-        if (not forecast or observation.disconnected_ns is None
-                or observation.connected_ns is None or observation.requests != 1):
-            raise ValueError("exact native registration/reconnect proof missing")
-        socket_events = health["socket_events"]
-        if any(e["client_id"] != "HYPERLIQUID"
-               or e["endpoint"] != "hyperliquid-data-streams" for e in socket_events):
-            raise ValueError("unexpected WS client/endpoint")
-        disconnects = [e for e in socket_events if e["state"] == "DISCONNECTED"]
-        connects = [e for e in socket_events if e["state"] == "CONNECTED"]
-        if (len(disconnects) != 1 or len(connects) > 2
-                or any(e["ts_ns"] < observation.request_ns for e in disconnects)):
-            raise ValueError("extra/unplanned data connection epoch")
-        epochs = [dict(start_ns=first_ns, end_ns=observation.disconnected_ns),
-                  dict(start_ns=observation.connected_ns, end_ns=end_ns)]
-        planned = _planned_ws_lifecycle(records, epochs, observation.request_ns)
-        native_outbound = [(first_ns, 0)]
-        # Retain both exact 100-request cohorts as an upper bound in every window.
-        registration_upper = 200
-        # Reserve the full-run rc5 30s adapter-heartbeat count in EVERY window,
-        # conservatively including delayed/catch-up ticks.
-        heartbeat_upper = (end_ns - first_ns + 29_999_999_999) // 30_000_000_000 + 1
-        for r in records:
-            if r["message"].startswith("Sending unsubscribe payload"):
-                if (r["component"] != "nautilus_hyperliquid::websocket::handler"
-                        or r["level"] != "DEBUG"
-                        or re.fullmatch(r"Sending unsubscribe payload \([0-9]+ bytes\)",
-                                        r["message"]) is None):
-                    raise ValueError("unbound native unsubscribe forecast")
-                registration_upper += 1
-            if (r["level"] in ("WARN", "WARNING", "ERROR", "CRITICAL")
-                    and canonical_json_bytes(r) not in planned
-                    and (r["component"] not in (HTTP_COMPONENT, DATA_COMPONENT)
-                         or _instrument_bookkeeping(r["component"], r["level"], r["message"])
-                         or _non_http_data_record(r["component"], r["message"]))):
+        forecast = {}
+        if (counts == {"bar": 40, "bbo": 20, "trade": 20, "depth10": 20}
+                and len(unique) == 100 and unique == expected_registrations
+                and set(health["registered_bars"]) == set(observation.bars)):
+            forecast = dict(bars=40, bbo=20, trade=20, depth10=20,
+                            native_subscriptions=100, rc5_source=RC5_SOURCE)
+        control: dict[str, Any] = dict(status="INCOMPLETE", blockers=["WS_CONTROL_BINDING_MISSING"])
+        try:
+            binding = native["log_binding"]
+            if binding["status"] != "PASS":
+                raise ValueError("native file binding is unproven")
+            if session is None or not session.binding:
+                raise ValueError("native summary unavailable")
+            first_ns = session.summary["first_ns"]
+            end_ns = session.summary["max_ns"] + 1
+            if (not forecast or observation.disconnected_ns is None
+                    or observation.connected_ns is None or observation.requests != 1):
+                raise ValueError("exact native registration/reconnect proof missing")
+            socket_events = health["socket_events"]
+            if len(socket_events) > 3:
+                raise ValueError("socket event cardinality exceeds frozen lifecycle")
+            if any(e["client_id"] != "HYPERLIQUID"
+                   or e["endpoint"] != "hyperliquid-data-streams" for e in socket_events):
+                raise ValueError("unexpected WS client/endpoint")
+            disconnects = [e for e in socket_events if e["state"] == "DISCONNECTED"]
+            connects = [e for e in socket_events if e["state"] == "CONNECTED"]
+            if (len(disconnects) != 1 or len(connects) > 2
+                    or any(e["ts_ns"] < observation.request_ns for e in disconnects)):
+                raise ValueError("extra/unplanned data connection epoch")
+            epochs = [dict(start_ns=first_ns, end_ns=observation.disconnected_ns),
+                      dict(start_ns=observation.connected_ns, end_ns=end_ns)]
+            planned = _planned_ws_lifecycle(session.summary, epochs, observation.request_ns)
+            native_outbound = [(first_ns, 0)]
+            # Retain both exact 100-request cohorts as an upper bound in every window.
+            registration_upper = 200
+            # Reserve the full-run rc5 30s adapter-heartbeat count in EVERY window,
+            # conservatively including delayed/catch-up ticks.
+            heartbeat_upper = (end_ns - first_ns + 29_999_999_999) // 30_000_000_000 + 1
+            if session.summary["unsubscribe_invalid"]:
+                raise ValueError("unbound native unsubscribe forecast")
+            registration_upper += session.summary["unsubscribes"]
+            allowed_warnings = sum(c["record"]["level"] in ("WARN", "WARNING", "ERROR", "CRITICAL")
+                                   and canonical_json_bytes(c["record"]) in planned
+                                   for c in session.summary["lifecycle"])
+            if session.summary["safety_warning_count"] > allowed_warnings:
                 sample_failures.append("NATIVE_NON_HTTP_SAFETY_FAILURE_OR_AMBIGUITY")
-        control = parse_native_ws_controls(
-            log_path, native_http=native, epochs=epochs,
-            outbound_forecast=native_outbound, close_reserve=2,
-            native_constant_upper_bound=heartbeat_upper + registration_upper,
-            planned_reconnect_request_ns=observation.request_ns,
-        )
-        control["adapter_heartbeat_whole_run_upper_bound"] = heartbeat_upper
-        control["socket_events"] = socket_events
-    except (OSError, KeyError, TypeError, ValueError):
-        sample_failures.append("WS_NATIVE_FORECAST_EPOCH_OR_ZERO_PREDICATE_INCOMPLETE")
+            control = parse_native_ws_controls(
+                log_path, native_http=native, epochs=epochs,
+                outbound_forecast=native_outbound, close_reserve=2,
+                native_constant_upper_bound=heartbeat_upper + registration_upper,
+                planned_reconnect_request_ns=observation.request_ns, _session=session,
+            )
+            control["adapter_heartbeat_whole_run_upper_bound"] = heartbeat_upper
+            control["socket_events"] = socket_events
+        except _NATIVE_ERRORS:
+            sample_failures.append("WS_NATIVE_FORECAST_EPOCH_OR_ZERO_PREDICATE_INCOMPLETE")
+        trail.mark("POST_WS_VERIFY", completed=control.get("status") == "PASS")
+        try:
+            if session is not None:
+                session.scratch_bytes()
+                for path, identity in session.artifacts.items():
+                    if path.exists():
+                        sampler.exclude(path, identity)
+            span = (resources[-1]["ts_ns"] - resources[0]["ts_ns"]) if resources else 1
+            postrun_disk = sampler.disk_snapshot(root, span)
+            if resources:
+                postrun_disk["root_7d_projection_percent"] = max(
+                    postrun_disk["root_7d_projection_percent"],
+                    resources[-1]["root_7d_projection_percent"])
+            if (postrun_disk["root_used_percent"] > 70
+                    or postrun_disk["root_7d_projection_percent"] > 70):
+                sample_failures.append("DISK_CEILING")
+        except _NATIVE_ERRORS:
+            sample_failures.append("POSTRUN_DISK_PROJECTION_INCOMPLETE")
+    trail.session = None
     provider["native_ws_control_evidence"] = control
     _apply_ws_proof(provider, control)
     capture_health = capture.capture_health
@@ -1432,8 +1847,12 @@ async def _run_l0_qualification(args: argparse.Namespace) -> tuple[int, dict[str
                   native_cohorts=queue_cohorts)
     report = evaluate_qualification(manifest, observation, time.time_ns(),
                                     provider, resources, queues, forecast)
+    trail.mark("PRE_REPORT_WRITE")
+    report["verifier_resources"] = trail.payload()
+    report["postrun_disk"] = postrun_disk
     report["native_registrations"] = registrations
-    report["blockers"] = sorted(set(report["blockers"] + sample_failures + native["blockers"]
+    report["blockers"] = sorted(set(report["blockers"] + sample_failures
+                                    + sorted(trail.blockers) + native["blockers"]
                                     + control["blockers"]))
     if report["blockers"]:
         report["status"] = "INCOMPLETE"
@@ -1441,10 +1860,133 @@ async def _run_l0_qualification(args: argparse.Namespace) -> tuple[int, dict[str
     report["digest"] = sha256_hex(canonical_json_bytes(report))
     return (PASS if report["status"] == "PASS" else PROVIDER_DATA_INCOMPLETE), report
 
+def _small_json(path: Path) -> dict[str, Any]:
+    with path.open("rb") as stream:
+        raw = stream.read(NATIVE_ENVELOPE_BYTES + 1)
+    if len(raw) > NATIVE_ENVELOPE_BYTES:
+        raise ValueError("replay fact budget exceeded")
+    value = json.loads(raw, object_pairs_hook=_unique_object)
+    if not isinstance(value, dict):
+        raise ValueError("replay facts malformed")
+    return value
+
+
+def _run_native_replay(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    """Diagnostic only: never constructs a node, qualification, digest or TTL."""
+    path = args.replay_native_log
+    if args.manifest is None or args.verifier_scratch_root is None or args.result_path is None:
+        raise ValueError("replay requires original manifest and dedicated scratch/result paths")
+    scratch = args.verifier_scratch_root.absolute()
+    result_path = args.result_path.absolute()
+    if (result_path.name in ("qualification.json", "qualification.json.tmp")
+            or result_path.exists() or result_path.is_symlink()
+            or not scratch.is_dir() or scratch.resolve() != scratch
+            or result_path.parent.resolve() != scratch
+            or path.resolve() == result_path or args.manifest.resolve() == result_path
+            or scratch == path.parent.resolve()):
+        raise ValueError("replay output must be new and confined to a dedicated scratch directory")
+    with os.scandir(scratch) as entries:
+        if next(entries, None) is not None:
+            raise ValueError("replay scratch directory must be new and empty")
+    manifest = RunManifest.model_validate(_small_json(args.manifest))
+    facts_document = _small_json(args.replay_facts) if args.replay_facts else {}
+    trail = _VerifierTrail(scratch / "replay-verifier-resources.json", path)
+    if trail.path.exists() or trail.path.is_symlink():
+        raise ValueError("replay resource trail must be new")
+    result: dict[str, Any] = dict(
+        schema="l0-native-replay/v1", status="REPLAY_INCOMPLETE",
+        qualification_authority=False, historical_manifest_hash=manifest.manifest_hash,
+        historical_release_sha=manifest.git_sha, historical_release_tree=manifest.git_tree,
+        verifier_source_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        structural_binding="INCOMPLETE", no_file_mutation="UNPROVEN",
+        http=dict(status="UNAVAILABLE"), ws=dict(status="UNAVAILABLE"),
+        unavailable_facts=[], blockers=[])
+    trail.mark("PRE_NATIVE_BIND")
+    with ExitStack() as stack:
+        session = None
+        try:
+            state = path.lstat()
+            session = stack.enter_context(_NativeEvidence(
+                path, (state.st_dev, state.st_ino), native_marker(manifest),
+                scratch_root=scratch, progress=trail.progress))
+            trail.session = session
+            session.bind()
+            result.update(structural_binding="PASS", binding=dict(session.binding),
+                          summary=dict(session.summary))
+        except _NATIVE_ERRORS as exc:
+            result["blockers"].append("REPLAY_STRUCTURAL_BINDING_INCOMPLETE")
+            result["error_type"] = type(exc).__name__
+        trail.mark("POST_NATIVE_BIND", completed=result["structural_binding"] == "PASS")
+        facts = facts_document.get("facts", {})
+        locators = facts_document.get("locators", {})
+        facts_bound = (session is not None and bool(session.binding)
+                       and facts_document.get("schema") == "l0-native-replay-facts/v1"
+                       and facts_document.get("manifest_hash") == manifest.manifest_hash
+                       and facts_document.get("native_sha256") == session.binding["sha256"]
+                       and isinstance(facts, dict) and isinstance(locators, dict))
+        if facts_document and not facts_bound:
+            result["blockers"].append("REPLAY_FACTS_BINDING_INCOMPLETE")
+        def available(keys: tuple[str, ...]) -> bool:
+            missing = [key for key in keys if not facts_bound or key not in facts
+                       or not isinstance(locators.get(key), str) or not locators[key].strip()]
+            result["unavailable_facts"].extend(key for key in missing
+                                             if key not in result["unavailable_facts"])
+            return not missing
+        if available(("dispatches", "sync_succeeded")) and session is not None:
+            result["http"] = parse_native_http_log(
+                path, manifest=manifest, dispatches=facts["dispatches"],
+                file_identity=session.file_identity, sync_succeeded=facts["sync_succeeded"],
+                _session=session)
+        trail.mark("POST_HTTP_VERIFY", completed=result["http"]["status"] != "UNAVAILABLE")
+        ws_keys = ("sync_succeeded", "epochs", "outbound_forecast", "close_reserve",
+                   "native_constant_upper_bound", "planned_reconnect_request_ns")
+        if available(ws_keys) and session is not None and session.binding:
+            native_binding = dict(session.binding,
+                                  status=("PASS" if facts["sync_succeeded"] is True
+                                          else "INCOMPLETE"))
+            native = dict(session.binding, log_binding=native_binding)
+            result["ws"] = parse_native_ws_controls(
+                path, native_http=native, epochs=facts["epochs"],
+                outbound_forecast=facts["outbound_forecast"], close_reserve=facts["close_reserve"],
+                native_constant_upper_bound=facts["native_constant_upper_bound"],
+                planned_reconnect_request_ns=facts["planned_reconnect_request_ns"],
+                _session=session)
+        trail.mark("POST_WS_VERIFY", completed=result["ws"]["status"] != "UNAVAILABLE")
+        if session is not None and session.binding:
+            try:
+                for _ in session.records():
+                    pass
+                result["no_file_mutation"] = "PROVEN"
+            except _NATIVE_ERRORS:
+                result["blockers"].append("REPLAY_FILE_MUTATION_OR_RECHECK_FAILURE")
+            result["index_peak_bytes"] = session.index_peak_bytes
+    trail.session = None
+    trail.mark("PRE_REPORT_WRITE")
+    result["verifier_resources"] = trail.payload()
+    result["blockers"] = sorted(set(result["blockers"]) | trail.blockers)
+    result["no_oom"] = "PROCESS_SURVIVED"
+    result["bounded_rss"] = ("PROVEN" if trail.maxima.get("process_lifetime_hwm_bytes", 2**63)
+                             <= 256 * 1024 * 1024 and not trail.blockers else "UNPROVEN")
+    if result["bounded_rss"] != "PROVEN":
+        result["blockers"].append("REPLAY_BOUNDED_RSS_UNPROVEN")
+    for key in ("http", "ws"):
+        if result[key]["status"] not in ("PASS", "UNAVAILABLE"):
+            result["blockers"].append(f"REPLAY_{key.upper()}_SEMANTIC_BLOCKER")
+    result["semantic_disposition"] = ("UNAVAILABLE_FACTS_REQUIRE_CONTROL_DISPOSITION"
+                                      if result["unavailable_facts"] else "REPLAYED")
+    if not result["blockers"]:
+        result["status"] = "REPLAY_STRUCTURAL_COMPLETE"
+    return (PASS if not result["blockers"] else PROVIDER_DATA_INCOMPLETE), result
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--evidence-path", type=Path)
-    parser.add_argument("--qualify-l0", action="store_true")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--qualify-l0", action="store_true")
+    modes.add_argument("--replay-native-log", type=Path)
+    parser.add_argument("--replay-facts", type=Path)
+    parser.add_argument("--verifier-scratch-root", type=Path)
     parser.add_argument("--config-path", type=Path)
     parser.add_argument("--result-path", type=Path)
     parser.add_argument("--manifest", type=Path)
@@ -1456,6 +1998,22 @@ def main() -> int:
     parser.add_argument("--provider-coin", default="ETH")
     parser.add_argument("--run-seconds", type=int, default=0)
     args = parser.parse_args()
+    if args.replay_native_log is not None:
+        if (args.run_seconds or args.config_path or args.evidence_path or args.ci_instrument_id
+                or args.actionable_market_id or args.watch_market_id or args.bar_type
+                or args.snapshot
+                or args.provider_coin != "ETH"):
+            parser.error("replay is mutually exclusive with all live/runtime inputs")
+        exit_code, result = _run_native_replay(args)
+        # Exclusive creation prevents overwriting any pre-existing artifact, including hard links.
+        with args.result_path.open("xb") as stream:
+            stream.write(canonical_json_bytes(result) + b"\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        print(canonical_json_bytes(result).decode())
+        return exit_code
+    if args.replay_facts is not None or args.verifier_scratch_root is not None:
+        parser.error("replay options require --replay-native-log")
     maximum = 2400 if args.qualify_l0 else 300
     if args.run_seconds < 0 or args.run_seconds > maximum:
         raise SystemExit(f"--run-seconds must be between 0 and {maximum}")
