@@ -32,8 +32,8 @@ from trader_assist_v0.multi_asset_shadow.resolution import FIRST_LAUNCH_20, reso
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/three-setup-release-bundle.yml"
-SHA = "ea565fd51793904de33523c7c621f81904331c03"
-TREE = "ba5050f82ea0bc5305ba271ce898768ed68719b0"
+SHA = "1d8e8ca08f4f526f72b2253acf3c9a71defdbe7b"
+TREE = "2daee287c155fa33e8af5894f3825d7eddb09e70"
 
 
 def parse_workflow(source: str) -> dict[str, Any]:
