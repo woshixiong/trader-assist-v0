@@ -76,8 +76,8 @@ def _read_confined_local_file(
     limit: int,
 ) -> bytes:
     """Read one exact already-downloaded file, confined to an explicit root."""
-    if type(input_root) is not Path or type(local_path) is not Path:
-        raise TypeError("exact pathlib.Path input root/path required")
+    if not isinstance(input_root, Path) or not isinstance(local_path, Path):
+        raise TypeError("pathlib.Path input root/path required")
     if type(expected_name) is not str or not expected_name:
         raise TypeError("exact expected local basename required")
     if type(limit) is not int or limit <= 0:
