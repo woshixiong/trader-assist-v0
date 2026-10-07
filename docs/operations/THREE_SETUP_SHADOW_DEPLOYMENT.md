@@ -335,8 +335,9 @@ preexist in **any** form (including dangling symlink), alias an existing
 device/inode, be a mountpoint, or traverse an untrusted symlink:
 
 * New stage: `/opt/trader-assist-v0-replay-only-37566655478-1`.
-* Separate new replay scratch/result root:
-  `/var/tmp/trade-os-replay-37566655478-1`.
+* Separate new persistent replay container root:
+  `/var/tmp/trade-os-replay-37566655478-1`. It is an ordinary host-filesystem
+  container and is **never** itself the replay tmpfs mountpoint.
 
 Require trusted, non-symlink parents, safe mount boundaries, no hardlink or
 bind-mount alias, verified free memory/disk/inodes, a preexisting
@@ -352,8 +353,11 @@ to make the installer work.
 After the gate, make only the two *new* roots with `O_EXCL`/non-following
 creation and immediately capture dev/inode/owner/group/mode/mount identities.
 Stage must be `root:traderassist`, mode `0750`; all stage subdirectories
-are confined under it. The replay scratch root is newly owned, inaccessible
-to other users and initially empty. Grant replay-only data access through
+are confined under it. The replay container root is newly owned, inaccessible
+to other users and initially empty. Its later `work/` and `proof/` children
+are created only after the separate replay human gate and fresh replay preflight;
+the root itself remains persistent host storage rather than a mountpoint. Grant
+replay-only data access through
 existing permitted read rights, not by `chmod`/`chown` of historical files.
 Preserve, without byte, timestamp, permission or service changes:
 `/opt/trader-assist-v0`, `/etc/trader-assist-v0`,
@@ -522,61 +526,189 @@ content and any unproven source/manifest mapping. No alteration of old
 timestamps, mode or source; if historic read access is unavailable, stop for
 Control, not `chmod`/copy-to-live.
 
-**Total scratch cap is mandatory, not a disk-free-space estimate or SQLite's
-512 MiB per-database bound.** The operator's later reviewed and human-authorized
-single-block recipe must use a **private, per-replay mount namespace**
-(e.g. util-linux `unshare --mount --propagation private`) with the
-**new, empty, exclusively owned** scratch directory covered *inside that
-namespace only* by a `tmpfs` mount with `size=768m`, `nosuid,nodev,noexec`
-and owned access mode `0700`. Check namespace creation, private propagation,
-`findmnt` exact mount source/options and hard-cap, identity, namespace-local
-visibility, old mounts unaffected, and that `statfs` reports bounded total
-allocation **before any replay write**. The 768 MiB is a **hard total
-scratch-and-result filesystem cap**, covering SQLite DB/WAL/journal, resource
-trail, intermediate index and result; set `TMPDIR`, `SQLITE_TMPDIR`,
-cache and Python temp destinations **inside this same mounted scratch root**
-for replay. No underlying scratch writes outside that namespace, no
-host-global mount, `/etc/fstab` change, mount-service mutation, old-root
-permission change or automatic fallback to an uncapped directory. If the host
-lacks authorized mount-namespace capability, sufficient memory/swap/disk
-headroom, namespace-safe mount or enforceable cap: **STOP/CONTROL_REPLAN**,
-not a silent `mount` in the host namespace. Unmount occurs only as the
-namespace exits; preserve any failed-run owned stage/proof and do not auto
-delete either root.
+The already-approved persistent replay container is fixed as:
 
-Launch the replay as the least-privileged account with existing read access,
-**inside that same private namespace**, using only the already verified
-`runtime-venv/bin/python3.12 -B` and the exact new extracted repaired
-source, with `PYTHONDONTWRITEBYTECODE=1`, no network/private API and
-no application, node, exchange, socket, systemd or service calls. Accept
-only these replay flags, with future *independently resolved* original paths
-and a new exclusive result filename within the scratch root:
+~~~text
+REPLAY_ROOT=/var/tmp/trade-os-replay-37566655478-1
+WORK_MOUNT=$REPLAY_ROOT/work
+DURABLE_PROOF=$REPLAY_ROOT/proof
+~~~
+
+`REPLAY_ROOT` is the newly created, exclusively controlled host-filesystem
+container from D0 and **is not a tmpfs mountpoint**. Only after the separate
+replay human gate and fresh exact preflight may the supervisor create the two
+previously absent children with non-following/exclusive path checks:
+
+* `WORK_MOUNT`: an empty mountpoint. Inside the replay's **private mount
+  namespace only**, cover it with a tmpfs mounted using
+  `size=768m,nosuid,nodev,noexec,mode=0700,uid=<TRADERASSIST_UID>,gid=<TRADERASSIST_GID>`.
+* `DURABLE_PROOF`: an ordinary durable host-filesystem sibling under the
+  same pre-authorized `REPLAY_ROOT`, owned by the trusted namespace
+  supervisor/control identity with mode no broader than `0750`. The replay
+  identity has **no write permission** to this directory while replay runs.
+
+The 768 MiB limit remains the **hard total replay work/scratch/result
+filesystem cap**, not a free-space estimate and not SQLite's 512 MiB
+per-database limit. It covers DB/WAL/journal, verifier scratch/index,
+resource trail, Python/cache/temp files, replay result, and captured
+stdout/stderr/exit evidence. Replay `--verifier-scratch-root`,
+`--result-path`, `HOME`, `TMPDIR`, `SQLITE_TMPDIR`, `XDG_CACHE_HOME`,
+and Python cache/temp destinations must all resolve below `WORK_MOUNT`.
+The unprivileged replay process must have **no writable path outside this
+capped tmpfs**. It may read the verified staged runtime/source and original
+historical inputs, but may not write predecessor `/opt`, `/etc`,
+`/var/lib`, home, host-global temp/cache, `DURABLE_PROOF`, or any other
+host root. Durable export below is a trusted **post-process evidence-retention
+step**, not a second replay scratch/work path.
+
+Before mounting, fresh-resolve and record the existing replay identity's
+numeric IDs:
+
+~~~sh
+# Future gated operator recipe fragment ONLY.
+TRADERASSIST_UID="$(id -u traderassist)"
+TRADERASSIST_GID="$(id -g traderassist)"
+~~~
+
+Use the existing `traderassist` account as the frozen replay identity unless
+fresh preflight proves it cannot satisfy the accepted read-only source
+contract; that case is **CONTROL_REPLAN**, never permission repair. The future
+reviewed operator block must mount the private tmpfs using those **numeric**
+`uid=` and `gid=` values plus `mode=0700`. Inside the same namespace,
+independently prove with `findmnt`, `stat`, and `statfs` that the
+filesystem is tmpfs; the total allocation is bounded at 768 MiB or stricter;
+`nosuid,nodev,noexec` are present; the mount-visible root numeric UID/GID
+equal `TRADERASSIST_UID/TRADERASSIST_GID`; mode is `0700`; propagation is
+private; and host-namespace mounts are unchanged.
+
+Before replay, use a trusted bounded privilege-drop primitive such as
+`setpriv --reuid "$TRADERASSIST_UID" --regid "$TRADERASSIST_GID" --clear-groups --no-new-privs`
+(or an equally bounded standard OS primitive) to perform an exact
+write/read/delete probe under the intended replay identity against
+`WORK_MOUNT`; then prove the mount is empty again. Separately prove that the
+same identity can open the original `native.jsonl` and original
+`e4/run-manifest.json` **read-only**, cannot open either for write, and
+cannot write `DURABLE_PROOF`. Do not `chmod`, `chown`, copy, or otherwise
+repair historical permissions. Any identity mismatch, required host-wide
+permission change, inability to drop privilege, or failed least-privilege
+probe is **CONTROL_REPLAN**. Replay itself must never run as root.
+
+**Total scratch cap is mandatory.** The later reviewed and human-authorized
+single-block recipe must use a **private, per-replay mount namespace**
+(e.g. util-linux `unshare --mount --propagation private`) and cover only
+`WORK_MOUNT` inside that namespace. Check namespace creation, private
+propagation, exact mount source/options/hard-cap, mount identity,
+namespace-local visibility, host mounts unchanged, and bounded `statfs`
+allocation **before any replay write**. No underlying work writes outside the
+namespace, host-global mount, `/etc/fstab` change, mount-service mutation,
+old-root permission change, or fallback to an uncapped directory is allowed.
+Require enough memory/swap headroom for the tmpfs and enough durable
+disk/inodes for a worst-case **<=768 MiB** export plus an explicit safety
+margin. If namespace capability, namespace-safe mount, enforceable cap, memory,
+swap, durable disk/inodes, or exact ownership cannot be proven:
+**STOP/CONTROL_REPLAN**.
+
+Run a trusted namespace supervisor that remains alive **after the unprivileged
+replay child terminates**. Launch only that child as `traderassist` inside
+the same private namespace, using the already verified
+`runtime-venv/bin/python3.12 -B` and exact repaired extracted source, with
+`PYTHONDONTWRITEBYTECODE=1`, no network/private API and no application,
+node, exchange, socket, systemd or service calls. Redirect replay stdout and
+stderr into new exclusive files under `WORK_MOUNT`. Accept only these replay
+flags, with future independently resolved original paths and a new exclusive
+result filename below `WORK_MOUNT`:
 
 ~~~sh
 # Future separately authorized replay fragment; execute ONLY inside
-# the verified private 768 MiB scratch namespace after the second gate.
+# the verified private 768 MiB work tmpfs after the second gate.
 STAGE/runtime-venv/bin/python3.12 -B \
   STAGE/bundle/payload/scripts/e4_nautilus_public_data_probe.py \
   --replay-native-log ORIGINAL_NATIVE_JSONL \
   --manifest ORIGINAL_E4_RUN_MANIFEST_JSON \
-  --verifier-scratch-root NEW_PRIVATE_SCRATCH_ROOT \
-  --result-path NEW_PRIVATE_SCRATCH_ROOT/replay-diagnostic.json
+  --verifier-scratch-root WORK_MOUNT \
+  --result-path WORK_MOUNT/replay-diagnostic.json
 # Add --replay-facts ORIGINAL_AUTHENTIC_FACTS_JSON only if independently proven.
 ~~~
 
-The displayed names `STAGE`, `ORIGINAL_*` and `NEW_PRIVATE_SCRATCH_ROOT`
-are **non-executable contract placeholders**, not permission to choose paths
-without Engineering Control's later exact operator block. Reject all live
-flags/config/qualification outputs, preexisting result/scratch content,
-symlink/hardlink overwrite, `qualification.json` basename, and any output
-outside the private mount. Constrain scratch verifier to the frozen 64 KiB
+The displayed names `STAGE`, `ORIGINAL_*`, `WORK_MOUNT`,
+`DURABLE_PROOF`, and `TRADERASSIST_*` are **non-executable contract
+placeholders**, not permission to choose paths or identities without
+Engineering Control's later exact operator block. Reject all live
+flags/config/qualification outputs, preexisting result/work content,
+symlink/hardlink overwrite, `qualification.json` basename, and any replay
+output outside `WORK_MOUNT`. Constrain scratch verifier to the frozen 64 KiB
 read chunks, 1 MiB maximum envelopes, 4 MiB SQLite cache, <=512 MiB DB,
 bounded journal/transactions and 64 retained WS diagnostic windows plus
 peak/first-failure evidence. Require **process-survived** and recorded
 RSS/VmHWM <=256 MiB, independent host MemAvailable/swap/no-pressure and
-resource index peak/total scratch cap proof. A cap exhaustion, OOM,
-missing resource-trail phase, original-log mutation or threshold breach
-is an explicit diagnostic failure; never label PASS.
+resource index peak/total scratch-cap proof. Cap exhaustion, OOM, missing
+resource-trail phase, original-log mutation or threshold breach is an explicit
+diagnostic failure; never label it PASS.
+
+The namespace must **not normally exit or unmount** when the replay child
+terminates. Whether the child exits 0, exits diagnostically nonzero, or receives
+an ordinary signal, the still-alive trusted supervisor must perform this
+mandatory pre-exit evidence freeze/export sequence while the private namespace
+still exists:
+
+1. Record the replay child's **exact exit status** as capped evidence under
+   `WORK_MOUNT`.
+2. Stop all replay writers and prove no surviving replay descendant still has
+   the work tree open for write.
+3. Remount the same tmpfs filesystem **read-only inside the private namespace**
+   (or use an equally strong namespace-local write freeze), then verify RO
+   state and unchanged mount identity.
+4. Enumerate the **complete remaining work tree** using non-following checks.
+   Permit only directories and regular files; reject path escape, symlink,
+   special file, regular-file hardlink alias, unexpected owner/mode, or any
+   other ownership/path anomaly. Compute exact file count, per-file byte size,
+   total regular-file bytes and SHA256 for **every** retained regular file.
+   The supervisor must serialize this exact namespace work-tree manifest for
+   durable retention.
+5. Export **the complete remaining work evidence**, not just the final JSON,
+   into the fresh `DURABLE_PROOF` sibling using trusted host tooling with
+   exclusive creation and no-follow semantics. Include, where present,
+   `replay-diagnostic.json`, `replay-verifier-resources.json`, captured
+   stdout/stderr/exit evidence, and every verifier scratch/index/journal
+   artifact that survives replay. Never invent an absent artifact.
+6. Hard-bound replay-origin durable export to **<=768 MiB total**. The source
+   is already bounded by the tmpfs, and no replay-origin byte outside that
+   capped source may be exported. `DURABLE_PROOF` remains non-writable by the
+   replay child and cannot be used to bypass the scratch cap.
+7. `fsync` each exported regular file. Exclusively create a durable export
+   manifest containing source/destination path-relative names, exact sizes,
+   SHA256 values, replay exit code, original-log/manifest binding,
+   namespace/mount identity, numeric replay UID/GID/mode, work-tree total
+   bytes/file count, and the export total; `fsync` that manifest and the
+   proof directory. Then re-open and re-read **every** durable destination and
+   verify exact size/SHA256 equality against the frozen namespace work-tree
+   manifest and export manifest.
+8. Only after `DURABLE_EVIDENCE_EXPORT=PASS` **and** post-fsync checksum
+   readback PASS may the supervisor permit normal namespace exit/unmount.
+   Namespace exit is not cleanup of `DURABLE_PROOF`; retain the durable proof
+   root for canonical GitHub evidence/adjudication with no automatic deletion.
+
+The export mechanism may write **only** to the pre-authorized
+`DURABLE_PROOF` sibling. It may not copy historical inputs, mutate old roots,
+create arbitrary host paths, use network/private APIs, or perform service
+operations.
+
+Error-path retention is fail-closed. If the replay child fails while the
+supervisor survives, perform the **same** read-only freeze, complete export,
+fsync and readback sequence before namespace exit and preserve the failed
+diagnostic evidence. If freeze/export/hash/fsync/readback fails, do **not**
+claim replay evidence or PASS: retain any already-created durable proof bytes
+without auto-cleanup, record `DURABLE_EVIDENCE_EXPORT=FAIL`, and return
+`CONTROL_REPLAN`. The recipe must not intentionally exit/unmount a namespace
+containing the only surviving evidence while a bounded export/readback path
+remains. If the namespace supervisor itself is forcibly lost (for example
+SIGKILL or host failure) before durable export, classify
+`REPLAY_EVIDENCE_RETENTION_UNPROVEN`; no replay acceptance and no blind
+rerun. Return to Engineering Control using whatever durable terminal/GitHub
+evidence survived. This exceptional loss is never relabelled as successful
+preservation. Under every branch, predecessor roots, historical evidence,
+systemd/default-off state and activation-permit state remain untouched; no
+automatic cleanup occurs.
 
 Historical semantic facts, if used, must be **authentic independently retained**
 `l0-native-replay-facts/v1`, <=1 MiB, with original `manifest_hash`,
@@ -601,12 +733,34 @@ pre-execution raw hashes; new stage dev/inode/ownership; exact
 runtime/pip-tool venv identities, locked distribution closure and rc5 wheel;
 full `python3.12` resolution under signed `-I` and normal execution;
 raw source/import origins; signed `--verify` output and default-off state.
+
 Only then distinguish `REPLAY_ONLY_DIAGNOSTIC_DEPLOYMENT_ACCEPTED=YES`
-from permanent `NORMAL_RELEASE_DEPLOYED=NO`; record the next separate
-human replay approval and, after replay, original log/manifest source-bound
-proof, isolated namespace mount cap, VmHWM, complete verifier resources,
-result schema/status/blockers, missing-fact disposition and result checksum.
-No example, unsigned `anchors.env` or previous PASS fills absent proof.
+from permanent `NORMAL_RELEASE_DEPLOYED=NO` and record the **separate current
+human replay approval**. After replay, canonical durable evidence must come
+from `DURABLE_PROOF`, not a vanished tmpfs path, and must include all of:
+
+* original log/manifest source-bound proof and unchanged metadata;
+* resolved numeric `traderassist` UID/GID plus mount-visible UID/GID/mode;
+* namespace/mount identity, private propagation and enforced 768 MiB hard cap;
+* least-privilege `WORK_MOUNT` write/read/delete probe, original-input
+  read-only/no-write probe, and proof that replay cannot write
+  `DURABLE_PROOF`;
+* replay child's exact exit code and process-survival disposition;
+* complete frozen namespace work-tree manifest, exact file count, per-file
+  sizes/SHA256 and total bytes;
+* durable proof export manifest, replay-origin export total **<=768 MiB**,
+  per-file fsync, proof-directory fsync and post-fsync full readback
+  size/SHA256 equality;
+* `DURABLE_EVIDENCE_EXPORT=PASS` as a mandatory precondition before **any**
+  replay result may advance;
+* final diagnostic result, complete verifier resource trail, VmHWM/RSS
+  <=256 MiB, result schema/status/blockers, missing-fact disposition and
+  result checksum, all read from the durable proof copy.
+
+`UNAVAILABLE_FACTS_REQUIRE_CONTROL_DISPOSITION` remains mandatory whenever
+historical semantic facts are absent or uncertain. No example, unsigned
+`anchors.env`, tmpfs-only path, partial export or previous PASS fills absent
+proof.
 
 `FAIL_CLOSED/CONTROL_REPLAN` is required on any new Architecture/Operations
 authority issue; main/product/artifact drift; expired artifact; signature,
