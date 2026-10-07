@@ -71,7 +71,10 @@ def mapping(item):
         product="USD_M_FUTURES",
         contract_specification=tuple(
             (key, "SYNTHETIC_UNVERIFIED")
-            for key in ("multiplier", "settlement", "expiry", "convention", "price_tick", "size_step")
+            for key in (
+                "multiplier", "settlement", "expiry",
+                "convention", "price_tick", "size_step",
+            )
         ),
         price_unit="USD",
         size_unit="CONTRACTS",

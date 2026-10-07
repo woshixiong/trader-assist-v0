@@ -42,7 +42,9 @@ def zipped(item: ArchiveObject, lines: list[str] | None = None, *,
            name: str | None = None, extra: bool = False) -> bytes:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as handle:
-        handle.writestr(name or item.csv_name, "\n".join(lines if lines is not None else rows(item)))
+        handle.writestr(
+            name or item.csv_name, "\n".join(lines if lines is not None else rows(item))
+        )
         if extra:
             handle.writestr("extra.csv", "NOT_ALLOWED")
     return buffer.getvalue()
@@ -152,6 +154,12 @@ def test_288_rows_and_nonzero_ignored_numeric_field_are_accepted():
     assert bars[-1].trade_count == 2
 
 
+def plus_one_close_ms(a: list[str]) -> list[str]:
+    fields = a[0].split(",")
+    fields[6] = str(int(fields[6]) + 1)
+    return [",".join(fields), *a[1:]]
+
+
 @pytest.mark.parametrize(
     "change",
     [
@@ -168,7 +176,7 @@ def test_288_rows_and_nonzero_ignored_numeric_field_are_accepted():
         lambda a: [a[0].replace(",2,0.5", ",2.5,0.5"), *a[1:]],
         lambda a: [a[0].replace(",12.5", ",Inf"), *a[1:]],
         lambda a: [a[0].replace("10.000,11.000", "12.000,11.000"), *a[1:]],
-        lambda a: [a[0].replace("299999", "300000"), *a[1:]],
+        plus_one_close_ms,
         lambda a: [a[0].replace(",1.5,", ",-1,"), *a[1:]],
         lambda a: [a[0] + ",extra", *a[1:]],
         lambda a: ["", *a[1:]],
@@ -177,7 +185,10 @@ def test_288_rows_and_nonzero_ignored_numeric_field_are_accepted():
 )
 def test_reject_bad_csv_rows_without_skipping_headers(change):
     item = obj()
-    archive = zipped(item, change(rows(item)))
+    original_rows = rows(item)
+    mutated_rows = change(original_rows)
+    assert mutated_rows != original_rows
+    archive = zipped(item, mutated_rows)
     with pytest.raises((ValueError, zipfile.BadZipFile)):
         parse_verified_daily_zip(
             item, archive, receipt(item, archive), finalized_as_of_ns=item.end_ns

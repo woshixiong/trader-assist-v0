@@ -5,9 +5,9 @@ No real Binance market payload is authorized here. No network client is supplied
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 from trader_assist_v0.contracts.common import canonical_json_bytes, sha256_hex
 from trader_assist_v0.research_data.admission import ExternalReferenceLedger
