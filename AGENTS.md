@@ -74,6 +74,26 @@ Additional RDC calls require a concrete technical necessity. On transport/networ
 failure, preserve the exact checkpoint and use the existing bounded retry/fallback
 contract; never create an RDC retry storm.
 
+### Frozen route and CI admission
+
+Use the package-state and manifest-selected procedures for the authorized route:
+A is deterministic/no-model; B is fresh ordinary ChatGPT High Writer; C is the
+frozen primary Codex route with exact same-thread/worktree resume after Pre-code
+PASS; D returns to Engineering Control. A matching executor string is not proof
+of actual runtime identity. No in-flight cross-route, model or surface fallback:
+Engineering Control must refreeze a material change first.
+
+Use native GitHub checks and executed job-step evidence for exact-head CI.
+Normal status polls use 60 seconds; classified transient read retries use
+10 seconds/20 consecutive failures maximum, never fast-retry quota/auth/429.
+Missing/skipped mandatory tests are not PASS. Do not launch a fresh Final
+Independent Reviewer until all frozen required checks and genuine test steps
+have been verified. The Reviewer's source of truth is canonical GitHub, not
+routine Remote Desktop Commander reads.
+
+macOS foreground Terminal/provider-session recovery remains a separate,
+unqualified Packet 2; GitHub CI cannot certify local terminal visibility.
+
 Every actor works to its safe authorized ability boundary. Routine continuation,
 SHA/CI/log relay, and long review-result relay through the user are prohibited.
 
