@@ -29,6 +29,7 @@ REQUIRED_FILES: Final = (
     "scripts/build_three_setup_shadow_deployment_bundle.py",
     "scripts/run_three_setup_shadow_runtime.py",
     "scripts/run_first_launch_public_runtime.py",
+    "scripts/p4a/run_e4_replay_diagnostic.py",
     "scripts/p4a/run_three_setup_shadow_runtime.sh",
     "deploy/p4a/config/three-setup-shadow.json.example",
     "deploy/p4a/systemd/trader-assist-v0-three-setup.env.example",

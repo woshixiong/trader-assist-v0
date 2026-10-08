@@ -98,6 +98,7 @@ def _write_release_surface(root: Path) -> None:
         "scripts/verify_exact_release.py",
         "scripts/three_setup_shadow_preflight.py",
         "scripts/build_three_setup_shadow_deployment_bundle.py",
+        "scripts/p4a/run_e4_replay_diagnostic.py",
         "scripts/p4a/run_three_setup_shadow_runtime.sh",
         "deploy/p4a/systemd/trader-assist-v0-three-setup.env.example",
         "deploy/p4a/systemd/trader-assist-v0-three-setup.service",

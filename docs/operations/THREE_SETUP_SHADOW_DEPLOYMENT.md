@@ -526,189 +526,163 @@ content and any unproven source/manifest mapping. No alteration of old
 timestamps, mode or source; if historic read access is unavailable, stop for
 Control, not `chmod`/copy-to-live.
 
-The already-approved persistent replay container is fixed as:
+The accepted replay root remains the already-created, exclusively controlled
+host directory from D0:
 
 ~~~text
 REPLAY_ROOT=/var/tmp/trade-os-replay-37566655478-1
-WORK_MOUNT=$REPLAY_ROOT/work
+WORK=$REPLAY_ROOT/work
 DURABLE_PROOF=$REPLAY_ROOT/proof
 ~~~
 
-`REPLAY_ROOT` is the newly created, exclusively controlled host-filesystem
-container from D0 and **is not a tmpfs mountpoint**. Only after the separate
-replay human gate and fresh exact preflight may the supervisor create the two
-previously absent children with non-following/exclusive path checks:
+This Operations amendment installs **one active replay-controller contract** for
+this route. After this amendment is independently reviewed, merged and accepted,
+the earlier private-namespace / complete remaining WORK-tree byte-export recipe
+is no longer an alternate execution path. For this replay-controller route only,
+the **complete-WORK byte-copy contract is superseded** by a complete
+surviving-WORK inventory with streaming SHA256 plus the bounded authoritative
+durable artifacts below. Scratch SQLite/index/journal bytes are non-authoritative
+intermediates: inventory their surviving identities and hashes, but do not copy
+their bytes into `DURABLE_PROOF`.
 
-* `WORK_MOUNT`: an empty mountpoint. Inside the replay's **private mount
-  namespace only**, cover it with a tmpfs mounted using
-  `size=768m,nosuid,nodev,noexec,mode=0700,uid=<TRADERASSIST_UID>,gid=<TRADERASSIST_GID>`.
-* `DURABLE_PROOF`: an ordinary durable host-filesystem sibling under the
-  same pre-authorized `REPLAY_ROOT`, owned by the trusted namespace
-  supervisor/control identity with mode no broader than `0750`. The replay
-  identity has **no write permission** to this directory while replay runs.
+The exact release must contain
+`scripts/p4a/run_e4_replay_diagnostic.py`. It is the only future D3 replay
+launcher. It creates no static systemd unit, daemon, container, new Linux
+account, custom mount namespace or seccomp framework. Direct invocation of
+`scripts/e4_nautilus_public_data_probe.py` for the target retained-log replay is
+superseded by this controller route.
 
-The 768 MiB limit remains the **hard total replay work/scratch/result
-filesystem cap**, not a free-space estimate and not SQLite's 512 MiB
-per-database limit. It covers DB/WAL/journal, verifier scratch/index,
-resource trail, Python/cache/temp files, replay result, and captured
-stdout/stderr/exit evidence. Replay `--verifier-scratch-root`,
-`--result-path`, `HOME`, `TMPDIR`, `SQLITE_TMPDIR`, `XDG_CACHE_HOME`,
-and Python cache/temp destinations must all resolve below `WORK_MOUNT`.
-The unprivileged replay process must have **no writable path outside this
-capped tmpfs**. It may read the verified staged runtime/source and original
-historical inputs, but may not write predecessor `/opt`, `/etc`,
-`/var/lib`, home, host-global temp/cache, `DURABLE_PROOF`, or any other
-host root. Durable export below is a trusted **post-process evidence-retention
-step**, not a second replay scratch/work path.
+Before any transient unit start, the controller must fail closed unless all of
+the following are true:
 
-Before mounting, fresh-resolve and record the existing replay identity's
-numeric IDs:
+* production `trader-assist-v0-three-setup.service` is exactly inactive and
+  disabled, and the activation permit is absent;
+* exact staged Python, exact unchanged verifier source and exact staged
+  controller are regular files under the accepted staged root;
+* original `native.jsonl` and original historical `e4/run-manifest.json`
+  have frozen non-following path/dev/inode/size/mode/uid/gid/mtime/ctime and
+  full SHA256 bindings; an optional authentic replay-facts document receives the
+  same binding;
+* `/proc/meminfo` reports `MemAvailable >= 1408 MiB`;
+* `REPLAY_ROOT` is the accepted existing root while `WORK` and
+  `DURABLE_PROOF` are still absent;
+* the pre-existing replay identity is exactly `UID=999`, `GID=988`; no account
+  creation or permission repair is allowed.
 
-~~~sh
-# Future gated operator recipe fragment ONLY.
-TRADERASSIST_UID="$(id -u traderassist)"
-TRADERASSIST_GID="$(id -g traderassist)"
+The controller may then create `WORK` and root-only `DURABLE_PROOF` and start
+one transient `systemd-run` service with the frozen mature systemd controls:
+
+~~~text
+ProtectSystem=strict
+BindReadOnlyPaths=<STAGE>
+BindReadOnlyPaths=<ORIGINAL_NATIVE_JSONL>
+BindReadOnlyPaths=<ORIGINAL_E4_RUN_MANIFEST_JSON>
+BindReadOnlyPaths=<OPTIONAL_AUTHENTIC_REPLAY_FACTS_JSON>
+TemporaryFileSystem=<WORK>:size=768M,nosuid,nodev,noexec,mode=0770,uid=0,gid=988
+ReadWritePaths=<DURABLE_PROOF>
+ProtectHome=yes
+PrivateNetwork=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_KILL
+MemoryMax=1280M
+TasksMax=16
+RuntimeMaxSec=2400s
+Restart=no
+PrivateTmp=no
 ~~~
 
-Use the existing `traderassist` account as the frozen replay identity unless
-fresh preflight proves it cannot satisfy the accepted read-only source
-contract; that case is **CONTROL_REPLAN**, never permission repair. The future
-reviewed operator block must mount the private tmpfs using those **numeric**
-`uid=` and `gid=` values plus `mode=0700`. Inside the same namespace,
-independently prove with `findmnt`, `stat`, and `statfs` that the
-filesystem is tmpfs; the total allocation is bounded at 768 MiB or stricter;
-`nosuid,nodev,noexec` are present; the mount-visible root numeric UID/GID
-equal `TRADERASSIST_UID/TRADERASSIST_GID`; mode is `0700`; propagation is
-private; and host-namespace mounts are unchanged.
+`RuntimeMaxSec=2400s` is an emergency outer backstop only. The controller owns
+the normal verifier deadline. Do **not** add `SystemCallFilter`,
+`RestrictNamespaces`, `RestrictAddressFamilies`, `SystemCallArchitectures`,
+`MemoryDenyWriteExecute`, `LockPersonality` or `RestrictRealtime`; the failed
+spike does not authorize a third synthetic start or a new hardening experiment.
 
-Before replay, use a trusted bounded privilege-drop primitive such as
-`setpriv --reuid "$TRADERASSIST_UID" --regid "$TRADERASSIST_GID" --clear-groups --no-new-privs`
-(or an equally bounded standard OS primitive) to perform an exact
-write/read/delete probe under the intended replay identity against
-`WORK_MOUNT`; then prove the mount is empty again. Separately prove that the
-same identity can open the original `native.jsonl` and original
-`e4/run-manifest.json` **read-only**, cannot open either for write, and
-cannot write `DURABLE_PROOF`. Do not `chmod`, `chown`, copy, or otherwise
-repair historical permissions. Any identity mismatch, required host-wide
-permission change, inability to drop privilege, or failed least-privilege
-probe is **CONTROL_REPLAN**. Replay itself must never run as root.
+Inside the already-created systemd filesystem boundary, before verifier launch,
+a bounded child using the exact replay credentials must prove:
 
-**Total scratch cap is mandatory.** The later reviewed and human-authorized
-single-block recipe must use a **private, per-replay mount namespace**
-(e.g. util-linux `unshare --mount --propagation private`) and cover only
-`WORK_MOUNT` inside that namespace. Check namespace creation, private
-propagation, exact mount source/options/hard-cap, mount identity,
-namespace-local visibility, host mounts unchanged, and bounded `statfs`
-allocation **before any replay write**. No underlying work writes outside the
-namespace, host-global mount, `/etc/fstab` change, mount-service mutation,
-old-root permission change, or fallback to an uncapped directory is allowed.
-Require enough memory/swap headroom for the tmpfs and enough durable
-disk/inodes for a worst-case **<=768 MiB** export plus an explicit safety
-margin. If namespace capability, namespace-safe mount, enforceable cap, memory,
-swap, durable disk/inodes, or exact ownership cannot be proven:
-**STOP/CONTROL_REPLAN**.
-
-Run a trusted namespace supervisor that remains alive **after the unprivileged
-replay child terminates**. Launch only that child as `traderassist` inside
-the same private namespace, using the already verified
-`runtime-venv/bin/python3.12 -B` and exact repaired extracted source, with
-`PYTHONDONTWRITEBYTECODE=1`, no network/private API and no application,
-node, exchange, socket, systemd or service calls. Redirect replay stdout and
-stderr into new exclusive files under `WORK_MOUNT`. Accept only these replay
-flags, with future independently resolved original paths and a new exclusive
-result filename below `WORK_MOUNT`:
-
-~~~sh
-# Future separately authorized replay fragment; execute ONLY inside
-# the verified private 768 MiB work tmpfs after the second gate.
-STAGE/runtime-venv/bin/python3.12 -B \
-  STAGE/bundle/payload/scripts/e4_nautilus_public_data_probe.py \
-  --replay-native-log ORIGINAL_NATIVE_JSONL \
-  --manifest ORIGINAL_E4_RUN_MANIFEST_JSON \
-  --verifier-scratch-root WORK_MOUNT \
-  --result-path WORK_MOUNT/replay-diagnostic.json
-# Add --replay-facts ORIGINAL_AUTHENTIC_FACTS_JSON only if independently proven.
+~~~text
+UID=999
+GID=988
+SUPPLEMENTARY_GROUPS=EMPTY
+CAPABILITIES=EMPTY
+NO_NEW_PRIVILEGES=YES
 ~~~
 
-The displayed names `STAGE`, `ORIGINAL_*`, `WORK_MOUNT`,
-`DURABLE_PROOF`, and `TRADERASSIST_*` are **non-executable contract
-placeholders**, not permission to choose paths or identities without
-Engineering Control's later exact operator block. Reject all live
-flags/config/qualification outputs, preexisting result/work content,
-symlink/hardlink overwrite, `qualification.json` basename, and any replay
-output outside `WORK_MOUNT`. Constrain scratch verifier to the frozen 64 KiB
-read chunks, 1 MiB maximum envelopes, 4 MiB SQLite cache, <=512 MiB DB,
-bounded journal/transactions and 64 retained WS diagnostic windows plus
-peak/first-failure evidence. Require **process-survived** and recorded
-RSS/VmHWM <=256 MiB, independent host MemAvailable/swap/no-pressure and
-resource index peak/total scratch-cap proof. Cap exhaustion, OOM, missing
-resource-trail phase, original-log mutation or threshold breach is an explicit
-diagnostic failure; never label it PASS.
+For both original inputs, `O_RDONLY|O_NOFOLLOW|O_CLOEXEC` must succeed and
+`fstat` dev/inode must equal the frozen host binding. Separate
+`O_WRONLY|O_NOFOLLOW|O_CLOEXEC` and `O_RDWR|O_NOFOLLOW|O_CLOEXEC` opens, with
+no `O_TRUNC` and no `O_CREAT`, must fail **exactly with `EROFS`**. Any success
+or any other denial stops before verifier launch. The same replay identity must
+also be unable to create a file in root-only `DURABLE_PROOF`.
 
-The namespace must **not normally exit or unmount** when the replay child
-terminates. Whether the child exits 0, exits diagnostically nonzero, or receives
-an ordinary signal, the still-alive trusted supervisor must perform this
-mandatory pre-exit evidence freeze/export sequence while the private namespace
-still exists:
+The verifier child uses the identical UID/GID/empty-groups/no-new-privileges
+state and the unchanged
+`scripts/e4_nautilus_public_data_probe.py`. Its exact argv is limited to the
+staged Python/verifier and replay-only flags. It uses `stdin=/dev/null`,
+`shell=False`, `close_fds=True`, no credential/private-API environment, and an
+explicit minimal environment. `TMPDIR`, `TMP`, `TEMP`, `SQLITE_TMPDIR`,
+`HOME` and `XDG_CACHE_HOME` all resolve under `WORK`;
+`PYTHONDONTWRITEBYTECODE=1` and `PYTHONNOUSERSITE=1`. `WORK` is the only
+child-writable filesystem.
 
-1. Record the replay child's **exact exit status** as capped evidence under
-   `WORK_MOUNT`.
-2. Stop all replay writers and prove no surviving replay descendant still has
-   the work tree open for write.
-3. Remount the same tmpfs filesystem **read-only inside the private namespace**
-   (or use an equally strong namespace-local write freeze), then verify RO
-   state and unchanged mount identity.
-4. Enumerate the **complete remaining work tree** using non-following checks.
-   Permit only directories and regular files; reject path escape, symlink,
-   special file, regular-file hardlink alias, unexpected owner/mode, or any
-   other ownership/path anomaly. Compute exact file count, per-file byte size,
-   total regular-file bytes and SHA256 for **every** retained regular file.
-   The supervisor must serialize this exact namespace work-tree manifest for
-   durable retention.
-5. Export **the complete remaining work evidence**, not just the final JSON,
-   into the fresh `DURABLE_PROOF` sibling using trusted host tooling with
-   exclusive creation and no-follow semantics. Include, where present,
-   `replay-diagnostic.json`, `replay-verifier-resources.json`, captured
-   stdout/stderr/exit evidence, and every verifier scratch/index/journal
-   artifact that survives replay. Never invent an absent artifact.
-6. Hard-bound replay-origin durable export to **<=768 MiB total**. The source
-   is already bounded by the tmpfs, and no replay-origin byte outside that
-   capped source may be exported. `DURABLE_PROOF` remains non-writable by the
-   replay child and cannot be used to bypass the scratch cap.
-7. `fsync` each exported regular file. Exclusively create a durable export
-   manifest containing source/destination path-relative names, exact sizes,
-   SHA256 values, replay exit code, original-log/manifest binding,
-   namespace/mount identity, numeric replay UID/GID/mode, work-tree total
-   bytes/file count, and the export total; `fsync` that manifest and the
-   proof directory. Then re-open and re-read **every** durable destination and
-   verify exact size/SHA256 equality against the frozen namespace work-tree
-   manifest and export manifest.
-8. Only after `DURABLE_EVIDENCE_EXPORT=PASS` **and** post-fsync checksum
-   readback PASS may the supervisor permit normal namespace exit/unmount.
-   Namespace exit is not cleanup of `DURABLE_PROOF`; retain the durable proof
-   root for canonical GitHub evidence/adjudication with no automatic deletion.
+The verifier gets a normal **1800-second** deadline. On timeout the controller
+sends `SIGTERM`, waits at most 10 seconds, then sends `SIGKILL` if required and
+reaps the child. Ordinary timeout or verifier failure does not skip evidence
+retention. After child completion, a reserved **300-second** evidence window is
+used for post-source hashing, inventory, durable writes, fsync and readback.
+The service cgroup remains `MemoryMax=1280 MiB`, `TasksMax=16`, with zero
+accepted swap activity; the verifier's existing independent semantic
+`VmHWM/RSS <=256 MiB` criterion remains unchanged.
 
-The export mechanism may write **only** to the pre-authorized
-`DURABLE_PROOF` sibling. It may not copy historical inputs, mutate old roots,
-create arbitrary host paths, use network/private APIs, or perform service
-operations.
+`stdout` and `stderr` are continuously drained. Each durable retained log is
+hard-capped at **8 MiB**, while the controller still computes the SHA256 and
+byte count of the **full** stream and records whether truncation occurred. A
+truncated retained log must carry `TRUNCATED=YES` in `child-exit.json`; no
+unbounded stream buffer or complete-log requirement is permitted.
 
-Error-path retention is fail-closed. If the replay child fails while the
-supervisor survives, perform the **same** read-only freeze, complete export,
-fsync and readback sequence before namespace exit and preserve the failed
-diagnostic evidence. If freeze/export/hash/fsync/readback fails, do **not**
-claim replay evidence or PASS: retain any already-created durable proof bytes
-without auto-cleanup, record `DURABLE_EVIDENCE_EXPORT=FAIL`, and return
-`CONTROL_REPLAN`. The recipe must not intentionally exit/unmount a namespace
-containing the only surviving evidence while a bounded export/readback path
-remains. If the namespace supervisor itself is forcibly lost (for example
-SIGKILL or host failure) before durable export, classify
-`REPLAY_EVIDENCE_RETENTION_UNPROVEN`; no replay acceptance and no blind
-rerun. Return to Engineering Control using whatever durable terminal/GitHub
-evidence survived. This exceptional loss is never relabelled as successful
-preservation. Under every branch, predecessor roots, historical evidence,
-systemd/default-off state and activation-permit state remain untouched; no
-automatic cleanup occurs.
+After the child is reaped and no controller writer is active, generate a
+**complete surviving-WORK inventory** using non-following traversal. Only
+directories and regular files are accepted. Record relative path, mode, uid,
+gid and size for every entry, and streaming SHA256 for every regular file.
+Symlink, special-file or unexpected regular-file hardlink ambiguity is evidence
+failure. A verifier scratch/index/journal that has already been cleaned is not
+fabricated; a surviving one is inventoried and hashed but its bytes are not
+duplicated to durable proof.
+
+The bounded durable proof set is:
+
+~~~text
+controller-result.json
+replay-diagnostic.json
+replay-verifier-resources.json
+child-exit.json
+source-binding.json
+unit-properties.json
+child.stdout.log
+child.stderr.log
+work-inventory.json
+proof-manifest.json
+~~~
+
+Only `replay-diagnostic.json`, `replay-verifier-resources.json` and the two
+capped logs are copied from `WORK`. The controller-created JSON evidence is
+written directly by the root supervisor. `proof-manifest.json` records each
+durable file's size/SHA256, proof-directory fsync completion, post-fsync
+readback SHA256 equality, original input pre/post bindings, requested/read-back
+unit properties, controller/verifier identities and
+`DURABLE_EVIDENCE_EXPORT=PASS|FAIL`. Original inputs are re-opened,
+re-stat'ed and fully re-hashed after the verifier; any drift invalidates the
+evidence.
+
+No replay result may advance unless `DURABLE_EVIDENCE_EXPORT=PASS`. Verifier
+exit failure with intact durable evidence remains a diagnostic failure with
+retained proof, not an excuse to rerun. If the supervisor or outer
+`RuntimeMaxSec` backstop is lost before durable completion, classify
+`REPLAY_EVIDENCE_RETENTION_UNPROVEN`; never infer PASS and never blind-rerun.
+No controller path copies historical source bytes, mutates predecessor roots,
+starts the production service, deploys a release, or grants any live/trading
+authority.
 
 Historical semantic facts, if used, must be **authentic independently retained**
 `l0-native-replay-facts/v1`, <=1 MiB, with original `manifest_hash`,
@@ -739,23 +713,26 @@ from permanent `NORMAL_RELEASE_DEPLOYED=NO` and record the **separate current
 human replay approval**. After replay, canonical durable evidence must come
 from `DURABLE_PROOF`, not a vanished tmpfs path, and must include all of:
 
-* original log/manifest source-bound proof and unchanged metadata;
-* resolved numeric `traderassist` UID/GID plus mount-visible UID/GID/mode;
-* namespace/mount identity, private propagation and enforced 768 MiB hard cap;
-* least-privilege `WORK_MOUNT` write/read/delete probe, original-input
-  read-only/no-write probe, and proof that replay cannot write
-  `DURABLE_PROOF`;
-* replay child's exact exit code and process-survival disposition;
-* complete frozen namespace work-tree manifest, exact file count, per-file
-  sizes/SHA256 and total bytes;
-* durable proof export manifest, replay-origin export total **<=768 MiB**,
-  per-file fsync, proof-directory fsync and post-fsync full readback
-  size/SHA256 equality;
+* original native/manifest pre/post path/dev/inode/metadata/full-SHA256
+  bindings, plus optional authentic facts binding when used;
+* exact `UID=999/GID=988`, empty supplementary groups, zero child capabilities,
+  no-new-privileges and exact `EROFS` write-open denial proof;
+* transient systemd requested/read-back property evidence, `WORK` tmpfs identity
+  and enforced `<=768 MiB` allocation, `MemoryMax=1280 MiB`, `TasksMax=16`,
+  outer `RuntimeMaxSec=2400s`, and prestart `MemAvailable>=1408 MiB`;
+* replay child's exact exit/timeout/signal disposition and zero accepted swap
+  activity;
+* bounded stdout/stderr retained bytes plus each full-stream SHA256/byte count
+  and deterministic truncation marker;
+* complete surviving-WORK inventory, exact entry/file counts, modes/owners,
+  per-regular-file sizes/SHA256 and total regular-file bytes;
+* durable proof manifest for the bounded authoritative proof set, per-file
+  fsync, proof-directory fsync and post-fsync full readback SHA256 equality;
 * `DURABLE_EVIDENCE_EXPORT=PASS` as a mandatory precondition before **any**
   replay result may advance;
-* final diagnostic result, complete verifier resource trail, VmHWM/RSS
-  <=256 MiB, result schema/status/blockers, missing-fact disposition and
-  result checksum, all read from the durable proof copy.
+* final diagnostic result and complete verifier resource trail, including the
+  unchanged verifier's `VmHWM/RSS <=256 MiB` decision and missing-fact
+  disposition.
 
 `UNAVAILABLE_FACTS_REQUIRE_CONTROL_DISPOSITION` remains mandatory whenever
 historical semantic facts are absent or uncertain. No example, unsigned
@@ -765,7 +742,7 @@ proof.
 `FAIL_CLOSED/CONTROL_REPLAN` is required on any new Architecture/Operations
 authority issue; main/product/artifact drift; expired artifact; signature,
 transfer, archive, manifest, code or wheel mismatch; path/link/mount collision;
-missing namespace/quota/tool/host capacity; mixed runtime import; original
+missing transient-systemd/cgroup/tool/host capacity; mixed runtime import; original
 file/inode/hash/metadata drift; inability to enforce the total cap;
 service/permit/default-off state deviation; undocumented network/write;
 Replay structural/semantic resource blocker; or absent independent human gate.
@@ -793,24 +770,36 @@ any second 2400-second live qualification. Bind the original failed-run
 manifest, not the repaired release's manifest. The replay reports the verifier
 source SHA256 separately from historical release SHA/tree.
 
-Resolve retained paths and create a new dedicated scratch directory under the
-authorized target execution procedure. The result path must be new, inside
-that directory, and cannot be named `qualification.json`. The replay rejects
-existing outputs, symlinks/hard-link overwrites and live/config arguments. It
-constructs no application, opens no provider connection and performs no service
-operation. Its only writes are dedicated scratch/resource/result artifacts.
+Resolve the exact accepted staged release, original retained inputs and accepted
+`REPLAY_ROOT` under the future Engineering Control operator block. The target
+replay must invoke the exact-release controller, **not** the verifier directly.
+The following remains a non-executable contract template until the separate
+current human replay gate and exact target paths are frozen:
 
-```sh
+~~~sh
+: "${STAGE:?resolve accepted replay-only stage}"
+: "${REPLAY_ROOT:?resolve accepted replay root}"
 : "${RETAINED_NATIVE_LOG:?resolve original native.jsonl}"
 : "${RETAINED_MANIFEST:?resolve original failed-run manifest}"
-: "${DEDICATED_SCRATCH_ROOT:?resolve new dedicated scratch directory}"
-: "${DEDICATED_REPLAY_RESULT:?resolve new result inside scratch directory}"
-python scripts/e4_nautilus_public_data_probe.py \
-  --replay-native-log "$RETAINED_NATIVE_LOG" \
-  --manifest "$RETAINED_MANIFEST" \
-  --verifier-scratch-root "$DEDICATED_SCRATCH_ROOT" \
-  --result-path "$DEDICATED_REPLAY_RESULT"
-```
+
+sudo "$STAGE/runtime-venv/bin/python3.12" -B \
+  "$STAGE/bundle/payload/scripts/p4a/run_e4_replay_diagnostic.py" \
+  --execute-authorized-replay \
+  --unit-name trade-os-e4-replay-diagnostic.service \
+  --replay-root "$REPLAY_ROOT" \
+  --stage-root "$STAGE" \
+  --staged-python "$STAGE/runtime-venv/bin/python3.12" \
+  --verifier "$STAGE/bundle/payload/scripts/e4_nautilus_public_data_probe.py" \
+  --native-log "$RETAINED_NATIVE_LOG" \
+  --manifest "$RETAINED_MANIFEST"
+# Add --replay-facts "$AUTHENTIC_REPLAY_FACTS" only when independently bound.
+~~~
+
+The controller itself creates the dedicated verifier scratch below transient
+`WORK`, enforces the read-only source probe and process boundary, and retains
+canonical evidence under root-only `DURABLE_PROOF`. Direct replay-verifier
+commands, a custom `unshare` namespace recipe, a static service or a complete
+scratch byte export are not alternate target paths.
 
 Without historical facts this proves current retained-file structure and
 resources only. `unavailable_facts` and
