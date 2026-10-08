@@ -200,14 +200,18 @@ def _verify_target_import(staged_source: Path) -> None:
 
 
 def _pip_check(host_python: Path) -> None:
-    result = subprocess.run(
-        (str(host_python), "-m", "pip", "--python", sys.executable, "check"),
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    """Use the explicitly selected pip provider to check this target Python."""
+    command = (str(host_python), "-m", "pip", "--python", sys.executable, "check")
+    try:
+        result = subprocess.run(command, check=False, capture_output=True, text=True)
+    except OSError as exc:
+        raise SystemExit(f"target pip check provider unavailable: {host_python}: {exc}") from exc
     if result.returncode:
-        raise SystemExit("target pip check failed: " + result.stdout.strip())
+        details = (result.stderr.strip() + "\n" + result.stdout.strip()).strip()
+        raise SystemExit(
+            f"target pip check failed (provider={host_python}, target={sys.executable}, "
+            f"exit={result.returncode}): {details}"
+        )
 
 
 def main() -> int:
