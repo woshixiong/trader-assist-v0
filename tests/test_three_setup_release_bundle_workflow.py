@@ -165,7 +165,7 @@ def test_structure_and_authority() -> None:
     assert set(workflow["on"]) == {"workflow_dispatch"}
     inputs = workflow["on"]["workflow_dispatch"]["inputs"]
     assert set(inputs) == {"release_sha", "release_tree"}
-    for name, value in [("release_sha", SHA), ("release_tree", TREE)]:
+    for name in ("release_sha", "release_tree"):
         assert "default" not in inputs[name]
         assert inputs[name]["required"] is True and inputs[name]["type"] == "string"
     assert set(workflow["jobs"]) == {"build-release-bundle"}
