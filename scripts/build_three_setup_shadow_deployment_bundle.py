@@ -183,8 +183,8 @@ import stat
 import tempfile
 from pathlib import Path
 parent = Path(os.environ["PIP_SCRATCH_PARENT"])
-if (not parent.is_absolute() or "|" in str(parent) or "\n" in str(parent)
-        or "\r" in str(parent) or parent.resolve(strict=True) != parent):
+if (not parent.is_absolute() or "|" in str(parent) or chr(10) in str(parent)
+        or chr(13) in str(parent) or parent.resolve(strict=True) != parent):
     raise SystemExit("PIP_PROVIDER_UNSAFE_TEMP_PARENT")
 info = parent.lstat()
 if (not stat.S_ISDIR(info.st_mode) or info.st_uid not in (0, os.geteuid())
