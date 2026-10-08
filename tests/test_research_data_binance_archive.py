@@ -187,7 +187,7 @@ def test_exact_official_header_preserves_all_288_validated_bars():
         lambda a: [" " + OFFICIAL_HEADER, *a],
         lambda a: [OFFICIAL_HEADER + ",extra", *a],
         lambda a: ['"' + OFFICIAL_HEADER + '"', *a],
-        lambda a: ["\\ufeff" + OFFICIAL_HEADER, *a],
+        lambda a: ["\ufeff" + OFFICIAL_HEADER, *a],
         lambda a: [OFFICIAL_HEADER, *a[:-1]],
         lambda a: [OFFICIAL_HEADER, *a, a[-1]],
         lambda a: [OFFICIAL_HEADER, a[1], *a[1:]],
