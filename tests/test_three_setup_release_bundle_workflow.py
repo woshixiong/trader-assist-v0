@@ -32,8 +32,9 @@ from trader_assist_v0.multi_asset_shadow.resolution import FIRST_LAUNCH_20, reso
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/three-setup-release-bundle.yml"
-SHA = "1d8e8ca08f4f526f72b2253acf3c9a71defdbe7b"
-TREE = "2daee287c155fa33e8af5894f3825d7eddb09e70"
+# Synthetic event identity; never a frozen historical release SHA.
+SHA = "a" * 40
+TREE = "b" * 40
 
 
 def parse_workflow(source: str) -> dict[str, Any]:
@@ -165,14 +166,15 @@ def test_structure_and_authority() -> None:
     inputs = workflow["on"]["workflow_dispatch"]["inputs"]
     assert set(inputs) == {"release_sha", "release_tree"}
     for name, value in [("release_sha", SHA), ("release_tree", TREE)]:
-        assert inputs[name]["default"] == value
+        assert "default" not in inputs[name]
         assert inputs[name]["required"] is True and inputs[name]["type"] == "string"
     assert set(workflow["jobs"]) == {"build-release-bundle"}
     job = workflow["jobs"]["build-release-bundle"]
     assert job["runs-on"] == "ubuntu-24.04" and job["timeout-minutes"] == 30
     assert set(job) == {"runs-on", "timeout-minutes", "defaults", "env", "steps"}
     assert job["defaults"] == {"run": {"shell": "bash"}}
-    assert job["env"]["RELEASE_SHA"] == SHA and job["env"]["RELEASE_TREE"] == TREE
+    assert job["env"]["RELEASE_SHA"] == "${{ inputs.release_sha }}"
+    assert job["env"]["RELEASE_TREE"] == "${{ inputs.release_tree }}"
     assert job["env"]["CONTROL_HEAD"] == "${{ github.sha }}"
     assert "/release/src:" in job["env"]["PYTHONPATH"]
     assert "BUILD_ROOT" not in job["env"]
@@ -425,51 +427,133 @@ def test_runtime_initializer_fails_on_environment_append(tmp_path: Path) -> None
     assert list(Path(env["RUNNER_TEMP"]).iterdir()) == []
 
 
-@pytest.mark.parametrize(
-    "mutation",
-    ["short", "uppercase", "wrong_sha", "wrong_tree", "short_tree", "malformed_tree", "injection"],
-)
-def test_dispatch_input_rejection(tmp_path: Path, mutation: str) -> None:
-    env = {
+def dispatch_env() -> dict[str, str]:
+    """Model the main event independently from the required form inputs."""
+    return {
         "RELEASE_SHA": SHA,
         "RELEASE_TREE": TREE,
         "INPUT_RELEASE_SHA": SHA,
         "INPUT_RELEASE_TREE": TREE,
+        "CONTROL_HEAD": SHA,
+        "GITHUB_REF": "refs/heads/main",
     }
-    assert_pass(shell_run("inputs", tmp_path, env))
-    if mutation in ("wrong_tree", "short_tree", "malformed_tree"):
-        env["INPUT_RELEASE_TREE"] = {
-            "wrong_tree": "b" * 40,
-            "short_tree": TREE[:12],
-            "malformed_tree": "z" * 40,
-        }[mutation]
-    else:
+
+
+def test_dispatch_accepts_only_matching_main_event(tmp_path: Path) -> None:
+    assert_pass(shell_run("inputs", tmp_path, dispatch_env()))
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "old_old", "old_new", "new_old", "branch", "tag",
+        "missing_ref", "empty_ref", "missing_control", "empty_control",
+        "wrong_control", "short_control", "uppercase_control", "nonhex_control",
+        "missing_input_sha", "missing_input_tree", "missing_env_sha",
+        "missing_env_tree", "short", "uppercase", "nonhex", "wrong_sha",
+        "wrong_tree", "short_tree", "uppercase_tree", "malformed_tree", "injection",
+    ],
+)
+def test_dispatch_input_rejection(tmp_path: Path, mutation: str) -> None:
+    env = dispatch_env()
+    old_sha = "1d8e8ca08f4f526f72b2253acf3c9a71defdbe7b"
+    old_tree = "2daee287c155fa33e8af5894f3825d7eddb09e70"
+    if mutation in ("old_old", "old_new"):
+        env["INPUT_RELEASE_SHA"] = env["RELEASE_SHA"] = old_sha
+    if mutation in ("old_old", "new_old"):
+        env["INPUT_RELEASE_TREE"] = env["RELEASE_TREE"] = old_tree
+    if mutation == "branch":
+        env["GITHUB_REF"] = "refs/heads/feature"
+    elif mutation == "tag":
+        env["GITHUB_REF"] = "refs/tags/main"
+    elif mutation == "missing_ref":
+        env.pop("GITHUB_REF")
+    elif mutation == "empty_ref":
+        env["GITHUB_REF"] = ""
+    elif mutation == "missing_control":
+        env.pop("CONTROL_HEAD")
+    elif mutation == "empty_control":
+        env["CONTROL_HEAD"] = ""
+    elif mutation == "wrong_control":
+        env["CONTROL_HEAD"] = "c" * 40
+    elif mutation == "short_control":
+        env["CONTROL_HEAD"] = SHA[:12]
+    elif mutation == "uppercase_control":
+        env["CONTROL_HEAD"] = SHA.upper()
+    elif mutation == "nonhex_control":
+        env["CONTROL_HEAD"] = "z" * 40
+    elif mutation == "missing_input_sha":
+        env.pop("INPUT_RELEASE_SHA")
+    elif mutation == "missing_input_tree":
+        env.pop("INPUT_RELEASE_TREE")
+    elif mutation == "missing_env_sha":
+        env.pop("RELEASE_SHA")
+    elif mutation == "missing_env_tree":
+        env.pop("RELEASE_TREE")
+    elif mutation in ("short", "uppercase", "nonhex", "wrong_sha", "injection"):
         env["INPUT_RELEASE_SHA"] = {
             "short": SHA[:12],
             "uppercase": SHA.upper(),
-            "wrong_sha": "a" * 40,
+            "nonhex": "z" * 40,
+            "wrong_sha": "c" * 40,
             "injection": "$(touch injected)",
+        }[mutation]
+    elif mutation in ("wrong_tree", "short_tree", "uppercase_tree", "malformed_tree"):
+        env["INPUT_RELEASE_TREE"] = {
+            "wrong_tree": "c" * 40,
+            "short_tree": TREE[:12],
+            "uppercase_tree": TREE.upper(),
+            "malformed_tree": "z" * 40,
         }[mutation]
     assert shell_run("inputs", tmp_path, env).returncode != 0
     assert not (tmp_path / "injected").exists()
 
 
-@pytest.mark.parametrize("mutation", ["sha", "tree", "dirty", "untracked", "control"])
+def twin_checkouts(tmp_path: Path, *, l0: bool = False) -> tuple[str, str]:
+    """Two separate clean checkouts of the same exact commit and tree."""
+    release = tmp_path / "release"
+    sha, tree = _candidate_repo(release, l0=l0)
+    subprocess.run(
+        ["git", "clone", "-q", "--no-local", str(release), str(tmp_path / "control")],
+        check=True, capture_output=True, text=True,
+    )
+    assert git(tmp_path / "control", "rev-parse", "HEAD") == sha
+    assert git(tmp_path / "control", "rev-parse", "HEAD^{tree}") == tree
+    assert git(tmp_path / "control", "status", "--porcelain") == ""
+    return sha, tree
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["sha", "tree", "dirty", "untracked", "control", "control_dirty",
+     "control_untracked", "control_other_commit"],
+)
 def test_checkout_drift_rejection(tmp_path: Path, mutation: str) -> None:
-    sha, tree = _candidate_repo(tmp_path / "release")
-    control, _ = _candidate_repo(tmp_path / "control")
-    env = {"RELEASE_SHA": sha, "RELEASE_TREE": tree, "CONTROL_HEAD": control}
+    sha, tree = twin_checkouts(tmp_path)
+    env = {"RELEASE_SHA": sha, "RELEASE_TREE": tree, "CONTROL_HEAD": sha}
     assert_pass(shell_run("identity", tmp_path, env))
     if mutation == "sha":
-        env["RELEASE_SHA"] = "a" * 40
+        env["RELEASE_SHA"] = "a" * 40 if sha != "a" * 40 else "b" * 40
     elif mutation == "tree":
-        env["RELEASE_TREE"] = "b" * 40
+        env["RELEASE_TREE"] = "b" * 40 if tree != "b" * 40 else "c" * 40
     elif mutation == "control":
-        env["CONTROL_HEAD"] = "c" * 40
+        env["CONTROL_HEAD"] = "c" * 40 if sha != "c" * 40 else "d" * 40
     elif mutation == "dirty":
         (tmp_path / "release/src/demo.py").write_text("CHANGED = 1\n")
-    else:
+    elif mutation == "untracked":
         (tmp_path / "release/untracked").touch()
+    elif mutation == "control_dirty":
+        (tmp_path / "control/src/demo.py").write_text("CHANGED = 1\n")
+    elif mutation == "control_untracked":
+        (tmp_path / "control/untracked").touch()
+    else:
+        (tmp_path / "control/control-only").write_text("DIFFERENT\n")
+        subprocess.run(["git", "-C", str(tmp_path / "control"), "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", str(tmp_path / "control"), "-c", "user.name=Test",
+             "-c", "user.email=test@example.invalid", "commit", "-qm", "different control"],
+            check=True,
+        )
     assert shell_run("identity", tmp_path, env).returncode != 0
 
 
@@ -477,14 +561,10 @@ def test_checkout_drift_rejection(tmp_path: Path, mutation: str) -> None:
 def raw_bundle_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
     """Use the real L0 builders and existing minimal clean-source fixture."""
     release = tmp_path / "release"
-    sha, tree = _candidate_repo(release, l0=True)
-    control, _ = _candidate_repo(tmp_path / "control")
-    # Make the control identity distinct even when fixture commits share a second.
-    (tmp_path / "control/control-only").write_text("CONTROL\n")
-    git(tmp_path / "control", "add", ".")
-    git(tmp_path / "control", "commit", "-m", "later control")
+    sha, tree = twin_checkouts(tmp_path, l0=True)
     control = git(tmp_path / "control", "rev-parse", "HEAD")
-    assert control != sha
+    assert control == sha
+    assert git(tmp_path / "control", "rev-parse", "HEAD^{tree}") == tree
     observed = datetime(2026, 9, 27, tzinfo=UTC)
     metadata = [
         {
@@ -598,7 +678,7 @@ def test_actual_anchor_capture(bundle_fixture: dict[str, str], mutation: str) ->
     elif mutation == "stale":
         lines = (stdout.parent / "builder-stdout.txt").read_text().splitlines()[1:]
     elif mutation == "sha":
-        env["RELEASE_SHA"] = env["CONTROL_HEAD"]
+        env["RELEASE_SHA"] = "c" * 40 if env["RELEASE_SHA"] != "c" * 40 else "d" * 40
     elif mutation == "digest":
         lines[-1] = lines[-1].split("=")[0] + "=" + "a" * 64
     stdout.write_text("\n".join(lines) + "\n")
@@ -644,7 +724,12 @@ def test_real_bundle_archive_round_trip_and_control_separation(
     summary = Path(env["GITHUB_STEP_SUMMARY"]).read_text()
     assert f"CONTROL_HEAD={env['CONTROL_HEAD']}" in summary
     assert f"EXPECTED_RELEASE_SHA={env['RELEASE_SHA']}" in summary
-    assert env["CONTROL_HEAD"] != env["RELEASE_SHA"]
+    assert env["CONTROL_HEAD"] == env["RELEASE_SHA"]
+    assert (Path(env["GITHUB_WORKSPACE"]) / "control").resolve() != (
+        Path(env["GITHUB_WORKSPACE"]) / "release"
+    ).resolve()
+    provenance = json.loads((root / "handoff/provenance.json").read_text())
+    assert provenance["control_head"] == env["CONTROL_HEAD"]
     assert "Artifact PASS grants no deployment/runtime/service authority." in summary
     assert git(Path(env["GITHUB_WORKSPACE"]) / "release", "status", "--porcelain") == ""
 
@@ -813,26 +898,49 @@ def test_docs_preserve_transport_and_gates() -> None:
     ):
         text = (ROOT / relative).read_text()
         for required in (
-            "FinalShell",
-            "0750",
+            "FinalShell", "0750",
             "Artifact PASS grants no deployment/runtime/service authority",
-            "Intel Mac",
-            "control HEAD",
+            "Intel Mac", "control HEAD",
         ):
             assert required in text
     operations = (ROOT / "docs/operations/THREE_SETUP_SHADOW_DEPLOYMENT.md").read_text()
+    workflow = parse_workflow(WORKFLOW.read_text())
+    for field in ("release_sha", "release_tree"):
+        assert workflow["on"]["workflow_dispatch"]["inputs"][field]["required"]
+        assert "default" not in workflow["on"]["workflow_dispatch"]["inputs"][field]
     for required in (
-        SHA,
-        TREE,
-        "gh run download",
-        "NOT_QUALIFIED",
-        "cost_model: null",
-        "four independent",
+        "gh api repos/woshixiong/trader-assist-v0/commits/main",
+        ".commit.tree.sha", "gh workflow run three-setup-release-bundle.yml",
+        "--ref main", "refs/heads/main", "control HEAD",
+        "release_sha", "release_tree", "gh run download",
+        "EXPECTED_RELEASE_MANIFEST_CANONICAL_DIGEST",
+        "EXPECTED_BUNDLE_MANIFEST_SHA256",
+        "EXPECTED_REMOTE_QUALIFICATION_SHA256", "NOT_QUALIFIED",
+        "cost_model: null", "NautilusTrader", "2.0.0rc5",
+        "20 markets", "40", "four independent",
         "separate current deployment authorization",
-        "separate service-start authorization",
+        "separate service-start authorization", "2400", "DEFAULT_OFF",
+        "UNKNOWN_INSUFFICIENT_ARTIFACTS", "NOT_ACCEPTED",
         "3_600_000_000_000",
     ):
         assert required in operations
+    for retired in (
+        "## Mandatory retained-log replay before another live qualification",
+        "REPLAY_ONLY_ISOLATED_DIAGNOSTIC_DEPLOYMENT",
+        "UNAVAILABLE_FACTS_REQUIRE_CONTROL_DISPOSITION",
+        "replay-diagnostic.json",
+        "release_sha=1d8e8ca08f4f526f72b2253acf3c9a71defdbe7b",
+        "release_tree=2daee287c155fa33e8af5894f3825d7eddb09e70",
+    ):
+        assert retired not in operations
+    identity = steps()["identity"]["run"]
+    assert "git -C control rev-parse 'HEAD^{tree}'" in identity
+    assert "git -C release rev-parse 'HEAD^{tree}'" in identity
+    assert "git -C control status --porcelain=v1 --untracked-files=all" in identity
+    assert "git -C release status --porcelain=v1 --untracked-files=all" in identity
+    validation = steps()["inputs"]["run"]
+    assert 'test "${GITHUB_REF:-}" = "refs/heads/main"' in validation
+    assert 'test "$RELEASE_SHA" = "$CONTROL_HEAD"' in validation
 
 
 @pytest.mark.parametrize("source", ["name: first\nname: second\n", "name: &alias forbidden\n"])
