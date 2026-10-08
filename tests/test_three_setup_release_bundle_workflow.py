@@ -1533,11 +1533,15 @@ def test_generated_installer_pipless_target_contract_and_all_guards() -> None:
     )
     assert all(script.index(gate) < provider for gate in original_guards)
     assert provider < bootstrap < first_write
-    assert script.index('"$PIP_PROVIDER_SCRATCH/pip-provider/bin/python" -I -m pip --version') < first_write
+    assert (
+        script.index('"$PIP_PROVIDER_SCRATCH/pip-provider/bin/python" -I -m pip --version')
+        < first_write
+    )
     target = "/opt/trader-assist-v0/venv/bin/python"
-    assert f"python3.12 -m venv --without-pip /opt/trader-assist-v0/venv" in script
+    assert "python3.12 -m venv --without-pip /opt/trader-assist-v0/venv" in script
     assert script.count(
-        f'"$PIP_PROVIDER_SCRATCH/pip-provider/bin/python" -m pip --python {target} install --require-hashes'
+        '"$PIP_PROVIDER_SCRATCH/pip-provider/bin/python" '
+        f"-m pip --python {target} install --require-hashes"
     ) == 2
     assert "python3.12 -m pip" not in script
     assert "get-pip.py" not in script and "apt-get" not in script
@@ -1545,7 +1549,10 @@ def test_generated_installer_pipless_target_contract_and_all_guards() -> None:
     assert '--pip-check-with "$PIP_PROVIDER_SCRATCH/pip-provider/bin/python"' in script
     assert "shutil.rmtree(scratch.name, dir_fd=parent_fd)" in script
     assert "os.O_NOFOLLOW" in script and "owned.st_ino" in script
-    assert script.count('echo "INSTALL_VERIFIED=PASS; SERVICE=STOPPED; ACTIVATION=DEFAULT_OFF"') == 1
+    assert (
+        script.count('echo "INSTALL_VERIFIED=PASS; SERVICE=STOPPED; ACTIVATION=DEFAULT_OFF"')
+        == 1
+    )
     assert script.index("pip_provider_exit()") < first_write
     assert script.index('[[ "1" == "--install" ]] || exit 0') < provider
 
