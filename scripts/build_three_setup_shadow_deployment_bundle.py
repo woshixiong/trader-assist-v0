@@ -293,9 +293,11 @@ install -m 0640 -g traderassist "$BUNDLE_ROOT/config/three-setup-shadow.json" \
 install -m 0640 -g traderassist "$BUNDLE_ROOT/config/three-setup-shadow.env" \
   /etc/trader-assist-v0/three-setup-shadow.env
 python3.12 -m venv --without-pip /opt/trader-assist-v0/venv
-"$PIP_PROVIDER_SCRATCH/pip-provider/bin/python" -m pip --python /opt/trader-assist-v0/venv/bin/python install --require-hashes \
+"$PIP_PROVIDER_SCRATCH/pip-provider/bin/python" -m pip --python \
+/opt/trader-assist-v0/venv/bin/python install --require-hashes \
   -r /opt/trader-assist-v0/requirements-runtime.lock
-"$PIP_PROVIDER_SCRATCH/pip-provider/bin/python" -m pip --python /opt/trader-assist-v0/venv/bin/python install --require-hashes \
+"$PIP_PROVIDER_SCRATCH/pip-provider/bin/python" -m pip --python \
+/opt/trader-assist-v0/venv/bin/python install --require-hashes \
   --no-deps --only-binary=:all: --no-index --find-links "$BUNDLE_ROOT" \
   -r /opt/trader-assist-v0/requirements-nautilus-pilot.lock
 chgrp -R traderassist /opt/trader-assist-v0
