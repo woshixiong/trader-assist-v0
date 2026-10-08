@@ -1513,3 +1513,105 @@ def test_simulation_cleanup_failure_preserves_original_status(original_status: i
     block = ast.Module(body=guarded.finalbody[1:], type_ignores=[])
     exec(compile(ast.fix_missing_locations(block), "simulation-cleanup-status", "exec"), namespace)
     assert namespace["status"] == (original_status or 1)
+
+
+def test_generated_installer_pipless_target_contract_and_all_guards() -> None:
+    script = builder._remote_script("exact-rc5.whl")
+    first_write = script.index("install -d -m 0750 -g traderassist /opt/trader-assist-v0")
+    provider = script.index("PIP_SCRATCH_RECORD=")
+    bootstrap = script.index('python3.12 -I -B -m venv "$PIP_PROVIDER_SCRATCH/pip-provider"')
+    original_guards = (
+        "BUNDLE_HASH_VERIFY=PASS", "STAGED_RELEASE_VERIFY=PASS",
+        "SERVICE_STATE=", "activation permit exists",
+        "PREINSTALL_VERIFY=PASS", "current deployment authorization is required",
+        "existing install requires separate rollback handling",
+        "existing config requires separate rollback handling",
+        "existing env requires separate rollback handling",
+        "existing traderassist service identity is required",
+        "existing traderassist group is required",
+        "existing durable state requires separately reviewed replacement",
+    )
+    assert all(script.index(gate) < provider for gate in original_guards)
+    assert provider < bootstrap < first_write
+    assert script.index('"$PIP_PROVIDER_SCRATCH/pip-provider/bin/python" -I -m pip --version') < first_write
+    target = "/opt/trader-assist-v0/venv/bin/python"
+    assert f"python3.12 -m venv --without-pip /opt/trader-assist-v0/venv" in script
+    assert script.count(
+        f'"$PIP_PROVIDER_SCRATCH/pip-provider/bin/python" -m pip --python {target} install --require-hashes'
+    ) == 2
+    assert "python3.12 -m pip" not in script
+    assert "get-pip.py" not in script and "apt-get" not in script
+    assert "--no-deps --only-binary=:all: --no-index --find-links" in script
+    assert '--pip-check-with "$PIP_PROVIDER_SCRATCH/pip-provider/bin/python"' in script
+    assert "shutil.rmtree(scratch.name, dir_fd=parent_fd)" in script
+    assert "os.O_NOFOLLOW" in script and "owned.st_ino" in script
+    assert script.count('echo "INSTALL_VERIFIED=PASS; SERVICE=STOPPED; ACTIVATION=DEFAULT_OFF"') == 1
+    assert script.index("pip_provider_exit()") < first_write
+    assert script.index('[[ "1" == "--install" ]] || exit 0') < provider
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="authoritative Linux CPython3.12 only")
+@pytest.mark.parametrize(
+    "failure", ["success", "no_venv", "no_pip", "bad_parent", "changed_mode", "symlink_swap"]
+)
+def test_provider_bootstrap_owns_only_scratch_and_fails_before_app_write(
+    tmp_path: Path, failure: str,
+) -> None:
+    """Run exactly the generated bootstrap+cleanup region, without /opt or /etc."""
+    assert sys.version_info[:2] == (3, 12)
+    import shlex
+
+    script = builder._remote_script("exact-rc5.whl")
+    start = script.index("# One verified, exclusively owned scratch venv")
+    stop = script.index("install -d -m 0750 -g traderassist /opt/trader-assist-v0")
+    isolated = script[start:stop]
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    system = bindir / "python3.12"
+    system.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = -m ] && [ \"$2\" = pip ]; then exit 97; fi\n"
+        "if [ \"$1\" = -I ] && [ \"$2\" = -B ] && [ \"$3\" = -m ] "
+        "&& [ \"$4\" = venv ]; then\n"
+        + ("  exit 42\n" if failure == "no_venv" else
+           "  exit 0\n" if failure == "no_pip" else "  :\n")
+        + "fi\n"
+        + f"exec {shlex.quote(sys.executable)} \"$@\"\n"
+    )
+    system.chmod(0o700)
+    parent = tmp_path / "scratch"
+    parent.mkdir()
+    if failure == "bad_parent":
+        swapped = tmp_path / "real-parent"
+        swapped.mkdir()
+        parent.rmdir()
+        parent.symlink_to(swapped, target_is_directory=True)
+    probe = tmp_path / "durable-write-marker"
+    if failure == "changed_mode":
+        isolated += '\nchmod 0777 "$PIP_PROVIDER_SCRATCH"\n'
+    if failure == "symlink_swap":
+        isolated += (
+            '\nmv "$PIP_PROVIDER_SCRATCH" "$PIP_PROVIDER_SCRATCH-original"\n'
+            'ln -s "$PIP_PROVIDER_SCRATCH-original" "$PIP_PROVIDER_SCRATCH"\n'
+        )
+    isolated += '\nprintf "WRITE" > "$PROBE_WRITE"\n'
+    result = subprocess.run(
+        ["bash", "-c", "set -euo pipefail\n" + isolated],
+        env={**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}",
+             "TMPDIR": str(parent), "PROBE_WRITE": str(probe)},
+        capture_output=True, text=True, timeout=80,
+    )
+    if failure == "success":
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert probe.read_text() == "WRITE"
+        assert "INSTALL_VERIFIED=PASS" in result.stdout
+        assert not list(parent.iterdir())
+    else:
+        assert result.returncode != 0, result.stdout + result.stderr
+        assert "INSTALL_VERIFIED=PASS" not in result.stdout
+        if failure in ("no_venv", "no_pip", "bad_parent"):
+            assert not probe.exists() and not list(parent.iterdir())
+        else:
+            assert "PIP_PROVIDER_CLEANUP_FAILED" in result.stderr
+            assert probe.read_text() == "WRITE"
+            assert list(parent.iterdir())
