@@ -29,6 +29,10 @@ MAX_NUMERIC_CHARS = 80
 SYMBOLS = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT")
 HOST = "https://data.binance.vision"
 Role = Literal["CURRENT_DEV", "FUTURE_DEV_RESERVE", "CERTIFICATION_RESERVE"]
+_OFFICIAL_KLINE_HEADER = (
+    "open_time,open,high,low,close,volume,close_time,quote_volume,"
+    "count,taker_buy_volume,taker_buy_quote_volume,ignore"
+)
 _SHA_LINE = re.compile(r"([0-9a-fA-F]{64}) [ *]([A-Za-z0-9_.-]+)")
 _NUMBER = re.compile(r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)?")
 _INTEGER = re.compile(r"(?:0|[1-9][0-9]*)")
@@ -226,7 +230,7 @@ def parse_verified_daily_zip(
     *,
     finalized_as_of_ns: int,
 ) -> tuple[BinanceKline, ...]:
-    """SHA-256-first verification; only a complete headerless 288-bar UTC day."""
+    """SHA-256-first verification; exactly 288 UTC 5m bars, optional official header."""
     require_frozen_object(obj)
     require_receipt(obj, receipt)
     if obj.role_intent != "CURRENT_DEV":
@@ -269,10 +273,12 @@ def parse_verified_daily_zip(
     except UnicodeError as exc:
         raise ValueError("CSV must be ASCII") from exc
     lines = content.splitlines()
+    if lines and lines[0] == _OFFICIAL_KLINE_HEADER:
+        lines = lines[1:]
     if len(lines) != 288 or any(
         not line or len(line.encode("ascii")) > MAX_LINE_BYTES for line in lines
     ):
-        raise ValueError("288 bounded contiguous headerless 5m rows required")
+        raise ValueError("288 bounded contiguous 5m data rows required")
     result: list[BinanceKline] = []
     for index, line in enumerate(lines):
         row = next(csv.reader([line], strict=True))

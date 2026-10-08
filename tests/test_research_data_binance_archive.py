@@ -24,6 +24,11 @@ from trader_assist_v0.research_data.binance_archive import (
     require_frozen_object,
 )
 
+OFFICIAL_HEADER = (
+    "open_time,open,high,low,close,volume,close_time,quote_volume,"
+    "count,taker_buy_volume,taker_buy_quote_volume,ignore"
+)
+
 
 def obj() -> ArchiveObject:
     return frozen_archive_objects()[0]
@@ -154,6 +159,51 @@ def test_288_rows_and_nonzero_ignored_numeric_field_are_accepted():
     assert bars[-1].trade_count == 2
 
 
+def test_exact_official_header_preserves_all_288_validated_bars():
+    item = obj()
+    data = rows(item)
+    without_header = zipped(item, data)
+    with_header = zipped(item, [OFFICIAL_HEADER, *data])
+    original = parse_verified_daily_zip(
+        item, without_header, receipt(item, without_header), finalized_as_of_ns=item.end_ns
+    )
+    parsed = parse_verified_daily_zip(
+        item, with_header, receipt(item, with_header), finalized_as_of_ns=item.end_ns
+    )
+    assert len(original) == len(parsed) == 288
+    assert parsed == original
+    assert parsed[0].open_ms * 1_000_000 == item.start_ns
+    assert (parsed[-1].close_ms + 1) * 1_000_000 == item.end_ns
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda a: [OFFICIAL_HEADER, OFFICIAL_HEADER, *a],
+        lambda a: [OFFICIAL_HEADER, a[0], OFFICIAL_HEADER, *a[2:]],
+        lambda a: [OFFICIAL_HEADER.upper(), *a],
+        lambda a: [OFFICIAL_HEADER.replace("open_time,open", "open,open_time"), *a],
+        lambda a: [" " + OFFICIAL_HEADER, *a],
+        lambda a: [OFFICIAL_HEADER + ",extra", *a],
+        lambda a: ['"' + OFFICIAL_HEADER + '"', *a],
+        lambda a: ["\ufeff" + OFFICIAL_HEADER, *a],
+        lambda a: [OFFICIAL_HEADER, *a[:-1]],
+        lambda a: [OFFICIAL_HEADER, *a, a[-1]],
+        lambda a: [OFFICIAL_HEADER, a[1], *a[1:]],
+        lambda a: [OFFICIAL_HEADER, *a[:50], *a[51:]],
+        lambda a: [OFFICIAL_HEADER, *a[:50], a[51], a[50], *a[52:]],
+        lambda a: [OFFICIAL_HEADER, a[0].replace(",2,0.5", ",NaN,0.5"), *a[1:]],
+    ],
+)
+def test_exact_header_does_not_bypass_schema_count_or_chronology(change):
+    item = obj()
+    archive = zipped(item, change(rows(item)))
+    with pytest.raises((ValueError, zipfile.BadZipFile)):
+        parse_verified_daily_zip(
+            item, archive, receipt(item, archive), finalized_as_of_ns=item.end_ns
+        )
+
+
 def plus_one_close_ms(a: list[str]) -> list[str]:
     fields = a[0].split(",")
     fields[6] = str(int(fields[6]) + 1)
@@ -163,11 +213,9 @@ def plus_one_close_ms(a: list[str]) -> list[str]:
 @pytest.mark.parametrize(
     "change",
     [
-        lambda a: ["open_time,open,high,low,close,volume,close_time,"
-                   "quote_volume,count,taker_buy_volume,taker_buy_quote_volume,ignore", *a],
+        lambda a: [OFFICIAL_HEADER, OFFICIAL_HEADER, *a[2:]],
         lambda a: ["\ufeff" + a[0], *a[1:]],
-        lambda a: [a[0], "open_time,open,high,low,close,volume,close_time,"
-                   "quote_volume,count,taker_buy_volume,taker_buy_quote_volume,ignore", *a[2:]],
+        lambda a: [a[0], OFFICIAL_HEADER, *a[2:]],
         lambda a: a[:-1],
         lambda a: [*a, a[-1]],
         lambda a: [a[0], a[0], *a[2:]],
@@ -202,6 +250,20 @@ def test_zip_sha_before_any_zip_parser(monkeypatch):
     monkeypatch.setattr(
         zipfile, "ZipFile",
         lambda *args, **kwargs: pytest.fail("ZIP parsed before SHA verification"),
+    )
+    with pytest.raises(ValueError, match="SHA256"):
+        parse_verified_daily_zip(
+            item, archive + b"x", proof, finalized_as_of_ns=item.end_ns
+        )
+
+
+def test_header_zip_sha_mismatch_stops_before_zip_open(monkeypatch):
+    item = obj()
+    archive = zipped(item, [OFFICIAL_HEADER, *rows(item)])
+    proof = receipt(item, archive)
+    monkeypatch.setattr(
+        zipfile, "ZipFile",
+        lambda *args, **kwargs: pytest.fail("header ZIP parsed before SHA verification"),
     )
     with pytest.raises(ValueError, match="SHA256"):
         parse_verified_daily_zip(
