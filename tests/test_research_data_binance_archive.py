@@ -24,7 +24,6 @@ from trader_assist_v0.research_data.binance_archive import (
     require_frozen_object,
 )
 
-
 OFFICIAL_HEADER = (
     "open_time,open,high,low,close,volume,close_time,quote_volume,"
     "count,taker_buy_volume,taker_buy_quote_volume,ignore"
