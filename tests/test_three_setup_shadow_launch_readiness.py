@@ -983,3 +983,229 @@ def test_replay_controller_release_and_runbook_binding() -> None:
     assert "scripts/p4a/run_e4_replay_diagnostic.py" in runbook
     assert "complete surviving-WORK inventory" in runbook
     assert "complete-WORK byte-copy contract is superseded" in runbook
+
+@pytest.mark.parametrize("late_at", ("never", "pending_fsync", "pass_fsync"))
+def test_replay_controller_a7_proof_deadline_final_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    late_at: str,
+) -> None:
+    controller = _load_replay_controller()
+    proof = tmp_path / "proof"
+    proof.mkdir()
+    (proof / "controller-result.json").write_text(
+        json.dumps({"status": "REPLAY_DIAGNOSTIC_CHILD_COMPLETE", "blockers": []}),
+        encoding="utf-8",
+    )
+    (proof / "child.stdout.log").write_bytes(b"already retained")
+    clock = [200.0]
+    monkeypatch.setattr(controller.time, "monotonic", lambda: clock[0])
+    original_fsync = controller._fsync_dir
+
+    def fsync_with_late_completion(directory: Path) -> None:
+        original_fsync(directory)
+        manifest_path = proof / "proof-manifest.json"
+        if directory == proof and manifest_path.is_file():
+            state = json.loads(manifest_path.read_bytes())["DURABLE_EVIDENCE_EXPORT"]
+            if (late_at == "pending_fsync" and state == "PENDING") or (
+                late_at == "pass_fsync" and state == "PASS"
+            ):
+                clock[0] = 301.0
+
+    monkeypatch.setattr(controller, "_fsync_dir", fsync_with_late_completion)
+    blockers: list[str] = []
+    result = controller._finalize_proof(
+        proof,
+        export_status="PASS",
+        blockers=blockers,
+        source_binding={"original": True},
+        source_identities={"controller": True},
+        unit_properties={"bound": True},
+        evidence_deadline=300.0,
+    )
+    durable = json.loads((proof / "proof-manifest.json").read_bytes())
+    controller_result = json.loads((proof / "controller-result.json").read_bytes())
+    assert result == durable
+    assert (proof / "child.stdout.log").read_bytes() == b"already retained"
+    if late_at == "never":
+        assert durable["DURABLE_EVIDENCE_EXPORT"] == "PASS"
+        assert "DURABLE_EVIDENCE_ALLOWANCE_EXCEEDED" not in blockers
+        return
+
+    assert durable["DURABLE_EVIDENCE_EXPORT"] == "FAIL"
+    assert controller_result["DURABLE_EVIDENCE_EXPORT"] == "FAIL"
+    assert "DURABLE_EVIDENCE_ALLOWANCE_EXCEEDED" in blockers
+    assert "DURABLE_EVIDENCE_ALLOWANCE_EXCEEDED" in durable["blockers"]
+    assert "DURABLE_EVIDENCE_ALLOWANCE_EXCEEDED" in controller_result["blockers"]
+    for item in durable["files"]:
+        contents = (proof / item["path"]).read_bytes()
+        assert item["sha256"] == hashlib.sha256(contents).hexdigest()
+        assert item["size"] == len(contents)
+    assert durable["post_fsync_readback_sha256_equality"] is True
+
+
+@pytest.mark.parametrize("late", (False, True))
+def test_replay_controller_a7_inside_unit_terminal_decision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    late: bool,
+) -> None:
+    controller = _load_replay_controller()
+    work, proof = tmp_path / "work", tmp_path / "proof"
+    (work / "verifier").mkdir(parents=True)
+    proof.mkdir(mode=0o750)
+    for relative in (
+        "verifier/replay-diagnostic.json",
+        "verifier/replay-verifier-resources.json",
+        "child.stdout.log",
+        "child.stderr.log",
+    ):
+        (work / relative).write_text(relative, encoding="utf-8")
+
+    # Simulated root/unit attributes only; no real systemd or verifier process.
+    monkeypatch.setattr(controller.os, "geteuid", lambda: 0)
+    original_lstat = controller.Path.lstat
+
+    def fake_lstat(path: Path):
+        if path == proof:
+            return SimpleNamespace(st_uid=0, st_gid=0, st_mode=0o40750)
+        return original_lstat(path)
+
+    monkeypatch.setattr(controller.Path, "lstat", fake_lstat)
+    expected = {"sha256": "bound"}
+    preflight = {
+        "source_identities": {"controller": expected, "verifier": expected},
+        "mem_available_bytes": controller.PRESTART_MEMAVAILABLE_MIN_BYTES,
+        "swap_counters": {"pswpin": 0, "pswpout": 0},
+    }
+    monkeypatch.setattr(controller, "_decode_internal", lambda _: preflight)
+    monkeypatch.setattr(controller, "_systemd_properties", lambda **_: [])
+    monkeypatch.setattr(controller, "_work_mount_evidence", lambda _: {})
+    monkeypatch.setattr(controller, "_systemd_unit_evidence", lambda *_: {})
+    monkeypatch.setattr(controller, "_source_bindings_from_host", lambda *_: {
+        "native_log": expected, "manifest": expected,
+    })
+    monkeypatch.setattr(controller, "_file_binding", lambda _: expected)
+    monkeypatch.setattr(controller, "_minimal_child_env", lambda _: {})
+    monkeypatch.setattr(controller, "_run_credential_probe", lambda *_: {"probe": "PASS"})
+    monkeypatch.setattr(controller, "_run_verifier_child", lambda *_: (
+        {"returncode": 0, "timed_out": False}, 300.0,
+    ))
+    monkeypatch.setattr(controller, "_swap_counters", lambda: preflight["swap_counters"])
+    clock = [200.0]
+    monkeypatch.setattr(controller.time, "monotonic", lambda: clock[0])
+    original_fsync = controller._fsync_dir
+
+    def complete_fsync(directory: Path) -> None:
+        original_fsync(directory)
+        manifest_path = proof / "proof-manifest.json"
+        if late and directory == proof and manifest_path.exists():
+            if json.loads(manifest_path.read_bytes())["DURABLE_EVIDENCE_EXPORT"] == "PASS":
+                clock[0] = 301.0
+
+    monkeypatch.setattr(controller, "_fsync_dir", complete_fsync)
+    args = SimpleNamespace(
+        host_preflight="test", replay_root=tmp_path,
+        stage_root=tmp_path / "stage", unit_name="synthetic-only",
+        native_log=tmp_path / "native", manifest=tmp_path / "manifest",
+        verifier=tmp_path / "verifier", replay_facts=None,
+    )
+    rc = controller._inside_unit(args)
+    output = capsys.readouterr().out
+    durable = json.loads((proof / "proof-manifest.json").read_bytes())
+    result = json.loads((proof / "controller-result.json").read_bytes())
+    if late:
+        assert rc != 0
+        assert "DURABLE_EVIDENCE_EXPORT=PASS" not in output
+        assert durable["DURABLE_EVIDENCE_EXPORT"] == "FAIL"
+        assert result["DURABLE_EVIDENCE_EXPORT"] == "FAIL"
+        assert "DURABLE_EVIDENCE_ALLOWANCE_EXCEEDED" in durable["blockers"]
+        for item in durable["files"]:
+            data = (proof / item["path"]).read_bytes()
+            assert item["sha256"] == hashlib.sha256(data).hexdigest()
+    else:
+        assert rc == 0
+        assert "DURABLE_EVIDENCE_EXPORT=PASS" in output
+        assert durable["DURABLE_EVIDENCE_EXPORT"] == "PASS"
+    assert (proof / "replay-diagnostic.json").exists()
+    assert (proof / "child.stdout.log").exists()
+
+
+def test_replay_controller_a7_uncorrectable_published_pass_is_unproven(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = _load_replay_controller()
+    proof = tmp_path / "proof"
+    proof.mkdir()
+    (proof / "controller-result.json").write_text('{"blockers":[]}', encoding="utf-8")
+    clock = [200.0]
+    monkeypatch.setattr(controller.time, "monotonic", lambda: clock[0])
+    original_fsync = controller._fsync_dir
+    original_replace = controller._write_json_replace
+
+    def fsync_after_pass(directory: Path) -> None:
+        original_fsync(directory)
+        path = proof / "proof-manifest.json"
+        if path.exists() and json.loads(path.read_bytes())["DURABLE_EVIDENCE_EXPORT"] == "PASS":
+            clock[0] = 301.0
+
+    def fail_correction(path: Path, value: object) -> bytes:
+        if path.name == "controller-result.json":
+            raise OSError("simulated corrective storage failure")
+        return original_replace(path, value)
+
+    monkeypatch.setattr(controller, "_fsync_dir", fsync_after_pass)
+    monkeypatch.setattr(controller, "_write_json_replace", fail_correction)
+    result = controller._finalize_proof(
+        proof, export_status="PASS", blockers=[], source_binding=None,
+        source_identities=None, unit_properties=None, evidence_deadline=300.0,
+    )
+    assert result["DURABLE_EVIDENCE_EXPORT"] == "FAIL"
+    assert result["REPLAY_EVIDENCE_RETENTION_UNPROVEN"] is True
+    assert "DURABLE_EVIDENCE_ALLOWANCE_EXCEEDED" in result["blockers"]
+
+def test_replay_controller_a7_last_post_fsync_readback_overrun(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = _load_replay_controller()
+    proof = tmp_path / "proof"
+    proof.mkdir()
+    (proof / "controller-result.json").write_text('{"blockers":[]}', encoding="utf-8")
+    clock = [200.0]
+    pass_fsync_count = [0]
+    monkeypatch.setattr(controller.time, "monotonic", lambda: clock[0])
+    real_fsync = controller._fsync_dir
+    real_read = controller.Path.read_bytes
+    manifest_path = proof / "proof-manifest.json"
+
+    def recorded_fsync(directory: Path) -> None:
+        real_fsync(directory)
+        if manifest_path.exists() and directory == proof:
+            if json.loads(real_read(manifest_path))["DURABLE_EVIDENCE_EXPORT"] == "PASS":
+                pass_fsync_count[0] += 1
+
+    def delayed_last_readback(path: Path) -> bytes:
+        data = real_read(path)
+        if path == manifest_path and pass_fsync_count[0] >= 2:
+            clock[0] = 301.0
+        return data
+
+    monkeypatch.setattr(controller, "_fsync_dir", recorded_fsync)
+    monkeypatch.setattr(controller.Path, "read_bytes", delayed_last_readback)
+    result = controller._finalize_proof(
+        proof, export_status="PASS", blockers=[], source_binding=None,
+        source_identities=None, unit_properties=None, evidence_deadline=300.0,
+    )
+    assert pass_fsync_count[0] >= 2
+    assert result["DURABLE_EVIDENCE_EXPORT"] == "FAIL"
+    assert "DURABLE_EVIDENCE_ALLOWANCE_EXCEEDED" in result["blockers"]
+    final_manifest = json.loads(real_read(manifest_path))
+    assert final_manifest["DURABLE_EVIDENCE_EXPORT"] == "FAIL"
+    final_controller = json.loads(real_read(proof / "controller-result.json"))
+    assert "DURABLE_EVIDENCE_ALLOWANCE_EXCEEDED" in final_controller["blockers"]
+    for item in final_manifest["files"]:
+        data = real_read(proof / item["path"])
+        assert item["sha256"] == hashlib.sha256(data).hexdigest()

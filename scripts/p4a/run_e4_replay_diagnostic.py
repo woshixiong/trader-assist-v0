@@ -65,6 +65,15 @@ class ReplayControllerError(RuntimeError):
     """The frozen controller contract cannot be satisfied."""
 
 
+class _EvidenceAllowanceExceeded(ReplayControllerError):
+    """The original, non-renewable evidence window has expired."""
+
+
+def _check_evidence_deadline(deadline: float | None) -> None:
+    if deadline is not None and time.monotonic() > deadline:
+        raise _EvidenceAllowanceExceeded("DURABLE_EVIDENCE_ALLOWANCE_EXCEEDED")
+
+
 def _canonical_bytes(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
 
@@ -938,6 +947,70 @@ def _readback_exact(proof: Path, files: list[dict[str, object]]) -> bool:
     return True
 
 
+def _finalize_failed_proof(
+    proof: Path,
+    *,
+    blockers: list[str],
+    source_binding: dict[str, object] | None,
+    source_identities: dict[str, object] | None,
+    unit_properties: dict[str, object] | None,
+) -> dict[str, object]:
+    """One bounded corrective publication; never grant a new time allowance."""
+    failed = sorted(set(blockers))
+    try:
+        result_path = proof / "controller-result.json"
+        if result_path.is_file() and not result_path.is_symlink():
+            result = json.loads(result_path.read_text(encoding="utf-8"))
+            if not isinstance(result, dict):
+                raise ReplayControllerError("controller result is malformed")
+        else:
+            result = {
+                "schema": "trade-os/e4-replay-controller-result/v1",
+                "status": "PRE_VERIFIER_FAILURE",
+            }
+        prior = result.get("blockers", [])
+        if not isinstance(prior, list):
+            raise ReplayControllerError("controller blockers are malformed")
+        result["blockers"] = sorted(set(failed + [str(value) for value in prior]))
+        result["qualification_authority"] = False
+        result["DURABLE_EVIDENCE_EXPORT"] = "FAIL"
+        _write_json_replace(result_path, result)
+
+        # Recompute after the correction, never fingerprint superseded bytes.
+        _fsync_dir(proof)
+        files = _proof_inventory(proof)
+        if not _readback_exact(proof, files):
+            raise ReplayControllerError("corrective proof readback mismatch")
+        manifest: dict[str, object] = {
+            "schema": "trade-os/e4-replay-proof-manifest/v1",
+            "files": files,
+            "directory_fsync_completion": True,
+            "post_fsync_readback_sha256_equality": True,
+            "source_binding": source_binding,
+            "controller_verifier_source_identities": source_identities,
+            "unit_properties_bound": unit_properties is not None,
+            "DURABLE_EVIDENCE_EXPORT": "FAIL",
+            "blockers": result["blockers"],
+        }
+        data = _write_json_replace(proof / "proof-manifest.json", manifest)
+        if (proof / "proof-manifest.json").read_bytes() != data:
+            raise ReplayControllerError("corrective manifest readback mismatch")
+        _fsync_dir(proof)
+        if (proof / "proof-manifest.json").read_bytes() != data:
+            raise ReplayControllerError("corrective manifest post-fsync mismatch")
+        if not _readback_exact(proof, files):
+            raise ReplayControllerError("corrective final proof hash mismatch")
+        return manifest
+    except Exception:
+        # A failed correction is not proof of retention. In particular the
+        # outer supervisor must not accept a stale on-disk PASS manifest.
+        return {
+            "DURABLE_EVIDENCE_EXPORT": "FAIL",
+            "blockers": failed,
+            "REPLAY_EVIDENCE_RETENTION_UNPROVEN": True,
+        }
+
+
 def _finalize_proof(
     proof: Path,
     *,
@@ -946,35 +1019,69 @@ def _finalize_proof(
     source_binding: dict[str, object] | None,
     source_identities: dict[str, object] | None,
     unit_properties: dict[str, object] | None,
+    evidence_deadline: float | None = None,
 ) -> dict[str, object]:
-    _fsync_dir(proof)
-    files = _proof_inventory(proof)
-    readback = _readback_exact(proof, files)
-    if not readback:
-        export_status = "FAIL"
-        blockers.append("PROOF_POST_FSYNC_READBACK_MISMATCH")
-    manifest: dict[str, Any] = {
-        "schema": "trade-os/e4-replay-proof-manifest/v1",
-        "files": files,
-        "directory_fsync_completion": True,
-        "post_fsync_readback_sha256_equality": readback,
-        "source_binding": source_binding,
-        "controller_verifier_source_identities": source_identities,
-        "unit_properties_bound": unit_properties is not None,
-        "DURABLE_EVIDENCE_EXPORT": export_status,
-        "blockers": sorted(set(blockers)),
-    }
-    final_bytes = _write_json_replace(proof / "proof-manifest.json", manifest)
-    with (proof / "proof-manifest.json").open("rb") as stream:
-        if stream.read() != final_bytes:
-            manifest["DURABLE_EVIDENCE_EXPORT"] = "FAIL"
-            manifest["blockers"] = sorted(
-                set(manifest["blockers"] + ["PROOF_MANIFEST_SELF_READBACK_MISMATCH"])
-            )
-            _write_json_replace(proof / "proof-manifest.json", manifest)
-    _fsync_dir(proof)
-    return manifest
+    def failed() -> dict[str, object]:
+        return _finalize_failed_proof(
+            proof,
+            blockers=blockers,
+            source_binding=source_binding,
+            source_identities=source_identities,
+            unit_properties=unit_properties,
+        )
 
+    try:
+        _check_evidence_deadline(evidence_deadline)
+        _fsync_dir(proof)
+        _check_evidence_deadline(evidence_deadline)
+        files = _proof_inventory(proof)
+        _check_evidence_deadline(evidence_deadline)
+        readback = _readback_exact(proof, files)
+        _check_evidence_deadline(evidence_deadline)
+        if not readback:
+            blockers.append("PROOF_POST_FSYNC_READBACK_MISMATCH")
+            return failed()
+        manifest: dict[str, Any] = {
+            "schema": "trade-os/e4-replay-proof-manifest/v1",
+            "files": files,
+            "directory_fsync_completion": True,
+            "post_fsync_readback_sha256_equality": readback,
+            "source_binding": source_binding,
+            "controller_verifier_source_identities": source_identities,
+            "unit_properties_bound": unit_properties is not None,
+            # Never publish PASS until every preparation fsync/readback passes.
+            "DURABLE_EVIDENCE_EXPORT": "PENDING" if export_status == "PASS" else "FAIL",
+            "blockers": sorted(set(blockers)),
+        }
+        data = _write_json_replace(proof / "proof-manifest.json", manifest)
+        _check_evidence_deadline(evidence_deadline)
+        if (proof / "proof-manifest.json").read_bytes() != data:
+            raise ReplayControllerError("proof manifest self-readback mismatch")
+        _check_evidence_deadline(evidence_deadline)
+        _fsync_dir(proof)
+        _check_evidence_deadline(evidence_deadline)
+        if manifest["DURABLE_EVIDENCE_EXPORT"] == "PENDING":
+            manifest["DURABLE_EVIDENCE_EXPORT"] = "PASS"
+            data = _write_json_replace(proof / "proof-manifest.json", manifest)
+            _check_evidence_deadline(evidence_deadline)
+            if (proof / "proof-manifest.json").read_bytes() != data:
+                raise ReplayControllerError("proof PASS publication readback mismatch")
+            _check_evidence_deadline(evidence_deadline)
+            _fsync_dir(proof)
+            _check_evidence_deadline(evidence_deadline)
+            if (proof / "proof-manifest.json").read_bytes() != data:
+                raise ReplayControllerError("proof PASS post-fsync readback mismatch")
+            _check_evidence_deadline(evidence_deadline)
+            if not _readback_exact(proof, files):
+                raise ReplayControllerError("proof PASS post-fsync hash mismatch")
+            _check_evidence_deadline(evidence_deadline)
+        return manifest
+    except _EvidenceAllowanceExceeded:
+        blockers.append("DURABLE_EVIDENCE_ALLOWANCE_EXCEEDED")
+        return failed()
+    except Exception as exc:
+        blockers.append(f"PROOF_FINALIZATION_FAILURE:{type(exc).__name__}")
+        return failed()
 
 def _inside_unit(args: argparse.Namespace) -> int:
     if os.geteuid() != 0:
@@ -1043,33 +1150,41 @@ def _inside_unit(args: argparse.Namespace) -> int:
 
         child_document, evidence_deadline = _run_verifier_child(args, work, env)
 
+        _check_evidence_deadline(evidence_deadline)
         post: dict[str, dict[str, object]] = {}
         for name, source_path in (
             ("native_log", args.native_log),
             ("manifest", args.manifest),
         ):
+            _check_evidence_deadline(evidence_deadline)
             post[name] = _file_binding(source_path)
+            _check_evidence_deadline(evidence_deadline)
         if args.replay_facts is not None:
+            _check_evidence_deadline(evidence_deadline)
             post["replay_facts"] = _file_binding(args.replay_facts)
+            _check_evidence_deadline(evidence_deadline)
         if post != expected:
             blockers.append("ORIGINAL_SOURCE_POSTRUN_DRIFT")
         source_document["post_run"] = post
         source_document["unchanged"] = post == expected
         _write_json_replace(proof / "source-binding.json", source_document)
+        _check_evidence_deadline(evidence_deadline)
 
         swap_start = host_preflight.get("swap_counters")
+        _check_evidence_deadline(evidence_deadline)
         swap_end = _swap_counters()
+        _check_evidence_deadline(evidence_deadline)
         if not isinstance(swap_start, dict) or swap_end != swap_start:
             blockers.append("SWAP_ACTIVITY_NONZERO")
         child_document["swap_start"] = swap_start
         child_document["swap_end"] = swap_end
         child_document["swap_activity_zero"] = swap_end == swap_start
         _write_json_exclusive(proof / "child-exit.json", child_document)
-
-        if evidence_deadline is not None and time.monotonic() > evidence_deadline:
-            blockers.append("DURABLE_EVIDENCE_ALLOWANCE_EXCEEDED")
+        _check_evidence_deadline(evidence_deadline)
         inventory = _work_inventory(work)
+        _check_evidence_deadline(evidence_deadline)
         _write_json_exclusive(proof / "work-inventory.json", inventory)
+        _check_evidence_deadline(evidence_deadline)
 
         authoritative = {
             "replay-diagnostic.json": work / "verifier/replay-diagnostic.json",
@@ -1079,13 +1194,12 @@ def _inside_unit(args: argparse.Namespace) -> int:
         }
         copied: dict[str, dict[str, object]] = {}
         for name, source in authoritative.items():
+            _check_evidence_deadline(evidence_deadline)
             if not source.is_file() or source.is_symlink():
                 blockers.append(f"MISSING_AUTHORITATIVE_ARTIFACT:{name}")
                 continue
             copied[name] = _stream_copy_exclusive(source, proof / name)
-            if evidence_deadline is not None and time.monotonic() > evidence_deadline:
-                blockers.append("DURABLE_EVIDENCE_ALLOWANCE_EXCEEDED")
-                break
+            _check_evidence_deadline(evidence_deadline)
 
         child_returncode = int(child_document["returncode"])
         controller_status = (
@@ -1111,7 +1225,11 @@ def _inside_unit(args: argparse.Namespace) -> int:
             "full_scratch_byte_copy": False,
             "blockers": sorted(set(blockers)),
         }
+        _check_evidence_deadline(evidence_deadline)
         _write_json_exclusive(proof / "controller-result.json", controller_result)
+        _check_evidence_deadline(evidence_deadline)
+    except _EvidenceAllowanceExceeded:
+        blockers.append("DURABLE_EVIDENCE_ALLOWANCE_EXCEEDED")
     except Exception as exc:
         blockers.append(f"CONTROLLER_FAILURE:{type(exc).__name__}:{exc}")
         try:
@@ -1136,7 +1254,25 @@ def _inside_unit(args: argparse.Namespace) -> int:
         source_binding=source_document,
         source_identities=source_identities,
         unit_properties=unit_document,
+        evidence_deadline=evidence_deadline,
     )
+    # Terminal decision is also inside the same non-renewable window.
+    if (
+        manifest.get("DURABLE_EVIDENCE_EXPORT") == "PASS"
+        and evidence_deadline is not None
+        and time.monotonic() > evidence_deadline
+    ):
+        blockers.append("DURABLE_EVIDENCE_ALLOWANCE_EXCEEDED")
+        manifest = _finalize_failed_proof(
+            proof,
+            blockers=blockers,
+            source_binding=source_document,
+            source_identities=source_identities,
+            unit_properties=unit_document,
+        )
+    if manifest.get("REPLAY_EVIDENCE_RETENTION_UNPROVEN"):
+        print("REPLAY_EVIDENCE_RETENTION_UNPROVEN=YES")
+        return 4
     if manifest["DURABLE_EVIDENCE_EXPORT"] != "PASS":
         print("DURABLE_EVIDENCE_EXPORT=FAIL")
         return 3
@@ -1211,9 +1347,12 @@ def _outer(args: argparse.Namespace) -> int:
     except (OSError, json.JSONDecodeError):
         print("REPLAY_EVIDENCE_RETENTION_UNPROVEN=YES")
         return 4
+    if completed.returncode in (3, 4) and manifest.get("DURABLE_EVIDENCE_EXPORT") == "PASS":
+        print("REPLAY_EVIDENCE_RETENTION_UNPROVEN=YES")
+        return 4
     if manifest.get("DURABLE_EVIDENCE_EXPORT") != "PASS":
         print("DURABLE_EVIDENCE_EXPORT=FAIL")
-        return 3
+        return completed.returncode or 3
     print("DURABLE_EVIDENCE_EXPORT=PASS")
     return completed.returncode
 
