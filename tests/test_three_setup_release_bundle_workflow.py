@@ -1554,7 +1554,7 @@ def test_generated_installer_pipless_target_contract_and_all_guards() -> None:
         == 1
     )
     assert script.index("pip_provider_exit()") < first_write
-    assert script.index('[[ "1" == "--install" ]] || exit 0') < provider
+    assert script.index('[[ "${1}" == "--install" ]] || exit 0') < provider
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="authoritative Linux CPython3.12 only")
