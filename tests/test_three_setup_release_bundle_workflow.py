@@ -460,8 +460,11 @@ def test_dispatch_input_rejection(tmp_path: Path, mutation: str) -> None:
     old_tree = "2daee287c155fa33e8af5894f3825d7eddb09e70"
     if mutation in ("old_old", "old_new"):
         env["INPUT_RELEASE_SHA"] = env["RELEASE_SHA"] = old_sha
-    if mutation in ("old_old", "new_old"):
+    if mutation == "old_old":
         env["INPUT_RELEASE_TREE"] = env["RELEASE_TREE"] = old_tree
+    elif mutation == "new_old":
+        # A mixed new/old input must fail even when the env keeps the new tree.
+        env["INPUT_RELEASE_TREE"] = old_tree
     if mutation == "branch":
         env["GITHUB_REF"] = "refs/heads/feature"
     elif mutation == "tag":
