@@ -7,12 +7,10 @@ name: Three Setup exact-release bundle
         description: Frozen reviewed product release SHA
         type: string
         required: true
-        default: 1d8e8ca08f4f526f72b2253acf3c9a71defdbe7b
       release_tree:
         description: Frozen reviewed product release tree
         type: string
         required: true
-        default: 2daee287c155fa33e8af5894f3825d7eddb09e70
 
 permissions:
   contents: read
@@ -25,8 +23,8 @@ jobs:
       run:
         shell: bash
     env:
-      RELEASE_SHA: 1d8e8ca08f4f526f72b2253acf3c9a71defdbe7b
-      RELEASE_TREE: 2daee287c155fa33e8af5894f3825d7eddb09e70
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      RELEASE_TREE: ${{ inputs.release_tree }}
       INPUT_RELEASE_SHA: ${{ inputs.release_sha }}
       INPUT_RELEASE_TREE: ${{ inputs.release_tree }}
       CONTROL_HEAD: ${{ github.sha }}
@@ -37,10 +35,16 @@ jobs:
         id: inputs
         run: |
           set -euo pipefail
+          # Normal release only: bind exact event-pinned main, never a historical ref.
+          test "${GITHUB_REF:-}" = "refs/heads/main"
           [[ "$INPUT_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$INPUT_RELEASE_TREE" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RELEASE_TREE" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$CONTROL_HEAD" =~ ^[0-9a-f]{40}$ ]]
           test "$INPUT_RELEASE_SHA" = "$RELEASE_SHA"
           test "$INPUT_RELEASE_TREE" = "$RELEASE_TREE"
+          test "$RELEASE_SHA" = "$CONTROL_HEAD"
       - name: Initialize runtime build root
         id: build_root
         run: |
@@ -81,7 +85,7 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Checkout historical product release
+      - name: Checkout exact main product release
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           path: release
@@ -93,6 +97,8 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git -C control rev-parse HEAD)" = "$CONTROL_HEAD"
+          test "$(git -C control rev-parse 'HEAD^{tree}')" = "$RELEASE_TREE"
+          test -z "$(git -C control status --porcelain=v1 --untracked-files=all)"
           test "$(git -C release rev-parse HEAD)" = "$RELEASE_SHA"
           test "$(git -C release rev-parse 'HEAD^{tree}')" = "$RELEASE_TREE"
           test -z "$(git -C release status --porcelain=v1 --untracked-files=all)"
