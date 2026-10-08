@@ -149,3 +149,107 @@ def test_linux_python312_isolated_operator_https_qualification(tmp_path: Path) -
             output, _ = process.communicate(timeout=5)
     assert process.returncode is not None, f"operator did not terminate: {output[-4000:]}"
     assert success, f"operator HTTPS qualification failed: {last_error}\n{output[-4000:]}"
+
+
+def test_target_pip_check_uses_explicit_provider_not_system_python(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from scripts import check_dependency_lock as checker
+
+    provider = tmp_path / "pip-provider/bin/python"
+    observed: list[tuple[str, ...]] = []
+
+    def capture(args: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        observed.append(args)
+        assert kwargs == {"check": False, "capture_output": True, "text": True}
+        return subprocess.CompletedProcess(args, 0, "No broken requirements found.\n", "")
+
+    monkeypatch.setattr(checker.subprocess, "run", capture)
+    checker._pip_check(provider)
+    assert observed == [(str(provider), "-m", "pip", "--python", sys.executable, "check")]
+
+
+@pytest.mark.parametrize(
+    "returncode,stdout,stderr",
+    [(1, "", "No module named pip"), (1, "", "requires incompatible-package"),
+     (2, "broken requirement", "provider failure")],
+)
+def test_target_pip_check_fails_with_provider_and_target_diagnostics(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    returncode: int, stdout: str, stderr: str,
+) -> None:
+    from scripts import check_dependency_lock as checker
+
+    provider = tmp_path / "provider/bin/python"
+    monkeypatch.setattr(
+        checker.subprocess, "run",
+        lambda args, **kwargs: subprocess.CompletedProcess(args, returncode, stdout, stderr),
+    )
+    with pytest.raises(SystemExit) as failure:
+        checker._pip_check(provider)
+    message = str(failure.value)
+    assert str(provider) in message and sys.executable in message
+    assert str(returncode) in message and (stdout or stderr) in message
+
+
+def test_target_pip_check_missing_provider_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from scripts import check_dependency_lock as checker
+
+    provider = tmp_path / "no-provider/bin/python"
+
+    def unavailable(*args: object, **kwargs: object) -> None:
+        raise FileNotFoundError("missing isolated pip provider")
+
+    monkeypatch.setattr(checker.subprocess, "run", unavailable)
+    with pytest.raises(SystemExit, match="provider unavailable") as failure:
+        checker._pip_check(provider)
+    assert str(provider) in str(failure.value)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux CPython 3.12 is authoritative")
+def test_real_python312_pipless_base_provider_checks_pipless_target(tmp_path: Path) -> None:
+    """No runner/global -m pip call: one official provider, one pip-less target."""
+    assert sys.implementation.name == "cpython" and sys.version_info[:2] == (3, 12)
+    provider = tmp_path / "provider"
+    target = tmp_path / "target"
+    python = sys.executable
+
+    # This wrapper records/rejects any attempted base '-m pip', even on pip-rich CI.
+    shim = tmp_path / "python3.12"
+    shim.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = -m ] && [ \"$2\" = pip ]; then "
+        "echo 'base pip invocation forbidden' >&2; exit 97; fi\n"
+        f"exec '{python}' \"$@\"\n"
+    )
+    shim.chmod(0o700)
+
+    def must_succeed(*args: str) -> subprocess.CompletedProcess[str]:
+        result = subprocess.run(args, text=True, capture_output=True, check=False, timeout=180)
+        assert result.returncode == 0, result.stdout + result.stderr
+        return result
+
+    must_succeed(str(shim), "-I", "-B", "-m", "venv", str(provider))
+    must_succeed(str(shim), "-I", "-B", "-m", "venv", "--without-pip", str(target))
+    provider_python = provider / "bin/python"
+    target_python = target / "bin/python"
+    assert must_succeed(str(provider_python), "-I", "-m", "pip", "--version").returncode == 0
+    absence = must_succeed(
+        str(target_python), "-I", "-c",
+        "import importlib.util,sys;"
+        "assert importlib.util.find_spec('pip') is None;"
+        "assert sys.prefix != sys.base_prefix",
+    )
+    assert absence.returncode == 0
+    from scripts import check_dependency_lock as checker
+
+    # This is exactly the final verifier seam, with sys.executable bound to the target.
+    must_succeed(
+        str(provider_python), "-m", "pip", "--python", str(target_python), "check",
+    )
+    assert "base pip invocation forbidden" in subprocess.run(
+        [str(shim), "-m", "pip", "--version"], capture_output=True, text=True
+    ).stderr
+    assert checker.PILOT_REQUIREMENT == "nautilus-trader==2.0.0rc5"
