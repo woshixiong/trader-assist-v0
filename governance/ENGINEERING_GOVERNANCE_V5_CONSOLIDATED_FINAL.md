@@ -146,6 +146,15 @@ D  UNRESOLVED ARCHITECTURE / SECURITY / AUTHORITY /
    -> Engineering Control resolves and refreezes first
 ~~~
 
+Material technical direction is a human choice, not routine executor selection.
+Before freezing a new or materially changed architecture, framework/provider,
+deployment/recovery method, commodity infrastructure, strategy/research/backtest
+execution route, or major scope/cost direction, Engineering Control must first
+present the simplest credible existing/official route and obtain the user's
+current direction decision. An accepted direction may be reused while its
+material predicates remain unchanged; do not repeatedly ask for the same choice.
+That direction decision never grants protected-action authority.
+
 The user is not asked to choose executor, Plan versus implementation, or routine
 failure routing when the evidence already determines it.
 
@@ -297,7 +306,9 @@ surface and must be qualified before V5 activation.
 After a passing Pre-code Review, routine implementation, focused validation,
 publication, CI wait, bounded repair, and handoff should proceed without
 routine human relay when the deterministic controller and permissions are
-qualified.
+qualified. This applies only while the human-selected material direction
+remains valid and no unexpected failure requires the §13 stop-and-escalate
+rule. A repair budget is a ceiling, not permission to preserve a failed route.
 
 Semantic repair budget:
 
@@ -335,7 +346,10 @@ EXACT_HEAD_BINDING=REQUIRED
 Verify PR head before waiting and at terminal readback. A changed head invalidates
 old-head CI and review evidence.
 
-Every failed exact-head CI result is classified before retry or mutation:
+Every failed exact-head CI result is classified before retry or mutation.
+Classification does not itself authorize an unexpected-failure repair; §13
+requires immediate route pause and user direction unless the exact deterministic
+mechanical correction or bounded transient recovery was already authorized:
 
 ~~~text
 TRANSIENT_OR_KNOWN_FLAKE
@@ -501,6 +515,34 @@ ownership must remain single and explicit per durable responsibility.
 ---
 
 ## 13. Architecture, continuity, and verification
+
+Priority is (1) human decision before a material technical direction is frozen,
+then (2) first-unexpected-failure reset if that direction fails, then (3)
+ordinary V5 execution. These are checks inside existing stages, not additional
+Review rounds or a new workflow.
+
+At the **first unexpected failure**, every actor must pause the affected plan
+before further source changes, semantic retries, new infrastructure or expanded
+scope. Preserve the exact checkpoint and obtain only the minimum safe read-only
+evidence needed to examine the whole responsibility chain and root cause,
+including whether an accepted or official component already solves it. Writer
+or Reviewer returns the issue to Engineering Control; Control immediately gives
+the user a short plain-language decision brief, ordinarily no more than four
+short lines: **what failed; root cause (or explicitly unknown); simplest
+official/reuse fix versus the costly alternative; exact decision requested**.
+Lead with the root problem, never a patch plan or implementation jargon; keep
+SHAs, stack traces, CI details and full analysis in canonical GitHub evidence.
+Wait for the user's direction before selecting a changed route or resuming
+unexpected-failure repair. The human decision is not permission for protected
+actions or a silent change to previously frozen scope.
+
+A previously human-authorized, narrowly bounded deterministic mechanical
+correction, planned red/green local test, or transient transport retry may
+continue within its exact existing limits when no new material uncertainty or
+route change appears. Do not label a new environmental, architecture, semantic,
+cross-layer or long-running-no-progress failure as routine to evade the stop.
+No uncontrolled termination of live services/processes: existing safety and
+protected-action gates remain in force.
 
 Global root cause precedes repeated local patch loops. Mixed state, duplicate
 authority, repeated adjacent fixes, or new cross-layer failures trigger
