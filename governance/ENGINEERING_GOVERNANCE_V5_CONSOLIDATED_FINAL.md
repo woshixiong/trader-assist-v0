@@ -150,8 +150,9 @@ Material technical direction is a human choice, not routine executor selection.
 Before freezing a new or materially changed architecture, framework/provider,
 deployment/recovery method, commodity infrastructure, strategy/research/backtest
 execution route, or major scope/cost direction, Engineering Control must first
-present the simplest credible existing/official route and obtain the user's
-current direction decision. An accepted direction may be reused while its
+explain in concise, plain language the root problem (or what remains unknown),
+the simplest credible existing/official route, and the meaningful alternative
+and cost/trade-off; then obtain the user's current direction decision. An accepted direction may be reused while its
 material predicates remain unchanged; do not repeatedly ask for the same choice.
 That direction decision never grants protected-action authority.
 
@@ -527,8 +528,7 @@ scope. Preserve the exact checkpoint and obtain only the minimum safe read-only
 evidence needed to examine the whole responsibility chain and root cause,
 including whether an accepted or official component already solves it. Writer
 or Reviewer returns the issue to Engineering Control; Control immediately gives
-the user a short plain-language decision brief, ordinarily no more than four
-short lines: **what failed; root cause (or explicitly unknown); simplest
+the user a plain-language decision brief of no more than four short lines: **what failed; root cause (or explicitly unknown); simplest
 official/reuse fix versus the costly alternative; exact decision requested**.
 Lead with the root problem, never a patch plan or implementation jargon; keep
 SHAs, stack traces, CI details and full analysis in canonical GitHub evidence.
