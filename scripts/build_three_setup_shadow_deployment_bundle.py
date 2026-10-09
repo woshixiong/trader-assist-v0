@@ -173,6 +173,117 @@ if [[ -d "$BUNDLE_ROOT/identity" ]]; then
     echo "existing durable state requires separately reviewed replacement" >&2; exit 2;
   }
 fi
+# One verified, exclusively owned scratch venv supplies pip; never bootstrap system pip.
+# This preflight runs only after the immutable/host/authority/no-overwrite gates.
+PIP_SCRATCH_PARENT="$(python3.12 -I -B -c 'import os; print(os.getenv("TMPDIR") or "/tmp")')"
+export PIP_SCRATCH_PARENT
+PIP_SCRATCH_RECORD="$(python3.12 -I -B - <<'PY_PROVIDER_ALLOC'
+import os
+import stat
+import tempfile
+from pathlib import Path
+parent = Path(os.environ["PIP_SCRATCH_PARENT"])
+if (not parent.is_absolute() or "|" in str(parent) or chr(10) in str(parent)
+        or chr(13) in str(parent) or parent.resolve(strict=True) != parent):
+    raise SystemExit("PIP_PROVIDER_UNSAFE_TEMP_PARENT")
+info = parent.lstat()
+if (not stat.S_ISDIR(info.st_mode) or info.st_uid not in (0, os.geteuid())
+        or (info.st_mode & 0o022 and not info.st_mode & stat.S_ISVTX)):
+    raise SystemExit("PIP_PROVIDER_UNSAFE_TEMP_PARENT")
+scratch = Path(tempfile.mkdtemp(prefix="trade-os-pip.", dir=parent))
+current = scratch.lstat()
+if (not stat.S_ISDIR(current.st_mode) or current.st_uid != os.geteuid()
+        or stat.S_IMODE(current.st_mode) != 0o700):
+    raise SystemExit("PIP_PROVIDER_INVALID_SCRATCH_IDENTITY")
+identity = (
+    current.st_dev, current.st_ino, current.st_uid, stat.S_IMODE(current.st_mode),
+    info.st_dev, info.st_ino, info.st_uid, stat.S_IMODE(info.st_mode),
+)
+print(str(scratch) + "|" + ":".join(map(str, identity)))
+PY_PROVIDER_ALLOC
+)" || { echo "PIP_PROVIDER_SCRATCH_ALLOCATION_FAILED" >&2; exit 2; }
+[[ "$PIP_SCRATCH_RECORD" == *"|"* ]] || {
+  echo "PIP_PROVIDER_INVALID_SCRATCH_IDENTITY" >&2; exit 2;
+}
+IFS='|' read -r PIP_PROVIDER_SCRATCH PIP_SCRATCH_ID <<< "$PIP_SCRATCH_RECORD"
+export PIP_PROVIDER_SCRATCH PIP_SCRATCH_ID
+cleanup_owned_pip_provider() {
+  python3.12 -I -B - <<'PY_PROVIDER_CLEAN'
+import os
+import shutil
+import stat
+from pathlib import Path
+parent = Path(os.environ["PIP_SCRATCH_PARENT"])
+scratch = Path(os.environ["PIP_PROVIDER_SCRATCH"])
+expected = tuple(map(int, os.environ["PIP_SCRATCH_ID"].split(":")))
+if (len(expected) != 8 or scratch.parent != parent
+        or not scratch.name.startswith("trade-os-pip.")
+        or not shutil.rmtree.avoids_symlink_attacks):
+    raise SystemExit("PIP_PROVIDER_CLEANUP_IDENTITY_UNSAFE")
+flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+parent_fd = os.open(parent, flags)
+try:
+    parent_stat = os.fstat(parent_fd)
+    actual_parent = (
+        parent_stat.st_dev, parent_stat.st_ino, parent_stat.st_uid,
+        stat.S_IMODE(parent_stat.st_mode),
+    )
+    owned = os.stat(scratch.name, dir_fd=parent_fd, follow_symlinks=False)
+    actual_scratch = (
+        owned.st_dev, owned.st_ino, owned.st_uid, stat.S_IMODE(owned.st_mode),
+    )
+    if (actual_parent != expected[4:] or actual_scratch != expected[:4]
+            or not stat.S_ISDIR(owned.st_mode) or owned.st_uid != os.geteuid()
+            or stat.S_IMODE(owned.st_mode) != 0o700):
+        raise SystemExit("PIP_PROVIDER_CLEANUP_IDENTITY_UNSAFE")
+    # Python's fd-safe rmtree stays anchored to the verified parent inode.
+    shutil.rmtree(scratch.name, dir_fd=parent_fd)
+finally:
+    os.close(parent_fd)
+PY_PROVIDER_CLEAN
+}
+pip_provider_exit() {
+  local result=$?
+  trap - EXIT INT TERM HUP
+  if ! cleanup_owned_pip_provider; then
+    echo "PIP_PROVIDER_CLEANUP_FAILED; INSTALL_NOT_VERIFIED" >&2
+    exit 74
+  fi
+  if [[ "$result" -eq 0 ]]; then
+    echo "INSTALL_VERIFIED=PASS; SERVICE=STOPPED; ACTIVATION=DEFAULT_OFF"
+  fi
+  exit "$result"
+}
+trap pip_provider_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+# Fail before the first durable app/config write if the host cannot bootstrap pip.
+if ! python3.12 -I -B -m venv "$PIP_PROVIDER_SCRATCH/pip-provider"; then
+  echo "PIP_VENV_BOOTSTRAP_UNAVAILABLE: CPython3.12 venv/ensurepip required" >&2
+  exit 2
+fi
+if ! "$PIP_PROVIDER_SCRATCH/pip-provider/bin/python" -I - <<'PY_PROVIDER_READY'
+import os
+import sys
+from pathlib import Path
+try:
+    import pip
+except ImportError:
+    raise SystemExit("PIP_VENV_BOOTSTRAP_UNAVAILABLE: provider pip missing")
+expected = Path(os.environ["PIP_PROVIDER_SCRATCH"]) / "pip-provider"
+if (Path(sys.prefix) != expected or sys.prefix == sys.base_prefix
+        or not Path(pip.__file__).is_relative_to(expected)):
+    raise SystemExit("PIP_PROVIDER_INVALID_ISOLATION")
+PY_PROVIDER_READY
+then
+  echo "PIP_VENV_BOOTSTRAP_UNAVAILABLE: provider identity or pip missing" >&2
+  exit 2
+fi
+if ! "$PIP_PROVIDER_SCRATCH/pip-provider/bin/python" -I -m pip --version; then
+  echo "PIP_VENV_BOOTSTRAP_UNAVAILABLE: pip CLI missing" >&2
+  exit 2
+fi
 install -d -m 0750 -g traderassist /opt/trader-assist-v0
 cp -a "$BUNDLE_ROOT/payload/." /opt/trader-assist-v0/
 cp "$BUNDLE_ROOT/release-manifest.json" /opt/trader-assist-v0/three-setup-release-manifest.json
@@ -182,9 +293,11 @@ install -m 0640 -g traderassist "$BUNDLE_ROOT/config/three-setup-shadow.json" \
 install -m 0640 -g traderassist "$BUNDLE_ROOT/config/three-setup-shadow.env" \
   /etc/trader-assist-v0/three-setup-shadow.env
 python3.12 -m venv --without-pip /opt/trader-assist-v0/venv
-python3.12 -m pip --python /opt/trader-assist-v0/venv install --require-hashes \
+"$PIP_PROVIDER_SCRATCH/pip-provider/bin/python" -m pip --python \
+/opt/trader-assist-v0/venv/bin/python install --require-hashes \
   -r /opt/trader-assist-v0/requirements-runtime.lock
-python3.12 -m pip --python /opt/trader-assist-v0/venv install --require-hashes \
+"$PIP_PROVIDER_SCRATCH/pip-provider/bin/python" -m pip --python \
+/opt/trader-assist-v0/venv/bin/python install --require-hashes \
   --no-deps --only-binary=:all: --no-index --find-links "$BUNDLE_ROOT" \
   -r /opt/trader-assist-v0/requirements-nautilus-pilot.lock
 chgrp -R traderassist /opt/trader-assist-v0
@@ -201,8 +314,7 @@ install -m 0644 /opt/trader-assist-v0/deploy/p4a/systemd/trader-assist-v0-three-
 export PYTHONPATH=/opt/trader-assist-v0/src:/opt/trader-assist-v0
 /opt/trader-assist-v0/venv/bin/python /opt/trader-assist-v0/scripts/check_dependency_lock.py \
   --verify-target-runtime-installed --staged-source /opt/trader-assist-v0/src \
-  --pip-check-with "$(command -v python3.12)"
-echo "INSTALL_VERIFIED=PASS; SERVICE=STOPPED; ACTIVATION=DEFAULT_OFF"
+  --pip-check-with "$PIP_PROVIDER_SCRATCH/pip-provider/bin/python"
 '''
     return script.replace('__WHEEL_NAME__', wheel_name)
 
