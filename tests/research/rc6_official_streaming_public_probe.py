@@ -291,7 +291,6 @@ async def probe(out):
             subscribe_trades=True,
             subscribe_book_depth=True,
             subscribe_bars=True,
-            book_type=BookType.L2_MBP,
             book_depth=None,
             manage_book=True,
             log_data=False,
