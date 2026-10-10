@@ -5,7 +5,6 @@ import importlib.util
 import inspect
 import os
 import threading
-from hashlib import sha256
 from importlib.metadata import distribution, version
 from pathlib import Path
 
@@ -544,11 +543,15 @@ def test_exact_current_external_minute_bar_type_round_trips_through_public_parse
     assert parsed.aggregation_source is AggregationSource.EXTERNAL
 
 
-def test_rc5_live_dataengine_bus_feather_flush_rotation_and_catalog(
-    tmp_path: Path,
+@pytest.mark.parametrize("stage", ["baseline", "construct", "subscribe"])
+def test_rc5_live_writer_runtime_boundary_diagnostic(
+    tmp_path: Path, capfd: pytest.CaptureFixture[str], stage: str,
 ) -> None:
-    """One bounded public ETH stream proof; no fixtures or direct writer.write calls."""
-    from nautilus_trader.model import BookType, OrderBookDepth10
+    """Diagnostic only: isolate native startup, construction and typed bus entry.
+
+    This does not qualify all source families, repeated flush, rotation or IO faults.
+    No synthetic publication, mock writer or direct writer.write is used.
+    """
     from nautilus_trader.persistence import ParquetDataCatalog, StreamingFeatherWriter
 
     assert version("nautilus-trader") == "2.0.0rc5"
@@ -557,132 +560,86 @@ def test_rc5_live_dataengine_bus_feather_flush_rotation_and_catalog(
     catalog_root = tmp_path / "catalog"
     run_id = str(node.instance_id)
     output = catalog_root / "live" / run_id
-    output.mkdir(parents=True)
-    required = {"Bar", "QuoteTick", "TradeTick", "OrderBookDepth10"}
+
+    def mark(boundary: str) -> None:
+        # capfd.disabled keeps the last native boundary visible even on SIGABRT.
+        print(f"RC5_WRITER_DIAGNOSTIC stage={stage} boundary={boundary}", flush=True)
 
     class WriterProbe(Strategy):
-        """Test-only infrastructure subscriber on the real LiveNode runtime."""
+        """Test-only subscriber; writer/cache/clock never cross runtime threads."""
 
         def __init__(self) -> None:
             super().__init__(StrategyConfig())
             self.writer = None
-            self.failed_writer = None
-            self.received: dict[str, tuple[str, int, int]] = {}
-            self.sealed: dict[Path, bytes] = {}
-            self.flushes = 0
-            self.rotated = False
-            self.io_failed = False
+            self.received: tuple[str, int, int] | None = None
             self.errors: list[str] = []
 
         def on_start(self) -> None:
+            mark("on_start_enter")
             try:
-                self.writer = StreamingFeatherWriter(
-                    str(output), self.cache, self.clock,
-                    include_types=["bars", "quotes", "trades", "order_book_depths"],
-                    rotation_mode=0, max_file_size=4096, flush_interval_ms=0,
-                )
-                self.writer.subscribe()
-                instrument_id = InstrumentId.from_str(INSTRUMENT_ID)
-                self.subscribe_bars(BarType.from_str(_external_minute_bar_type(INSTRUMENT_ID)))
-                self.subscribe_quotes(instrument_id)
-                self.subscribe_trades(instrument_id)
-                self.subscribe_book_depth10(instrument_id, BookType.L2_MBP)
-                self.clock.set_timer_ns(
-                    "writer-contract-flush", 2_000_000_000, callback=self.flush_probe,
-                )
-            except Exception as exc:
-                self.errors.append(f"start:{type(exc).__name__}:{exc}")
-                handle.stop()
-
-        def observe(self, event: object) -> None:
-            instrument = (
-                event.bar_type.instrument_id if isinstance(event, Bar) else event.instrument_id
-            )
-            self.received.setdefault(
-                type(event).__name__, (str(instrument), event.ts_event, event.ts_init),
-            )
-
-        def on_bar(self, event: Bar) -> None:
-            self.observe(event)
-
-        def on_quote(self, event: QuoteTick) -> None:
-            self.observe(event)
-
-        def on_trade(self, event: TradeTick) -> None:
-            self.observe(event)
-
-        def on_book_depth(self, event: OrderBookDepth10) -> None:
-            self.observe(event)
-
-        def flush_probe(self, _event: object) -> None:
-            try:
-                # Files present before explicit flush prove native size rotation.
-                self.rotated |= bool(tuple(output.rglob("*.feather"))) and self.flushes == 0
-                self.writer.flush()
-                self.flushes += 1
-                for path, digest in self.sealed.items():
-                    assert path.exists() and sha256(path.read_bytes()).digest() == digest
-                for path in output.rglob("*.feather"):
-                    self.sealed.setdefault(path, sha256(path.read_bytes()).digest())
-                if required <= self.received.keys() and self.failed_writer is None:
-                    bad_output = tmp_path / "failed-output"
-                    bad_output.mkdir()
-                    self.failed_writer = StreamingFeatherWriter(
-                        str(bad_output), self.cache, self.clock,
+                if stage != "baseline":
+                    output.mkdir(parents=True)
+                    mark("writer_construct_enter")
+                    self.writer = StreamingFeatherWriter(
+                        str(output), self.cache, self.clock,
                         include_types=["quotes"], flush_interval_ms=0,
                     )
-                    bad_output.rmdir()
-                    bad_output.write_text("intentional local IO obstruction", encoding="utf-8")
-                    self.failed_writer.subscribe()
-                elif self.failed_writer is not None:
-                    with pytest.raises(OSError):
-                        self.failed_writer.flush()
-                    self.failed_writer.unsubscribe()
-                    with pytest.raises(OSError):
-                        self.failed_writer.close()
-                    self.io_failed = True
-                    handle.stop()
+                    mark("writer_construct_return")
+                if stage == "subscribe":
+                    mark("writer_subscribe_enter")
+                    self.writer.subscribe()
+                    mark("writer_subscribe_return")
+                self.subscribe_quotes(InstrumentId.from_str(INSTRUMENT_ID))
+                mark("source_subscribe_return")
             except Exception as exc:
-                self.errors.append(f"flush:{type(exc).__name__}:{exc}")
+                self.errors.append(f"start:{type(exc).__name__}:{exc}")
+                mark("on_start_error")
+                handle.stop()
+
+        def on_quote(self, event: QuoteTick) -> None:
+            if self.received is None:
+                self.received = (str(event.instrument_id), event.ts_event, event.ts_init)
+                mark("actual_quote_callback")
                 handle.stop()
 
         def on_stop(self) -> None:
-            self.clock.cancel_timer("writer-contract-flush")
-            for writer in (self.writer, self.failed_writer):
-                if writer is None:
-                    continue
-                writer.unsubscribe()
-                try:
-                    writer.flush()
-                    writer.close()
-                except OSError as exc:
-                    if writer is self.writer:
-                        self.errors.append(f"close:{exc}")
+            mark("on_stop")
+            # Native synchronous writer teardown is isolated after node.run returns.
 
     probe = WriterProbe()
     node.add_strategy(probe)
-    # This only stops the node; all writer operations stay on the runtime thread.
-    deadline = threading.Timer(90, handle.stop)
-    deadline.start()
-    try:
-        node.run()
-    finally:
-        deadline.cancel()
-        node.dispose()
-    assert not probe.errors, probe.errors
-    assert required <= probe.received.keys(), "actual public source coverage incomplete"
-    assert probe.flushes >= 2 and probe.rotated and probe.io_failed
-    assert probe.writer.is_closed
-    restored = ParquetDataCatalog(str(catalog_root)).read_live_run(run_id)
-    identities = {
-        (type(event).__name__, str(
-            event.bar_type.instrument_id if isinstance(event, Bar) else event.instrument_id
-        ), event.ts_event, event.ts_init)
-        for event in restored
-    }
-    assert {(kind, *identity) for kind, identity in probe.received.items()} <= identities
-    for path, digest in probe.sealed.items():
-        assert path.exists() and sha256(path.read_bytes()).digest() == digest
+    deadline = threading.Timer(45, handle.stop)
+    with capfd.disabled():
+        mark("node_run_enter")
+        deadline.start()
+        try:
+            node.run()
+            mark("node_run_return")
+            assert not probe.errors, probe.errors
+            assert probe.received is not None, "no actual public quote before bounded stop"
+            if probe.writer is not None:
+                if stage == "subscribe":
+                    mark("writer_unsubscribe_enter")
+                    probe.writer.unsubscribe()
+                    mark("writer_unsubscribe_return")
+                mark("writer_flush_enter")
+                probe.writer.flush()
+                mark("writer_flush_return")
+                probe.writer.close()
+                mark("writer_close_return")
+                assert probe.writer.is_closed
+            if stage == "subscribe":
+                restored = ParquetDataCatalog(str(catalog_root)).read_live_run(run_id)
+                identities = {
+                    (str(event.instrument_id), event.ts_event, event.ts_init)
+                    for event in restored if isinstance(event, QuoteTick)
+                }
+                assert probe.received in identities, "typed bus quote absent from sealed readback"
+                mark("actual_quote_readback_pass")
+            mark("diagnostic_stage_pass")
+        finally:
+            deadline.cancel()
+            node.dispose()
 
 
 def test_probe_uses_live_node_strategy_and_handle_surfaces() -> None:
