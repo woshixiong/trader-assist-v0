@@ -120,10 +120,12 @@ def python_block(step_id: str) -> str:
 
 
 def shell_run(step_id: str, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    # An intentionally missing synthetic ref must not inherit the CI event ref.
+    inherited_env = {key: value for key, value in os.environ.items() if key != "GITHUB_REF"}
     return subprocess.run(
         ["bash", "-c", steps()[step_id]["run"]],
         cwd=cwd,
-        env={**os.environ, **env},
+        env={**inherited_env, **env},
         capture_output=True,
         text=True,
         check=False,
@@ -441,6 +443,36 @@ def dispatch_env() -> dict[str, str]:
 
 def test_dispatch_accepts_only_matching_main_event(tmp_path: Path) -> None:
     assert_pass(shell_run("inputs", tmp_path, dispatch_env()))
+
+
+@pytest.mark.parametrize("parent_ref", [None, "refs/heads/main"], ids=["parent-unset", "parent-main"])
+@pytest.mark.parametrize(
+    "child_ref",
+    [None, "", "refs/heads/feature", "refs/tags/main", "refs/heads/main"],
+    ids=["missing", "empty", "wrong-branch", "tag", "main"],
+)
+def test_dispatch_ref_isolation_against_parent_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    parent_ref: str | None,
+    child_ref: str | None,
+) -> None:
+    if parent_ref is None:
+        monkeypatch.delenv("GITHUB_REF", raising=False)
+    else:
+        monkeypatch.setenv("GITHUB_REF", parent_ref)
+
+    env = dispatch_env()
+    if child_ref is None:
+        env.pop("GITHUB_REF")
+    else:
+        env["GITHUB_REF"] = child_ref
+
+    result = shell_run("inputs", tmp_path, env)
+    if child_ref == "refs/heads/main":
+        assert_pass(result)
+    else:
+        assert result.returncode != 0, result.stdout + result.stderr
 
 
 @pytest.mark.parametrize(
