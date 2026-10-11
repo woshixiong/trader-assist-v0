@@ -275,6 +275,7 @@ def _manifest(infos: list[dict[str, object]], watch: bool, profile: bool,
 def _run_native(mode: str, infos: list[dict[str, object]], root: Path,
                 head: str, tree: str) -> dict[str, object]:
     from nautilus_trader.model import Bar, BarType, OrderBookDepth10, QuoteTick, TradeTick
+
     from trader_assist_v0.nautilus_e4.host import (
         NautilusE4CaptureStrategy,
         NautilusE4CaptureStrategyConfig,
@@ -503,7 +504,7 @@ def _run_child(mode: str, folder: Path, timeout: int, meta: list[dict[str, objec
         info.write_text(json.dumps(meta))
     command = [sys.executable, str(Path(__file__).resolve()), "--stage0-child", mode,
                "--output", str(out), "--meta", str(info), "--root",
-               str(folder / ("attempt-" + mode)), "--head", head, "--tree", tree]
+               str(folder / ("attempt-" + out.stem)), "--head", head, "--tree", tree]
     try:
         done = subprocess.run(command, capture_output=True, text=True, timeout=timeout,
                               check=False)
