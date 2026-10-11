@@ -341,8 +341,6 @@ def _run_native(mode: str, infos: list[dict[str, object]], root: Path,
                 return
             callback(item)
             self.forwarded[key] += 1
-            if family == "Depth10":
-                self.forwarded["Depth10"] += 1
             if family in ("Quote", "Trade", "Depth10"):
                 self.forwarded[family] += 1
             if len(self.samples[key]) < (MAX_BAR if live_bars else MAX_OBJECTS):
@@ -443,6 +441,7 @@ def _run_native(mode: str, infos: list[dict[str, object]], root: Path,
 
 
 def _child() -> int:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     parser = argparse.ArgumentParser()
     parser.add_argument("--stage0-child", choices=("discover", "rich", "bar"), required=True)
     parser.add_argument("--output", type=Path, required=True)
