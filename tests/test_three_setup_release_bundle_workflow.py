@@ -445,7 +445,9 @@ def test_dispatch_accepts_only_matching_main_event(tmp_path: Path) -> None:
     assert_pass(shell_run("inputs", tmp_path, dispatch_env()))
 
 
-@pytest.mark.parametrize("parent_ref", [None, "refs/heads/main"], ids=["parent-unset", "parent-main"])
+@pytest.mark.parametrize(
+    "parent_ref", [None, "refs/heads/main"], ids=["parent-unset", "parent-main"]
+)
 @pytest.mark.parametrize(
     "child_ref",
     [None, "", "refs/heads/feature", "refs/tags/main", "refs/heads/main"],
