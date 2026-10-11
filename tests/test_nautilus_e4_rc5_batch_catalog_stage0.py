@@ -66,7 +66,7 @@ def _identity(instrument: object) -> dict[str, object]:
     if not instrument_id.endswith(".HYPERLIQUID") or not symbol.endswith("-USD-PERP"):
         raise RuntimeError("INSTRUMENT_ID_NOT_HYPERLIQUID_PERP")
     dex = symbol.split(":", 1)[0] if ":" in symbol else "MAIN"
-    if not raw or dex == "MAIN" and ":" in raw:
+    if not raw or (dex == "MAIN" and ":" in raw):
         raise RuntimeError("RAW_SYMBOL_DEX_INCONSISTENT")
     return {
         "instrument_id": instrument_id,
@@ -80,7 +80,12 @@ def _identity(instrument: object) -> dict[str, object]:
 async def _discover_native() -> dict[str, dict[str, object]]:
     from nautilus_trader.adapters.hyperliquid import HyperliquidEnvironment, HyperliquidHttpClient
 
-    client = HyperliquidHttpClient.from_env(HyperliquidEnvironment.MAINNET)
+    client = HyperliquidHttpClient(
+        private_key=None,
+        vault_address=None,
+        account_address=None,
+        environment=HyperliquidEnvironment.MAINNET,
+    )
     instruments = await asyncio.wait_for(
         client.load_instrument_definitions(
             include_spot=False,
@@ -155,7 +160,8 @@ def _fingerprint(event: object, family: str) -> tuple[object, ...]:
     timestamp = (int(_read_value(event, "ts_event")), int(_read_value(event, "ts_init")))
     if family == "Quote":
         return timestamp + tuple(str(_read_value(event, key)) for key in
-                                 ("instrument_id", "bid_price", "ask_price", "bid_size", "ask_size"))
+                                 ("instrument_id", "bid_price", "ask_price",
+                                  "bid_size", "ask_size"))
     if family == "Trade":
         return timestamp + tuple(str(_read_value(event, key)) for key in
                                  ("instrument_id", "trade_id", "aggressor_side", "price", "size"))
@@ -164,7 +170,7 @@ def _fingerprint(event: object, family: str) -> tuple[object, ...]:
         for side in ("bids", "asks"):
             levels.append(tuple((str(_read_value(o, "price")), str(_read_value(o, "size")))
                                 for o in _read_value(event, side)))
-        return timestamp + (str(_read_value(event, "instrument_id")), *levels)
+        return (*timestamp, str(_read_value(event, "instrument_id")), *levels)
     return timestamp + tuple(str(_read_value(event, key)) for key in
                              ("bar_type", "open", "high", "low", "close", "volume"))
 
@@ -214,7 +220,9 @@ def _catalog_roundtrip(items: dict[str, list[object]], instruments: list[object]
 def _manifest(infos: list[dict[str, object]], watch: bool, profile: bool,
               head: str, tree: str, run_id: str):
     from trader_assist_v0.contracts.common import sha256_hex
-    from trader_assist_v0.nautilus_e4.contracts import MarketExpression, PitUniverseSnapshot, RunManifest
+    from trader_assist_v0.nautilus_e4.contracts import (
+        MarketExpression, PitUniverseSnapshot, RunManifest,
+    )
     from scripts.e4_nautilus_public_data_probe import L0_PROFILE
 
     expressions = tuple(
@@ -254,7 +262,6 @@ def _manifest(infos: list[dict[str, object]], watch: bool, profile: bool,
 def _run_native(mode: str, infos: list[dict[str, object]], root: Path,
                 head: str, tree: str) -> dict[str, object]:
     from nautilus_trader.model import Bar, BarType, OrderBookDepth10, QuoteTick, TradeTick
-    from trader_assist_v0.nautilus_e4.capture import SubscriptionPolicy
     from trader_assist_v0.nautilus_e4.host import (
         NautilusE4CaptureStrategy, NautilusE4CaptureStrategyConfig, build_public_data_node,
     )
@@ -347,10 +354,14 @@ def _run_native(mode: str, infos: list[dict[str, object]], root: Path,
                 self.samples[key].append(item)
             if sum(v for k, v in self.forwarded.items() if "|" in k) % 8 == 0:
                 self._sample()
-            if (family == "Depth10" and self.forwarded["Depth10"] >= MAX_DEPTH or
-                not live_bars and sum(self.forwarded[k] for k in
-                                      ("Quote", "Trade", "Depth10")) >= MAX_RICH or
-                live_bars and self.forwarded[key] >= MAX_BAR):
+            if (
+                (family == "Depth10" and self.forwarded["Depth10"] >= MAX_DEPTH)
+                or (
+                    not live_bars
+                    and sum(self.forwarded[k] for k in ("Quote", "Trade", "Depth10")) >= MAX_RICH
+                )
+                or (live_bars and self.forwarded[key] >= MAX_BAR)
+            ):
                 self._stop("RESOURCE_CAP_STOP:CALLBACK_LIMIT")
 
         def on_quote(self, tick: QuoteTick):
@@ -399,8 +410,8 @@ def _run_native(mode: str, infos: list[dict[str, object]], root: Path,
         clean_return = True
         strategy._sample()
         for name in names:
-            obj = strategy.cache.instrument(__import__("nautilus_trader.model", fromlist=["InstrumentId"])
-                                            .InstrumentId.from_str(name))
+            model = __import__("nautilus_trader.model", fromlist=["InstrumentId"])
+            obj = strategy.cache.instrument(model.InstrumentId.from_str(name))
             if obj is None:
                 raise RuntimeError("POST_RUN_NATIVE_INSTRUMENT_CACHE_MISSING:" + name)
             native_instruments.append(obj)
