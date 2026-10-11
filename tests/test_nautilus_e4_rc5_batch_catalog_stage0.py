@@ -8,16 +8,16 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from collections import Counter, defaultdict
 import json
 import os
-from pathlib import Path
 import resource
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+from collections import Counter, defaultdict
+from pathlib import Path
 
 import pytest
 
@@ -179,6 +179,7 @@ def _catalog_roundtrip(items: dict[str, list[object]], instruments: list[object]
                        root: Path, identity: dict[str, dict[str, object]]) -> dict[str, object]:
     from nautilus_trader.persistence import ParquetDataCatalog
 
+    root.mkdir(parents=True, exist_ok=True)
     catalog = ParquetDataCatalog(str(root))
     catalog.write_instruments(instruments)
     written: dict[str, object] = {}
@@ -199,11 +200,21 @@ def _catalog_roundtrip(items: dict[str, list[object]], instruments: list[object]
         writer(ordered)
         identifier = key.split("|", 1)[1]
         query = {
-            "Quote": lambda: catalog.query_quote_ticks(identifiers=[identifier]),
-            "Trade": lambda: catalog.query_trade_ticks(identifiers=[identifier]),
-            "Depth10": lambda: catalog.query_order_book_depths(instrument_ids=[identifier]),
-            "Bar1m": lambda: catalog.query_bars(identifiers=[identifier]),
-            "Bar5m": lambda: catalog.query_bars(identifiers=[identifier]),
+            "Quote": lambda identifier=identifier: catalog.query_quote_ticks(
+                identifiers=[identifier]
+            ),
+            "Trade": lambda identifier=identifier: catalog.query_trade_ticks(
+                identifiers=[identifier]
+            ),
+            "Depth10": lambda identifier=identifier: catalog.query_order_book_depths(
+                instrument_ids=[identifier]
+            ),
+            "Bar1m": lambda identifier=identifier: catalog.query_bars(
+                identifiers=[identifier]
+            ),
+            "Bar5m": lambda identifier=identifier: catalog.query_bars(
+                identifiers=[identifier]
+            ),
         }[family]
         queried = query()
         before = Counter(_fingerprint(x, family) for x in ordered)
@@ -219,11 +230,13 @@ def _catalog_roundtrip(items: dict[str, list[object]], instruments: list[object]
 
 def _manifest(infos: list[dict[str, object]], watch: bool, profile: bool,
               head: str, tree: str, run_id: str):
+    from scripts.e4_nautilus_public_data_probe import L0_PROFILE
     from trader_assist_v0.contracts.common import sha256_hex
     from trader_assist_v0.nautilus_e4.contracts import (
-        MarketExpression, PitUniverseSnapshot, RunManifest,
+        MarketExpression,
+        PitUniverseSnapshot,
+        RunManifest,
     )
-    from scripts.e4_nautilus_public_data_probe import L0_PROFILE
 
     expressions = tuple(
         MarketExpression(
@@ -263,7 +276,9 @@ def _run_native(mode: str, infos: list[dict[str, object]], root: Path,
                 head: str, tree: str) -> dict[str, object]:
     from nautilus_trader.model import Bar, BarType, OrderBookDepth10, QuoteTick, TradeTick
     from trader_assist_v0.nautilus_e4.host import (
-        NautilusE4CaptureStrategy, NautilusE4CaptureStrategyConfig, build_public_data_node,
+        NautilusE4CaptureStrategy,
+        NautilusE4CaptureStrategyConfig,
+        build_public_data_node,
     )
     from trader_assist_v0.nautilus_e4.safety import assert_public_only
 
