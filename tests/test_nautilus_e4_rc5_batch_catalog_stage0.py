@@ -312,6 +312,7 @@ def _run_native(mode: str, infos: list[dict[str, object]], root: Path,
         def __init__(self, cfg):
             super().__init__(cfg)
             self.samples = defaultdict(list)
+            self.rich_callback_clocks = {}
             self.received = Counter()
             self.forwarded = Counter()
             self.native_bar_times = defaultdict(list)
@@ -380,13 +381,46 @@ def _run_native(mode: str, infos: list[dict[str, object]], root: Path,
             ):
                 self._stop("RESOURCE_CAP_STOP:CALLBACK_LIMIT")
 
+        def _rich_time(self, family, item, callback_receive_ns):
+            """O(1) native-on-entry evidence, including callbacks stopped before super()."""
+            key = family + "|" + str(item.instrument_id)
+            event_ns = int(item.ts_event)
+            init_ns = int(item.ts_init)
+            existing = self.rich_callback_clocks.get(key)
+            if existing is None:
+                self.rich_callback_clocks[key] = {
+                    "first_callback_receive_ns": callback_receive_ns,
+                    "last_callback_receive_ns": callback_receive_ns,
+                    "ts_event_min_ns": event_ns,
+                    "ts_event_max_ns": event_ns,
+                    "ts_init_min_ns": init_ns,
+                    "ts_init_max_ns": init_ns,
+                    "callback_receive_min_ns": callback_receive_ns,
+                    "callback_receive_max_ns": callback_receive_ns,
+                }
+                return
+            existing["last_callback_receive_ns"] = callback_receive_ns
+            existing["ts_event_min_ns"] = min(existing["ts_event_min_ns"], event_ns)
+            existing["ts_event_max_ns"] = max(existing["ts_event_max_ns"], event_ns)
+            existing["ts_init_min_ns"] = min(existing["ts_init_min_ns"], init_ns)
+            existing["ts_init_max_ns"] = max(existing["ts_init_max_ns"], init_ns)
+            existing["callback_receive_min_ns"] = min(
+                existing["callback_receive_min_ns"], callback_receive_ns
+            )
+            existing["callback_receive_max_ns"] = max(
+                existing["callback_receive_max_ns"], callback_receive_ns
+            )
+
         def on_quote(self, tick: QuoteTick):
+            self._rich_time("Quote", tick, time.time_ns())
             self._capture("Quote", str(tick.instrument_id), tick, super().on_quote)
 
         def on_trade(self, tick: TradeTick):
+            self._rich_time("Trade", tick, time.time_ns())
             self._capture("Trade", str(tick.instrument_id), tick, super().on_trade)
 
         def on_book_depth(self, depth: OrderBookDepth10):
+            self._rich_time("Depth10", depth, time.time_ns())
             self._capture("Depth10", str(depth.instrument_id), depth, super().on_book_depth)
 
         def on_historical_bars(self, bars):
@@ -459,6 +493,9 @@ def _run_native(mode: str, infos: list[dict[str, object]], root: Path,
                                       "roundtrip": {"status": "DATA_INCOMPLETE"},
                                       "status": "DATA_INCOMPLETE"})
     return {"mode": mode, "run_id": run_id, "result": observed, "catalog": catalog,
+            "requested_instruments": names, "requested_bar_types": list(bar_types),
+            "subscribed_ns": strategy.subscribed_ns,
+            "rich_callback_clocks": strategy.rich_callback_clocks,
             "live_bar_clocks": {k: [{x: v for x, v in entry.items() if x != "fingerprint"}
                                    for entry in entries]
                                 for k, entries in strategy.native_bar_times.items()},
@@ -527,6 +564,130 @@ def _exact_git_ref() -> tuple[str, str]:
     return git("rev-parse", "HEAD"), git("rev-parse", "HEAD^{tree}")
 
 
+
+STAGE0_SCHEMA = "trade-os/issue320-rc5-stage0-result/v1"
+RICH_CLOCK_FIELDS = (
+    "first_callback_receive_ns", "last_callback_receive_ns",
+    "ts_event_min_ns", "ts_event_max_ns",
+    "ts_init_min_ns", "ts_init_max_ns",
+    "callback_receive_min_ns", "callback_receive_max_ns",
+)
+
+
+def _stage0_cells(report: dict[str, object]) -> dict[str, dict[str, object]]:
+    """Exactly ten cells; unknown is never interpreted as a zero native event."""
+    discovered = report.get("native_discovery")
+    known = discovered if isinstance(discovered, dict) else {}
+    cells: dict[str, dict[str, object]] = {}
+    for symbol in ("ETH", "SKHX"):
+        identity = known.get(symbol)
+        for family in FAMILIES:
+            label = symbol + "|" + family
+            window_key = ("W_BAR_BOTH" if family.startswith("Bar") else
+                          "W_RICH_" + symbol)
+            window = report.get(window_key)
+            window = window if isinstance(window, dict) else None
+            native_id = identity.get("instrument_id") if isinstance(identity, dict) else None
+            bar_type = (
+                str(native_id) + "-" + ("1" if family == "Bar1m" else "5") +
+                "-MINUTE-LAST-EXTERNAL"
+                if native_id is not None and family.startswith("Bar") else None
+            )
+            identifier = bar_type if bar_type is not None else native_id
+            key = family + "|" + str(identifier) if identifier is not None else None
+            observed = window.get("result", {}) if window else {}
+            actual = observed.get(key) if key is not None else None
+            catalog = actual.get("roundtrip", {}) if isinstance(actual, dict) else {}
+            count = actual.get("received") if isinstance(actual, dict) else None
+            rich_times = (
+                window.get("rich_callback_clocks", {}).get(key)
+                if window is not None and family in FAMILIES[:3] else None
+            )
+            bar_times = (
+                window.get("live_bar_clocks", {}).get(key)
+                if window is not None and family.startswith("Bar") else None
+            )
+            if isinstance(actual, dict):
+                status = actual.get("status", "UNVERIFIED")
+                reason = window.get("resource_stop") or (
+                    "NO_NATIVE_CALLBACK" if count == 0 else None
+                )
+            elif symbol == "SKHX" and isinstance(discovered, dict) and identity is None:
+                status = "SKHX_NOT_QUALIFIED"
+                reason = "SKHX_NOT_NATIVE_DISCOVERED"
+            else:
+                status = "NOT_RUN/UNVERIFIED"
+                reason = report.get("failure") or "WINDOW_NOT_AVAILABLE"
+            cells[label] = {
+                "symbol": symbol,
+                "family": family,
+                "run_id": window.get("run_id") if window else None,
+                "window": window_key,
+                "native_identity": identity,
+                "instrument_id": native_id,
+                "full_bar_type": bar_type,
+                "subscription_requested": (
+                    key in observed if isinstance(observed, dict) else False
+                ),
+                "subscription_evidence": (
+                    "E4_CONFIG_AND_CALLBACK_REPORT" if window else "NOT_RUN"
+                ),
+                "received": count,
+                "forwarded": actual.get("forwarded") if actual else None,
+                "retained": actual.get("retained") if actual else None,
+                "written": catalog.get("written"),
+                "typed_query": catalog.get("queried"),
+                "catalog_status": catalog.get("status", "NOT_RUN/UNVERIFIED"),
+                "rich_callback_timing": (
+                    {field: rich_times.get(field) if rich_times else None
+                     for field in RICH_CLOCK_FIELDS}
+                    if family in FAMILIES[:3] else None
+                ),
+                "bar_live_clocks": bar_times if family.startswith("Bar") else None,
+                "historical_bar_callbacks": (
+                    window.get("historical_not_counted", {}).get(bar_type, 0)
+                    if window and bar_type else None
+                ),
+                "subscribed_ns": window.get("subscribed_ns") if window else None,
+                "resource_stop": window.get("resource_stop") if window else None,
+                "rss_cpu": window.get("rss_cpu") if window else None,
+                "e4_bytes": window.get("e4_bytes") if window else None,
+                "status": status,
+                "reason": reason,
+            }
+    return cells
+
+
+def _write_stage0_result(report: dict[str, object]) -> Path:
+    """Fail closed if even the bounded independent evidence cannot be published."""
+    root_value = os.environ.get("RUNNER_TEMP")
+    if not root_value:
+        raise RuntimeError("STAGE0_RUNNER_TEMP_MISSING")
+    root = Path(root_value)
+    if not root.is_dir():
+        raise RuntimeError("STAGE0_RUNNER_TEMP_NOT_DIRECTORY")
+    report["schema_version"] = STAGE0_SCHEMA
+    report["generated_at_ns"] = time.time_ns()
+    report["cells"] = _stage0_cells(report)
+    assert len(report["cells"]) == 10
+    assert set(report["cells"]) == {
+        symbol + "|" + family
+        for symbol in ("ETH", "SKHX") for family in FAMILIES
+    }
+    encoded = json.dumps(report, sort_keys=True, allow_nan=False)
+    destination = root / "e4-rc5-stage0-result.json"
+    temporary = root / "e4-rc5-stage0-result.json.tmp"
+    temporary.write_text(encoded + "\n", encoding="utf-8")
+    temporary.replace(destination)
+    readback = json.loads(destination.read_text(encoding="utf-8"))
+    if (readback["schema_version"] != STAGE0_SCHEMA or
+            readback["cells"] != report["cells"] or
+            readback["head"] != report["head"] or
+            readback["tree"] != report["tree"]):
+        raise RuntimeError("STAGE0_RESULT_SCHEMA_OR_READBACK_MISMATCH")
+    return destination
+
+
 def test_rc5_stage0_native_public_batch_catalog(capsys):
     enabled = (
         os.environ.get("GITHUB_EVENT_NAME") == "pull_request"
@@ -536,20 +697,37 @@ def test_rc5_stage0_native_public_batch_catalog(capsys):
     )
     if not enabled:
         pytest.skip("Stage0 one-off exact branch opt-in only (not ordinary PR regression)")
-    from trader_assist_v0.nautilus_e4.host import assert_exact_nautilus_version
-    from trader_assist_v0.nautilus_e4.safety import assert_public_only
-
-    assert_exact_nautilus_version()
-    assert_public_only(env=os.environ)
-    head, tree = _exact_git_ref()
     started = time.monotonic()
-    reports: dict[str, object] = {"STAGE0_EXECUTED": "YES", "head": head, "tree": tree,
-                                  "E4_CONTINUOUS_RAW_RETENTION": "NOT_QUALIFIED"}
+    reports: dict[str, object] = {
+        "schema_version": STAGE0_SCHEMA,
+        "STAGE0_EXECUTED": "YES",
+        "head": None,
+        "tree": None,
+        "repository": os.environ.get("GITHUB_REPOSITORY"),
+        "event": os.environ.get("GITHUB_EVENT_NAME"),
+        "branch": os.environ.get("GITHUB_HEAD_REF"),
+        "native_discovery": None,
+        "W_RICH_ETH": None,
+        "W_RICH_SKHX": None,
+        "W_BAR_BOTH": None,
+        "status": "IN_PROGRESS",
+        "E4_CONTINUOUS_RAW_RETENTION": "NOT_QUALIFIED",
+        "failure": None,
+        "attempted_window": None,
+    }
     with capsys.disabled():
-        _emit({"STAGE0_EXECUTED": "YES", "head": head, "tree": tree})
-    with tempfile.TemporaryDirectory(prefix="issue320-stage0-") as temp:
-        folder = Path(temp)
-        try:
+        _emit({"STAGE0_EXECUTED": "YES"})
+    try:
+        from trader_assist_v0.nautilus_e4.host import assert_exact_nautilus_version
+        from trader_assist_v0.nautilus_e4.safety import assert_public_only
+
+        assert_exact_nautilus_version()
+        assert_public_only(env=os.environ)
+        head, tree = _exact_git_ref()
+        reports["head"], reports["tree"] = head, tree
+        with tempfile.TemporaryDirectory(prefix="issue320-stage0-") as temp:
+            folder = Path(temp)
+            reports["attempted_window"] = "NATIVE_DISCOVERY"
             native = _run_child("discover", folder, 35, None, head, tree)["discovered"]
             reports["native_discovery"] = native
             selected = [native["ETH"]]
@@ -558,24 +736,34 @@ def test_rc5_stage0_native_public_batch_catalog(capsys):
             for idx, info in enumerate(selected):
                 if time.monotonic() - started > MAX_STAGE - (HARD_RICH + 25):
                     raise RuntimeError("STAGE0_EXPERIMENT_BUDGET_EXHAUSTED")
-                reports["W_RICH_" + ("ETH" if idx == 0 else "SKHX")] = _run_child(
-                    "rich", folder, HARD_RICH, [info], head, tree)
+                name = "W_RICH_" + ("ETH" if idx == 0 else "SKHX")
+                reports["attempted_window"] = name
+                reports[name] = _run_child("rich", folder, HARD_RICH, [info], head, tree)
             if time.monotonic() - started > MAX_STAGE - (HARD_BAR + 25):
                 raise RuntimeError("STAGE0_EXPERIMENT_BUDGET_EXHAUSTED")
+            reports["attempted_window"] = "W_BAR_BOTH"
             reports["W_BAR_BOTH"] = _run_child("bar", folder, HARD_BAR, selected, head, tree)
             if "SKHX" not in native:
                 reports["SKHX_STATUS"] = "SKHX_NOT_QUALIFIED"
-            reports["elapsed_s"] = round(time.monotonic() - started, 3)
-            if reports["elapsed_s"] > MAX_STAGE:
-                raise RuntimeError("STAGE0_EXPERIMENT_BUDGET_EXCEEDED")
-            with capsys.disabled():
-                _emit(reports)
-        except Exception as exc:
-            reports["failure"] = str(exc)
-            reports["elapsed_s"] = round(time.monotonic() - started, 3)
-            with capsys.disabled():
-                _emit(reports)
-            pytest.fail("STAGE0_STOP_ENGINEERING_CONTROL:" + str(exc))
+        reports["elapsed_s"] = round(time.monotonic() - started, 3)
+        if reports["elapsed_s"] > MAX_STAGE:
+            raise RuntimeError("STAGE0_EXPERIMENT_BUDGET_EXCEEDED")
+        reports["status"] = "COMPLETED_WITH_PER_CELL_RESULTS"
+        reports["attempted_window"] = None
+        path = _write_stage0_result(reports)
+        with capsys.disabled():
+            _emit({"STAGE0_EXECUTED": "YES", "head": head, "tree": tree,
+                   "result_file": str(path), "cell_count": 10})
+    except Exception as exc:
+        reports["failure"] = str(exc)
+        reports["status"] = "FAILED"
+        reports["elapsed_s"] = round(time.monotonic() - started, 3)
+        _write_stage0_result(reports)
+        with capsys.disabled():
+            _emit({"STAGE0_EXECUTED": "YES", "status": "FAILED",
+                   "failure": str(exc), "head": reports["head"],
+                   "tree": reports["tree"], "cell_count": 10})
+        pytest.fail("STAGE0_STOP_ENGINEERING_CONTROL:" + str(exc))
 
 
 if __name__ == "__main__":
