@@ -370,6 +370,8 @@ def _run_native(mode: str, infos: list[dict[str, object]], root: Path,
         def on_bar(self, bar: Bar):
             received_ns = time.time_ns()
             identifier = str(bar.bar_type)
+            if identifier not in bar_types:
+                raise RuntimeError("LIVE_BAR_NOT_IN_EXACT_SUBSCRIPTIONS")
             key = ("Bar1m" if "-1-MINUTE-" in identifier else "Bar5m") + "|" + identifier
             if self.stopped_reason is not None:
                 self.received[key] += 1
