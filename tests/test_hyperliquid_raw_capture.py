@@ -353,7 +353,7 @@ def cli_fixture(tmp_path: Path, mode: str, sig: int | None = None) -> tuple[int,
                 # Read at the fd level so TextIO read-ahead cannot hide readiness.
                 import time
 
-                deadline = time.monotonic() + 10
+                deadline = time.monotonic() + 20  # Startup allowance; signal-stop budget stays 25s.
                 while "READY\n" not in prefix:
                     remaining = deadline - time.monotonic()
                     assert remaining > 0, "fixture did not become ready"
@@ -534,7 +534,15 @@ def test_unit_is_dedicated_hardened_and_default_off() -> None:
     assert service["User"] == service["Group"] == "traderassist"
     assert service["Restart"] == "no" and service["TimeoutStopSec"] == "30"
     assert service["KillSignal"] == "SIGTERM"
-    assert "--continuous" in service["ExecStart"]
+    import shlex
+
+    assert shlex.split(service["ExecStart"]) == [
+        "/opt/trader-assist-v0/venv/bin/python",
+        "/opt/trader-assist-v0/scripts/hyperliquid_raw_capture.py",
+        "--continuous",
+        "--output",
+        "/var/lib/trader-assist-v0-hyperliquid-raw-capture",
+    ]
     assert service["StateDirectory"] == "trader-assist-v0-hyperliquid-raw-capture"
     assert service["StateDirectoryMode"] == "0700"
     assert service["ProtectSystem"] == "strict" and service["NoNewPrivileges"] == "yes"
@@ -583,7 +591,51 @@ def test_native_linux_unit_syntax() -> None:
         # never a syntax/hardening diagnostic or an unknown platform failure.
         diagnostic = (
             "trader-assist-v0-hyperliquid-raw-capture.service: Command "
-            "/opt/trader-assist-v0/.venv/bin/python is not executable: No such file or directory"
+            "/opt/trader-assist-v0/venv/bin/python is not executable: No such file or directory"
         )
         assert result.returncode == 1 and result.stderr.strip() == diagnostic, result.stderr
     assert not result.stdout.strip(), result.stdout
+
+
+def test_startup_write_failure_is_not_masked_by_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    release = raw.RawWriter._release
+
+    def write_failure(self: raw.RawWriter, record: dict[str, Any]) -> None:
+        raise OSError("primary startup write failure")
+
+    def cleanup_failure(self: raw.RawWriter) -> None:
+        release(self)
+        raise OSError("secondary startup cleanup failure")
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(raw.RawWriter, "_line", write_failure)
+        scoped.setattr(raw.RawWriter, "_release", cleanup_failure)
+        with pytest.raises(OSError, match="primary startup write failure") as exc:
+            with raw.RawWriter(tmp_path):
+                pass
+        assert any("secondary startup cleanup failure" in note for note in exc.value.__notes__)
+    with raw.RawWriter(tmp_path):
+        pass
+
+
+def test_rotation_fsync_failure_releases_lock_without_new_segment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail(fd: int) -> None:
+        raise OSError("rotation fsync failure")
+
+    with monkeypatch.context() as scoped, pytest.raises(OSError, match="rotation fsync"):
+        with raw.RawWriter(tmp_path, max_bytes=4096) as writer:
+            writer.marker("large", value="x" * 1600)
+            writer.max_bytes = writer._size  # Next append must rotate the first segment.
+            prefix = writer.paths[0].read_bytes()
+            scoped.setattr(raw.os, "fsync", fail)
+            writer.marker("rotate")
+    assert writer.segment_count == 1 and writer._lock is None
+    assert len(list(tmp_path.glob("*.ndjson"))) == 1
+    assert writer.paths[0].read_bytes().startswith(prefix)
+    assert not any(r.get("event") == "rotate" for r in raw.read_records(writer.paths))
+    with raw.RawWriter(tmp_path):
+        pass

@@ -11,7 +11,7 @@ Type=simple
 User=traderassist
 Group=traderassist
 Environment=PYTHONPATH=/opt/trader-assist-v0/src
-ExecStart=/opt/trader-assist-v0/.venv/bin/python /opt/trader-assist-v0/scripts/hyperliquid_raw_capture.py --continuous --output /var/lib/trader-assist-v0-hyperliquid-raw-capture
+ExecStart=/opt/trader-assist-v0/venv/bin/python /opt/trader-assist-v0/scripts/hyperliquid_raw_capture.py --continuous --output /var/lib/trader-assist-v0-hyperliquid-raw-capture
 Restart=no
 KillSignal=SIGTERM
 TimeoutStopSec=30

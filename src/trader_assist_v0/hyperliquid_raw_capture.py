@@ -159,8 +159,11 @@ class RawWriter:
         try:
             fcntl.flock(self._lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             self.marker("start", session_id=self.session)
-        except BaseException:
-            self._release()
+        except BaseException as exc:
+            try:
+                self._release()
+            except BaseException as release_error:
+                exc.add_note(f"writer startup release also failed: {release_error}")
             raise
         return self
 

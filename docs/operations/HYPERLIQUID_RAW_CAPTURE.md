@@ -75,11 +75,28 @@ no privileges/capabilities, and a separate 0700 systemd StateDirectory owned by
 
 Literal future layout assumptions:
 
-- Interpreter: `/opt/trader-assist-v0/.venv/bin/python` (existing locked dependencies).
+- Interpreter: `/opt/trader-assist-v0/venv/bin/python` (existing locked dependencies).
 - Script: `/opt/trader-assist-v0/scripts/hyperliquid_raw_capture.py`.
 - `PYTHONPATH=/opt/trader-assist-v0/src`.
 - `ExecStart` passes `--continuous --output /var/lib/trader-assist-v0-hyperliquid-raw-capture`.
 - Existing host user/group `traderassist`; never substitute root or create a user silently.
+
+The interpreter matches the existing installer in
+`scripts/build_three_setup_shadow_deployment_bundle.py`, which creates `venv`
+without a dot. The current `scripts/verify_exact_release.py:REQUIRED_FILES`
+excludes this new CLI and unit; its recursive selection includes only `src`.
+Consequently the existing bundle does not yet stage this recorder's complete
+entrypoint/service surface. This is a real release-integration prerequisite,
+not a host-readiness or live-data claim.
+
+A separate Engineering Control package must minimally extend those two existing
+release scripts: select/hash/stage the CLI and unit in the exact-release manifest,
+and add default-OFF unit installation plus offline entrypoint/layout verification
+to the existing installer. Preserve the dedicated absent permit, no start/enable/
+restart, exact identity/hash rejection, and current human host-action gates. No
+new generic deploy controller or ad hoc copy from an arbitrary worktree is needed.
+Those two release scripts are outside Issue #328's five-path scope and are not
+modified by this source package.
 
 These paths are a staged-layout contract, not proof of a current deployed release.
 Before installation, Operations must verify the exact accepted release manifest
