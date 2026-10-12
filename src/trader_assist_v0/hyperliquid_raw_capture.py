@@ -1,4 +1,4 @@
-"""Bounded public Hyperliquid raw capture; no account or execution interface."""
+"""Bounded proof and opt-in continuous public raw capture; no account/execution API."""
 
 from __future__ import annotations
 
@@ -8,11 +8,13 @@ import hashlib
 import json
 import math
 import os
+import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import AsyncGenerator, Callable, Iterator
+from contextlib import aclosing, suppress
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, TextIO, cast
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
@@ -23,6 +25,36 @@ INFO_URL = "https://api.hyperliquid.xyz/info"
 WS_URL = "wss://api.hyperliquid.xyz/ws"
 CHANNELS = ("trades", "bbo", "l2Book")
 MAX_SEGMENT_BYTES = 64 * 1024 * 1024
+
+
+DISCOVERY_STOP_SECONDS = 12.0
+
+
+class DiscoveryStopped(Exception):
+    """Only deliberate stop between successfully validated metadata requests."""
+
+
+class StopIntent:
+    """CLI stop notification and atomic metadata request admission."""
+
+    def __init__(self) -> None:
+        self.event = asyncio.Event()
+        self._intent = threading.Event()
+        self._admission = threading.Lock()
+        self.requested_at: float | None = None
+
+    def request(self) -> None:
+        # Called on the event-loop thread, including asyncio signal callbacks.
+        with self._admission:
+            if not self._intent.is_set():
+                self.requested_at = time.monotonic()
+                self._intent.set()
+        self.event.set()
+
+    def check(self) -> None:
+        with self._admission:
+            if self._intent.is_set():
+                raise DiscoveryStopped()
 
 
 def utc_now() -> str:
@@ -47,11 +79,15 @@ def public_info(request: dict[str, str]) -> Any:
 
 def discover_coins(
     info: Callable[[dict[str, str]], Any] = public_info,
+    *,
+    stop: StopIntent | None = None,
 ) -> tuple[list[str], list[dict[str, Any]]]:
     """Resolve unique active ETH and builder-deployed SKHX from venue metadata."""
     evidence: list[dict[str, Any]] = []
 
     def fetch(request: dict[str, str]) -> Any:
+        if stop is not None:
+            stop.check()  # Admission precedes I/O; the lock is never held during HTTP.
         payload = info(request)
         evidence.append({"request": request, "raw_payload": payload, "received_at_utc": utc_now()})
         return payload
@@ -64,6 +100,8 @@ def discover_coins(
         names
     ):
         raise ValueError("invalid or duplicate DEX names")
+    if stop is not None:
+        stop.check()
     eth: list[str] = []
     skhx: list[str] = []
     for dex in ["", *names]:
@@ -84,6 +122,8 @@ def discover_coins(
                 skhx.append(coin)
     if len(eth) != 1 or len(skhx) != 1:
         raise ValueError("missing or ambiguous active ETH/SKHX metadata")
+    if stop is not None:
+        stop.check()
     return [eth[0], skhx[0]], evidence
 
 
@@ -96,6 +136,7 @@ class RawWriter:
         *,
         max_bytes: int = MAX_SEGMENT_BYTES,
         clock: Callable[[], str] = utc_now,
+        retain_paths: bool = True,
     ) -> None:
         if max_bytes < 1024:
             raise ValueError("segment size must be at least 1024 bytes")
@@ -104,6 +145,9 @@ class RawWriter:
         self.clock = clock
         self.session = uuid4().hex
         self.paths: list[Path] = []
+        self.retain_paths = retain_paths
+        self.segment_count = 0
+        self._path: Path | None = None
         self._lock: TextIO | None = None
         self._file: TextIO | None = None
         self._date = ""
@@ -131,11 +175,30 @@ class RawWriter:
                 self._lock = None
 
     def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        failure: BaseException | None = exc
         try:
             self.marker("stop", clean=exc_type is None, reason=None if exc is None else str(exc))
             self._finish_segment()
+        except BaseException as finalization_error:
+            if failure is None:
+                failure = finalization_error
+            else:
+                failure.add_note(f"writer finalization also failed: {finalization_error}")
+            # A preceding clean stop marker is intent, not proof of successful fsync.
+            try:
+                self.marker("finalization_failure", clean=False, reason=str(finalization_error))
+            except BaseException:
+                pass
         finally:
-            self._release()
+            try:
+                self._release()
+            except BaseException as release_error:
+                if failure is None:
+                    failure = release_error
+                else:
+                    failure.add_note(f"writer release also failed: {release_error}")
+        if failure is not None and failure is not exc:
+            raise failure
 
     def _line(self, record: dict[str, Any]) -> None:
         if self._file is None:
@@ -156,7 +219,11 @@ class RawWriter:
 
     def _finish_segment(self) -> None:
         if self._file is not None:
-            self._line(self._control("segment_end", segment=self.paths[-1].name))
+            self._line(
+                self._control(
+                    "segment_end", segment=self._path.name if self._path is not None else None
+                )
+            )
             os.fsync(self._file.fileno())
             self._file.close()
             self._file = None
@@ -169,9 +236,12 @@ class RawWriter:
         if self._file is None or stamp[:10] != self._date or self._size + size > self.max_bytes:
             self._finish_segment()
             self._date = stamp[:10]
-            path = self.directory / f"{self._date}-{self.session}-{len(self.paths):06d}.ndjson"
+            path = self.directory / f"{self._date}-{self.session}-{self.segment_count:06d}.ndjson"
             self._file = path.open("x", encoding="utf-8")
-            self.paths.append(path)
+            self._path = path
+            self.segment_count += 1
+            if self.retain_paths:
+                self.paths.append(path)
             self._size = 0
             self._line(self._control("segment_start", segment=path.name))
         self._line(record)
@@ -264,55 +334,62 @@ async def receive_public(writer: RawWriter, coins: list[str], *, max_reconnects:
         writer.marker("connect_failure", reason=str(exc), gap_start_utc=gap_start)
         return exc if failures > max_reconnects else process_exception(exc)
 
-    async for websocket in connect(
-        WS_URL,
-        process_exception=connection_error,
-        open_timeout=10,
-        ping_interval=20,
-        ping_timeout=20,
-        close_timeout=5,
-        max_queue=16,
-    ):
-        writer.marker("connect" if gap_start is None else "reconnect")
-        last_received = utc_now()
-        acknowledgments: set[tuple[str, str]] = set()
-        try:
-            for coin, channel in sorted(expected):
-                subscription = {"type": channel, "coin": coin}
-                await websocket.send(
-                    json.dumps({"method": "subscribe", "subscription": subscription})
+    connections = cast(
+        AsyncGenerator[Any, None],
+        connect(
+            WS_URL,
+            process_exception=connection_error,
+            open_timeout=10,
+            ping_interval=20,
+            ping_timeout=20,
+            close_timeout=5,
+            max_queue=16,
+        ).__aiter__(),
+    )
+    async with aclosing(connections):
+        async for websocket in connections:
+            writer.marker("connect" if gap_start is None else "reconnect")
+            last_received = utc_now()
+            acknowledgments: set[tuple[str, str]] = set()
+            try:
+                for coin, channel in sorted(expected):
+                    subscription = {"type": channel, "coin": coin}
+                    await websocket.send(
+                        json.dumps({"method": "subscribe", "subscription": subscription})
+                    )
+                    writer.marker("subscribe", subscription=subscription)
+                ack_deadline = time.monotonic() + 30
+                while True:
+                    if acknowledgments != expected and time.monotonic() >= ack_deadline:
+                        raise ValueError("missing subscription acknowledgments")
+                    try:
+                        frame = await asyncio.wait_for(websocket.recv(), timeout=5)
+                    except TimeoutError:
+                        await websocket.send('{"method":"ping"}')
+                        continue
+                    stamp = utc_now()
+                    last_received = stamp
+                    raw = json.loads(frame)
+                    record_message(writer, raw, stamp, coins)
+                    if raw["channel"] == "subscriptionResponse":
+                        subscription = raw["data"]["subscription"]
+                        acknowledgments.add((subscription["coin"], subscription["type"]))
+                        if acknowledgments == expected:
+                            writer.marker("subscriptions_ready")
+                            if gap_start is not None:
+                                writer.marker(
+                                    "gap", start_utc=gap_start, end_utc=stamp, missing="UNKNOWN"
+                                )
+                                gap_start = None
+            except ConnectionClosed as exc:
+                failures += 1
+                gap_start = gap_start or last_received
+                writer.marker(
+                    "disconnect", reason=str(exc), gap_start_utc=gap_start, missing="UNKNOWN"
                 )
-                writer.marker("subscribe", subscription=subscription)
-            ack_deadline = time.monotonic() + 30
-            while True:
-                if acknowledgments != expected and time.monotonic() >= ack_deadline:
-                    raise ValueError("missing subscription acknowledgments")
-                try:
-                    frame = await asyncio.wait_for(websocket.recv(), timeout=5)
-                except TimeoutError:
-                    await websocket.send('{"method":"ping"}')
-                    continue
-                stamp = utc_now()
-                last_received = stamp
-                raw = json.loads(frame)
-                record_message(writer, raw, stamp, coins)
-                if raw["channel"] == "subscriptionResponse":
-                    subscription = raw["data"]["subscription"]
-                    acknowledgments.add((subscription["coin"], subscription["type"]))
-                    if acknowledgments == expected:
-                        writer.marker("subscriptions_ready")
-                        if gap_start is not None:
-                            writer.marker(
-                                "gap", start_utc=gap_start, end_utc=stamp, missing="UNKNOWN"
-                            )
-                            gap_start = None
-        except ConnectionClosed as exc:
-            failures += 1
-            gap_start = gap_start or last_received
-            writer.marker("disconnect", reason=str(exc), gap_start_utc=gap_start, missing="UNKNOWN")
-            if failures > max_reconnects:
-                raise
-            continue
+                if failures > max_reconnects:
+                    raise
+                continue
 
 
 async def capture(directory: Path, *, duration: float = 180) -> dict[str, Any]:
@@ -362,4 +439,91 @@ async def capture(directory: Path, *, duration: float = 180) -> dict[str, Any]:
             for path in writer.paths
         ],
         "persistent_host_capture": False,
+    }
+
+
+async def _discover_continuous(stop: StopIntent) -> tuple[list[str], list[dict[str, Any]]] | None:
+    """Own and boundedly join one discovery worker; never use the default executor."""
+    outcome: list[tuple[list[str], list[dict[str, Any]]] | BaseException] = []
+
+    def work() -> None:
+        try:
+            outcome.append(discover_coins(stop=stop))
+        except BaseException as exc:
+            outcome.append(exc)
+
+    worker = threading.Thread(target=work, name="hyperliquid-public-discovery", daemon=True)
+    worker.start()
+
+    async def join() -> None:
+        while worker.is_alive():
+            if (
+                stop.requested_at is not None
+                and time.monotonic() - stop.requested_at >= DISCOVERY_STOP_SECONDS
+            ):
+                raise TimeoutError("metadata discovery did not stop within join budget")
+            await asyncio.sleep(0.02)
+        worker.join(timeout=0)
+
+    try:
+        await join()
+    except BaseException:
+        stop.request()
+        await join()
+        # Do not discard a real metadata failure racing external cancellation.
+        if (
+            outcome
+            and isinstance(outcome[0], BaseException)
+            and not isinstance(outcome[0], DiscoveryStopped)
+        ):
+            raise outcome[0] from None
+        raise
+    result = outcome[0]
+    if isinstance(result, DiscoveryStopped):
+        if not stop.event.is_set():
+            raise RuntimeError("discovery stopped without requested shutdown")
+        return None
+    if isinstance(result, BaseException):
+        raise result
+    return result
+
+
+async def _receive_until_stop(writer: RawWriter, coins: list[str], stop: StopIntent) -> None:
+    receiver = asyncio.create_task(receive_public(writer, coins))
+    stopping = asyncio.create_task(stop.event.wait())
+    try:
+        await asyncio.wait((receiver, stopping), return_when=asyncio.FIRST_COMPLETED)
+        if receiver.done():
+            receiver.result()  # Provider/storage failure wins even when stop is ready.
+            raise RuntimeError("public receiver ended unexpectedly")
+        receiver.cancel()
+        with suppress(asyncio.CancelledError):
+            await receiver
+    finally:
+        stopping.cancel()
+        with suppress(asyncio.CancelledError):
+            await stopping
+        if not receiver.done():
+            receiver.cancel()
+            with suppress(asyncio.CancelledError):
+                await receiver
+
+
+async def capture_continuous(directory: Path, *, stop: StopIntent) -> dict[str, Any]:
+    """Explicit indefinite public recording; success only after requested clean stop."""
+    with RawWriter(directory, retain_paths=False) as writer:
+        discovered = await _discover_continuous(stop)
+        if discovered is not None:
+            coins, evidence = discovered
+            for item in evidence:
+                writer.marker("discovery", **item)
+            writer.marker("coins", venue_coins=coins)
+            if not stop.event.is_set():
+                await _receive_until_stop(writer, coins, stop)
+        writer.marker("requested_stop")
+    return {
+        "mode": "continuous",
+        "termination": "clean_requested_stop",
+        "session_id": writer.session,
+        "segments": writer.segment_count,
     }
