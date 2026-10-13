@@ -40,7 +40,7 @@ SECRET_VALUE = re.compile(
 
 
 def _reject_secret(path: Path) -> None:
-    if path.suffix in {".py", ".sh", ".json", ".example", ".md", ".toml"}:
+    if path.suffix in {".py", ".sh", ".json", ".example", ".md", ".toml", ".service"}:
         data = path.read_bytes()
         if (
             (b"-----BEGIN " + b"PRIVATE KEY-----\n") in data
@@ -145,6 +145,23 @@ SERVICE_STATE="$(systemctl is-active trader-assist-v0-three-setup.service 2>/dev
 [[ ! -e /etc/trader-assist-v0/three-setup-activation-permit ]] || {
   echo "activation permit exists" >&2; exit 2;
 }
+RAW_SERVICE_STATE="$(
+  systemctl is-active trader-assist-v0-hyperliquid-raw-capture.service 2>/dev/null || true
+)"
+[[ "$RAW_SERVICE_STATE" == "inactive" || "$RAW_SERVICE_STATE" == "unknown" ]] || {
+  echo "public recorder service is not stopped" >&2; exit 2;
+}
+RAW_ENABLE_STATE="$(
+  systemctl is-enabled trader-assist-v0-hyperliquid-raw-capture.service 2>/dev/null || true
+)"
+[[ "$RAW_ENABLE_STATE" == "disabled" || "$RAW_ENABLE_STATE" == "static"
+   || "$RAW_ENABLE_STATE" == "not-found" ]] || {
+  echo "public recorder service is not default OFF" >&2; exit 2;
+}
+[[ ! -e /etc/trader-assist-v0/hyperliquid-raw-capture-permit
+   && ! -L /etc/trader-assist-v0/hyperliquid-raw-capture-permit ]] || {
+  echo "public recorder permit exists" >&2; exit 2;
+}
 PYTHONPATH="$BUNDLE_ROOT/payload/src:$BUNDLE_ROOT/payload" python3.12 -B \
   "$BUNDLE_ROOT/payload/scripts/three_setup_shadow_preflight.py" --host-only \
   --host-wheel "$BUNDLE_ROOT/__WHEEL_NAME__"
@@ -164,6 +181,10 @@ echo "PREINSTALL_VERIFY=PASS; SERVICE=STOPPED; ACTIVATION=DEFAULT_OFF"
 }
 id traderassist >/dev/null 2>&1 || {
   echo "existing traderassist service identity is required" >&2; exit 2;
+}
+[[ ! -e /etc/systemd/system/trader-assist-v0-hyperliquid-raw-capture.service
+   && ! -L /etc/systemd/system/trader-assist-v0-hyperliquid-raw-capture.service ]] || {
+  echo "existing public recorder unit requires separate rollback handling" >&2; exit 2;
 }
 getent group traderassist >/dev/null || {
   echo "existing traderassist group is required" >&2; exit 2;
@@ -197,11 +218,16 @@ if [[ -d "$BUNDLE_ROOT/identity" ]]; then
 fi
 install -m 0644 /opt/trader-assist-v0/deploy/p4a/systemd/trader-assist-v0-three-setup.service \
   /etc/systemd/system/trader-assist-v0-three-setup.service
+install -m 0644 \\
+  /opt/trader-assist-v0/deploy/p4a/systemd/trader-assist-v0-hyperliquid-raw-capture.service \
+  /etc/systemd/system/trader-assist-v0-hyperliquid-raw-capture.service
 # Unit installation does not reload, start, restart or enable the service.
 export PYTHONPATH=/opt/trader-assist-v0/src:/opt/trader-assist-v0
 /opt/trader-assist-v0/venv/bin/python /opt/trader-assist-v0/scripts/check_dependency_lock.py \
   --verify-target-runtime-installed --staged-source /opt/trader-assist-v0/src \
   --pip-check-with "$(command -v python3.12)"
+/opt/trader-assist-v0/venv/bin/python -B \\
+  /opt/trader-assist-v0/scripts/hyperliquid_raw_capture.py --help >/dev/null
 echo "INSTALL_VERIFIED=PASS; SERVICE=STOPPED; ACTIVATION=DEFAULT_OFF"
 '''
     return script.replace('__WHEEL_NAME__', wheel_name)

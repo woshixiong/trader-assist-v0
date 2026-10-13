@@ -11,10 +11,13 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
+import sysconfig
 import tarfile
+import venv
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -25,6 +28,12 @@ import pytest
 from scripts import build_three_setup_shadow_deployment_bundle as builder
 from scripts.build_multi_asset_registry_seed import build_launch_identity
 from scripts.e4_nautilus_public_data_probe import launch_bars
+from scripts.verify_exact_release import (
+    ExactReleaseError,
+    build_release_manifest,
+    release_paths,
+    verify_staged_release,
+)
 from tests.test_three_setup_shadow_launch_readiness import _candidate_repo
 from trader_assist_v0.contracts.common import canonical_json_bytes
 from trader_assist_v0.multi_asset_shadow.models import RegistryVersion
@@ -1125,8 +1134,15 @@ elif name == 'rm':
     else:
         shutil.rmtree(path)
 elif name == 'systemctl':
-    assert args == ['is-active', 'trader-assist-v0-three-setup.service']
-    print('inactive')
+    assert args[1] in ('trader-assist-v0-three-setup.service',
+                       'trader-assist-v0-hyperliquid-raw-capture.service')
+    assert args[0] in ('is-active', 'is-enabled')
+    if args[1] == 'trader-assist-v0-hyperliquid-raw-capture.service':
+        print(os.environ.get('RAW_SERVICE_STATE', 'inactive') if args[0] == 'is-active'
+              else os.environ.get('RAW_ENABLE_STATE', 'not-found'))
+    else:
+        assert args[0] == 'is-active'
+        print('inactive')
 elif name == 'python3.12' and '-' in args:
     code = sys.stdin.read()
     version = '(3, 11)' if failure == 'python_identity' else '(3, 12)'
@@ -1416,6 +1432,84 @@ def simulation_namespace() -> dict[str, Any]:
     return namespace
 
 
+def installed_service_units() -> set[Path]:
+    """Read unit destinations from the actual emitted installer, without running it."""
+    script = builder._remote_script("fixture.whl").replace("\\\n", " ")
+    units = set()
+    for line in script.splitlines():
+        if line.lstrip().startswith("install "):
+            command = shlex.split(line)
+            destination = Path(command[-1])
+            if destination.suffix == ".service":
+                assert destination.parent == Path("/etc/systemd/system")
+                units.add(destination)
+    assert len(units) >= 2
+    return units
+
+
+def test_simulation_inventory_covers_actual_installed_units() -> None:
+    namespace = simulation_namespace()
+    assert installed_service_units() <= set(namespace["DESTINATIONS"])
+
+
+@pytest.mark.parametrize("unit_kind", ["regular", "broken_symlink", "foreign_symlink"])
+@pytest.mark.parametrize("remove_unit", [True, False], ids=["removed", "removal-fails"])
+def test_simulation_real_inventory_cleanup(
+    tmp_path: Path, unit_kind: str, remove_unit: bool
+) -> None:
+    namespace = simulation_namespace()
+    destinations = namespace["DESTINATIONS"]
+    units = installed_service_units()
+    assert units <= set(destinations)
+    assert set(destinations) == {
+        Path("/opt/trader-assist-v0"), Path("/etc/trader-assist-v0"),
+        Path("/var/lib/trader-assist-v0"), *units,
+    }
+    # Keep the real inventory intact. Only external command/filesystem effects
+    # are mapped to this test's disposable tree; no host path is ever touched.
+    mapped = {path: tmp_path / "host" / path.relative_to("/") for path in destinations}
+    sentinel = tmp_path / "host/etc/systemd/system/unrelated.service"
+    sentinel.parent.mkdir(parents=True)
+    sentinel.write_text("preserve")
+    recorder = Path("/etc/systemd/system/trader-assist-v0-hyperliquid-raw-capture.service")
+    for path, target in mapped.items():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if path == recorder and unit_kind != "regular":
+            target.symlink_to(sentinel if unit_kind == "foreign_symlink" else tmp_path / "missing")
+        elif path in units:
+            target.write_text("owned unit")
+        else:
+            target.mkdir()
+            (target / "owned").write_text("owned state")
+    real_absent = namespace["absent"]
+    namespace["absent"] = lambda path: real_absent(mapped[path])
+    calls = []
+
+    def fake_run(args: list[str]) -> None:
+        path = Path(args[-1])
+        assert path in destinations
+        assert args == ["sudo", "-n", "rm", "-rf", "--", str(path)]
+        calls.append(path)
+        if path == recorder and not remove_unit:
+            return
+        target = mapped[path]
+        if target.is_symlink() or target.is_file():
+            target.unlink()
+        else:
+            shutil.rmtree(target)
+
+    namespace["run"] = fake_run
+    assert namespace["cleanup"](False, None, None, None) == []
+    assert not calls
+    assert all(not real_absent(target) for target in mapped.values())
+    errors = namespace["cleanup"](True, None, None, None)
+    assert calls == list(destinations)
+    assert errors == ([] if remove_unit else [f"cleanup left {recorder}"])
+    assert all(real_absent(target) for path, target in mapped.items()
+               if path != recorder or remove_unit)
+    assert sentinel.read_text() == "preserve"
+
+
 def test_disposable_simulation_composition() -> None:
     job = parse_workflow(WORKFLOW.read_text())["jobs"]["build-release-bundle"]
     ids = [step.get("id") for step in job["steps"]]
@@ -1547,3 +1641,190 @@ def test_simulation_cleanup_failure_preserves_original_status(original_status: i
     block = ast.Module(body=guarded.finalbody[1:], type_ignores=[])
     exec(compile(ast.fix_missing_locations(block), "simulation-cleanup-status", "exec"), namespace)
     assert namespace["status"] == (original_status or 1)
+
+
+RAW_CLI = "scripts/hyperliquid_raw_capture.py"
+RAW_UNIT = "deploy/p4a/systemd/trader-assist-v0-hyperliquid-raw-capture.service"
+RAW_MODULE = "src/trader_assist_v0/hyperliquid_raw_capture.py"
+
+
+def test_recorder_bundle_payload_and_default_off(raw_bundle_fixture: dict[str, str]) -> None:
+    bundle = Path(raw_bundle_fixture["BUILD_ROOT"]) / "bundle"
+    release = json.loads((bundle / "release-manifest.json").read_bytes())
+    transfer = json.loads((bundle / "bundle-manifest.json").read_bytes())
+    for relative in (RAW_CLI, RAW_UNIT):
+        data = (bundle / "payload" / relative).read_bytes()
+        entry = next(item for item in release["files"] if item["path"] == relative)
+        assert entry["sha256"] == hashlib.sha256(data).hexdigest()
+        assert entry["size"] == len(data)
+        assert (
+            next(item for item in transfer["files"] if item["path"] == "payload/" + relative)[
+                "sha256"
+            ]
+            == entry["sha256"]
+        )
+    script = (bundle / "remote-qualification.sh").read_text()
+    assert_pass(
+        subprocess.run(["bash", "-n"], input=script, text=True, capture_output=True, check=False)
+    )
+    assert "install -m 0644 /opt/trader-assist-v0/" + RAW_UNIT in " ".join(
+        script.replace(chr(92) + "\n", " ").split()
+    )
+    assert "/etc/systemd/system/trader-assist-v0-hyperliquid-raw-capture.service" in script
+    probe = "/opt/trader-assist-v0/venv/bin/python -B /opt/trader-assist-v0/" + RAW_CLI
+    assert probe + " --help" in " ".join(script.replace(chr(92) + "\n", " ").split())
+    assert not re.search(r"systemctl\s+(?:start|restart|enable|daemon-reload)\b", script)
+    permit = "/etc/trader-assist-v0/hyperliquid-raw-capture-permit"
+    assert "[[ ! -e " + permit in script
+    assert "&& ! -L " + permit in script
+    unit = (ROOT / RAW_UNIT).read_text()
+    assert (
+        "ExecStart=/opt/trader-assist-v0/venv/bin/python /opt/trader-assist-v0/" + RAW_CLI in unit
+    )
+    assert "ConditionPathExists=" + permit in unit
+    assert "Restart=no" in unit
+    assert "[Install]" not in [
+        line.strip() for line in unit.splitlines() if not line.startswith("#")
+    ]
+    assert not any("permit" in path.name for path in bundle.rglob("*"))
+
+
+@pytest.fixture
+def recorder_staged_release(tmp_path: Path) -> tuple[Path, dict[str, object]]:
+    staged = tmp_path / "staged"
+    for source in release_paths(ROOT):
+        target = staged / source.relative_to(ROOT)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+    manifest = build_release_manifest(staged, release_sha=SHA, release_tree=TREE)
+    return staged, manifest
+
+
+@pytest.mark.parametrize("site_flags", [(), ("-S",)], ids=["normal", "no-ambient-site"])
+def test_recorder_staged_offline_import(
+    recorder_staged_release: tuple[Path, dict[str, object]],
+    site_flags: tuple[str, ...],
+) -> None:
+    staged, manifest = recorder_staged_release
+    assert not (staged / ".git").exists()
+    assert {RAW_CLI, RAW_MODULE, RAW_UNIT} <= {entry["path"] for entry in manifest["files"]}
+    verify_staged_release(
+        staged,
+        manifest,
+        expected_release_sha=SHA,
+        expected_release_tree=TREE,
+        expected_manifest_digest=str(manifest["manifest_sha256"]),
+    )
+    # Build a real offline venv; a bare interpreter symlink loses CI's venv packages.
+    # Expose only the qualified test runtime's package directories, explicitly.
+    venv.EnvBuilder(with_pip=False).create(staged / "venv")
+    python = staged / "venv/bin/python"
+    runtime_paths = sorted({sysconfig.get_path("purelib"), sysconfig.get_path("platlib")})
+    environment = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join([str(staged / "src"), *runtime_paths]),
+    }
+    probe = subprocess.run(
+        [
+            str(python), "-B", "-c",
+            "import sys, pathlib, websockets, trader_assist_v0.hyperliquid_raw_capture as raw; "
+            "assert pathlib.Path(sys.prefix) == pathlib.Path(sys.argv[1]) / 'venv'; "
+            "assert pathlib.Path(raw.__file__) == pathlib.Path(sys.argv[1]) / sys.argv[2]; "
+            "assert any(pathlib.Path(websockets.__file__).is_relative_to(pathlib.Path(p)) "
+            "for p in sys.argv[3:])",
+            str(staged), RAW_MODULE, *runtime_paths,
+        ],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=20,
+    )
+    assert_pass(probe)
+    result = subprocess.run(
+        [str(python), *site_flags, "-B", str(staged / RAW_CLI), "--help"],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=20,
+    )
+    assert_pass(result)
+    assert "--continuous" in result.stdout
+    assert not list(staged.rglob("*.ndjson"))
+
+
+@pytest.mark.parametrize("relative", [RAW_CLI, RAW_UNIT, RAW_MODULE])
+@pytest.mark.parametrize("mutation", ["missing", "tamper", "symlink", "omit_rehashed"])
+def test_recorder_staged_rejects_mutation(
+    recorder_staged_release: tuple[Path, dict[str, object]], relative: str, mutation: str
+) -> None:
+    staged, manifest = recorder_staged_release
+    target = staged / relative
+    if mutation == "missing":
+        target.unlink()
+    elif mutation == "tamper":
+        target.write_bytes(target.read_bytes() + b"\n# corruption\n")
+    elif mutation == "symlink":
+        original = target.with_suffix(".original")
+        target.rename(original)
+        target.symlink_to(original)
+    else:
+        manifest["files"] = [entry for entry in manifest["files"] if entry["path"] != relative]
+        manifest["source_file_count"] = len(manifest["files"])
+        manifest["manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(
+                {key: value for key, value in manifest.items() if key != "manifest_sha256"}
+            )
+        ).hexdigest()
+    with pytest.raises(ExactReleaseError):
+        verify_staged_release(
+            staged, manifest, expected_release_sha=SHA, expected_release_tree=TREE
+        )
+
+
+@pytest.mark.parametrize("relative", [RAW_CLI, RAW_UNIT])
+def test_recorder_secret_rejected(tmp_path: Path, relative: str) -> None:
+    path = tmp_path / relative
+    path.parent.mkdir(parents=True)
+    path.write_text('token="abcdefghijk"\n')
+    with pytest.raises(builder.BundleError, match="secret-shaped"):
+        builder._reject_secret(path)
+
+
+@pytest.mark.parametrize(
+    "variable,state",
+    [
+        ("RAW_SERVICE_STATE", "active"),
+        ("RAW_SERVICE_STATE", "activating"),
+        ("RAW_SERVICE_STATE", "failed"),
+        ("RAW_ENABLE_STATE", "enabled"),
+        ("RAW_ENABLE_STATE", "enabled-runtime"),
+        ("RAW_ENABLE_STATE", ""),
+    ],
+)
+def test_recorder_activation_refused(
+    target_fixture: dict[str, str], variable: str, state: str
+) -> None:
+    target_fixture[variable] = state
+    result = target_run(target_fixture)
+    assert result.returncode == 2
+    assert "public recorder service is not" in result.stderr
+    assert not any("--host-only" in item["argv"] for item in process_records(target_fixture))
+
+
+@pytest.mark.parametrize("kind", ["absent", "file", "directory", "broken_symlink"])
+def test_recorder_permit_guard_without_host_work(tmp_path: Path, kind: str) -> None:
+    permit = tmp_path / "hyperliquid-raw-capture-permit"
+    if kind == "file":
+        permit.touch()
+    elif kind == "directory":
+        permit.mkdir()
+    elif kind == "broken_symlink":
+        permit.symlink_to(tmp_path / "missing")
+    script = builder._remote_script("fixture.whl")
+    start = script.index("[[ ! -e /etc/trader-assist-v0/hyperliquid-raw-capture-permit")
+    guard = script[start:script.index("\n}", start) + 2]
+    guard = guard.replace("/etc/trader-assist-v0/hyperliquid-raw-capture-permit", str(permit))
+    result = subprocess.run(["bash", "-c", guard], capture_output=True, text=True, check=False)
+    assert result.returncode == (0 if kind == "absent" else 2)
