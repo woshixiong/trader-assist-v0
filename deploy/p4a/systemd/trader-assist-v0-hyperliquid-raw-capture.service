@@ -1,0 +1,37 @@
+[Unit]
+Description=Trader Assist public Hyperliquid raw capture (explicit opt-in)
+Documentation=https://github.com/woshixiong/trader-assist-v0/issues/328
+After=network-online.target
+Wants=network-online.target
+# Dedicated permit is absent by default. This source package never creates it.
+ConditionPathExists=/etc/trader-assist-v0/hyperliquid-raw-capture-permit
+
+[Service]
+Type=simple
+User=traderassist
+Group=traderassist
+Environment=PYTHONPATH=/opt/trader-assist-v0/src
+ExecStart=/opt/trader-assist-v0/venv/bin/python /opt/trader-assist-v0/scripts/hyperliquid_raw_capture.py --continuous --output /var/lib/trader-assist-v0-hyperliquid-raw-capture
+Restart=no
+KillSignal=SIGTERM
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=trader-assist-v0-hyperliquid-raw-capture
+StateDirectory=trader-assist-v0-hyperliquid-raw-capture
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+CapabilityBoundingSet=
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/trader-assist-v0-hyperliquid-raw-capture
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+# No [Install] target: no boot enablement is provided.
