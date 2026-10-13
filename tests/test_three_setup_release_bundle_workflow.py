@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -1429,6 +1430,84 @@ def simulation_namespace() -> dict[str, Any]:
     namespace: dict[str, Any] = {}
     exec(compile(code.removesuffix("main()"), "simulation-functions", "exec"), namespace)
     return namespace
+
+
+def installed_service_units() -> set[Path]:
+    """Read unit destinations from the actual emitted installer, without running it."""
+    script = builder._remote_script("fixture.whl").replace("\\\n", " ")
+    units = set()
+    for line in script.splitlines():
+        if line.lstrip().startswith("install "):
+            command = shlex.split(line)
+            destination = Path(command[-1])
+            if destination.suffix == ".service":
+                assert destination.parent == Path("/etc/systemd/system")
+                units.add(destination)
+    assert len(units) >= 2
+    return units
+
+
+def test_simulation_inventory_covers_actual_installed_units() -> None:
+    namespace = simulation_namespace()
+    assert installed_service_units() <= set(namespace["DESTINATIONS"])
+
+
+@pytest.mark.parametrize("unit_kind", ["regular", "broken_symlink", "foreign_symlink"])
+@pytest.mark.parametrize("remove_unit", [True, False], ids=["removed", "removal-fails"])
+def test_simulation_real_inventory_cleanup(
+    tmp_path: Path, unit_kind: str, remove_unit: bool
+) -> None:
+    namespace = simulation_namespace()
+    destinations = namespace["DESTINATIONS"]
+    units = installed_service_units()
+    assert units <= set(destinations)
+    assert set(destinations) == {
+        Path("/opt/trader-assist-v0"), Path("/etc/trader-assist-v0"),
+        Path("/var/lib/trader-assist-v0"), *units,
+    }
+    # Keep the real inventory intact. Only external command/filesystem effects
+    # are mapped to this test's disposable tree; no host path is ever touched.
+    mapped = {path: tmp_path / "host" / path.relative_to("/") for path in destinations}
+    sentinel = tmp_path / "host/etc/systemd/system/unrelated.service"
+    sentinel.parent.mkdir(parents=True)
+    sentinel.write_text("preserve")
+    recorder = Path("/etc/systemd/system/trader-assist-v0-hyperliquid-raw-capture.service")
+    for path, target in mapped.items():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if path == recorder and unit_kind != "regular":
+            target.symlink_to(sentinel if unit_kind == "foreign_symlink" else tmp_path / "missing")
+        elif path in units:
+            target.write_text("owned unit")
+        else:
+            target.mkdir()
+            (target / "owned").write_text("owned state")
+    real_absent = namespace["absent"]
+    namespace["absent"] = lambda path: real_absent(mapped[path])
+    calls = []
+
+    def fake_run(args: list[str]) -> None:
+        path = Path(args[-1])
+        assert path in destinations
+        assert args == ["sudo", "-n", "rm", "-rf", "--", str(path)]
+        calls.append(path)
+        if path == recorder and not remove_unit:
+            return
+        target = mapped[path]
+        if target.is_symlink() or target.is_file():
+            target.unlink()
+        else:
+            shutil.rmtree(target)
+
+    namespace["run"] = fake_run
+    assert namespace["cleanup"](False, None, None, None) == []
+    assert not calls
+    assert all(not real_absent(target) for target in mapped.values())
+    errors = namespace["cleanup"](True, None, None, None)
+    assert calls == list(destinations)
+    assert errors == ([] if remove_unit else [f"cleanup left {recorder}"])
+    assert all(real_absent(target) for path, target in mapped.items()
+               if path != recorder or remove_unit)
+    assert sentinel.read_text() == "preserve"
 
 
 def test_disposable_simulation_composition() -> None:

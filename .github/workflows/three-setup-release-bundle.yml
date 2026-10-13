@@ -510,6 +510,7 @@ jobs:
               Path('/opt/trader-assist-v0'), Path('/etc/trader-assist-v0'),
               Path('/var/lib/trader-assist-v0'),
               Path('/etc/systemd/system/trader-assist-v0-three-setup.service'),
+              Path('/etc/systemd/system/trader-assist-v0-hyperliquid-raw-capture.service'),
           )
           UNIT = 'trader-assist-v0-three-setup.service'
 
