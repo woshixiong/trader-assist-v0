@@ -25,6 +25,12 @@ import pytest
 from scripts import build_three_setup_shadow_deployment_bundle as builder
 from scripts.build_multi_asset_registry_seed import build_launch_identity
 from scripts.e4_nautilus_public_data_probe import launch_bars
+from scripts.verify_exact_release import (
+    ExactReleaseError,
+    build_release_manifest,
+    release_paths,
+    verify_staged_release,
+)
 from tests.test_three_setup_shadow_launch_readiness import _candidate_repo
 from trader_assist_v0.contracts.common import canonical_json_bytes
 from trader_assist_v0.multi_asset_shadow.models import RegistryVersion
@@ -1125,8 +1131,15 @@ elif name == 'rm':
     else:
         shutil.rmtree(path)
 elif name == 'systemctl':
-    assert args == ['is-active', 'trader-assist-v0-three-setup.service']
-    print('inactive')
+    assert args[1] in ('trader-assist-v0-three-setup.service',
+                       'trader-assist-v0-hyperliquid-raw-capture.service')
+    assert args[0] in ('is-active', 'is-enabled')
+    if args[1] == 'trader-assist-v0-hyperliquid-raw-capture.service':
+        print(os.environ.get('RAW_SERVICE_STATE', 'inactive') if args[0] == 'is-active'
+              else os.environ.get('RAW_ENABLE_STATE', 'not-found'))
+    else:
+        assert args[0] == 'is-active'
+        print('inactive')
 elif name == 'python3.12' and '-' in args:
     code = sys.stdin.read()
     version = '(3, 11)' if failure == 'python_identity' else '(3, 12)'
@@ -1547,3 +1560,166 @@ def test_simulation_cleanup_failure_preserves_original_status(original_status: i
     block = ast.Module(body=guarded.finalbody[1:], type_ignores=[])
     exec(compile(ast.fix_missing_locations(block), "simulation-cleanup-status", "exec"), namespace)
     assert namespace["status"] == (original_status or 1)
+
+
+RAW_CLI = "scripts/hyperliquid_raw_capture.py"
+RAW_UNIT = "deploy/p4a/systemd/trader-assist-v0-hyperliquid-raw-capture.service"
+RAW_MODULE = "src/trader_assist_v0/hyperliquid_raw_capture.py"
+
+
+def test_recorder_bundle_payload_and_default_off(raw_bundle_fixture: dict[str, str]) -> None:
+    bundle = Path(raw_bundle_fixture["BUILD_ROOT"]) / "bundle"
+    release = json.loads((bundle / "release-manifest.json").read_bytes())
+    transfer = json.loads((bundle / "bundle-manifest.json").read_bytes())
+    for relative in (RAW_CLI, RAW_UNIT):
+        data = (bundle / "payload" / relative).read_bytes()
+        entry = next(item for item in release["files"] if item["path"] == relative)
+        assert entry["sha256"] == hashlib.sha256(data).hexdigest()
+        assert entry["size"] == len(data)
+        assert (
+            next(item for item in transfer["files"] if item["path"] == "payload/" + relative)[
+                "sha256"
+            ]
+            == entry["sha256"]
+        )
+    script = (bundle / "remote-qualification.sh").read_text()
+    assert_pass(
+        subprocess.run(["bash", "-n"], input=script, text=True, capture_output=True, check=False)
+    )
+    assert "install -m 0644 /opt/trader-assist-v0/" + RAW_UNIT in " ".join(
+        script.replace(chr(92) + "\n", " ").split()
+    )
+    assert "/etc/systemd/system/trader-assist-v0-hyperliquid-raw-capture.service" in script
+    probe = "/opt/trader-assist-v0/venv/bin/python -B /opt/trader-assist-v0/" + RAW_CLI
+    assert probe + " --help" in " ".join(script.replace(chr(92) + "\n", " ").split())
+    assert not re.search(r"systemctl\s+(?:start|restart|enable|daemon-reload)\b", script)
+    permit = "/etc/trader-assist-v0/hyperliquid-raw-capture-permit"
+    assert "[[ ! -e " + permit in script
+    assert "&& ! -L " + permit in script
+    unit = (ROOT / RAW_UNIT).read_text()
+    assert (
+        "ExecStart=/opt/trader-assist-v0/venv/bin/python /opt/trader-assist-v0/" + RAW_CLI in unit
+    )
+    assert "ConditionPathExists=" + permit in unit
+    assert "Restart=no" in unit
+    assert "[Install]" not in [
+        line.strip() for line in unit.splitlines() if not line.startswith("#")
+    ]
+    assert not any("permit" in path.name for path in bundle.rglob("*"))
+
+
+@pytest.fixture
+def recorder_staged_release(tmp_path: Path) -> tuple[Path, dict[str, object]]:
+    staged = tmp_path / "staged"
+    for source in release_paths(ROOT):
+        target = staged / source.relative_to(ROOT)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+    manifest = build_release_manifest(staged, release_sha=SHA, release_tree=TREE)
+    return staged, manifest
+
+
+def test_recorder_staged_offline_import(
+    recorder_staged_release: tuple[Path, dict[str, object]],
+) -> None:
+    staged, manifest = recorder_staged_release
+    assert not (staged / ".git").exists()
+    assert {RAW_CLI, RAW_MODULE, RAW_UNIT} <= {entry["path"] for entry in manifest["files"]}
+    verify_staged_release(
+        staged,
+        manifest,
+        expected_release_sha=SHA,
+        expected_release_tree=TREE,
+        expected_manifest_digest=str(manifest["manifest_sha256"]),
+    )
+    # Exercise the unit's existing venv/source layout without installing dependencies.
+    python = staged / "venv/bin/python"
+    python.parent.mkdir(parents=True)
+    python.symlink_to(sys.executable)
+    result = subprocess.run(
+        [str(python), "-B", str(staged / RAW_CLI), "--help"],
+        env={**os.environ, "PYTHONPATH": str(staged / "src")},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=20,
+    )
+    assert_pass(result)
+    assert "--continuous" in result.stdout
+    assert not list(staged.rglob("*.ndjson"))
+
+
+@pytest.mark.parametrize("relative", [RAW_CLI, RAW_UNIT, RAW_MODULE])
+@pytest.mark.parametrize("mutation", ["missing", "tamper", "symlink", "omit_rehashed"])
+def test_recorder_staged_rejects_mutation(
+    recorder_staged_release: tuple[Path, dict[str, object]], relative: str, mutation: str
+) -> None:
+    staged, manifest = recorder_staged_release
+    target = staged / relative
+    if mutation == "missing":
+        target.unlink()
+    elif mutation == "tamper":
+        target.write_bytes(target.read_bytes() + b"\n# corruption\n")
+    elif mutation == "symlink":
+        original = target.with_suffix(".original")
+        target.rename(original)
+        target.symlink_to(original)
+    else:
+        manifest["files"] = [entry for entry in manifest["files"] if entry["path"] != relative]
+        manifest["source_file_count"] = len(manifest["files"])
+        manifest["manifest_sha256"] = hashlib.sha256(
+            canonical_json_bytes(
+                {key: value for key, value in manifest.items() if key != "manifest_sha256"}
+            )
+        ).hexdigest()
+    with pytest.raises(ExactReleaseError):
+        verify_staged_release(
+            staged, manifest, expected_release_sha=SHA, expected_release_tree=TREE
+        )
+
+
+@pytest.mark.parametrize("relative", [RAW_CLI, RAW_UNIT])
+def test_recorder_secret_rejected(tmp_path: Path, relative: str) -> None:
+    path = tmp_path / relative
+    path.parent.mkdir(parents=True)
+    path.write_text('token="abcdefghijk"\n')
+    with pytest.raises(builder.BundleError, match="secret-shaped"):
+        builder._reject_secret(path)
+
+
+@pytest.mark.parametrize(
+    "variable,state",
+    [
+        ("RAW_SERVICE_STATE", "active"),
+        ("RAW_SERVICE_STATE", "activating"),
+        ("RAW_SERVICE_STATE", "failed"),
+        ("RAW_ENABLE_STATE", "enabled"),
+        ("RAW_ENABLE_STATE", "enabled-runtime"),
+        ("RAW_ENABLE_STATE", ""),
+    ],
+)
+def test_recorder_activation_refused(
+    target_fixture: dict[str, str], variable: str, state: str
+) -> None:
+    target_fixture[variable] = state
+    result = target_run(target_fixture)
+    assert result.returncode == 2
+    assert "public recorder service is not" in result.stderr
+    assert not any("--host-only" in item["argv"] for item in process_records(target_fixture))
+
+
+@pytest.mark.parametrize("kind", ["absent", "file", "directory", "broken_symlink"])
+def test_recorder_permit_guard_without_host_work(tmp_path: Path, kind: str) -> None:
+    permit = tmp_path / "hyperliquid-raw-capture-permit"
+    if kind == "file":
+        permit.touch()
+    elif kind == "directory":
+        permit.mkdir()
+    elif kind == "broken_symlink":
+        permit.symlink_to(tmp_path / "missing")
+    script = builder._remote_script("fixture.whl")
+    start = script.index("[[ ! -e /etc/trader-assist-v0/hyperliquid-raw-capture-permit")
+    guard = script[start:script.index("\n}", start) + 2]
+    guard = guard.replace("/etc/trader-assist-v0/hyperliquid-raw-capture-permit", str(permit))
+    result = subprocess.run(["bash", "-c", guard], capture_output=True, text=True, check=False)
+    assert result.returncode == (0 if kind == "absent" else 2)

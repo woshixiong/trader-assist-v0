@@ -24,6 +24,7 @@ REQUIRED_FILES: Final = (
     "scripts/check_dependency_lock.py",
     "scripts/build_multi_asset_registry_seed.py",
     "scripts/e4_nautilus_public_data_probe.py",
+    "scripts/hyperliquid_raw_capture.py",
     "scripts/verify_exact_release.py",
     "scripts/three_setup_shadow_preflight.py",
     "scripts/build_three_setup_shadow_deployment_bundle.py",
@@ -33,6 +34,7 @@ REQUIRED_FILES: Final = (
     "deploy/p4a/config/three-setup-shadow.json.example",
     "deploy/p4a/systemd/trader-assist-v0-three-setup.env.example",
     "deploy/p4a/systemd/trader-assist-v0-three-setup.service",
+    "deploy/p4a/systemd/trader-assist-v0-hyperliquid-raw-capture.service",
     "deploy/p4a/evidence/three-setup-shadow-qualification-manifest-v1.json.example",
     "docs/operations/THREE_SETUP_SHADOW_DEPLOYMENT.md",
 )
