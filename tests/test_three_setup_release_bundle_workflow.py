@@ -14,7 +14,9 @@ import re
 import shutil
 import subprocess
 import sys
+import sysconfig
 import tarfile
+import venv
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -1619,8 +1621,10 @@ def recorder_staged_release(tmp_path: Path) -> tuple[Path, dict[str, object]]:
     return staged, manifest
 
 
+@pytest.mark.parametrize("site_flags", [(), ("-S",)], ids=["normal", "no-ambient-site"])
 def test_recorder_staged_offline_import(
     recorder_staged_release: tuple[Path, dict[str, object]],
+    site_flags: tuple[str, ...],
 ) -> None:
     staged, manifest = recorder_staged_release
     assert not (staged / ".git").exists()
@@ -1632,13 +1636,35 @@ def test_recorder_staged_offline_import(
         expected_release_tree=TREE,
         expected_manifest_digest=str(manifest["manifest_sha256"]),
     )
-    # Exercise the unit's existing venv/source layout without installing dependencies.
+    # Build a real offline venv; a bare interpreter symlink loses CI's venv packages.
+    # Expose only the qualified test runtime's package directories, explicitly.
+    venv.EnvBuilder(with_pip=False).create(staged / "venv")
     python = staged / "venv/bin/python"
-    python.parent.mkdir(parents=True)
-    python.symlink_to(sys.executable)
+    runtime_paths = sorted({sysconfig.get_path("purelib"), sysconfig.get_path("platlib")})
+    environment = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join([str(staged / "src"), *runtime_paths]),
+    }
+    probe = subprocess.run(
+        [
+            str(python), "-B", "-c",
+            "import sys, pathlib, websockets, trader_assist_v0.hyperliquid_raw_capture as raw; "
+            "assert pathlib.Path(sys.prefix) == pathlib.Path(sys.argv[1]) / 'venv'; "
+            "assert pathlib.Path(raw.__file__) == pathlib.Path(sys.argv[1]) / sys.argv[2]; "
+            "assert any(pathlib.Path(websockets.__file__).is_relative_to(pathlib.Path(p)) "
+            "for p in sys.argv[3:])",
+            str(staged), RAW_MODULE, *runtime_paths,
+        ],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=20,
+    )
+    assert_pass(probe)
     result = subprocess.run(
-        [str(python), "-B", str(staged / RAW_CLI), "--help"],
-        env={**os.environ, "PYTHONPATH": str(staged / "src")},
+        [str(python), *site_flags, "-B", str(staged / RAW_CLI), "--help"],
+        env=environment,
         capture_output=True,
         text=True,
         check=False,
