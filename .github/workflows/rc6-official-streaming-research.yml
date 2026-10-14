@@ -1,0 +1,71 @@
+name: rc6 official public streaming research
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    branches: [main]
+    paths:
+      - .github/workflows/rc6-official-streaming-research.yml
+      - tests/research/rc6_official_streaming_public_probe.py
+
+permissions:
+  contents: read
+
+jobs:
+  rc6-public-streaming:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.head_ref == 'research/rc6-official-streaming-gh-only-1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Use Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install isolated official rc6 wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv "$RUNNER_TEMP/rc6-venv"
+          source "$RUNNER_TEMP/rc6-venv/bin/activate"
+          python -m pip install --upgrade pip
+          mkdir -p "$RUNNER_TEMP/rc6-wheels"
+          python -m pip download --only-binary=:all: --no-deps --dest "$RUNNER_TEMP/rc6-wheels" 'nautilus-trader==2.0.0rc6'
+          mapfile -t WHEELS < <(find "$RUNNER_TEMP/rc6-wheels" -maxdepth 1 -type f -name '*.whl' -print)
+          if [ "${#WHEELS[@]}" -ne 1 ]; then
+            echo 'Expected exactly one official rc6 wheel' >&2
+            exit 1
+          fi
+          python -m pip install "${WHEELS[0]}"
+          echo "RC6_WHEEL_SHA256=$(sha256sum "${WHEELS[0]}" | cut -d ' ' -f1)" >> "$GITHUB_ENV"
+          echo "RC6_WHEEL_FILENAME=$(basename "${WHEELS[0]}")" >> "$GITHUB_ENV"
+
+      - name: Probe native four-family receipt staging and promotion
+        shell: bash
+        env:
+          RC6_REPO_BASE: ce4dc4d94f3d673762b7239576370db283f506ab
+          RC6_PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          RC6_RESULT_PATH: ${{ runner.temp }}/rc6-result.json
+          RC6_DATA_ROOT: ${{ runner.temp }}/rc6-native-data
+        run: |
+          set -euo pipefail
+          source "$RUNNER_TEMP/rc6-venv/bin/activate"
+          test "$(git rev-parse HEAD)" = "$RC6_PR_HEAD"
+          python tests/research/rc6_official_streaming_public_probe.py
+
+      - name: Upload only sanitized JSON evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rc6-public-streaming-result
+          path: ${{ runner.temp }}/rc6-result.json
+          if-no-files-found: warn
+          retention-days: 3
