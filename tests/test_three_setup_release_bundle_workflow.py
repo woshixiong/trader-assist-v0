@@ -1682,10 +1682,16 @@ def test_recorder_bundle_payload_and_default_off(raw_bundle_fixture: dict[str, s
         "ExecStart=/opt/trader-assist-v0/venv/bin/python /opt/trader-assist-v0/" + RAW_CLI in unit
     )
     assert "ConditionPathExists=" + permit in unit
-    assert "Restart=no" in unit
-    assert "[Install]" not in [
-        line.strip() for line in unit.splitlines() if not line.startswith("#")
-    ]
+    # Native recovery is opt-in: install may expose WantedBy, but must never
+    # enable/start the service or create the required permit by itself.
+    assert "Restart=on-failure" in unit
+    assert "RestartSec=30" in unit
+    assert "RestartPreventExitStatus=74 78" in unit
+    assert "StartLimitIntervalSec=120" in unit
+    assert "StartLimitBurst=5" in unit
+    active_lines = [line.strip() for line in unit.splitlines() if not line.startswith("#")]
+    assert "[Install]" in active_lines
+    assert "WantedBy=multi-user.target" in active_lines
     assert not any("permit" in path.name for path in bundle.rglob("*"))
 
 
