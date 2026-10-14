@@ -84,19 +84,20 @@ Literal future layout assumptions:
 The interpreter matches the existing installer in
 `scripts/build_three_setup_shadow_deployment_bundle.py`, which creates `venv`
 without a dot. The current `scripts/verify_exact_release.py:REQUIRED_FILES`
-excludes this new CLI and unit; its recursive selection includes only `src`.
-Consequently the existing bundle does not yet stage this recorder's complete
-entrypoint/service surface. This is a real release-integration prerequisite,
-not a host-readiness or live-data claim.
+already selects both `scripts/hyperliquid_raw_capture.py` and the dedicated
+`deploy/p4a/systemd/trader-assist-v0-hyperliquid-raw-capture.service`. The
+existing exact-release scripts hash and stage these files; the bundle installer
+installs the unit and verifies the CLI offline with `--help`. It does not
+start, restart or enable the service, and it does not create the dedicated
+absent-by-default permit. The source integration is already present and those
+release scripts are not modified by this candidate.
 
-A separate Engineering Control package must minimally extend those two existing
-release scripts: select/hash/stage the CLI and unit in the exact-release manifest,
-and add default-OFF unit installation plus offline entrypoint/layout verification
-to the existing installer. Preserve the dedicated absent permit, no start/enable/
-restart, exact identity/hash rejection, and current human host-action gates. No
-new generic deploy controller or ad hoc copy from an arbitrary worktree is needed.
-Those two release scripts are outside Issue #328's five-path scope and are not
-modified by this source package.
+A new exact-head reviewed release artifact must still be built and independently
+verified before any authorized installation. Verify manifest hashes, locked
+interpreter/import layout, dedicated permit absence and default-OFF service
+behavior. Neither source integration nor passing CI proves host readiness,
+public-data continuity, delivered alerts or deployment. Do not create an ad hoc
+copy/deployment controller or bypass current human host-action gates.
 
 These paths are a staged-layout contract, not proof of a current deployed release.
 Before installation, Operations must verify the exact accepted release manifest
@@ -273,8 +274,9 @@ prevented exits, deliberate stop, permit/boot predicates, forced-stop timeout an
 rate-limit failure/alert. Source assertions alone cannot qualify those behaviors.
 
 Build and verify a new exact reviewed release containing module, CLI and unit;
-artifact 11823987288 is not this revision. Preserve the existing release integration
-prerequisites above. Exact-head CI and independent reviews remain outstanding.
+artifact 11823987288 is not this revision. Preserve the existing source-integrated
+release layout and default-OFF safety predicates above. Exact-head CI and
+independent reviews remain outstanding.
 
 Real host acceptance requires measured normal Depth/BBO progress gaps and timestamp
 skew, justified thresholds/margins, delivered service/data/disk/inode alerts and a real
