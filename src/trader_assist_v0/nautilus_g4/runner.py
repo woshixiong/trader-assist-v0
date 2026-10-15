@@ -2093,6 +2093,7 @@ def run_native_paper_lifecycle(
     technical_quantity = _decimal_quantity(quantity, label="paper quantity")
     if technical_quantity <= 0:
         raise ValueError("paper quantity must be positive")
+    catalog_path.mkdir(parents=True, exist_ok=True)
     catalog = ParquetDataCatalog(str(catalog_path))
     catalog.write_instruments([provider_instrument])
     catalog.write_quote_ticks(quote_ticks)
