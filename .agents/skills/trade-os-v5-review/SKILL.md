@@ -7,14 +7,12 @@ description: Enforce fresh Pre-code and Final Independent Review, exact identity
 
 Thin adapter to the constitution review contract.
 
-## Pre-code Review
+## Pre-code Review — HIGH design risk only
 
-Fresh ordinary ChatGPT / High. Read only the exact package, Plan, base,
-architecture/contracts, acceptance/adversarial matrix, and minimal governance.
-Write the complete structured result to the package Issue/state record.
-
-Route only to PASS, PLAN_REVISE, or CONTROL_REPLAN as defined by the
-constitution. Review is incomplete until GitHub result egress succeeds.
+Do not require Pre-code Review for LOW/MEDIUM changes or repeated use of an
+already accepted HIGH architecture. For materially new HIGH safety architecture,
+use fresh ordinary ChatGPT High to inspect Plan, exact scope, contracts and
+adversarial scenarios. Record PASS, PLAN_REVISE or CONTROL_REPLAN in GitHub.
 
 ## Optional internal Codex review
 
@@ -22,11 +20,13 @@ Use only when genuinely useful and actual child model/reasoning identity is
 runtime-verifiable. It is read-only, optional, and never final authority.
 Unverifiable identity means skip, not fallback.
 
-## Final Independent Review
+## Final Independent Review — HIGH/governance only
 
 Use a fresh ordinary ChatGPT context that did not control or implement the
-candidate. Bind to exact current PR/base/head/tree and exact-head CI. Retrieve
-review evidence progressively while preserving complete coverage:
+HIGH/governance candidate. Bind to exact current PR/base/head/tree and exact-head
+CI. For LOW/MEDIUM do not fabricate a Final Review; instead require CI and
+a separately recorded phase-level product verification for MEDIUM features.
+Retrieve HIGH review evidence progressively while preserving complete coverage:
 
 ~~~text
 PR_BOOTSTRAP=>METADATA_FIRST
@@ -52,3 +52,32 @@ Otherwise use COMMENT_ONLY exact-head evidence. Never misrepresent self-approval
 as independent identity.
 
 A changed head requires a new fresh Final Reviewer.
+
+## Stage-based product verification
+
+For MEDIUM milestone checks, independent agents may act as end users and
+adversarial testers with *test-only credentials* in an isolated/shadow environment.
+Use launch/doctor/drive/evidence/cleanup and 3-5 real feature scenarios. Check
+expected and negative behavior; gather logs/output rather than model opinions.
+Summarize one deduplicated defect batch with severity, reproduction, owner and
+re-test evidence. Muse/Hark Pro output is optional non-authoritative test input:
+it never performs production changes or substitutes for required HIGH review.
+
+## Native ownership / global regression checks on required final review
+
+Where a package changes commodity infrastructure, reviewer checks:
+`FRAMEWORK_NATIVE_REUSE_REQUIRED` ownership matrix tied to the pinned
+version; no project-managed reconnect/OMS/risk/storage/Shadow mechanics when
+a fitting native implementation exists. If a claimed native limitation drove
+custom code, `OFFICIAL_COMMUNITY_SEARCH_BEFORE_PATCH` must have an exact
+reproducer plus relevant official docs/issue/community evidence; lack of a
+confirmed upstream fix must be recorded, not invented. Evaluate whether
+`ROOT_CAUSE_BEFORE_CODE` was respected and the smallest supported
+configuration/adapter chosen. Verify `SYSTEM_WIDE_CAUSAL_VERIFICATION`
+of upstream/downstream contracts and GitHub/AWS artifact identity, with
+data/Shadow/risk execution negative cases where applicable.
+
+A competing commodity implementation with no demonstrated framework gap is
+a review blocker, even if unit tests pass. A behavioral verification that
+covers only a single function but claims an end-to-end result is FAIL/BLOCKED.
+This is part of the existing final review, not an extra review stage.

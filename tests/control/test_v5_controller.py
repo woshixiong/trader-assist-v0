@@ -249,3 +249,65 @@ def test_stale_rebind_requires_revalidation_then_can_publish():
         ).current_stage
         == controller.Stage.PUBLISH
     )
+
+
+
+def test_streamlined_tier_defaults_high_and_refuses_unverified_bypass():
+    high = state()
+    assert controller.streamlined_risk_tier(high) == "HIGH"
+    with pytest.raises(controller.ControlError, match="skip required"):
+        controller.transition(high, controller.Stage.IMPLEMENT, event_key="bad-low")
+    forged = state(retained_gates=["RISK_TIER=LOW"])
+    assert controller.streamlined_risk_tier(forged) == "HIGH"
+    with pytest.raises(controller.ControlError, match="skip required"):
+        controller.transition(forged, controller.Stage.IMPLEMENT, event_key="forged")
+
+
+@pytest.mark.parametrize("tier", ["LOW", "MEDIUM"])
+def test_streamlined_low_medium_skip_reviews_only_with_exact_head_ci(tier):
+    tags = [f"RISK_TIER={tier}", "RISK_PACKET_VERIFIED"]
+    initial = state(retained_gates=tags)
+    active = controller.transition(initial, controller.Stage.IMPLEMENT, event_key="implement")
+    assert active.current_stage == controller.Stage.IMPLEMENT
+    pending = state(
+        current_stage="CI_WAIT",
+        resume_stage="CI_WAIT",
+        retained_gates=tags,
+    )
+    assert controller.route_ci(
+        pending,
+        controller.CiObservation("e" * 40, "success", "", locator="ci-run"),
+    ) == controller.Stage.HUMAN_CLOSEOUT_GATE
+    with pytest.raises(controller.ControlError, match="exact-head"):
+        controller.transition(
+            pending, controller.Stage.HUMAN_CLOSEOUT_GATE, event_key="no-ci-proof"
+        )
+    completed = controller.transition(
+        state(
+            current_stage="CI_WAIT",
+            resume_stage="CI_WAIT",
+            retained_gates=tags,
+            ci_head="e" * 40,
+            ci_run_or_check_locators=["ci-run"],
+        ),
+        controller.Stage.HUMAN_CLOSEOUT_GATE,
+        event_key="verified-ci",
+    )
+    assert completed.current_stage == controller.Stage.HUMAN_CLOSEOUT_GATE
+
+
+def test_high_risk_still_requires_independent_review_after_ci():
+    original = state(
+        current_stage="CI_WAIT",
+        resume_stage="CI_WAIT",
+        ci_head="e" * 40,
+        ci_run_or_check_locators=["run"],
+        retained_gates=["RISK_TIER=HIGH", "RISK_PACKET_VERIFIED"],
+    )
+    with pytest.raises(controller.ControlError, match="Final Review"):
+        controller.transition(
+            original, controller.Stage.HUMAN_CLOSEOUT_GATE, event_key="unsafe"
+        )
+    assert controller.route_ci(
+        original, controller.CiObservation("e" * 40, "success", "")
+    ) == controller.Stage.OPTIONAL_INTERNAL_REVIEW

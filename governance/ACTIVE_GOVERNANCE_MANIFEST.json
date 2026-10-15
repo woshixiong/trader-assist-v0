@@ -76,10 +76,13 @@
     "runtime_qualification": "BASELINE_QUALIFIED"
   },
   "review": {
-    "pre_code_review": "FRESH_ORDINARY_CHATGPT_HIGH",
-    "final_independent_review": "FRESH_ORDINARY_CHATGPT_HIGH",
+    "pre_code_review": "HIGH_DESIGN_RISK_ONLY",
+    "final_independent_review": "HIGH_AND_GOVERNANCE_ONLY",
+    "medium_phase_verification": "REAL_USER_AND_ADVERSARIAL_E2E_AT_MILESTONE",
     "canonical_github_result_egress_required": true,
-    "comment_only_fallback_when_native_self_approval_unavailable": true
+    "comment_only_fallback_when_native_self_approval_unavailable": true,
+    "official_native_reuse": "ONE_CONSOLIDATED_INDEPENDENT_FINAL_REVIEW_AND_END_TO_END",
+    "noncritical_local_checks": "LOCAL_FAST_TESTS_FULL_CI_ON_FINAL_CANDIDATE"
   },
   "execution_relay": {
     "preferred": "REMOTE_DESKTOP_COMMANDER_WHEN_CONNECTED_AND_QUOTA_AVAILABLE",
@@ -109,12 +112,8 @@
     "VNext preparation/archive artifacts already present in the repository"
   ],
   "protected_actions": [
-    "MARK_READY",
-    "MERGE",
-    "BRANCH_DELETION",
-    "DEPLOYMENT",
-    "PRODUCTION_RUNTIME_OR_CLOUD_MUTATION",
-    "SERVICE_START_RESTART_ENABLE_REBOOT",
+    "PRODUCTION_RUNTIME_OR_CLOUD_MUTATION_OUTSIDE_PREAUTHORIZED_SCOPE",
+    "LIVE_SERVICE_START_RESTART_ENABLE_REBOOT",
     "CREDENTIAL_OR_PRIVATE_API",
     "WALLET_OR_SIGNING",
     "EXCHANGE_WRITE_OR_ORDER_ACTION",
@@ -124,5 +123,99 @@
     "merge_commit": "07eaa624d24973a9fd48fd15957f3ee60550bc4e",
     "reviewed_head": "7444ab6506ae740f1d151bb8fa8cb09f33215fd5",
     "reviewed_tree": "a1bad58b29479a06d4c007d2bf63b5ac5cef0de5"
+  },
+  "risk_routing": {
+    "default_on_ambiguity": "HIGH",
+    "low": "NO_MANDATORY_PRE_CODE_OR_FINAL_REVIEW_CI_REQUIRED",
+    "medium": "SMALL_BATCH_CI_PLUS_PHASE_E2E_NO_PER_SLICE_REVIEW",
+    "high": "DESIGN_RISK_PRE_CODE_AND_MANDATORY_INDEPENDENT_FINAL",
+    "controller_tags": [
+      "RISK_TIER=LOW|MEDIUM|HIGH",
+      "RISK_PACKET_VERIFIED"
+    ],
+    "no_auto_live_authority": true
+  },
+  "fast_track": {
+    "name": "OFFICIAL_NATIVE_REUSE",
+    "origin": "PINNED_NAUTILUS_OFFICIAL_API_AND_COMPONENTS",
+    "package_size": "LARGE_COHERENT_CAPABILITY_BUNDLE",
+    "implementation": "ONE_CONTINUOUS_CODEX_EXECUTION",
+    "publication": "ONE_FINAL_CANDIDATE_CI_PER_PASSING_BUNDLE_WITH_RERUNS_ONLY_ON_FIX",
+    "human_only_credentials": true,
+    "user_final_acceptance": "BEFORE_ANY_SEPARATELY_AUTHORIZED_LIVE_PROMOTION"
+  },
+  "automated_closeout": {
+    "enabled_only_after_reviewed_governance_activation": true,
+    "mark_ready": "AUTO_AFTER_REQUIRED_GATES",
+    "merge": "GITHUB_NATIVE_AUTO_MERGE_AFTER_REQUIRED_GATES",
+    "delete_merged_branch": "AUTO_IF_SAFE",
+    "default_unknown_state": "BLOCK",
+    "requires_proven_nonforgeable_CI_and_tier": true
+  },
+  "test_deployment": {
+    "enabled_only_after_scoped_setup": true,
+    "scope": "ISOLATED_SHADOW_DEFAULT_OFF",
+    "runtime": "EXISTING_AWS_ONLY",
+    "proof": "IMMUTABLE_RELEASE_HASH_HEALTH_AND_ROLLBACK",
+    "live_order_authority": false,
+    "secrets_human_only": true
+  },
+  "network_resilience": {
+    "status": "PROPOSED_REQUIRES_EXECUTOR_VERIFICATION",
+    "transient_fast_interval_seconds": 10,
+    "transient_fast_max_attempts": 20,
+    "extended_recovery_interval_minutes": [
+      5,
+      15
+    ],
+    "extended_recovery_mechanism": "NATIVE_GITHUB_OR_EXISTING_SYSTEMD_TIMER_REQUIRED",
+    "recovery_policy": "UNTIL_RESTORED_OR_EXPLICIT_CANCEL_WITH_FINITE_BURSTS",
+    "durable_checkpoint": "GITHUB_EXACT_HEAD_RUN_AND_OPERATION_ID",
+    "do_not_retry": [
+      "CREDENTIAL_OR_AUTHENTICATION",
+      "PERMISSION_DENIED",
+      "SEMANTIC_TEST_CI_FAILURE",
+      "INVALID_CONFIG_OR_RESOURCE_EXHAUSTION",
+      "EXCHANGE_WRITE_OR_ORDER_ACTION"
+    ],
+    "ambiguous_write": "READBACK_THEN_FAIL_CLOSED_IF_UNCERTAIN",
+    "never_repeat_confirmed_side_effect": true,
+    "quota_safe": true,
+    "no_chat_auto_awaken_claim": true
+  },
+  "engineering_invariants": {
+    "FRAMEWORK_NATIVE_REUSE_REQUIRED": "MANDATORY",
+    "OFFICIAL_COMMUNITY_SEARCH_BEFORE_PATCH": "MANDATORY",
+    "ROOT_CAUSE_BEFORE_CODE": "MANDATORY",
+    "SYSTEM_WIDE_CAUSAL_VERIFICATION": "MANDATORY",
+    "UNIQUE_PROJECT_IP": "STRATEGY_RESEARCH_SIGNALS_EXIT_POLICY_EDGE",
+    "COMMODITY_DEFAULT": "MARKET_CAPTURE_FRESHNESS_HEALTH_STORAGE_CACHE_SHADOW_ORDER_MECHANICS_OMS_RISK_EXECUTION_RECOVERY_MONITORING",
+    "PINNED_NATIVE_VERSION": "nautilus_trader_v2.0.0rc5",
+    "NEW_COMMODITY_ENGINE": "BLOCKED_IF_APPLICABLE_MATURE_CAPABILITY_EXISTS",
+    "UNSUPPORTED_GAP": "OFFICIAL_DOCS_ISSUES_COMMUNITY_REPRO_FIRST_THEN_TECHNICAL_DIRECTION_DECISION",
+    "THIN_ADAPTER": "ONLY_OFFICIAL_EXTENSION_SEAMS_NO_DUPLICATE_AUTHORITY",
+    "CAPABILITY_MAP": "REQUIRED_ONCE_REUSED_WHEN_UNCHANGED",
+    "SCOPED_GLOBAL_E2E": "REQUIRED_AT_PACKAGE_CLOSEOUT_WITH_CAUSAL_BOUNDARIES",
+    "PR_READY_MERGE": "BLOCK_IF_UNVERIFIED_COMPETING_INFRASTRUCTURE_OR_UNSEARCHED_UPSTREAM_GAP"
+  },
+  "user_workflow_override": {
+    "status": "CANDIDATE_NEEDS_TRUSTED_CONTROLLER_IMPLEMENTATION",
+    "action": "PROCESS_GATE_WAIVER_FOR_EXPLICIT_SCOPE",
+    "allowed_for": "PUBLIC_DATA_AND_SHADOW_ONLY_CORRECTNESS_REPAIR_NO_REAL_ORDERS",
+    "user_repeat_authorization_required": false,
+    "pre_code_review": "WAIVABLE_WHEN_USER_EXPLICIT_AND_TRUSTED_SCOPE",
+    "final_review": "WAIVABLE_FOR_NONLIVE_BOUNDED_CORRECTNESS_INCIDENT_WHEN_USER_EXPLICIT",
+    "legacy_plan_only": "MIGRATE_TO_IMPLEMENT_WITH_VERIFIED_CONTROL_TRANSITION",
+    "cannot_forge_review_pass": true,
+    "mandatory_tests_and_hash_deploy_proof": true,
+    "requires_independent_provenance_not_writer_string": true,
+    "excludes": [
+      "LIVE_EXCHANGE_WRITES",
+      "FUNDS_RISK",
+      "CREDENTIAL_OR_SECRET_ACTION",
+      "SIGNING",
+      "UNSCOPED_PRODUCTION_OR_CLOUD_MUTATION"
+    ],
+    "last_known_blocking_case": "woshixiong/-/issues/7"
   }
 }

@@ -12,9 +12,13 @@ Task-specific Product, Strategy, Operations, Security, deployment, executor, and
 operator procedures may be stricter in their narrow domains but may not weaken
 or compete with this constitution.
 
-This constitution grants no Mark Ready, merge, deployment, runtime/cloud
-mutation, service-control, credential/private-API, wallet/signing,
-exchange-write/order, autonomous-trading, or real-capital authority.
+This constitution grants no unrestricted production deployment, live service
+control, credential/private-API, wallet/signing, exchange-write/order,
+autonomous-trading, or real-capital authority. Once separately activated,
+ordinary GitHub Ready, Merge and closed-scope shadow/test deployment are
+deterministic automatic outcomes of verified acceptance and security gates,
+not repetitive human approval steps. No automatic GitHub merge grants live
+runtime or real-capital authority.
 
 ---
 
@@ -206,65 +210,206 @@ Final integration, exact-head review, and merge-front movement are serialized.
 
 ---
 
-## 5. Route C lifecycle and Pre-code Review
+## 4B. Explicit current-user workflow override: no deadlock on safe repair
 
-A large coherent Codex package uses one primary thread/session and one bounded
-worktree/checkpoint chain where the execution surface supports it.
+A **present, specific human direction** to skip nonessential Pre-code/Final
+review or to perform a narrowly bounded correction is authoritative for the
+**process choice** when no money-bearing, credential, signing, permission,
+unbounded cloud or real-exchange-write boundary is crossed. It is not a
+claim that a missing review PASSED, and does not relax actual correctness
+tests, provenance, deployment rollback or permission segregation.
 
-~~~text
-ENGINEERING_CONTROL_FREEZE
--> DETERMINISTIC EXACT-BASE BOOTSTRAP
--> CODEX PLAN-ONLY
--> FRESH PRE-CODE REVIEW
--> SAME CODEX THREAD RESUME ON PASS
--> IMPLEMENT / FOCUSED VALIDATE
--> DETERMINISTIC PUBLISH
--> EXACT-HEAD CI
--> BOUNDED REPAIR LOOP IF NEEDED
--> OPTIONAL INTERNAL READ-ONLY REVIEW WHEN JUSTIFIED AND VERIFIABLE
--> FINAL REVIEW MANIFEST
--> FRESH FINAL INDEPENDENT REVIEW
--> ENGINEERING CONTROL CLOSEOUT
-~~~
+**TRIGGER:** the user explicitly identifies the work and requests "no review,
+directly repair and deploy" to an existing **market-capture + simulation/
+Shadow-only** service. Treat this as `USER_WORKFLOW_OVERRIDE_REQUEST` and
+reconcile immediately. The task owner/Engineering Control must record a
+`PROCESS_GATE_WAIVER` with the referenced user direction, exact package/base,
+allowed code/deploy surfaces, immutable GitHub and installed AWS identity,
+excluded real-order/secret capability, minimal deterministic tests, observed
+real stream/Shadow behavior and rollback plan. Do **not** demand the same
+human approval again or require a new ChatGPT reviewer window just to unlock
+a frozen PLAN-ONLY task.
 
-Plan-only may choose implementation order and mechanics but may not change
-frozen scope, product behavior, architecture authority, external contracts,
-protected actions, or acceptance criteria.
+**FROZEN-ISSUE RECOVERY:** a pre-existing Issue and Codex session frozen at
+Pre-code Review can be migrated to a bounded implementation+verification lane
+after a legitimate, GitHub-recorded Control transition. Preserve the original
+issue, PLAN, source provenance, worktree/thread and completed stages. Do not
+fabricate independent PASS, quietly relabel risk, or repeat Codex PLAN-only.
+The authorized implementation executor resumes from the latest valid
+checkpoint; if it lacks tool access, record a precise *capability* blocker
+rather than claim the review requirement is still necessary.
 
-Pre-code Review happens after Plan-only and before product-source mutation.
-It is a fresh ordinary ChatGPT / High review of the exact package, plan, base,
-architecture/contracts, acceptance criteria, adversarial matrix, and minimal
-governance needed for the decision.
+**SAFE SHADOW-ONLY DEPLOY:** the user's scoped deployment direction may
+permit updating the named public-data/Shadow services after hash-bound backup,
+correctness tests, visible version parity, rollback and health proof; it does
+not authorize arbitrary production mutations, wallet/API/SSH credential
+handling, real exchange writes or account trading. A simulated ledger must
+keep old records intact and preserve strategy/attempt/exit-policy identity.
+When host conditions are not suitable, reject unsafe deployment *for the
+specific measurable reason*, not a procedural review loop.
 
-Pre-code decisions route deterministically:
+**NON-OVERRIDABLE TECHNICAL CHECKS:** deterministic tests for relevant data/
+order-identity/time semantics, no exchange-write path, source/target hash
+binding, host capacity, restart behavior, audit preservation and rollback.
+If actual money-bearing execution, unknown credential boundary or a
+non-isolated live service would be affected, retain the targeted high-risk
+gate and explain the concrete risk in one short statement.
 
-~~~text
-PASS
--> resume the same Codex thread/session and implement
+**IMPLEMENTATION DEPENDENCY:** the risk-tier classifier/controller must verify
+a genuine, distinct authority record; a Writer-supplied string or Issue
+comment that merely says "waived" is not sufficient. Until the successor
+controller is tested and this amendment activated, the current main V5 gates
+still apply and cannot be bypassed just by this candidate text.
 
-FAIL + PLAN_REVISE
--> resume the same Codex thread/session for bounded plan revision
--> run a fresh Pre-code Review on the revised plan
+---
 
-FAIL + CONTROL_REPLAN
--> return directly to Engineering Control for refreeze
-~~~
+## 4A. Mandatory official-native ownership and global root-cause gate
 
-Same-thread resume is a fail-closed continuity invariant:
+**These are hard engineering admission rules, not advisory preferences and not extra
+per-task Review stages.** They apply to ChatGPT planners/reviewers, Codex writers,
+external testers, local/CI scripts and operators alike. They override any proposal
+to "solve it quickly" by duplicating a working mature framework component.
 
-~~~text
-PRE_CODE_PASS_SAME_THREAD_RESUME_REQUIRED=YES
-PLAN_REVISE_SAME_THREAD_RESUME_REQUIRED=YES
-EXACT_RESUME_UNAVAILABLE_OR_UNVERIFIABLE=>PAUSED_CAPABILITY/ENGINEERING_CONTROL
-SILENT_NEW_SEMANTIC_THREAD_SUBSTITUTION=PROHIBITED
-~~~
+### RULE 1 — FRAMEWORK_NATIVE_REUSE_REQUIRED
 
-For both PASS and PLAN_REVISE, the exact primary Codex thread and worktree must
-be resumed. If exact resume semantics are unavailable or cannot be verified,
-preserve the checkpoint, enter the capability-paused state, and return to
-Engineering Control. Never substitute a new semantic Codex thread silently.
+**Our differentiator is trading strategy intelligence and research edge, not
+generic trading infrastructure.** Owned strategy work includes opportunity
+definition, entry/exit/risk-reward hypotheses, state/regime models, ranking,
+parameters, backtest experiments and Shadow evidence interpretation. Strategy
+decisions should plug into first-party framework/runtime APIs.
 
-The user does not select the failure route.
+**COMMODITY_INFRASTRUCTURE_DEFAULT** includes market-data feeds and adapters,
+subscription/reconnect/resubscribe, freshness and health reporting, data
+normalization, time/event handling, state Cache, durable market-data storage,
+replay/recovery, simulated/paper/Shadow order *mechanics*, order state/OMS,
+fills/reconciliation, portfolio/account calculations, generic pre-trade risk,
+system monitoring, logging, CI, release and deployment plumbing. These must
+reuse an applicable official NautilusTrader pinned-release capability, or a
+qualified already-adopted mature external provider/native system when the
+pinned release lacks one. Do not build a second collector/connector/controller,
+shadow OMS, risk engine, freshness daemon, catalog, order state or health
+pipeline merely because an internal implementation is convenient.
+
+**Admission test before coding any commodity responsibility:**
+record `NATIVE_CAPABILITY_MAP` (requested function -> pinned Nautilus
+version/API/type/factory/extension seam -> integration path -> any explicit
+unsupported/missing item). Read the actual installed version, tagged source,
+official examples and adapter's supported venue features. "Supported by latest"
+is not proof for rc5; a framework feature may require configuration, have an
+unsupported API, or not cover the specific venue. For already confirmed,
+unchanged native features reuse the existing map; do **not** redo broad
+provider selection or S0-S9 scoring at every task.
+
+A **thin adapter** may only translate formats, invoke an official supported
+extension seam, or connect stable strategy contracts. It cannot become the
+authoritative owner of native reconnection, OMS, general risk, state recovery
+or synthetic fills. If the proposed adapter starts taking ownership of a
+commodity engine, block implementation and route through RULE 2 first.
+
+### RULE 2 — OFFICIAL_COMMUNITY_SEARCH_BEFORE_PATCH
+
+If an official/native feature fails, mismatches an interface, produces an
+unexpected result, or appears missing, **freeze coding on that responsibility**
+until a concrete problem/evidence packet exists. Search in order:
+(1) pinned-version official API/reference/config/source/examples and release
+notes; (2) official issue tracker, discussions, tests, maintainer guidance;
+(3) relevant community issue reproductions/solutions and known version-specific
+limitations; (4) mature published workarounds and supported alternative
+adapters. Compare exact version, language/Rust-vs-Python surface, venue,
+runtime, platform and data flow. Cite URLs plus evidence and verify candidate
+configuration or workaround using the **smallest reproducible test**.
+
+**Never assume a community solution must exist.** If none is supported or
+reproducible, record `UPSTREAM_GAP_CONFIRMED_OR_UNRESOLVED` honestly.
+Choose supported first-party composition/configuration before any new code;
+alternatives are upstream issue/upgrade at the user's chosen version boundary,
+a different maintained provider, a minimal bounded adapter, or waiting.
+A material new commodity implementation, invasive fork or parallel engine
+requires explicit Engineering Control evidence and a current user **technical
+direction** decision; neither an agent's urgency nor a passing CI is an
+exception. The user is involved only when a real unsupported gap or material
+architecture/cost decision exists, not for routine defects.
+
+### RULE 3 — ROOT_CAUSE_BEFORE_CODE
+
+On a failure, gather only the decisive observations, determine whether the
+cause is configuration, native API usage, version mismatch, deployment state,
+data contract, dependency, environment, or actual framework bug. First test
+the **simplest official configuration/operational correction with no product
+code change**. Do not build a new script, poller, controller, recovery layer,
+validator, storage stack or extra CI workflow merely to work around symptoms.
+No "fix it by adding code" until one root cause and a clear owner boundary are
+recorded. Keep corrective changes small even inside large development
+packages. For unresolved causes, contain the affected behavior, continue
+unrelated safe work, and request user direction only if material uncertainty
+requires it. Never downgrade risk, mask a false PASS, or invent health data.
+
+### RULE 4 — SYSTEM_WIDE_CAUSAL_VERIFICATION
+
+Analyze each material failure across its **complete responsibility chain**,
+not a single failing line. Map input/source + venue timestamp/identity ->
+official adapter/data engine -> cache/catalog and health ->
+strategy/scanner/Shadow or Risk/ExecutionEngine ->
+order event/position/account reconciliation ->
+durable evidence + host service + GitHub release/artifact identity.
+Mark layers `APPLICABLE` or `NOT_APPLICABLE` with reason; do not force
+order-path tests on data-only development. Identify authoritative ownership
+at every boundary, especially GitHub commit vs actually deployed AWS SHA,
+data gaps, timestamp disorder, duplicate events, versioned Shadow ledger
+entry/exit and crash/restart survival.
+
+Fix the **shared/global cause** first, then rerun the smallest meaningful
+upstream/downstream integration tests. Failures in adjacent layers that share
+one origin become one defect batch, not sequential local patches. A claimed
+`PASS` requires measured end-to-end behavior on the actual relevant path;
+CI success alone is not proof of live event freshness, deployment, paper fills
+or funds safety. For native reuse, run one consolidated package-level
+verification at the end rather than repetitive micro-reviews.
+
+**Minimal canonical evidence, not bureaucracy:** attach the native capability
+map; for exceptions attach one root-cause note, official/community references
+and their applicability, boundary diagram in plain text, chosen remedy and
+one reproducer; for complete packages attach exact-head CI + end-to-end
+functional/negative-path results. No broad reports or external-solution
+reselection where existing proven native API already decides the route.
+
+**Anti-regression gate:** a Writer cannot use an unverified claim of "framework
+missing" to introduce a custom infrastructure engine. New competing
+commodity ownership or bypassing the official/community search blocks
+approval and auto-Merge, regardless of risk tier.
+
+---
+
+## 5. Risk-proportional engineering and phase verification
+
+**V5 streamlined amendment (candidate until separately reviewed and activated).** Engineering Control binds a change risk tier from actual changed paths, semantic blast radius, intended runtime exposure and evidence, not from the Writer's claim. Unknown classification, mixed-risk packages, governance/control-plane edits, or a discrepancy fail to HIGH. Record the tier and exact classification evidence in the canonical task packet; the controller represents its verified routing decision as `RISK_TIER=LOW|MEDIUM|HIGH` and `RISK_PACKET_VERIFIED` in retained gates. The marker is an adapter to the canonical packet, not authorization to self-declare lower risk.
+
+**LOW**: documentation, non-operational UI presentation and bounded non-critical maintenance with no trading, secrets, permission, deployment, data-integrity or execution effect. Direct small implementation -> focused tests -> exact-head CI -> closeout. No mandatory Plan-only, Pre-code or independent Final Review for each small change.
+
+**MEDIUM**: strategy research and shadow-only code, isolated scanner/market-data features, dashboard functionality and bounded refactors that cannot send orders, mutate production, bypass risk or change exchange credentials. Make coherent, optionally larger development bundles with cheap local tests and a single CI candidate publication instead of CI after every local commit. Skip routine Pre-code and per-slice independent Final Review; run scripted end-to-end phase verification on the integrated user-visible feature before promotion. Failing scenarios become one deduplicated, severity-ranked defect batch; fix in small commits with immediate CI, then rerun only affected and boundary regressions. Medium does not authorize live trading, production exposure or actual deployment.
+
+**HIGH**: OMS/order path, Risk Kernel, sizing, wallet/signing, execution guards, permissions, service/deployment control, persistent-data correctness with trading consequences, external provider/security architecture, governance, or any ambiguity about exposure. Retain one short design/Pre-code Review only when architecture or safety design changes, then one fresh independent Final Review of the exact candidate, required deterministic negative and failure-mode tests, stage-level end-to-end evidence, and current human protected-action authority. Governance amendments require fresh independent review even if documentation-only.
+
+For a HIGH implementation without a new architecture, an existing accepted design plus tests replaces repeated Pre-code Reviews. Engineering Control records this determination. The single independent Final Review remains required.
+
+### OFFICIAL_NATIVE_REUSE fast lane — integration origin, not a financial-risk exemption
+
+Where the goal is solely assembling capabilities **already provided by the pinned NautilusTrader version**, enforce RULE 1-4 in §4A and organize one **large, coherent, end-to-end development package** by functional area (native data capture/health, native order lifecycle/risk, native shadow/backtest, native operations). Prove each claimed capability against actual installed pinned-version API/examples and explicitly list unsupported gaps. Do not rewrite framework internals, add a parallel OMS/risk/controller, or infer support from newer upstream versions.
+
+One task brief and one Codex execution plan at package start. Codex may work through many local commits without repeated handoffs, routine Pre-code reviews or full CI per local commit. Perform cheap developer-side syntax/unit/smoke checks while building; run the complete required GitHub CI once on the final published candidate head (and rerun only after real corrections). Then perform **one consolidated strict independent review plus integrated real-behavior and negative/failure-path testing** on the exact package. Consolidate noncritical defects into one reproducible batch; block on critical ones immediately.
+
+Official reuse reduces design uncertainty, **not** the impact of incorrect venue configuration, event routing, lost-data handling, order outcomes, recovery or permissions. Real-capital execution boundaries remain HIGH at final verification even when the upstream component is mature. A test/shadow package contains no order-authorized credentials and cannot promote itself to live. User may personally perform the final acceptance trial after automated verification. Keep experimental proprietary strategy/edge work separate from native framework assembly.
+
+**Routine state paths (new packages only):**
+- LOW/MEDIUM: CONTROL_FREEZE -> IMPLEMENT -> LOCAL_VALIDATE -> PUBLISH -> CI_WAIT -> HUMAN_CLOSEOUT_GATE. PLAN is optional; routine PRECODE_REVIEW and FINAL_INDEPENDENT_REVIEW are not required.
+- HIGH: CONTROL_FREEZE -> PLAN -> PRECODE_REVIEW (only when design-risk triggers) -> IMPLEMENT -> LOCAL_VALIDATE -> PUBLISH -> CI_WAIT -> OPTIONAL_INTERNAL_REVIEW -> FINAL_REVIEW_READY -> FINAL_INDEPENDENT_REVIEW -> HUMAN_CLOSEOUT_GATE. Where the Pre-code gate is not triggered, PLAN -> IMPLEMENT is allowed only with a separately verified HIGH design-reuse predicate; the current controller does not yet enable this shortcut.
+- Untagged/legacy packages continue the strict HIGH path; no automatic migration or reclassification.
+
+Independent validation is **behavioral**, not another blanket code-reading round. A project-local Verification Skill or equivalent harness must specify Launch, Doctor, Drive, Evidence and Cleanup, plus small feature maps. Use the existing test runner, HTTP/CLI, browser and replay tools first. Verification agents act as a real user and an adversarial outsider, using *disposable/offline/shadow* environments without production credentials or exchange write access. Hark Pro and Muse may supply independent **test observations only**, not authoritative code or production changes. The Writer and testing agents must not share a mutable production host. All outcomes are PASS / FAIL / BLOCKED with reproducible evidence; missing evidence is never PASS.
+
+Every slice keeps fast CI and exact-head binding. Every meaningful feature/milestone gets one phase-level E2E/exploratory pass; a release or trading-risk promotion always re-enters HIGH. Do not defer all tests to the end of a large branch. The completed phase report must include tested features, real versus simulated data, negative paths, CI head, evidence artifacts, defects and retained blockers.
+
+Codex thread/worktree continuity is preferred for a coherent task, not a reason to freeze LOW/MEDIUM delivery when a checkpoint survives. If an executor loses its session, resume from exact canonical GitHub evidence and record the new session explicitly; no semantic work may silently be replayed. HIGH frozen work keeps the existing fail-closed exact-resume rule when applicable.
 
 ---
 
@@ -372,71 +517,13 @@ decisive run/job/step excerpt.
 
 ---
 
-## 9. Review result egress is part of review completion
+## 9. Risk-scoped review and phase evidence
 
-Every Pre-code Review and Final Independent Review must persist its complete
-result to canonical GitHub before the review stage is complete.
+LOW: focused test and exact-head CI status are sufficient for routine code acceptance; no Pre-code or Final Independent Review packet is required. MEDIUM: local focused checks during development, full CI on the final published candidate, and one integrated phase-level independent behavioral verification packet for each meaningful feature milestone or before promotion. OFFICIAL_NATIVE_REUSE: one consolidated strict independent final review and integrated test of the finished large package, never a per-file or per-subfeature review. HIGH and governance: preserve fresh independent Final Review and canonical GitHub result egress. Pre-code Review for HIGH is triggered only by new/changed safety-critical architecture or an explicitly identified design-risk.
 
-~~~text
-REVIEW_DECISION_COMPLETE
-AND CANONICAL_GITHUB_RESULT_EGRESS != PASS
-=> REVIEW_STAGE_NOT_COMPLETE
-~~~
+Any required independent review reads every materially changed file and records exact PR/head/tree, CI locator, observed behavior, negative tests, unresolved risk, PASS/FAIL/BLOCKED, and its canonical result. A changed head invalidates old PASS and requires targeted revalidation of the changed scope and dependent invariants, not necessarily a full new review of unrelated files. A green CI result without behavioral evidence never qualifies a claim requiring live behavior. Never misrepresent the PR author's own approval as an independent identity.
 
-The user must not carry long review findings between windows.
-
-### 9.1 Pre-code Review result
-
-Canonical destination: the Development Package Issue/package-state record.
-
-Required structured block:
-
-~~~text
-REVIEW_TYPE=PRE_CODE
-REVIEW_RESULT_KEY=
-PACKAGE_ID=
-FROZEN_BASE=
-PLAN_REF=
-DECISION=PASS|FAIL
-FAIL_ROUTE=NONE|PLAN_REVISE|CONTROL_REPLAN
-BLOCKERS=
-NEXT_DESTINATION=
-NEXT_ACTION=
-NEXT_COMMAND_REF_OR_LITERAL=
-REVIEWER_MODE=FRESH_ORDINARY_CHATGPT_READ_ONLY
-RESULT_EGRESS=GITHUB_CANONICAL
-~~~
-
-### 9.2 Final Independent Review result
-
-Final Review uses a fresh ordinary ChatGPT context with High reasoning, reads
-the exact current PR/base/head/tree/diff, frozen acceptance/adversarial matrix,
-exact-head CI, final review manifest, and minimal authority/safety rules.
-
-Required structured block:
-
-~~~text
-REVIEW_TYPE=FINAL_INDEPENDENT
-REVIEW_RESULT_KEY=
-PR=
-BASE=
-HEAD=
-TREE=
-DECISION=PASS|FAIL
-BLOCKERS=
-CI_EVIDENCE=
-REVIEW_SUBMISSION_MODE=NATIVE_REVIEW|COMMENT_ONLY
-NEXT_DESTINATION=
-NEXT_ACTION=
-NEXT_COMMAND_REF_OR_LITERAL=
-RESULT_EGRESS=GITHUB_CANONICAL
-~~~
-
-If the authenticated PR owner cannot submit a native independent approval, use
-COMMENT_ONLY canonical evidence. COMMENT_ONLY is evidence, not a second
-identity. Do not misrepresent self-review as independent GitHub identity.
-
-A changed candidate head requires a new fresh Final Reviewer.
+For HIGH Pre-code decisions use PASS, PLAN_REVISE or CONTROL_REPLAN. If required review evidence cannot be written to canonical GitHub, the review is incomplete; LOW/MEDIUM skip paths do not fabricate review results. Test agents may discover and report defects, but may neither replace HIGH independent review nor authorize protected actions.
 
 ---
 
@@ -522,19 +609,20 @@ then (2) first-unexpected-failure reset if that direction fails, then (3)
 ordinary V5 execution. These are checks inside existing stages, not additional
 Review rounds or a new workflow.
 
-At the **first unexpected failure**, every actor must pause the affected plan
-before further source changes, semantic retries, new infrastructure or expanded
-scope. Preserve the exact checkpoint and obtain only the minimum safe read-only
-evidence needed to examine the whole responsibility chain and root cause,
-including whether an accepted or official component already solves it. Writer
-or Reviewer returns the issue to Engineering Control; Control immediately gives
-the user a plain-language decision brief of no more than four short lines: **what failed; root cause (or explicitly unknown); simplest
-official/reuse fix versus the costly alternative; exact decision requested**.
-Lead with the root problem, never a patch plan or implementation jargon; keep
-SHAs, stack traces, CI details and full analysis in canonical GitHub evidence.
-Wait for the user's direction before selecting a changed route or resuming
-unexpected-failure repair. The human decision is not permission for protected
-actions or a silent change to previously frozen scope.
+On an **unexpected LOW/MEDIUM failure**, first reproduce and classify it, retain
+the failing command/evidence in GitHub, and fix within the accepted feature scope
+using small CI-checked changes. At a phase checkpoint, aggregate reproducible
+defects into one prioritized batch before focused correction and phase re-test.
+No new human decision is needed for ordinary in-scope semantic or test failure.
+Escalate on a new architecture/provider/security decision, unexpected live-risk
+effect, cross-layer authority break, loss of reliable evidence, uncontrolled
+repair loop, or expansion beyond the accepted direction.
+
+On an **unexpected HIGH failure**, pause affected source changes, preserve the
+exact checkpoint, identify root cause and the mature/official alternative,
+then route new architecture, authority, security or funds-impacting decisions
+to Engineering Control and the current human. Do not weaken validators or
+override risk limits to make CI pass.
 
 A previously human-authorized, narrowly bounded deterministic mechanical
 correction, planned red/green local test, or transient transport retry may
@@ -544,9 +632,11 @@ cross-layer or long-running-no-progress failure as routine to evade the stop.
 No uncontrolled termination of live services/processes: existing safety and
 protected-action gates remain in force.
 
-Global root cause precedes repeated local patch loops. Mixed state, duplicate
-authority, repeated adjacent fixes, or new cross-layer failures trigger
-route-level reanalysis rather than validator weakening.
+Global root cause precedes repeated local patch loops. RULE 1-4 in §4A
+are mandatory for all commodity infrastructure, including low-risk/native
+integration. Mixed state, duplicate authority, repeated adjacent fixes, or
+new cross-layer failures trigger route-level reanalysis rather than validator
+weakening.
 
 For authoritative adjacent layers, supported domains must close cleanly and
 valid admitted input must have a deterministic semantic result.
@@ -633,24 +723,63 @@ Normal engineering work:
 Publication sequence is:
 
 ~~~text
-EXACT CANDIDATE
--> FOCUSED VALIDATION
--> DRAFT PR
--> EXACT-HEAD CI
--> FRESH FINAL INDEPENDENT REVIEW
--> CURRENT HUMAN MARK-READY AUTHORITY
--> CURRENT HUMAN MERGE AUTHORITY
--> REQUIRED LIVE-MAIN / POST-MERGE VERIFICATION
+EXACT CANDIDATE -> FOCUSED VALIDATION -> DRAFT PR -> EXACT-HEAD CI
+-> LOW: BOUNDED CLOSEOUT / MEDIUM: BOUNDED CLOSEOUT + MILESTONE VERIFICATION
+-> HIGH OR GOVERNANCE: REQUIRED FRESH INDEPENDENT FINAL REVIEW
+-> RETAINED HUMAN PROTECTED-ACTION AUTHORITY
+-> RELEVANT POST-MERGE CHECK; LIVE PROMOTION REQUIRES SEPARATE AUTHORITY
 ~~~
 
-For transient network/TLS/HTTP instability, preserve the semantic checkpoint
-and same execution/credential route first. Idempotent reads normally receive a
-small bounded retry budget. A write may be retried only after canonical
-readback proves no mutation or proves the exact target is unchanged and retry
-is safe. Ambiguous mutation without readback fails closed.
+### Network recovery, durable continuity, and no manual relay
 
-Transport recovery never authorizes force push, credential weakening, or
-semantic rerun.
+A flaky local Mac/FinalShell/RDC connection is **not a semantic failure**. Never
+discard completed Codex work, restart a whole expensive CI pipeline, demand
+manual log copying, or repeat a successful server mutation merely because its
+acknowledgment was lost. GitHub exact-head package/checkpoint, commit, artifact,
+run ID and remote operation ID own progress; the local chat is not an always-on
+worker.
+
+**Fast retry envelope (preserves user's operating preference):** on positively
+classified transient DNS/TCP/TLS/SSH/HTTP timeout/disconnect, first use the
+official tool's own reconnect/resume where available. Otherwise retry at
+**10-second intervals, up to 20 attempts per burst**. If still offline,
+persist `PAUSED_TRANSPORT_AUTO_RESUME` with task/run identity and next action,
+then automatically retry through an existing lightweight **native**
+GitHub-hosted event/scheduled runner, qualified service/systemd timer or
+persistent remote executor at a **5-15 minute recovery cadence** with jitter;
+continue recovery attempts until network/service returns or the task is
+explicitly cancelled. Each recovery run has a finite retry budget; no hot
+infinite loop, log storm or Remote Commander quota burn. User receives an
+optional failure notice but is not asked to reissue the same task.
+This long-horizon auto-resume is a **target capability**, not claimed to exist
+until a tested durable runner/timer and correct event binding are installed.
+
+Only retry on **transient transport/unavailability**. Credential/authentication
+failure, expired token, denied permissions, semantic CI/test failure, invalid
+configuration, disk/RAM shortage, safety violation or real exchange rejection
+are **not network failures**: stop the affected operation; never ask an AI to
+refresh/create/read secrets. Backoff with jitter, service limits and one owner
+of retries take precedence over repeated retries at several layers.
+
+**Read before repeating writes:** for Git commits/PR/merge use ref/SHA and CI
+readback; for AWS deployments use release SHA, last-good marker and operation
+ID; for CI use run ID/head, re-run **only transient failed jobs** within
+GitHub's native retry allowance. No second shell deploy, service restart,
+order/transaction submission or resource mutation until the previous outcome
+is reconciled. Idempotent retry requires matching exact target and safe
+postcondition. Any ambiguous non-idempotent write fails closed to a
+read-only reconciliation checkpoint; never blindly retry. Real exchange
+writes/orders are outside this development retry policy entirely.
+
+When cloud CI/workflows continue independently of Mac connectivity, they
+should complete and save results even if ChatGPT or local Codex loses its
+session. GitHub Actions' native run status/Artifact and a systemd-supervised
+test-only service are preferred to home-grown polling controllers; the
+ordinary ChatGPT chat is not claimed to self-awaken. On reconnect, the agent
+reads the exact canonical checkpoint and resumes *unfinished* work only.
+
+Transport recovery never authorizes force push, permission broadening,
+secret exposure, real-capital activity or semantic rerun.
 
 Human-executed commands are engineered artifacts and must be safe, bounded,
 reproducible, and tailored to the observed OS/shell/tool contract.
@@ -693,40 +822,51 @@ later stage. V5-A does not archive or delete them.
 
 ---
 
-## 17. Protected human gates
+## 17. Human-exclusive secrets and automated protected boundaries
 
-Each protected action requires explicit current human authority:
+**Human-only, with no model delegation:** create, obtain, enter, reveal, rotate, revoke or grant access to passwords, API keys, tokens, wallet private keys, seed phrases, SSH keys, signing material, GitHub/AWS credentials and IAM/secret-manager grants. The human performs these directly in the vendor/provider interface. Agents may describe minimal required scopes and safely test whether a *capability* is present, but must never request secret values, print/redact-after-reading secrets, fetch private credentials, or modify secret/identity grants. Preserve secrets outside repository and all AI/test-agent inputs, prompts, logs and screenshots.
+
+The following remain individually human-authority-bound and can **never** be inferred from a passing CI, merge, prior test or shadow deployment:
 
 ~~~text
-MARK_READY
-MERGE
-BRANCH_DELETION
-DEPLOYMENT
-PRODUCTION_RUNTIME_OR_CLOUD_MUTATION
-SERVICE_START_RESTART_ENABLE_REBOOT
+PRODUCTION_RUNTIME_OR_CLOUD_MUTATION_OUTSIDE_PREAUTHORIZED_SCOPE
+LIVE_SERVICE_START_RESTART_ENABLE_REBOOT
 CREDENTIAL_OR_PRIVATE_API
 WALLET_OR_SIGNING
 EXCHANGE_WRITE_OR_ORDER_ACTION
 AUTONOMOUS_OR_REAL_CAPITAL_TRADING
 ~~~
 
-Mark Ready and Merge remain two distinct protected actions. After Final Review
-PASS, one current user message may conditionally authorize both actions. Before
-acting, Engineering Control must fresh-verify the exact reviewed head, all
-required CI, and no drift against the frozen predicates. If every predicate
-matches, a second authorization prompt is prohibited. If any predicate changed
-or is unknown, fail closed without performing either action and without
-consuming that conditional authorization.
+**GitHub code acceptance is automated after safeguards, not a human click.**
+After the governance change is properly reviewed and activated, the verified
+exact-head pipeline may automatically Mark Ready, enable native GitHub auto-merge
+and delete the merged temporary branch when all applicable mandatory status
+checks, required independent HIGH/governance or native-reuse review, change-scope
+integrity, CODEOWNERS/branch-protection requirements and negative-path claims
+PASS. Block immediately on any failed/missing/stale check, unresolved security
+issue, untrusted evidence, drifted head or required review absence. Do not
+weaken branch protection to force auto-merge. GitHub native auto-merge is
+preferred to a home-grown merging controller. The actor that wrote code
+cannot forge review/CI attestation.
 
-~~~text
-MARK_READY_AND_MERGE_REMAIN_PROTECTED_ACTIONS=YES
-ONE_CURRENT_USER_MESSAGE_MAY_CONDITIONALLY_AUTHORIZE_BOTH=YES
-SECOND_AUTHORIZATION_PROMPT_WHEN_FROZEN_PREDICATES_MATCH=PROHIBITED
-CHANGED_OR_UNKNOWN_PREDICATE=>FAIL_CLOSED_WITHOUT_CONSUMING_AUTHORIZATION
-~~~
+**Scoped test-only deployments** may automatically install, start, health-check
+and roll back an immutable GitHub-hashed build in an isolated Shadow/test
+directory or service after a one-time, explicitly configured allowlisted
+deployment scope and OS-level credential separation. This never permits
+production service restart, real order placement, wallet reads or credential
+changes. Limit rollout to CPU/memory constraints of the existing AWS host,
+default OFF, and deploy only artifacts passing current CI. GitHub keeps the
+commit, build hash, deployment/health evidence and last-known-good rollback
+reference. No direct root shell from AI agents. Human final exploratory
+acceptance is the last check before separately authorized live promotion,
+not a mandatory approval for every GitHub Merge.
 
-No package, controller, Writer, CI, Reviewer, or prior authorization can infer
-these gates.
+**Current governance transition:** This candidate does not change active main
+permissions. PR #339 itself remains subject to the current main V5 gates and
+independent governance review until separately accepted and activated. Native
+GitHub auto-merge/branch-protection and restricted AWS deployment are not
+configured by merely editing this constitution. Controller and CI must
+provide non-forgeable verified evidence before any shortcut is enabled.
 
 ---
 
@@ -741,4 +881,6 @@ Model IDs and execution defaults belong in refreshable manifest/profile
 configuration. Durable lessons that are truly project-wide belong here.
 Task-specific details remain in their narrow lifecycle.
 
-Material governance changes require fresh independent review before activation.
+Material governance changes require a fresh independent review, matching
+controller/validator/test updates, and current authorization before activation.
+A proposal branch or Draft PR is never itself an active rule.

@@ -75,8 +75,8 @@ class Stage(StrEnum):
 
 PAUSES = {Stage.PAUSED_QUOTA, Stage.PAUSED_TRANSPORT, Stage.PAUSED_CAPABILITY}
 NORMAL = {
-    Stage.CONTROL_FREEZE: {Stage.PLAN},
-    Stage.PLAN: {Stage.PRECODE_REVIEW},
+    Stage.CONTROL_FREEZE: {Stage.PLAN, Stage.IMPLEMENT},
+    Stage.PLAN: {Stage.PRECODE_REVIEW, Stage.IMPLEMENT},
     Stage.PRECODE_REVIEW: {Stage.IMPLEMENT, Stage.PLAN_REVISE, Stage.CONTROL_REPLAN},
     Stage.PLAN_REVISE: {Stage.PRECODE_REVIEW},
     Stage.IMPLEMENT: {Stage.LOCAL_VALIDATE},
@@ -84,6 +84,7 @@ NORMAL = {
     Stage.PUBLISH: {Stage.CI_WAIT},
     Stage.CI_WAIT: {
         Stage.OPTIONAL_INTERNAL_REVIEW,
+        Stage.HUMAN_CLOSEOUT_GATE,
         Stage.MECHANICAL_REPAIR,
         Stage.REPAIR_1,
         Stage.REPAIR_2,
@@ -177,6 +178,21 @@ def validate_resume_identity(
         )
 
 
+def streamlined_risk_tier(state: PackageState) -> str:
+    """Only a separately verified canonical risk packet can enable shortcuts.
+
+    Legacy and ambiguous packages retain HIGH's conservative route.
+    """
+    matches = [x.split("=", 1)[1] for x in state.retained_gates if x.startswith("RISK_TIER=")]
+    if len(matches) != 1:
+        return "HIGH"
+    if matches[0] not in {"LOW", "MEDIUM", "HIGH"}:
+        raise ControlError("invalid risk tier")
+    if "RISK_PACKET_VERIFIED" not in state.retained_gates:
+        return "HIGH"
+    return matches[0]
+
+
 def transition(
     state: PackageState, target: Stage, *, event_key: str, exact_head: str | None = None
 ) -> PackageState:
@@ -202,6 +218,14 @@ def transition(
         allowed = NORMAL.get(current, set())
         if target not in allowed:
             raise ControlError(f"illegal transition {current}->{target}")
+        if target == Stage.IMPLEMENT and current in {Stage.CONTROL_FREEZE, Stage.PLAN}:
+            if streamlined_risk_tier(state) not in {"LOW", "MEDIUM"}:
+                raise ControlError("HIGH/legacy package cannot skip required Pre-code route")
+        if current == Stage.CI_WAIT and target == Stage.HUMAN_CLOSEOUT_GATE:
+            if streamlined_risk_tier(state) not in {"LOW", "MEDIUM"}:
+                raise ControlError("HIGH/legacy package requires independent Final Review")
+            if state.ci_head != state.exact_head or not state.ci_run_or_check_locators:
+                raise ControlError("risk shortcut requires exact-head successful CI evidence")
         repairs = state.semantic_repair_count + (target in {Stage.REPAIR_1, Stage.REPAIR_2})
         if repairs > 2:
             target, repairs = Stage.CONTROL_REPLAN, state.semantic_repair_count
@@ -254,6 +278,8 @@ def route_ci(state: PackageState, observation: CiObservation) -> Stage:
     if observation.head != state.exact_head:
         return Stage.STALE_REBIND
     if observation.conclusion == "success":
+        if streamlined_risk_tier(state) in {"LOW", "MEDIUM"}:
+            return Stage.HUMAN_CLOSEOUT_GATE
         return Stage.OPTIONAL_INTERNAL_REVIEW
     if observation.classification == "TRANSIENT_OR_KNOWN_FLAKE":
         return Stage.CI_WAIT if observation.rerun_count < 1 else Stage.PAUSED_TRANSPORT

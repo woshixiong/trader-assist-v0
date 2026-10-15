@@ -70,9 +70,15 @@ ONE_BOUNDED_RESULT_READ=ALLOWED_ONLY_FOR_CONCRETE_ABNORMAL_OR_INTERACTIVE_NEED
 AUTOMATION_CONTINUITY_TAKES_PRIORITY_OVER_RDC_MINIMIZATION=YES
 ~~~
 
-Additional RDC calls require a concrete technical necessity. On transport/network
-failure, preserve the exact checkpoint and use the existing bounded retry/fallback
-contract; never create an RDC retry storm.
+Additional RDC calls require a concrete technical necessity. On transport/network failure, preserve exact canonical checkpoint. For genuine
+transient network outages, automatically retry 10 seconds apart, at most 20
+times in one burst; a durable native GitHub/service timer may then retry every
+5-15 minutes with jitter until restored/cancelled. No RDC polling storm, no
+human relay, no semantic replay. Before any write retry, reconcile GitHub
+ref/run or host operation identity; ambiguous side effects stop for readback.
+Never retry secrets/auth/permission, semantic failures or exchange writes as
+if they were transport interruptions. Continued operation needs an actual
+persistent executor; chat sessions are not an always-on worker.
 
 ### Execution defaults — operational clarification only
 
@@ -80,9 +86,11 @@ These defaults clarify how to apply the existing V5 route and transport rules.
 They do not add stages, change lifecycle/authority, or modify controller, CI,
 review, repair, or protected-action behavior.
 
-- Follow the frozen V5 route exactly. Route B uses an ordinary ChatGPT Writer;
-  Route C uses Codex CLI; Pre-code and Final Independent Review use a fresh
-  ordinary ChatGPT High context. Do not substitute executors.
+- Resolve the active constitution's LOW/MEDIUM/HIGH tier first. Route B uses an
+  ordinary ChatGPT Writer; Route C uses the selected Codex execution surface.
+  HIGH/governance requires independent review; LOW/MEDIUM use small CI-checked
+  changes and milestone behavioral verification rather than blanket reviews.
+  Until this amendment is activated on main, existing V5 gates remain binding.
 - When Route C genuinely requires local execution, use RDC only to start or
   resume one visible foreground Terminal/Codex session. Do not use RDC for
   routine progress polling.
@@ -97,7 +105,7 @@ review, repair, or protected-action behavior.
 Every actor works to its safe authorized ability boundary. Routine continuation,
 SHA/CI/log relay, and long review-result relay through the user are prohibited.
 
-At every expected stop emit:
+At every human-required stop emit (machine-to-machine continuation uses canonical GitHub state):
 
 ~~~text
 DECISION=
@@ -107,12 +115,52 @@ NEXT_ACTION=
 COPY_PASTE_COMMAND_OR_PROMPT=
 ~~~
 
+## Mandatory engineering ownership before new infrastructure code
+
+The manifest-selected constitution RULE 1-4 (section 4A) applies to every
+AI and human executor: **FRAMEWORK_NATIVE_REUSE_REQUIRED**,
+**OFFICIAL_COMMUNITY_SEARCH_BEFORE_PATCH**, **ROOT_CAUSE_BEFORE_CODE** and
+**SYSTEM_WIDE_CAUSAL_VERIFICATION**. Strategies/research/edge are project IP;
+data capture, freshness, health, persistence, Shadow order mechanics,
+execution/OMS, non-strategy risk, recovery and operations are commodity
+capabilities; use pinned Nautilus/qualified mature native APIs first.
+
+Before commodity work, record a short pinned-version native capability map.
+For a failing native API, search official docs/source/Issues and relevant
+community reproductions before a custom patch. For a symptom, establish
+global owner/root cause and test configuration first, then code only if
+necessary. Verify the relevant whole data->state->strategy/shadow or execution
+chain and GitHub/AWS deployed identity. No duplicated infrastructure engine
+without proven gap, Engineering Control technical decision and, if material,
+user direction. This is an automatic execution gate, not an extra routine
+pre-code-review round. Until candidate activation, current main V5 still governs.
+
+## Explicit user override of process-only review deadlocks (candidate)
+
+If a current user explicitly waives ordinary Pre-code or Final Review for a
+bounded, already scoped public-data/Shadow-only correction, record and execute
+a trusted, risk-scoped Engineering Control **process waiver**, preserve
+existing Codex thread and GitHub checkpoint, and resume tests/fix/deploy.
+Never impersonate a reviewer or manufacture PASS. This fixes cases such as
+`woshixiong/-#7`: no repeated request for permission the user already gave,
+and no process-only pause after authorization. Preserve real correctness,
+no-order, actual deployed SHA, health/rollback and human-only credentials
+gates. Until amended V5 activation, current main governance still applies.
+
 ## Protected actions
 
-The manifest/constitution may never imply current authority for Mark Ready,
-merge, branch deletion, deployment, production/runtime/cloud mutation, service
-control, credential/private-API mutation, wallet/signing, exchange/order writes,
-autonomous trading, or real-capital action. Each requires explicit current human
-authorization.
+On activation of this reviewed amendment only: routine Mark Ready, native
+auto-Merge and safe merged-branch cleanup are machine-authorized **only** after
+trusted exact-head CI, required independent review, provenance and branch
+protection gates are verified. Missing evidence blocks. Isolated Shadow/test
+deployment may use a previously human-configured *bounded* allowlist; it never
+grants live deployment or trading authority.
+
+Human only: all passwords, keys, tokens, SSH credentials, wallet material,
+IAM/access grants, secret provisioning/rotation/revocation. Agents never read
+or change these. Human authorization remains mandatory for real-capital/order
+enabling and production changes outside the preauthorized test scope.
+The active-main V5 rules still apply until this candidate is accepted and
+activated; no proposal document grants current action authority.
 
 Load the manifest-selected phase skill only when that phase actually applies.

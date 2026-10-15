@@ -5,7 +5,8 @@ description: Emit a zero-decision, GitHub-anchored handoff at every expected sto
 
 # Trade OS V5 Handoff
 
-Every expected stop emits:
+Every stop requiring a human or new model context emits (routine automated
+continuation stays in GitHub without human relay):
 
 ~~~text
 DECISION=
@@ -38,8 +39,9 @@ EXACT_CANONICAL_LOCATOR_AVAILABLE=>HANDOFF_MUST_CARRY_EXACT_OBJECT
 GENERIC_ISSUE_OR_PR_HISTORY_INSTRUCTION_WHEN_EXACT_LOCATOR_KNOWN=PROHIBITED
 ~~~
 
-For Pre-code PASS or PLAN_REVISE handoffs, target the exact same Codex
-thread/worktree. If exact resume is unavailable or unverifiable, emit
+For a required HIGH Pre-code PASS or PLAN_REVISE handoff, target the exact same
+Codex thread/worktree. LOW/MEDIUM use recorded GitHub checkpoint recovery on
+lost sessions, never rerunning completed work. If exact resume is unavailable or unverifiable, emit
 PAUSED_CAPABILITY to Engineering Control; never substitute a fresh semantic
 thread.
 
@@ -50,17 +52,11 @@ EXACT_RESUME_UNAVAILABLE_OR_UNVERIFIABLE=>PAUSED_CAPABILITY/ENGINEERING_CONTROL
 SILENT_NEW_SEMANTIC_THREAD_SUBSTITUTION=PROHIBITED
 ~~~
 
-Protected actions are never smuggled through a handoff; they require explicit
-current human authority. Mark Ready and Merge remain distinct protected
-actions, while one current user message may conditionally authorize both after
-Final Review PASS. Engineering Control must fresh-verify exact reviewed head,
-required CI, and no drift before acting. Matching predicates prohibit a second
-authorization prompt; changed or unknown predicates fail closed without
-consuming the authorization.
-
-~~~text
-MARK_READY_AND_MERGE_REMAIN_PROTECTED_ACTIONS=YES
-ONE_CURRENT_USER_MESSAGE_MAY_CONDITIONALLY_AUTHORIZE_BOTH=YES
-SECOND_AUTHORIZATION_PROMPT_WHEN_FROZEN_PREDICATES_MATCH=PROHIBITED
-CHANGED_OR_UNKNOWN_PREDICATE=>FAIL_CLOSED_WITHOUT_CONSUMING_AUTHORIZATION
-~~~
+Protected and credential actions are never smuggled through handoffs.
+Under this candidate's **future activated policy**, ordinary GitHub Mark
+Ready/Merge/merged branch deletion become deterministic automatic closeout
+actions once trusted CI, phase/independent review and branch protection permit,
+not repeated human click prompts. Existing main V5 still governs this Draft PR.
+Secrets, credential grants, wallet/signing and real-money exchange writes are
+human-only; bounded test-only deployments are allowed only after separate
+human setup of an isolated scope.

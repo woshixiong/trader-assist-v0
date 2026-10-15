@@ -116,19 +116,58 @@ def check_manifest(root: Path) -> None:
         raise CheckFailure("execution relay metadata mismatch")
 
     protected = [
-        "MARK_READY",
-        "MERGE",
-        "BRANCH_DELETION",
-        "DEPLOYMENT",
-        "PRODUCTION_RUNTIME_OR_CLOUD_MUTATION",
-        "SERVICE_START_RESTART_ENABLE_REBOOT",
+        "PRODUCTION_RUNTIME_OR_CLOUD_MUTATION_OUTSIDE_PREAUTHORIZED_SCOPE",
+        "LIVE_SERVICE_START_RESTART_ENABLE_REBOOT",
         "CREDENTIAL_OR_PRIVATE_API",
         "WALLET_OR_SIGNING",
         "EXCHANGE_WRITE_OR_ORDER_ACTION",
         "AUTONOMOUS_OR_REAL_CAPITAL_TRADING",
     ]
+    auto = m.get("automated_closeout", {})
+    if not isinstance(auto, dict) or auto.get("default_unknown_state") != "BLOCK" or auto.get("requires_proven_nonforgeable_CI_and_tier") is not True:
+        raise CheckFailure("unverified automatic closeout policy")
+    secrets = m.get("test_deployment", {})
+    if not isinstance(secrets, dict) or secrets.get("live_order_authority") is not False or secrets.get("secrets_human_only") is not True:
+        raise CheckFailure("unsafe test deployment policy")
     if m.get("protected_actions") != protected:
         raise CheckFailure("protected-action authority changed")
+    ownership = m.get("engineering_invariants")
+    if not isinstance(ownership, dict):
+        raise CheckFailure("mandatory framework-native invariants missing")
+    for name in (
+        "FRAMEWORK_NATIVE_REUSE_REQUIRED",
+        "OFFICIAL_COMMUNITY_SEARCH_BEFORE_PATCH",
+        "ROOT_CAUSE_BEFORE_CODE",
+        "SYSTEM_WIDE_CAUSAL_VERIFICATION",
+    ):
+        if ownership.get(name) != "MANDATORY":
+            raise CheckFailure(f"mandatory framework-native invariant missing: {name}")
+    if ownership.get("NEW_COMMODITY_ENGINE") != "BLOCKED_IF_APPLICABLE_MATURE_CAPABILITY_EXISTS":
+        raise CheckFailure("commodity duplicate implementation guard invalid")
+    if ownership.get("PINNED_NATIVE_VERSION") != "nautilus_trader_v2.0.0rc5":
+        raise CheckFailure("pinned native API contract drift")
+    override = m.get("user_workflow_override")
+    if not isinstance(override, dict) or (
+        override.get("action") != "PROCESS_GATE_WAIVER_FOR_EXPLICIT_SCOPE"
+        or override.get("requires_independent_provenance_not_writer_string") is not True
+        or override.get("mandatory_tests_and_hash_deploy_proof") is not True
+        or override.get("cannot_forge_review_pass") is not True
+        or override.get("user_repeat_authorization_required") is not False
+    ):
+        raise CheckFailure("unsafe explicit-user process waiver contract")
+
+    resilience = m.get("network_resilience")
+    if not isinstance(resilience, dict):
+        raise CheckFailure("missing network resilience policy")
+    if (
+        resilience.get("transient_fast_interval_seconds") != 10
+        or resilience.get("transient_fast_max_attempts") != 20
+        or resilience.get("ambiguous_write") != "READBACK_THEN_FAIL_CLOSED_IF_UNCERTAIN"
+        or resilience.get("never_repeat_confirmed_side_effect") is not True
+        or resilience.get("no_chat_auto_awaken_claim") is not True
+    ):
+        raise CheckFailure("unsafe network resilience policy")
+
 
 
 def check_documents(root: Path) -> None:
@@ -142,6 +181,35 @@ def check_documents(root: Path) -> None:
         ),
         "V5 constitution",
     )
+    require(
+        text(root, CANONICAL),
+        (
+            "FRAMEWORK_NATIVE_REUSE_REQUIRED",
+            "OFFICIAL_COMMUNITY_SEARCH_BEFORE_PATCH",
+            "ROOT_CAUSE_BEFORE_CODE",
+            "SYSTEM_WIDE_CAUSAL_VERIFICATION",
+            "NATIVE_CAPABILITY_MAP",
+            "UPSTREAM_GAP_CONFIRMED_OR_UNRESOLVED",
+        ),
+        "V5 native-first constitution",
+    )
+    for policy_path in (
+        "AGENTS.md",
+        "governance/CHATGPT_PROJECT_GOVERNANCE_BRIDGE.md",
+        ".agents/skills/trade-os-v5-development/SKILL.md",
+        ".agents/skills/trade-os-v5-review/SKILL.md",
+    ):
+        require(
+            text(root, policy_path),
+            (
+                "FRAMEWORK_NATIVE_REUSE_REQUIRED",
+                "OFFICIAL_COMMUNITY_SEARCH_BEFORE_PATCH",
+                "ROOT_CAUSE_BEFORE_CODE",
+                "SYSTEM_WIDE_CAUSAL_VERIFICATION",
+            ),
+            f"native-first routing: {policy_path}",
+        )
+
     require(
         text(root, "governance/CHATGPT_PROJECT_GOVERNANCE_BRIDGE.md"),
         (

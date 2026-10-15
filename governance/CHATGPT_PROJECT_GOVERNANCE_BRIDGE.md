@@ -38,6 +38,28 @@ question appears, or review evidence is insufficient, expand only to the missing
 evidence first. Broad history is a last-resort Engineering Control escalation,
 not routine startup input.
 
+## Mandatory native reuse and whole-system diagnosis (candidate)
+
+Before implementing generic trading infrastructure, consult the
+manifest-selected RULE 1-4 native-first contract. Trading strategies and edge
+research are project-owned; capture/feed, native health/freshness, durable
+catalog, order/shadow mechanics, OMS/risk execution, state recovery and
+operational services reuse qualified mature official APIs. Bind the exact
+pinned Nautilus version and record a minimal capability map once.
+
+If an official/native interface fails, do not immediately write a patch:
+first reproduce, search pinned official docs/source/issue tracker and
+community workarounds, confirm version/venue/platform compatibility, then
+choose the simplest official configuration or composition. No parallel
+commodity component without evidence of a real unsupported gap and an
+Engineering Control / relevant user technical direction.
+
+For recurring issues, diagnose ownership and causality across market source,
+adapter, data/cache/catalog, strategy/shadow or risk/execution, persisted
+results and AWS/GitHub deployed state. Fix the shared root cause and verify
+the relevant whole path, not individual patch outcomes. No new routine
+human review stage is implied.
+
 ## Operating contract
 
 1. Fresh-resolve current main/base/head/tree, task identity, scope, authority,
@@ -61,14 +83,24 @@ not routine startup input.
    for a concrete abnormal or interactive need. Automation continuity takes
    priority over quota minimization, so do not create manual relay solely to
    save RDC calls.
-7. Use progressive disclosure. Do not load old chats, historical governance,
+7. Treat Mac/FinalShell/RDC drops as transport, not code failure. On transient
+   network errors retry at 10-second intervals for up to 20 attempts; after
+   that, durable provider-native recovery may retry at 5-15 minute intervals
+   with jitter until restored or explicitly cancelled. Canonical checkpoint,
+   not ChatGPT, owns continuation. Never retry a potentially completed write
+   before remote identity/readback. No repeated local RDC polling, no full CI
+   reruns for transient single-job failure, no auth/token/permission retry
+   loops, no secret work by agents. The long-running recovery mechanism
+   must actually be deployed and tested before claiming unattended continuity.
+8. Use progressive disclosure. Do not load old chats, historical governance,
    broad backlog bodies, or unrelated repository history by default.
-8. Durable decisions, package state, review results, and next actions belong in
+9. Durable decisions, package state, review results, and next actions belong in
    GitHub immediately.
 
-When the manifest-selected lifecycle routes Pre-code Review PASS or PLAN_REVISE
-back to Codex, the exact semantic thread/worktree resume is mandatory and
-fail-closed:
+When the manifest-selected HIGH design-risk lifecycle routes a required Pre-code
+Review PASS or PLAN_REVISE back to Codex, exact semantic thread/worktree resume
+remains mandatory and fail-closed. LOW/MEDIUM skip that review and may rebind a
+lost executor session from exact GitHub checkpoints without repeating work:
 
 ~~~text
 PRE_CODE_PASS_SAME_THREAD_RESUME_REQUIRED=YES
@@ -101,8 +133,9 @@ action.
 
 ## Review egress
 
-Pre-code and Final Independent Review are not complete until the complete review
-result has been written to the canonical GitHub evidence surface.
+A risk-triggered HIGH Pre-code or Final Independent Review is not complete
+until its full result is written to canonical GitHub. LOW/MEDIUM do not invent
+reviews; they preserve CI evidence and phase-level behavioral verification.
 
 A Reviewer is read-only with respect to candidate code/config/state, except for
 that bounded canonical result write. If result egress is unavailable, stop at
@@ -127,7 +160,7 @@ SHARED_OUTER_LAUNCHER_STDIN=PROHIBITED
 REMOTE_DESKTOP_OFFLINE_OR_QUOTA_EXHAUSTED=>ONE_EXACT_GENERATED_HUMAN_TERMINAL_COMMAND_OR_BLOCK
 ~~~
 
-At every expected stop emit:
+At a human-required handoff emit (automated steps use GitHub state without human relay):
 
 ~~~text
 DECISION=
@@ -140,26 +173,38 @@ COPY_PASTE_COMMAND_OR_PROMPT=
 The command/prompt must be complete so the user does not reconstruct state or
 choose a route already determined by evidence.
 
-## Protected gates
+## No deadlock on explicit user review waiver (candidate)
 
-Always require explicit current human authority for Mark Ready, merge, branch
-deletion, deployment, production/runtime/cloud mutation, service control,
-credential/private-API mutation, wallet/signing, exchange/order writes,
-autonomous trading, and real-capital action.
+Specific user authorization to skip routine review on a bounded data/Shadow
+repair should trigger a GitHub-recorded **Engineering Control process waiver**
+that takes an existing PLAN-ONLY package directly to implementation, automated
+correctness tests, hash-bound Shadow deploy and rollback. Do not simulate
+independent review, require a new window or re-ask the human. Real trade,
+secret, signing and unscoped host authority stay excluded. This requires
+verified authority evidence and an updated controller before activation:
+ordinary ChatGPT messages cannot silently override currently active main V5.
 
-Mark Ready and Merge remain distinct protected actions, but one current user
-message may conditionally authorize both after Final Review PASS. Engineering
-Control must fresh-verify the exact reviewed head, required CI, and no drift
-before acting. Matching frozen predicates prohibit a second authorization
-prompt. Changed or unknown predicates fail closed without consuming the
-conditional authorization.
+## Automated closeout and human-exclusive secrets (candidate until main activation)
 
-~~~text
-MARK_READY_AND_MERGE_REMAIN_PROTECTED_ACTIONS=YES
-ONE_CURRENT_USER_MESSAGE_MAY_CONDITIONALLY_AUTHORIZE_BOTH=YES
-SECOND_AUTHORIZATION_PROMPT_WHEN_FROZEN_PREDICATES_MATCH=PROHIBITED
-CHANGED_OR_UNKNOWN_PREDICATE=>FAIL_CLOSED_WITHOUT_CONSUMING_AUTHORIZATION
-~~~
+Passwords, API keys, tokens, SSH keys, signing/wallet material, IAM and
+secret-manager provisioning/rotation/permission grants are **human only**.
+Agents may give setup checklists, but must never read, request, disclose or
+mutate these values. Safe capability checks and use of a restricted deployment
+service are allowed only after the human separately provisions the scope.
 
-No prior approval, review, merge, package, automation, or governance rule
-implicitly grants a protected action.
+For verified future V5 packages, after trusted exact-head CI, source scope,
+required independent HIGH/governance/native-reuse Final Review, negative
+tests and branch protection are green, enable **GitHub native auto-merge**,
+automatically Mark Ready when needed, and clean merged temporary branches.
+No per-PR human approval for these ordinary repository operations. Incomplete,
+untrusted or stale evidence blocks, and an AI Writer cannot attest its own
+review. Any pre-existing package continues under its existing governance
+until explicitly migrated.
+
+On an AWS test/shadow target with a previously configured bounded allowlist,
+automate SHA-bound install, smoke/health, evidence and rollback with no live
+keys or exchange writes; do not let AI acquire unrestricted SSH/root access.
+Production changes and real order authority remain human protected.
+
+Until this candidate is independently reviewed, activated and the execution
+gates actually implemented, continue using the present main V5 authority.
