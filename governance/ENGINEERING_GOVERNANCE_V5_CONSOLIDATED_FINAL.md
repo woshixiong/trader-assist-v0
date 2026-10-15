@@ -206,65 +206,28 @@ Final integration, exact-head review, and merge-front movement are serialized.
 
 ---
 
-## 5. Route C lifecycle and Pre-code Review
+## 5. Risk-proportional engineering and phase verification
 
-A large coherent Codex package uses one primary thread/session and one bounded
-worktree/checkpoint chain where the execution surface supports it.
+**V5 streamlined amendment (candidate until separately reviewed and activated).** Engineering Control binds a change risk tier from actual changed paths, semantic blast radius, intended runtime exposure and evidence, not from the Writer's claim. Unknown classification, mixed-risk packages, governance/control-plane edits, or a discrepancy fail to HIGH. Record the tier and exact classification evidence in the canonical task packet; the controller represents its verified routing decision as `RISK_TIER=LOW|MEDIUM|HIGH` and `RISK_PACKET_VERIFIED` in retained gates. The marker is an adapter to the canonical packet, not authorization to self-declare lower risk.
 
-~~~text
-ENGINEERING_CONTROL_FREEZE
--> DETERMINISTIC EXACT-BASE BOOTSTRAP
--> CODEX PLAN-ONLY
--> FRESH PRE-CODE REVIEW
--> SAME CODEX THREAD RESUME ON PASS
--> IMPLEMENT / FOCUSED VALIDATE
--> DETERMINISTIC PUBLISH
--> EXACT-HEAD CI
--> BOUNDED REPAIR LOOP IF NEEDED
--> OPTIONAL INTERNAL READ-ONLY REVIEW WHEN JUSTIFIED AND VERIFIABLE
--> FINAL REVIEW MANIFEST
--> FRESH FINAL INDEPENDENT REVIEW
--> ENGINEERING CONTROL CLOSEOUT
-~~~
+**LOW**: documentation, non-operational UI presentation and bounded non-critical maintenance with no trading, secrets, permission, deployment, data-integrity or execution effect. Direct small implementation -> focused tests -> exact-head CI -> closeout. No mandatory Plan-only, Pre-code or independent Final Review for each small change.
 
-Plan-only may choose implementation order and mechanics but may not change
-frozen scope, product behavior, architecture authority, external contracts,
-protected actions, or acceptance criteria.
+**MEDIUM**: strategy research and shadow-only code, isolated scanner/market-data features, dashboard functionality and bounded refactors that cannot send orders, mutate production, bypass risk or change exchange credentials. Make several small, CI-checked slices on short-lived branches. Skip routine Pre-code and per-slice independent Final Review; run scripted end-to-end phase verification on the integrated user-visible feature before promotion. Failing scenarios become one deduplicated, severity-ranked defect batch; fix in small commits with immediate CI, then rerun only affected and boundary regressions. Medium does not authorize live trading, production exposure or actual deployment.
 
-Pre-code Review happens after Plan-only and before product-source mutation.
-It is a fresh ordinary ChatGPT / High review of the exact package, plan, base,
-architecture/contracts, acceptance criteria, adversarial matrix, and minimal
-governance needed for the decision.
+**HIGH**: OMS/order path, Risk Kernel, sizing, wallet/signing, execution guards, permissions, service/deployment control, persistent-data correctness with trading consequences, external provider/security architecture, governance, or any ambiguity about exposure. Retain one short design/Pre-code Review only when architecture or safety design changes, then one fresh independent Final Review of the exact candidate, required deterministic negative and failure-mode tests, stage-level end-to-end evidence, and current human protected-action authority. Governance amendments require fresh independent review even if documentation-only.
 
-Pre-code decisions route deterministically:
+For a HIGH implementation without a new architecture, an existing accepted design plus tests may replace repeated Pre-code Reviews. Engineering Control must record this determination. The single independent Final Review remains required.
 
-~~~text
-PASS
--> resume the same Codex thread/session and implement
+**Routine state paths (new packages only):**
+- LOW/MEDIUM: CONTROL_FREEZE -> IMPLEMENT -> LOCAL_VALIDATE -> PUBLISH -> CI_WAIT -> HUMAN_CLOSEOUT_GATE. PLAN is optional; routine PRECODE_REVIEW and FINAL_INDEPENDENT_REVIEW are not required.
+- HIGH: CONTROL_FREEZE -> PLAN -> PRECODE_REVIEW (only when design-risk triggers) -> IMPLEMENT -> LOCAL_VALIDATE -> PUBLISH -> CI_WAIT -> OPTIONAL_INTERNAL_REVIEW -> FINAL_REVIEW_READY -> FINAL_INDEPENDENT_REVIEW -> HUMAN_CLOSEOUT_GATE. Where the Pre-code gate is not triggered, PLAN -> IMPLEMENT is allowed only with a separately verified HIGH design-reuse predicate; the current controller does not yet enable this shortcut.
+- Untagged/legacy packages continue the strict HIGH path; no automatic migration or reclassification.
 
-FAIL + PLAN_REVISE
--> resume the same Codex thread/session for bounded plan revision
--> run a fresh Pre-code Review on the revised plan
+Independent validation is **behavioral**, not another blanket code-reading round. A project-local Verification Skill or equivalent harness must specify Launch, Doctor, Drive, Evidence and Cleanup, plus small feature maps. Use the existing test runner, HTTP/CLI, browser and replay tools first. Verification agents act as a real user and an adversarial outsider, using *disposable/offline/shadow* environments without production credentials or exchange write access. Hark Pro and Muse may supply independent **test observations only**, not authoritative code or production changes. The Writer and testing agents must not share a mutable production host. All outcomes are PASS / FAIL / BLOCKED with reproducible evidence; missing evidence is never PASS.
 
-FAIL + CONTROL_REPLAN
--> return directly to Engineering Control for refreeze
-~~~
+Every slice keeps fast CI and exact-head binding. Every meaningful feature/milestone gets one phase-level E2E/exploratory pass; a release or trading-risk promotion always re-enters HIGH. Do not defer all tests to the end of a large branch. The completed phase report must include tested features, real versus simulated data, negative paths, CI head, evidence artifacts, defects and retained blockers.
 
-Same-thread resume is a fail-closed continuity invariant:
-
-~~~text
-PRE_CODE_PASS_SAME_THREAD_RESUME_REQUIRED=YES
-PLAN_REVISE_SAME_THREAD_RESUME_REQUIRED=YES
-EXACT_RESUME_UNAVAILABLE_OR_UNVERIFIABLE=>PAUSED_CAPABILITY/ENGINEERING_CONTROL
-SILENT_NEW_SEMANTIC_THREAD_SUBSTITUTION=PROHIBITED
-~~~
-
-For both PASS and PLAN_REVISE, the exact primary Codex thread and worktree must
-be resumed. If exact resume semantics are unavailable or cannot be verified,
-preserve the checkpoint, enter the capability-paused state, and return to
-Engineering Control. Never substitute a new semantic Codex thread silently.
-
-The user does not select the failure route.
+Codex thread/worktree continuity is preferred for a coherent task, not a reason to freeze LOW/MEDIUM delivery when a checkpoint survives. If an executor loses its session, resume from exact canonical GitHub evidence and record the new session explicitly; no semantic work may silently be replayed. HIGH frozen work keeps the existing fail-closed exact-resume rule when applicable.
 
 ---
 
@@ -372,71 +335,13 @@ decisive run/job/step excerpt.
 
 ---
 
-## 9. Review result egress is part of review completion
+## 9. Risk-scoped review and phase evidence
 
-Every Pre-code Review and Final Independent Review must persist its complete
-result to canonical GitHub before the review stage is complete.
+LOW: focused test and exact-head CI status are sufficient for routine code acceptance; no Pre-code or Final Independent Review packet is required. MEDIUM: focused test and exact-head CI per small change; one integrated phase-level independent behavioral verification packet for each meaningful feature milestone or before promotion. HIGH and governance: preserve fresh independent Final Review and canonical GitHub result egress. Pre-code Review for HIGH is triggered only by new/changed safety-critical architecture or an explicitly identified design-risk.
 
-~~~text
-REVIEW_DECISION_COMPLETE
-AND CANONICAL_GITHUB_RESULT_EGRESS != PASS
-=> REVIEW_STAGE_NOT_COMPLETE
-~~~
+Any required independent review reads every materially changed file and records exact PR/head/tree, CI locator, observed behavior, negative tests, unresolved risk, PASS/FAIL/BLOCKED, and its canonical result. A changed head invalidates old PASS and requires targeted revalidation of the changed scope and dependent invariants, not necessarily a full new review of unrelated files. A green CI result without behavioral evidence never qualifies a claim requiring live behavior. Never misrepresent the PR author's own approval as an independent identity.
 
-The user must not carry long review findings between windows.
-
-### 9.1 Pre-code Review result
-
-Canonical destination: the Development Package Issue/package-state record.
-
-Required structured block:
-
-~~~text
-REVIEW_TYPE=PRE_CODE
-REVIEW_RESULT_KEY=
-PACKAGE_ID=
-FROZEN_BASE=
-PLAN_REF=
-DECISION=PASS|FAIL
-FAIL_ROUTE=NONE|PLAN_REVISE|CONTROL_REPLAN
-BLOCKERS=
-NEXT_DESTINATION=
-NEXT_ACTION=
-NEXT_COMMAND_REF_OR_LITERAL=
-REVIEWER_MODE=FRESH_ORDINARY_CHATGPT_READ_ONLY
-RESULT_EGRESS=GITHUB_CANONICAL
-~~~
-
-### 9.2 Final Independent Review result
-
-Final Review uses a fresh ordinary ChatGPT context with High reasoning, reads
-the exact current PR/base/head/tree/diff, frozen acceptance/adversarial matrix,
-exact-head CI, final review manifest, and minimal authority/safety rules.
-
-Required structured block:
-
-~~~text
-REVIEW_TYPE=FINAL_INDEPENDENT
-REVIEW_RESULT_KEY=
-PR=
-BASE=
-HEAD=
-TREE=
-DECISION=PASS|FAIL
-BLOCKERS=
-CI_EVIDENCE=
-REVIEW_SUBMISSION_MODE=NATIVE_REVIEW|COMMENT_ONLY
-NEXT_DESTINATION=
-NEXT_ACTION=
-NEXT_COMMAND_REF_OR_LITERAL=
-RESULT_EGRESS=GITHUB_CANONICAL
-~~~
-
-If the authenticated PR owner cannot submit a native independent approval, use
-COMMENT_ONLY canonical evidence. COMMENT_ONLY is evidence, not a second
-identity. Do not misrepresent self-review as independent GitHub identity.
-
-A changed candidate head requires a new fresh Final Reviewer.
+For HIGH Pre-code decisions use PASS, PLAN_REVISE or CONTROL_REPLAN. If required review evidence cannot be written to canonical GitHub, the review is incomplete; LOW/MEDIUM skip paths do not fabricate review results. Test agents may discover and report defects, but may neither replace HIGH independent review nor authorize protected actions.
 
 ---
 
@@ -522,19 +427,20 @@ then (2) first-unexpected-failure reset if that direction fails, then (3)
 ordinary V5 execution. These are checks inside existing stages, not additional
 Review rounds or a new workflow.
 
-At the **first unexpected failure**, every actor must pause the affected plan
-before further source changes, semantic retries, new infrastructure or expanded
-scope. Preserve the exact checkpoint and obtain only the minimum safe read-only
-evidence needed to examine the whole responsibility chain and root cause,
-including whether an accepted or official component already solves it. Writer
-or Reviewer returns the issue to Engineering Control; Control immediately gives
-the user a plain-language decision brief of no more than four short lines: **what failed; root cause (or explicitly unknown); simplest
-official/reuse fix versus the costly alternative; exact decision requested**.
-Lead with the root problem, never a patch plan or implementation jargon; keep
-SHAs, stack traces, CI details and full analysis in canonical GitHub evidence.
-Wait for the user's direction before selecting a changed route or resuming
-unexpected-failure repair. The human decision is not permission for protected
-actions or a silent change to previously frozen scope.
+On an **unexpected LOW/MEDIUM failure**, first reproduce and classify it, retain
+the failing command/evidence in GitHub, and fix within the accepted feature scope
+using small CI-checked changes. At a phase checkpoint, aggregate reproducible
+defects into one prioritized batch before focused correction and phase re-test.
+No new human decision is needed for ordinary in-scope semantic or test failure.
+Escalate on a new architecture/provider/security decision, unexpected live-risk
+effect, cross-layer authority break, loss of reliable evidence, uncontrolled
+repair loop, or expansion beyond the accepted direction.
+
+On an **unexpected HIGH failure**, pause affected source changes, preserve the
+exact checkpoint, identify root cause and the mature/official alternative,
+then route new architecture, authority, security or funds-impacting decisions
+to Engineering Control and the current human. Do not weaken validators or
+override risk limits to make CI pass.
 
 A previously human-authorized, narrowly bounded deterministic mechanical
 correction, planned red/green local test, or transient transport retry may
@@ -633,14 +539,11 @@ Normal engineering work:
 Publication sequence is:
 
 ~~~text
-EXACT CANDIDATE
--> FOCUSED VALIDATION
--> DRAFT PR
--> EXACT-HEAD CI
--> FRESH FINAL INDEPENDENT REVIEW
--> CURRENT HUMAN MARK-READY AUTHORITY
--> CURRENT HUMAN MERGE AUTHORITY
--> REQUIRED LIVE-MAIN / POST-MERGE VERIFICATION
+EXACT CANDIDATE -> FOCUSED VALIDATION -> DRAFT PR -> EXACT-HEAD CI
+-> LOW: BOUNDED CLOSEOUT / MEDIUM: BOUNDED CLOSEOUT + MILESTONE VERIFICATION
+-> HIGH OR GOVERNANCE: REQUIRED FRESH INDEPENDENT FINAL REVIEW
+-> RETAINED HUMAN PROTECTED-ACTION AUTHORITY
+-> RELEVANT POST-MERGE CHECK; LIVE PROMOTION REQUIRES SEPARATE AUTHORITY
 ~~~
 
 For transient network/TLS/HTTP instability, preserve the semantic checkpoint
@@ -710,8 +613,11 @@ EXCHANGE_WRITE_OR_ORDER_ACTION
 AUTONOMOUS_OR_REAL_CAPITAL_TRADING
 ~~~
 
-Mark Ready and Merge remain two distinct protected actions. After Final Review
-PASS, one current user message may conditionally authorize both actions. Before
+Mark Ready and Merge remain two distinct protected actions. For a HIGH
+change, after Final Review PASS, one current user message may conditionally
+authorize both actions. For LOW/MEDIUM, the same combined authorization may
+follow exact-head CI and any triggered phase gate without inventing an
+independent Final Review. Before
 acting, Engineering Control must fresh-verify the exact reviewed head, all
 required CI, and no drift against the frozen predicates. If every predicate
 matches, a second authorization prompt is prohibited. If any predicate changed
@@ -741,4 +647,6 @@ Model IDs and execution defaults belong in refreshable manifest/profile
 configuration. Durable lessons that are truly project-wide belong here.
 Task-specific details remain in their narrow lifecycle.
 
-Material governance changes require fresh independent review before activation.
+Material governance changes require a fresh independent review, matching
+controller/validator/test updates, and current authorization before activation.
+A proposal branch or Draft PR is never itself an active rule.

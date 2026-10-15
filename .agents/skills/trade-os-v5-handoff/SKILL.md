@@ -5,7 +5,8 @@ description: Emit a zero-decision, GitHub-anchored handoff at every expected sto
 
 # Trade OS V5 Handoff
 
-Every expected stop emits:
+Every stop requiring a human or new model context emits (routine automated
+continuation stays in GitHub without human relay):
 
 ~~~text
 DECISION=
@@ -38,8 +39,9 @@ EXACT_CANONICAL_LOCATOR_AVAILABLE=>HANDOFF_MUST_CARRY_EXACT_OBJECT
 GENERIC_ISSUE_OR_PR_HISTORY_INSTRUCTION_WHEN_EXACT_LOCATOR_KNOWN=PROHIBITED
 ~~~
 
-For Pre-code PASS or PLAN_REVISE handoffs, target the exact same Codex
-thread/worktree. If exact resume is unavailable or unverifiable, emit
+For a required HIGH Pre-code PASS or PLAN_REVISE handoff, target the exact same
+Codex thread/worktree. LOW/MEDIUM use recorded GitHub checkpoint recovery on
+lost sessions, never rerunning completed work. If exact resume is unavailable or unverifiable, emit
 PAUSED_CAPABILITY to Engineering Control; never substitute a fresh semantic
 thread.
 

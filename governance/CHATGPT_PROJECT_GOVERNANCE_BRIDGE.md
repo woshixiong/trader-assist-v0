@@ -66,9 +66,10 @@ not routine startup input.
 8. Durable decisions, package state, review results, and next actions belong in
    GitHub immediately.
 
-When the manifest-selected lifecycle routes Pre-code Review PASS or PLAN_REVISE
-back to Codex, the exact semantic thread/worktree resume is mandatory and
-fail-closed:
+When the manifest-selected HIGH design-risk lifecycle routes a required Pre-code
+Review PASS or PLAN_REVISE back to Codex, exact semantic thread/worktree resume
+remains mandatory and fail-closed. LOW/MEDIUM skip that review and may rebind a
+lost executor session from exact GitHub checkpoints without repeating work:
 
 ~~~text
 PRE_CODE_PASS_SAME_THREAD_RESUME_REQUIRED=YES
@@ -101,8 +102,9 @@ action.
 
 ## Review egress
 
-Pre-code and Final Independent Review are not complete until the complete review
-result has been written to the canonical GitHub evidence surface.
+A risk-triggered HIGH Pre-code or Final Independent Review is not complete
+until its full result is written to canonical GitHub. LOW/MEDIUM do not invent
+reviews; they preserve CI evidence and phase-level behavioral verification.
 
 A Reviewer is read-only with respect to candidate code/config/state, except for
 that bounded canonical result write. If result egress is unavailable, stop at
@@ -127,7 +129,7 @@ SHARED_OUTER_LAUNCHER_STDIN=PROHIBITED
 REMOTE_DESKTOP_OFFLINE_OR_QUOTA_EXHAUSTED=>ONE_EXACT_GENERATED_HUMAN_TERMINAL_COMMAND_OR_BLOCK
 ~~~
 
-At every expected stop emit:
+At a human-required handoff emit (automated steps use GitHub state without human relay):
 
 ~~~text
 DECISION=

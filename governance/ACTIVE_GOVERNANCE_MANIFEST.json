@@ -76,8 +76,9 @@
     "runtime_qualification": "BASELINE_QUALIFIED"
   },
   "review": {
-    "pre_code_review": "FRESH_ORDINARY_CHATGPT_HIGH",
-    "final_independent_review": "FRESH_ORDINARY_CHATGPT_HIGH",
+    "pre_code_review": "HIGH_DESIGN_RISK_ONLY",
+    "final_independent_review": "HIGH_AND_GOVERNANCE_ONLY",
+    "medium_phase_verification": "REAL_USER_AND_ADVERSARIAL_E2E_AT_MILESTONE",
     "canonical_github_result_egress_required": true,
     "comment_only_fallback_when_native_self_approval_unavailable": true
   },
@@ -124,5 +125,16 @@
     "merge_commit": "07eaa624d24973a9fd48fd15957f3ee60550bc4e",
     "reviewed_head": "7444ab6506ae740f1d151bb8fa8cb09f33215fd5",
     "reviewed_tree": "a1bad58b29479a06d4c007d2bf63b5ac5cef0de5"
+  },
+  "risk_routing": {
+    "default_on_ambiguity": "HIGH",
+    "low": "NO_MANDATORY_PRE_CODE_OR_FINAL_REVIEW_CI_REQUIRED",
+    "medium": "SMALL_BATCH_CI_PLUS_PHASE_E2E_NO_PER_SLICE_REVIEW",
+    "high": "DESIGN_RISK_PRE_CODE_AND_MANDATORY_INDEPENDENT_FINAL",
+    "controller_tags": [
+      "RISK_TIER=LOW|MEDIUM|HIGH",
+      "RISK_PACKET_VERIFIED"
+    ],
+    "no_auto_live_authority": true
   }
 }

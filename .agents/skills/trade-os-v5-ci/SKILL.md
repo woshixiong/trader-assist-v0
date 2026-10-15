@@ -33,5 +33,7 @@ Known transient: at most one same-head rerun. Semantic: consume the frozen
 repair budget and route through package-state. Unresolved/new-root: Engineering
 Control.
 
-All-green advances mechanically to Final Review readiness. Never Mark Ready,
-merge, deploy, or cross another protected gate.
+All-green routes HIGH/governance to required Final Review; LOW/MEDIUM may
+advance to protected closeout after verified tier binding and exact-head CI.
+MEDIUM promotion additionally needs phase-level behavioral evidence. Never
+silently Mark Ready, merge, deploy or cross another protected gate.

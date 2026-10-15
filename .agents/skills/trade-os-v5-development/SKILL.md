@@ -1,42 +1,22 @@
 ---
 name: trade-os-v5-development
-description: Execute a frozen V5 development package through Plan-only, Pre-code Review, same-thread implementation, focused validation, bounded repair, and publication handoff.
+description: Implement small risk-classified Trade OS changes with fast CI and phase-level verification; retain strict HIGH safety gates.
 ---
 
 # Trade OS V5 Development
 
-Thin adapter only; do not duplicate the constitution.
+This is an adapter to the manifest-selected constitution, not a second policy.
 
 ~~~text
 MODEL_EXECUTOR_STDIN_SOURCE=EXPLICIT
 SHARED_OUTER_LAUNCHER_STDIN=PROHIBITED
 ~~~
 
-Before local publication containing `.github/workflows/**`, require current
-human-backed `GH_WORKFLOW_SCOPE_VERIFIED=YES`; do not silently refresh OAuth.
-
-1. Bootstrap exact package/base/runtime identity first.
-2. Run Plan-only with no product-source mutation.
-3. Persist the Plan and emit the complete fresh Pre-code Review prompt.
-4. Review PASS and PLAN_REVISE must resume the exact same primary Codex
-   thread/worktree. If exact resume is unavailable or unverifiable, preserve the
-   checkpoint and return PAUSED_CAPABILITY to Engineering Control; never
-   silently substitute a new semantic Codex thread. CONTROL_REPLAN returns to
-   Engineering Control. The user does not select the route.
-
-~~~text
-PRE_CODE_PASS_SAME_THREAD_RESUME_REQUIRED=YES
-PLAN_REVISE_SAME_THREAD_RESUME_REQUIRED=YES
-EXACT_RESUME_UNAVAILABLE_OR_UNVERIFIABLE=>PAUSED_CAPABILITY/ENGINEERING_CONTROL
-SILENT_NEW_SEMANTIC_THREAD_SUBSTITUTION=PROHIBITED
-~~~
-5. Default subagents=0. At most one optional bounded child may run when actual
-   child identity is verifiable; otherwise skip it with no fallback.
-6. Implement -> smallest decisive validation -> observe -> bounded in-scope
-   repair.
-7. Semantic budget is initial + Repair1 + Repair2; third semantic failure or a
-   new root/scope/architecture/security/authority issue returns to Control.
-8. After publication, hand exact head to the deterministic CI stage. Do not
-   model-poll CI.
-9. V5-A does not supply the controller; use this skill as candidate procedure
-   only until V5-B is implemented and qualified.
+1. Bind exact repo/issue/base/head, frozen feature and acceptance predicates. Engineering Control records verified LOW/MEDIUM/HIGH risk classification in the canonical packet; ambiguity defaults HIGH. Legacy untagged packages retain old strict V5 stages.
+2. LOW: direct bounded implementation -> focused validation -> short Draft PR -> exact-head CI -> human protected closeout. No routine plan-only, Pre-code or Final Independent Review.
+3. MEDIUM: ship several isolated short CI-checked changes; hold new trading/production behavior OFF. No per-slice Pre-code/Final Review. On an actual feature/milestone, run a real user scenario and independent adversarial scenario on disposable/offline/shadow hosts. Capture traces and deduplicate faults into a ranked defect batch, fix in small CI-checked commits, rerun focused and boundary regression.
+4. HIGH or governance: fresh independent Final Review always; add one Pre-code Review only for changed/unknown safety-critical design. Preserve exact-head identity, negative-path tests, and current human gates. No real exchange writes or service mutations via test agents.
+5. For Codex, preserve the primary thread/worktree whenever available. Only HIGH required Pre-code resumption fails closed on exact resume loss; LOW/MEDIUM can start an explicitly recorded replacement executor at the last canonical checkpoint without repeating completed work.
+6. On failure, classify/reproduce first. LOW/MEDIUM within frozen scope can repair without user relay. New architecture/security/authority or real-capital risk returns to Control. Do not weaken guards to green CI.
+7. If publishing `.github/workflows/**` through a local git transport, enforce current human-backed `GH_WORKFLOW_SCOPE_VERIFIED=YES` without silent OAuth refresh.
+8. CI status waiting is deterministic, not a model or RDC polling loop.

@@ -80,9 +80,11 @@ These defaults clarify how to apply the existing V5 route and transport rules.
 They do not add stages, change lifecycle/authority, or modify controller, CI,
 review, repair, or protected-action behavior.
 
-- Follow the frozen V5 route exactly. Route B uses an ordinary ChatGPT Writer;
-  Route C uses Codex CLI; Pre-code and Final Independent Review use a fresh
-  ordinary ChatGPT High context. Do not substitute executors.
+- Resolve the active constitution's LOW/MEDIUM/HIGH tier first. Route B uses an
+  ordinary ChatGPT Writer; Route C uses the selected Codex execution surface.
+  HIGH/governance requires independent review; LOW/MEDIUM use small CI-checked
+  changes and milestone behavioral verification rather than blanket reviews.
+  Until this amendment is activated on main, existing V5 gates remain binding.
 - When Route C genuinely requires local execution, use RDC only to start or
   resume one visible foreground Terminal/Codex session. Do not use RDC for
   routine progress polling.
@@ -97,7 +99,7 @@ review, repair, or protected-action behavior.
 Every actor works to its safe authorized ability boundary. Routine continuation,
 SHA/CI/log relay, and long review-result relay through the user are prohibited.
 
-At every expected stop emit:
+At every human-required stop emit (machine-to-machine continuation uses canonical GitHub state):
 
 ~~~text
 DECISION=
