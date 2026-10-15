@@ -21,6 +21,7 @@ class NativeCatalogBatchSink:
             raise ValueError("batch_size must be 1..4096")
         self.root = root
         self._factory = ParquetDataCatalog
+        root.mkdir(parents=True, exist_ok=True)
         self._catalog = self._factory(str(root))
         self._batch_size = batch_size
         self._now = now_ns
