@@ -131,6 +131,18 @@ def check_manifest(root: Path) -> None:
         raise CheckFailure("unsafe test deployment policy")
     if m.get("protected_actions") != protected:
         raise CheckFailure("protected-action authority changed")
+    resilience = m.get("network_resilience")
+    if not isinstance(resilience, dict):
+        raise CheckFailure("missing network resilience policy")
+    if (
+        resilience.get("transient_fast_interval_seconds") != 10
+        or resilience.get("transient_fast_max_attempts") != 20
+        or resilience.get("ambiguous_write") != "READBACK_THEN_FAIL_CLOSED_IF_UNCERTAIN"
+        or resilience.get("never_repeat_confirmed_side_effect") is not True
+        or resilience.get("no_chat_auto_awaken_claim") is not True
+    ):
+        raise CheckFailure("unsafe network resilience policy")
+
 
 
 def check_documents(root: Path) -> None:

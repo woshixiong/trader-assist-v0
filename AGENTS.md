@@ -70,9 +70,15 @@ ONE_BOUNDED_RESULT_READ=ALLOWED_ONLY_FOR_CONCRETE_ABNORMAL_OR_INTERACTIVE_NEED
 AUTOMATION_CONTINUITY_TAKES_PRIORITY_OVER_RDC_MINIMIZATION=YES
 ~~~
 
-Additional RDC calls require a concrete technical necessity. On transport/network
-failure, preserve the exact checkpoint and use the existing bounded retry/fallback
-contract; never create an RDC retry storm.
+Additional RDC calls require a concrete technical necessity. On transport/network failure, preserve exact canonical checkpoint. For genuine
+transient network outages, automatically retry 10 seconds apart, at most 20
+times in one burst; a durable native GitHub/service timer may then retry every
+5-15 minutes with jitter until restored/cancelled. No RDC polling storm, no
+human relay, no semantic replay. Before any write retry, reconcile GitHub
+ref/run or host operation identity; ambiguous side effects stop for readback.
+Never retry secrets/auth/permission, semantic failures or exchange writes as
+if they were transport interruptions. Continued operation needs an actual
+persistent executor; chat sessions are not an always-on worker.
 
 ### Execution defaults — operational clarification only
 

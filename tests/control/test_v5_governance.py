@@ -139,3 +139,20 @@ def test_context_io_document_invariants_are_required(
     monkeypatch.setattr(checker, "text", without_invariant)
     with pytest.raises(checker.CheckFailure):
         checker.check_documents(ROOT)
+
+
+
+def test_transient_network_recovery_contract_is_present(monkeypatch: pytest.MonkeyPatch) -> None:
+    value = manifest()
+    value["network_resilience"]["transient_fast_max_attempts"] = 0
+    install(monkeypatch, value)
+    with pytest.raises(checker.CheckFailure, match="network resilience"):
+        checker.check_manifest(ROOT)
+
+
+def test_unknown_network_write_must_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    value = manifest()
+    value["network_resilience"]["ambiguous_write"] = "BLIND_RETRY"
+    install(monkeypatch, value)
+    with pytest.raises(checker.CheckFailure, match="network resilience"):
+        checker.check_manifest(ROOT)

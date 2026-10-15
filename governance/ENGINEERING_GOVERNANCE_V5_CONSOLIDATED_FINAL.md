@@ -558,14 +558,56 @@ EXACT CANDIDATE -> FOCUSED VALIDATION -> DRAFT PR -> EXACT-HEAD CI
 -> RELEVANT POST-MERGE CHECK; LIVE PROMOTION REQUIRES SEPARATE AUTHORITY
 ~~~
 
-For transient network/TLS/HTTP instability, preserve the semantic checkpoint
-and same execution/credential route first. Idempotent reads normally receive a
-small bounded retry budget. A write may be retried only after canonical
-readback proves no mutation or proves the exact target is unchanged and retry
-is safe. Ambiguous mutation without readback fails closed.
+### Network recovery, durable continuity, and no manual relay
 
-Transport recovery never authorizes force push, credential weakening, or
-semantic rerun.
+A flaky local Mac/FinalShell/RDC connection is **not a semantic failure**. Never
+discard completed Codex work, restart a whole expensive CI pipeline, demand
+manual log copying, or repeat a successful server mutation merely because its
+acknowledgment was lost. GitHub exact-head package/checkpoint, commit, artifact,
+run ID and remote operation ID own progress; the local chat is not an always-on
+worker.
+
+**Fast retry envelope (preserves user's operating preference):** on positively
+classified transient DNS/TCP/TLS/SSH/HTTP timeout/disconnect, first use the
+official tool's own reconnect/resume where available. Otherwise retry at
+**10-second intervals, up to 20 attempts per burst**. If still offline,
+persist `PAUSED_TRANSPORT_AUTO_RESUME` with task/run identity and next action,
+then automatically retry through an existing lightweight **native**
+GitHub-hosted event/scheduled runner, qualified service/systemd timer or
+persistent remote executor at a **5-15 minute recovery cadence** with jitter;
+continue recovery attempts until network/service returns or the task is
+explicitly cancelled. Each recovery run has a finite retry budget; no hot
+infinite loop, log storm or Remote Commander quota burn. User receives an
+optional failure notice but is not asked to reissue the same task.
+This long-horizon auto-resume is a **target capability**, not claimed to exist
+until a tested durable runner/timer and correct event binding are installed.
+
+Only retry on **transient transport/unavailability**. Credential/authentication
+failure, expired token, denied permissions, semantic CI/test failure, invalid
+configuration, disk/RAM shortage, safety violation or real exchange rejection
+are **not network failures**: stop the affected operation; never ask an AI to
+refresh/create/read secrets. Backoff with jitter, service limits and one owner
+of retries take precedence over repeated retries at several layers.
+
+**Read before repeating writes:** for Git commits/PR/merge use ref/SHA and CI
+readback; for AWS deployments use release SHA, last-good marker and operation
+ID; for CI use run ID/head, re-run **only transient failed jobs** within
+GitHub's native retry allowance. No second shell deploy, service restart,
+order/transaction submission or resource mutation until the previous outcome
+is reconciled. Idempotent retry requires matching exact target and safe
+postcondition. Any ambiguous non-idempotent write fails closed to a
+read-only reconciliation checkpoint; never blindly retry. Real exchange
+writes/orders are outside this development retry policy entirely.
+
+When cloud CI/workflows continue independently of Mac connectivity, they
+should complete and save results even if ChatGPT or local Codex loses its
+session. GitHub Actions' native run status/Artifact and a systemd-supervised
+test-only service are preferred to home-grown polling controllers; the
+ordinary ChatGPT chat is not claimed to self-awaken. On reconnect, the agent
+reads the exact canonical checkpoint and resumes *unfinished* work only.
+
+Transport recovery never authorizes force push, permission broadening,
+secret exposure, real-capital activity or semantic rerun.
 
 Human-executed commands are engineered artifacts and must be safe, bounded,
 reproducible, and tailored to the observed OS/shell/tool contract.

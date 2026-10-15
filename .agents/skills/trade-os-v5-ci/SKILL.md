@@ -37,3 +37,16 @@ All-green routes HIGH/governance to required Final Review; LOW/MEDIUM may
 advance to protected closeout after verified tier binding and exact-head CI.
 MEDIUM promotion additionally needs phase-level behavioral evidence. Never
 silently Mark Ready, merge, deploy or cross another protected gate.
+
+## Transient network outage recovery (candidate)
+
+Network transport failure must preserve exact head/run/checkpoint, distinct from
+failing semantic tests. Prefer native GitHub workflow/job rerun for **failed
+transient jobs only**, never blindly rerun full CI on every network hiccup.
+Use a 10s/20-attempt bounded quick reconnect envelope where client-managed
+reads are required; after that only a durable existing native scheduler/service
+may retry at a 5-15min jittered cadence until recovery or cancellation.
+Read exact CI run status before retry. GitHub native rerun limits apply; an
+exhausted job rerun budget must enter a tracked paused state, not loop.
+No RDC polling storm, credential reissue, untrusted proof injection or duplicate
+deployment on ambiguous success.

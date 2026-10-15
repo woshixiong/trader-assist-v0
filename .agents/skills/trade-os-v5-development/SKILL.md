@@ -23,3 +23,5 @@ SHARED_OUTER_LAUNCHER_STDIN=PROHIBITED
 
 9. After independent verification and trusted exact-head CI, eventual auto-Ready/auto-Merge should use GitHub native protection; until V5 amendment activation, keep main's current manual gates. Human handles all secrets, keys, tokens, IAM/permission grants and wallet material. Never read, request, change or propagate them.
 10. Deploy test-only Shadow artifacts via an allowlisted operator-installed command with immutable SHA and automatic rollback; never grant generic SSH/root or live-order rights to an agent. Human acceptance is the last stage before any separately approved live promotion.
+
+11. NETWORK: on positively transient failure, resume native session or retry at 10-second intervals (up to 20); persist exact task/commit/run/operation ID and let qualified provider-native 5-15min recovery timer keep trying until restored. Never blindly repeat Git/host writes, pretend local ChatGPT is persistent, rerun already-passing tests, or spend RDC calls polling. A permission/token/semantic/safety error is not retryable transport.

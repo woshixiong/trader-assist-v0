@@ -61,9 +61,18 @@ not routine startup input.
    for a concrete abnormal or interactive need. Automation continuity takes
    priority over quota minimization, so do not create manual relay solely to
    save RDC calls.
-7. Use progressive disclosure. Do not load old chats, historical governance,
+7. Treat Mac/FinalShell/RDC drops as transport, not code failure. On transient
+   network errors retry at 10-second intervals for up to 20 attempts; after
+   that, durable provider-native recovery may retry at 5-15 minute intervals
+   with jitter until restored or explicitly cancelled. Canonical checkpoint,
+   not ChatGPT, owns continuation. Never retry a potentially completed write
+   before remote identity/readback. No repeated local RDC polling, no full CI
+   reruns for transient single-job failure, no auth/token/permission retry
+   loops, no secret work by agents. The long-running recovery mechanism
+   must actually be deployed and tested before claiming unattended continuity.
+8. Use progressive disclosure. Do not load old chats, historical governance,
    broad backlog bodies, or unrelated repository history by default.
-8. Durable decisions, package state, review results, and next actions belong in
+9. Durable decisions, package state, review results, and next actions belong in
    GitHub immediately.
 
 When the manifest-selected HIGH design-risk lifecycle routes a required Pre-code

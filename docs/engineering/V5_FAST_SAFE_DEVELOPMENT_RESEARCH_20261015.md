@@ -203,3 +203,98 @@ Official sources reviewed for native reuse:
 - https://nautilustrader.io/docs/latest/concepts/execution/
 - https://nautilustrader.io/docs/latest/concepts/live/
 - https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/automatically-merging-a-pull-request
+
+## 13. Two concurrent windows' lessons and durable network resilience (2026-10-15)
+
+### A. New strategy/AWS window — `woshixiong/-`
+
+Most successful pattern: direct on-host diagnosis -> focused edit -> reload
+specific test/shadow service -> observe real market-data updates and shadow
+ledger. The Mac/FinalShell/RDC middle hop slows work and monopolizes the
+desktop. Current evidence confirms market-data and shadow `orders.jsonl` /
+`exits.jsonl` can be read, but **does not** prove every one of 71 strategy
+identities has an independently valid live shadow record. Observed blockers
+include GitHub/AWS source drift, version mapping, duplicate/ambiguous paper
+order attribution, BBO/L2/timestamp integrity and data persistence.
+The user limited AWS to public live capture + study/shadow paper orders and
+explicitly rejected premature statistics/export. As of the consulted window
+record, its source fixes and AWS redeployment were **not verified done**.
+
+Borrow: fast scoped deployment + real output inspection + one consolidated bug
+batch + SHA comparison against GitHub; prove `version_id`, `order_id`,
+`entry/exit` causal alignment and data completeness before claiming success.
+Avoid taking an external Agent's self-reported deployment/test result as proof.
+
+### B. Nautilus foundation window — `woshixiong/trader-assist-v0`
+
+Issue #338 groups **A native public capture without mandatory warmup, B
+Catalog/data health, C native shadow lifecycle, D execution/risk/account
+wiring with no private execution** in one coherent package. This is the right
+large-package development style. The current local implementation reportedly
+had a Draft PR and local 102 PASS/22 SKIP, while native CI surfaced a
+`ParquetDataCatalog` directory-initialization failure. Local PASS was not the
+same as exact-head Linux CI PASS, and final merge/deployment was not proved.
+The older #329/#331 recorder work was merged on main; continuous production
+capture after that merge was *not* verified deployed. Previous failed first
+launch stemmed partly from project-added all-strategy historical warmup, queue
+overflow and excessive qualification, not an intrinsic Nautilus requirement.
+
+Borrow: native RC5 pinned APIs, one master feature bundle with internal A/B/C/D
+integration checks, GitHub-hosted CI as authoritative Linux proof, optional
+history only for strategies that need it, one strict final integrated package
+review, no separate tiny PR for every minor gate. Keep new base integration
+independent of proprietary signal research, private wallets and live orders.
+
+### Combined workflow adjustment
+
+1. Each task has `task_id + immutable base/head + expected service scope +
+   acceptance` stored in GitHub; read actual AWS deployed SHA/config and
+   reconcile drift before any patch. Do not trust copied output.
+2. Codex works continuously on a **large coherent package** with inexpensive
+   focused local checks. No repeated pre-code/final reviews per submodule.
+   Publish a single bounded candidate and run full exact-head Linux CI;
+   batch noncritical corrections, then rerun necessary gates.
+3. Only in isolated shadow/test mode, use an existing provider-native
+   deploy mechanism with a one-time human-scoped credential setup; drive
+   actual subscribed streams, catalog reopen, synthetic orders, versioned
+   paper ledger and negative paths. Save immutable evidence and rollback
+   identity to GitHub. No AI secrets or live-capital permission.
+4. Real user/Hark Pro/Muse adversarial tests are supplemental **read-only
+   findings**. Explicit human final use test happens after automatic
+   behavioral proof, not every iteration. Release blocker is factual
+   capability and data/ledger correctness, not ritual window switching.
+5. Network disruptions: **10s x 20 fast recovery attempts** on only transient
+   transport. After that use a durable 5-15min jittered GitHub/native
+   systemd recovery timer that keeps trying until restored/cancelled, with a
+   finite budget per invocation. Prefer provider auto reconnect/resubscribe,
+   resume from GitHub run/commit/deploy checkpoint, avoid manual intervention.
+   Prevent compounded retries, CI runner cost storms, quota storms and
+   duplicated service/Git/exchange writes. Never attempt token or permission
+   repairs through AI. If no durable timer exists, call the state
+   `PAUSED_TRANSPORT_AUTO_RESUME_NOT_CONFIGURED`, never falsely report
+   automatic recovery.
+
+### Expected acceptance
+- One disconnected Mac does not break an already-running GitHub-hosted CI.
+- A retryable GitHub read recovers; a successfully completed GitHub write is
+  not repeated after lost acknowledgment.
+- A failed network step does not rerun prior passing expensive native CI.
+- A shadow deployment whose SSH acknowledgment was lost reconciles the
+  installed SHA before any retry. Unknown outcome cannot restart live services.
+- Temporary disconnection produces an observable checkpoint; persistent
+  connectivity resumption continues only unfinished steps through the tested
+  native timer/scheduler, with no additional paid service.
+- Auth denied, resource OOM, code test failures, real-account/order failures
+  do not trigger transport retries.
+- Final users can distinguish GH code SHA, AWS deployed SHA, collector gaps
+  and shadow order identity/causal correctness; none inferred from PR green.
+  
+Primary retry sources:
+- https://docs.aws.amazon.com/wellarchitected/latest/framework/rel_mitigate_interaction_failure_limit_retries.html
+- https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs?tool=cli
+- https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/retry-backoff.html
+
+**Not implemented solely by this governance-document change:** persistent
+retry/timer, credentialless native deploy command, verified tier attestation,
+exact CI result predicate, medium phase evidence, automatic merge. Keep
+candidate Draft until all safety and functionality tests pass.

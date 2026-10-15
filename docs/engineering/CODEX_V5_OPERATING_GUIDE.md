@@ -181,3 +181,15 @@ wallet/signing. Existing AWS hosts may run SHA-bound, default-OFF isolated
 test/Shadow releases through restricted, preconfigured deployment commands.
 Real-capital enabling or production mutation is not implied by GitHub Merge.
 
+
+## Candidate network-continuity change (not active yet)
+
+Local Mac/FinalShell/RDC failures should never abort semantic work already
+recorded in GitHub. For transient network errors: official resume/reconnect
+first; 10 seconds x up to 20 safe retries; then durable 5-15 minute
+provider-native retries with jitter until recovery/cancel. Persist exact head,
+CI run, writer checkpoint and AWS operation id. Never duplicate ambiguous
+writes, retry credential failures, poll RDC repeatedly, or rerun successful CI
+when only its local observer lost connectivity. Long-horizon unattended
+recovery needs an actually installed qualified GitHub/systemd runner; a normal
+ChatGPT window does not continue itself when closed.

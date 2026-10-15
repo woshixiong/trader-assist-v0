@@ -159,5 +159,28 @@
     "proof": "IMMUTABLE_RELEASE_HASH_HEALTH_AND_ROLLBACK",
     "live_order_authority": false,
     "secrets_human_only": true
+  },
+  "network_resilience": {
+    "status": "PROPOSED_REQUIRES_EXECUTOR_VERIFICATION",
+    "transient_fast_interval_seconds": 10,
+    "transient_fast_max_attempts": 20,
+    "extended_recovery_interval_minutes": [
+      5,
+      15
+    ],
+    "extended_recovery_mechanism": "NATIVE_GITHUB_OR_EXISTING_SYSTEMD_TIMER_REQUIRED",
+    "recovery_policy": "UNTIL_RESTORED_OR_EXPLICIT_CANCEL_WITH_FINITE_BURSTS",
+    "durable_checkpoint": "GITHUB_EXACT_HEAD_RUN_AND_OPERATION_ID",
+    "do_not_retry": [
+      "CREDENTIAL_OR_AUTHENTICATION",
+      "PERMISSION_DENIED",
+      "SEMANTIC_TEST_CI_FAILURE",
+      "INVALID_CONFIG_OR_RESOURCE_EXHAUSTION",
+      "EXCHANGE_WRITE_OR_ORDER_ACTION"
+    ],
+    "ambiguous_write": "READBACK_THEN_FAIL_CLOSED_IF_UNCERTAIN",
+    "never_repeat_confirmed_side_effect": true,
+    "quota_safe": true,
+    "no_chat_auto_awaken_claim": true
   }
 }
