@@ -62,3 +62,22 @@ expected and negative behavior; gather logs/output rather than model opinions.
 Summarize one deduplicated defect batch with severity, reproduction, owner and
 re-test evidence. Muse/Hark Pro output is optional non-authoritative test input:
 it never performs production changes or substitutes for required HIGH review.
+
+## Native ownership / global regression checks on required final review
+
+Where a package changes commodity infrastructure, reviewer checks:
+`FRAMEWORK_NATIVE_REUSE_REQUIRED` ownership matrix tied to the pinned
+version; no project-managed reconnect/OMS/risk/storage/Shadow mechanics when
+a fitting native implementation exists. If a claimed native limitation drove
+custom code, `OFFICIAL_COMMUNITY_SEARCH_BEFORE_PATCH` must have an exact
+reproducer plus relevant official docs/issue/community evidence; lack of a
+confirmed upstream fix must be recorded, not invented. Evaluate whether
+`ROOT_CAUSE_BEFORE_CODE` was respected and the smallest supported
+configuration/adapter chosen. Verify `SYSTEM_WIDE_CAUSAL_VERIFICATION`
+of upstream/downstream contracts and GitHub/AWS artifact identity, with
+data/Shadow/risk execution negative cases where applicable.
+
+A competing commodity implementation with no demonstrated framework gap is
+a review blocker, even if unit tests pass. A behavioral verification that
+covers only a single function but claims an end-to-end result is FAIL/BLOCKED.
+This is part of the existing final review, not an extra review stage.

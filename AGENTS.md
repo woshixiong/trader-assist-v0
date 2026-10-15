@@ -115,6 +115,26 @@ NEXT_ACTION=
 COPY_PASTE_COMMAND_OR_PROMPT=
 ~~~
 
+## Mandatory engineering ownership before new infrastructure code
+
+The manifest-selected constitution RULE 1-4 (section 4A) applies to every
+AI and human executor: **FRAMEWORK_NATIVE_REUSE_REQUIRED**,
+**OFFICIAL_COMMUNITY_SEARCH_BEFORE_PATCH**, **ROOT_CAUSE_BEFORE_CODE** and
+**SYSTEM_WIDE_CAUSAL_VERIFICATION**. Strategies/research/edge are project IP;
+data capture, freshness, health, persistence, Shadow order mechanics,
+execution/OMS, non-strategy risk, recovery and operations are commodity
+capabilities; use pinned Nautilus/qualified mature native APIs first.
+
+Before commodity work, record a short pinned-version native capability map.
+For a failing native API, search official docs/source/Issues and relevant
+community reproductions before a custom patch. For a symptom, establish
+global owner/root cause and test configuration first, then code only if
+necessary. Verify the relevant whole data->state->strategy/shadow or execution
+chain and GitHub/AWS deployed identity. No duplicated infrastructure engine
+without proven gap, Engineering Control technical decision and, if material,
+user direction. This is an automatic execution gate, not an extra routine
+pre-code-review round. Until candidate activation, current main V5 still governs.
+
 ## Protected actions
 
 On activation of this reviewed amendment only: routine Mark Ready, native

@@ -25,3 +25,36 @@ SHARED_OUTER_LAUNCHER_STDIN=PROHIBITED
 10. Deploy test-only Shadow artifacts via an allowlisted operator-installed command with immutable SHA and automatic rollback; never grant generic SSH/root or live-order rights to an agent. Human acceptance is the last stage before any separately approved live promotion.
 
 11. NETWORK: on positively transient failure, resume native session or retry at 10-second intervals (up to 20); persist exact task/commit/run/operation ID and let qualified provider-native 5-15min recovery timer keep trying until restored. Never blindly repeat Git/host writes, pretend local ChatGPT is persistent, rerun already-passing tests, or spend RDC calls polling. A permission/token/semantic/safety error is not retryable transport.
+
+## Mandatory official-native integration discipline
+
+**FRAMEWORK_NATIVE_REUSE_REQUIRED:** Classify each requested responsibility:
+STRATEGY_IP vs COMMODITY_INFRASTRUCTURE vs THIN_INTEGRATION. Only strategies,
+research hypotheses, proprietary signal and trade management policy are
+project differentiation. Quote/trade/bar capture, reconnect, stream freshness,
+health, catalog/recovery, native simulation/Shadow order mechanics,
+execution/OMS, generic risk, audit/logging and deployment reuse pinned
+Nautilus or another approved mature owner. No second implementation of a
+working framework capability.
+
+**OFFICIAL_COMMUNITY_SEARCH_BEFORE_PATCH:** Record a minimal exact rc5
+capability/API map. On a native error, stop commodity code edits, get a
+small reproducer; inspect official API/source/examples/releases, issue tracker
+and discussions, then relevant community reports. Check version, Rust/Python
+surface, venue and platform. Try config/composition first. No official or
+community solution is guaranteed; record unresolved gaps honestly. A new
+adapter beyond a supported thin seam or independent engine requires a
+separate technical direction and authority decision.
+
+**ROOT_CAUSE_BEFORE_CODE:** Distinguish configuration, data contract,
+version/API, environment, deploy drift and genuine implementation defects.
+Test the smallest supported correction without new code first; forbid
+speculative pollers/controllers/patch cascades. If unresolved, preserve evidence
+and block that responsibility while continuing unrelated safe work.
+
+**SYSTEM_WIDE_CAUSAL_VERIFICATION:** Record affected input -> native adapter ->
+cache/data catalog/health -> strategy+Shadow or execution+risk -> durable
+result -> release/AWS version chain. Check relevant adjacent boundaries,
+causal event/order IDs, freshness, restart/duplicates and actual deployed
+commit. Consolidate shared-root defects; perform one integrated final
+package verification, not a new review for each subcomponent.

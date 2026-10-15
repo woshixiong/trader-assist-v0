@@ -210,6 +210,123 @@ Final integration, exact-head review, and merge-front movement are serialized.
 
 ---
 
+## 4A. Mandatory official-native ownership and global root-cause gate
+
+**These are hard engineering admission rules, not advisory preferences and not extra
+per-task Review stages.** They apply to ChatGPT planners/reviewers, Codex writers,
+external testers, local/CI scripts and operators alike. They override any proposal
+to "solve it quickly" by duplicating a working mature framework component.
+
+### RULE 1 — FRAMEWORK_NATIVE_REUSE_REQUIRED
+
+**Our differentiator is trading strategy intelligence and research edge, not
+generic trading infrastructure.** Owned strategy work includes opportunity
+definition, entry/exit/risk-reward hypotheses, state/regime models, ranking,
+parameters, backtest experiments and Shadow evidence interpretation. Strategy
+decisions should plug into first-party framework/runtime APIs.
+
+**COMMODITY_INFRASTRUCTURE_DEFAULT** includes market-data feeds and adapters,
+subscription/reconnect/resubscribe, freshness and health reporting, data
+normalization, time/event handling, state Cache, durable market-data storage,
+replay/recovery, simulated/paper/Shadow order *mechanics*, order state/OMS,
+fills/reconciliation, portfolio/account calculations, generic pre-trade risk,
+system monitoring, logging, CI, release and deployment plumbing. These must
+reuse an applicable official NautilusTrader pinned-release capability, or a
+qualified already-adopted mature external provider/native system when the
+pinned release lacks one. Do not build a second collector/connector/controller,
+shadow OMS, risk engine, freshness daemon, catalog, order state or health
+pipeline merely because an internal implementation is convenient.
+
+**Admission test before coding any commodity responsibility:**
+record `NATIVE_CAPABILITY_MAP` (requested function -> pinned Nautilus
+version/API/type/factory/extension seam -> integration path -> any explicit
+unsupported/missing item). Read the actual installed version, tagged source,
+official examples and adapter's supported venue features. "Supported by latest"
+is not proof for rc5; a framework feature may require configuration, have an
+unsupported API, or not cover the specific venue. For already confirmed,
+unchanged native features reuse the existing map; do **not** redo broad
+provider selection or S0-S9 scoring at every task.
+
+A **thin adapter** may only translate formats, invoke an official supported
+extension seam, or connect stable strategy contracts. It cannot become the
+authoritative owner of native reconnection, OMS, general risk, state recovery
+or synthetic fills. If the proposed adapter starts taking ownership of a
+commodity engine, block implementation and route through RULE 2 first.
+
+### RULE 2 — OFFICIAL_COMMUNITY_SEARCH_BEFORE_PATCH
+
+If an official/native feature fails, mismatches an interface, produces an
+unexpected result, or appears missing, **freeze coding on that responsibility**
+until a concrete problem/evidence packet exists. Search in order:
+(1) pinned-version official API/reference/config/source/examples and release
+notes; (2) official issue tracker, discussions, tests, maintainer guidance;
+(3) relevant community issue reproductions/solutions and known version-specific
+limitations; (4) mature published workarounds and supported alternative
+adapters. Compare exact version, language/Rust-vs-Python surface, venue,
+runtime, platform and data flow. Cite URLs plus evidence and verify candidate
+configuration or workaround using the **smallest reproducible test**.
+
+**Never assume a community solution must exist.** If none is supported or
+reproducible, record `UPSTREAM_GAP_CONFIRMED_OR_UNRESOLVED` honestly.
+Choose supported first-party composition/configuration before any new code;
+alternatives are upstream issue/upgrade at the user's chosen version boundary,
+a different maintained provider, a minimal bounded adapter, or waiting.
+A material new commodity implementation, invasive fork or parallel engine
+requires explicit Engineering Control evidence and a current user **technical
+direction** decision; neither an agent's urgency nor a passing CI is an
+exception. The user is involved only when a real unsupported gap or material
+architecture/cost decision exists, not for routine defects.
+
+### RULE 3 — ROOT_CAUSE_BEFORE_CODE
+
+On a failure, gather only the decisive observations, determine whether the
+cause is configuration, native API usage, version mismatch, deployment state,
+data contract, dependency, environment, or actual framework bug. First test
+the **simplest official configuration/operational correction with no product
+code change**. Do not build a new script, poller, controller, recovery layer,
+validator, storage stack or extra CI workflow merely to work around symptoms.
+No "fix it by adding code" until one root cause and a clear owner boundary are
+recorded. Keep corrective changes small even inside large development
+packages. For unresolved causes, contain the affected behavior, continue
+unrelated safe work, and request user direction only if material uncertainty
+requires it. Never downgrade risk, mask a false PASS, or invent health data.
+
+### RULE 4 — SYSTEM_WIDE_CAUSAL_VERIFICATION
+
+Analyze each material failure across its **complete responsibility chain**,
+not a single failing line. Map input/source + venue timestamp/identity ->
+official adapter/data engine -> cache/catalog and health ->
+strategy/scanner/Shadow or Risk/ExecutionEngine ->
+order event/position/account reconciliation ->
+durable evidence + host service + GitHub release/artifact identity.
+Mark layers `APPLICABLE` or `NOT_APPLICABLE` with reason; do not force
+order-path tests on data-only development. Identify authoritative ownership
+at every boundary, especially GitHub commit vs actually deployed AWS SHA,
+data gaps, timestamp disorder, duplicate events, versioned Shadow ledger
+entry/exit and crash/restart survival.
+
+Fix the **shared/global cause** first, then rerun the smallest meaningful
+upstream/downstream integration tests. Failures in adjacent layers that share
+one origin become one defect batch, not sequential local patches. A claimed
+`PASS` requires measured end-to-end behavior on the actual relevant path;
+CI success alone is not proof of live event freshness, deployment, paper fills
+or funds safety. For native reuse, run one consolidated package-level
+verification at the end rather than repetitive micro-reviews.
+
+**Minimal canonical evidence, not bureaucracy:** attach the native capability
+map; for exceptions attach one root-cause note, official/community references
+and their applicability, boundary diagram in plain text, chosen remedy and
+one reproducer; for complete packages attach exact-head CI + end-to-end
+functional/negative-path results. No broad reports or external-solution
+reselection where existing proven native API already decides the route.
+
+**Anti-regression gate:** a Writer cannot use an unverified claim of "framework
+missing" to introduce a custom infrastructure engine. New competing
+commodity ownership or bypassing the official/community search blocks
+approval and auto-Merge, regardless of risk tier.
+
+---
+
 ## 5. Risk-proportional engineering and phase verification
 
 **V5 streamlined amendment (candidate until separately reviewed and activated).** Engineering Control binds a change risk tier from actual changed paths, semantic blast radius, intended runtime exposure and evidence, not from the Writer's claim. Unknown classification, mixed-risk packages, governance/control-plane edits, or a discrepancy fail to HIGH. Record the tier and exact classification evidence in the canonical task packet; the controller represents its verified routing decision as `RISK_TIER=LOW|MEDIUM|HIGH` and `RISK_PACKET_VERIFIED` in retained gates. The marker is an adapter to the canonical packet, not authorization to self-declare lower risk.
@@ -224,7 +341,7 @@ For a HIGH implementation without a new architecture, an existing accepted desig
 
 ### OFFICIAL_NATIVE_REUSE fast lane — integration origin, not a financial-risk exemption
 
-Where the goal is solely assembling capabilities **already provided by the pinned NautilusTrader version**, organize one **large, coherent, end-to-end development package** by functional area (native data capture/health, native order lifecycle/risk, native shadow/backtest, native operations). Prove each claimed capability against actual installed pinned-version API/examples and explicitly list unsupported gaps. Do not rewrite framework internals, add a parallel OMS/risk/controller, or infer support from newer upstream versions.
+Where the goal is solely assembling capabilities **already provided by the pinned NautilusTrader version**, enforce RULE 1-4 in §4A and organize one **large, coherent, end-to-end development package** by functional area (native data capture/health, native order lifecycle/risk, native shadow/backtest, native operations). Prove each claimed capability against actual installed pinned-version API/examples and explicitly list unsupported gaps. Do not rewrite framework internals, add a parallel OMS/risk/controller, or infer support from newer upstream versions.
 
 One task brief and one Codex execution plan at package start. Codex may work through many local commits without repeated handoffs, routine Pre-code reviews or full CI per local commit. Perform cheap developer-side syntax/unit/smoke checks while building; run the complete required GitHub CI once on the final published candidate head (and rerun only after real corrections). Then perform **one consolidated strict independent review plus integrated real-behavior and negative/failure-path testing** on the exact package. Consolidate noncritical defects into one reproducible batch; block on critical ones immediately.
 
@@ -462,9 +579,11 @@ cross-layer or long-running-no-progress failure as routine to evade the stop.
 No uncontrolled termination of live services/processes: existing safety and
 protected-action gates remain in force.
 
-Global root cause precedes repeated local patch loops. Mixed state, duplicate
-authority, repeated adjacent fixes, or new cross-layer failures trigger
-route-level reanalysis rather than validator weakening.
+Global root cause precedes repeated local patch loops. RULE 1-4 in §4A
+are mandatory for all commodity infrastructure, including low-risk/native
+integration. Mixed state, duplicate authority, repeated adjacent fixes, or
+new cross-layer failures trigger route-level reanalysis rather than validator
+weakening.
 
 For authoritative adjacent layers, supported domains must close cleanly and
 valid admitted input must have a deterministic semantic result.

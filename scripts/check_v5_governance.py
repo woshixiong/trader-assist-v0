@@ -131,6 +131,22 @@ def check_manifest(root: Path) -> None:
         raise CheckFailure("unsafe test deployment policy")
     if m.get("protected_actions") != protected:
         raise CheckFailure("protected-action authority changed")
+    ownership = m.get("engineering_invariants")
+    if not isinstance(ownership, dict):
+        raise CheckFailure("mandatory framework-native invariants missing")
+    for name in (
+        "FRAMEWORK_NATIVE_REUSE_REQUIRED",
+        "OFFICIAL_COMMUNITY_SEARCH_BEFORE_PATCH",
+        "ROOT_CAUSE_BEFORE_CODE",
+        "SYSTEM_WIDE_CAUSAL_VERIFICATION",
+    ):
+        if ownership.get(name) != "MANDATORY":
+            raise CheckFailure(f"mandatory framework-native invariant missing: {name}")
+    if ownership.get("NEW_COMMODITY_ENGINE") != "BLOCKED_IF_APPLICABLE_MATURE_CAPABILITY_EXISTS":
+        raise CheckFailure("commodity duplicate implementation guard invalid")
+    if ownership.get("PINNED_NATIVE_VERSION") != "nautilus_trader_v2.0.0rc5":
+        raise CheckFailure("pinned native API contract drift")
+
     resilience = m.get("network_resilience")
     if not isinstance(resilience, dict):
         raise CheckFailure("missing network resilience policy")
@@ -156,6 +172,35 @@ def check_documents(root: Path) -> None:
         ),
         "V5 constitution",
     )
+    require(
+        text(root, CANONICAL),
+        (
+            "FRAMEWORK_NATIVE_REUSE_REQUIRED",
+            "OFFICIAL_COMMUNITY_SEARCH_BEFORE_PATCH",
+            "ROOT_CAUSE_BEFORE_CODE",
+            "SYSTEM_WIDE_CAUSAL_VERIFICATION",
+            "NATIVE_CAPABILITY_MAP",
+            "UPSTREAM_GAP_CONFIRMED_OR_UNRESOLVED",
+        ),
+        "V5 native-first constitution",
+    )
+    for policy_path in (
+        "AGENTS.md",
+        "governance/CHATGPT_PROJECT_GOVERNANCE_BRIDGE.md",
+        ".agents/skills/trade-os-v5-development/SKILL.md",
+        ".agents/skills/trade-os-v5-review/SKILL.md",
+    ):
+        require(
+            text(root, policy_path),
+            (
+                "FRAMEWORK_NATIVE_REUSE_REQUIRED",
+                "OFFICIAL_COMMUNITY_SEARCH_BEFORE_PATCH",
+                "ROOT_CAUSE_BEFORE_CODE",
+                "SYSTEM_WIDE_CAUSAL_VERIFICATION",
+            ),
+            f"native-first routing: {policy_path}",
+        )
+
     require(
         text(root, "governance/CHATGPT_PROJECT_GOVERNANCE_BRIDGE.md"),
         (

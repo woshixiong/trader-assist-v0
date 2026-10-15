@@ -298,3 +298,62 @@ Primary retry sources:
 retry/timer, credentialless native deploy command, verified tier attestation,
 exact CI result predicate, medium phase evidence, automatic merge. Keep
 candidate Draft until all safety and functionality tests pass.
+
+## 14. User's four mandatory invariants: strategy innovation versus framework reuse (2026-10-15)
+
+**Hard rules to put in V5 constitution, Manifest, AGENTS, ChatGPT bridge, development/review skills and governance validator:** `FRAMEWORK_NATIVE_REUSE_REQUIRED`; `OFFICIAL_COMMUNITY_SEARCH_BEFORE_PATCH`; `ROOT_CAUSE_BEFORE_CODE`; `SYSTEM_WIDE_CAUSAL_VERIFICATION`.
+
+**Unique project differentiator:** strategy discovery, opportunity selection and
+signal policy, proprietary entry/exit/winner management, parameter research,
+empirical real Shadow performance/edge. Nautilus is the primary owner for
+generic data adapter/connectivity, subscriptions, clock/event model, account/
+portfolio, native execution/OMS, risk mechanisms, catalog/cache/persistence,
+basic market freshness/health and framework-provided simulation/backtest
+mechanics. systemd/GitHub Actions and mature provider-native tools own
+generic deploy/monitor/CI. A project's supported adapters may translate
+contracts but cannot own a competing generic engine.
+
+**Before each commodity capability:** produce a short `NATIVE_CAPABILITY_MAP`
+with pinned rc5 symbols/API/example links, supported/unsupported venue
+features and thin integration seam. A *verified* map can be reused across
+bundles. No redo of broad third-party software selection when a suitable
+accepted mature native capability is already established.
+
+**On blocked native behavior:** reproduce first; consult exact pinned official
+reference/source/examples/release notes, maintainer Issues/Discussions, and
+community fixes. Distinguish current upstream docs from pinned version. Verify
+a known workaround or supported configuration; if no proven solution exists,
+do not hallucinate one. If a genuine gap remains, contain unsupported
+behavior, compare official upgrade/patch, mature alternative, supported
+composition, thin adapter, wait; request user technical choice only when
+necessary. No quick one-off custom shadow engine, reconnect/controller or
+risk replacement.
+
+**On any complex defect:** choose the smallest plain explanation/root cause
+before code, prefer config/native feature. Walk complete relevant causal path:
+venue market data -> native data client/event/cache/catalog + freshness ->
+strategy decision/Shadow ledger OR native order/risk/execution/reconciliation ->
+AWS service+artifact SHA+GitHub truth. Test failures and gaps at the boundary
+and aggregate defects by shared root cause. Fix once at owner, not in each
+downstream symptom. Final acceptance for a large native bundle is one strict
+integrated package verification, with targeted local checks during work.
+
+**Difference between reuse and no testing:** mature upstream code lowers
+custom logic but cannot ensure correct installation, venue adapter support,
+time semantics, order identity, configuration, deployment, failure recovery
+or real-money handling. Hence minimum final end-to-end + negative/failure-path
+test remains, and no actual live order authority is implied.
+
+**No workflow inflation:** these four rules are admissions/checks in existing
+planning and verification, not more documents, formal Pre-code rounds,
+multi-provider selection or repetitive CI per internal commit.
+
+Official background references (latest may differ from pinned rc5):
+- https://nautilustrader.io/docs/latest/concepts/cache/
+- https://nautilustrader.io/docs/latest/concepts/execution/
+- https://nautilustrader.io/docs/latest/concepts/live/
+- https://github.com/nautechsystems/nautilus_trader/tree/v2.0.0rc5
+
+**Activation note:** Draft PR #339 is still missing independent trusted
+risk/CI attestation and other prior blocking gates; edits in this section
+express a candidate, NOT an enabled policy.

@@ -38,6 +38,28 @@ question appears, or review evidence is insufficient, expand only to the missing
 evidence first. Broad history is a last-resort Engineering Control escalation,
 not routine startup input.
 
+## Mandatory native reuse and whole-system diagnosis (candidate)
+
+Before implementing generic trading infrastructure, consult the
+manifest-selected RULE 1-4 native-first contract. Trading strategies and edge
+research are project-owned; capture/feed, native health/freshness, durable
+catalog, order/shadow mechanics, OMS/risk execution, state recovery and
+operational services reuse qualified mature official APIs. Bind the exact
+pinned Nautilus version and record a minimal capability map once.
+
+If an official/native interface fails, do not immediately write a patch:
+first reproduce, search pinned official docs/source/issue tracker and
+community workarounds, confirm version/venue/platform compatibility, then
+choose the simplest official configuration or composition. No parallel
+commodity component without evidence of a real unsupported gap and an
+Engineering Control / relevant user technical direction.
+
+For recurring issues, diagnose ownership and causality across market source,
+adapter, data/cache/catalog, strategy/shadow or risk/execution, persisted
+results and AWS/GitHub deployed state. Fix the shared root cause and verify
+the relevant whole path, not individual patch outcomes. No new routine
+human review stage is implied.
+
 ## Operating contract
 
 1. Fresh-resolve current main/base/head/tree, task identity, scope, authority,

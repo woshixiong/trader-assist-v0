@@ -156,3 +156,68 @@ def test_unknown_network_write_must_fail_closed(monkeypatch: pytest.MonkeyPatch)
     install(monkeypatch, value)
     with pytest.raises(checker.CheckFailure, match="network resilience"):
         checker.check_manifest(ROOT)
+
+
+
+@pytest.mark.parametrize(
+    "rule_name",
+    [
+        "FRAMEWORK_NATIVE_REUSE_REQUIRED",
+        "OFFICIAL_COMMUNITY_SEARCH_BEFORE_PATCH",
+        "ROOT_CAUSE_BEFORE_CODE",
+        "SYSTEM_WIDE_CAUSAL_VERIFICATION",
+    ],
+)
+def test_all_four_native_first_invariants_are_mandatory(
+    monkeypatch: pytest.MonkeyPatch, rule_name: str
+) -> None:
+    value = manifest()
+    value["engineering_invariants"][rule_name] = "OPTIONAL"
+    install(monkeypatch, value)
+    with pytest.raises(checker.CheckFailure, match="mandatory framework-native"):
+        checker.check_manifest(ROOT)
+
+
+def test_cannot_reenable_duplicate_commodity_engine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    value = manifest()
+    value["engineering_invariants"]["NEW_COMMODITY_ENGINE"] = "ALLOWED"
+    install(monkeypatch, value)
+    with pytest.raises(checker.CheckFailure, match="commodity duplicate"):
+        checker.check_manifest(ROOT)
+
+
+def test_pinned_native_version_cannot_silently_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    value = manifest()
+    value["engineering_invariants"]["PINNED_NATIVE_VERSION"] = "LATEST"
+    install(monkeypatch, value)
+    with pytest.raises(checker.CheckFailure, match="pinned native API"):
+        checker.check_manifest(ROOT)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "AGENTS.md",
+        "governance/CHATGPT_PROJECT_GOVERNANCE_BRIDGE.md",
+        ".agents/skills/trade-os-v5-development/SKILL.md",
+        ".agents/skills/trade-os-v5-review/SKILL.md",
+    ],
+)
+def test_native_first_four_rules_present_across_router_and_skills(
+    monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    original = checker.text
+
+    def drop_rule(root: Path, requested: str) -> str:
+        body = original(root, requested)
+        if requested == path:
+            return body.replace("ROOT_CAUSE_BEFORE_CODE", "ROOT_CAUSE_MISSING")
+        return body
+
+    monkeypatch.setattr(checker, "text", drop_rule)
+    with pytest.raises(checker.CheckFailure, match="native-first routing"):
+        checker.check_documents(ROOT)
