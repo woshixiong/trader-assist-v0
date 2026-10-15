@@ -146,6 +146,15 @@ def check_manifest(root: Path) -> None:
         raise CheckFailure("commodity duplicate implementation guard invalid")
     if ownership.get("PINNED_NATIVE_VERSION") != "nautilus_trader_v2.0.0rc5":
         raise CheckFailure("pinned native API contract drift")
+    override = m.get("user_workflow_override")
+    if not isinstance(override, dict) or (
+        override.get("action") != "PROCESS_GATE_WAIVER_FOR_EXPLICIT_SCOPE"
+        or override.get("requires_independent_provenance_not_writer_string") is not True
+        or override.get("mandatory_tests_and_hash_deploy_proof") is not True
+        or override.get("cannot_forge_review_pass") is not True
+        or override.get("user_repeat_authorization_required") is not False
+    ):
+        raise CheckFailure("unsafe explicit-user process waiver contract")
 
     resilience = m.get("network_resilience")
     if not isinstance(resilience, dict):

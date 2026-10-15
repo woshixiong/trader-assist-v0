@@ -58,3 +58,16 @@ result -> release/AWS version chain. Check relevant adjacent boundaries,
 causal event/order IDs, freshness, restart/duplicates and actual deployed
 commit. Consolidate shared-root defects; perform one integrated final
 package verification, not a new review for each subcomponent.
+
+## User-authorized nonlive hotfix waiver (candidate)
+
+When the user specifically says to skip Reviews and directly fix/deploy
+public-data or Shadow ledger correctness, Engineering Control reconciles
+frozen process stage using non-forgeable `PROCESS_GATE_WAIVER` evidence.
+Do not demand Pre-code/Final review or another user approval solely because
+a previous plan said PLAN-ONLY; do not fabricate reviewer PASS. Codex can
+resume the original thread/worktree at implementation after verified Control
+migration. Retain deterministic correctness and exchange-no-write tests,
+GitHub/AWS exact hash mapping, safe scoped deployment/rollback and human-only
+credentials. An unsupported privilege/capability fails for the actual reason,
+not process fiction. Not operational until the controller enables trusted waiver.

@@ -357,3 +357,38 @@ Official background references (latest may differ from pinned rc5):
 **Activation note:** Draft PR #339 is still missing independent trusted
 risk/CI attestation and other prior blocking gates; edits in this section
 express a candidate, NOT an enabled policy.
+
+## 15. Observed review-deadlock in strategy Issue #7 (2026-10-15)
+
+Authoritative current evidence:
+- https://github.com/woshixiong/-/issues/7
+- https://github.com/woshixiong/-/issues/7#issuecomment-6183026881 (Codex same-thread PLAN V2; code writes zero, pending Pre-code)
+- https://github.com/woshixiong/-/issues/7#issuecomment-6183754489 (user explicitly authorized skipping Pre-code and immediate non-live P0 fixes/deploy, recorded at 11:30 Singapore)
+- https://github.com/woshixiong/-/issues/7#issuecomment-6183669790 (strategy owner directive)
+
+Facts: `woshixiong/-` Issue #7 borrows upstream `woshixiong/trader-assist-v0`
+ACTIVE V5. Current Stage 1 Plan is frozen and requires an independent fresh
+Pre-code PASS before implementation. User explicitly authorized omitting
+review and fixing market-data continuity + Shadow ledger identity/timestamps,
+then qualified AWS deployment. The strategy actor could read AWS and GitHub
+but **reported no source changes, no PR, no deploy**, because it could not
+change the frozen V5 stage or impersonate a fresh reviewer. This is a
+**process-authority deadlock, not proof of inability to code**.
+
+New rule: if a user explicitly waives *process-only* reviews for a bounded
+non-money-bearing fix, Engineering Control records a trusted waiver+scope
+rebind in GitHub, preserves the original Codex session, moves PLAN-ONLY to
+IMPLEMENT, lets Codex repair the already specified files, runs automated
+correctness/integration tests, and performs separately scoped user-authorized
+Shadow deployment with exact artifact backup, health and rollback. No
+re-review ritual and no additional human approval. No wallet/signing/API
+secrets or live exchange writes. For unknown actual live-order privileges,
+retain a targeted safety blocker with measured explanation.
+
+**Current status:** This waiver is **proposed** in the Draft V5 successor
+only. Existing main governance, #7 frozen package and live server remain
+unchanged. Controller needs trusted identity/waiver verification, no
+writer-forged `WAIVED` strings, and negative regression tests before
+such a shortcut is actually executable. Once successor is active, #7 needs
+one idempotent Control rebind; it must not silently rewrite historic
+authority or claim a review occurred.

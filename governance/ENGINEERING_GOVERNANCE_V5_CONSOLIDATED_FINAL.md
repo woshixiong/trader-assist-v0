@@ -210,6 +210,59 @@ Final integration, exact-head review, and merge-front movement are serialized.
 
 ---
 
+## 4B. Explicit current-user workflow override: no deadlock on safe repair
+
+A **present, specific human direction** to skip nonessential Pre-code/Final
+review or to perform a narrowly bounded correction is authoritative for the
+**process choice** when no money-bearing, credential, signing, permission,
+unbounded cloud or real-exchange-write boundary is crossed. It is not a
+claim that a missing review PASSED, and does not relax actual correctness
+tests, provenance, deployment rollback or permission segregation.
+
+**TRIGGER:** the user explicitly identifies the work and requests "no review,
+directly repair and deploy" to an existing **market-capture + simulation/
+Shadow-only** service. Treat this as `USER_WORKFLOW_OVERRIDE_REQUEST` and
+reconcile immediately. The task owner/Engineering Control must record a
+`PROCESS_GATE_WAIVER` with the referenced user direction, exact package/base,
+allowed code/deploy surfaces, immutable GitHub and installed AWS identity,
+excluded real-order/secret capability, minimal deterministic tests, observed
+real stream/Shadow behavior and rollback plan. Do **not** demand the same
+human approval again or require a new ChatGPT reviewer window just to unlock
+a frozen PLAN-ONLY task.
+
+**FROZEN-ISSUE RECOVERY:** a pre-existing Issue and Codex session frozen at
+Pre-code Review can be migrated to a bounded implementation+verification lane
+after a legitimate, GitHub-recorded Control transition. Preserve the original
+issue, PLAN, source provenance, worktree/thread and completed stages. Do not
+fabricate independent PASS, quietly relabel risk, or repeat Codex PLAN-only.
+The authorized implementation executor resumes from the latest valid
+checkpoint; if it lacks tool access, record a precise *capability* blocker
+rather than claim the review requirement is still necessary.
+
+**SAFE SHADOW-ONLY DEPLOY:** the user's scoped deployment direction may
+permit updating the named public-data/Shadow services after hash-bound backup,
+correctness tests, visible version parity, rollback and health proof; it does
+not authorize arbitrary production mutations, wallet/API/SSH credential
+handling, real exchange writes or account trading. A simulated ledger must
+keep old records intact and preserve strategy/attempt/exit-policy identity.
+When host conditions are not suitable, reject unsafe deployment *for the
+specific measurable reason*, not a procedural review loop.
+
+**NON-OVERRIDABLE TECHNICAL CHECKS:** deterministic tests for relevant data/
+order-identity/time semantics, no exchange-write path, source/target hash
+binding, host capacity, restart behavior, audit preservation and rollback.
+If actual money-bearing execution, unknown credential boundary or a
+non-isolated live service would be affected, retain the targeted high-risk
+gate and explain the concrete risk in one short statement.
+
+**IMPLEMENTATION DEPENDENCY:** the risk-tier classifier/controller must verify
+a genuine, distinct authority record; a Writer-supplied string or Issue
+comment that merely says "waived" is not sufficient. Until the successor
+controller is tested and this amendment activated, the current main V5 gates
+still apply and cannot be bypassed just by this candidate text.
+
+---
+
 ## 4A. Mandatory official-native ownership and global root-cause gate
 
 **These are hard engineering admission rules, not advisory preferences and not extra

@@ -173,6 +173,17 @@ COPY_PASTE_COMMAND_OR_PROMPT=
 The command/prompt must be complete so the user does not reconstruct state or
 choose a route already determined by evidence.
 
+## No deadlock on explicit user review waiver (candidate)
+
+Specific user authorization to skip routine review on a bounded data/Shadow
+repair should trigger a GitHub-recorded **Engineering Control process waiver**
+that takes an existing PLAN-ONLY package directly to implementation, automated
+correctness tests, hash-bound Shadow deploy and rollback. Do not simulate
+independent review, require a new window or re-ask the human. Real trade,
+secret, signing and unscoped host authority stay excluded. This requires
+verified authority evidence and an updated controller before activation:
+ordinary ChatGPT messages cannot silently override currently active main V5.
+
 ## Automated closeout and human-exclusive secrets (candidate until main activation)
 
 Passwords, API keys, tokens, SSH keys, signing/wallet material, IAM and

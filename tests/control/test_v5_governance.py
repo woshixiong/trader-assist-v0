@@ -221,3 +221,24 @@ def test_native_first_four_rules_present_across_router_and_skills(
     monkeypatch.setattr(checker, "text", drop_rule)
     with pytest.raises(checker.CheckFailure, match="native-first routing"):
         checker.check_documents(ROOT)
+
+
+
+def test_explicit_user_review_waiver_requires_verifiable_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    value = manifest()
+    value["user_workflow_override"]["requires_independent_provenance_not_writer_string"] = False
+    install(monkeypatch, value)
+    with pytest.raises(checker.CheckFailure, match="explicit-user process waiver"):
+        checker.check_manifest(ROOT)
+
+
+def test_waiver_cannot_cancel_correctness_and_deployment_checks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    value = manifest()
+    value["user_workflow_override"]["mandatory_tests_and_hash_deploy_proof"] = False
+    install(monkeypatch, value)
+    with pytest.raises(checker.CheckFailure, match="explicit-user process waiver"):
+        checker.check_manifest(ROOT)

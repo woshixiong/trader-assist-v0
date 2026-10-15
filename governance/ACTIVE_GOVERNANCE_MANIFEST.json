@@ -197,5 +197,25 @@
     "CAPABILITY_MAP": "REQUIRED_ONCE_REUSED_WHEN_UNCHANGED",
     "SCOPED_GLOBAL_E2E": "REQUIRED_AT_PACKAGE_CLOSEOUT_WITH_CAUSAL_BOUNDARIES",
     "PR_READY_MERGE": "BLOCK_IF_UNVERIFIED_COMPETING_INFRASTRUCTURE_OR_UNSEARCHED_UPSTREAM_GAP"
+  },
+  "user_workflow_override": {
+    "status": "CANDIDATE_NEEDS_TRUSTED_CONTROLLER_IMPLEMENTATION",
+    "action": "PROCESS_GATE_WAIVER_FOR_EXPLICIT_SCOPE",
+    "allowed_for": "PUBLIC_DATA_AND_SHADOW_ONLY_CORRECTNESS_REPAIR_NO_REAL_ORDERS",
+    "user_repeat_authorization_required": false,
+    "pre_code_review": "WAIVABLE_WHEN_USER_EXPLICIT_AND_TRUSTED_SCOPE",
+    "final_review": "WAIVABLE_FOR_NONLIVE_BOUNDED_CORRECTNESS_INCIDENT_WHEN_USER_EXPLICIT",
+    "legacy_plan_only": "MIGRATE_TO_IMPLEMENT_WITH_VERIFIED_CONTROL_TRANSITION",
+    "cannot_forge_review_pass": true,
+    "mandatory_tests_and_hash_deploy_proof": true,
+    "requires_independent_provenance_not_writer_string": true,
+    "excludes": [
+      "LIVE_EXCHANGE_WRITES",
+      "FUNDS_RISK",
+      "CREDENTIAL_OR_SECRET_ACTION",
+      "SIGNING",
+      "UNSCOPED_PRODUCTION_OR_CLOUD_MUTATION"
+    ],
+    "last_known_blocking_case": "woshixiong/-/issues/7"
   }
 }

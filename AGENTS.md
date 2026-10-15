@@ -135,6 +135,18 @@ without proven gap, Engineering Control technical decision and, if material,
 user direction. This is an automatic execution gate, not an extra routine
 pre-code-review round. Until candidate activation, current main V5 still governs.
 
+## Explicit user override of process-only review deadlocks (candidate)
+
+If a current user explicitly waives ordinary Pre-code or Final Review for a
+bounded, already scoped public-data/Shadow-only correction, record and execute
+a trusted, risk-scoped Engineering Control **process waiver**, preserve
+existing Codex thread and GitHub checkpoint, and resume tests/fix/deploy.
+Never impersonate a reviewer or manufacture PASS. This fixes cases such as
+`woshixiong/-#7`: no repeated request for permission the user already gave,
+and no process-only pause after authorization. Preserve real correctness,
+no-order, actual deployed SHA, health/rollback and human-only credentials
+gates. Until amended V5 activation, current main governance still applies.
+
 ## Protected actions
 
 On activation of this reviewed amendment only: routine Mark Ready, native
