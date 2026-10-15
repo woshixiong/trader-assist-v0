@@ -392,3 +392,53 @@ writer-forged `WAIVED` strings, and negative regression tests before
 such a shortcut is actually executable. Once successor is active, #7 needs
 one idempotent Control rebind; it must not silently rewrite historic
 authority or claim a review occurred.
+
+## 16. Preserve late V5 execution-efficiency amendments (2026-10-15 inventory)
+
+**Classification: non-lifecycle optimization; preserve in streamlined V5.** The
+user intends to remove repetitive Plan/Pre-code/Final Reviewer windows and
+manual Ready/Merge confirmations. Those are distinct from technical transport,
+quota, context, CI, correctness, recovery and safety optimizations added after
+V5 stabilization. Do not accidentally delete the latter while changing
+review/routing stages. They are conditional on the relevant execution surface
+and should not create new gating/approval tasks.
+
+| Date / canonical evidence | Rule to preserve | Adaptation in streamlined V5 |
+|---|---|---|
+| Sep 26, `be7b2cc9f6` | Same exact Codex semantic task/worktree, authoritative durable checkpoint; no silent lost-plan replay | Retain continuity, but do not use strict no-new-thread as a blanket block when a lower-risk phase was explicitly migrated and precise GitHub checkpoint can resume safely |
+| Sep 26, `7a4209fdd3` | Exact GitHub comment locator => read that comment only; no broad Issue/PR history; review on bounded changed-file patches; no raw successful CI logs | Retain progressive disclosure and exact evidence fetching in every workflow; only perform reviewer-only checks when review is actually required |
+| Sep 30, `0959b5e4f4` | `scripts/control/v5_ci_waiter.py` owns exact-head CI waits, not Codex or repeated RDC; transient network state is not semantic CI failure; fallback `gh run watch` | Retain zero-model/low-cost CI wait and head/readback check. **Gap**: current waiter default `--poll-seconds=60` also sleeps on transient transport, so user-requested 10-second recovery has not been precisely implemented in that script. Decouple network retry delay from normal CI polling interval. A fixed 60-second CI check was an implementation choice, not an immutable user requirement |
+| Sep 30 / Oct 4, `0781a41881` | RDC necessity test; <=1 start/resume per local stage, zero routine progress reads, only one decisive abnormal read; GitHub-native connector reads/CI avoid RDC | Keep strict RDC quota discipline; use RDC only for genuinely local/interactive execution, not background observation; never replace necessary automation with manual relay merely to save quota |
+| Oct 7, `a8e71cf68f` | Local Codex via visible foreground Terminal, not hidden/background; 10-second local transient retry; same session; use qualified Linux CI rather than fixing nonrepresentative Mac test environment | Keep these **when local Codex remains the executor**; do not impose a Mac/FinalShell requirement on cloud-based execution |
+| Oct 9, `3e75086da9`, `d20c5c9a31` | Root cause before patching, official/mature solution first, meaningful technical direction decision in no more than four plain-language lines | Keep root cause/official-first. Restrict human escalation to new real architecture/security/funds/authority decisions or unbounded failure; let ordinary bounded defects be auto-fixed without human relay |
+| Existing V5 §14, GitHub Native/CI skills | Explicit stdin/EOF hygiene, exact SHA before potentially non-idempotent mutation, remote result readback; transport interruption is not a semantic repair | Preserve as transport and command safety, not a mandatory planning/review stage |
+| Current main `AGENTS.md`, Bridge, skills | Routine SHA/log/CI/review-result courier via user prohibited; GitHub owns durable state; never broad rereads by default | Keep zero-relay handoff with autonomous continuation wherever supported; describe capability boundary clearly where a persistent runner is absent |
+| Oct 15, PR #339 candidate network proposal (NOT original already running V5 capability) | 10 seconds x up to 20 attempts on proven transient errors; extended 5–15 minute auto-resume until recovered/cancelled | Keep as **future target** requiring a real persistent runner/timer. Do not claim indefinite recovery works before it has been implemented and verified. Readback before retrying any ambiguous write |
+
+**Negative preservation list:** Never preserve an extra mandatory Pre-code
+Review, one-review-per-tiny-change, universal Final Reviewer, redundant
+user Mark Ready/Merge click, all-issue-history read, duplicated already-qualifed
+Linux validation on Mac, model-mediated CI polling, or user-as-SHA-courier simply
+because it historically coexisted with the useful transport guards.
+
+**Specific migration/acceptance regression checks:**
+1. CI waiter sees transient TLS EOF and retries by a **separate 10-second
+   transport backoff** up to 20 times (not the optional normal `poll_seconds`);
+   stops safely on auth failures and does not consume semantic repair budget.
+2. CI exact-head changes invalidate stale results; only current exact-head
+   required success checks advance.
+3. RDC call accounting shows no GitHub-status or CI progress reads; one visible
+   foreground local Codex launch when local is chosen.
+4. A user-window or network disconnect preserves semantic task identity and
+   prevents duplicate Git/GitHub/AWS writes.
+5. Workload on Linux-specific project gates stays in qualified CI, not repeated
+   heavy Mac environment setup.
+6. Required HIGH package review reads precise PR changes, not broad history or
+   success logs; skipped LOW/MEDIUM review does not invoke reviewer-only steps.
+7. Only significant architecture/safety direction requires human involvement;
+   routine bounded repair is allowed to continue, preserving human-exclusive
+   keys/tokens/SSH/IAM/wallet privileges.
+
+**Authority/intent:** The active main V5, not this research note or draft PR,
+still governs. This section is a migration checklist for the candidate, not
+permission to execute any protected action.
