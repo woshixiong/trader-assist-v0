@@ -21,6 +21,7 @@ Reduce excessive task-by-task Plan-only, Pre-code Review, Final Independent Revi
 | AWS CodeDeploy rollback | Known-good immutable revision and rollback by redeploying prior release | Full CodeDeploy setup unnecessary for a small single-host shadow service if an existing systemd release script suffices |
 
 Primary sources:
+- https://dora.dev/capabilities/streamlining-change-approval/ (heavy external approvals harm delivery; targeted peer review and automation are preferred, not "never review")
 - https://dora.dev/capabilities/continuous-integration/
 - https://dora.dev/capabilities/working-in-small-batches/
 - https://dora.dev/capabilities/deployment-automation/
@@ -96,7 +97,7 @@ Stage 3: GitHub Actions deploys to test/shadow via AWS-native SSM Run Command wh
 Stage 4: health, specific feature assertions, no-write check, process/resource envelope and run ID all must PASS. On failure, stop candidate and restore last known-good symlink/artifact; record result to GitHub.
 Stage 5: independent HIGH-gated production promotion only after exact artifact review; deployment and order enablement are separate gates.
 
-Constraints: no live keys in verification sessions, no agent/root login, no webhook secrets in PR artifacts, no arbitrary shell from untrusted inputs, no automatic service restart on actual money-bearing target. No extra AWS instance or paid API dependency. SSM for **non-EC2 (e.g., Lightsail)** needs separate capability and pricing verification; do not assume the free EC2 statement applies.
+Constraints: no live keys in verification sessions, no agent/root login, no webhook secrets in PR artifacts, no arbitrary shell from untrusted inputs, no automatic service restart on actual money-bearing target. **Never register this production/public-repository AWS server as an unrestricted self-hosted GitHub Actions runner**: GitHub explicitly warns that public-repository pull requests can execute untrusted code on it. Build/test on GitHub-hosted runners; use a restricted deploy command to the isolated test target. Reference: https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/add-runners No extra AWS instance or paid API dependency. SSM for **non-EC2 (e.g., Lightsail)** needs separate capability and pricing verification; do not assume the free EC2 statement applies.
 
 ## 8. Defect consolidation versus risk of delayed testing
 
