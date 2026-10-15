@@ -1648,3 +1648,21 @@ def test_native_foundation_paper_market_limit_modify_cancel(tmp_path, monkeypatc
         assert "PARTIAL_FILL" in result["unsupported_or_unqualified"]
     assert results[0]["fills"] == results[1]["fills"]
     assert results[0]["state"]["order_semantics"] == results[1]["state"]["order_semantics"]
+
+
+@REQUIRES_NAUTILUS
+def test_native_paper_strategy_retains_single_config():
+    from nautilus_trader.model import InstrumentId, Quantity
+
+    from trader_assist_v0.nautilus_g4.runner import (
+        NativePaperLifecycleConfig,
+        NativePaperLifecycleStrategy,
+    )
+
+    config = NativePaperLifecycleConfig(
+        InstrumentId.from_str("ETH-USD-PERP.HYPERLIQUID"), Quantity.from_str("0.010"),
+    )
+    strategy = NativePaperLifecycleStrategy(config)
+    assert strategy.config is config
+    assert strategy._paper_instrument_id == config.instrument_id
+    assert strategy._paper_quantity == config.quantity

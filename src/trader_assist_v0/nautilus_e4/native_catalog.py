@@ -3,11 +3,57 @@
 
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from collections.abc import Callable
 from pathlib import Path
 from time import monotonic_ns
 from typing import Any
+
+
+def _native_field_signature(event: Any) -> dict[str, object] | None:
+    """Bounded public market fields only; never dump an event's arbitrary payload."""
+    if event is None:
+        return None
+    fields = (
+        "instrument_id", "bar_type", "ts_event", "ts_init", "bid_price", "ask_price",
+        "bid_size", "ask_size", "price", "size", "aggressor_side", "trade_id",
+        "open", "high", "low", "close", "volume", "flags", "sequence",
+    )
+    signature: dict[str, object] = {"native_type": type(event).__name__}
+    for name in fields:
+        if hasattr(event, name):
+            signature[name] = str(getattr(event, name))[:160]
+    for side in ("bids", "asks"):
+        if hasattr(event, side):
+            signature[side] = [
+                {name: str(getattr(level, name))[:160]
+                 for name in ("side", "price", "size", "order_id")}
+                for level in getattr(event, side)[:10]
+            ]
+    for name in ("bid_counts", "ask_counts"):
+        if hasattr(event, name):
+            signature[name] = [str(count)[:20] for count in getattr(event, name)[:10]]
+    return signature
+
+
+def _readback_diagnostic(
+    family: str, identifier: str, expected: list[Any], actual: list[Any],
+) -> str:
+    index = next((i for i, (left, right) in enumerate(zip(expected, actual, strict=False))
+                  if left != right), min(len(expected), len(actual)))
+    left = _native_field_signature(expected[index] if index < len(expected) else None)
+    right = _native_field_signature(actual[index] if index < len(actual) else None)
+    return json.dumps({
+        "family": family, "query_identifier": identifier[:160],
+        "expected_count": len(expected), "actual_count": len(actual),
+        "expected_ts_init_range": [min(e.ts_init for e in expected),
+                                   max(e.ts_init for e in expected)],
+        "actual_ts_init_range": None if not actual else [min(e.ts_init for e in actual),
+                                                          max(e.ts_init for e in actual)],
+        "first_mismatch_index": index, "expected": left, "actual": right,
+        "normalized_fields_equal": left == right,
+    }, sort_keys=True)
 
 
 class NativeCatalogBatchSink:
@@ -90,11 +136,14 @@ class NativeCatalogBatchSink:
                     raise ValueError("native batch ts_init must be nondecreasing")
                 getattr(self._catalog, "write_" + family)(events)
                 reopened = self._factory(str(self.root))
-                actual = getattr(reopened, "query_" + family)(
+                actual = list(getattr(reopened, "query_" + family)(
                     **{key: [identifier]}, start=min(timestamps), end=max(timestamps),
-                )
-                if list(actual) != events:
-                    raise RuntimeError("native catalog fresh-instance batch readback mismatch")
+                ))
+                if actual != events:
+                    raise RuntimeError(
+                        "native catalog fresh-instance batch readback mismatch: "
+                        + _readback_diagnostic(family, identifier, events, actual)
+                    )
         except Exception:
             self.failed = True
             # Some groups may already be written. Retain all references and never retry.

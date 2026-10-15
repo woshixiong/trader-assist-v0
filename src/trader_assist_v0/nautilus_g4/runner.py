@@ -1997,13 +1997,21 @@ def candidate_state_isolation_plan(
     return hashes
 
 
+@dataclass(frozen=True)
+class NativePaperLifecycleConfig:
+    """Single native Strategy config argument for the offline technical proof."""
+
+    instrument_id: Any
+    quantity: Any
+
+
 class NativePaperLifecycleStrategy(_NautilusStrategy):
     """Finite technical MARKET/LIMIT/modify/cancel proof, entirely in BacktestNode."""
 
-    def __init__(self, instrument_id: Any, quantity: Any) -> None:
-        super().__init__()
-        self._paper_instrument_id = instrument_id
-        self._paper_quantity = quantity
+    def __init__(self, config: NativePaperLifecycleConfig) -> None:
+        super().__init__(config)
+        self._paper_instrument_id = config.instrument_id
+        self._paper_quantity = config.quantity
         self._quote_count = 0
         self._limit_id: Any = None
         self.events: list[str] = []
@@ -2115,9 +2123,9 @@ def run_native_paper_lifecycle(
         engine=BacktestEngineConfig(bypass_logging=True, run_analysis=False),
         dispose_on_completion=False,
     )
-    strategy = NativePaperLifecycleStrategy(
+    strategy = NativePaperLifecycleStrategy(NativePaperLifecycleConfig(
         provider_instrument.id, Quantity.from_str(quantity),
-    )
+    ))
     node = BacktestNode(configs=[config])
     try:
         node.build()

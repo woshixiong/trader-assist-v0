@@ -1983,6 +1983,7 @@ def _run_foundation_public(args: argparse.Namespace) -> tuple[int, dict[str, Any
     from uuid import uuid4
 
     from trader_assist_v0.nautilus_e4.host import (
+        NativePublicCaptureConfig,
         NativePublicCaptureStrategy,
         build_public_data_node,
     )
@@ -2001,9 +2002,9 @@ def _run_foundation_public(args: argparse.Namespace) -> tuple[int, dict[str, Any
     root = args.evidence_path / f"native-{uuid4().hex}"
     sink = NativeCatalogBatchSink(root)
     node = build_public_data_node(foundation=True)
-    strategy = NativePublicCaptureStrategy(
+    strategy = NativePublicCaptureStrategy(NativePublicCaptureConfig(
         instrument_ids=instruments, bar_types=bars, sink=sink, stop=node.handle().stop,
-    )
+    ))
     timer = threading.Timer(args.run_seconds, node.handle().stop)
     try:
         node.add_strategy(strategy)

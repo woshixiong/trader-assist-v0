@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import resource
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from importlib.metadata import version
 from pathlib import Path
 from threading import RLock
@@ -58,7 +59,7 @@ if TYPE_CHECKING:
         clock: Any
         cache: _InstrumentCache
 
-        def __init__(self, config: StrategyConfig | None = None) -> None: ...
+        def __init__(self, config: object | None = None) -> None: ...
 
         def subscribe_bars(self, bar_type: object) -> None: ...
 
@@ -1058,20 +1059,28 @@ def build_capture_strategy(
     return NautilusE4CaptureStrategy(config)
 
 
+@dataclass(frozen=True)
+class NativePublicCaptureConfig:
+    """One config object passed through rc5's native Strategy constructor."""
+
+    instrument_ids: tuple[str, ...]
+    bar_types: tuple[str, ...]
+    sink: Any
+    stop: Callable[[], None]
+
+
 class NativePublicCaptureStrategy(Strategy):
     """Isolated public native callbacks; no semantic CaptureSession or history path."""
 
-    def __init__(
-        self, *, instrument_ids: tuple[str, ...], bar_types: tuple[str, ...],
-        sink: Any, stop: Callable[[], None],
-    ) -> None:
-        super().__init__()
+    def __init__(self, config: NativePublicCaptureConfig) -> None:
+        super().__init__(config)
         from nautilus_trader.model import BarType, InstrumentId
 
         from .native_health import NativeFeedObservations
 
         assert_exact_nautilus_version()
         assert_public_only(env=os.environ)
+        instrument_ids, bar_types = config.instrument_ids, config.bar_types
         if not instrument_ids or len(instrument_ids) > 32:
             raise ValueError("foundation requires 1..32 exact instruments")
         self.instrument_ids = tuple(InstrumentId.from_str(raw) for raw in instrument_ids)
@@ -1093,8 +1102,8 @@ class NativePublicCaptureStrategy(Strategy):
             (str(bar.instrument_id), str(bar)): 600_000_000_000 for bar in self.bar_types
         })
         self.observations = NativeFeedObservations(streams)
-        self.sink = sink
-        self._stop_node = stop
+        self.sink = config.sink
+        self._stop_node = config.stop
         self.failure: str | None = None
         self._timer_started = False
 
