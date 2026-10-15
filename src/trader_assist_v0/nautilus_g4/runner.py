@@ -4,7 +4,8 @@
 from __future__ import annotations
 
 import hmac
-from collections.abc import Collection, Mapping
+import os
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -1994,3 +1995,150 @@ def candidate_state_isolation_plan(
     if len(hashes) != len(set(hashes)):
         raise ValueError("duplicate candidate identity would violate comparison isolation")
     return hashes
+
+
+class NativePaperLifecycleStrategy(_NautilusStrategy):
+    """Finite technical MARKET/LIMIT/modify/cancel proof, entirely in BacktestNode."""
+
+    def __init__(self, instrument_id: Any, quantity: Any) -> None:
+        super().__init__()
+        self._paper_instrument_id = instrument_id
+        self._paper_quantity = quantity
+        self._quote_count = 0
+        self._limit_id: Any = None
+        self.events: list[str] = []
+        self.fills: list[Any] = []
+
+    def on_start(self) -> None:
+        self.subscribe_quotes(self._paper_instrument_id)
+
+    def on_quote(self, tick: Any) -> None:
+        from nautilus_trader.model import OrderSide, Price
+
+        native = cast(Any, self)
+        self._quote_count += 1
+        if self._quote_count == 1:
+            market = native.order_factory.market(
+                instrument_id=self._paper_instrument_id,
+                order_side=OrderSide.BUY, quantity=self._paper_quantity,
+            )
+            limit = native.order_factory.limit(
+                instrument_id=self._paper_instrument_id,
+                order_side=OrderSide.BUY, quantity=self._paper_quantity,
+                price=Price.from_str(str(Decimal(str(tick.bid_price)) - Decimal("100.0"))),
+            )
+            self._limit_id = limit.client_order_id
+            self.submit_order(market)
+            self.submit_order(limit)
+        elif self._quote_count == 2:
+            native.modify_order(
+                self._limit_id,
+                price=Price.from_str(str(Decimal(str(tick.bid_price)) - Decimal("50.0"))),
+            )
+        elif self._quote_count == 3:
+            native.cancel_order(self._limit_id)
+
+    def on_order_event(self, event: Any) -> None:
+        if len(self.events) >= 256:
+            raise RuntimeError("finite paper lifecycle event bound exceeded")
+        self.events.append(type(event).__name__)
+
+    def on_order_filled(self, event: Any) -> None:
+        if not isinstance(event, _NautilusOrderFilled) or len(self.fills) >= 16:
+            raise RuntimeError("unexpected paper fill type/count")
+        self.fills.append(event)
+
+
+def run_native_paper_lifecycle(
+    *, provider_instrument: Any, quote_ticks: Sequence[Any], catalog_path: Path,
+    quantity: str = "0.010",
+) -> dict[str, Any]:
+    """Offline native lifecycle with explicit simulated provenance, never live routing."""
+    from nautilus_trader.backtest import BacktestNode
+    from nautilus_trader.config import (
+        BacktestDataConfig,
+        BacktestEngineConfig,
+        BacktestRunConfig,
+        BacktestVenueConfig,
+    )
+    from nautilus_trader.model import (
+        AccountType,
+        BookType,
+        CryptoPerpetual,
+        OmsType,
+        Quantity,
+        QuoteTick,
+    )
+    from nautilus_trader.persistence import ParquetDataCatalog
+
+    from trader_assist_v0.nautilus_e4.safety import assert_public_only
+
+    assert_public_only(env=os.environ)
+    assert_backtest_node_catalog_surface()
+    if not isinstance(provider_instrument, CryptoPerpetual):
+        raise TypeError("paper proof requires a native CryptoPerpetual")
+    if not 3 <= len(quote_ticks) <= 1024:
+        raise ValueError("paper proof requires 3..1024 native quotes")
+    if any(not isinstance(tick, QuoteTick) for tick in quote_ticks):
+        raise TypeError("paper proof requires native QuoteTick inputs")
+    if any(tick.instrument_id != provider_instrument.id for tick in quote_ticks):
+        raise ValueError("paper quote instrument mismatch")
+    if any(Decimal(str(tick.bid_price)) <= Decimal("100") for tick in quote_ticks):
+        raise ValueError("technical paper limit proof requires bid prices above 100")
+    times = [int(tick.ts_init) for tick in quote_ticks]
+    if times != sorted(set(times)):
+        raise ValueError("paper proof requires strictly increasing callback timestamps")
+    if catalog_path.exists() and any(catalog_path.iterdir()):
+        raise ValueError("paper proof requires a new empty catalog")
+    technical_quantity = _decimal_quantity(quantity, label="paper quantity")
+    if technical_quantity <= 0:
+        raise ValueError("paper quantity must be positive")
+    catalog = ParquetDataCatalog(str(catalog_path))
+    catalog.write_instruments([provider_instrument])
+    catalog.write_quote_ticks(quote_ticks)
+    if list(ParquetDataCatalog(str(catalog_path)).query_quote_ticks(
+        identifiers=[str(provider_instrument.id)],
+    )) != list(quote_ticks):
+        raise RuntimeError("paper source catalog readback mismatch")
+    config = BacktestRunConfig(
+        venues=[BacktestVenueConfig(
+            name=str(provider_instrument.id.venue), oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN, book_type=BookType.L1_MBP,
+            base_currency=provider_instrument.quote_currency,
+            starting_balances=[f"1_000_000 {provider_instrument.quote_currency}"],
+        )],
+        data=[BacktestDataConfig(
+            data_type="QuoteTick", catalog_path=str(catalog_path),
+            instrument_id=provider_instrument.id, start_time=min(times), end_time=max(times) + 1,
+        )],
+        engine=BacktestEngineConfig(bypass_logging=True, run_analysis=False),
+        dispose_on_completion=False,
+    )
+    strategy = NativePaperLifecycleStrategy(
+        provider_instrument.id, Quantity.from_str(quantity),
+    )
+    node = BacktestNode(configs=[config])
+    try:
+        node.build()
+        node.add_strategy(config.id, strategy)
+        node.run()
+        cache = node.get_engine_cache(config.id)
+        portfolio = node.get_engine_portfolio(config.id)
+        state = project_provider_native_state(
+            cache=cache, portfolio=portfolio, venue=provider_instrument.id.venue,
+        )
+        return {
+            "origin": "SIMULATED", "engine": "BacktestNode", "gate_d": "EXCLUDED",
+            "order_events": tuple(strategy.events),
+            "fills": tuple({
+                "origin": "SIMULATED", "quantity": str(fill.last_qty),
+                "price": str(fill.last_px), "commission": str(fill.commission),
+            } for fill in strategy.fills),
+            "state": state.model_dump(mode="json"),
+            "unsupported_or_unqualified": (
+                "STOP/TP/MIT/LIT", "PARTIAL_FILL", "PERSISTENT_ENGINE_RESTORE",
+            ),
+            "private_api_calls": 0, "signing": False, "exchange_writes": 0,
+        }
+    finally:
+        node.dispose()

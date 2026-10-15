@@ -949,7 +949,8 @@ class NautilusE4CaptureStrategy(Strategy):
 
 
 def build_public_data_node(
-    *, l0: bool = False, qualification_manifest: RunManifest | None = None,
+    *, l0: bool = False, foundation: bool = False,
+    qualification_manifest: RunManifest | None = None,
     qualification_log: Path | None = None,
 ) -> LiveNodeLike:
     """Build, but do not run, the current exact public-data-only LiveNode."""
@@ -965,9 +966,11 @@ def build_public_data_node(
     from nautilus_trader.model import TraderId
 
     qualification = qualification_manifest is not None or qualification_log is not None
+    if foundation and (l0 or qualification):
+        raise ValueError("foundation capture is separate from L0 qualification")
     if qualification and (not l0 or qualification_manifest is None or qualification_log is None):
         raise ValueError("qualification logging requires the exact L0 manifest and log path")
-    if l0:
+    if l0 or foundation:
         from nautilus_trader.live import LiveNodeBuilder, LiveNodeConfig, QueueMonitorConfig
 
         client_kwargs: dict[str, Any] = {
@@ -982,8 +985,9 @@ def build_public_data_node(
             data_clients={"HYPERLIQUID": HyperliquidDataClientConfig(**client_kwargs)},
             exec_clients={},
             queue_monitor=QueueMonitorConfig(
-                queue_depth_trigger=1, queue_depth_clear=0,
-                mean_dispatch_ns_trigger=1, mean_dispatch_ns_clear=0,
+                queue_depth_trigger=1000 if foundation else 1, queue_depth_clear=0,
+                mean_dispatch_ns_trigger=10_000_000 if foundation else 1,
+                mean_dispatch_ns_clear=0,
             ),
         )
         factories = {"HYPERLIQUID": HyperliquidDataClientFactory()}
@@ -1052,3 +1056,118 @@ def build_capture_strategy(
         evidence_root=str(evidence_root),
     )
     return NautilusE4CaptureStrategy(config)
+
+
+class NativePublicCaptureStrategy(Strategy):
+    """Isolated public native callbacks; no semantic CaptureSession or history path."""
+
+    def __init__(
+        self, *, instrument_ids: tuple[str, ...], bar_types: tuple[str, ...],
+        sink: Any, stop: Callable[[], None],
+    ) -> None:
+        super().__init__()
+        from nautilus_trader.model import BarType, InstrumentId
+
+        from .native_health import NativeFeedObservations
+
+        assert_exact_nautilus_version()
+        assert_public_only(env=os.environ)
+        if not instrument_ids or len(instrument_ids) > 32:
+            raise ValueError("foundation requires 1..32 exact instruments")
+        self.instrument_ids = tuple(InstrumentId.from_str(raw) for raw in instrument_ids)
+        if len(set(instrument_ids)) != len(instrument_ids):
+            raise ValueError("duplicate foundation instrument")
+        if any(str(item.venue) != "HYPERLIQUID" for item in self.instrument_ids):
+            raise ValueError("foundation instruments must use HYPERLIQUID")
+        self.bar_types = tuple(BarType.from_str(raw) for raw in bar_types)
+        if not self.bar_types or len(set(bar_types)) != len(bar_types):
+            raise ValueError("explicit unique native bar streams required")
+        if any(str(bar.instrument_id) not in instrument_ids for bar in self.bar_types):
+            raise ValueError("bar instrument outside foundation subscriptions")
+        streams = {
+            (raw, family): 120_000_000_000
+            for raw in instrument_ids for family in ("QuoteTick", "TradeTick", "OrderBookDepth10")
+        }
+        # Bars have their own exact stream and conservative, explicit receipt threshold.
+        streams.update({
+            (str(bar.instrument_id), str(bar)): 600_000_000_000 for bar in self.bar_types
+        })
+        self.observations = NativeFeedObservations(streams)
+        self.sink = sink
+        self._stop_node = stop
+        self.failure: str | None = None
+        self._timer_started = False
+
+    def _failed(self, exc: Exception) -> None:
+        self.failure = f"{type(exc).__name__}: {exc}"
+        self._stop_node()
+
+    def on_start(self) -> None:
+        from nautilus_trader.model import BookType
+
+        try:
+            instruments = [self.cache.instrument(item) for item in self.instrument_ids]
+            if any(item is None for item in instruments):
+                raise ValueError("native instrument missing from cache")
+            self.sink.write_instruments(instruments)
+            self.subscribe_socket_state()
+            self.subscribe_queue_state()
+            for item in self.instrument_ids:
+                self.subscribe_quotes(item)
+                self.subscribe_trades(item)
+                self.subscribe_book_depth10(item, BookType.L2_MBP)
+            for bar in self.bar_types:
+                self.subscribe_bars(bar)
+            self.clock.set_timer_ns("foundation-flush", 1_000_000_000)
+            self._timer_started = True
+        except Exception as exc:
+            self._failed(exc)
+
+    def _received(self, event: Any, stream: str) -> None:
+        if self.failure is not None:
+            return
+        try:
+            instrument_id = event.bar_type.instrument_id if isinstance(event, Bar) else (
+                event.instrument_id
+            )
+            self.observations.received((str(instrument_id), stream))
+            self.sink.append(event)
+        except Exception as exc:
+            self._failed(exc)
+
+    def on_quote(self, tick: QuoteTick) -> None:
+        self._received(tick, "QuoteTick")
+
+    def on_trade(self, tick: TradeTick) -> None:
+        self._received(tick, "TradeTick")
+
+    def on_book_depth(self, depth: OrderBookDepth10) -> None:
+        self._received(depth, "OrderBookDepth10")
+
+    def on_bar(self, bar: Bar) -> None:
+        self._received(bar, str(bar.bar_type))
+
+    def on_time_event(self, event: Any) -> None:
+        if self.failure is None:
+            try:
+                self.sink.flush_due()
+            except Exception as exc:
+                self._failed(exc)
+
+    def on_socket_state(self, event: SocketStateChangedLike) -> None:
+        self.observations.socket_observed(
+            client_id=str(event.client_id), endpoint=str(event.endpoint),
+            state=str(event.state).split(".")[-1].upper(),
+        )
+
+    def on_queue_state(self, event: Any) -> None:
+        self.observations.queue_observed(event)
+
+    def on_stop(self) -> None:
+        try:
+            if self._timer_started:
+                self.clock.cancel_timer("foundation-flush")
+            if not self.sink.failed:
+                self.sink.close()
+        except Exception as exc:
+            self._failed(exc)
