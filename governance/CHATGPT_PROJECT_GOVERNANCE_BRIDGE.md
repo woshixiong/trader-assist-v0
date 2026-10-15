@@ -142,26 +142,27 @@ COPY_PASTE_COMMAND_OR_PROMPT=
 The command/prompt must be complete so the user does not reconstruct state or
 choose a route already determined by evidence.
 
-## Protected gates
+## Automated closeout and human-exclusive secrets (candidate until main activation)
 
-Always require explicit current human authority for Mark Ready, merge, branch
-deletion, deployment, production/runtime/cloud mutation, service control,
-credential/private-API mutation, wallet/signing, exchange/order writes,
-autonomous trading, and real-capital action.
+Passwords, API keys, tokens, SSH keys, signing/wallet material, IAM and
+secret-manager provisioning/rotation/permission grants are **human only**.
+Agents may give setup checklists, but must never read, request, disclose or
+mutate these values. Safe capability checks and use of a restricted deployment
+service are allowed only after the human separately provisions the scope.
 
-Mark Ready and Merge remain distinct protected actions, but one current user
-message may conditionally authorize both after Final Review PASS. Engineering
-Control must fresh-verify the exact reviewed head, required CI, and no drift
-before acting. Matching frozen predicates prohibit a second authorization
-prompt. Changed or unknown predicates fail closed without consuming the
-conditional authorization.
+For verified future V5 packages, after trusted exact-head CI, source scope,
+required independent HIGH/governance/native-reuse Final Review, negative
+tests and branch protection are green, enable **GitHub native auto-merge**,
+automatically Mark Ready when needed, and clean merged temporary branches.
+No per-PR human approval for these ordinary repository operations. Incomplete,
+untrusted or stale evidence blocks, and an AI Writer cannot attest its own
+review. Any pre-existing package continues under its existing governance
+until explicitly migrated.
 
-~~~text
-MARK_READY_AND_MERGE_REMAIN_PROTECTED_ACTIONS=YES
-ONE_CURRENT_USER_MESSAGE_MAY_CONDITIONALLY_AUTHORIZE_BOTH=YES
-SECOND_AUTHORIZATION_PROMPT_WHEN_FROZEN_PREDICATES_MATCH=PROHIBITED
-CHANGED_OR_UNKNOWN_PREDICATE=>FAIL_CLOSED_WITHOUT_CONSUMING_AUTHORIZATION
-~~~
+On an AWS test/shadow target with a previously configured bounded allowlist,
+automate SHA-bound install, smoke/health, evidence and rollback with no live
+keys or exchange writes; do not let AI acquire unrestricted SSH/root access.
+Production changes and real order authority remain human protected.
 
-No prior approval, review, merge, package, automation, or governance rule
-implicitly grants a protected action.
+Until this candidate is independently reviewed, activated and the execution
+gates actually implemented, continue using the present main V5 authority.

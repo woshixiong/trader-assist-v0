@@ -12,9 +12,13 @@ Task-specific Product, Strategy, Operations, Security, deployment, executor, and
 operator procedures may be stricter in their narrow domains but may not weaken
 or compete with this constitution.
 
-This constitution grants no Mark Ready, merge, deployment, runtime/cloud
-mutation, service-control, credential/private-API, wallet/signing,
-exchange-write/order, autonomous-trading, or real-capital authority.
+This constitution grants no unrestricted production deployment, live service
+control, credential/private-API, wallet/signing, exchange-write/order,
+autonomous-trading, or real-capital authority. Once separately activated,
+ordinary GitHub Ready, Merge and closed-scope shadow/test deployment are
+deterministic automatic outcomes of verified acceptance and security gates,
+not repetitive human approval steps. No automatic GitHub merge grants live
+runtime or real-capital authority.
 
 ---
 
@@ -212,11 +216,19 @@ Final integration, exact-head review, and merge-front movement are serialized.
 
 **LOW**: documentation, non-operational UI presentation and bounded non-critical maintenance with no trading, secrets, permission, deployment, data-integrity or execution effect. Direct small implementation -> focused tests -> exact-head CI -> closeout. No mandatory Plan-only, Pre-code or independent Final Review for each small change.
 
-**MEDIUM**: strategy research and shadow-only code, isolated scanner/market-data features, dashboard functionality and bounded refactors that cannot send orders, mutate production, bypass risk or change exchange credentials. Make several small, CI-checked slices on short-lived branches. Skip routine Pre-code and per-slice independent Final Review; run scripted end-to-end phase verification on the integrated user-visible feature before promotion. Failing scenarios become one deduplicated, severity-ranked defect batch; fix in small commits with immediate CI, then rerun only affected and boundary regressions. Medium does not authorize live trading, production exposure or actual deployment.
+**MEDIUM**: strategy research and shadow-only code, isolated scanner/market-data features, dashboard functionality and bounded refactors that cannot send orders, mutate production, bypass risk or change exchange credentials. Make coherent, optionally larger development bundles with cheap local tests and a single CI candidate publication instead of CI after every local commit. Skip routine Pre-code and per-slice independent Final Review; run scripted end-to-end phase verification on the integrated user-visible feature before promotion. Failing scenarios become one deduplicated, severity-ranked defect batch; fix in small commits with immediate CI, then rerun only affected and boundary regressions. Medium does not authorize live trading, production exposure or actual deployment.
 
 **HIGH**: OMS/order path, Risk Kernel, sizing, wallet/signing, execution guards, permissions, service/deployment control, persistent-data correctness with trading consequences, external provider/security architecture, governance, or any ambiguity about exposure. Retain one short design/Pre-code Review only when architecture or safety design changes, then one fresh independent Final Review of the exact candidate, required deterministic negative and failure-mode tests, stage-level end-to-end evidence, and current human protected-action authority. Governance amendments require fresh independent review even if documentation-only.
 
-For a HIGH implementation without a new architecture, an existing accepted design plus tests may replace repeated Pre-code Reviews. Engineering Control must record this determination. The single independent Final Review remains required.
+For a HIGH implementation without a new architecture, an existing accepted design plus tests replaces repeated Pre-code Reviews. Engineering Control records this determination. The single independent Final Review remains required.
+
+### OFFICIAL_NATIVE_REUSE fast lane — integration origin, not a financial-risk exemption
+
+Where the goal is solely assembling capabilities **already provided by the pinned NautilusTrader version**, organize one **large, coherent, end-to-end development package** by functional area (native data capture/health, native order lifecycle/risk, native shadow/backtest, native operations). Prove each claimed capability against actual installed pinned-version API/examples and explicitly list unsupported gaps. Do not rewrite framework internals, add a parallel OMS/risk/controller, or infer support from newer upstream versions.
+
+One task brief and one Codex execution plan at package start. Codex may work through many local commits without repeated handoffs, routine Pre-code reviews or full CI per local commit. Perform cheap developer-side syntax/unit/smoke checks while building; run the complete required GitHub CI once on the final published candidate head (and rerun only after real corrections). Then perform **one consolidated strict independent review plus integrated real-behavior and negative/failure-path testing** on the exact package. Consolidate noncritical defects into one reproducible batch; block on critical ones immediately.
+
+Official reuse reduces design uncertainty, **not** the impact of incorrect venue configuration, event routing, lost-data handling, order outcomes, recovery or permissions. Real-capital execution boundaries remain HIGH at final verification even when the upstream component is mature. A test/shadow package contains no order-authorized credentials and cannot promote itself to live. User may personally perform the final acceptance trial after automated verification. Keep experimental proprietary strategy/edge work separate from native framework assembly.
 
 **Routine state paths (new packages only):**
 - LOW/MEDIUM: CONTROL_FREEZE -> IMPLEMENT -> LOCAL_VALIDATE -> PUBLISH -> CI_WAIT -> HUMAN_CLOSEOUT_GATE. PLAN is optional; routine PRECODE_REVIEW and FINAL_INDEPENDENT_REVIEW are not required.
@@ -337,7 +349,7 @@ decisive run/job/step excerpt.
 
 ## 9. Risk-scoped review and phase evidence
 
-LOW: focused test and exact-head CI status are sufficient for routine code acceptance; no Pre-code or Final Independent Review packet is required. MEDIUM: focused test and exact-head CI per small change; one integrated phase-level independent behavioral verification packet for each meaningful feature milestone or before promotion. HIGH and governance: preserve fresh independent Final Review and canonical GitHub result egress. Pre-code Review for HIGH is triggered only by new/changed safety-critical architecture or an explicitly identified design-risk.
+LOW: focused test and exact-head CI status are sufficient for routine code acceptance; no Pre-code or Final Independent Review packet is required. MEDIUM: local focused checks during development, full CI on the final published candidate, and one integrated phase-level independent behavioral verification packet for each meaningful feature milestone or before promotion. OFFICIAL_NATIVE_REUSE: one consolidated strict independent final review and integrated test of the finished large package, never a per-file or per-subfeature review. HIGH and governance: preserve fresh independent Final Review and canonical GitHub result egress. Pre-code Review for HIGH is triggered only by new/changed safety-critical architecture or an explicitly identified design-risk.
 
 Any required independent review reads every materially changed file and records exact PR/head/tree, CI locator, observed behavior, negative tests, unresolved risk, PASS/FAIL/BLOCKED, and its canonical result. A changed head invalidates old PASS and requires targeted revalidation of the changed scope and dependent invariants, not necessarily a full new review of unrelated files. A green CI result without behavioral evidence never qualifies a claim requiring live behavior. Never misrepresent the PR author's own approval as an independent identity.
 
@@ -596,43 +608,51 @@ later stage. V5-A does not archive or delete them.
 
 ---
 
-## 17. Protected human gates
+## 17. Human-exclusive secrets and automated protected boundaries
 
-Each protected action requires explicit current human authority:
+**Human-only, with no model delegation:** create, obtain, enter, reveal, rotate, revoke or grant access to passwords, API keys, tokens, wallet private keys, seed phrases, SSH keys, signing material, GitHub/AWS credentials and IAM/secret-manager grants. The human performs these directly in the vendor/provider interface. Agents may describe minimal required scopes and safely test whether a *capability* is present, but must never request secret values, print/redact-after-reading secrets, fetch private credentials, or modify secret/identity grants. Preserve secrets outside repository and all AI/test-agent inputs, prompts, logs and screenshots.
+
+The following remain individually human-authority-bound and can **never** be inferred from a passing CI, merge, prior test or shadow deployment:
 
 ~~~text
-MARK_READY
-MERGE
-BRANCH_DELETION
-DEPLOYMENT
-PRODUCTION_RUNTIME_OR_CLOUD_MUTATION
-SERVICE_START_RESTART_ENABLE_REBOOT
+PRODUCTION_RUNTIME_OR_CLOUD_MUTATION_OUTSIDE_PREAUTHORIZED_SCOPE
+LIVE_SERVICE_START_RESTART_ENABLE_REBOOT
 CREDENTIAL_OR_PRIVATE_API
 WALLET_OR_SIGNING
 EXCHANGE_WRITE_OR_ORDER_ACTION
 AUTONOMOUS_OR_REAL_CAPITAL_TRADING
 ~~~
 
-Mark Ready and Merge remain two distinct protected actions. For a HIGH
-change, after Final Review PASS, one current user message may conditionally
-authorize both actions. For LOW/MEDIUM, the same combined authorization may
-follow exact-head CI and any triggered phase gate without inventing an
-independent Final Review. Before
-acting, Engineering Control must fresh-verify the exact reviewed head, all
-required CI, and no drift against the frozen predicates. If every predicate
-matches, a second authorization prompt is prohibited. If any predicate changed
-or is unknown, fail closed without performing either action and without
-consuming that conditional authorization.
+**GitHub code acceptance is automated after safeguards, not a human click.**
+After the governance change is properly reviewed and activated, the verified
+exact-head pipeline may automatically Mark Ready, enable native GitHub auto-merge
+and delete the merged temporary branch when all applicable mandatory status
+checks, required independent HIGH/governance or native-reuse review, change-scope
+integrity, CODEOWNERS/branch-protection requirements and negative-path claims
+PASS. Block immediately on any failed/missing/stale check, unresolved security
+issue, untrusted evidence, drifted head or required review absence. Do not
+weaken branch protection to force auto-merge. GitHub native auto-merge is
+preferred to a home-grown merging controller. The actor that wrote code
+cannot forge review/CI attestation.
 
-~~~text
-MARK_READY_AND_MERGE_REMAIN_PROTECTED_ACTIONS=YES
-ONE_CURRENT_USER_MESSAGE_MAY_CONDITIONALLY_AUTHORIZE_BOTH=YES
-SECOND_AUTHORIZATION_PROMPT_WHEN_FROZEN_PREDICATES_MATCH=PROHIBITED
-CHANGED_OR_UNKNOWN_PREDICATE=>FAIL_CLOSED_WITHOUT_CONSUMING_AUTHORIZATION
-~~~
+**Scoped test-only deployments** may automatically install, start, health-check
+and roll back an immutable GitHub-hashed build in an isolated Shadow/test
+directory or service after a one-time, explicitly configured allowlisted
+deployment scope and OS-level credential separation. This never permits
+production service restart, real order placement, wallet reads or credential
+changes. Limit rollout to CPU/memory constraints of the existing AWS host,
+default OFF, and deploy only artifacts passing current CI. GitHub keeps the
+commit, build hash, deployment/health evidence and last-known-good rollback
+reference. No direct root shell from AI agents. Human final exploratory
+acceptance is the last check before separately authorized live promotion,
+not a mandatory approval for every GitHub Merge.
 
-No package, controller, Writer, CI, Reviewer, or prior authorization can infer
-these gates.
+**Current governance transition:** This candidate does not change active main
+permissions. PR #339 itself remains subject to the current main V5 gates and
+independent governance review until separately accepted and activated. Native
+GitHub auto-merge/branch-protection and restricted AWS deployment are not
+configured by merely editing this constitution. Controller and CI must
+provide non-forgeable verified evidence before any shortcut is enabled.
 
 ---
 

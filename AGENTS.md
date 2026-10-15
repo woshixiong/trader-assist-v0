@@ -111,10 +111,18 @@ COPY_PASTE_COMMAND_OR_PROMPT=
 
 ## Protected actions
 
-The manifest/constitution may never imply current authority for Mark Ready,
-merge, branch deletion, deployment, production/runtime/cloud mutation, service
-control, credential/private-API mutation, wallet/signing, exchange/order writes,
-autonomous trading, or real-capital action. Each requires explicit current human
-authorization.
+On activation of this reviewed amendment only: routine Mark Ready, native
+auto-Merge and safe merged-branch cleanup are machine-authorized **only** after
+trusted exact-head CI, required independent review, provenance and branch
+protection gates are verified. Missing evidence blocks. Isolated Shadow/test
+deployment may use a previously human-configured *bounded* allowlist; it never
+grants live deployment or trading authority.
+
+Human only: all passwords, keys, tokens, SSH credentials, wallet material,
+IAM/access grants, secret provisioning/rotation/revocation. Agents never read
+or change these. Human authorization remains mandatory for real-capital/order
+enabling and production changes outside the preauthorized test scope.
+The active-main V5 rules still apply until this candidate is accepted and
+activated; no proposal document grants current action authority.
 
 Load the manifest-selected phase skill only when that phase actually applies.

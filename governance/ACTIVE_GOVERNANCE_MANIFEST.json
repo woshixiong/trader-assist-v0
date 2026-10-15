@@ -80,7 +80,9 @@
     "final_independent_review": "HIGH_AND_GOVERNANCE_ONLY",
     "medium_phase_verification": "REAL_USER_AND_ADVERSARIAL_E2E_AT_MILESTONE",
     "canonical_github_result_egress_required": true,
-    "comment_only_fallback_when_native_self_approval_unavailable": true
+    "comment_only_fallback_when_native_self_approval_unavailable": true,
+    "official_native_reuse": "ONE_CONSOLIDATED_INDEPENDENT_FINAL_REVIEW_AND_END_TO_END",
+    "noncritical_local_checks": "LOCAL_FAST_TESTS_FULL_CI_ON_FINAL_CANDIDATE"
   },
   "execution_relay": {
     "preferred": "REMOTE_DESKTOP_COMMANDER_WHEN_CONNECTED_AND_QUOTA_AVAILABLE",
@@ -110,12 +112,8 @@
     "VNext preparation/archive artifacts already present in the repository"
   ],
   "protected_actions": [
-    "MARK_READY",
-    "MERGE",
-    "BRANCH_DELETION",
-    "DEPLOYMENT",
-    "PRODUCTION_RUNTIME_OR_CLOUD_MUTATION",
-    "SERVICE_START_RESTART_ENABLE_REBOOT",
+    "PRODUCTION_RUNTIME_OR_CLOUD_MUTATION_OUTSIDE_PREAUTHORIZED_SCOPE",
+    "LIVE_SERVICE_START_RESTART_ENABLE_REBOOT",
     "CREDENTIAL_OR_PRIVATE_API",
     "WALLET_OR_SIGNING",
     "EXCHANGE_WRITE_OR_ORDER_ACTION",
@@ -136,5 +134,30 @@
       "RISK_PACKET_VERIFIED"
     ],
     "no_auto_live_authority": true
+  },
+  "fast_track": {
+    "name": "OFFICIAL_NATIVE_REUSE",
+    "origin": "PINNED_NAUTILUS_OFFICIAL_API_AND_COMPONENTS",
+    "package_size": "LARGE_COHERENT_CAPABILITY_BUNDLE",
+    "implementation": "ONE_CONTINUOUS_CODEX_EXECUTION",
+    "publication": "ONE_FINAL_CANDIDATE_CI_PER_PASSING_BUNDLE_WITH_RERUNS_ONLY_ON_FIX",
+    "human_only_credentials": true,
+    "user_final_acceptance": "BEFORE_ANY_SEPARATELY_AUTHORIZED_LIVE_PROMOTION"
+  },
+  "automated_closeout": {
+    "enabled_only_after_reviewed_governance_activation": true,
+    "mark_ready": "AUTO_AFTER_REQUIRED_GATES",
+    "merge": "GITHUB_NATIVE_AUTO_MERGE_AFTER_REQUIRED_GATES",
+    "delete_merged_branch": "AUTO_IF_SAFE",
+    "default_unknown_state": "BLOCK",
+    "requires_proven_nonforgeable_CI_and_tier": true
+  },
+  "test_deployment": {
+    "enabled_only_after_scoped_setup": true,
+    "scope": "ISOLATED_SHADOW_DEFAULT_OFF",
+    "runtime": "EXISTING_AWS_ONLY",
+    "proof": "IMMUTABLE_RELEASE_HASH_HEALTH_AND_ROLLBACK",
+    "live_order_authority": false,
+    "secrets_human_only": true
   }
 }

@@ -134,3 +134,72 @@ Outcomes:
 Use existing Plus, optional free-tier Hark Pro/Muse **test-only**, public GitHub Actions hosted runner, and the existing AWS server. No self-hosted new agent server, new cloud VM, paid model router, CodeDeploy cost assumptions, or polling daemon. GitHub Actions uses existing runner quota and pricing rules; do not launch workflows on a schedule merely to drive an AI loop. Never upload private client or exchange data into public issue artifacts.
 
 **Review verdict for this document:** research is sufficient to choose a risk-tier and verification design; **implementation in Draft PR #339 is incomplete** until blockers are resolved. No statement in this document should be treated as a PASS for the candidate.
+
+## 12. 2026-10-15 final user feedback: fast native reuse, human-only secrets, automatic closeout
+
+**Decision update (design pending implementation):** The bulk of near-term work
+is reproducing/building existing features from the **pinned NautilusTrader**
+release, NOT inventing competing trading infrastructure. The trader's unique
+innovation belongs in strategies, research, Shadow outcomes and tuning.
+
+### Large-package native reuse fast lane
+- Favor **one coherent large package** per official capability family, not many tiny
+  PRs. Group by executable integration seam (data capture, data health,
+  shadow/backtest, order lifecycle/risk and system operations), not by arbitrary
+  file count. The goal is fast, high-quality official reuse, no new controller.
+- One acceptance brief -> Codex continuous development with local fast tests
+  (syntax, focused unit, smoke) -> **single full CI on the final published
+  candidate SHA** -> **one strict independent end-to-end review and adverse-case
+  validation** -> auto closeout if all gates prove PASS. Failed final CI requires
+  a corrected candidate and rerun; never suppress a failed required check.
+- Even mature Nautilus is not a proof of venue/adaptor compatibility. Confirm
+  the exact frozen rc5 implementation, official API and version-specific
+  integration contract. Risk-engine, order-outcome, idempotency, reconciliation,
+  stale-data and unknown-submit tests are compulsory at package final check.
+- The human may perform one **final manual real-product acceptance** after the
+  automated stage; lack of a real-person intermediate review is not a blocker
+  to test/shadow-only package delivery.
+
+### Human-exclusive operations, no exceptions
+- Human: creating, entering, provisioning, rotating, revoking or granting
+  passwords, passwords managers, exchange API keys, any API tokens, SSH
+  identities, AWS/GitHub credentials and IAM grants, wallet private keys or
+  signing secrets. AI only supplies minimal scope/setup guidance and checks
+  boolean success without receiving or exposing values.
+- Agents and externally connected Hark Pro/Muse **must not** receive live
+  credentials or gain broad production command authority. They can submit
+  untrusted isolated testing observations only.
+
+### GitHub closed loop and AWS fast deployment
+- Remove **per-PR human Mark Ready and Merge approval** from the *future*
+  accepted V5; ready and native GitHub auto-merge happen upon exact-head
+  authenticated CI PASS, current branch rules, independent review where
+  actually required, no unexpected scope/credential changes and no blockers.
+  Fail-closed default. Auto-delete merged temporary branch when safe.
+- One-time human account setup of GitHub branch protection/auto-merge and AWS
+  scoped credentials may be needed; never automate credential issuance via AI.
+- Development/test deployment: GitHub-native immutable artifact and commit SHA;
+  restricted SSH/SSM deploy command under bounded service permissions into
+  isolated **order-OFF Shadow**, health check, capture outcome, restore last
+  good artifact automatically on failure. Don't SSH-root to an LLM or run CI
+  directly on the live trading host.
+- Production/runtime changes and exchange writes remain a separate authority
+  surface; no agent can convert a code merge or passing CI into live orders.
+
+### Critical outstanding engineering gates
+1. Trustworthy non-self-reported package provenance and risk scope.
+2. Genuine *successful* exact-head CI attestation, not merely a locator.
+3. Independent final package verification including one real operational test
+   suite on test/simulated environment; user acceptance before live release.
+4. Update controller, validators and all activation rules before flipping auto
+   Ready/Merge; prove gates with negative tests, especially forged PASS data.
+5. Verify whether current AWS is Lightsail or EC2; design restricted deploy
+   without additional server or paid services. Confirm resource headroom.
+6. Use original governance's human gates for **this governance PR itself**
+   until new auto-merge policy is activated.
+
+Official sources reviewed for native reuse:
+- https://nautilustrader.io/docs/latest/concepts/adapters/
+- https://nautilustrader.io/docs/latest/concepts/execution/
+- https://nautilustrader.io/docs/latest/concepts/live/
+- https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/automatically-merging-a-pull-request

@@ -116,17 +116,19 @@ def check_manifest(root: Path) -> None:
         raise CheckFailure("execution relay metadata mismatch")
 
     protected = [
-        "MARK_READY",
-        "MERGE",
-        "BRANCH_DELETION",
-        "DEPLOYMENT",
-        "PRODUCTION_RUNTIME_OR_CLOUD_MUTATION",
-        "SERVICE_START_RESTART_ENABLE_REBOOT",
+        "PRODUCTION_RUNTIME_OR_CLOUD_MUTATION_OUTSIDE_PREAUTHORIZED_SCOPE",
+        "LIVE_SERVICE_START_RESTART_ENABLE_REBOOT",
         "CREDENTIAL_OR_PRIVATE_API",
         "WALLET_OR_SIGNING",
         "EXCHANGE_WRITE_OR_ORDER_ACTION",
         "AUTONOMOUS_OR_REAL_CAPITAL_TRADING",
     ]
+    auto = m.get("automated_closeout", {})
+    if not isinstance(auto, dict) or auto.get("default_unknown_state") != "BLOCK" or auto.get("requires_proven_nonforgeable_CI_and_tier") is not True:
+        raise CheckFailure("unverified automatic closeout policy")
+    secrets = m.get("test_deployment", {})
+    if not isinstance(secrets, dict) or secrets.get("live_order_authority") is not False or secrets.get("secrets_human_only") is not True:
+        raise CheckFailure("unsafe test deployment policy")
     if m.get("protected_actions") != protected:
         raise CheckFailure("protected-action authority changed")
 

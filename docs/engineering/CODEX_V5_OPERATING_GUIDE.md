@@ -1,6 +1,6 @@
 # Trade OS — Codex V5 Operating Guide
 
-**Status:** V5 ACTIVE GUIDE; FIRST REAL CANARY PASSED
+**Status:** V5 legacy operating guide; new fast-native-reuse/automatic-closeout candidate in PR #339 is NOT ACTIVE until acceptance
 
 This guide explains the intended operator experience. It is subordinate to the
 manifest-selected constitution and exact Development Package.
@@ -167,3 +167,17 @@ The manifest-selected lifecycle is now `ACTIVE`. The lifecycle, same-thread
 resume, CI, review, protected-action, and transport rules above are unchanged.
 V5-C cleanup remains a separate later scope and does not block normal product
 development.
+
+## Candidate successor direction (not an operative instruction until activation)
+
+This legacy guide documents the previously frozen V5 workflow. The proposed
+successor in PR #339 replaces per-slice review and human merge clicking
+with large pinned NautilusTrader-native capability packages, one continuous
+Codex implementation, cheap local checks, one full final-candidate CI and
+one package-level strict independent verification. GitHub native branch
+protection, not the user, controls automated Ready/Merge on trusted PASS.
+Humans exclusively handle passwords, tokens, SSH/IAM credential grants and
+wallet/signing. Existing AWS hosts may run SHA-bound, default-OFF isolated
+test/Shadow releases through restricted, preconfigured deployment commands.
+Real-capital enabling or production mutation is not implied by GitHub Merge.
+
