@@ -108,7 +108,7 @@ def check_documents(root: Path) -> None:
     require(constitution, FOUR_GATES + CONTEXT_MARKERS + (TWO_FIX, USER_OVERRIDE), "constitution")
     require(bridge, FOUR_GATES + CONTEXT_MARKERS + (TWO_FIX, USER_OVERRIDE), "Project bridge")
     require(index, (CANONICAL, MANIFEST, SKILL, V5_ARCHIVE, TWO_FIX), "Rules Index")
-    require(skill, CONTEXT_MARKERS + (TWO_FIX,), "V6 skill")
+    require(skill, (*CONTEXT_MARKERS, TWO_FIX), "V6 skill")
     require(constitution, (
         "PROTECTED_ACTIONS_REQUIRE_EXPLICIT_CURRENT_HUMAN_AUTHORITY=YES",
         "PAUSED_CAPABILITY", "systemd-journal", "FinalShell",
