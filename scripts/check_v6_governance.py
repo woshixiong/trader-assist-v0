@@ -115,7 +115,7 @@ def check_documents(root: Path) -> None:
     ), "V6 protected/host policy")
     require(bridge, ("Mark Ready", "Merge", "RDC", "FinalShell"), "Project bridge")
     require(workflow, (
-        "scripts/check_v6_governance.py",
+        "check_v6_governance.py",
         "V6 candidate/main governance downgrade",
         "CI_BASE_SHA", "CI_BEFORE_SHA", "governance/v6-min-migration-20261016",
         "--ignore=tests/control/test_v4_governance.py",
