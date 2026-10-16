@@ -85,3 +85,9 @@ Never silently mutate an observed candidate in place.
 A confirmatory E5 Forward clock begins only after the exact immutable candidate and applicable PRE-E5 method controls are frozen. A newer version never inherits an older version's Forward duration.
 
 Repository files define schemas, contracts, formulas and research manifests only. Raw private/account trading data, credentials, wallets, production DB/logs and real account identifiers never enter Git history.
+
+## Independent price-action research candidates (2026-10-16)
+
+The [Brooks / Louie Price Action research library](brooks_price_action/README.md) contains a **manual-trading playbook**, nine quant research/control entries (Q0–Q8) and a public evidence/validation plan, frozen in Issue [#343](https://github.com/woshixiong/trader-assist-v0/issues/343).
+
+Status: `RESEARCH_CANDIDATE / NON_EXECUTABLE / NO_EDGE_CLAIM`. It is **separate** from the accepted Three-Setup/VNext Strategy contract. Its factors are optional research challengers, not a new authorized directional Setup; no existing Strategy/Policy/Parameter/Derivation/Production authority is modified by adding this reference material.
