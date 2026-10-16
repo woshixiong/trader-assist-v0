@@ -74,25 +74,42 @@ Additional RDC calls require a concrete technical necessity. On transport/networ
 failure, preserve the exact checkpoint and use the existing bounded retry/fallback
 contract; never create an RDC retry storm.
 
-### Execution defaults — operational clarification only
+### Manifest-selected V6 Pilot — enforceable admission
 
-These defaults clarify how to apply the existing V5 route and transport rules.
-They do not add stages, change lifecycle/authority, or modify controller, CI,
-review, repair, or protected-action behavior.
+USER_ROUTINE_OVERRIDE=EXPLICIT_SCOPED_GITHUB_RECORD
+NO_SILENT_EXECUTOR_OR_SESSION_SWITCH=YES
+TWO_FAILED_SEMANTIC_REMEDIES=>STOP_USER_PLUS_ORDINARY_CHATGPT
+MATURE_FRAMEWORK_FIRST=HARD_GATE
+OFFICIAL_SOURCE_BEFORE_CUSTOM_ADAPTER=HARD_GATE
+ROOT_CAUSE_BEFORE_PATCH=HARD_GATE
+END_TO_END_FUNCTIONAL_ACCEPTANCE=HARD_GATE
 
-- Follow the frozen V5 route exactly. Route B uses an ordinary ChatGPT Writer;
-  Route C uses Codex CLI; Pre-code and Final Independent Review use a fresh
-  ordinary ChatGPT High context. Do not substitute executors.
-- When Route C genuinely requires local execution, use RDC only to start or
-  resume one visible foreground Terminal/Codex session. Do not use RDC for
-  routine progress polling.
-- On a clearly transient local Codex network interruption, wait 10 seconds and
-  retry/resume the same task/session when available. This is a local Codex
-  transport rule; it does not change CI polling or CI waiter behavior.
-- When the local Mac cannot authoritatively represent the required test
-  environment, do not repeatedly rebuild or repair the local environment for
-  parity. Use the already-qualified GitHub CI or other existing authoritative
-  environment.
+- Resolve the active constitution from the **current ref's manifest**; this file
+  does not activate governance on another ref. Old V5 manuals are archives,
+  never an alternate live authority when V6 is manifest-selected.
+- Preserve exact GitHub object retrieval and smallest relevant evidence.
+  `EXACT_COMMENT_LOCATOR_PRESENT=>READ_EXACT_COMMENT_ONLY`
+  `FETCH_ALL_ISSUE_COMMENTS_WHEN_EXACT_COMMENT_KNOWN=PROHIBITED`
+- Ordinary ChatGPT controls architecture, risk, acceptance and user dialogue.
+  Choose exactly one Codex Cloud **or** CLI Writer route per approved real task;
+  preserve its verified semantic session/worktree/PR and GitHub checkpoint.
+  Unknown continuity => PAUSED_CAPABILITY, no silent new session/fallback.
+- Prefer pinned mature Nautilus/native commodity services, official installed
+  API/source and supported community solutions. Reproduce the shared root
+  cause before edits. Two failed targeted semantic remedies on the same root
+  => stop for **user + ordinary ChatGPT** technical direction.
+- Use native GitHub CI, scope checks and whole-path positive/negative tests;
+  no model-mediated CI polling or raw successful log dumps. No mandatory
+  repetitive Pre-code/Final review on routine low-risk work; targeted fresh
+  scrutiny remains for material governance/security/order/architecture.
+- AWS access: direct Remote Desktop Commander on dedicated non-sudo
+  `rdc-ops` (systemd `rdc-aws.service`, Journal read) for necessary
+  bounded read-only observations. If protected files require access, Mac RDC
+  -> FinalShell SSH is an optional online, scoped human-authorized fallback.
+  Neither channel grants trading, service-control, sudo or merge authority.
+- The user may explicitly override ordinary workflow stages, with a narrow
+  GitHub decision record. Protected actions ALWAYS need explicit current
+  human authorization. Never silently enlarge this exception.
 
 Every actor works to its safe authorized ability boundary. Routine continuation,
 SHA/CI/log relay, and long review-result relay through the user are prohibited.
