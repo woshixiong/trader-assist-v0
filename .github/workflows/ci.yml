@@ -44,12 +44,54 @@ jobs:
       - name: Compile
         run: /tmp/trader-assist-v0-venv/bin/python -m compileall -q src scripts tests
       - name: Governance consistency
+        env:
+          CI_HEAD_REF: ${{ github.head_ref }}
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CI_BEFORE_SHA: ${{ github.event.before }}
         run: |
-          if [ "${{ github.head_ref }}" = "governance/v5-activation" ] || grep -q '"governance_version": "V5"' governance/ACTIVE_GOVERNANCE_MANIFEST.json; then
-            /tmp/trader-assist-v0-venv/bin/python scripts/check_v5_governance.py
-          else
-            /tmp/trader-assist-v0-venv/bin/python scripts/check_v4_governance.py
-          fi
+          /tmp/trader-assist-v0-venv/bin/python - <<'PY'
+          import json
+          import os
+          import pathlib
+          import subprocess
+          import sys
+
+          path = pathlib.Path('governance/ACTIVE_GOVERNANCE_MANIFEST.json')
+          try:
+              manifest = json.loads(path.read_text(encoding='utf-8'))
+              version = manifest['governance_version']
+          except (OSError, ValueError, KeyError, TypeError) as exc:
+              raise SystemExit(f'FAIL_CLOSED: invalid/missing governance selector: {exc}')
+          if not isinstance(manifest, dict) or not isinstance(version, str):
+              raise SystemExit('FAIL_CLOSED: malformed governance manifest')
+
+          def previous_version(sha):
+              if not sha or set(sha) == {'0'}:
+                  return None
+              result = subprocess.run(
+                  ['git', 'show', f'{sha}:governance/ACTIVE_GOVERNANCE_MANIFEST.json'],
+                  capture_output=True, text=True, check=False,
+              )
+              if result.returncode != 0:
+                  raise SystemExit('FAIL_CLOSED: unable to inspect governance base')
+              try:
+                  return json.loads(result.stdout)['governance_version']
+              except (ValueError, KeyError, TypeError) as exc:
+                  raise SystemExit(f'FAIL_CLOSED: invalid governance base: {exc}')
+
+          head = os.environ.get('CI_HEAD_REF', '')
+          from_v6 = any(previous_version(os.environ.get(var, '')) == 'V6'
+                        for var in ('CI_BASE_SHA', 'CI_BEFORE_SHA'))
+          v6_candidate = head == 'governance/v6-min-migration-20261016'
+          if (v6_candidate or from_v6) and version != 'V6':
+              raise SystemExit('FAIL_CLOSED: V6 candidate/main governance downgrade')
+          checks = {'V4': 'check_v4_governance.py',
+                    'V5': 'check_v5_governance.py',
+                    'V6': 'check_v6_governance.py'}
+          if version not in checks:
+              raise SystemExit(f'FAIL_CLOSED: unsupported governance {version!r}')
+          subprocess.run([sys.executable, 'scripts/' + checks[version]], check=True)
+          PY
       - name: Schema drift
         run: /tmp/trader-assist-v0-venv/bin/python scripts/export_schemas.py --check
       - name: Secret scan
@@ -68,10 +110,21 @@ jobs:
             --check-pr-scope "$PR_BASE_SHA"
       - name: Tests
         run: |
-          if [ "${{ github.head_ref }}" = "governance/v5-activation" ] || grep -q '"governance_version": "V5"' governance/ACTIVE_GOVERNANCE_MANIFEST.json; then
-            /tmp/trader-assist-v0-venv/bin/pytest -q --ignore=tests/control/test_v4_governance.py
-          else
-            /tmp/trader-assist-v0-venv/bin/pytest -q
-          fi
+          /tmp/trader-assist-v0-venv/bin/python - <<'PY'
+          import json
+          import subprocess
+          import sys
+          manifest = json.load(open('governance/ACTIVE_GOVERNANCE_MANIFEST.json', encoding='utf-8'))
+          version = manifest['governance_version']
+          cmd = [sys.executable, '-m', 'pytest', '-q']
+          if version == 'V6':
+              cmd += ['--ignore=tests/control/test_v4_governance.py',
+                      '--ignore=tests/control/test_v5_governance.py']
+          elif version == 'V5':
+              cmd += ['--ignore=tests/control/test_v4_governance.py']
+          elif version != 'V4':
+              raise SystemExit('FAIL_CLOSED: unknown governance test selector')
+          subprocess.run(cmd, check=True)
+          PY
       - name: Diff check
         run: git diff --check

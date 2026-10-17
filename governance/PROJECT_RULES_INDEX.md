@@ -1,21 +1,22 @@
 # Trader Assist / Trade OS — Project Rules Index
 
-This is thin navigation for the exact Git ref being inspected. It is not a
-second constitution and cannot activate a candidate governance version.
+Thin navigation only. The checked-out/current-ref active manifest decides the
+sole engineering constitution; this index cannot activate governance.
 
-## Authority map
+## Current authority
 
-- Machine map: governance/ACTIVE_GOVERNANCE_MANIFEST.json
-- Manifest-selected constitution:
-  governance/ENGINEERING_GOVERNANCE_V5_CONSOLIDATED_FINAL.md
-- Root router: AGENTS.md
-- Version-agnostic ChatGPT Project Instruction adapter:
-  governance/CHATGPT_PROJECT_GOVERNANCE_BRIDGE.md
+- AGENTS router: `AGENTS.md`
+- Machine selector: `governance/ACTIVE_GOVERNANCE_MANIFEST.json`
+- Sole constitution: `governance/ENGINEERING_GOVERNANCE_V6_PILOT.md`
+- ChatGPT Project adapter: `governance/CHATGPT_PROJECT_GOVERNANCE_BRIDGE.md`
+- Narrow V6 skill: `.agents/skills/trade-os-v6/SKILL.md`
+- Archived historical V5: `governance/ENGINEERING_GOVERNANCE_V5_CONSOLIDATED_FINAL.md`
+- Native exact-head CI: `.github/workflows/ci.yml`, `scripts/check_v6_governance.py`
 
-On main, V5 is the manifest-selected `ACTIVE` governance/routing system. The
-activation merge, baseline qualification, and first real non-production V5
-canary have passed. This index remains navigation only and does not create
-authority.
+V6 `PILOT_ACTIVE` becomes authoritative on main **only after** the separately
+approved tested PR is merged. A candidate branch cannot change main's V5
+authority. No legacy V5 controller or mandatory per-small-change reviewer is
+an active V6 procedure.
 
 ## Narrow subordinate procedures
 
@@ -42,40 +43,18 @@ Load only when the task trigger applies:
 These procedures are subordinate in their real domains and cannot weaken the
 manifest-selected constitution.
 
-## V5 execution surfaces
 
-- Codex repo config: .codex/config.toml
-- Current model/qualification profile:
-  governance/CODEX_CURRENT_MODEL_PROFILE.md
-- Optional Explorer: .codex/agents/explorer.toml
-- Optional internal Reviewer: .codex/agents/code-reviewer.toml
-- Existing protected-action hook: .codex/hooks/pre_tool_use_policy.py
-- Operating guide: docs/engineering/CODEX_V5_OPERATING_GUIDE.md
+## Pilot operating surfaces
 
-V5-B controller/bootstrap/consistency-validator and their focused tests are
-implemented and baseline-qualified. The first real non-production end-to-end V5
-canary has passed. V5-C cleanup remains a separate later scope.
+- Per-real-task single Codex Cloud or CLI route and exact semantic session.
+- Deterministic GitHub Actions and PR checks; GitHub native notifications.
+- `.codex/config.toml` retains guarded local CLI defaults when CLI chosen.
+- Direct AWS RDC restricted `rdc-ops`, Journal-read, systemd-enabled service.
+- Optional Mac RDC -> FinalShell SSH for separately authorized host access.
+- `USER_ROUTINE_OVERRIDE=EXPLICIT_SCOPED_GITHUB_RECORD`
+- `TWO_FAILED_SEMANTIC_REMEDIES=>STOP_USER_PLUS_ORDINARY_CHATGPT`
 
-## Progressive-disclosure skills
+## Historical archive
 
-- .agents/skills/trade-os-v5-bootstrap/SKILL.md
-- .agents/skills/trade-os-v5-development/SKILL.md
-- .agents/skills/trade-os-v5-ci/SKILL.md
-- .agents/skills/trade-os-v5-review/SKILL.md
-- .agents/skills/trade-os-v5-handoff/SKILL.md
-
-Skills are adapters to the same manifest/constitution/state machine; they do
-not define independent authority.
-
-## Feedback only
-
-- docs/engineering/V5_PROCESS_IMPROVEMENT_BACKLOG.md
-
-The backlog records process observations only and is never governance authority.
-
-## Activation boundary
-
-`ACTIVE` means V5 is selected on main and the required activation evidence,
-including the first real non-production V5 canary, is PASS. V5-C cleanup remains
-a separate later scope; preserved V4/VNext files do not block normal product
-development and remain until separately authorized cleanup.
+V4/V5 rules, scripts, controller and skills are preserved for evidence only.
+Do not load long archived history or run legacy active-state gates on V6 work.

@@ -1,11 +1,9 @@
 {
   "schema_version": "1.0.0",
-  "governance_version": "V5",
-  "status": "ACTIVE",
+  "governance_version": "V6",
+  "status": "PILOT_ACTIVE",
   "repository": "woshixiong/trader-assist-v0",
-  "candidate_branch": "governance/v5-activation",
-  "frozen_base": "f17d436b222061ab2229d83f09f743182353fe11",
-  "sole_project_wide_constitution": "governance/ENGINEERING_GOVERNANCE_V5_CONSOLIDATED_FINAL.md",
+  "sole_project_wide_constitution": "governance/ENGINEERING_GOVERNANCE_V6_PILOT.md",
   "entrypoints": [
     "AGENTS.md",
     "governance/PROJECT_RULES_INDEX.md",
@@ -23,91 +21,49 @@
     "governance/MARKET_AND_VENUE_SELECTION_FRAMEWORK_V1_2026-09-13.md"
   ],
   "active_skills": [
-    ".agents/skills/trade-os-v5-bootstrap/SKILL.md",
-    ".agents/skills/trade-os-v5-development/SKILL.md",
-    ".agents/skills/trade-os-v5-ci/SKILL.md",
-    ".agents/skills/trade-os-v5-review/SKILL.md",
-    ".agents/skills/trade-os-v5-handoff/SKILL.md"
+    ".agents/skills/trade-os-v6/SKILL.md"
   ],
   "codex": {
-    "execution_surface": "CODEX_CLI",
+    "execution_surface": "PER_TASK_SINGLE_SESSION",
+    "choice": "CLOUD_OR_CLI_SET_IN_EXACT_PACKAGE",
+    "default_model": {
+      "model": "gpt-6.1-sol",
+      "reasoning": "medium"
+    },
     "config": ".codex/config.toml",
-    "primary": {
-      "model": "gpt-6.1-sol",
-      "reasoning": "medium"
+    "context_policy": "EXACT_LOCATORS_PROGRESSIVE_DISCLOSURE_CHECKPOINTS",
+    "semantic_session_continuity": "REQUIRED_FAIL_CLOSED",
+    "cloud_continuity_automation": "UNVERIFIED_UNTIL_USER_SELECTED_REAL_TASK",
+    "cli_network_transient_retry": {
+      "delay_seconds": 10,
+      "max_attempts": 20,
+      "semantic_rerun": false
     },
-    "repair_1": {
-      "model": "gpt-6.1-sol",
-      "reasoning": "medium"
-    },
-    "repair_2_hard_root_cause": {
-      "model": "gpt-6.1-sol",
-      "reasoning": "high"
-    },
-    "exceptional_control_analysis": {
-      "model": "gpt-6-astra",
-      "reasoning": "medium",
-      "authority": "ENGINEERING_CONTROL_EXPLICIT_ESCALATION_ONLY"
-    },
-    "web_search_default": "disabled",
-    "sandbox_mode": "workspace-write",
-    "approval_policy": "on-request",
-    "approvals_reviewer": "auto_review",
-    "default_subagents": 0,
-    "max_optional_concurrent_children": 1,
-    "recursive_subagent_delegation": false,
-    "subagent_runtime_identity_verification_required": true,
-    "silent_subagent_fallback_prohibited": true,
-    "agents": {
-      "explorer": {
-        "config": ".codex/agents/explorer.toml",
-        "model": "gpt-6-luna",
-        "reasoning": "low",
-        "authority": "READ_ONLY_OPTIONAL"
-      },
-      "internal_reviewer": {
-        "config": ".codex/agents/code-reviewer.toml",
-        "model": "gpt-6-luna",
-        "reasoning": "high",
-        "authority": "READ_ONLY_OPTIONAL_NON_FINAL"
-      }
-    },
-    "hook": ".codex/hooks/pre_tool_use_policy.py",
-    "runtime_qualification": "BASELINE_QUALIFIED"
+    "legacy_cloud_shortcut": "PROHIBITED"
   },
   "review": {
-    "pre_code_review": "FRESH_ORDINARY_CHATGPT_HIGH",
-    "final_independent_review": "FRESH_ORDINARY_CHATGPT_HIGH",
-    "canonical_github_result_egress_required": true,
-    "comment_only_fallback_when_native_self_approval_unavailable": true
+    "routine": "CI_PLUS_WHOLE_PATH_FUNCTIONAL_ACCEPTANCE",
+    "high_risk": "TARGETED_FRESH_INDEPENDENT_REVIEW",
+    "current_transition": "V5_INDEPENDENT_FINAL_REVIEW_REQUIRED"
   },
   "execution_relay": {
-    "preferred": "REMOTE_DESKTOP_COMMANDER_WHEN_CONNECTED_AND_QUOTA_AVAILABLE",
-    "authority": "EXECUTION_TRANSPORT_ONLY",
-    "hard_dependency": false
+    "github": "NATIVE_FIRST_NO_MODEL_POLLING",
+    "aws_primary": "RDC_AWS_RDC_OPS_NO_SUDO_JOURNAL_READ",
+    "aws_fallback": "MAC_RDC_FINALSHELL_SSH_WHEN_ONLINE_SCOPED_AUTH",
+    "rdc_quota": "BUNDLED_NON_POLLING"
   },
-  "deterministic_runtime": {
-    "v5_bootstrap": "PASS",
-    "v5_governance_consistency_validator": "PASS",
-    "v5_controller_and_package_state": "PASS",
-    "exact_head_ci_waiter": "PASS"
+  "user_decision": {
+    "ordinary_workflow_override": "EXPLICIT_SCOPED_RECORD",
+    "two_failed_semantic_fixes": "STOP_USER_PLUS_ORDINARY_CHATGPT_DIRECTION",
+    "protected_actions_require_current_authority": true
   },
-  "activation_requirements": {
-    "v5_b_controller_bootstrap_validator": "PASS",
-    "cli_and_gpt6_runtime_identity_qualification": "PASS",
-    "permission_auto_review_network_qualification": "PASS",
-    "protected_action_nonregression": "PASS",
-    "controller_and_failure_class_tests": "PASS",
-    "exact_head_ci": "PASS",
-    "fresh_independent_review": "PASS",
-    "project_instruction_replaced_with_version_agnostic_bridge": "PASS",
-    "first_real_nonproduction_v5_canary": "PASS"
+  "archived_governance": {
+    "version": "V5",
+    "constitution": "governance/ENGINEERING_GOVERNANCE_V5_CONSOLIDATED_FINAL.md",
+    "prior_main_head": "8440a62f8135eb5ea7bea4e1dd23d7b243e24e30",
+    "historical_files": "PRESERVED_NOT_ACTIVE",
+    "original_manifest_activation_merge": "07eaa624d24973a9fd48fd15957f3ee60550bc4e"
   },
-  "preserved_pending_v5_c_cleanup": [
-    "governance/ENGINEERING_GOVERNANCE_V4_CONSOLIDATED_FINAL.md",
-    "governance/CHATGPT_PROJECT_GOVERNANCE_BRIDGE_V4_CORE_ENFORCEMENT_2026-09-23.md",
-    "VNext preparation/archive artifacts already present in the repository"
-  ],
   "protected_actions": [
     "MARK_READY",
     "MERGE",
@@ -119,10 +75,5 @@
     "WALLET_OR_SIGNING",
     "EXCHANGE_WRITE_OR_ORDER_ACTION",
     "AUTONOMOUS_OR_REAL_CAPITAL_TRADING"
-  ],
-  "activation_merge_evidence": {
-    "merge_commit": "07eaa624d24973a9fd48fd15957f3ee60550bc4e",
-    "reviewed_head": "7444ab6506ae740f1d151bb8fa8cb09f33215fd5",
-    "reviewed_tree": "a1bad58b29479a06d4c007d2bf63b5ac5cef0de5"
-  }
+  ]
 }
