@@ -30,6 +30,10 @@ Historical `PENDING_DELTA_REVIEW`, `E4_HARD_HOLD`, and Engineering19 stage-statu
 - `TA_VNEXT_POST_ACCEPTANCE_CONSOLIDATION_ADDENDUM_2026-09-16.md` — current publication/status and later bounded-delta precedence.
 - `../../archive/strategy/STRATEGY_RESEARCH_DECISION_ARCHIVE_THROUGH_2026-09-11.md` — historical/superseded decision rationale.
 
+## Independent research candidates (NON-EXECUTABLE)
+
+- **Bounded Soft Martingale / Mean-Reversion Grid V0.1** ([Research spec](./soft_martingale_grid/RESEARCH_SPEC_V0_1.md) · [Source/evidence ledger](./soft_martingale_grid/SOURCE_EVIDENCE_LEDGER.md) · [Issue #346](https://github.com/woshixiong/trader-assist-v0/issues/346)) — independent UNVALIDATED hypothesis. Source channels Ryan Brown / ResponsibleForexTrading and AlgoLee are distinct; tested mechanism: finite mean-reversion grid + optional soft progression + hard basket/account stops; compare against no-grid/fixed-grid baselines. **No proven after-fee alpha, no authorization for live trading, no change to Three Setup.** Human add-to-loser remains prohibited.
+
 ## Current accepted identity
 
 ```text
