@@ -17,6 +17,18 @@ STAMP = "2026-10-11T10:00:00.123456Z"
 COINS = ["ETH", "builder:SKHX"]
 
 
+@pytest.fixture(autouse=True)
+def direct_local_websocket(monkeypatch: pytest.MonkeyPatch) -> None:
+    original = raw.connect
+
+    def local_connect(url: str, **kwargs: Any) -> Any:
+        if url.startswith("ws://127.0.0.1:"):
+            kwargs["proxy"] = None  # Synthetic loopback never uses the host's HTTP proxy.
+        return original(url, **kwargs)
+
+    monkeypatch.setattr(raw, "connect", local_connect)
+
+
 def metadata(request: dict[str, str]) -> Any:
     if request["type"] == "perpDexs":
         return [None, {"name": "builder"}]
@@ -256,6 +268,8 @@ mode = sys.argv[1]
 out = sys.argv[2]
 original_discover = raw.discover_coins
 original_receive = raw.receive_public
+original_connect = raw.connect
+raw.connect = lambda *a, **kw: original_connect(*a, proxy=None, **kw)
 original_line = raw.RawWriter._line
 original_fsync = raw.os.fsync
 connections = 0
@@ -289,7 +303,9 @@ def line(self, record):
     if record.get('kind') == 'data' and mode == 'write-fault':
         raise OSError('fixture disk write failure')
     original_line(self, record)
-    if record.get('kind') == 'data' and (mode != 'reconnect' or connections == 2):
+    if (record.get('kind') == 'data' and record.get('channel') == 'l2Book'
+        and record.get('venue_coin') == 'ETH'
+        and (mode != 'reconnect' or connections == 2)):
         print('READY', flush=True)
 raw.RawWriter._line = line
 
@@ -300,7 +316,7 @@ def fsync(fd):
     print('FSYNC', flush=True)
 raw.os.fsync = fsync
 
-async def receive(writer, coins):
+async def receive(writer, coins, *, health_policy=None):
     async def provider(ws):
         global connections
         connections += 1
@@ -314,7 +330,11 @@ async def receive(writer, coins):
         else:
             for coin in coins:
                 for channel in raw.CHANNELS:
-                    payload = {'coin': coin, 'bbo': [], 'levels': [[], []]}
+                    payload = {'coin': coin, 'time': int(time.time() * 1000) + connections,
+                               'bbo': [{'px': '1', 'sz': '2', 'n': 1},
+                                       {'px': '2', 'sz': '3', 'n': 1}],
+                               'levels': [[{'px': '1', 'sz': '2', 'n': 1}],
+                                          [{'px': '2', 'sz': '3', 'n': 1}]]}
                     if channel == 'trades':
                         payload = [{'coin': coin, 'px': '1.2300', 'time': 123}]
                     await ws.send(json.dumps({'channel': channel, 'data': payload}))
@@ -324,7 +344,7 @@ async def receive(writer, coins):
                 await ws.wait_closed()
     async with serve(provider, '127.0.0.1', 0) as server:
         raw.WS_URL = 'ws://127.0.0.1:' + str(server.sockets[0].getsockname()[1])
-        await original_receive(writer, coins)
+        await original_receive(writer, coins, health_policy=health_policy)
 raw.receive_public = receive
 sys.argv = ['fixture', '--continuous', '--output', out]
 try:
@@ -532,7 +552,11 @@ def test_unit_is_dedicated_hardened_and_default_off() -> None:
     assert unit["Unit"]["ConditionPathExists"].endswith("/hyperliquid-raw-capture-permit")
     service = unit["Service"]
     assert service["User"] == service["Group"] == "traderassist"
-    assert service["Restart"] == "no" and service["TimeoutStopSec"] == "30"
+    assert service["Restart"] == "on-failure" and service["TimeoutStopSec"] == "30"
+    assert service["RestartSec"] == "30"
+    assert service["RestartPreventExitStatus"] == "74 78"
+    assert unit["Unit"]["StartLimitIntervalSec"] == "120"
+    assert unit["Unit"]["StartLimitBurst"] == "5"
     assert service["KillSignal"] == "SIGTERM"
     import shlex
 
@@ -546,7 +570,8 @@ def test_unit_is_dedicated_hardened_and_default_off() -> None:
     assert service["StateDirectory"] == "trader-assist-v0-hyperliquid-raw-capture"
     assert service["StateDirectoryMode"] == "0700"
     assert service["ProtectSystem"] == "strict" and service["NoNewPrivileges"] == "yes"
-    assert "Install" not in unit
+    assert unit["Install"]["WantedBy"] == "multi-user.target"
+    assert "WatchdogSec" not in service
     assert "LoadCredential" not in service and "EnvironmentFile" not in service
     assert "three-setup" not in path.read_text()
 
@@ -639,3 +664,675 @@ def test_rotation_fsync_failure_releases_lock_without_new_segment(
     assert not any(r.get("event") == "rotate" for r in raw.read_records(writer.paths))
     with raw.RawWriter(tmp_path):
         pass
+
+
+def eth_frame(channel: str = "l2Book", *, milliseconds: int | None = None) -> dict[str, Any]:
+    import time
+
+    sides = [{"px": "2505.5", "sz": "4.4661", "n": 3}, {"px": "2505.6", "sz": "117.3743", "n": 27}]
+    return {
+        "channel": channel,
+        "data": {
+            "coin": "ETH",
+            "time": int(time.time() * 1000) if milliseconds is None else milliseconds,
+            "bbo" if channel == "bbo" else "levels": sides
+            if channel == "bbo"
+            else [[s] for s in sides],
+        },
+    }
+
+
+@pytest.mark.parametrize("channel", ["bbo", "l2Book"])
+def test_health_uses_sample_confirmed_epoch_ms_without_mutation(channel: str) -> None:
+    # Genuine sample's timestamp/shape; full raw bytes remain in canonical Issue332 evidence.
+    frame = eth_frame(channel, milliseconds=1791961752972)
+    before = json.dumps(frame)
+    assert raw.healthy_eth_time(frame, "2026-10-14T07:09:13.184000Z", 60) == 1791961752972
+    assert json.dumps(frame) == before
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "null",
+        "empty",
+        "nan",
+        "negative",
+        "crossed",
+        "count",
+        "boolean",
+        "seconds",
+        "old",
+        "future",
+        "missing",
+    ],
+)
+def test_invalid_or_implausible_books_never_prove_health(fault: str) -> None:
+    frame = eth_frame()
+    data = frame["data"]
+    if fault == "null":
+        frame = eth_frame("bbo")
+        frame["data"]["bbo"][0] = None
+    elif fault == "empty":
+        data["levels"][0] = []
+    elif fault == "nan":
+        data["levels"][0][0]["px"] = "NaN"
+    elif fault == "negative":
+        data["levels"][0][0]["sz"] = "-1"
+    elif fault == "crossed":
+        data["levels"][0][0]["px"] = "9999"
+    elif fault == "count":
+        data["levels"][0][0]["n"] = True
+    elif fault == "boolean":
+        data["time"] = True
+    elif fault == "seconds":
+        data["time"] //= 1000
+    elif fault == "old":
+        data["time"] -= 61000
+    elif fault == "future":
+        data["time"] += 6000
+    else:
+        del data["time"]
+    assert raw.healthy_eth_time(frame, raw.utc_now(), 60) is None
+
+
+def test_progress_requires_advancement_and_bounds_positive_skew(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        with raw.RawWriter(tmp_path) as writer:
+            state = raw.MarketProgress(writer, raw.HealthPolicy())
+            state.connected()
+            frame = eth_frame()
+            stamp = raw.utc_now()
+            assert state.observe(frame, stamp)
+            previous = state.last_depth
+            assert not state.observe(frame, stamp)
+            frame["data"]["time"] -= 1
+            assert not state.observe(frame, stamp)
+            assert state.last_depth == previous
+            state.connected()
+            assert not state.observe(frame, stamp)  # reconnect cannot reset watermark
+            frame["data"]["time"] += 3000
+            assert state.observe(frame, stamp)  # bounded positive skew; no future watermark runaway
+
+    asyncio.run(scenario())
+
+
+def test_checkpoints_are_atomic_data_only_and_connection_bound(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        with raw.RawWriter(tmp_path) as writer:
+            state = raw.MarketProgress(writer, raw.HealthPolicy())
+            state.connected()
+            frame, stamp = eth_frame(), raw.utc_now()
+            raw.record_message(writer, frame, stamp, COINS)
+            assert state.observe(frame, stamp)
+            state.publish()
+            path = state.path("l2Book")
+            saved = path.read_bytes()
+            saved_time = path.stat().st_mtime_ns
+            record = json.loads(saved)
+            assert record["session_id"] == writer.session and record["connection_epoch"] == 1
+            assert record["execution_eligible"] is False
+            writer.marker("pong")
+            state.publish()
+            assert path.read_bytes() == saved and path.stat().st_mtime_ns == saved_time
+            assert not list(tmp_path.glob("*.tmp"))
+            state.connected()
+            assert not path.exists()
+            assert not state.observe(frame, stamp)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("mode", ["acks", "pongs", "duplicates", "bbo", "backoff", "send"])
+def test_depth_stalls_despite_control_or_other_market_activity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+) -> None:
+    class Socket:
+        def __init__(self) -> None:
+            self.index = 0
+            self.fixed = eth_frame()
+
+        async def send(self, message: str) -> None:
+            if mode == "send":
+                await asyncio.sleep(1)
+
+        async def recv(self) -> str:
+            await asyncio.sleep(0.002)
+            self.index += 1
+            if self.index <= 6:
+                coin, channel = sorted((c, h) for c in COINS for h in raw.CHANNELS)[self.index - 1]
+                return json.dumps(
+                    {
+                        "channel": "subscriptionResponse",
+                        "data": {
+                            "method": "subscribe",
+                            "subscription": {"coin": coin, "type": channel},
+                        },
+                    }
+                )
+            if mode == "duplicates":
+                return json.dumps(self.fixed)
+            if mode == "bbo":
+                return json.dumps(eth_frame("bbo"))
+            if mode == "acks":
+                return json.dumps(
+                    {
+                        "channel": "subscriptionResponse",
+                        "data": {
+                            "method": "subscribe",
+                            "subscription": {"coin": "ETH", "type": "bbo"},
+                        },
+                    }
+                )
+            return json.dumps({"channel": "pong"})
+
+    async def connections() -> Any:
+        if mode == "backoff":
+            await asyncio.sleep(1)
+        yield Socket()
+
+    monkeypatch.setattr(raw, "connect", lambda *a, **kw: connections())
+
+    async def scenario() -> None:
+        with raw.RawWriter(tmp_path) as writer:
+            # Internal seam accelerates timer tests; public config still enforces [30,300].
+            with pytest.raises(raw.DataStall) as caught:
+                await raw.receive_public(writer, COINS, health_policy=raw.HealthPolicy(0.05, 1))
+            assert raw.failure_exit_status(caught.value) == 75
+
+    asyncio.run(scenario())
+    records = list(raw.read_records(sorted(tmp_path.glob("*.ndjson"))))
+    assert any(r.get("event") == "data_stall" for r in records)
+    assert any(r.get("event") == "gap_open" and r["missing"] == "UNKNOWN" for r in records)
+    assert not list(tmp_path.glob(".eth-*-progress.json"))
+
+
+def test_quiet_bbo_with_advancing_depth_does_not_restart(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+    from itertools import pairwise
+
+    milestone = asyncio.Event()
+    depth_times: list[int] = []
+    original_observe = raw.MarketProgress.observe
+    original_warn = raw.MarketProgress.warn_bbo
+
+    def observe(
+        state: raw.MarketProgress,
+        frame: Any,
+        stamp: str,
+        received_monotonic: float | None = None,
+    ) -> bool:
+        advanced = original_observe(state, frame, stamp, received_monotonic)
+        if advanced:
+            depth_times.append(frame["data"]["time"])
+        return advanced
+
+    def warn(state: raw.MarketProgress) -> None:
+        if len(depth_times) >= 3:
+            # Simulate a quiet BBO interval only; leave the real Depth timer untouched.
+            state.last_bbo = min(
+                state.last_bbo,
+                asyncio.get_running_loop().time() - state.policy.bbo_warning_seconds - 1,
+            )
+        original_warn(state)
+        if len(depth_times) >= 3 and state.bbo_warned:
+            milestone.set()
+
+    monkeypatch.setattr(raw.MarketProgress, "observe", observe)
+    monkeypatch.setattr(raw.MarketProgress, "warn_bbo", warn)
+
+    class Socket:
+        def __init__(self) -> None:
+            self.index = 0
+            self.last_ms = int(time.time() * 1000)
+
+        async def send(self, message: str) -> None:
+            pass
+
+        async def recv(self) -> str:
+            await asyncio.sleep(0)
+            self.index += 1
+            if self.index <= 6:
+                coin, channel = sorted((c, h) for c in COINS for h in raw.CHANNELS)[self.index - 1]
+                return json.dumps(
+                    {
+                        "channel": "subscriptionResponse",
+                        "data": {
+                            "method": "subscribe",
+                            "subscription": {"coin": coin, "type": channel},
+                        },
+                    }
+                )
+            self.last_ms = max(int(time.time() * 1000), self.last_ms + 1)
+            return json.dumps(eth_frame(milliseconds=self.last_ms))
+
+    async def connections() -> Any:
+        yield Socket()
+
+    monkeypatch.setattr(raw, "connect", lambda *a, **kw: connections())
+
+    async def scenario() -> None:
+        with raw.RawWriter(tmp_path) as writer:
+            task = asyncio.create_task(
+                raw.receive_public(writer, COINS, health_policy=raw.HealthPolicy())
+            )
+            try:
+                # Milestone follows successful raw append, real progress validation and warning.
+                await asyncio.wait_for(milestone.wait(), timeout=20)
+                assert len(depth_times) >= 3
+                assert all(later > earlier for earlier, later in pairwise(depth_times))
+                assert not task.done()
+            finally:
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+
+    asyncio.run(scenario())
+    records = list(raw.read_records(sorted(tmp_path.glob("*.ndjson"))))
+    assert sum(r.get("kind") == "data" and r.get("channel") == "l2Book" for r in records) >= 3
+    assert not any(r.get("kind") == "data" and r.get("channel") == "bbo" for r in records)
+    assert any(r.get("event") == "bbo_quiet_or_unproven" for r in records)
+    assert not any(r.get("event") == "data_stall" for r in records)
+
+
+@pytest.mark.parametrize("primary", [ValueError("protocol"), raw.DataStall("stale")])
+def test_secondary_fsync_storage_wins_preserving_primary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    primary: Exception,
+) -> None:
+    def fail(fd: int) -> None:
+        raise OSError(28, "fixture full disk")
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(raw.os, "fsync", fail)
+        with pytest.raises(type(primary)) as caught:
+            with raw.RawWriter(tmp_path):
+                raise primary
+    assert caught.value is primary
+    assert raw.failure_exit_status(primary) == 74
+    assert any("finalization" in n for n in primary.__notes__)
+    with raw.RawWriter(tmp_path):
+        pass
+
+
+def test_checkpoint_failure_is_storage_not_transport(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(*args: Any) -> None:
+        raise OSError(28, "checkpoint disk full")
+
+    async def scenario() -> None:
+        with raw.RawWriter(tmp_path) as writer:
+            state = raw.MarketProgress(writer, raw.HealthPolicy())
+            state.connected()
+            frame, stamp = eth_frame(), raw.utc_now()
+            raw.record_message(writer, frame, stamp, COINS)
+            assert state.observe(frame, stamp)
+            with monkeypatch.context() as scoped:
+                scoped.setattr(raw.os, "replace", fail)
+                with pytest.raises(OSError) as caught:
+                    state.publish()
+                assert raw.failure_exit_status(caught.value) == 74
+            assert not state.path("l2Book").exists()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        raw.HealthPolicy(29, 300),
+        raw.HealthPolicy(301, 300),
+        raw.HealthPolicy(60, 59),
+        raw.HealthPolicy(60, 901),
+        raw.HealthPolicy(float("nan"), 300),
+    ],
+)
+def test_public_policy_bounds_fail_before_writer(tmp_path: Path, policy: raw.HealthPolicy) -> None:
+    async def scenario() -> None:
+        with pytest.raises(ValueError):
+            await raw.capture_continuous(tmp_path, stop=raw.StopIntent(), policy=policy)
+
+    asyncio.run(scenario())
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("restore", [False, True])
+def test_continuous_reconnect_requires_acks_and_new_depth(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    restore: bool,
+) -> None:
+    from websockets.exceptions import ConnectionClosedOK
+    from websockets.frames import Close
+
+    first_time = eth_frame()["data"]["time"]
+    restored = asyncio.Event()
+
+    class Socket:
+        def __init__(self, epoch: int) -> None:
+            self.epoch, self.index = epoch, 0
+
+        async def send(self, message: str) -> None:
+            pass
+
+        async def recv(self) -> str:
+            await asyncio.sleep(0.002)
+            self.index += 1
+            if self.index <= 6:
+                coin, channel = sorted((c, h) for c in COINS for h in raw.CHANNELS)[self.index - 1]
+                return json.dumps(
+                    {
+                        "channel": "subscriptionResponse",
+                        "data": {
+                            "method": "subscribe",
+                            "subscription": {"coin": coin, "type": channel},
+                        },
+                    }
+                )
+            if self.index == 7 and (self.epoch == 1 or restore):
+                if self.epoch == 2:
+                    restored.set()
+                return json.dumps(eth_frame(milliseconds=first_time + self.epoch))
+            if self.epoch == 1:
+                raise ConnectionClosedOK(Close(1000, "fixture"), Close(1000, "fixture"), True)
+            return json.dumps({"channel": "pong"})
+
+    async def connections() -> Any:
+        yield Socket(1)
+        yield Socket(2)
+
+    monkeypatch.setattr(raw, "connect", lambda *a, **kw: connections())
+
+    async def scenario() -> None:
+        with raw.RawWriter(tmp_path) as writer:
+            task = asyncio.create_task(
+                raw.receive_public(writer, COINS, health_policy=raw.HealthPolicy(0.2, 1))
+            )
+            if restore:
+                await asyncio.wait_for(restored.wait(), timeout=1)
+                await asyncio.sleep(0.01)
+                assert not task.done()
+                checkpoint = json.loads((tmp_path / ".eth-l2Book-progress.json").read_text())
+                assert checkpoint["connection_epoch"] == 2
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+            else:
+                with pytest.raises(raw.DataStall):
+                    await task
+
+    asyncio.run(scenario())
+    records = list(raw.read_records(sorted(tmp_path.glob("*.ndjson"))))
+    assert sum(r.get("event") == "ack" for r in records) == 12
+    gaps = [r for r in records if r.get("event") == "gap"]
+    assert bool(gaps) is restore
+    if restore:
+        assert gaps[0]["coverage"] == "ETH_DEPTH_ONLY" and gaps[0]["missing"] == "UNKNOWN"
+
+
+@pytest.mark.parametrize("operation", ["write", "checkpoint_fsync", "close"])
+def test_storage_fault_classes_and_lock_release(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    import errno
+
+    async def scenario() -> None:
+        with raw.RawWriter(tmp_path) as writer:
+            if operation == "write":
+
+                def fail(record: dict[str, Any]) -> None:
+                    raise OSError(errno.ENOSPC, "fixture bytes/inodes exhausted")
+
+                with monkeypatch.context() as scoped:
+                    scoped.setattr(writer, "_line", fail)
+                    with pytest.raises(OSError) as caught:
+                        writer.marker("fault")
+                    assert raw.failure_exit_status(caught.value) == 74
+            elif operation == "checkpoint_fsync":
+                state = raw.MarketProgress(writer, raw.HealthPolicy())
+                state.connected()
+                frame, stamp = eth_frame(), raw.utc_now()
+                raw.record_message(writer, frame, stamp, COINS)
+                state.observe(frame, stamp)
+
+                def fail(fd: int) -> None:
+                    raise OSError(errno.EDQUOT, "fixture quota")
+
+                with monkeypatch.context() as scoped:
+                    scoped.setattr(raw.os, "fsync", fail)
+                    with pytest.raises(OSError) as caught:
+                        state.publish()
+                    assert raw.failure_exit_status(caught.value) == 74
+                    assert not state.path("l2Book").exists()
+
+    if operation == "close":
+        primary = ValueError("primary protocol")
+        with pytest.raises(ValueError) as caught:
+            with raw.RawWriter(tmp_path) as writer:
+                source = writer._file
+
+                class File:
+                    def __getattr__(self, name: str) -> Any:
+                        return getattr(source, name)
+
+                    def close(self) -> None:
+                        assert source is not None
+                        source.close()
+                        raise OSError(errno.EIO, "secondary close")
+
+                writer._file = File()  # type: ignore[assignment]
+                raise primary
+        assert caught.value is primary and raw.failure_exit_status(primary) == 74
+    else:
+        asyncio.run(scenario())
+    with raw.RawWriter(tmp_path):
+        pass
+
+
+def test_cancel_cleanup_storage_fault_cannot_be_clean_stop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        stop = raw.StopIntent()
+
+        async def connections() -> Any:
+            stop.request()
+            await asyncio.sleep(1)
+            yield None
+
+        monkeypatch.setattr(raw, "connect", lambda *a, **kw: connections())
+        original = raw.MarketProgress.invalidate
+        calls = 0
+
+        def invalidate(state: raw.MarketProgress) -> None:
+            nonlocal calls
+            calls += 1
+            if calls > 1:
+                with raw.storage_operation("checkpoint cancellation cleanup"):
+                    raise OSError(28, "fixture cleanup disk full")
+            original(state)
+
+        monkeypatch.setattr(raw.MarketProgress, "invalidate", invalidate)
+        with raw.RawWriter(tmp_path) as writer:
+            with pytest.raises(OSError) as caught:
+                await raw._receive_until_stop(writer, COINS, stop, raw.HealthPolicy())
+            assert raw.failure_exit_status(caught.value) == 74
+
+    asyncio.run(scenario())
+
+
+def test_cli_failure_precedence_and_policy_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "raw_cli_classification", "scripts/hyperliquid_raw_capture.py"
+    )
+    assert spec is not None and spec.loader is not None
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    for exception, status in (
+        (raw.DataStall("stale"), 75),
+        (ValueError("protocol"), 78),
+        (RuntimeError("unexpected"), 1),
+    ):
+
+        async def failing(
+            output: Path,
+            policy: raw.HealthPolicy,
+            error: Exception = exception,
+        ) -> Any:
+            raise error
+
+        monkeypatch.setattr(cli, "continuous", failing)
+        monkeypatch.setattr(sys, "argv", ["cli", "--continuous", "--output", str(tmp_path)])
+        assert cli.main() == status
+    primary = ValueError("protocol")
+    with pytest.raises(OSError) as captured, raw.storage_operation("secondary fsync"):
+        raise OSError(28, "full")
+    raw.carry_storage_failure(primary, captured.value)
+
+    async def secondary(output: Path, policy: raw.HealthPolicy) -> Any:
+        raise primary
+
+    monkeypatch.setattr(cli, "continuous", secondary)
+    assert cli.main() == 74
+    monkeypatch.setattr(
+        sys, "argv", ["cli", "--output", str(tmp_path), "--eth-depth-seconds", "60"]
+    )
+    with pytest.raises(SystemExit) as caught:
+        cli.main()
+    assert caught.value.code == 2
+
+
+def test_disposable_process_crash_preserves_archive_and_releases_flock(tmp_path: Path) -> None:
+    code = """
+import sys
+from pathlib import Path
+from trader_assist_v0.hyperliquid_raw_capture import RawWriter
+with RawWriter(Path(sys.argv[1])) as writer:
+    writer.marker('before_crash')
+    print('READY', flush=True)
+    sys.stdin.read()
+"""
+    with subprocess.Popen(
+        [sys.executable, "-u", "-c", code, str(tmp_path)],
+        env={**os.environ, "PYTHONPATH": str(Path.cwd() / "src")},
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    ) as child:
+        try:
+            import select
+
+            assert child.stdout is not None
+            assert select.select([child.stdout], [], [], 10)[0]
+            assert child.stdout.readline().strip() == "READY"
+            before = {p: p.read_bytes() for p in tmp_path.glob("*.ndjson")}
+            child.kill()  # Only this disposable fixture, never a host service.
+            child.communicate(timeout=5)
+            assert child.returncode != 0
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.communicate(timeout=5)
+    with raw.RawWriter(tmp_path) as writer:
+        writer.marker("after_crash", previous_coverage="UNKNOWN")
+    assert all(p.read_bytes() == content for p, content in before.items())
+    assert not set(writer.paths).intersection(before)
+    records = list(raw.read_records(list(before)))
+    assert any(r.get("event") == "before_crash" for r in records)
+    assert not any(r.get("event") == "stop" for r in records)
+
+
+def test_prior_session_checkpoints_removed_before_discovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for channel in ("bbo", "l2Book"):
+        (tmp_path / f".eth-{channel}-progress.json").write_text('{"session_id":"old"}')
+
+    async def discovery(stop: raw.StopIntent) -> None:
+        assert not list(tmp_path.glob(".eth-*-progress.json"))
+        stop.request()
+        return None
+
+    monkeypatch.setattr(raw, "_discover_continuous", discovery)
+
+    async def scenario() -> None:
+        result = await raw.capture_continuous(tmp_path, stop=raw.StopIntent())
+        assert result["termination"] == "clean_requested_stop"
+
+    asyncio.run(scenario())
+
+
+def test_slow_raw_append_cannot_retroactively_refresh_expired_depth(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+
+    original = raw.RawWriter._line
+
+    def delayed(writer: raw.RawWriter, record: dict[str, Any]) -> None:
+        original(writer, record)
+        if record.get("kind") == "data":
+            time.sleep(0.05)  # Disposable fault injection; no service is involved.
+
+    monkeypatch.setattr(raw.RawWriter, "_line", delayed)
+
+    class Socket:
+        async def send(self, message: str) -> None:
+            pass
+
+        async def recv(self) -> str:
+            return json.dumps(eth_frame())
+
+    async def connections() -> Any:
+        yield Socket()
+
+    monkeypatch.setattr(raw, "connect", lambda *a, **kw: connections())
+
+    async def scenario() -> None:
+        with raw.RawWriter(tmp_path) as writer:
+            with pytest.raises(raw.DataStall):
+                await raw.receive_public(writer, COINS, health_policy=raw.HealthPolicy(0.03, 1))
+
+    asyncio.run(scenario())
+    records = list(raw.read_records(sorted(tmp_path.glob("*.ndjson"))))
+    assert any(r.get("kind") == "data" for r in records)  # genuine received frame retained
+    assert any(r.get("event") == "data_stall" for r in records)
+    assert not list(tmp_path.glob(".eth-*-progress.json"))
+
+
+@pytest.mark.parametrize("data", [None, [], {"subscription": None}, {"subscription": []}])
+def test_malformed_ack_is_protocol_failure(tmp_path: Path, data: Any) -> None:
+    with raw.RawWriter(tmp_path) as writer:
+        with pytest.raises(ValueError) as caught:
+            raw.record_message(
+                writer, {"channel": "subscriptionResponse", "data": data}, STAMP, COINS
+            )
+        assert raw.failure_exit_status(caught.value) == 78
+
+
+@pytest.mark.parametrize("http_status,exit_status", [(401, 78), (408, 75), (429, 75), (503, 75)])
+def test_websocket_http_failure_classification(http_status: int, exit_status: int) -> None:
+    from websockets.datastructures import Headers
+    from websockets.exceptions import InvalidStatus
+    from websockets.http11 import Response
+
+    failure = InvalidStatus(Response(http_status, "fixture", Headers()))
+    assert raw.failure_exit_status(failure) == exit_status
