@@ -550,3 +550,21 @@ def test_probe_uses_live_node_strategy_and_handle_surfaces() -> None:
     assert "threading.Timer(args.run_seconds, handle.stop)" in source
     assert "node.trader" not in source
     assert "node.stop" not in source
+
+
+def test_foundation_node_is_native_data_only_and_separate_from_history():
+    from nautilus_trader.live import LiveNodeConfig
+
+    from trader_assist_v0.nautilus_e4.host import NativePublicCaptureStrategy
+
+    assert issubclass(NativePublicCaptureStrategy, Strategy)
+    assert "request_bars" not in inspect.getsource(NativePublicCaptureStrategy)
+    assert "HistoricalWarmup" not in inspect.getsource(NativePublicCaptureStrategy)
+    assert "CaptureSession" not in inspect.getsource(NativePublicCaptureStrategy.__init__)
+    config = LiveNodeConfig(exec_clients={})
+    assert not config.exec_clients and not config.risk_engine.bypass
+    node = build_public_data_node(foundation=True)
+    try:
+        assert isinstance(node, LiveNode)
+    finally:
+        node.dispose()

@@ -1979,11 +1979,64 @@ def _run_native_replay(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     return (PASS if not result["blockers"] else PROVIDER_DATA_INCOMPLETE), result
 
 
+def _run_foundation_public(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    from uuid import uuid4
+
+    from trader_assist_v0.nautilus_e4.host import (
+        NativePublicCaptureConfig,
+        NativePublicCaptureStrategy,
+        build_public_data_node,
+    )
+    from trader_assist_v0.nautilus_e4.native_catalog import NativeCatalogBatchSink
+
+    if args.evidence_path is None:
+        raise ValueError("foundation capture requires --evidence-path")
+    instruments = tuple(args.foundation_instrument or (
+        "ETH-USD-PERP.HYPERLIQUID", "xyz:SKHX-USD-PERP.HYPERLIQUID",
+    ))
+    bars = tuple(args.bar_type) or tuple(
+        f"{instrument}-{minutes}-MINUTE-LAST-EXTERNAL"
+        for instrument in instruments for minutes in (1, 5)
+    )
+    # A new native catalog per process avoids overlap with an uncertain prior process.
+    root = args.evidence_path / f"native-{uuid4().hex}"
+    sink = NativeCatalogBatchSink(root)
+    node = build_public_data_node(foundation=True)
+    strategy = NativePublicCaptureStrategy(NativePublicCaptureConfig(
+        instrument_ids=instruments, bar_types=bars, sink=sink, stop=node.handle().stop,
+    ))
+    timer = threading.Timer(args.run_seconds, node.handle().stop)
+    try:
+        node.add_strategy(strategy)
+        timer.start()
+        node.run()
+    finally:
+        timer.cancel()
+        node.dispose()
+        if not sink.failed:
+            sink.close()
+    health = strategy.observations.snapshot()
+    streams = health["streams"]
+    assert isinstance(streams, list)
+    observed = all(stream["status"] == "RECEIVING" for stream in streams)
+    passed = strategy.failure is None and sink.verified > 0 and observed
+    return (PASS if passed else PROVIDER_DATA_INCOMPLETE), {
+        "schema_version": "NAUTILUS_NATIVE_FOUNDATION_UNREVIEWED_V1",
+        "status": "PASS" if passed else "INCOMPLETE_OR_FAILED",
+        "claim": "BOUNDED_PUBLIC_CAPTURE_ONLY", "formal_review": "PENDING",
+        "nautilus_version": NAUTILUS_VERSION, "catalog_path": str(root),
+        "health": health, "catalog": sink.observation(), "failure": strategy.failure,
+        "execution_clients": 0, "private_api_calls": 0, "exchange_writes": 0,
+        "signing": False, "gate_d": "EXCLUDED", "history_requests": 0,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--evidence-path", type=Path)
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--qualify-l0", action="store_true")
+    modes.add_argument("--foundation-public", action="store_true")
     modes.add_argument("--replay-native-log", type=Path)
     parser.add_argument("--replay-facts", type=Path)
     parser.add_argument("--verifier-scratch-root", type=Path)
@@ -1996,8 +2049,16 @@ def main() -> int:
     parser.add_argument("--bar-type", action="append", default=[])
     parser.add_argument("--ci-instrument-id")
     parser.add_argument("--provider-coin", default="ETH")
+    parser.add_argument("--foundation-instrument", action="append", default=[])
     parser.add_argument("--run-seconds", type=int, default=0)
     args = parser.parse_args()
+    if args.foundation_instrument and not args.foundation_public:
+        parser.error("--foundation-instrument requires --foundation-public")
+    if args.foundation_public and (
+        args.manifest or args.snapshot or args.config_path or args.ci_instrument_id
+        or args.watch_market_id or args.actionable_market_id or args.provider_coin != "ETH"
+    ):
+        parser.error("foundation capture cannot use semantic/history qualification inputs")
     if args.replay_native_log is not None:
         if (args.run_seconds or args.config_path or args.evidence_path or args.ci_instrument_id
                 or args.actionable_market_id or args.watch_market_id or args.bar_type
@@ -2035,8 +2096,11 @@ def main() -> int:
         )
         return PASS
     try:
-        exit_code, result = (asyncio.run(_run_l0_qualification(args))
-                             if args.qualify_l0 else _run_live(args))
+        if args.foundation_public:
+            exit_code, result = _run_foundation_public(args)
+        else:
+            exit_code, result = (asyncio.run(_run_l0_qualification(args))
+                                 if args.qualify_l0 else _run_live(args))
     except Exception as exc:
         _write_result(
             args.result_path,

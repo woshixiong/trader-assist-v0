@@ -1614,3 +1614,55 @@ def test_formal_acceptance_requires_every_g4_gate_to_genuinely_pass() -> None:
     gates["G4E5"] = "PASS"
     del gates["G4E8"]
     assert not formal_g4_acceptance(gates)
+
+
+@REQUIRES_NAUTILUS
+def test_native_foundation_paper_market_limit_modify_cancel(tmp_path, monkeypatch):
+    import nautilus_trader.adapters.hyperliquid as hyperliquid
+
+    from trader_assist_v0.nautilus_g4.runner import run_native_paper_lifecycle
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("live execution factory must not be constructed by paper runner")
+
+    monkeypatch.setattr(hyperliquid, "HyperliquidExecutionClientFactory", forbidden)
+    quotes = tuple(quote_tick(ts_event=i, ts_init=i) for i in (
+        1_700_000_000_000_000_000, 1_700_000_001_000_000_000,
+        1_700_000_002_000_000_000, 1_700_000_003_000_000_000,
+    ))
+    results = [run_native_paper_lifecycle(
+        provider_instrument=native_hyperliquid_instrument(), quote_ticks=quotes,
+        catalog_path=tmp_path / f"paper-{index}",
+    ) for index in range(2)]
+    for result in results:
+        assert result["origin"] == "SIMULATED"
+        assert result["exchange_writes"] == result["private_api_calls"] == 0
+        assert result["gate_d"] == "EXCLUDED"
+        assert result["fills"] and all(f["origin"] == "SIMULATED" for f in result["fills"])
+        assert "OrderFilled" in result["order_events"]
+        assert "OrderUpdated" in result["order_events"]
+        assert "OrderCanceled" in result["order_events"]
+        assert result["state"]["order_count"] == 2
+        assert result["state"]["position_count"] == 1
+        assert result["state"]["account_count"] == 1
+        assert "PARTIAL_FILL" in result["unsupported_or_unqualified"]
+    assert results[0]["fills"] == results[1]["fills"]
+    assert results[0]["state"]["order_semantics"] == results[1]["state"]["order_semantics"]
+
+
+@REQUIRES_NAUTILUS
+def test_native_paper_strategy_retains_single_config():
+    from nautilus_trader.model import InstrumentId, Quantity
+
+    from trader_assist_v0.nautilus_g4.runner import (
+        NativePaperLifecycleConfig,
+        NativePaperLifecycleStrategy,
+    )
+
+    config = NativePaperLifecycleConfig(
+        InstrumentId.from_str("ETH-USD-PERP.HYPERLIQUID"), Quantity.from_str("0.010"),
+    )
+    strategy = NativePaperLifecycleStrategy(config)
+    assert strategy.config is config
+    assert strategy._paper_instrument_id == config.instrument_id
+    assert strategy._paper_quantity == config.quantity
