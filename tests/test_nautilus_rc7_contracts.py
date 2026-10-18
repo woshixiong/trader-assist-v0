@@ -129,3 +129,33 @@ def test_decisions_no_fill_reject_and_partial_fill_survive_restart(tmp_path: Pat
     with pytest.raises(ValueError, match="conflicting"):
         reopened.append(event_id="fill:0", kind="OrderFilled", ts_ns=120, payload={})
     reopened.close()
+
+
+def test_approved_strategy_retains_cold_start_no_signal_denominator(tmp_path: Path) -> None:
+    from decimal import Decimal
+
+    from test_nautilus_pilot_contracts import _closed_bar, _manifest
+
+    from trader_assist_v0.nautilus_e4.registered_shadow import RegisteredShadowEvaluator
+
+    manifest = _manifest()
+    ledger = ShadowLedger(
+        tmp_path / "strategy.sqlite",
+        strategy_id=manifest.package_version,
+        strategy_version=manifest.strategy_version,
+    )
+    evaluator = RegisteredShadowEvaluator(
+        manifest=manifest,
+        market_id=_closed_bar(0).market_id,
+        minimum_tick=Decimal("0.1"),
+        ledger=ledger,
+    )
+    for i in range(3):
+        bar = _closed_bar(i)
+        assert evaluator.evaluate(bar, now_ns=bar.close_time_ms * 1_000_000) is None
+    assert ledger.verify() == 3
+    evaluator.evaluate(_closed_bar(2), now_ns=_closed_bar(2).close_time_ms * 1_000_000)
+    assert ledger.verify() == 3  # replay does not inflate the strategy decision denominator
+    with pytest.raises(ValueError, match="lookahead"):
+        evaluator.evaluate(_closed_bar(3), now_ns=1)
+    ledger.close()

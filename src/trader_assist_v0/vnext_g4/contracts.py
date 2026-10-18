@@ -739,7 +739,7 @@ class G4RunManifest(StrictFrozenModel):
     data_version: Literal["TA_VNEXT_RESEARCH_DATA_CONTRACT_V1_2026-09-11_REPAIR1"] = (
         VNEXT_DATA_VERSION
     )
-    nautilus_version: Literal["2.0.0rc7"] = NAUTILUS_VERSION
+    nautilus_version: Literal["2.0.0rc5", "2.0.0rc7"] = NAUTILUS_VERSION
     execution_model: ExecutionModelConfig
     candidate_hashes: tuple[Sha256Hex, ...] = Field(min_length=1)
     trial_adaptivity_id: VersionId

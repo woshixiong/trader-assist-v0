@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import shutil
 import time
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -21,9 +23,17 @@ from trader_assist_v0.nautilus_e4.native_health import NativeHealth
 from trader_assist_v0.nautilus_e4.native_runtime import build_native_node
 
 
-def capture_observer(snapshot: PitUniverseSnapshot, health: NativeHealth) -> Any:
+def capture_observer(
+    snapshot: PitUniverseSnapshot,
+    health: NativeHealth,
+    *,
+    strategy_manifest: Any = None,
+    ledger_root: Path | None = None,
+) -> Any:
     from nautilus_trader.common import DataActor
     from nautilus_trader.model import BarType, BookType, InstrumentId
+
+    evaluators: dict[str, Any] = {}
 
     class NativeObserver(DataActor):
         def on_start(self) -> None:
@@ -34,6 +44,24 @@ def capture_observer(snapshot: PitUniverseSnapshot, health: NativeHealth) -> Any
                 if native is None or str(native.raw_symbol) != expression.provider_coin:
                     health.failures.add("PROVIDER_METADATA_IDENTITY_MISMATCH")
                     raise ValueError(f"native provider metadata mismatch: {identity}")
+                if strategy_manifest is not None:
+                    from trader_assist_v0.nautilus_e4.registered_shadow import (
+                        RegisteredShadowEvaluator,
+                    )
+                    from trader_assist_v0.nautilus_e4.shadow_ledger import ShadowLedger
+
+                    assert ledger_root is not None
+                    ledger = ShadowLedger(
+                        ledger_root / f"{expression.market_id}.sqlite",
+                        strategy_id=strategy_manifest.package_version,
+                        strategy_version=strategy_manifest.strategy_version,
+                    )
+                    evaluators[str(identity)] = RegisteredShadowEvaluator(
+                        manifest=strategy_manifest,
+                        market_id=expression.market_id,
+                        minimum_tick=native.price_increment.as_decimal(),
+                        ledger=ledger,
+                    )
                 self.subscribe_quotes(identity)
                 self.subscribe_trades(identity)
                 self.subscribe_book_depth(identity, BookType.L2_MBP)
@@ -69,6 +97,40 @@ def capture_observer(snapshot: PitUniverseSnapshot, health: NativeHealth) -> Any
             # Native external bars are completed provider callbacks. A future timestamp
             # is rejected by health; no historical callback is admitted as current live.
             self.record(event, f"{event.bar_type.spec.step}m", str(event.bar_type.instrument_id))
+            identity = str(event.bar_type.instrument_id)
+            if event.bar_type.spec.step != 5 or identity not in evaluators:
+                return
+            from trader_assist_v0.multi_asset_shadow.models import ClosedBar
+
+            open_ms = event.ts_event // 1_000_000
+            close_ms = open_ms + 300_000
+            if (
+                event.ts_event % 1_000_000
+                or open_ms % 300_000
+                or event.ts_init < close_ms * 1_000_000
+            ):
+                health.failures.add("STRATEGY_BAR_NOT_CLOSED")
+                return
+            expression = next(e for e in snapshot.expressions if e.instrument_id == identity)
+            closed = ClosedBar.create(
+                market_id=expression.market_id,
+                open_time_ms=open_ms,
+                close_time_ms=close_ms - 1,
+                open=event.open.as_decimal(),
+                high=event.high.as_decimal(),
+                low=event.low.as_decimal(),
+                close=event.close.as_decimal(),
+                volume=event.volume.as_decimal(),
+                source_id="NATIVE_HYPERLIQUID_RC7",
+                provenance_hash=hashlib.sha256(event.to_json_bytes()).hexdigest(),
+                received_at=datetime.fromtimestamp(event.ts_init / 1_000_000_000, UTC),
+            )
+            evaluators[identity].evaluate(closed, now_ns=self.clock.timestamp_ns())
+
+        def on_stop(self) -> None:
+            for evaluator in evaluators.values():
+                evaluator.ledger.verify()
+                evaluator.ledger.close()
 
         def on_socket_state(self, event: Any) -> None:
             state = str(event.state).split(".")[-1].upper()
@@ -107,8 +169,22 @@ async def run(args: argparse.Namespace) -> None:
         if any(not rate.is_finite() or rate < 0 for rate in rates):
             raise ValueError("Sandbox fee assumptions must be finite nonnegative rates")
         fee_model = MakerTakerFeeModel(*rates)
+    strategy_manifest = None
+    if args.strategy_manifest is not None:
+        from trader_assist_v0.nautilus_pilot.strategy_package import StrategyPackageManifest
+
+        strategy_manifest = StrategyPackageManifest.model_validate_json(
+            args.strategy_manifest.read_text()
+        )
     node = build_native_node(args.root, sandbox=args.sandbox, sandbox_fee_model=fee_model)
-    node.add_actor(capture_observer(snapshot, health))
+    node.add_actor(
+        capture_observer(
+            snapshot,
+            health,
+            strategy_manifest=strategy_manifest,
+            ledger_root=args.root / "shadow-ledger",
+        )
+    )
     failure: Exception | None = None
 
     async def report() -> None:
@@ -157,6 +233,7 @@ def main() -> None:
     parser.add_argument("--snapshot", type=Path, required=True)
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--sandbox", action="store_true")
+    parser.add_argument("--strategy-manifest", type=Path)
     parser.add_argument("--maker-rate")
     parser.add_argument("--taker-rate")
     args = parser.parse_args()

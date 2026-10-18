@@ -95,3 +95,41 @@ or missing stream counts. A short CI run cannot establish target-host 24h
 uptime, Testnet/Mainnet acceptance, or real-capital safety. Official Nautilus RC
 production warnings remain applicable. No credentials, wallet, private API,
 exchange order, deployment, Ready or merge is authorized.
+
+## Execution architecture stop — exact rc7 binding
+
+The inspected official wheel's `live/__init__.pyi` exposes `LiveRiskEngineConfig`
+and LiveNode configuration/build methods, but no verified Python runtime
+RiskEngine state setter or native final-dispatch interception binding. The
+Hyperliquid Python surface exposes an inert config and factory; the tagged Rust
+factory constructs the native ExecutionClient. The tagged Rust RiskEngine
+initializes `TradingState::Active` and exposes `set_trading_state` in Rust.
+
+This is a **binding/acceptance blocker**, not a claim that Nautilus lacks native
+risk functionality. A pure Python certificate check before a queued command
+cannot establish the required last-submit stale-data barrier after that queue.
+No live client has been constructed and no order has been sent to test it.
+Do not enable the inert real-execution contract or call its construction proof
+whole-path no-bypass acceptance.
+
+Exact official sources inspected:
+
+- `python/nautilus_trader/live/__init__.pyi` at `v2.0.0rc7`.
+- `python/nautilus_trader/adapters/hyperliquid/__init__.pyi` at `v2.0.0rc7`.
+- `crates/risk/src/engine/mod.rs` at `v2.0.0rc7` (native state initialization,
+  runtime state setter, execution queue path).
+- `crates/adapters/hyperliquid/src/factories.rs` at `v2.0.0rc7` (native client construction).
+
+Engineering Control must choose the supported native extension boundary before
+further execution wiring: inspect/approve a bounded official native plugin or
+ExecutionClientFactory extension using native RiskEngine state control and
+last-dispatch enforcement, or retain an explicitly limited public/Sandbox-only
+scope. No core monkeypatch, parallel RiskEngine, silent version fallback or
+credentialed experiment is authorized as a workaround. Fresh independent
+order/risk review remains required.
+
+The optional `--strategy-manifest` attaches the **existing** validated Three
+Setup evaluator to native closed 5m callbacks and `ShadowLedger`. It retains
+cold-start WAIT, no-signal PASS, and REJECT records for evaluated signals whose
+native-order mapping is not qualified. It does not invent entry/size economics
+or submit them. A strategy readiness requirement does not block collection.

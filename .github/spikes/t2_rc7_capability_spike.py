@@ -54,6 +54,7 @@ if TYPE_CHECKING:
         def __init__(self, *args: object, **kwargs: object) -> None: ...
 
     class Strategy:
+        cache: Any
         order_factory: Any
 
         def __init__(self, config: StrategyConfig | None = None) -> None: ...
@@ -66,7 +67,15 @@ if TYPE_CHECKING:
 
         def submit_order(self, order: object) -> None: ...
 
-    class OrderFilled: ...
+    class OrderFilled:
+        client_order_id: Any
+        venue_order_id: Any
+        trade_id: Any
+        event_id: Any
+        last_qty: Any
+        last_px: Any
+        ts_event: int
+        ts_init: int
 
 else:
     from nautilus_trader.model import OrderFilled
@@ -138,7 +147,7 @@ def _construct_public_client(
     *,
     env: Mapping[str, str],
     counters: dict[str, int],
-) -> object:
+) -> Any:
     """Guard credentials before importing or constructing the exact rc7 client."""
     _credential_guard(env)
     from nautilus_trader.adapters.hyperliquid import (
@@ -388,10 +397,10 @@ class CapabilitySpikeStrategy(Strategy):
 
 @dataclass(frozen=True)
 class Fixture:
-    instrument: object
-    quotes: tuple[object, ...]
-    trades: tuple[object, ...]
-    bars: tuple[object, ...]
+    instrument: Any
+    quotes: tuple[Any, ...]
+    trades: tuple[Any, ...]
+    bars: tuple[Any, ...]
     trigger_identity: dict[str, object]
     bar_type: object
 
@@ -518,7 +527,11 @@ def _provider_state(cache: object, portfolio: object, venue: object) -> dict[str
     orders_method = getattr(cache, "orders", None)
     positions_method = getattr(cache, "positions", None)
     account_method = getattr(cache, "account_for_venue", None)
-    if not all(callable(method) for method in (orders_method, positions_method, account_method)):
+    if (
+        not callable(orders_method)
+        or not callable(positions_method)
+        or not callable(account_method)
+    ):
         raise RuntimeError("provider Cache lacks required public state methods")
     orders = tuple(orders_method())
     positions = tuple(positions_method())
@@ -730,7 +743,7 @@ def _run_backtest_phase(
     return result
 
 
-async def _public_instrument_and_no_signer_proof() -> tuple[object, dict[str, object]]:
+async def _public_instrument_and_no_signer_proof() -> tuple[Any, dict[str, object]]:
     from nautilus_trader.model import CryptoPerpetual
 
     counters = {

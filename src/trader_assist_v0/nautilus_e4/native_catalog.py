@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -61,7 +62,7 @@ def verify_promoted_run(root: Path, instance_id: str, *, live: bool = True) -> d
 
     catalog = ParquetDataCatalog(str(root))
     staged = catalog.read_live_run(instance_id) if live else catalog.read_backtest(instance_id)
-    queries = {
+    queries: dict[type[Any], Callable[..., list[Any]]] = {
         QuoteTick: catalog.query_quote_ticks,
         TradeTick: catalog.query_trade_ticks,
         OrderBookDepth: catalog.query_order_book_depths,
