@@ -1,0 +1,73 @@
+name: Three Setup Q1 qualification
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qualification:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      HARNESS_PR_BASE_SHA: 36d57b3a9f4677354f1d5d63bca17c6fb72befbd
+      HARNESS_PR_BASE_TREE: d642119ddd8b9e554ae9bd441de44daac3e97599
+    steps:
+      - name: Checkout harness control HEAD
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          path: harness
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout exact frozen product candidate
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          path: candidate
+          ref: ${{ env.HARNESS_PR_BASE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Reject candidate and PR-base drift before live work
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          test "$(git -C candidate rev-parse HEAD)" = "$HARNESS_PR_BASE_SHA"
+          test "$(git -C candidate rev-parse 'HEAD^{tree}')" = "$HARNESS_PR_BASE_TREE"
+          if [ "$EVENT_NAME" = pull_request ]; then
+            test "$PR_BASE_SHA" = "$HARNESS_PR_BASE_SHA"
+          fi
+          test -z "$(git -C candidate status --porcelain=v1 --untracked-files=all)"
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Install exact candidate target closure
+        run: |
+          test "$(uname -s)" = Linux
+          test "$(uname -m)" = x86_64
+          python -m venv --without-pip "$RUNNER_TEMP/q1-target"
+          python -m pip --python "$RUNNER_TEMP/q1-target/bin/python" install --require-hashes -r candidate/requirements-runtime.lock
+          python -m pip --python "$RUNNER_TEMP/q1-target/bin/python" install --require-hashes --no-deps --only-binary=:all: -r candidate/requirements-nautilus-pilot.lock
+          python -m pip --python "$RUNNER_TEMP/q1-target/bin/python" check
+          ! python -m pip --python "$RUNNER_TEMP/q1-target/bin/python" show trader-assist-v0
+      - name: Run candidate-only product qualification
+        env:
+          PYTHONPATH: ${{ github.workspace }}/candidate/src:${{ github.workspace }}/candidate
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          "$RUNNER_TEMP/q1-target/bin/python" harness/scripts/three_setup_q1_qualification.py \
+            --candidate candidate \
+            --candidate-sha "$HARNESS_PR_BASE_SHA" \
+            --candidate-tree "$HARNESS_PR_BASE_TREE" \
+            --result "$RUNNER_TEMP/three-setup-q1-result.json" \
+            --segment-seconds 900
+      - name: Upload canonical Q1 evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: three-setup-q1-qualification
+          path: ${{ runner.temp }}/three-setup-q1-result.json
+          if-no-files-found: error
