@@ -31,6 +31,12 @@ jobs:
           PYTHONPATH: src:.
         run: |
           python -m pytest -q tests/test_nautilus_rc7_contracts.py tests/test_nautilus_rc7_native.py > /tmp/rc7-proof/native-tests.txt 2>&1
+      - name: Compact native test result
+        if: always()
+        run: |
+          if [ -f /tmp/rc7-proof/native-tests.txt ]; then
+            grep -E '^E   |^FAILED |passed|failed' /tmp/rc7-proof/native-tests.txt | tail -30
+          fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:

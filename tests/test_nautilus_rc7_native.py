@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -35,7 +36,13 @@ from trader_assist_v0.nautilus_e4.native_runtime import build_native_node
 
 def test_native_public_sandbox_and_inert_execution_construction(tmp_path: Path) -> None:
     for sandbox in (False, True):
-        node = build_native_node(tmp_path / str(sandbox), sandbox=sandbox)
+        from nautilus_trader.execution import MakerTakerFeeModel
+
+        node = build_native_node(
+            tmp_path / str(sandbox),
+            sandbox=sandbox,
+            sandbox_fee_model=MakerTakerFeeModel(Decimal("0"), Decimal("0")),
+        )
         try:
             assert node.cache is not None
             assert node.portfolio is not None
@@ -61,12 +68,15 @@ def test_native_stream_promotes_equal_timestamp_rows_and_roundtrips(tmp_path: Pa
             run_analysis=False,
         )
     )
+    from nautilus_trader.execution import MakerTakerFeeModel
+
     engine.add_venue(
         Venue("HYPERLIQUID"),
         OmsType.NETTING,
         AccountType.MARGIN,
         [Money.from_str("100000 USDC")],
         book_type=BookType.L1_MBP,
+        fee_model=MakerTakerFeeModel(Decimal("0"), Decimal("0")),
     )
     engine.add_instrument(instrument)
     ticks = [

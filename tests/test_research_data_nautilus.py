@@ -362,7 +362,9 @@ def test_exact_rc5_binance_oi_request_historical_response_route(exact_rc5, monke
                     node.add_strategy(strategy)
 
                 def dispose(self):
+                    nonlocal node
                     node.dispose()
+                    node = None  # Release rc7 thread ownership, not only runtime resources.
 
             return Capture()
 

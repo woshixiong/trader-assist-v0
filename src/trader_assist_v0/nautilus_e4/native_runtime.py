@@ -15,8 +15,11 @@ from .native_catalog import RC7_VERSION, streaming_config
 from .safety import assert_public_only
 
 
-def build_native_node(root: Path, *, sandbox: bool = False) -> Any:
+def build_native_node(root: Path, *, sandbox: bool = False, sandbox_fee_model: Any = None) -> Any:
     from importlib.metadata import version
+
+    if sandbox and sandbox_fee_model is None:
+        raise ValueError("Sandbox requires an explicit native fee model; never infer account fees")
 
     assert_public_only(env=os.environ)
     if version("nautilus-trader") != RC7_VERSION:
@@ -73,6 +76,7 @@ def build_native_node(root: Path, *, sandbox: bool = False) -> Any:
                 book_type=BookType.L1_MBP,
                 reject_stop_orders=True,
                 use_reduce_only=True,
+                fee_model=sandbox_fee_model,
             ),
         )
     return builder.build()

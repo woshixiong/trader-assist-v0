@@ -11,6 +11,7 @@ import asyncio
 import json
 import shutil
 import time
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -96,7 +97,17 @@ async def run(args: argparse.Namespace) -> None:
         }.items()
     }
     health = NativeHealth(required)
-    node = build_native_node(args.root, sandbox=args.sandbox)
+    fee_model = None
+    if args.sandbox:
+        if args.maker_rate is None or args.taker_rate is None:
+            raise ValueError("Sandbox requires explicit simulated --maker-rate and --taker-rate")
+        from nautilus_trader.execution import MakerTakerFeeModel
+
+        rates = (Decimal(args.maker_rate), Decimal(args.taker_rate))
+        if any(not rate.is_finite() or rate < 0 for rate in rates):
+            raise ValueError("Sandbox fee assumptions must be finite nonnegative rates")
+        fee_model = MakerTakerFeeModel(*rates)
+    node = build_native_node(args.root, sandbox=args.sandbox, sandbox_fee_model=fee_model)
     node.add_actor(capture_observer(snapshot, health))
     failure: Exception | None = None
 
@@ -146,6 +157,8 @@ def main() -> None:
     parser.add_argument("--snapshot", type=Path, required=True)
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--sandbox", action="store_true")
+    parser.add_argument("--maker-rate")
+    parser.add_argument("--taker-rate")
     args = parser.parse_args()
     asyncio.run(run(args))
 

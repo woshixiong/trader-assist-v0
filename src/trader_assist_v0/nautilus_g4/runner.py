@@ -1511,6 +1511,7 @@ def execute_provider_native_round_trip_state(
         BookType,
         CryptoPerpetual,
         Currency,
+        NautilusDataType,
         OmsType,
         TraderId,
     )
@@ -1553,14 +1554,14 @@ def execute_provider_native_round_trip_state(
     catalog_path_text = str(catalog_root)
     data: list[BacktestDataConfig] = []
     for data_type, count in (
-        ("QuoteTick", identity.quote_tick_count),
-        ("TradeTick", identity.trade_tick_count),
-        ("Bar", identity.bar_count),
+        (NautilusDataType.QuoteTick, identity.quote_tick_count),
+        (NautilusDataType.TradeTick, identity.trade_tick_count),
+        (NautilusDataType.Bar, identity.bar_count),
     ):
         if count:
             data.append(
                 BacktestDataConfig(
-                batch_deltas=True,
+                    batch_deltas=True,
                     data_type=data_type,
                     catalog_path=catalog_path_text,
                     instrument_id=provider_instrument_id,

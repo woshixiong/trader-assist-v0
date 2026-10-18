@@ -430,6 +430,7 @@ def _controlled_backtest_node_probe(root: Path) -> dict[str, object]:
         AccountType,
         BookType,
         Currency,
+        NautilusDataType,
         OmsType,
         Price,
         Quantity,
@@ -481,7 +482,10 @@ def _controlled_backtest_node_probe(root: Path) -> dict[str, object]:
     ]
     catalog.write_instruments([instrument])
     catalog.write_quote_ticks(ticks)
+    from nautilus_trader.execution import MakerTakerFeeModel
+
     venue = BacktestVenueConfig(
+        fee_model=MakerTakerFeeModel(Decimal("0"), Decimal("0")),
         name=str(instrument.id.venue),
         oms_type=OmsType.NETTING,
         account_type=AccountType.MARGIN,
@@ -490,7 +494,8 @@ def _controlled_backtest_node_probe(root: Path) -> dict[str, object]:
         starting_balances=["1_000_000 USD"],
     )
     data = BacktestDataConfig(
-        data_type="QuoteTick",
+        data_type=NautilusDataType.QuoteTick,
+        batch_deltas=True,
         catalog_path=str(root),
         instrument_id=instrument.id,
         start_time=ticks[0].ts_init,
