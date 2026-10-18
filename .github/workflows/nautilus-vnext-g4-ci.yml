@@ -164,13 +164,13 @@ jobs:
           from pathlib import Path
 
           result = json.loads(Path(os.environ["T2_RESULT"]).read_text())
-          assert result["schema_version"] == "T2_RC5_CAPABILITY_SPIKE_V2", result
+          assert result["schema_version"] == "T2_RC7_CAPABILITY_SPIKE_V1", result
           assert result["status"] == "PASS", result
           assert result["exact_git_head"] == os.environ["T2_EXPECTED_HEAD"], result
           assert result["exact_git_tree"] == os.environ["T2_EXPECTED_TREE"], result
           assert result["nautilus_version"] == "2.0.0rc7", result
           assert result["task_packet_sha256"] == (
-              "df432697ba3083dec3542002f5771733c09c1b8f250da85ee7a2ca817084bfa9"
+              "bc533c99fa48cfac5bfd128db6777af6257c7bd0bb788580c64b1450ab82f8ae"
           ), result
           canonical_packet = json.dumps(
               result["task_packet_identity"],
