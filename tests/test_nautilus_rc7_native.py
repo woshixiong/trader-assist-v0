@@ -42,6 +42,7 @@ def test_native_public_sandbox_and_inert_execution_construction(tmp_path: Path) 
             assert not node.is_running
         finally:
             node.dispose()
+            del node
     config, factory, risk, execution = native_execution_contract(env={})
     assert not risk.bypass
     assert execution.reconciliation
@@ -70,7 +71,7 @@ def test_native_stream_promotes_equal_timestamp_rows_and_roundtrips(tmp_path: Pa
     engine.add_instrument(instrument)
     ticks = [
         QuoteTick(
-            InstrumentId("ETH-USD-PERP.HYPERLIQUID"),
+            InstrumentId.from_str("ETH-USD-PERP.HYPERLIQUID"),
             Price.from_str(str(2000 + i) + ".0"),
             Price.from_str(str(2001 + i) + ".0"),
             Quantity.from_str("1.000"),
@@ -106,7 +107,7 @@ def test_explicit_book_batching_native_contract(tmp_path: Path) -> None:
     config = replay_data_config(
         tmp_path,
         NautilusDataType.OrderBookDelta,
-        InstrumentId("ETH-USD-PERP.HYPERLIQUID"),
+        InstrumentId.from_str("ETH-USD-PERP.HYPERLIQUID"),
         start=1,
         end=10,
     )

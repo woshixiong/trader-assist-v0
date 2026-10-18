@@ -42,7 +42,7 @@ jobs:
           /tmp/trader-assist-e3-venv/bin/python -m pip check
       - name: Runtime and pilot dependency audits
         run: |
-          /tmp/trader-assist-e3-venv/bin/pip-audit --strict -r requirements-runtime.lock
+          /tmp/trader-assist-e3-venv/bin/pip-audit --strict -r requirements-dev-py313.lock
           /tmp/trader-assist-e3-venv/bin/pip-audit --strict \
             -r requirements-nautilus-pilot.lock
       - name: Exact environment and rc7 identity

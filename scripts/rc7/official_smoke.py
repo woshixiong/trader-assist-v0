@@ -1,3 +1,4 @@
+# mypy: disable-error-code="import-not-found"
 """Decisive official rc7 wheel/API proof; never loads exchange credentials or runs a node."""
 
 from __future__ import annotations

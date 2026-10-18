@@ -102,7 +102,7 @@ def validate_launch(
     if len(bars) != 40 or len(set(bars)) != 40 or set(bars) != set(expected):
         raise ValueError("L0 requires exactly 40 external 1m/5m LAST streams")
     ids = sorted(e.market_id for e in snapshot.expressions)
-    if manifest.nautilus_version != "2.0.0rc5" or (
+    if manifest.nautilus_version != "2.0.0rc7" or (
         manifest.pit_snapshot_hash != snapshot.snapshot_hash
         or manifest.provider_instrument_ids
         != tuple(sorted(e.instrument_id for e in snapshot.expressions))

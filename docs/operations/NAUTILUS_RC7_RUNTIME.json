@@ -1,0 +1,39 @@
+{
+  "schema_version": "TRADEOS_NATIVE_RUNTIME_V1",
+  "package_id": "NAUTILUS_RC7_UNIFIED_NATIVE_FOUNDATION_20261019",
+  "python": "3.13",
+  "nautilus": "2.0.0rc7",
+  "platform": "Linux x86_64 glibc>=2.34",
+  "wheel": "nautilus_trader-2.0.0rc7-cp313-cp313-manylinux_2_34_x86_64.whl",
+  "wheel_sha256": "b3928f37d75d57508030a421dc762186ad1f9ffc5d5420d7daf1d2c6badb8044",
+  "dependency_locks": ["requirements-dev-py313.lock", "requirements-nautilus-pilot.lock"],
+  "official_source_tag": "v2.0.0rc7",
+  "book_type": "OrderBookDepth",
+  "backtest_batch_deltas": true,
+  "startup_history_required": false,
+  "native_risk_bypass": false,
+  "execution_mode_default": "PUBLIC_ONLY",
+  "external_execution_activation": "NOT_IMPLEMENTED_NOT_AUTHORIZED",
+  "service_default": "DISABLED_NO_AUTHORIZATION_MARKER",
+  "streaming": {
+    "rotation": "NO_ROTATION",
+    "promotion_interval_ms": null,
+    "promote_on_close": true,
+    "delete_feather_after_promotion": false,
+    "use_ts_event_for_ts_init": false,
+    "live_catalog_health": "DEGRADED_UNTIL_LIVE_PROMOTION_QUALIFIED"
+  },
+  "qualification": {
+    "official_wheel_api": "PASS_AT_faa4d1c0d00c205d41d9177f5adfe957aa840f42",
+    "target_host_24h": "NOT_RUN",
+    "sandbox_lifecycle": "PENDING",
+    "final_submit_no_bypass": "PENDING_INDEPENDENT_REVIEW",
+    "real_orders": "PROHIBITED"
+  },
+  "references": [
+    "https://github.com/nautechsystems/nautilus_trader/blob/v2.0.0rc7/docs/how_to/stream_parquet_catalog.md",
+    "https://github.com/nautechsystems/nautilus_trader/blob/v2.0.0rc7/examples/live/hyperliquid/data_tester.py",
+    "https://github.com/nautechsystems/nautilus_trader/blob/v2.0.0rc7/examples/live/sandbox/exec_tester.py",
+    "https://github.com/nautechsystems/nautilus_trader/blob/v2.0.0rc7/examples/live/hyperliquid/exec_tester.py"
+  ]
+}

@@ -1,3 +1,4 @@
+# mypy: disable-error-code="import-not-found"
 """rc7 native storage composition and fail-closed typed promotion verification.
 
 The native writer is the only market-data archive owner. Project evidence may
@@ -102,13 +103,18 @@ def recover_and_promote(root: Path, instance_id: str, *, live: bool = True) -> d
     from nautilus_trader.persistence import ParquetDataCatalog
 
     catalog = ParquetDataCatalog(str(root))
-    # Native read recovers unlocked partial files, retaining complete record batches.
-    if live:
-        catalog.read_live_run(instance_id)
-    else:
-        catalog.read_backtest(instance_id)
-    for data_type in catalog.list_data_types():
-        if isinstance(data_type, NautilusDataType):
+    from nautilus_trader.model import Bar, OrderBookDelta, OrderBookDepth, QuoteTick, TradeTick
+
+    staged = catalog.read_live_run(instance_id) if live else catalog.read_backtest(instance_id)
+    families = {
+        QuoteTick: NautilusDataType.QuoteTick,
+        TradeTick: NautilusDataType.TradeTick,
+        OrderBookDepth: NautilusDataType.OrderBookDepth,
+        OrderBookDelta: NautilusDataType.OrderBookDelta,
+        Bar: NautilusDataType.Bar,
+    }
+    for cls, data_type in families.items():
+        if any(isinstance(event, cls) for event in staged):
             catalog.convert_stream_to_data(
                 instance_id, data_type, Environment.LIVE if live else Environment.BACKTEST
             )

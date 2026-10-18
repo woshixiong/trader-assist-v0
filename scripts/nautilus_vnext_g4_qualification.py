@@ -1517,7 +1517,7 @@ def qualify(
             else "TECHNICAL_G4_PARTIAL"
         ),
         "formal_g4_finalization_mode": formal_g4_finalize,
-        "nautilus_version": "2.0.0rc5",
+        "nautilus_version": "2.0.0rc7",
         "exact_head": git_sha,
         "exact_tree": git_tree,
         "g4_manifest_hash": manifest.manifest_hash,

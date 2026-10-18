@@ -155,7 +155,7 @@ EXECUTION_CONTROL_RECORD: dict[str, object] = {
     "l1_size_feasibility_required": True,
     "liquidity_consumption": True,
     "nautilus_release_commit_sha": "1b0a49d2792a9432a3aca3fcb617ce7a630d905e",
-    "nautilus_release_tag": "v2.0.0rc5",
+    "nautilus_release_tag": "v2.0.0rc7",
     "nautilus_tag_object_sha": "34de0d6f886a9fe8359f9d6590f43f53c86b1d32",
     "order_primitive": "MARKETABLE",
     "passive_touch_equals_fill": False,

@@ -310,7 +310,7 @@ def validate_three_setup_e4_identity(config: ThreeSetupProductionConfig) -> None
         raise ThreeSetupProductionError("E4 evidence root is missing")
     manifest = RunManifest.model_validate_json(manifest_path.read_bytes())
     snapshot = PitUniverseSnapshot.model_validate_json(snapshot_path.read_bytes())
-    if manifest.git_sha != config.release_sha or manifest.nautilus_version != "2.0.0rc5":
+    if manifest.git_sha != config.release_sha or manifest.nautilus_version != "2.0.0rc7":
         raise ThreeSetupProductionError("E4 release or Nautilus identity differs")
     store = E4EvidenceStore(evidence_root)
     if store.load_manifest() != manifest or store.load_snapshot() != snapshot:

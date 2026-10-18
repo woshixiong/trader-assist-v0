@@ -1,3 +1,4 @@
+# mypy: disable-error-code="import-not-found"
 """Default-off native execution construction. No live client is built or run here.
 
 The returned config/factory is evidence of the supported technical seam, not

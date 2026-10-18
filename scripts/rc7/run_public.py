@@ -1,3 +1,4 @@
+# mypy: disable-error-code="import-not-found,misc"
 """Run the single native public rc7 owner with an approved PIT universe.
 
 No historical prewarm, secret loading, private API, or exchange-write mode.
@@ -109,7 +110,7 @@ async def run(args: argparse.Namespace) -> None:
             pending = target.with_suffix(".tmp")
             pending.write_text(json.dumps(output, indent=2) + "\n")
             pending.replace(target)
-            if "DISK_LOW" in output["reasons"]:
+            if shutil.disk_usage(args.root).free < health.minimum_free_bytes:
                 node.handle().stop()
                 raise RuntimeError("DISK_LOW")
             await asyncio.sleep(5)

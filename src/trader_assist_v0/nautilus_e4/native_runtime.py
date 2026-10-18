@@ -1,3 +1,4 @@
+# mypy: disable-error-code="import-not-found"
 """One rc7 native public transport/catalog owner with optional native Sandbox.
 
 No credentialed execution node can be started through this entry point. The

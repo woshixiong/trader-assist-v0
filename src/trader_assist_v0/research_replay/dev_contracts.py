@@ -149,7 +149,7 @@ class DevRunSpec(BoundRecord):
     python_version: str = Field(min_length=1)
     os: str = Field(min_length=1)
     architecture: str = Field(min_length=1)
-    backtest_version: Literal["2.0.0rc5"]
+    backtest_version: Literal["2.0.0rc5", "2.0.0rc7"]
     report_code_hash: Sha256Hex
     universe_hash: Sha256Hex
     registry_hash: Sha256Hex
