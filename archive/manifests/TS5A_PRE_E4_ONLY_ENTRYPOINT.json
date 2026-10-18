@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0.0",
+  "archive_id": "TS5A_PRE_E4_ONLY_ENTRYPOINT",
+  "package_id": "ARCH1-TS5A-LEGACY-SNAPSHOT-BACKFILL-1",
+  "repository": "woshixiong/trader-assist-v0",
+  "archived_at_utc_date": "2026-09-28",
+  "source": {
+    "commit": "b76917c33aca9d376aa4380ab4e30a670d49604e",
+    "tree": "4d4ad6e769f17aa6e406be64953a39e10ea380ad",
+    "source_pr": 259,
+    "retirement_package": "TS5A-THREE-SETUP-E4-ONLY-ENTRYPOINT-1",
+    "retirement_merge_commit": "e5bcdbdbbee9b3e0152a303e9358f615b58a4a85"
+  },
+  "reason": "Preserve complete pre-TS5A files containing the retired legacy direct-provider Three Setup production composition and associated production tests before E4-only entrypoint retirement.",
+  "files": [
+    {
+      "original_path": "src/trader_assist_v0/multi_asset_shadow/production.py",
+      "archive_path": "archive/code/TS5A_PRE_E4_ONLY_ENTRYPOINT/src/trader_assist_v0/multi_asset_shadow/production.py",
+      "source_git_blob_sha": "9974c0b1fa4b7025e9a86a6fa29af06e0f3334ec",
+      "content_sha256": "106212862f22c31775d005eaf824b5ae41659b8fa36ca8abba828400d2e11b58"
+    },
+    {
+      "original_path": "tests/test_three_setup_production.py",
+      "archive_path": "archive/tests/TS5A_PRE_E4_ONLY_ENTRYPOINT/tests/test_three_setup_production.py",
+      "source_git_blob_sha": "20cde89fa5d4ed5a30aa2c7380611c8d9b47736f",
+      "content_sha256": "d5e58b86177fb1a3cd8643694b7e29617db0042b77d34c19db58f543bf652c7c"
+    }
+  ],
+  "restore_read_instructions": [
+    "Read exact original source with: git show b76917c33aca9d376aa4380ab4e30a670d49604e:src/trader_assist_v0/multi_asset_shadow/production.py",
+    "Read exact original tests with: git show b76917c33aca9d376aa4380ab4e30a670d49604e:tests/test_three_setup_production.py",
+    "Archive copies are recovery evidence only. Reuse requires a fresh requirements and compatibility assessment before any code is restored to active source/tests."
+  ],
+  "inert_non_importable_non_executable": true,
+  "packaging_note": "archive/code is outside the Hatch wheel package root src/trader_assist_v0.",
+  "test_discovery_note": "archive/tests is outside pytest testpaths=[\"tests\"]."
+}
