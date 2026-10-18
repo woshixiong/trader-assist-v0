@@ -1,0 +1,41 @@
+{
+  "active_source_mutation": false,
+  "active_test_mutation": false,
+  "archival_reason": "Preserve exact whole-file context before any future surgical retirement of legacy MultiAssetPublicRuntime and MultiAssetProductionBootstrap.compose from the Nautilus E4 production route.",
+  "archive_semantics": {
+    "executable": false,
+    "importable": false,
+    "inert": true,
+    "packaged": false,
+    "pytest_discovery": false
+  },
+  "explicitly_not_retired": [
+    "trader_assist_v0.multi_asset_shadow.runtime.E4ThreeSetupRuntime",
+    "trader_assist_v0.multi_asset_shadow.bootstrap.MultiAssetProductionBootstrap.compose_e4",
+    "trader_assist_v0.multi_asset_shadow.hyperliquid_public.HyperliquidPublicClient"
+  ],
+  "files": [
+    {
+      "archive_path": "archive/code/LEGACY_MULTI_ASSET_PUBLIC_RUNTIME_PRE_RETIREMENT/src/trader_assist_v0/multi_asset_shadow/runtime.py",
+      "original_path": "src/trader_assist_v0/multi_asset_shadow/runtime.py",
+      "sha256": "ff54e14c4dceaa21cbf0bde464421e44cf1d9c777729fe2044f877887ca505d9",
+      "size": 85359
+    },
+    {
+      "archive_path": "archive/code/LEGACY_MULTI_ASSET_PUBLIC_RUNTIME_PRE_RETIREMENT/src/trader_assist_v0/multi_asset_shadow/bootstrap.py",
+      "original_path": "src/trader_assist_v0/multi_asset_shadow/bootstrap.py",
+      "sha256": "0e3cd116bdb6f525d72852a521dff30774586f4095b2824fb3acc3b0dc7c6b3f",
+      "size": 38893
+    }
+  ],
+  "package_id": "ARCH2-LEGACY-MULTIASSET-PUBLIC-RUNTIME-SNAPSHOT-1",
+  "repository": "woshixiong/trader-assist-v0",
+  "restore_instructions": "Read/copy the archived whole-file snapshot from archive/code/LEGACY_MULTI_ASSET_PUBLIC_RUNTIME_PRE_RETIREMENT/. For exact historical restoration, prefer git show at source_commit and verify each SHA256 against this manifest.",
+  "schema": "trade-os-legacy-code-archive-v1",
+  "source_commit": "51787a233e3c81b5b84794e540d0cc6f97b7b93f",
+  "source_tree": "0bcc47375a67b35fe4b580c6eb283806de918543",
+  "target_legacy_symbols": [
+    "trader_assist_v0.multi_asset_shadow.runtime.MultiAssetPublicRuntime",
+    "trader_assist_v0.multi_asset_shadow.bootstrap.MultiAssetProductionBootstrap.compose"
+  ]
+}
