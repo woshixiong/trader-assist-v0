@@ -4,6 +4,7 @@ import ast
 import importlib.util
 import inspect
 import os
+import threading
 from importlib.metadata import distribution, version
 from pathlib import Path
 
@@ -540,6 +541,105 @@ def test_exact_current_external_minute_bar_type_round_trips_through_public_parse
     assert parsed.spec.aggregation is BarAggregation.MINUTE
     assert parsed.spec.price_type is PriceType.LAST
     assert parsed.aggregation_source is AggregationSource.EXTERNAL
+
+
+@pytest.mark.parametrize("stage", ["baseline", "construct", "subscribe"])
+def test_rc5_live_writer_runtime_boundary_diagnostic(
+    tmp_path: Path, capfd: pytest.CaptureFixture[str], stage: str,
+) -> None:
+    """Diagnostic only: isolate native startup, construction and typed bus entry.
+
+    This does not qualify all source families, repeated flush, rotation or IO faults.
+    No synthetic publication, mock writer or direct writer.write is used.
+    """
+    from nautilus_trader.persistence import ParquetDataCatalog, StreamingFeatherWriter
+
+    assert version("nautilus-trader") == "2.0.0rc5"
+    node = build_public_data_node()
+    handle = node.handle()
+    catalog_root = tmp_path / "catalog"
+    run_id = str(node.instance_id)
+    output = catalog_root / "live" / run_id
+
+    def mark(boundary: str) -> None:
+        # capfd.disabled keeps the last native boundary visible even on SIGABRT.
+        print(f"RC5_WRITER_DIAGNOSTIC stage={stage} boundary={boundary}", flush=True)
+
+    class WriterProbe(Strategy):
+        """Test-only subscriber; writer/cache/clock never cross runtime threads."""
+
+        def __init__(self) -> None:
+            super().__init__(StrategyConfig())
+            self.writer = None
+            self.received: tuple[str, int, int] | None = None
+            self.errors: list[str] = []
+
+        def on_start(self) -> None:
+            mark("on_start_enter")
+            try:
+                if stage != "baseline":
+                    output.mkdir(parents=True)
+                    mark("writer_construct_enter")
+                    self.writer = StreamingFeatherWriter(
+                        str(output), self.cache, self.clock,
+                        include_types=["quotes"], flush_interval_ms=0,
+                    )
+                    mark("writer_construct_return")
+                if stage == "subscribe":
+                    mark("writer_subscribe_enter")
+                    self.writer.subscribe()
+                    mark("writer_subscribe_return")
+                self.subscribe_quotes(InstrumentId.from_str(INSTRUMENT_ID))
+                mark("source_subscribe_return")
+            except Exception as exc:
+                self.errors.append(f"start:{type(exc).__name__}:{exc}")
+                mark("on_start_error")
+                handle.stop()
+
+        def on_quote(self, event: QuoteTick) -> None:
+            if self.received is None:
+                self.received = (str(event.instrument_id), event.ts_event, event.ts_init)
+                mark("actual_quote_callback")
+                handle.stop()
+
+        def on_stop(self) -> None:
+            mark("on_stop")
+            # Native synchronous writer teardown is isolated after node.run returns.
+
+    probe = WriterProbe()
+    node.add_strategy(probe)
+    deadline = threading.Timer(45, handle.stop)
+    with capfd.disabled():
+        mark("node_run_enter")
+        deadline.start()
+        try:
+            node.run()
+            mark("node_run_return")
+            assert not probe.errors, probe.errors
+            assert probe.received is not None, "no actual public quote before bounded stop"
+            if probe.writer is not None:
+                if stage == "subscribe":
+                    mark("writer_unsubscribe_enter")
+                    probe.writer.unsubscribe()
+                    mark("writer_unsubscribe_return")
+                mark("writer_flush_enter")
+                probe.writer.flush()
+                mark("writer_flush_return")
+                probe.writer.close()
+                mark("writer_close_return")
+                assert probe.writer.is_closed
+            if stage == "subscribe":
+                restored = ParquetDataCatalog(str(catalog_root)).read_live_run(run_id)
+                identities = {
+                    (str(event.instrument_id), event.ts_event, event.ts_init)
+                    for event in restored if isinstance(event, QuoteTick)
+                }
+                assert probe.received in identities, "typed bus quote absent from sealed readback"
+                mark("actual_quote_readback_pass")
+            mark("diagnostic_stage_pass")
+        finally:
+            deadline.cancel()
+            node.dispose()
 
 
 def test_probe_uses_live_node_strategy_and_handle_surfaces() -> None:
