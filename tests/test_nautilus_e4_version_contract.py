@@ -379,7 +379,7 @@ def test_exact_rc5_native_history_depth_and_messagebus_contract() -> None:
     for name in (
         "request_bars",
         "on_historical_bars",
-        "subscribe_book_depth10",
+        "subscribe_book_depth",
         "on_book_depth",
         "publish_message",
         "subscribe_topic",
@@ -391,7 +391,7 @@ def test_exact_rc5_native_history_depth_and_messagebus_contract() -> None:
     )
     assert _parameter_names(methods["on_historical_bars"]) == ("self", "bars")
     assert {"instrument_id", "book_type"} <= set(
-        _parameter_names(methods["subscribe_book_depth10"])
+        _parameter_names(methods["subscribe_book_depth"])
     )
     assert {"topic", "message"} <= set(_parameter_names(methods["publish_message"]))
     assert {"topic", "handler", "priority"} <= set(_parameter_names(methods["subscribe_topic"]))

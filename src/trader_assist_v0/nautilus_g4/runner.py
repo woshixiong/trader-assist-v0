@@ -1294,6 +1294,7 @@ def execute_provider_native_state(
     if identity.quote_tick_count:
         data.append(
             BacktestDataConfig(
+                batch_deltas=True,
                 data_type="QuoteTick",
                 catalog_path=catalog_path_text,
                 instrument_id=provider_instrument_id,
@@ -1304,6 +1305,7 @@ def execute_provider_native_state(
     if identity.trade_tick_count:
         data.append(
             BacktestDataConfig(
+                batch_deltas=True,
                 data_type="TradeTick",
                 catalog_path=catalog_path_text,
                 instrument_id=provider_instrument_id,
@@ -1314,6 +1316,7 @@ def execute_provider_native_state(
     if identity.bar_count:
         data.append(
             BacktestDataConfig(
+                batch_deltas=True,
                 data_type="Bar",
                 catalog_path=catalog_path_text,
                 instrument_id=provider_instrument_id,
@@ -1552,6 +1555,7 @@ def execute_provider_native_round_trip_state(
         if count:
             data.append(
                 BacktestDataConfig(
+                batch_deltas=True,
                     data_type=data_type,
                     catalog_path=catalog_path_text,
                     instrument_id=provider_instrument_id,

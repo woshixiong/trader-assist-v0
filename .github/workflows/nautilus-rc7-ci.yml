@@ -18,6 +18,19 @@ jobs:
       - name: Verify official wheel and isolated native API
         run: |
           python scripts/rc7/official_smoke.py --output /tmp/rc7-proof
+      - name: Native-compatible exact dependency lock
+        run: |
+          if [ ! -f requirements-dev-py313.lock ]; then
+            python scripts/rc7/lock_py313.py > /tmp/rc7-proof/lock-resolution.log 2>&1
+          fi
+          cp requirements-dev-py313.lock /tmp/rc7-proof/
+          python -m pip install --require-hashes -r requirements-dev-py313.lock > /tmp/rc7-install.log 2>&1
+          python -m pip check
+      - name: Native catalog, Sandbox, guard and ledger proof
+        env:
+          PYTHONPATH: src:.
+        run: |
+          python -m pytest -q tests/test_nautilus_rc7_contracts.py tests/test_nautilus_rc7_native.py > /tmp/rc7-proof/native-tests.txt 2>&1
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:

@@ -33,7 +33,7 @@ if TYPE_CHECKING:
         def request_data(self, data_type: object, client_id: object) -> object: ...
 
 
-RC5_VERSION = "2.0.0rc5"
+RC5_VERSION = "2.0.0rc7"
 RC5_SOURCE = "1b0a49d2792a9432a3aca3fcb617ce7a630d905e"
 
 

@@ -1,4 +1,5 @@
 """Decisive official rc7 wheel/API proof; never loads exchange credentials or runs a node."""
+
 from __future__ import annotations
 
 import argparse
@@ -23,7 +24,9 @@ def main() -> None:
     args.output.mkdir(parents=True, exist_ok=True)
     assert sys.version_info[:2] == (3, 13)
     assert platform.system() == "Linux" and platform.machine() == "x86_64"
-    with urllib.request.urlopen(f"https://pypi.org/pypi/nautilus_trader/{VERSION}/json", timeout=60) as response:
+    with urllib.request.urlopen(
+        f"https://pypi.org/pypi/nautilus_trader/{VERSION}/json", timeout=60
+    ) as response:
         metadata = json.load(response)
     artifact = next(item for item in metadata["urls"] if item["filename"] == WHEEL)
     assert artifact["digests"]["sha256"] == SHA256
@@ -38,6 +41,7 @@ def main() -> None:
     subprocess.run([sys.executable, "-m", "pip", "install", "--no-deps", str(wheel)], check=True)
     subprocess.run([sys.executable, "-m", "pip", "check"], check=True)
     from importlib.metadata import version
+
     from nautilus_trader.adapters.hyperliquid import HyperliquidExecutionClientFactory
     from nautilus_trader.adapters.sandbox import SandboxExecutionClientFactory
     from nautilus_trader.backtest import BacktestNode
@@ -45,11 +49,25 @@ def main() -> None:
     from nautilus_trader.persistence import ParquetDataCatalog, StreamingConfig
 
     assert version("nautilus-trader") == VERSION
-    assert all((HyperliquidExecutionClientFactory, SandboxExecutionClientFactory,
-                BacktestNode, LiveNode, ParquetDataCatalog, StreamingConfig))
-    proof = {"version": VERSION, "wheel": WHEEL, "sha256": SHA256,
-             "python": platform.python_version(), "platform": platform.platform(),
-             "wheel_api": "PASS", "external_order_writes": 0}
+    assert all(
+        (
+            HyperliquidExecutionClientFactory,
+            SandboxExecutionClientFactory,
+            BacktestNode,
+            LiveNode,
+            ParquetDataCatalog,
+            StreamingConfig,
+        )
+    )
+    proof = {
+        "version": VERSION,
+        "wheel": WHEEL,
+        "sha256": SHA256,
+        "python": platform.python_version(),
+        "platform": platform.platform(),
+        "wheel_api": "PASS",
+        "external_order_writes": 0,
+    }
     (args.output / "proof.json").write_text(json.dumps(proof, indent=2) + "\n")
     wheel.unlink()
     print(json.dumps(proof))
