@@ -52,6 +52,36 @@ def test_unknown_future_out_of_order_events_cannot_make_healthy() -> None:
     assert "OUT_OF_ORDER_OR_GAP" in health.failures
 
 
+def test_closed_bar_freshness_uses_close_without_changing_source_open_time() -> None:
+    second = 1_000_000_000
+    health = NativeHealth({"ETH:5m": 360 * second})
+    health.socket(True)
+    health.writer_ok = health.catalog_verified = True
+    assert health.observe(
+        "ETH:5m",
+        ts_event=300 * second,
+        event_end_ns=600 * second,
+        ts_init=600 * second,
+        now=900 * second,
+    )
+    assert health.last["ETH:5m"][0] == 300 * second
+    assert (
+        health.report(now=900 * second, generated=900 * second, free_bytes=10**12)["status"]
+        == "HEALTHY"
+    )
+    assert (
+        health.report(now=1000 * second, generated=1000 * second, free_bytes=10**12)["status"]
+        == "DEGRADED"
+    )
+    assert not health.observe(
+        "ETH:5m",
+        ts_event=600 * second,
+        event_end_ns=900 * second,
+        ts_init=899 * second,
+        now=900 * second,
+    )
+
+
 @pytest.mark.parametrize(
     "change",
     [

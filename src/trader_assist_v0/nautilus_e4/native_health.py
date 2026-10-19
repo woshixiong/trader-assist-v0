@@ -16,6 +16,7 @@ class NativeHealth:
     writer_ok: bool = False
     catalog_verified: bool = False
     last: dict[str, tuple[int, int, int]] = field(default_factory=dict)
+    event_ends: dict[str, int] = field(default_factory=dict)
     counts: dict[str, int] = field(default_factory=dict)
     duplicates: int = 0
     out_of_order: int = 0
@@ -25,9 +26,18 @@ class NativeHealth:
         if not connected:
             self.epoch += 1
             self.last.clear()
+            self.event_ends.clear()
         self.connected = connected
 
-    def observe(self, stream: str, *, ts_event: int, ts_init: int, now: int) -> bool:
+    def observe(
+        self,
+        stream: str,
+        *,
+        ts_event: int,
+        ts_init: int,
+        now: int,
+        event_end_ns: int | None = None,
+    ) -> bool:
         if stream not in self.required:
             self.failures.add("UNKNOWN_INSTRUMENT_OR_STREAM")
             return False
@@ -37,6 +47,9 @@ class NativeHealth:
         ):
             self.failures.add("INVALID_EVENT_CLOCK")
             return False
+        if event_end_ns is not None and not ts_event <= event_end_ns <= min(ts_init, now):
+            self.failures.add("INVALID_EVENT_END_CLOCK")
+            return False
         prior = self.last.get(stream)
         if prior and ts_event < prior[0]:
             self.out_of_order += 1
@@ -45,6 +58,7 @@ class NativeHealth:
         if prior and (ts_event, ts_init) == prior[:2]:
             self.duplicates += 1
         self.last[stream] = (ts_event, ts_init, self.epoch)
+        self.event_ends[stream] = ts_event if event_end_ns is None else event_end_ns
         self.counts[stream] = self.counts.get(stream, 0) + 1
         return True
 
@@ -64,7 +78,10 @@ class NativeHealth:
             event = self.last.get(stream)
             if event is None or event[2] != self.epoch:
                 reasons.add(f"MISSING:{stream}")
-            elif not 0 <= now - event[0] <= max_age or not 0 <= now - event[1] <= max_age:
+            elif (
+                not 0 <= now - self.event_ends[stream] <= max_age
+                or not 0 <= now - event[1] <= max_age
+            ):
                 reasons.add(f"STALE:{stream}")
         return {
             "status": "HEALTHY" if not reasons else "DEGRADED",

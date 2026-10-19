@@ -53,9 +53,15 @@ jobs:
         with:
           name: rc7-native-proof
           path: /tmp/rc7-proof
+      - name: Package native source paths without changing their names
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.public_probe }}
+        run: |
+          if [ -d /tmp/rc7-public-catalog ]; then
+            tar -czf /tmp/rc7-public-retained-source.tar.gz -C /tmp rc7-public-catalog
+          fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.public_probe }}
         with:
           name: rc7-public-retained-source
-          path: /tmp/rc7-public-catalog
+          path: /tmp/rc7-public-retained-source.tar.gz
           retention-days: 7

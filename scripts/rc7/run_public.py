@@ -108,12 +108,15 @@ def capture_observer(
             for minutes in (1, 5):
                 self.subscribe_bars(BarType.from_str(f"{identity}-{minutes}-MINUTE-LAST-EXTERNAL"))
 
-        def record(self, event: Any, kind: str, identity: str) -> None:
+        def record(
+            self, event: Any, kind: str, identity: str, *, event_end_ns: int | None = None
+        ) -> None:
             accepted = health.observe(
                 f"{identity}:{kind}",
                 ts_event=event.ts_event,
                 ts_init=event.ts_init,
                 now=self.clock.timestamp_ns(),
+                event_end_ns=event_end_ns,
             )
 
             if accepted and not health.connected:
@@ -142,7 +145,12 @@ def capture_observer(
             except ValueError as exc:
                 health.failures.add(str(exc))
                 return
-            self.record(event, f"{event.bar_type.spec.step}m", str(event.bar_type.instrument_id))
+            self.record(
+                event,
+                f"{event.bar_type.spec.step}m",
+                str(event.bar_type.instrument_id),
+                event_end_ns=(close_ms + 1) * 1_000_000,
+            )
             identity = str(event.bar_type.instrument_id)
             if event.bar_type.spec.step != 5 or identity not in evaluators:
                 return
@@ -244,6 +252,7 @@ async def run(args: argparse.Namespace) -> None:
     instance_id = str(node.instance_id)
     failure: Exception | None = None
     started = time.monotonic()
+    last_active_report: dict[str, Any] = {}
 
     async def report() -> None:
         while True:
@@ -256,6 +265,8 @@ async def run(args: argparse.Namespace) -> None:
             output["capture_state"] = "CAPTURING_CATALOG_PENDING_CLOSE"
             if universe.missing:
                 output["status"] = "DEGRADED"
+            last_active_report.clear()
+            last_active_report.update(output)
             target = args.root / "health.json"
             pending = target.with_suffix(".tmp")
             pending.write_text(json.dumps(output, indent=2) + "\n")
@@ -272,6 +283,8 @@ async def run(args: argparse.Namespace) -> None:
                 node.handle().stop()
                 raise RuntimeError("PUBLIC_PROVIDER_UNAVAILABLE_OR_NO_EVENTS")
             if args.duration_seconds is not None and elapsed >= args.duration_seconds:
+                last_active_report["bounded_stop_requested"] = True
+                last_active_report["capture_end_ns"] = now
                 node.handle().stop()
                 return
             await asyncio.sleep(5)
@@ -289,6 +302,7 @@ async def run(args: argparse.Namespace) -> None:
     except Exception as exc:
         failure = exc
     finally:
+        stopped_ns = last_active_report.get("capture_end_ns", time.time_ns())
         monitor.cancel()
         try:
             await monitor
@@ -325,16 +339,36 @@ async def run(args: argparse.Namespace) -> None:
         raise failure
     proof = verify_promoted_run(args.root, instance_id)
     missing = sorted(set(health.required) - health.counts.keys())
+    freshness = set(last_active_report.get("reasons", ["NO_RUNTIME_HEALTH_REPORT"])) - {
+        "WRITER_UNKNOWN_OR_FAILED",
+        "CATALOG_UNVERIFIED",
+    }
+    if not 0 <= stopped_ns - last_active_report.get("generated_ns", 0) <= health.report_max_age_ns:
+        freshness.add("HEALTH_REPORT_STALE_AT_STOP")
+    elapsed = time.monotonic() - started
+    duration_complete = args.duration_seconds is None or bool(
+        last_active_report.get("bounded_stop_requested")
+    )
     proof.update(
         provider_snapshot=universe.current_snapshot(now_ns=time.time_ns()).model_dump(mode="json"),
         stream_counts=health.counts,
         missing_streams=missing,
         event_failures=sorted(health.failures),
-        public_coverage="PASS" if not missing and not health.failures else "INCOMPLETE",
+        freshness_reasons=sorted(freshness),
+        public_coverage=(
+            "PASS"
+            if not missing and not health.failures and not freshness and duration_complete
+            else "INCOMPLETE"
+        ),
+        requested_duration_seconds=args.duration_seconds,
+        elapsed_seconds=elapsed,
+        bounded_duration_complete=duration_complete,
         policy="NO_ROTATION_PROMOTE_ON_EXPLICIT_CLOSE_RETAIN_FEATHER",
         sandbox=sandbox_proof,
     )
     (args.root / "close-proof.json").write_text(json.dumps(proof, indent=2) + "\n")
+    if not duration_complete:
+        raise RuntimeError("NATIVE_RUN_STOPPED_BEFORE_REQUESTED_DURATION")
 
 
 def main() -> None:

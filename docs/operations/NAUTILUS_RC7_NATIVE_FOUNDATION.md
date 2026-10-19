@@ -43,6 +43,10 @@ PYTHONPATH=src:. python -m scripts.rc7.run_public \
 Inspect `resolved-pit-universe.json`, `health.json`, `close-proof.json` and
 `recovery-proof.json`. `close-proof.json` separates typed catalog integrity from
 per-instrument public stream coverage; catalog PASS alone is insufficient.
+Coverage also requires completion of the requested duration and a fresh final
+stream-health report. Closed-bar freshness uses its verified close time while
+retaining native open `ts_event`; it does not incorrectly age a closed 5m bar
+from its open time. An early native shutdown cannot satisfy the bounded proof.
 The health report says `CAPTURING_CATALOG_PENDING_CLOSE` while the catalog has
 not been verified and `STOPPED` after termination. Neither means live HEALTHY.
 Missing instruments/events, bad clocks, disk errors and native close failures
@@ -127,6 +131,14 @@ denominator. Snapshot/event collection is idempotent; no fees or fills are
 invented by the ledger. Actual event counts are reported; rejection, partial
 fill, stop/TP and reconciliation coverage must not be inferred from unrelated
 events. The approved evaluator still has no qualified sizing/order mapping.
+
+The ETH protocol fixture declares **100000 USDC and 100000 USD as separate
+simulated balances**. Tagged native Hyperliquid metadata quotes perps in USD
+and settles ETH in USDC; the native fee/PnL APIs debit USD. No USD/USDC exchange
+rate or real account collateral equivalence is asserted. Funding other HIP-3
+collateral/order mappings is outside this ETH-only order fixture. Source
+artifacts are packed as tar.gz because GitHub artifact paths reject the colon
+in genuine native HIP-3 instrument names; catalog filenames stay unchanged.
 
 | Changed capability | Required evidence / current boundary |
 | --- | --- |

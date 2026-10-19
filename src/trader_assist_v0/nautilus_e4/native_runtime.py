@@ -70,7 +70,10 @@ def build_native_node(root: Path, *, sandbox: bool = False, sandbox_fee_model: A
             SandboxExecutionClientFactory(),
             SandboxExecutionClientConfig(
                 venue=Venue("HYPERLIQUID"),
-                starting_balances=[Money.from_str("100000 USDC")],
+                # Official HL metadata uses USD quote and USDC ETH settlement.
+                # Native fees/PnL debit USD: declare both simulated balances,
+                # keeping them separate (no invented USD/USDC conversion rate).
+                starting_balances=[Money.from_str("100000 USDC"), Money.from_str("100000 USD")],
                 oms_type=OmsType.NETTING,
                 account_type=AccountType.MARGIN,
                 book_type=BookType.L1_MBP,
