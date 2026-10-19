@@ -44,6 +44,13 @@ def capture_observer(
     class NativeObserver(DataActor):
         def on_start(self) -> None:
             self.subscribe_socket_state()
+            # connect() publishes bootstrap instruments before opening its native
+            # session. Admit already-delivered cache entries as well as callbacks;
+            # neither actor/event-queue ordering can cause a startup false failure.
+            for native in self.cache.instruments(Venue("HYPERLIQUID")):
+                self.on_instrument(native)
+            if not universe.missing:
+                return
             if universe.snapshot is None:
                 # Public native provider refresh; no hand-built HTTP or symbol IDs.
                 self.request_instruments(venue=Venue("HYPERLIQUID"))

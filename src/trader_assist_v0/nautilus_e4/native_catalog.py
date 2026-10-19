@@ -100,7 +100,7 @@ def verify_promoted_run(root: Path, instance_id: str, *, live: bool = True) -> d
 def recover_and_promote(root: Path, instance_id: str, *, live: bool = True) -> dict[str, Any]:
     """Use official locked-partial recovery and replay identities; no custom copier."""
     from nautilus_trader.common import Environment
-    from nautilus_trader.model import CryptoPerpetual, NautilusDataType, NautilusInstrumentType
+    from nautilus_trader.model import NautilusDataType
     from nautilus_trader.persistence import ParquetDataCatalog
 
     catalog = ParquetDataCatalog(str(root))
@@ -114,17 +114,40 @@ def recover_and_promote(root: Path, instance_id: str, *, live: bool = True) -> d
         OrderBookDelta: NautilusDataType.OrderBookDelta,
         Bar: NautilusDataType.Bar,
     }
-    for cls, data_type in families.items():
-        if any(isinstance(event, cls) for event in staged):
-            catalog.convert_stream_to_data(
-                instance_id, data_type, Environment.LIVE if live else Environment.BACKTEST
-            )
-    if any(isinstance(event, CryptoPerpetual) for event in staged):
+    environment = Environment.LIVE if live else Environment.BACKTEST
+    try:
+        verify_promoted_run(root, instance_id, live=live)
+    except RuntimeError as exc:
+        if not str(exc).startswith("CATALOG_INTEGRITY_FAILURE:"):
+            raise
+        # Automatic and manual rc7 promotion use different replay identities.
+        # Never re-import an already complete automatic promotion. A partial
+        # catalog which cannot be promoted natively still fails with sources retained.
+        for cls, data_type in families.items():
+            if any(isinstance(event, cls) for event in staged):
+                catalog.convert_stream_to_data(instance_id, data_type, environment)
+    ids = sorted(
+        {
+            str(event.bar_type.instrument_id if isinstance(event, Bar) else event.instrument_id)
+            for event in staged
+            if isinstance(event, tuple(families))
+        }
+    )
+    present = {str(item.id) for item in catalog.instruments(instrument_ids=ids)}
+    missing = sorted(set(ids) - present)
+    if missing:
+        # read_live_run/read_backtest return Data only, not instrument records.
+        # The tagged converter explicitly requires the aggregate Instrument
+        # family, not NautilusInstrumentType.CryptoPerpetual.
         catalog.convert_stream_to_data(
             instance_id,
-            NautilusInstrumentType("CryptoPerpetual"),
-            Environment.LIVE if live else Environment.BACKTEST,
+            NautilusDataType.Instrument,
+            environment,
+            identifiers=missing,
         )
+        restored = {str(item.id) for item in catalog.instruments(instrument_ids=ids)}
+        if not set(ids) <= restored:
+            raise RuntimeError("RECOVERY_NATIVE_INSTRUMENT_DEFINITIONS_MISSING")
     return verify_promoted_run(root, instance_id, live=live)
 
 
@@ -156,7 +179,10 @@ def replay_catalog_quotes(root: Path, instance_id: str, *, live: bool = True) ->
         start=min(event.ts_init for event in source),
         end=max(event.ts_init for event in source),
     )
-    instruments = catalog.instruments(instrument_ids=ids)
+    first_init = min(event.ts_init for event in source)
+    # Native range queries retain the latest pre-start definition. Do not load
+    # later definitions into an earlier replay (including after a capture restart).
+    instruments = catalog.instruments(instrument_ids=ids, start=first_init, end=first_init)
     if {str(item.id) for item in instruments} != set(ids):
         raise RuntimeError("REPLAY_NATIVE_INSTRUMENT_DEFINITIONS_MISSING")
 

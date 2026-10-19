@@ -90,6 +90,14 @@ Close/readback failures propagate; staged files must remain intact. Native
 recovery reads unlocked `.feather.partial` files and retains complete batches.
 Do not delete Feather/catalog data to make a failed promotion appear successful.
 
+Recovery verifies an already complete automatic promotion before requesting
+manual conversion: rc7 uses different automatic/manual replay identities.
+Run readers return market `Data`, excluding instrument definitions. Recovery
+therefore checks native catalog definitions separately and uses the official
+aggregate `NautilusDataType.Instrument` selector for missing definitions. A
+partially committed catalog which native conversion cannot repair fails and
+retains its source; the wrapper never overwrites overlapping intervals.
+
 Native health uses stream-specific actual event age, continuity epochs,
 monotonic source order, native socket state, free disk, writer/catalog evidence
 and report timestamp. File mtime is never a freshness predicate. Reconnect ACK
