@@ -250,6 +250,9 @@ async def run(args: argparse.Namespace) -> None:
         )
     )
     instance_id = str(node.instance_id)
+    # Official run_async borrow contract: capture shared read/stop handles now,
+    # never access node.cache/portfolio while the node is being run asynchronously.
+    native_cache, native_portfolio, handle = node.cache, node.portfolio, node.handle()
     failure: Exception | None = None
     started = time.monotonic()
     last_active_report: dict[str, Any] = {}
@@ -274,18 +277,20 @@ async def run(args: argparse.Namespace) -> None:
             if probe_ledger is not None and node.is_running:
                 from trader_assist_v0.nautilus_e4.native_sandbox import record_sandbox_state
 
-                sandbox_proof.update(record_sandbox_state(node, probe_ledger, now_ns=now))
+                sandbox_proof.update(
+                    record_sandbox_state(native_cache, native_portfolio, probe_ledger, now_ns=now)
+                )
             if shutil.disk_usage(args.root).free < health.minimum_free_bytes:
-                node.handle().stop()
+                handle.stop()
                 raise RuntimeError("DISK_LOW")
             elapsed = time.monotonic() - started
             if elapsed >= args.startup_timeout_seconds and (universe.missing or not health.counts):
-                node.handle().stop()
+                handle.stop()
                 raise RuntimeError("PUBLIC_PROVIDER_UNAVAILABLE_OR_NO_EVENTS")
             if args.duration_seconds is not None and elapsed >= args.duration_seconds:
                 last_active_report["bounded_stop_requested"] = True
                 last_active_report["capture_end_ns"] = now
-                node.handle().stop()
+                handle.stop()
                 return
             await asyncio.sleep(5)
 
@@ -293,7 +298,7 @@ async def run(args: argparse.Namespace) -> None:
         try:
             await report()
         except Exception:
-            node.handle().stop()
+            handle.stop()
             raise
 
     monitor = asyncio.create_task(stop_on_report_failure())
@@ -316,7 +321,9 @@ async def run(args: argparse.Namespace) -> None:
                     from trader_assist_v0.nautilus_e4.native_sandbox import record_sandbox_state
 
                     sandbox_proof.update(
-                        record_sandbox_state(node, probe_ledger, now_ns=time.time_ns())
+                        record_sandbox_state(
+                            native_cache, native_portfolio, probe_ledger, now_ns=time.time_ns()
+                        )
                     )
             except Exception as exc:
                 failure = failure or exc

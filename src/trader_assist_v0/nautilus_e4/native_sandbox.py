@@ -40,12 +40,14 @@ def attach_sandbox_probe(node: Any) -> None:
     )
 
 
-def record_sandbox_state(node: Any, ledger: ShadowLedger, *, now_ns: int) -> dict[str, Any]:
+def record_sandbox_state(
+    cache: Any, portfolio: Any, ledger: ShadowLedger, *, now_ns: int
+) -> dict[str, Any]:
     """Record native facts idempotently; account/fees/PnL never locally modeled."""
     from nautilus_trader.model import Venue
 
     kinds: Counter[str] = Counter()
-    orders = node.cache.orders()
+    orders = cache.orders()
     for order in orders:
         events = order.events()
         for event in events:
@@ -62,18 +64,18 @@ def record_sandbox_state(node: Any, ledger: ShadowLedger, *, now_ns: int) -> dic
                 details={"origin": "OFFICIAL_EXEC_TESTER_PROTOCOL_ONLY"},
             )
     venue = Venue("HYPERLIQUID")
-    account = node.cache.account_for_venue(venue)
+    account = cache.account_for_venue(venue)
     if account is None:
         raise RuntimeError("NATIVE_SANDBOX_ACCOUNT_MISSING")
     snapshot = {
         "account": account.to_dict(),
         "orders": [order.to_dict() for order in orders],
-        "positions": [position.to_dict() for position in node.cache.positions()],
-        "realized_pnl": {str(k): str(v) for k, v in node.portfolio.realized_pnls(venue).items()},
+        "positions": [position.to_dict() for position in cache.positions()],
+        "realized_pnl": {str(k): str(v) for k, v in portfolio.realized_pnls(venue).items()},
         "unrealized_pnl": {
-            str(k): str(v) for k, v in node.portfolio.unrealized_pnls(venue).items()
+            str(k): str(v) for k, v in portfolio.unrealized_pnls(venue).items()
         },
-        "equity": {str(k): str(v) for k, v in node.portfolio.equity(venue).items()},
+        "equity": {str(k): str(v) for k, v in portfolio.equity(venue).items()},
     }
     ledger.append(
         event_id=f"native-state:{now_ns}", kind="NATIVE_STATE", ts_ns=now_ns, payload=snapshot
