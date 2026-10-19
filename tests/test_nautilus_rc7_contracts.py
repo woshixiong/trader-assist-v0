@@ -12,7 +12,7 @@ from trader_assist_v0.nautilus_e4.shadow_ledger import ShadowLedger
 
 def verified_cycle() -> dict[str, object]:
     return {
-        "status": "PASS",
+        "status": "SEALED_STAGE_READABLE",
         "instance_id": "current",
         "bounded_duration_complete": True,
         "public_coverage": "PASS",
@@ -38,14 +38,14 @@ def verified_cycle() -> dict[str, object]:
         {"stream_counts": {}},
     ],
 )
-def test_service_cycle_cannot_admit_failed_or_old_proof(change: dict[str, object]) -> None:
-    from scripts.rc7.run_public import require_verified_cycle
+def test_bounded_qualification_cannot_admit_failed_or_old_proof(change: dict[str, object]) -> None:
+    from scripts.rc7.run_public import require_qualified_stop
 
-    require_verified_cycle(verified_cycle(), "current")
+    require_qualified_stop(verified_cycle(), "current")
     with pytest.raises(RuntimeError, match="FAIL_CLOSED"):
-        require_verified_cycle({**verified_cycle(), **change}, "current")
+        require_qualified_stop({**verified_cycle(), **change}, "current")
     with pytest.raises(RuntimeError, match="FAIL_CLOSED"):
-        require_verified_cycle({}, "current")
+        require_qualified_stop({}, "current")
 
 
 def test_capture_gap_is_measured_without_claiming_exchange_loss() -> None:
@@ -91,13 +91,13 @@ def test_public_process_exits_nonzero_on_capacity_despite_prior_success(tmp_path
         text=True,
         timeout=15,
     )
-    assert result.returncode != 0
+    assert result.returncode == 78
     assert "ARCHIVE_BUDGET_EXHAUSTED_SOURCES_RETAINED" in result.stderr
     assert "VERIFIED_SUCCESS" not in result.stdout
     assert prior.read_bytes() == original
 
 
-def test_public_unit_only_cycles_on_verified_zero_exit() -> None:
+def test_public_unit_is_continuous_and_fatal_exits_never_restart() -> None:
     import configparser
     import shlex
 
@@ -105,12 +105,15 @@ def test_public_unit_only_cycles_on_verified_zero_exit() -> None:
     unit.read("deploy/systemd/tradeos-rc7-public.service")
     service = unit["Service"]
     assert service["Type"] == "simple"
-    assert service["Restart"] == "on-success"
+    assert service["Restart"] == "on-failure"
     assert set(service["RestartPreventExitStatus"].split()) == {
         "SIGHUP",
         "SIGINT",
         "SIGTERM",
         "SIGPIPE",
+        "2",
+        "78",
+        "130",
     }
     assert "SuccessExitStatus" not in service and "RestartForceExitStatus" not in service
     assert int(service["RestartSec"]) >= 15
@@ -119,6 +122,7 @@ def test_public_unit_only_cycles_on_verified_zero_exit() -> None:
     assert service["User"] == service["Group"] == "tradeos"
     command = shlex.split(service["ExecStart"])
     assert command[1:3] == ["-m", "scripts.rc7.run_public"]
+    assert "--duration-seconds" not in command
     assert not {"--sandbox", "--sandbox-probe", "--strategy-manifest"} & set(command)
 
 
@@ -158,7 +162,11 @@ def test_native_systemd_255_verifies_unit_and_rejects_oneshot_restart(tmp_path: 
         [binary, "verify", "--man=no", str(path)], capture_output=True, text=True
     )
     assert result.returncode == 0, result.stderr
-    path.write_text(source.replace("Type=simple", "Type=oneshot"))
+    path.write_text(
+        source.replace("Type=simple", "Type=oneshot").replace(
+            "Restart=on-failure", "Restart=on-success"
+        )
+    )
     invalid = subprocess.run(
         [binary, "verify", "--man=no", str(path)], capture_output=True, text=True
     )
@@ -274,6 +282,62 @@ def test_closed_bar_freshness_uses_close_without_changing_source_open_time() -> 
         ts_init=899 * second,
         now=900 * second,
     )
+
+
+def test_disconnect_ack_does_not_rearm_and_gap_keeps_native_endpoints() -> None:
+    health = NativeHealth({"ETH:quote": 100, "xyz:SKHX:trade": 100}, minimum_free_bytes=1)
+    health.writer_ok = health.catalog_verified = True
+    health.socket(True)
+    for stream in health.required:
+        assert health.observe(stream, ts_event=1000, ts_init=1001, now=1002)
+    health.socket(False, now=1050)
+    health.socket(True, now=1060)
+    assert health.report(now=1060, generated=1060, free_bytes=100)["status"] == "DEGRADED"
+    assert len(health.gaps) == 2
+    for stream in health.required:
+        assert health.observe(stream, ts_event=1060, ts_init=1061, now=1062)
+    assert health.report(now=1062, generated=1062, free_bytes=100)["status"] == "HEALTHY"
+    assert all(
+        gap["prior_ts_event"] == 1000 and gap["next_ts_event"] == 1060 for gap in health.gaps
+    )
+    assert all(gap["lost_events"] == "UNKNOWN" for gap in health.gaps)
+    restarted = NativeHealth(dict(health.required))
+    restarted.restore_boundaries(
+        health.report(now=1062, generated=1062, free_bytes=100)["last_native"], now=1100
+    )
+    assert len(restarted.pending_gaps) == 2
+    assert all(gap["reason"] == "PROCESS_RESTART" for gap in restarted.gaps)
+    assert not restarted.last  # Checkpoint clocks never re-arm current freshness.
+    assert [event["state"] for event in health.gap_events] == [
+        "OPEN",
+        "OPEN",
+        "FRESH_EVENTS_RESUMED",
+        "FRESH_EVENTS_RESUMED",
+    ]
+
+
+def test_bar_gap_never_reindexes_later_native_open_time() -> None:
+    second = 1_000_000_000
+    health = NativeHealth({"ETH:1m": 180 * second})
+    health.socket(True)
+    assert health.observe(
+        "ETH:1m",
+        ts_event=60 * second,
+        ts_init=120 * second,
+        now=120 * second,
+        event_end_ns=120 * second,
+    )
+    assert health.observe(
+        "ETH:1m",
+        ts_event=180 * second,
+        ts_init=240 * second,
+        now=240 * second,
+        event_end_ns=240 * second,
+    )
+    assert health.last["ETH:1m"][0] == 180 * second
+    assert health.gaps[0]["reason"] == "CLOSED_BAR_INTERVAL_MISSING"
+    assert health.gaps[0]["prior_ts_event"] == 60 * second
+    assert health.gaps[0]["next_ts_event"] == 180 * second
 
 
 @pytest.mark.parametrize(

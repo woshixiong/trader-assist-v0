@@ -23,9 +23,44 @@ class NativeHealth:
     failures: set[str] = field(default_factory=set)
     first_observed_ns: int | None = None
     last_observed_ns: int | None = None
+    gaps: list[dict[str, object]] = field(default_factory=list)
+    gap_events: list[dict[str, object]] = field(default_factory=list)
+    pending_gaps: dict[str, int] = field(default_factory=dict)
 
-    def socket(self, connected: bool) -> None:
-        if not connected:
+    def restore_boundaries(self, previous: dict[str, dict[str, int]], *, now: int) -> None:
+        """Last observed checkpoint boundaries, not exact lost-event counts."""
+        for stream, clocks in previous.items():
+            if min(clocks["ts_event"], clocks["ts_init"]) <= 0:
+                raise ValueError("INVALID_PREVIOUS_NATIVE_BOUNDARY")
+            self.last[stream] = (clocks["ts_event"], clocks["ts_init"], self.epoch)
+            self.mark_gap(stream, "PROCESS_RESTART", now)
+        self.last.clear()
+
+    def mark_gap(self, stream: str, reason: str, now: int) -> None:
+        if stream in self.pending_gaps or stream not in self.last:
+            return
+        previous = self.last[stream]
+        gap: dict[str, object] = {
+            "stream": stream,
+            "instrument_id": stream.rsplit(":", 1)[0],
+            "reason": reason,
+            "prior_ts_event": previous[0],
+            "prior_ts_init": previous[1],
+            "detected_ns": now,
+            "epoch": self.epoch,
+            "next_ts_event": None,
+            "next_ts_init": None,
+            "coverage": "UNKNOWN_NO_SYNTHETIC_BACKFILL",
+            "lost_events": "UNKNOWN",
+        }
+        self.pending_gaps[stream] = len(self.gaps)
+        self.gaps.append(gap)
+        self.gap_events.append({**gap, "state": "OPEN"})
+
+    def socket(self, connected: bool, *, now: int | None = None) -> None:
+        if not connected and self.connected:
+            for stream in self.last:
+                self.mark_gap(stream, "NATIVE_DISCONNECT", now or self.last_observed_ns or 0)
             self.epoch += 1
             self.last.clear()
             self.event_ends.clear()
@@ -59,6 +94,22 @@ class NativeHealth:
             return False
         if prior and (ts_event, ts_init) == prior[:2]:
             self.duplicates += 1
+        end = ts_event if event_end_ns is None else event_end_ns
+        if prior:
+            cadence = {"1m": 60_000_000_000, "5m": 300_000_000_000}.get(stream.rsplit(":", 1)[-1])
+            if cadence and ts_event > prior[0] + cadence:
+                self.mark_gap(stream, "CLOSED_BAR_INTERVAL_MISSING", now)
+            elif now - prior[1] > self.required[stream]:
+                self.mark_gap(stream, "RECEIVE_FRESHNESS_GAP", now)
+        fresh = (
+            0 <= now - ts_init <= self.required[stream] and 0 <= now - end <= self.required[stream]
+        )
+        if fresh and stream in self.pending_gaps:
+            index = self.pending_gaps.pop(stream)
+            self.gaps[index].update(
+                next_ts_event=ts_event, next_ts_init=ts_init, next_observed_ns=now
+            )
+            self.gap_events.append({**self.gaps[index], "state": "FRESH_EVENTS_RESUMED"})
         self.last[stream] = (ts_event, ts_init, self.epoch)
         self.event_ends[stream] = ts_event if event_end_ns is None else event_end_ns
         self.counts[stream] = self.counts.get(stream, 0) + 1
@@ -88,6 +139,7 @@ class NativeHealth:
                 or not 0 <= now - event[1] <= max_age
             ):
                 reasons.add(f"STALE:{stream}")
+                self.mark_gap(stream, "RECEIVE_FRESHNESS_GAP", now)
         return {
             "status": "HEALTHY" if not reasons else "DEGRADED",
             "reasons": sorted(reasons),
@@ -96,4 +148,10 @@ class NativeHealth:
             "counts": dict(self.counts),
             "duplicates": self.duplicates,
             "out_of_order": self.out_of_order,
+            "gaps": [dict(gap) for gap in self.gaps],
+            "pending_gap_streams": sorted(self.pending_gaps),
+            "last_native": {
+                stream: {"ts_event": value[0], "ts_init": value[1]}
+                for stream, value in self.last.items()
+            },
         }

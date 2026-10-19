@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       public_probe:
-        description: 'Bounded public ETH + approved xyz:SKHX and simulated Sandbox proof'
+        description: 'One bounded public ETH + xyz:SKHX native reconnect and active-stage proof'
         type: boolean
         default: false
 permissions:
@@ -42,7 +42,7 @@ jobs:
           if [ -f /tmp/rc7-proof/native-tests.txt ]; then
             grep -E '^E   |^FAILED |passed|failed' /tmp/rc7-proof/native-tests.txt | tail -30
           fi
-      - name: Bounded public provider and Sandbox qualification (isolated runner only)
+      - name: Bounded public native reconnect and active-stage qualification (isolated runner only)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.public_probe }}
         env:
           PYTHONPATH: src:.

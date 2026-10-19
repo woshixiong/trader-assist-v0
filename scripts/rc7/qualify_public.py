@@ -1,4 +1,4 @@
-"""Bounded isolated public/Sandbox proof; never usable as an execution launcher."""
+"""Bounded isolated public native reconnect/staging proof; never usable as an execution launcher."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from trader_assist_v0.nautilus_e4.native_catalog import replay_catalog_quotes
+from trader_assist_v0.nautilus_e4.native_catalog import read_staged_run
 
 
 def qualify(root: Path, output: Path) -> dict[str, Any]:
@@ -29,49 +29,66 @@ def qualify(root: Path, output: Path) -> dict[str, Any]:
         "started_ns": time.time_ns(),
     }
     try:
-        proofs = []
-        for phase, universe, duration in (
-            ("initial", ["--provider-coins", "ETH", "xyz:SKHX"], 420),
-            # Success now requires all streams, including a newly closed 5m.
-            ("restart", ["--snapshot", str(root / "resolved-pit-universe.json")], 420),
-        ):
-            command = [
-                sys.executable,
-                "-m",
-                "scripts.rc7.run_public",
-                "--root",
-                str(root),
-                "--duration-seconds",
-                str(duration),
-                "--sandbox",
-                "--sandbox-probe",
-                "--maker-rate",
-                "0.00015",
-                "--taker-rate",
-                "0.00045",
-                *universe,
-            ]
-            with (output / f"{phase}.log").open("w") as log:
-                completed = subprocess.run(
-                    command,
-                    stdout=log,
-                    stderr=subprocess.STDOUT,
-                    timeout=duration + 150,
-                )
-            if completed.returncode:
-                raise RuntimeError(f"{phase}:NATIVE_PUBLIC_RUNTIME_EXIT:{completed.returncode}")
-            proof = json.loads((root / "close-proof.json").read_text())
-            (output / f"{phase}-close-proof.json").write_text(json.dumps(proof, indent=2) + "\n")
-            proofs.append(proof)
-        if proofs[0]["public_coverage"] != "PASS":
+        command = [
+            sys.executable,
+            "-m",
+            "scripts.rc7.run_public",
+            "--root",
+            str(root),
+            "--duration-seconds",
+            "420",
+            "--qualification-reconnect",
+            "--provider-coins",
+            "ETH",
+            "xyz:SKHX",
+        ]
+        with (output / "capture.log").open("w") as log:
+            with subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT) as process:
+                try:
+                    # One process/one writer: native reconnect at ~60s, inspect
+                    # sealed stage while still running, then explicit test stop.
+                    process.wait(timeout=330)
+                    raise RuntimeError("PUBLIC_CAPTURE_STOPPED_BEFORE_ACTIVE_STAGE_PROBE")
+                except subprocess.TimeoutExpired:
+                    health = json.loads((root / "health.json").read_text())
+                    active = read_staged_run(root, health["instance_id"])
+                    if (
+                        not active["types"].get("QuoteTick", {}).get("count")
+                        or not active["open_partials"]
+                    ):
+                        process.terminate()
+                        raise RuntimeError("NATIVE_ACTIVE_STAGE_NOT_QUALIFIED") from None
+                    active["same_capture_pid"] = process.pid
+                    (output / "active-stage-proof.json").write_text(json.dumps(active, indent=2))
+                try:
+                    exit_code = process.wait(timeout=240)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+                    raise RuntimeError("PUBLIC_QUALIFICATION_TIMEOUT") from None
+        if exit_code:
+            raise RuntimeError(f"NATIVE_PUBLIC_RUNTIME_EXIT:{exit_code}")
+        proof = json.loads((root / "close-proof.json").read_text())
+        (output / "close-proof.json").write_text(json.dumps(proof, indent=2))
+        if proof["public_coverage"] != "PASS":
             raise RuntimeError("PUBLIC_STREAM_COVERAGE_INCOMPLETE")
-        result["public_provider"] = "PASS_ETH_AND_XYZ_SKHX_ALL_FIVE_STREAMS"
-        result["restart"] = json.loads((root / "recovery-proof.json").read_text())
-        result["replay"] = replay_catalog_quotes(root, proofs[0]["instance_id"])
-        result["sandbox"] = proofs[0]["sandbox"]
-        if result["sandbox"].get("status") != "OBSERVED":
-            raise RuntimeError("SANDBOX_NO_NATIVE_FILL_OBSERVED")
-        result["status"] = "PASS_BOUNDED_CAPTURE_RECOVERY_REPLAY_SANDBOX_OBSERVED"
+        recovered = [
+            gap
+            for gap in proof["stream_gaps"]
+            if gap["reason"] == "NATIVE_DISCONNECT" and gap["next_ts_init"] is not None
+        ]
+        if not proof["reconnect_probe_requested"] or not recovered:
+            raise RuntimeError("NATIVE_SOCKET_RECONNECT_NOT_QUALIFIED")
+        result.update(
+            status="PASS_BOUNDED_CONTINUOUS_NODE_STAGE_AND_NATIVE_RECONNECT",
+            public_provider="PASS_ETH_AND_XYZ_SKHX_ALL_FIVE_STREAMS",
+            sandbox="NOT_RUN_APPROVED_STRATEGY_ORDER_MAPPING_MISSING",
+            recovered_stream_gaps=recovered,
+            stage=proof["types"],
+            parquet_catalog="NOT_AUTOMATICALLY_PROMOTED_NOT_LIVE_QUALIFIED",
+            native_node_processes=1,
+            writer_restarts=0,
+        )
     except Exception as exc:
         result["failure"] = f"{type(exc).__name__}:{exc}"
     finally:

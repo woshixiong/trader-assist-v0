@@ -18,9 +18,14 @@ from typing import Any
 RC7_VERSION = "2.0.0rc7"
 RC7_WHEEL_SHA256 = "b3928f37d75d57508030a421dc762186ad1f9ffc5d5420d7daf1d2c6badb8044"
 BACKTEST_BATCH_DELTAS = True
+STAGE_ROTATION_NS = 300_000_000_000
 
 
-def streaming_config(root: Path) -> Any:
+class ArchiveIntegrityError(RuntimeError):
+    """Fatal native archive read/recovery failure; never automatically restart."""
+
+
+def streaming_config(root: Path, *, continuous: bool = False) -> Any:
     from nautilus_trader.persistence import DataCatalogConfig, RotationConfig, StreamingConfig
 
     root.mkdir(parents=True, exist_ok=True)
@@ -29,14 +34,59 @@ def streaming_config(root: Path) -> Any:
     return StreamingConfig(
         writer_path=str(root),
         catalog=DataCatalogConfig(path=str(root)),
-        rotation_config=RotationConfig.no_rotation(),
+        rotation_config=(
+            RotationConfig.interval(STAGE_ROTATION_NS)
+            if continuous
+            else RotationConfig.no_rotation()
+        ),
         promotion_interval_ms=None,
-        promote_on_close=True,
+        # Rotation may split equal ts_init across files. Keep native staging,
+        # including on close; explicit conversion must prove disjoint intervals.
+        promote_on_close=not continuous,
         delete_feather_after_promotion=False,
         use_ts_event_for_ts_init=False,
         replace_existing=False,
         flush_interval_ms=1000,
     )
+
+
+def read_staged_run(
+    root: Path, instance_id: str, *, require_closed: bool = False
+) -> dict[str, Any]:
+    """Official sealed-Feather reader, not a complete live-run/catalog certificate.
+
+    Locked partials remain untouched; unlocked crash remnants are recovered by
+    Nautilus. This native API sorts by ts_init and loads the available run in
+    memory. It does not promise an atomic snapshot or global equal-time ordering
+    across data families. No promotion or custom storage occurs here.
+    """
+    from nautilus_trader.persistence import ParquetDataCatalog
+
+    try:
+        data = ParquetDataCatalog(str(root)).read_live_run(instance_id)
+        partials = sorted(
+            str(p.relative_to(root))
+            for p in (root / "live" / instance_id).rglob("*.feather.partial")
+        )
+        if require_closed and (partials or not data):
+            raise RuntimeError("CLOSED_NATIVE_STAGE_INCOMPLETE")
+        types = {}
+        for name in sorted({type(event).__name__ for event in data}):
+            count, digest = event_multiset(
+                [event for event in data if type(event).__name__ == name]
+            )
+            types[name] = {"count": count, "sha256": digest}
+        return {
+            "status": "SEALED_STAGE_READABLE",
+            "instance_id": instance_id,
+            "types": types,
+            "open_partials": partials,
+            "complete_stopped_run": require_closed,
+            "catalog": "NOT_VERIFIED_OR_PROMOTED",
+            "source_retained": True,
+        }
+    except Exception as exc:
+        raise ArchiveIntegrityError(f"NATIVE_STAGE_READ_FAILURE:{exc}") from exc
 
 
 def _identity(event: Any) -> str:

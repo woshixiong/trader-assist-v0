@@ -186,6 +186,117 @@ def test_explicit_book_batching_native_contract(tmp_path: Path) -> None:
     assert config.batch_deltas is True
 
 
+def test_continuous_native_interval_reads_sealed_prefix_and_retains_equal_time_tail(
+    tmp_path: Path,
+) -> None:
+    from nautilus_trader.common import Cache, Clock
+    from nautilus_trader.model import BookAction, BookOrder, OrderBookDelta, OrderSide
+    from nautilus_trader.persistence import RotationConfig, StreamingFeatherWriter
+    from test_nautilus_vnext_g4_runner import native_hyperliquid_instrument
+
+    from trader_assist_v0.nautilus_e4.native_catalog import (
+        STAGE_ROTATION_NS,
+        ArchiveIntegrityError,
+        read_staged_run,
+    )
+
+    config = streaming_config(tmp_path, continuous=True)
+    assert config.promotion_interval_ms is None and not config.promote_on_close
+    assert not config.delete_feather_after_promotion
+    assert config.rotation_config.interval_ns == STAGE_ROTATION_NS
+    run_id = "042e5764-dc54-4d2f-adf8-92c4396084dc"
+    stage = tmp_path / "live" / run_id
+    clock = Clock.new_test()
+    clock.set_time(1_000_000_000)
+    instrument = native_hyperliquid_instrument()
+    writer = StreamingFeatherWriter(
+        str(stage), Cache(), clock, rotation_config=RotationConfig.interval(STAGE_ROTATION_NS)
+    )
+    rows = [
+        QuoteTick(
+            instrument.id,
+            Price.from_str(f"{2000 + i}.0"),
+            Price.from_str(f"{2001 + i}.0"),
+            Quantity.from_str("1.000"),
+            Quantity.from_str("1.000"),
+            1_000_000_000,
+            1_000_000_000,
+        )
+        for i in range(3)
+    ]
+    books = [
+        OrderBookDelta.clear(instrument.id, 1, 1_000_000_000, 1_000_000_000),
+        OrderBookDelta(
+            instrument.id,
+            BookAction.ADD,
+            BookOrder(OrderSide.BUY, Price.from_str("2000.0"), Quantity.from_str("1.000"), 1),
+            0,
+            2,
+            1_000_000_000,
+            1_000_000_000,
+        ),
+        OrderBookDelta.clear(instrument.id, 3, 1_000_000_000, 1_000_000_000),
+        OrderBookDelta(
+            instrument.id,
+            BookAction.ADD,
+            BookOrder(OrderSide.SELL, Price.from_str("2001.0"), Quantity.from_str("2.000"), 2),
+            0,
+            4,
+            1_000_000_000,
+            1_000_000_000,
+        ),
+    ]
+    catalog = ParquetDataCatalog(str(tmp_path))
+
+    def quotes():
+        return [row for row in catalog.read_live_run(run_id) if isinstance(row, QuoteTick)]
+
+    def book_rows():
+        return [row for row in catalog.read_live_run(run_id) if isinstance(row, OrderBookDelta)]
+
+    try:
+        writer.write(instrument)
+        writer.write(rows[0])
+        writer.write(books[0])
+        writer.write(books[1])
+        writer.flush()
+        assert catalog.read_live_run(run_id) == []  # Never touch the locked tail.
+        clock.set_time(1_000_000_000 + STAGE_ROTATION_NS)
+        writer.write(rows[1])  # The write seals, without closing/restarting the writer.
+        writer.write(books[2])
+        clock.set_time(2_000_000_000 + STAGE_ROTATION_NS)
+        writer.write(rows[2])
+        writer.write(books[3])
+        writer.flush()
+        assert [row.to_dict() for row in quotes()] == [row.to_dict() for row in rows[:2]]
+        assert read_staged_run(tmp_path, run_id)["open_partials"]
+        with pytest.raises(ArchiveIntegrityError, match="INCOMPLETE"):
+            read_staged_run(tmp_path, run_id, require_closed=True)
+        # Passing wall time and flushing do NOT rotate a quiet data family.
+        clock.set_time(10 * STAGE_ROTATION_NS)
+        writer.flush()
+        assert len(quotes()) == 2
+        assert [row.to_dict() for row in book_rows()] == [row.to_dict() for row in books[:3]]
+        assert not writer.is_closed
+        assert catalog.query_quote_ticks(identifiers=[str(instrument.id)]) == []
+    finally:
+        writer.close()
+    assert [row.to_dict() for row in quotes()] == [row.to_dict() for row in rows]
+    assert (
+        read_staged_run(tmp_path, run_id, require_closed=True)["types"]["QuoteTick"]["count"] == 3
+    )
+    sources = list(stage.rglob("*.feather"))
+    with pytest.raises(Exception, match="(?i)overlap|non.disjoint|intersect"):
+        recover_and_promote(tmp_path, run_id)
+    assert all(path.exists() for path in sources)
+    assert len(quotes()) == 3
+    assert [row.to_dict() for row in book_rows()] == [row.to_dict() for row in books]
+    broken = next(path for path in sources if "quote" in str(path).lower())
+    broken.write_bytes(b"corrupt-sealed-native-source")
+    with pytest.raises(ArchiveIntegrityError, match="NATIVE_STAGE_READ_FAILURE"):
+        read_staged_run(tmp_path, run_id, require_closed=True)
+
+
 def test_native_clear_book_equal_timestamp_promotion_preserves_order(tmp_path: Path) -> None:
     from nautilus_trader.common import Cache, Clock
     from nautilus_trader.model import BookAction, BookOrder, OrderBookDelta, OrderSide

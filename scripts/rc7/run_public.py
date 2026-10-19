@@ -9,17 +9,20 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import shutil
+import sys
 import time
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from trader_assist_v0.nautilus_e4.contracts import PitUniverseSnapshot
 from trader_assist_v0.nautilus_e4.native_archive import (
     DEFAULT_ARCHIVE_BYTES,
-    DEFAULT_CAPTURE_SECONDS,
+    MAX_QUALIFICATION_SECONDS,
+    ArchiveCapacityError,
     observe_archive,
     require_archive_capacity,
 )
@@ -29,19 +32,19 @@ from trader_assist_v0.nautilus_e4.native_capture import (
     closed_bar_window,
     native_event_hash,
 )
-from trader_assist_v0.nautilus_e4.native_catalog import recover_and_promote, verify_promoted_run
+from trader_assist_v0.nautilus_e4.native_catalog import ArchiveIntegrityError, read_staged_run
 from trader_assist_v0.nautilus_e4.native_health import NativeHealth
 from trader_assist_v0.nautilus_e4.native_runtime import build_native_node
 
 
-def require_verified_cycle(proof: dict[str, Any], instance_id: str) -> None:
+def require_qualified_stop(proof: dict[str, Any], instance_id: str) -> None:
     """Only this invocation's complete proof may admit a zero process exit.
 
-    systemd owns subsequent cycles; this function never restarts anything and
-    never treats an earlier close-proof file as current success.
+    Used only for an explicitly bounded qualification; production has no
+    planned stop. Earlier proof files cannot certify the current invocation.
     """
     if (
-        proof.get("status") != "PASS"
+        proof.get("status") != "SEALED_STAGE_READABLE"
         or proof.get("instance_id") != instance_id
         or proof.get("bounded_duration_complete") is not True
         or proof.get("public_coverage") != "PASS"
@@ -74,13 +77,116 @@ def capture_observer(
     strategy_manifest: Any = None,
     ledger_root: Path | None = None,
     metadata_root: Path | None = None,
+    qualification_reconnect: bool = False,
 ) -> Any:
     from nautilus_trader.common import DataActor
     from nautilus_trader.model import BarType, BookType, CryptoPerpetual, InstrumentId, Venue
 
     evaluators: dict[str, Any] = {}
+    coverage_ledger = None
+    if metadata_root is not None:
+        from trader_assist_v0.nautilus_e4.shadow_ledger import ShadowLedger
+
+        coverage_ledger = ShadowLedger(
+            metadata_root / "coverage.sqlite",
+            strategy_id="NATIVE_PUBLIC_COVERAGE",
+            strategy_version="2.0.0rc7",
+        )
 
     class NativeObserver(DataActor):
+        gap_written = 0
+        reconnect_requested = False
+        coverage_closed = False
+
+        def request_native_gap_history(self) -> None:
+            # Use supported provider requests only. These responses are evidence,
+            # never inserted as live callbacks or allowed to re-arm freshness.
+            if not hasattr(self, "requested_gap_history"):
+                self.requested_gap_history: set[tuple[str, int]] = set()
+            for gap in health.gaps:
+                stream = str(gap["stream"])
+                if stream not in health.required:
+                    continue
+                key = (stream, cast(int, gap["prior_ts_init"]))
+                if key in self.requested_gap_history:
+                    continue
+                self.requested_gap_history.add(key)
+                instrument, kind = stream.rsplit(":", 1)
+                now = self.clock.timestamp_ns()
+                start = datetime.fromtimestamp(
+                    cast(int, gap["prior_ts_event"]) / 1_000_000_000, UTC
+                )
+                end = datetime.fromtimestamp(now / 1_000_000_000, UTC)
+                if kind in {"1m", "5m"}:
+                    request = self.request_bars(
+                        BarType.from_str(f"{instrument}-{kind[:-1]}-MINUTE-LAST-EXTERNAL"),
+                        start=start,
+                        end=end,
+                        limit=5000,
+                    )
+                elif kind == "trade":
+                    request = self.request_trades(
+                        InstrumentId.from_str(instrument), start=start, end=end
+                    )
+                else:
+                    continue  # No quote/depth historical guarantee in the pinned adapter.
+                if coverage_ledger is not None:
+                    coverage_ledger.append(
+                        event_id=f"native-history-request:{request}",
+                        kind="NATIVE_HISTORY_REQUEST",
+                        ts_ns=now,
+                        payload={
+                            "stream": stream,
+                            "request_id": str(request),
+                            "start_ns": gap["prior_ts_event"],
+                            "end_ns": now,
+                            "coverage": "REQUESTED_NOT_PROVEN",
+                        },
+                    )
+
+        def record_history(self, events: Any, kind: str) -> None:
+            if coverage_ledger is None or self.coverage_closed:
+                return
+            now = self.clock.timestamp_ns()
+            for event in events:
+                if kind == "Bar":
+                    try:
+                        closed_bar_window(event, now_ns=now)
+                    except ValueError:
+                        continue  # Never accept the provider's current partial candle.
+                digest = native_event_hash(event)
+                coverage_ledger.append(
+                    event_id=f"native-history:{kind}:{digest}",
+                    kind="NATIVE_HISTORY_RESPONSE",
+                    ts_ns=event.ts_init,
+                    payload={
+                        "type": kind,
+                        "native_sha256": digest,
+                        "ts_event": event.ts_event,
+                        "ts_init": event.ts_init,
+                        "coverage": "OBSERVED_NOT_LIVE_OR_ARCHIVE_BACKFILL_CERTIFIED",
+                    },
+                )
+
+        def on_historical_bars(self, bars: Any) -> None:
+            self.record_history(bars, "Bar")
+
+        def on_historical_trades(self, trades: Any) -> None:
+            self.record_history(trades, "TradeTick")
+
+        def persist_gaps(self) -> None:
+            if coverage_ledger is None or self.coverage_closed:
+                return
+            while self.gap_written < len(health.gap_events):
+                event = health.gap_events[self.gap_written]
+                coverage_ledger.append(
+                    event_id=f"{self.actor_id}:{self.clock.timestamp_ns()}:{self.gap_written}",
+                    kind="CAPTURE_GAP",
+                    ts_ns=self.clock.timestamp_ns(),
+                    payload=event,
+                )
+                self.gap_written += 1
+
         def on_start(self) -> None:
             self.subscribe_socket_state()
             # connect() publishes bootstrap instruments before opening its native
@@ -162,12 +268,27 @@ def capture_observer(
                 # An actual valid native event proves receiving transport, including
                 # when initial socket CONNECTED preceded actor subscription.
                 health.socket(True)
+            self.persist_gaps()
+            if accepted and health.connected:
+                self.request_native_gap_history()
 
         def on_quote(self, event: Any) -> None:
             if event.bid_price.as_decimal() <= 0 or event.ask_price < event.bid_price:
                 health.failures.add("INVALID_BBO")
                 return
             self.record(event, "quote", str(event.instrument_id))
+            # Isolated public qualification only: exercise the official native
+            # reconnect command once, never implement a recovery controller.
+            if (
+                qualification_reconnect
+                and not self.reconnect_requested
+                and health.first_observed_ns is not None
+                and self.clock.timestamp_ns() - health.first_observed_ns >= 60_000_000_000
+            ):
+                from nautilus_trader.model import ClientId
+
+                self.reconnect_requested = True
+                self.reconnect_socket(ClientId("HYPERLIQUID"), "hyperliquid-data-streams")
 
         def on_trade(self, event: Any) -> None:
             self.record(event, "trade", str(event.instrument_id))
@@ -214,6 +335,11 @@ def capture_observer(
             evaluators[identity].evaluate(closed, now_ns=self.clock.timestamp_ns())
 
         def on_stop(self) -> None:
+            self.persist_gaps()
+            if coverage_ledger is not None:
+                coverage_ledger.verify()
+                coverage_ledger.close()
+                self.coverage_closed = True
             for evaluator in evaluators.values():
                 evaluator.ledger.verify()
                 evaluator.ledger.close()
@@ -221,14 +347,22 @@ def capture_observer(
         def on_socket_state(self, event: Any) -> None:
             state = str(event.state).split(".")[-1].upper()
             if event.endpoint == "hyperliquid-data-streams":
-                health.socket(state in {"CONNECTED", "ACTIVE"})
+                health.socket(state in {"CONNECTED", "ACTIVE"}, now=self.clock.timestamp_ns())
+                self.persist_gaps()
 
     return NativeObserver()
 
 
 async def run(args: argparse.Namespace) -> None:
-    if not 30 <= args.duration_seconds <= DEFAULT_CAPTURE_SECONDS:
-        raise ValueError("bounded capture duration must be 30..900 seconds")
+    if (
+        args.duration_seconds is not None
+        and not 30 <= args.duration_seconds <= MAX_QUALIFICATION_SECONDS
+    ):
+        raise ValueError("qualification capture duration must be 30..900 seconds")
+    if args.qualification_reconnect and (
+        args.duration_seconds is None or os.environ.get("GITHUB_ACTIONS") != "true"
+    ):
+        raise ValueError("reconnect probe requires bounded isolated GitHub CI")
     if args.sandbox_probe and (not args.sandbox or args.strategy_manifest is not None):
         raise ValueError("Sandbox protocol probe must be isolated from strategy and real execution")
     snapshot = (
@@ -250,6 +384,17 @@ async def run(args: argparse.Namespace) -> None:
         else None
     )
     health = NativeHealth({})
+    previous_health_path = args.root / "health.json"
+    if previous_health_path.exists():
+        previous_health = json.loads(previous_health_path.read_text())
+        boundaries = previous_health.get("last_native", {})
+        for gap in previous_health.get("gaps", []):
+            if gap.get("next_ts_init") is None and gap["stream"] not in boundaries:
+                boundaries[gap["stream"]] = {
+                    "ts_event": gap["prior_ts_event"],
+                    "ts_init": gap["prior_ts_init"],
+                }
+        health.restore_boundaries(boundaries, now=time.time_ns())
     require_archive_capacity(
         observe_archive(args.root),
         max_bytes=args.max_archive_bytes,
@@ -261,7 +406,10 @@ async def run(args: argparse.Namespace) -> None:
     from nautilus_trader.persistence import ParquetDataCatalog
 
     catalog = ParquetDataCatalog(str(args.root))
-    recovery = [recover_and_promote(args.root, run_id) for run_id in catalog.list_live_runs()]
+    recovery = [
+        read_staged_run(args.root, run_id, require_closed=True)
+        for run_id in catalog.list_live_runs()
+    ]
     (args.root / "recovery-proof.json").write_text(json.dumps(recovery, indent=2) + "\n")
     require_archive_capacity(
         observe_archive(args.root),
@@ -299,15 +447,15 @@ async def run(args: argparse.Namespace) -> None:
             strategy_id="OFFICIAL_EXEC_TESTER_PROTOCOL_ONLY",
             strategy_version="2.0.0rc7",
         )
-    node.add_actor(
-        capture_observer(
-            universe,
-            health,
-            strategy_manifest=strategy_manifest,
-            ledger_root=args.root / "shadow-ledger",
-            metadata_root=args.root,
-        )
+    observer = capture_observer(
+        universe,
+        health,
+        strategy_manifest=strategy_manifest,
+        ledger_root=args.root / "shadow-ledger",
+        metadata_root=args.root,
+        qualification_reconnect=args.qualification_reconnect,
     )
+    node.add_actor(observer)
     instance_id = str(node.instance_id)
     # Official run_async borrow contract: capture shared read/stop handles now,
     # never access node.cache/portfolio while the node is being run asynchronously.
@@ -324,9 +472,10 @@ async def run(args: argparse.Namespace) -> None:
             output = health.report(now=now, generated=now, free_bytes=free_bytes)
             output["archive"] = archive.evidence(now_ns=now)
             output["capture_gap"] = capture_gap(previous_last_ns, health.first_observed_ns)
+            observer.persist_gaps()
             output["missing_provider_coins"] = universe.missing
             output["instance_id"] = instance_id
-            output["capture_state"] = "CAPTURING_CATALOG_PENDING_CLOSE"
+            output["capture_state"] = "CONTINUOUS_NATIVE_STAGE_CAPTURE"
             if universe.missing:
                 output["status"] = "DEGRADED"
             last_active_report.clear()
@@ -396,10 +545,10 @@ async def run(args: argparse.Namespace) -> None:
                 if probe_ledger is not None:
                     probe_ledger.close()
             try:
-                node.dispose()  # Native explicit close/promotion must always run.
+                node.dispose()  # Native explicit close/seal must always run.
             except Exception as exc:
                 failure = failure or exc
-        health.socket(False)
+        health.connected = False
         stopped = health.report(
             now=time.time_ns(),
             generated=time.time_ns(),
@@ -409,9 +558,9 @@ async def run(args: argparse.Namespace) -> None:
         (args.root / "health.json").write_text(json.dumps(stopped, indent=2) + "\n")
     if failure is not None:
         raise failure
-    proof = verify_promoted_run(args.root, instance_id)
+    proof = read_staged_run(args.root, instance_id, require_closed=True)
     archive = observe_archive(args.root, args.root / "live" / instance_id)
-    # Promotion duplicates storage temporarily. Exceeding the budget at close
+    # Explicit close can flush additional buffered rows. Exceeding the budget
     # retains the evidence and fails; it never silently prunes source files.
     try:
         require_archive_capacity(
@@ -433,9 +582,7 @@ async def run(args: argparse.Namespace) -> None:
     if not 0 <= stopped_ns - last_active_report.get("generated_ns", 0) <= health.report_max_age_ns:
         freshness.add("HEALTH_REPORT_STALE_AT_STOP")
     elapsed = time.monotonic() - started
-    duration_complete = args.duration_seconds is None or bool(
-        last_active_report.get("bounded_stop_requested")
-    )
+    duration_complete = bool(last_active_report.get("bounded_stop_requested"))
     proof.update(
         provider_snapshot=universe.current_snapshot(now_ns=time.time_ns()).model_dump(mode="json"),
         stream_counts=health.counts,
@@ -450,7 +597,7 @@ async def run(args: argparse.Namespace) -> None:
         requested_duration_seconds=args.duration_seconds,
         elapsed_seconds=elapsed,
         bounded_duration_complete=duration_complete,
-        policy="NO_ROTATION_PROMOTE_ON_EXPLICIT_CLOSE_RETAIN_FEATHER",
+        policy="CONTINUOUS_NATIVE_INTERVAL_STAGE_NO_AUTOMATIC_PROMOTION",
         archive_bytes=archive.total_bytes,
         max_archive_bytes=args.max_archive_bytes,
         retention="RETAIN_ALL_STOP_AT_BUDGET_NO_AUTOMATIC_DELETION",
@@ -458,24 +605,28 @@ async def run(args: argparse.Namespace) -> None:
         first_observed_ns=health.first_observed_ns,
         last_observed_ns=health.last_observed_ns,
         capture_gap=capture_gap(previous_last_ns, health.first_observed_ns),
+        stream_gaps=health.gaps,
+        reconnect_probe_requested=observer.reconnect_requested,
     )
     (args.root / "close-proof.json").write_text(json.dumps(proof, indent=2) + "\n")
     stopped.update(
-        capture_state="STOPPED_CATALOG_VERIFIED",
+        capture_state="STOPPED_STAGE_READABLE_CATALOG_UNQUALIFIED",
         capture_gap=proof["capture_gap"],
         archive={
             **archive.evidence(now_ns=time.time_ns()),
             "writer": "CLOSED",
-            "catalog": "VERIFIED_STOPPED_RUN",
+            "catalog": "NOT_VERIFIED_OR_PROMOTED",
             "instance_id": instance_id,
             "typed_integrity": proof["types"],
         },
     )
     (args.root / "health.json").write_text(json.dumps(stopped, indent=2) + "\n")
+    if args.duration_seconds is None:
+        raise RuntimeError("UNEXPECTED_NATIVE_NODE_STOP")
     if not duration_complete:
         raise RuntimeError("NATIVE_RUN_STOPPED_BEFORE_REQUESTED_DURATION")
-    require_verified_cycle(proof, instance_id)
-    print(json.dumps({"cycle_exit": "VERIFIED_SUCCESS", "instance_id": instance_id}))
+    require_qualified_stop(proof, instance_id)
+    print(json.dumps({"qualification_exit": "VERIFIED_STAGED_STOP", "instance_id": instance_id}))
 
 
 def main() -> None:
@@ -483,7 +634,10 @@ def main() -> None:
     universe_args = parser.add_mutually_exclusive_group(required=True)
     universe_args.add_argument("--snapshot", type=Path)
     universe_args.add_argument("--provider-coins", nargs="+")
-    parser.add_argument("--duration-seconds", type=int, default=DEFAULT_CAPTURE_SECONDS)
+    parser.add_argument(
+        "--duration-seconds", type=int, help="isolated qualification only; default is continuous"
+    )
+    parser.add_argument("--qualification-reconnect", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--max-archive-bytes", type=int, default=DEFAULT_ARCHIVE_BYTES)
     parser.add_argument("--startup-timeout-seconds", type=int, default=90)
     parser.add_argument("--root", type=Path, required=True)
@@ -493,7 +647,10 @@ def main() -> None:
     parser.add_argument("--maker-rate")
     parser.add_argument("--taker-rate")
     args = parser.parse_args()
-    if not 30 <= args.duration_seconds <= DEFAULT_CAPTURE_SECONDS:
+    if (
+        args.duration_seconds is not None
+        and not 30 <= args.duration_seconds <= MAX_QUALIFICATION_SECONDS
+    ):
         parser.error("bounded capture duration must be 30..900 seconds")
     if args.max_archive_bytes <= 0:
         parser.error("archive budget must be positive")
@@ -501,7 +658,11 @@ def main() -> None:
         parser.error(
             "protocol probe requires Sandbox and must be isolated from registered strategy"
         )
-    asyncio.run(run(args))
+    try:
+        asyncio.run(run(args))
+    except (ArchiveCapacityError, ArchiveIntegrityError, ValueError, OSError) as exc:
+        print(f"FATAL_CAPTURE_STOP:{exc}", file=sys.stderr, flush=True)
+        raise SystemExit(78) from exc
 
 
 if __name__ == "__main__":

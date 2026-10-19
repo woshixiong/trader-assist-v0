@@ -41,7 +41,7 @@ def build_native_node(root: Path, *, sandbox: bool = False, sandbox_fee_model: A
     config = LiveNodeConfig(
         environment=Environment.LIVE,
         trader_id=TraderId("TRADEOS-RC7-001"),
-        streaming=streaming_config(root),
+        streaming=streaming_config(root, continuous=True),
         shutdown_on_error=True,
         risk_engine=LiveRiskEngineConfig(bypass=False),
         exec_engine=LiveExecutionEngineConfig(reconciliation=True),

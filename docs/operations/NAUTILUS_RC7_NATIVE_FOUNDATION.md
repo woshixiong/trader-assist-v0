@@ -26,123 +26,92 @@ changes; its parser uses candle open time for `ts_event`. Admission checks the
 corresponding close against `ts_init` and the current clock. Actual public
 provider and 5m coverage still require bounded evidence.
 
-## Bounded isolated development quickstart
+## Continuous public capture candidate
 
-Use the exact locked Linux x86_64/Python 3.13 environment; this is not an AWS or
-service activation instruction. The default has no execution client. Discovery
-accepts only coins already in `multi_asset_shadow.resolution.INITIAL_40` and
-resolves native IDs/precision through the official provider. There is no symbol
-fallback if `xyz:SKHX` is missing.
+One native LiveNode runs until an operator stop, genuine failure or fatal archive
+admission error. No duration is passed by the disabled systemd artifact. There
+is no planned 900-second cycle, writer close or collector restart. Native
+Hyperliquid reconnect/resubscribe and stale-stream recovery stay enabled.
+Use the locked Linux CPython3.13/rc7 environment, without credentials:
 
 ```sh
-capture_root="$(mktemp -d)"
 PYTHONPATH=src:. python -m scripts.rc7.run_public \
-  --provider-coins ETH xyz:SKHX --root "$capture_root" --duration-seconds 420
+  --provider-coins ETH xyz:SKHX --root /path/to/isolated-capture
 ```
 
-Inspect `resolved-pit-universe.json`, `health.json`, `close-proof.json` and
-`recovery-proof.json`. `close-proof.json` separates typed catalog integrity from
-per-instrument public stream coverage; catalog PASS alone is insufficient.
-Coverage also requires completion of the requested duration and a fresh final
-stream-health report. Closed-bar freshness uses its verified close time while
-retaining native open `ts_event`; it does not incorrectly age a closed 5m bar
-from its open time. An early native shutdown cannot satisfy the bounded proof.
-The health report says `CAPTURING_CATALOG_PENDING_CLOSE` while the catalog has
-not been verified and `STOPPED` after termination. Neither means live HEALTHY.
-Missing instruments/events, bad clocks, disk errors and native close failures
-remain visible and cannot be certified as usable provider coverage.
+`--duration-seconds 420` is an explicit isolated qualification stop, never the
+normal service mode. The CI-only reconnect probe sends one **official native
+DataActor.reconnect_socket** command; it adds no recovery loop or transport.
+The optional public CI proof uses one process/writer for 420 seconds, checks
+sealed data while that writer remains open, and requires fresh native events
+after the native disconnect/reconnect. It submits no orders.
 
-After the writer is stopped, use the instance ID from the close proof:
+## Native archive query lag and integrity
+
+The live policy uses `RotationConfig.interval(300_000_000_000)`, no promotion
+interval, **promote_on_close=False**, and retained Feather. The tagged official
+`writer/feather.rs` checks interval rotation **on a write for that data family**,
+after appending it. Passing wall time or flushing alone does not seal a quiet
+family. Thus a five-minute interval is **not a five-minute visibility SLA**.
+Under active traffic it seals at the first family write after the deadline;
+quiet data can remain unavailable to staged readers indefinitely. Families
+rotate independently and may contain several instruments. Instruments themselves
+are not returned as market Data by the native run reader.
+
+Use the official sealed-stage reader, including while capture is active:
 
 ```sh
-PYTHONPATH=src:. python -m scripts.rc7.catalog replay \
-  --root "$capture_root" --instance-id INSTANCE_ID
+PYTHONPATH=src:. python -m scripts.rc7.catalog stage \
+  --root /path/to/isolated-capture --instance-id INSTANCE_ID
 ```
 
-This reads typed catalog quotes/instrument definitions and runs two official
-BacktestEngines, checking causal clocks, complete typed event hashes and repeat
-ordering. It submits no orders and does not establish strategy profitability.
-`catalog recover` invokes official unlocked-partial recovery and promotion;
-complete source batches remain retained. Restarting capture on the same root
-first recovers/verifies prior runs and fails on corrupt or missing archive data.
-Do not run recovery against an active writer or remove failed source files.
+This delegates to `ParquetDataCatalog.read_live_run()`. Native recovery skips
+writer-locked `.feather.partial` files, recovers abandoned unlocked partials,
+and reads sealed Feather only. The latest unsealed tail is absent, not silently
+certified complete. The API loads available run data in memory and sorts by
+`ts_init`; it is not a transactional snapshot or a global ordering guarantee
+across different families at equal timestamps. Tests preserve per-family order,
+original clocks, equal-time rows and CLEAR/book values across segment boundaries.
 
-The existing rc7 CI workflow has a manually dispatched `public_probe=true`
-option for an isolated Ubuntu runner. It performs a 420-second initial capture,
-a 420-second clean restart, typed readback, deterministic replay, and the official
-ExecTester routed exclusively to Sandbox with declared simulated fee rates.
-It retains native sources and `public-qualification.json`, including failures.
-Unavailable provider access is a failed/unqualified public proof, never PASS.
-This fixture is separate from the registered strategy and adds no alpha signals.
+**Promoted Parquet Catalog queries are separate.** No automatic promotion runs,
+including on close, so their lag is unbounded until an explicit successful
+native conversion. Rotation can split equal-ts_init groups; native conversion
+can reject overlapping closed catalog intervals. The source remains retained,
+and no integrity check is weakened. `catalog recover` is an explicit stopped-run
+conversion attempt, not a safe rolling promoter or guaranteed conversion of all
+rotated runs. Existing unrotated native close/promotion/readback and deterministic
+Backtest fixtures remain tested. Never run conversion against an active writer.
 
-## Storage/recovery and health limits
+Startup invokes native stage recovery/readback before starting a new writer.
+Corruption, locked prior writers, or an incomplete stopped run fail closed.
+Active-stage readback reports SEALED_STAGE_READABLE with open partials listed;
+it never reports Parquet/catalog PASS. Stopped stage readback requires the full
+native tail to have sealed. Source remains after crash/truncated-tail recovery.
 
-The pinned official guide warns that rotation or interval promotion can split
-equal `ts_init` rows, causing overlapping closed catalog intervals. This candidate
-uses explicit no rotation/no interval promotion, retaining source Feather and
-promoting on close. Do not represent that conservative policy as qualified
-continuous 24×7 live catalog promotion. During capture, catalog/writer verification
-is UNKNOWN and health stays DEGRADED; stop-time successful typed readback does
-not retroactively make the live process healthy. Continuous live rotation and
-promotion remain acceptance gaps. The operational fallback is **bounded explicit
-close/promote/restart**, not transparent continuous capture: each invocation
-defaults to 900 seconds (allowed 30..900), disposes the native node, verifies the
-entire stopped run, and exits. Start another invocation only after successful
-close proof. Native connection/bootstrap between runs is an explicit visible
-capture gap. The disabled systemd artifact owns the next cycle after verified
-success; direct CLI invocation still runs exactly one bounded cycle.
+The existing 8GiB whole-root / 1GiB free-disk checks remain minimum admission
+and stop thresholds, not hard filesystem quotas or automatic retention. They
+are sampled and can overshoot. Fatal archive/capacity/config errors exit 78;
+no automatic restart follows. Fuller alerts, backup/DR and retention are deferred.
+Staging activity is not writer integrity or live HEALTHY. Strategy evaluation
+uses live native callbacks and never waits for Parquet promotion.
 
-`--max-archive-bytes` defaults to 8 GiB for the whole retained root, including
-Feather, Parquet and ledgers. Admission, five-second observations and post-close
-checks fail on exhausted budget or less than 1 GiB free disk. This is a **sampled
-stop threshold**, not a filesystem quota: bursts, shutdown writes and promotion
-can overshoot it. Reserve promotion headroom or apply an operator-owned filesystem
-quota separately. On exhaustion the process stops and retains all evidence; it
-never evicts unverified source/catalog rows. Retention is bounded by stopping
-new capture, not by pruning history. Offline archive/offload of a stopped root
-and resuming a fresh root are explicit operator responsibilities. No automatic
-deletion/retention controller or service activation is introduced.
+## Disconnect and gap evidence
 
-During capture `health.json.archive` reports native staging byte/file observations
-and recent filesystem activity separately from integrity. Such activity cannot
-certify the writer, typed catalog or feed. Live health remains DEGRADED, including
-when an older run is queryable. Only successful native close and full typed
-readback yield `STOPPED_CATALOG_VERIFIED` / `VERIFIED_STOPPED_RUN`; that report
-still cannot pass live/24h health qualification. A locked or unrecoverable native
-partial prevents complete-run catalog certification. Recovery never certifies
-only the sealed subset of an active writer.
+Socket acknowledgement alone never re-arms freshness. Native disconnect clears
+the continuity epoch; each instrument/stream needs valid fresh native events.
+Stale receive intervals and missing closed-bar periods also create explicit
+CAPTURE_GAP metadata with prior/next original `ts_event` and `ts_init`. Later
+bars are never shifted or reindexed. Exact lost-event counts remain UNKNOWN.
+Gap/history-request facts reuse the existing immutable `ShadowLedger` in
+`coverage.sqlite`; this stores metadata/hashes, not a second market-data archive.
 
-Focused native tests exercise equal-`ts_init` rows across flush batches, CLEAR /
-populated / trailing CLEAR book rows, active-writer refusal, and actual size
-rotation with equal timestamps rejected for overlapping intervals while sources
-remain. Native CLEAR sentinel zeros may adopt neighbouring precision as documented
-in the pinned guide; the digest normalizes only those zero sentinel strings,
-retaining nonzero decimals, actions, flags, sequence and both clocks. General
-precision changes are not normalized. Crash/truncated-tail recovery and missing
-catalog-row negatives remain required. These fixtures do not establish gapless
-live rotation or native partial fills.
-
-`verify_promoted_run` checks the complete native sink lifecycle against typed
-Parquet count and event-multiset hashes, retaining duplicates, precision and
-both native timestamps. It does not compare the shorter Actor RUNNING window to
-the longer native writer lifetime. It does not claim exchange wire-receive time.
-Close/readback failures propagate; staged files must remain intact. Native
-recovery reads unlocked `.feather.partial` files and retains complete batches.
-Do not delete Feather/catalog data to make a failed promotion appear successful.
-
-Recovery verifies an already complete automatic promotion before requesting
-manual conversion: rc7 uses different automatic/manual replay identities.
-Run readers return market `Data`, excluding instrument definitions. Recovery
-therefore checks native catalog definitions separately and uses the official
-aggregate `NautilusDataType.Instrument` selector for missing definitions. A
-partially committed catalog which native conversion cannot repair fails and
-retains its source; the wrapper never overwrites overlapping intervals.
-
-Native health uses stream-specific actual event age, continuity epochs,
-monotonic source order, native socket state, free disk, writer/catalog evidence
-and report timestamp. File mtime is never a freshness predicate. Reconnect ACK
-alone cannot restore feed health. Out-of-order/unknown-clock faults latch until
-reviewed recovery; no automatic execution re-arm is provided.
+The adapter owns reconnect/resubscribe and book snapshot reset. Supported native
+bar requests and bounded recent-trade requests are used after observed gaps.
+Closed historical responses are recorded as evidence; they do not re-arm live
+freshness, feed the live strategy, or certify complete archive backfill. The
+recent-trade snapshot can lack historical depth or return empty when the indexer
+is unavailable. No historical quote/depth recovery guarantee is exposed here.
+Unproven intervals remain explicit UNKNOWN coverage. No event is synthesized.
 
 ## Shadow and execution boundaries
 
@@ -184,7 +153,7 @@ in genuine native HIP-3 instrument names; catalog filenames stay unchanged.
 | Native quote replay | Same catalog definitions, two causal deterministic Engine runs |
 | Sandbox lifecycle/fees/PnL | Native events and account snapshots in isolated public proof; report observed types only |
 | Approved strategy orders | **NOT QUALIFIED:** registered evaluator lacks accepted native order sizing/mapping |
-| Continuous live Parquet promotion | **NOT QUALIFIED:** retained Feather until explicit close; equal-timestamp overlap constraint |
+| Continuous archive queries | Native sealed Feather only; write-triggered lag, no fixed SLA; promoted Parquet remains unqualified |
 | Real execution / 24h host | **OFF / NOT RUN:** final-dispatch gate, independent review and host qualification remain open |
 
 `native_execution_contract` constructs only inert official Hyperliquid config,
@@ -201,40 +170,13 @@ cancel/reduce-only behavior must be tested without weakening protective orders.
 The unit in `deploy/systemd/tradeos-rc7-public.service` is an artifact only. It
 requires an unshipped `/etc/tradeos/rc7-public-authorized` marker, a dedicated
 unprivileged `tradeos` user, isolated venv, writable data root and approved PIT
-snapshot. It uses success-only next-cycle restart, journal output, SIGINT clean stop
-and filesystem confinement. No installation, activation, enable marker or AWS
-service action is authorized by this document.
-
-The unit targets **systemd 255** (the Ubuntu 24.04 CI baseline). Official
-[`systemd.service` at v255](https://github.com/systemd/systemd/blob/v255/man/systemd.service.xml)
-defines `Restart=on-success`: exit zero triggers another invocation after
-`RestartSec=15`; nonzero exits, timeouts and abnormal termination stop. The
-normally clean signals SIGHUP/SIGINT/SIGTERM/SIGPIPE are explicitly excluded via
-`RestartPreventExitStatus`. A manager-requested `systemctl stop` suppresses
-restart regardless of process exit status. The existing start limit remains
-three starts per 300 seconds. Nothing force-restarts a failed verification.
-
-The public command may exit zero only after this invocation's native close,
-typed catalog verification, capacity checks, requested duration and complete
-fresh stream coverage. Missing/old/incomplete proof cannot admit the next cycle.
-Proof write failures also stop. The optional isolated public qualification now
-uses 420 seconds for **each** phase so restart has a chance to qualify a newly
-closed 5m; the previous 60-second evidence remains limited to its measured data.
-
-Each live/stopped report and close proof publishes `capture_gap` with state
-`CAPTURE_GAP`. When a prior observed boundary exists, it measures nanoseconds
-between the prior last accepted callback and this run's first accepted callback;
-this includes close, systemd delay and native bootstrap. It is not an exact
-exchange-loss or sink-visibility measurement. The first run/older proofs report
-UNKNOWN, and backwards boundary clocks fail closed. Gaps at every 15-minute
-boundary remain intentional and visible. This policy does not qualify gapless
-24/7 capture, continuous Parquet visibility or live HEALTHY.
-
-CI uses native `systemd-analyze verify` on an isolated unit copy with only
-host paths/account substituted, and rejects the invalid oneshot/on-success
-combination as a negative control. It never installs or starts a service.
-Actual target-host version, resources/path collisions and manager stop/restart
-behavior require separately authorized deployment preparation/qualification.
+snapshot. It uses official **systemd 255** `Restart=on-failure`, 15-second
+restart delay and a three-start/300s limit for genuine native failures. Fatal
+archive/config exit 78, argument exit 2, manual SIGINT exit 130 and clean
+termination signals are restart-prevented. Manager-requested stop never restarts.
+The unit remains uninstalled/disabled with an unshipped authorization marker.
+No service or AWS mutation is authorized by this document. Native
+`systemd-analyze verify` validates a CI copy without installing/starting it.
 
 After separately authorized installation and closure of the acceptance gaps,
 use the following read-only qualification command on the target host:

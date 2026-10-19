@@ -11,7 +11,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_ARCHIVE_BYTES = 8 * 1024**3
-DEFAULT_CAPTURE_SECONDS = 900
+MAX_QUALIFICATION_SECONDS = 900
+
+
+class ArchiveCapacityError(RuntimeError):
+    """Fatal disk/archive admission failure, with all source evidence retained."""
 
 
 @dataclass(frozen=True)
@@ -29,19 +33,19 @@ class ArchiveObservation:
             "stage_files": self.stage_files,
             "writer": "STAGING_ACTIVITY_OBSERVED" if recent else "UNKNOWN_OR_QUIET",
             "writer_integrity": "UNVERIFIED_UNTIL_NATIVE_CLOSE_AND_TYPED_READBACK",
-            "catalog": "CURRENT_RUN_PENDING_CLOSE",
+            "catalog": "NOT_AUTOMATICALLY_PROMOTED",
             "retention": "RETAIN_ALL_STOP_AT_BUDGET_NO_AUTOMATIC_DELETION",
         }
 
 
 def observe_archive(root: Path, stage: Path | None = None) -> ArchiveObservation:
     if root.is_symlink():
-        raise RuntimeError("ARCHIVE_SYMLINK_NOT_SUPPORTED")
+        raise ArchiveCapacityError("ARCHIVE_SYMLINK_NOT_SUPPORTED")
     total = staged = files = newest = 0
     for path in root.rglob("*"):
         # Never follow an external archive tree or let its size escape admission.
         if path.is_symlink():
-            raise RuntimeError("ARCHIVE_SYMLINK_NOT_SUPPORTED")
+            raise ArchiveCapacityError("ARCHIVE_SYMLINK_NOT_SUPPORTED")
         try:
             stat = path.stat()
         except FileNotFoundError:
@@ -62,6 +66,6 @@ def require_archive_capacity(
     if max_bytes <= 0 or minimum_free_bytes <= 0:
         raise ValueError("archive limits must be positive")
     if observation.total_bytes >= max_bytes:
-        raise RuntimeError("ARCHIVE_BUDGET_EXHAUSTED_SOURCES_RETAINED")
+        raise ArchiveCapacityError("ARCHIVE_BUDGET_EXHAUSTED_SOURCES_RETAINED")
     if free_bytes < minimum_free_bytes:
-        raise RuntimeError("DISK_LOW")
+        raise ArchiveCapacityError("DISK_LOW")
