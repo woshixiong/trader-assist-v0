@@ -159,3 +159,61 @@ def test_approved_strategy_retains_cold_start_no_signal_denominator(tmp_path: Pa
     with pytest.raises(ValueError, match="lookahead"):
         evaluator.evaluate(_closed_bar(3), now_ns=1)
     ledger.close()
+
+
+def test_native_universe_uses_provider_identity_without_inventing_symbols() -> None:
+    from types import SimpleNamespace
+
+    from trader_assist_v0.nautilus_e4.native_capture import NativeUniverse
+
+    universe = NativeUniverse(("ETH", "xyz:SKHX"), None)
+    with pytest.raises(ValueError, match="MISSING"):
+        universe.current_snapshot(now_ns=1)
+
+    class Identity:
+        venue = "HYPERLIQUID"
+
+        def __init__(self, symbol: str) -> None:
+            self.symbol = symbol
+
+        def __str__(self) -> str:
+            return self.symbol + ".HYPERLIQUID"
+
+    for coin, symbol in (("ETH", "provider-eth"), ("xyz:SKHX", "provider-rwa")):
+        native = SimpleNamespace(
+            raw_symbol=coin, id=Identity(symbol), to_dict=lambda value=coin: {"coin": value}
+        )
+        expression = universe.admit(native)
+        assert expression is not None
+        assert expression.instrument_id == str(native.id)
+    snapshot = universe.current_snapshot(now_ns=1)
+    pinned = NativeUniverse(("ETH", "xyz:SKHX"), snapshot)
+    with pytest.raises(ValueError, match="identity mismatch"):
+        pinned.admit(SimpleNamespace(raw_symbol="ETH", id=native.id))
+    assert not universe.missing
+    with pytest.raises(ValueError, match="approved registry"):
+        NativeUniverse(("ETH", "fake:NEW"), None)
+
+
+@pytest.mark.parametrize("minutes", [1, 5])
+def test_native_closed_bar_admission_has_no_partial_or_future_bar(minutes: int) -> None:
+    from types import SimpleNamespace
+
+    from trader_assist_v0.nautilus_e4.native_capture import closed_bar_window
+
+    duration = minutes * 60_000_000_000
+    event = SimpleNamespace(
+        bar_type=SimpleNamespace(spec=SimpleNamespace(step=minutes)),
+        ts_event=duration,
+        ts_init=2 * duration,
+    )
+    assert closed_bar_window(event, now_ns=2 * duration) == (
+        duration // 1_000_000,
+        2 * duration // 1_000_000 - 1,
+    )
+    event.ts_init -= 1
+    with pytest.raises(ValueError, match="NOT_CLOSED"):
+        closed_bar_window(event, now_ns=2 * duration)
+    event.ts_init = 2 * duration + 1
+    with pytest.raises(ValueError, match="FUTURE"):
+        closed_bar_window(event, now_ns=2 * duration)

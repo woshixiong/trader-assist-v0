@@ -1,4 +1,4 @@
-# mypy: disable-error-code="import-not-found"
+# mypy: disable-error-code="import-not-found,misc"
 """rc7 native storage composition and fail-closed typed promotion verification.
 
 The native writer is the only market-data archive owner. Project evidence may
@@ -100,7 +100,7 @@ def verify_promoted_run(root: Path, instance_id: str, *, live: bool = True) -> d
 def recover_and_promote(root: Path, instance_id: str, *, live: bool = True) -> dict[str, Any]:
     """Use official locked-partial recovery and replay identities; no custom copier."""
     from nautilus_trader.common import Environment
-    from nautilus_trader.model import NautilusDataType
+    from nautilus_trader.model import CryptoPerpetual, NautilusDataType, NautilusInstrumentType
     from nautilus_trader.persistence import ParquetDataCatalog
 
     catalog = ParquetDataCatalog(str(root))
@@ -119,7 +119,95 @@ def recover_and_promote(root: Path, instance_id: str, *, live: bool = True) -> d
             catalog.convert_stream_to_data(
                 instance_id, data_type, Environment.LIVE if live else Environment.BACKTEST
             )
+    if any(isinstance(event, CryptoPerpetual) for event in staged):
+        catalog.convert_stream_to_data(
+            instance_id,
+            NautilusInstrumentType("CryptoPerpetual"),
+            Environment.LIVE if live else Environment.BACKTEST,
+        )
     return verify_promoted_run(root, instance_id, live=live)
+
+
+def replay_catalog_quotes(root: Path, instance_id: str, *, live: bool = True) -> dict[str, Any]:
+    """Two native Engine runs over the exact promoted run's typed quote window.
+
+    This is data replay qualification, with no orders or strategy economics.
+    Existing matched strategy replay remains the financial-behavior owner.
+    """
+    from decimal import Decimal
+
+    from nautilus_trader.backtest import BacktestEngine, BacktestEngineConfig
+    from nautilus_trader.common import DataActor
+    from nautilus_trader.execution import MakerTakerFeeModel
+    from nautilus_trader.model import AccountType, BookType, Money, OmsType, QuoteTick, Venue
+    from nautilus_trader.persistence import ParquetDataCatalog
+
+    verify_promoted_run(root, instance_id, live=live)
+    catalog = ParquetDataCatalog(str(root))
+    stage = catalog.read_live_run(instance_id) if live else catalog.read_backtest(instance_id)
+    source = [event for event in stage if isinstance(event, QuoteTick)]
+    if not source:
+        raise RuntimeError("REPLAY_REQUIRES_PROMOTED_QUOTES")
+    if any(event.ts_init < event.ts_event for event in source):
+        raise RuntimeError("NONCAUSAL_QUOTE_TIMESTAMP")
+    ids = sorted({str(event.instrument_id) for event in source})
+    quotes = catalog.query_quote_ticks(
+        identifiers=ids,
+        start=min(event.ts_init for event in source),
+        end=max(event.ts_init for event in source),
+    )
+    instruments = catalog.instruments(instrument_ids=ids)
+    if {str(item.id) for item in instruments} != set(ids):
+        raise RuntimeError("REPLAY_NATIVE_INSTRUMENT_DEFINITIONS_MISSING")
+
+    def observer(received: list[Any]) -> Any:
+        class Observer(DataActor):
+            def on_start(self) -> None:
+                for instrument in instruments:
+                    self.subscribe_quotes(instrument.id)
+
+            def on_quote(self, event: Any) -> None:
+                received.append(event)
+
+        return Observer()
+
+    repetitions: list[str] = []
+    for _ in range(2):
+        received: list[Any] = []
+        engine = BacktestEngine(BacktestEngineConfig(bypass_logging=True, run_analysis=False))
+        try:
+            engine.add_venue(
+                venue=Venue("HYPERLIQUID"),
+                oms_type=OmsType.NETTING,
+                account_type=AccountType.MARGIN,
+                starting_balances=[Money.from_str("100000 USDC")],
+                book_type=BookType.L1_MBP,
+                fee_model=MakerTakerFeeModel(Decimal(0), Decimal(0)),
+            )
+            for instrument in instruments:
+                engine.add_instrument(instrument)
+            engine.add_actor(observer(received))
+            engine.add_data(quotes)
+            engine.run()
+            if event_multiset(received) != event_multiset(source):
+                raise RuntimeError("REPLAY_TYPED_EVENT_MISMATCH")
+            repetitions.append(
+                hashlib.sha256(
+                    "\n".join(_identity(event) for event in received).encode()
+                ).hexdigest()
+            )
+        finally:
+            engine.dispose()
+    if repetitions[0] != repetitions[1]:
+        raise RuntimeError("NATIVE_REPLAY_NONDETERMINISTIC")
+    return {
+        "status": "PASS",
+        "quote_count": len(source),
+        "ordered_sha256": repetitions[0],
+        "native_engine_runs": 2,
+        "orders": "NONE_DATA_REPLAY_ONLY",
+        "book_batch_deltas": BACKTEST_BATCH_DELTAS,
+    }
 
 
 def replay_data_config(

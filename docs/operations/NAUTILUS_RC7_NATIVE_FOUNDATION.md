@@ -18,11 +18,58 @@ Historical rc4/rc5 evidence remains readable; rc6 findings remain unchanged.
 
 `native_runtime.build_native_node` composes public-only capture or the official
 Sandbox factory. `scripts.rc7.run_public` validates an approved hash-bound PIT
-snapshot against the actual native provider cache before subscribing immediately
+snapshot against native provider instrument callbacks before subscribing immediately
 to Quote/Trade/Book/closed external 1m and 5m. It requires ETH and a HIP-3 expression;
 it does not invent a symbol or substitute SKHX. Missing metadata fails closed.
-The native bar callback does not establish every provider's bar-finality semantics;
-public-provider and 5m coverage still require bounded evidence.
+The tagged Hyperliquid handler emits the previous cached candle when its period
+changes; its parser uses candle open time for `ts_event`. Admission checks the
+corresponding close against `ts_init` and the current clock. Actual public
+provider and 5m coverage still require bounded evidence.
+
+## Bounded isolated development quickstart
+
+Use the exact locked Linux x86_64/Python 3.13 environment; this is not an AWS or
+service activation instruction. The default has no execution client. Discovery
+accepts only coins already in `multi_asset_shadow.resolution.INITIAL_40` and
+resolves native IDs/precision through the official provider. There is no symbol
+fallback if `xyz:SKHX` is missing.
+
+```sh
+capture_root="$(mktemp -d)"
+PYTHONPATH=src:. python -m scripts.rc7.run_public \
+  --provider-coins ETH xyz:SKHX --root "$capture_root" --duration-seconds 420
+```
+
+Inspect `resolved-pit-universe.json`, `health.json`, `close-proof.json` and
+`recovery-proof.json`. `close-proof.json` separates typed catalog integrity from
+per-instrument public stream coverage; catalog PASS alone is insufficient.
+The health report says `CAPTURING_CATALOG_PENDING_CLOSE` while the catalog has
+not been verified and `STOPPED` after termination. Neither means live HEALTHY.
+Missing instruments/events, bad clocks, disk errors and native close failures
+remain visible and cannot be certified as usable provider coverage.
+
+After the writer is stopped, use the instance ID from the close proof:
+
+```sh
+PYTHONPATH=src:. python -m scripts.rc7.catalog replay \
+  --root "$capture_root" --instance-id INSTANCE_ID
+```
+
+This reads typed catalog quotes/instrument definitions and runs two official
+BacktestEngines, checking causal clocks, complete typed event hashes and repeat
+ordering. It submits no orders and does not establish strategy profitability.
+`catalog recover` invokes official unlocked-partial recovery and promotion;
+complete source batches remain retained. Restarting capture on the same root
+first recovers/verifies prior runs and fails on corrupt or missing archive data.
+Do not run recovery against an active writer or remove failed source files.
+
+The existing rc7 CI workflow has a manually dispatched `public_probe=true`
+option for an isolated Ubuntu runner. It performs a 420-second initial capture,
+a 60-second clean restart, typed readback, deterministic replay, and the official
+ExecTester routed exclusively to Sandbox with declared simulated fee rates.
+It retains native sources and `public-qualification.json`, including failures.
+Unavailable provider access is a failed/unqualified public proof, never PASS.
+This fixture is separate from the registered strategy and adds no alpha signals.
 
 ## Storage/recovery and health limits
 
@@ -62,6 +109,27 @@ strategy/version, all decisions including REJECT/WAIT/PASS/UNFILLED/LOST, and
 native lifecycle facts. It is not an OMS. Native partial fills/cost/PnL and
 account/position snapshots must be collected from native behavior; artificial
 fixtures are not live Sandbox lifecycle proof.
+
+`--sandbox --sandbox-probe --maker-rate 0.00015 --taker-rate 0.00045` adds only
+the official native protocol tester to the bounded development run. Its native
+order history (including denied, unfilled, cancelled and amended orders), fills
+with native commission, account/position/equity/PnL snapshots are recorded in
+`sandbox-probe.sqlite`. Every initialized probe order remains in its decision
+denominator. Snapshot/event collection is idempotent; no fees or fills are
+invented by the ledger. Actual event counts are reported; rejection, partial
+fill, stop/TP and reconciliation coverage must not be inferred from unrelated
+events. The approved evaluator still has no qualified sizing/order mapping.
+
+| Changed capability | Required evidence / current boundary |
+| --- | --- |
+| ETH + existing HIP-3 metadata | Actual native provider resolution; public CI artifact required |
+| Quote/trade/L2 book/closed 1m+5m | Nonzero per-instrument counts; no unavailable-provider PASS |
+| Close/restart/recovery | Native crash fixture, idempotent promotion, typed hashes, clean restart proof |
+| Native quote replay | Same catalog definitions, two causal deterministic Engine runs |
+| Sandbox lifecycle/fees/PnL | Native events and account snapshots in isolated public proof; report observed types only |
+| Approved strategy orders | **NOT QUALIFIED:** registered evaluator lacks accepted native order sizing/mapping |
+| Continuous live Parquet promotion | **NOT QUALIFIED:** retained Feather until explicit close; equal-timestamp overlap constraint |
+| Real execution / 24h host | **OFF / NOT RUN:** final-dispatch gate, independent review and host qualification remain open |
 
 `native_execution_contract` constructs only inert official Hyperliquid config,
 factory, enabled native RiskEngine (`bypass=False`) and startup reconciliation.

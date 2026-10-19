@@ -27,6 +27,8 @@ from nautilus_trader.model import (
 from nautilus_trader.persistence import ParquetDataCatalog
 
 from trader_assist_v0.nautilus_e4.native_catalog import (
+    recover_and_promote,
+    replay_catalog_quotes,
     replay_data_config,
     streaming_config,
     verify_promoted_run,
@@ -104,12 +106,71 @@ def test_native_stream_promotes_equal_timestamp_rows_and_roundtrips(tmp_path: Pa
     assert proof["types"]["QuoteTick"]["count"] == 3
     restored = catalog.query_quote_ticks(identifiers=[str(instrument.id)])
     assert [q.to_dict() for q in restored] == [q.to_dict() for q in ticks]
+    assert recover_and_promote(tmp_path, runs[0], live=False) == proof
+    replay = replay_catalog_quotes(tmp_path, runs[0], live=False)
+    assert replay["native_engine_runs"] == 2
+    assert replay["quote_count"] == 3
     # A missing promoted row must never produce catalog PASS.
     for file in (tmp_path / "data").rglob("*.parquet"):
         if "quote" in str(file).lower():
             file.unlink()
     with pytest.raises(RuntimeError, match="CATALOG_INTEGRITY_FAILURE"):
         verify_promoted_run(tmp_path, runs[0], live=False)
+
+
+def test_native_crash_recovers_flushed_partial_and_promotes_idempotently(tmp_path: Path) -> None:
+    import os
+    import subprocess
+    import sys
+
+    run_id = "8b067de2-e76c-49c3-851d-9ce6d03cf180"
+    stage = tmp_path / "live" / run_id
+    code = """
+import os, sys
+from nautilus_trader.common import Cache, Clock
+from nautilus_trader.model import Price, Quantity, QuoteTick
+from nautilus_trader.persistence import StreamingFeatherWriter
+from test_nautilus_vnext_g4_runner import native_hyperliquid_instrument
+instrument = native_hyperliquid_instrument()
+writer = StreamingFeatherWriter(sys.argv[1], Cache(), Clock.new_test())
+writer.write(instrument)
+for i in range(3):
+    writer.write(QuoteTick(instrument.id, Price.from_str('2000.0'), Price.from_str('2001.0'),
+                          Quantity.from_str('1.000'), Quantity.from_str('1.000'),
+                          1000000000+i, 1000000000+i))
+writer.flush()
+os._exit(0)
+"""
+    env = dict(os.environ, PYTHONPATH="src:.:tests")
+    subprocess.run([sys.executable, "-c", code, str(stage)], env=env, check=True, timeout=30)
+    partials = list(stage.rglob("*.feather.partial"))
+    assert partials, "fixture must terminate before native close/seal"
+    # Simulate a cut-short last append, after actual native flushed batches.
+    for path in partials:
+        with path.open("ab") as file:
+            file.write(b"truncated-final-append")
+    proof = recover_and_promote(tmp_path, run_id)
+    assert proof["types"]["QuoteTick"]["count"] == 3
+    assert not list(stage.rglob("*.feather.partial"))
+    assert recover_and_promote(tmp_path, run_id) == proof
+    assert replay_catalog_quotes(tmp_path, run_id)["quote_count"] == 3
+
+
+def test_official_sandbox_protocol_fixture_attaches_without_live_execution(tmp_path: Path) -> None:
+    from nautilus_trader.execution import MakerTakerFeeModel
+
+    from trader_assist_v0.nautilus_e4.native_sandbox import attach_sandbox_probe
+
+    node = build_native_node(
+        tmp_path,
+        sandbox=True,
+        sandbox_fee_model=MakerTakerFeeModel(Decimal("0.00015"), Decimal("0.00045")),
+    )
+    try:
+        attach_sandbox_probe(node)
+        assert not node.is_running
+    finally:
+        node.dispose()
 
 
 def test_explicit_book_batching_native_contract(tmp_path: Path) -> None:

@@ -2,12 +2,17 @@ name: Nautilus RC7 unified native
 on:
   pull_request:
   workflow_dispatch:
+    inputs:
+      public_probe:
+        description: 'Bounded public ETH + approved xyz:SKHX and simulated Sandbox proof'
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
   rc7-native:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -37,8 +42,20 @@ jobs:
           if [ -f /tmp/rc7-proof/native-tests.txt ]; then
             grep -E '^E   |^FAILED |passed|failed' /tmp/rc7-proof/native-tests.txt | tail -30
           fi
+      - name: Bounded public provider and Sandbox qualification (isolated runner only)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.public_probe }}
+        env:
+          PYTHONPATH: src:.
+        run: |
+          python -m scripts.rc7.qualify_public --root /tmp/rc7-public-catalog --output /tmp/rc7-proof/public
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
           name: rc7-native-proof
           path: /tmp/rc7-proof
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.public_probe }}
+        with:
+          name: rc7-public-retained-source
+          path: /tmp/rc7-public-catalog
+          retention-days: 7
