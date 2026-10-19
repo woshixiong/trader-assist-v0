@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -122,3 +123,89 @@ def test_explicit_book_batching_native_contract(tmp_path: Path) -> None:
         end=10,
     )
     assert config.batch_deltas is True
+
+
+def test_frozen_replay_fee_adapter_keeps_real_native_engine_and_instrument() -> None:
+    import nautilus_trader.backtest as backtest
+    import nautilus_trader.model as model
+    from test_nautilus_vnext_g4_runner import native_hyperliquid_instrument
+
+    from trader_assist_v0.research_replay.native_fee_compat import (
+        native_fee_compatibility,
+        native_modules,
+    )
+
+    instrument = native_hyperliquid_instrument()
+    original_engine, original_instrument = backtest.BacktestEngine, model.CryptoPerpetual
+    run = SimpleNamespace(cost=SimpleNamespace(maker_bps=Decimal("1.5"), taker_bps=Decimal("4.5")))
+
+    @native_fee_compatibility
+    def replay(run: object, instrument: object) -> None:
+        native = native_modules.import_module("nautilus_trader.model")
+        assert isinstance(instrument, native.CryptoPerpetual)
+        assert instrument.maker_fee == Decimal("0.00015")
+        assert instrument.taker_fee == Decimal("0.00045")
+        engine = native_modules.import_module("nautilus_trader.backtest").BacktestEngine(
+            BacktestEngineConfig(bypass_logging=True, run_analysis=False)
+        )
+        try:
+            assert isinstance(engine._engine, original_engine)
+            with pytest.raises(ValueError, match="override"):
+                engine.add_venue(fee_model=None)
+            engine.add_venue(
+                venue=Venue("HYPERLIQUID"),
+                oms_type=OmsType.NETTING,
+                account_type=AccountType.MARGIN,
+                starting_balances=[Money.from_str("100000 USDC")],
+                book_type=BookType.L1_MBP,
+            )
+            with pytest.raises(TypeError, match="bound instrument"):
+                engine.add_instrument(instrument.native)
+            engine.add_instrument(instrument)
+            cached = engine.cache.instrument(instrument.id)
+            assert isinstance(cached, original_instrument)
+            assert cached.id == instrument.native.id
+        finally:
+            engine.dispose()
+
+    replay(run, instrument)
+    assert backtest.BacktestEngine is original_engine
+    assert model.CryptoPerpetual is original_instrument
+    assert native_modules.import_module("nautilus_trader.backtest") is backtest
+    with pytest.raises(TypeError, match="CryptoPerpetual"):
+        replay(run, object())
+
+
+def test_frozen_replay_fee_adapter_nested_failure_restores_context() -> None:
+    import nautilus_trader.model as model
+    from test_nautilus_vnext_g4_runner import native_hyperliquid_instrument
+
+    from trader_assist_v0.research_replay.native_fee_compat import (
+        native_fee_compatibility,
+        native_modules,
+    )
+
+    instrument = native_hyperliquid_instrument()
+    run = SimpleNamespace(cost=SimpleNamespace(maker_bps=Decimal(1), taker_bps=Decimal(4)))
+
+    @native_fee_compatibility
+    def inner(run: object, instrument: object) -> None:
+        raise RuntimeError("nested replay failed")
+
+    @native_fee_compatibility
+    def outer(run: object, instrument: object) -> None:
+        outer_view = native_modules.import_module("nautilus_trader.model")
+        with pytest.raises(RuntimeError, match="nested replay failed"):
+            inner(run, instrument.native)
+        assert isinstance(
+            instrument, native_modules.import_module("nautilus_trader.model").CryptoPerpetual
+        )
+        assert (
+            outer_view.CryptoPerpetual
+            == native_modules.import_module("nautilus_trader.model").CryptoPerpetual
+        )
+        raise RuntimeError("outer replay failed")
+
+    with pytest.raises(RuntimeError, match="outer replay failed"):
+        outer(run, instrument)
+    assert native_modules.import_module("nautilus_trader.model") is model

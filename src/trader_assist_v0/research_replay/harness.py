@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 from decimal import Decimal
 from typing import Any, Literal, Self
 
@@ -42,6 +41,8 @@ from .contracts import (
 from .dev_contracts import DevRunSpec
 from .evidence import require_pipeline
 from .lifecycle import BlockPlan, TrialLedger, VisibilityPolicy
+from .native_fee_compat import native_fee_compatibility
+from .native_fee_compat import native_modules as importlib
 from .paths import funding_settlement, measure_path, net_cash
 from .policies import PolicyAction, PolicyContext, PolicySpec, evaluate
 from .reporting import (
@@ -341,6 +342,7 @@ def _snapshot(
     )
 
 
+@native_fee_compatibility
 @decimal80
 def _native_candidate(
     run: ResearchRunSpec | DevRunSpec,
@@ -365,13 +367,11 @@ def _native_candidate(
     provider: Any = instrument
     if not isinstance(provider, native.CryptoPerpetual) or str(provider.id.venue) != "HYPERLIQUID":
         raise TypeError("native Hyperliquid CryptoPerpetual required")
-    # rc7 removed instrument fee fields. Bind the native model directly to the
-    # already accepted matched cost identity; never infer an account's fee tier.
-    native_execution = importlib.import_module("nautilus_trader.execution")
-    native_fee_model = native_execution.MakerTakerFeeModel(
-        maker_rate=run.cost.maker_bps / Decimal(10_000),
-        taker_rate=run.cost.taker_bps / Decimal(10_000),
-    )
+    if (
+        Decimal(str(provider.maker_fee)) * 10_000 != run.cost.maker_bps
+        or Decimal(str(provider.taker_fee)) * 10_000 != run.cost.taker_bps
+    ):
+        raise ValueError("native fee profile differs from matched cost identity")
     if (
         execution.book_type != "L1_MBP"
         or execution.order_primitive.value != "MARKETABLE"
@@ -731,7 +731,6 @@ def _native_candidate(
             base_currency=provider.quote_currency,
             book_type=native.BookType.L1_MBP,
             fill_model=build_fill_model(execution),
-            fee_model=native_fee_model,
             bar_execution=False,
             trade_execution=execution.trade_execution,
             liquidity_consumption=execution.liquidity_consumption,
