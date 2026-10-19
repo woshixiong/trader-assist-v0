@@ -17,6 +17,12 @@ from pathlib import Path
 from typing import Any
 
 from trader_assist_v0.nautilus_e4.contracts import PitUniverseSnapshot
+from trader_assist_v0.nautilus_e4.native_archive import (
+    DEFAULT_ARCHIVE_BYTES,
+    DEFAULT_CAPTURE_SECONDS,
+    observe_archive,
+    require_archive_capacity,
+)
 from trader_assist_v0.nautilus_e4.native_capture import (
     STREAM_AGES,
     NativeUniverse,
@@ -188,6 +194,8 @@ def capture_observer(
 
 
 async def run(args: argparse.Namespace) -> None:
+    if not 30 <= args.duration_seconds <= DEFAULT_CAPTURE_SECONDS:
+        raise ValueError("bounded capture duration must be 30..900 seconds")
     if args.sandbox_probe and (not args.sandbox or args.strategy_manifest is not None):
         raise ValueError("Sandbox protocol probe must be isolated from strategy and real execution")
     snapshot = (
@@ -202,6 +210,13 @@ async def run(args: argparse.Namespace) -> None:
     )
     universe = NativeUniverse(coins, snapshot)
     args.root.mkdir(parents=True, exist_ok=True)
+    health = NativeHealth({})
+    require_archive_capacity(
+        observe_archive(args.root),
+        max_bytes=args.max_archive_bytes,
+        free_bytes=shutil.disk_usage(args.root).free,
+        minimum_free_bytes=health.minimum_free_bytes,
+    )
     # Native recovery runs before starting a new writer. Completed promotion
     # identities are idempotent; a corrupt prior run prevents false readiness.
     from nautilus_trader.persistence import ParquetDataCatalog
@@ -209,7 +224,12 @@ async def run(args: argparse.Namespace) -> None:
     catalog = ParquetDataCatalog(str(args.root))
     recovery = [recover_and_promote(args.root, run_id) for run_id in catalog.list_live_runs()]
     (args.root / "recovery-proof.json").write_text(json.dumps(recovery, indent=2) + "\n")
-    health = NativeHealth({})
+    require_archive_capacity(
+        observe_archive(args.root),
+        max_bytes=args.max_archive_bytes,
+        free_bytes=shutil.disk_usage(args.root).free,
+        minimum_free_bytes=health.minimum_free_bytes,
+    )
     fee_model = None
     if args.sandbox:
         if args.maker_rate is None or args.taker_rate is None:
@@ -260,9 +280,10 @@ async def run(args: argparse.Namespace) -> None:
     async def report() -> None:
         while True:
             now = time.time_ns()
-            output = health.report(
-                now=now, generated=now, free_bytes=shutil.disk_usage(args.root).free
-            )
+            archive = observe_archive(args.root, args.root / "live" / instance_id)
+            free_bytes = shutil.disk_usage(args.root).free
+            output = health.report(now=now, generated=now, free_bytes=free_bytes)
+            output["archive"] = archive.evidence(now_ns=now)
             output["missing_provider_coins"] = universe.missing
             output["instance_id"] = instance_id
             output["capture_state"] = "CAPTURING_CATALOG_PENDING_CLOSE"
@@ -280,9 +301,12 @@ async def run(args: argparse.Namespace) -> None:
                 sandbox_proof.update(
                     record_sandbox_state(native_cache, native_portfolio, probe_ledger, now_ns=now)
                 )
-            if shutil.disk_usage(args.root).free < health.minimum_free_bytes:
-                handle.stop()
-                raise RuntimeError("DISK_LOW")
+            require_archive_capacity(
+                archive,
+                max_bytes=args.max_archive_bytes,
+                free_bytes=free_bytes,
+                minimum_free_bytes=health.minimum_free_bytes,
+            )
             elapsed = time.monotonic() - started
             if elapsed >= args.startup_timeout_seconds and (universe.missing or not health.counts):
                 handle.stop()
@@ -297,7 +321,8 @@ async def run(args: argparse.Namespace) -> None:
     async def stop_on_report_failure() -> None:
         try:
             await report()
-        except Exception:
+        except Exception as exc:
+            health.failures.add(str(exc))
             handle.stop()
             raise
 
@@ -345,6 +370,21 @@ async def run(args: argparse.Namespace) -> None:
     if failure is not None:
         raise failure
     proof = verify_promoted_run(args.root, instance_id)
+    archive = observe_archive(args.root, args.root / "live" / instance_id)
+    # Promotion duplicates storage temporarily. Exceeding the budget at close
+    # retains the evidence and fails; it never silently prunes source files.
+    try:
+        require_archive_capacity(
+            archive,
+            max_bytes=args.max_archive_bytes,
+            free_bytes=shutil.disk_usage(args.root).free,
+            minimum_free_bytes=health.minimum_free_bytes,
+        )
+    except RuntimeError as exc:
+        stopped["reasons"] = sorted({*stopped["reasons"], str(exc)})
+        stopped["archive"] = archive.evidence(now_ns=time.time_ns())
+        (args.root / "health.json").write_text(json.dumps(stopped, indent=2) + "\n")
+        raise
     missing = sorted(set(health.required) - health.counts.keys())
     freshness = set(last_active_report.get("reasons", ["NO_RUNTIME_HEALTH_REPORT"])) - {
         "WRITER_UNKNOWN_OR_FAILED",
@@ -371,9 +411,23 @@ async def run(args: argparse.Namespace) -> None:
         elapsed_seconds=elapsed,
         bounded_duration_complete=duration_complete,
         policy="NO_ROTATION_PROMOTE_ON_EXPLICIT_CLOSE_RETAIN_FEATHER",
+        archive_bytes=archive.total_bytes,
+        max_archive_bytes=args.max_archive_bytes,
+        retention="RETAIN_ALL_STOP_AT_BUDGET_NO_AUTOMATIC_DELETION",
         sandbox=sandbox_proof,
     )
     (args.root / "close-proof.json").write_text(json.dumps(proof, indent=2) + "\n")
+    stopped.update(
+        capture_state="STOPPED_CATALOG_VERIFIED",
+        archive={
+            **archive.evidence(now_ns=time.time_ns()),
+            "writer": "CLOSED",
+            "catalog": "VERIFIED_STOPPED_RUN",
+            "instance_id": instance_id,
+            "typed_integrity": proof["types"],
+        },
+    )
+    (args.root / "health.json").write_text(json.dumps(stopped, indent=2) + "\n")
     if not duration_complete:
         raise RuntimeError("NATIVE_RUN_STOPPED_BEFORE_REQUESTED_DURATION")
 
@@ -383,7 +437,8 @@ def main() -> None:
     universe_args = parser.add_mutually_exclusive_group(required=True)
     universe_args.add_argument("--snapshot", type=Path)
     universe_args.add_argument("--provider-coins", nargs="+")
-    parser.add_argument("--duration-seconds", type=int)
+    parser.add_argument("--duration-seconds", type=int, default=DEFAULT_CAPTURE_SECONDS)
+    parser.add_argument("--max-archive-bytes", type=int, default=DEFAULT_ARCHIVE_BYTES)
     parser.add_argument("--startup-timeout-seconds", type=int, default=90)
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--sandbox", action="store_true")
@@ -392,8 +447,10 @@ def main() -> None:
     parser.add_argument("--maker-rate")
     parser.add_argument("--taker-rate")
     args = parser.parse_args()
-    if args.duration_seconds is not None and not 30 <= args.duration_seconds <= 900:
+    if not 30 <= args.duration_seconds <= DEFAULT_CAPTURE_SECONDS:
         parser.error("bounded capture duration must be 30..900 seconds")
+    if args.max_archive_bytes <= 0:
+        parser.error("archive budget must be positive")
     if args.sandbox_probe and (not args.sandbox or args.strategy_manifest is not None):
         parser.error(
             "protocol probe requires Sandbox and must be isolated from registered strategy"

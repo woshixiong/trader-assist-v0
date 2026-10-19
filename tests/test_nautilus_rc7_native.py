@@ -186,6 +186,97 @@ def test_explicit_book_batching_native_contract(tmp_path: Path) -> None:
     assert config.batch_deltas is True
 
 
+def test_native_clear_book_equal_timestamp_promotion_preserves_order(tmp_path: Path) -> None:
+    from nautilus_trader.common import Cache, Clock
+    from nautilus_trader.model import BookAction, BookOrder, OrderBookDelta, OrderSide
+    from nautilus_trader.persistence import StreamingFeatherWriter
+    from test_nautilus_vnext_g4_runner import native_hyperliquid_instrument
+
+    from trader_assist_v0.nautilus_e4.native_catalog import event_multiset
+
+    run_id = "eb943584-b1a4-4edc-bb71-b4c00d860afd"
+    instrument = native_hyperliquid_instrument()
+    stage = tmp_path / "live" / run_id
+    writer = StreamingFeatherWriter(str(stage), Cache(), Clock.new_test())
+    writer.write(instrument)
+    stamp = 1_000_000_000
+    rows = [
+        OrderBookDelta.clear(instrument.id, 1, stamp, stamp),
+        OrderBookDelta(
+            instrument.id,
+            BookAction.ADD,
+            BookOrder(OrderSide.BUY, Price.from_str("2000.0"), Quantity.from_str("1.000"), 1),
+            0,
+            2,
+            stamp,
+            stamp,
+        ),
+        OrderBookDelta.clear(instrument.id, 3, stamp, stamp),
+        OrderBookDelta(
+            instrument.id,
+            BookAction.ADD,
+            BookOrder(OrderSide.SELL, Price.from_str("2001.0"), Quantity.from_str("2.000"), 2),
+            0,
+            4,
+            stamp,
+            stamp,
+        ),
+        OrderBookDelta.clear(instrument.id, 5, stamp, stamp),
+    ]
+    try:
+        for row in rows:
+            writer.write(row)
+            writer.flush()  # Multiple batches, same ts_init, one unrotated source.
+        with pytest.raises(RuntimeError, match="ACTIVE_OR_UNRECOVERED|NO_TYPED"):
+            verify_promoted_run(tmp_path, run_id)
+    finally:
+        writer.close()
+    proof = recover_and_promote(tmp_path, run_id)
+    assert proof["types"]["OrderBookDelta"]["count"] == 5
+    catalog = ParquetDataCatalog(str(tmp_path))
+    restored = catalog.query_order_book_deltas(identifiers=[str(instrument.id)])
+    assert [row.sequence for row in restored] == [1, 2, 3, 4, 5]
+    assert event_multiset(restored) == event_multiset(rows)
+    assert recover_and_promote(tmp_path, run_id) == proof
+
+
+def test_native_rotation_equal_timestamp_overlap_fails_with_source_retained(tmp_path: Path) -> None:
+    from nautilus_trader.common import Cache, Clock
+    from nautilus_trader.persistence import RotationConfig, StreamingFeatherWriter
+    from test_nautilus_vnext_g4_runner import native_hyperliquid_instrument
+
+    run_id = "5b6435a2-0a79-4d43-b1ae-d48ce62c8cac"
+    instrument = native_hyperliquid_instrument()
+    stage = tmp_path / "live" / run_id
+    writer = StreamingFeatherWriter(
+        str(stage), Cache(), Clock.new_test(), rotation_config=RotationConfig.size(1)
+    )
+    writer.write(instrument)
+    try:
+        for i in range(3):
+            writer.write(
+                QuoteTick(
+                    instrument.id,
+                    Price.from_str(f"{2000 + i}.0"),
+                    Price.from_str(f"{2001 + i}.0"),
+                    Quantity.from_str("1.000"),
+                    Quantity.from_str("1.000"),
+                    1_000_000_000,
+                    1_000_000_000,
+                )
+            )
+            writer.flush()
+    finally:
+        writer.close()
+    sources = list(stage.rglob("*.feather"))
+    assert len(sources) >= 3, "fixture must really rotate equal-ts_init source rows"
+    with pytest.raises(Exception, match="(?i)overlap|non.disjoint|intersect"):
+        recover_and_promote(tmp_path, run_id)
+    assert all(path.exists() for path in sources)
+    with pytest.raises(RuntimeError, match="CATALOG_INTEGRITY_FAILURE"):
+        verify_promoted_run(tmp_path, run_id)
+
+
 def test_frozen_replay_fee_adapter_keeps_real_native_engine_and_instrument() -> None:
     import nautilus_trader.backtest as backtest
     import nautilus_trader.model as model

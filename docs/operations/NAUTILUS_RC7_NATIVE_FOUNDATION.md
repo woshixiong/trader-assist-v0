@@ -83,8 +83,43 @@ uses explicit no rotation/no interval promotion, retaining source Feather and
 promoting on close. Do not represent that conservative policy as qualified
 continuous 24×7 live catalog promotion. During capture, catalog/writer verification
 is UNKNOWN and health stays DEGRADED; stop-time successful typed readback does
-not retroactively make the live process healthy. Live rotation/promotion and
-bounded disk retention remain acceptance gaps.
+not retroactively make the live process healthy. Continuous live rotation and
+promotion remain acceptance gaps. The operational fallback is **bounded explicit
+close/promote/restart**, not transparent continuous capture: each invocation
+defaults to 900 seconds (allowed 30..900), disposes the native node, verifies the
+entire stopped run, and exits. Start another invocation only after successful
+close proof. Native connection/bootstrap between runs is an explicit visible
+capture gap; there is no automatic restart scheduler here.
+
+`--max-archive-bytes` defaults to 8 GiB for the whole retained root, including
+Feather, Parquet and ledgers. Admission, five-second observations and post-close
+checks fail on exhausted budget or less than 1 GiB free disk. This is a **sampled
+stop threshold**, not a filesystem quota: bursts, shutdown writes and promotion
+can overshoot it. Reserve promotion headroom or apply an operator-owned filesystem
+quota separately. On exhaustion the process stops and retains all evidence; it
+never evicts unverified source/catalog rows. Retention is bounded by stopping
+new capture, not by pruning history. Offline archive/offload of a stopped root
+and resuming a fresh root are explicit operator responsibilities. No automatic
+deletion/retention controller or service activation is introduced.
+
+During capture `health.json.archive` reports native staging byte/file observations
+and recent filesystem activity separately from integrity. Such activity cannot
+certify the writer, typed catalog or feed. Live health remains DEGRADED, including
+when an older run is queryable. Only successful native close and full typed
+readback yield `STOPPED_CATALOG_VERIFIED` / `VERIFIED_STOPPED_RUN`; that report
+still cannot pass live/24h health qualification. A locked or unrecoverable native
+partial prevents complete-run catalog certification. Recovery never certifies
+only the sealed subset of an active writer.
+
+Focused native tests exercise equal-`ts_init` rows across flush batches, CLEAR /
+populated / trailing CLEAR book rows, active-writer refusal, and actual size
+rotation with equal timestamps rejected for overlapping intervals while sources
+remain. Native CLEAR sentinel zeros may adopt neighbouring precision as documented
+in the pinned guide; the digest normalizes only those zero sentinel strings,
+retaining nonzero decimals, actions, flags, sequence and both clocks. General
+precision changes are not normalized. Crash/truncated-tail recovery and missing
+catalog-row negatives remain required. These fixtures do not establish gapless
+live rotation or native partial fills.
 
 `verify_promoted_run` checks the complete native sink lifecycle against typed
 Parquet count and event-multiset hashes, retaining duplicates, precision and

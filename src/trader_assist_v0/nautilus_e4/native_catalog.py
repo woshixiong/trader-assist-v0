@@ -11,6 +11,7 @@ import hashlib
 import json
 from collections import Counter
 from collections.abc import Callable
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +42,15 @@ def streaming_config(root: Path) -> Any:
 def _identity(event: Any) -> str:
     # Official typed serialization preserves economic precision and ts_event/ts_init.
     payload = type(event).to_dict(event)
+    # The tagged native promotion contract adopts neighbouring precision for
+    # CLEAR's zero-valued sentinel order. Compare its numeric zeros, while
+    # retaining every nonzero value, action, sequence, flag and timestamp.
+    if type(event).__name__ == "OrderBookDelta" and event.is_clear:
+        order = payload["order"]
+        if event.order.side is None and event.order.order_id == 0:
+            for key in ("price", "size"):
+                if Decimal(order[key]) == 0:
+                    order[key] = "0"
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
 
@@ -62,6 +72,11 @@ def verify_promoted_run(root: Path, instance_id: str, *, live: bool = True) -> d
 
     catalog = ParquetDataCatalog(str(root))
     staged = catalog.read_live_run(instance_id) if live else catalog.read_backtest(instance_id)
+    stage = root / ("live" if live else "backtest") / instance_id
+    if list(stage.rglob("*.feather.partial")):
+        # Native recovery leaves locked or unrecoverable files in place. Reading
+        # the sealed subset is not evidence of a complete stopped run.
+        raise RuntimeError("ACTIVE_OR_UNRECOVERED_NATIVE_STAGE")
     queries: dict[type[Any], Callable[..., list[Any]]] = {
         QuoteTick: catalog.query_quote_ticks,
         TradeTick: catalog.query_trade_ticks,

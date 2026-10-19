@@ -10,6 +10,44 @@ from trader_assist_v0.nautilus_e4.native_health import NativeHealth
 from trader_assist_v0.nautilus_e4.shadow_ledger import ShadowLedger
 
 
+def test_archive_admission_retains_evidence_and_never_certifies_staging(tmp_path: Path) -> None:
+    from scripts.rc7.qualify_health import validate_report
+    from trader_assist_v0.nautilus_e4.native_archive import (
+        observe_archive,
+        require_archive_capacity,
+    )
+
+    stage = tmp_path / "live" / "run"
+    stage.mkdir(parents=True)
+    source = stage / "quote.feather.partial"
+    source.write_bytes(b"native-source-placeholder")
+    observed = observe_archive(tmp_path, stage)
+    assert observed.total_bytes == observed.stage_bytes == source.stat().st_size
+    assert observed.evidence(now_ns=source.stat().st_mtime_ns)["writer"] == (
+        "STAGING_ACTIVITY_OBSERVED"
+    )
+    assert observed.evidence(now_ns=source.stat().st_mtime_ns + 16_000_000_000)["writer"] == (
+        "UNKNOWN_OR_QUIET"
+    )
+    require_archive_capacity(observed, max_bytes=100, free_bytes=100, minimum_free_bytes=10)
+    for budget, free, error in ((observed.total_bytes, 100, "BUDGET"), (100, 1, "DISK_LOW")):
+        with pytest.raises(RuntimeError, match=error):
+            require_archive_capacity(
+                observed, max_bytes=budget, free_bytes=free, minimum_free_bytes=10
+            )
+    assert source.read_bytes() == b"native-source-placeholder"
+    health = NativeHealth({"ETH:quote": 100})
+    health.socket(True)
+    health.observe("ETH:quote", ts_event=100, ts_init=100, now=100)
+    report = health.report(now=100, generated=100, free_bytes=10**12)
+    report["archive"] = observed.evidence(now_ns=source.stat().st_mtime_ns)
+    with pytest.raises(ValueError, match="DEGRADED"):
+        validate_report(report, 100)
+    (tmp_path / "external-link").symlink_to(stage, target_is_directory=True)
+    with pytest.raises(RuntimeError, match="SYMLINK"):
+        observe_archive(tmp_path, stage)
+
+
 def inputs() -> GuardInputs:
     return GuardInputs(
         data_evaluable=True,
