@@ -69,7 +69,7 @@ Do not run recovery against an active writer or remove failed source files.
 
 The existing rc7 CI workflow has a manually dispatched `public_probe=true`
 option for an isolated Ubuntu runner. It performs a 420-second initial capture,
-a 60-second clean restart, typed readback, deterministic replay, and the official
+a 420-second clean restart, typed readback, deterministic replay, and the official
 ExecTester routed exclusively to Sandbox with declared simulated fee rates.
 It retains native sources and `public-qualification.json`, including failures.
 Unavailable provider access is a failed/unqualified public proof, never PASS.
@@ -89,7 +89,8 @@ close/promote/restart**, not transparent continuous capture: each invocation
 defaults to 900 seconds (allowed 30..900), disposes the native node, verifies the
 entire stopped run, and exits. Start another invocation only after successful
 close proof. Native connection/bootstrap between runs is an explicit visible
-capture gap; there is no automatic restart scheduler here.
+capture gap. The disabled systemd artifact owns the next cycle after verified
+success; direct CLI invocation still runs exactly one bounded cycle.
 
 `--max-archive-bytes` defaults to 8 GiB for the whole retained root, including
 Feather, Parquet and ledgers. Admission, five-second observations and post-close
@@ -200,9 +201,40 @@ cancel/reduce-only behavior must be tested without weakening protective orders.
 The unit in `deploy/systemd/tradeos-rc7-public.service` is an artifact only. It
 requires an unshipped `/etc/tradeos/rc7-public-authorized` marker, a dedicated
 unprivileged `tradeos` user, isolated venv, writable data root and approved PIT
-snapshot. It uses bounded on-failure restart, journal output, SIGINT clean stop
+snapshot. It uses success-only next-cycle restart, journal output, SIGINT clean stop
 and filesystem confinement. No installation, activation, enable marker or AWS
 service action is authorized by this document.
+
+The unit targets **systemd 255** (the Ubuntu 24.04 CI baseline). Official
+[`systemd.service` at v255](https://github.com/systemd/systemd/blob/v255/man/systemd.service.xml)
+defines `Restart=on-success`: exit zero triggers another invocation after
+`RestartSec=15`; nonzero exits, timeouts and abnormal termination stop. The
+normally clean signals SIGHUP/SIGINT/SIGTERM/SIGPIPE are explicitly excluded via
+`RestartPreventExitStatus`. A manager-requested `systemctl stop` suppresses
+restart regardless of process exit status. The existing start limit remains
+three starts per 300 seconds. Nothing force-restarts a failed verification.
+
+The public command may exit zero only after this invocation's native close,
+typed catalog verification, capacity checks, requested duration and complete
+fresh stream coverage. Missing/old/incomplete proof cannot admit the next cycle.
+Proof write failures also stop. The optional isolated public qualification now
+uses 420 seconds for **each** phase so restart has a chance to qualify a newly
+closed 5m; the previous 60-second evidence remains limited to its measured data.
+
+Each live/stopped report and close proof publishes `capture_gap` with state
+`CAPTURE_GAP`. When a prior observed boundary exists, it measures nanoseconds
+between the prior last accepted callback and this run's first accepted callback;
+this includes close, systemd delay and native bootstrap. It is not an exact
+exchange-loss or sink-visibility measurement. The first run/older proofs report
+UNKNOWN, and backwards boundary clocks fail closed. Gaps at every 15-minute
+boundary remain intentional and visible. This policy does not qualify gapless
+24/7 capture, continuous Parquet visibility or live HEALTHY.
+
+CI uses native `systemd-analyze verify` on an isolated unit copy with only
+host paths/account substituted, and rejects the invalid oneshot/on-success
+combination as a negative control. It never installs or starts a service.
+Actual target-host version, resources/path collisions and manager stop/restart
+behavior require separately authorized deployment preparation/qualification.
 
 After separately authorized installation and closure of the acceptance gaps,
 use the following read-only qualification command on the target host:

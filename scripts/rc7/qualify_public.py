@@ -32,7 +32,8 @@ def qualify(root: Path, output: Path) -> dict[str, Any]:
         proofs = []
         for phase, universe, duration in (
             ("initial", ["--provider-coins", "ETH", "xyz:SKHX"], 420),
-            ("restart", ["--snapshot", str(root / "resolved-pit-universe.json")], 60),
+            # Success now requires all streams, including a newly closed 5m.
+            ("restart", ["--snapshot", str(root / "resolved-pit-universe.json")], 420),
         ):
             command = [
                 sys.executable,

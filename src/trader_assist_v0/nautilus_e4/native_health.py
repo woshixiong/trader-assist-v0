@@ -21,6 +21,8 @@ class NativeHealth:
     duplicates: int = 0
     out_of_order: int = 0
     failures: set[str] = field(default_factory=set)
+    first_observed_ns: int | None = None
+    last_observed_ns: int | None = None
 
     def socket(self, connected: bool) -> None:
         if not connected:
@@ -60,6 +62,9 @@ class NativeHealth:
         self.last[stream] = (ts_event, ts_init, self.epoch)
         self.event_ends[stream] = ts_event if event_end_ns is None else event_end_ns
         self.counts[stream] = self.counts.get(stream, 0) + 1
+        if self.first_observed_ns is None:
+            self.first_observed_ns = now
+        self.last_observed_ns = now
         return True
 
     def report(self, *, now: int, generated: int, free_bytes: int) -> dict[str, object]:

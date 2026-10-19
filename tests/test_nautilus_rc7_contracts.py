@@ -10,6 +10,162 @@ from trader_assist_v0.nautilus_e4.native_health import NativeHealth
 from trader_assist_v0.nautilus_e4.shadow_ledger import ShadowLedger
 
 
+def verified_cycle() -> dict[str, object]:
+    return {
+        "status": "PASS",
+        "instance_id": "current",
+        "bounded_duration_complete": True,
+        "public_coverage": "PASS",
+        "missing_streams": [],
+        "event_failures": [],
+        "freshness_reasons": [],
+        "types": {"QuoteTick": {"count": 3}},
+        "stream_counts": {"ETH:quote": 3},
+    }
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"status": "FAIL"},
+        {"instance_id": "previous"},
+        {"bounded_duration_complete": False},
+        {"public_coverage": "INCOMPLETE"},
+        {"missing_streams": ["ETH:5m"]},
+        {"event_failures": ["OUT_OF_ORDER_OR_GAP"]},
+        {"freshness_reasons": ["STALE:ETH:quote"]},
+        {"types": {}},
+        {"stream_counts": {}},
+    ],
+)
+def test_service_cycle_cannot_admit_failed_or_old_proof(change: dict[str, object]) -> None:
+    from scripts.rc7.run_public import require_verified_cycle
+
+    require_verified_cycle(verified_cycle(), "current")
+    with pytest.raises(RuntimeError, match="FAIL_CLOSED"):
+        require_verified_cycle({**verified_cycle(), **change}, "current")
+    with pytest.raises(RuntimeError, match="FAIL_CLOSED"):
+        require_verified_cycle({}, "current")
+
+
+def test_capture_gap_is_measured_without_claiming_exchange_loss() -> None:
+    from scripts.rc7.run_public import capture_gap
+
+    assert capture_gap(100, 350) == {
+        "state": "CAPTURE_GAP",
+        "measurement": "CALLBACK_INTERVAL",
+        "previous_last_observed_ns": 100,
+        "first_observed_ns": 350,
+        "interval_ns": 250,
+    }
+    assert capture_gap(None, 350)["measurement"] == "UNKNOWN"
+    assert capture_gap(100, None)["interval_ns"] is None
+    with pytest.raises(ValueError, match="CLOCK_INVALID"):
+        capture_gap(350, 100)
+
+
+def test_public_process_exits_nonzero_on_capacity_despite_prior_success(tmp_path: Path) -> None:
+    import json
+    import os
+    import subprocess
+    import sys
+
+    prior = tmp_path / "close-proof.json"
+    prior.write_text(json.dumps(verified_cycle()))
+    original = prior.read_bytes()
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.rc7.run_public",
+            "--provider-coins",
+            "ETH",
+            "xyz:SKHX",
+            "--root",
+            str(tmp_path),
+            "--max-archive-bytes",
+            "1",
+        ],
+        env={**os.environ, "PYTHONPATH": "src:."},
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode != 0
+    assert "ARCHIVE_BUDGET_EXHAUSTED_SOURCES_RETAINED" in result.stderr
+    assert "VERIFIED_SUCCESS" not in result.stdout
+    assert prior.read_bytes() == original
+
+
+def test_public_unit_only_cycles_on_verified_zero_exit() -> None:
+    import configparser
+    import shlex
+
+    unit = configparser.ConfigParser(interpolation=None, strict=False)
+    unit.read("deploy/systemd/tradeos-rc7-public.service")
+    service = unit["Service"]
+    assert service["Type"] == "simple"
+    assert service["Restart"] == "on-success"
+    assert set(service["RestartPreventExitStatus"].split()) == {
+        "SIGHUP",
+        "SIGINT",
+        "SIGTERM",
+        "SIGPIPE",
+    }
+    assert "SuccessExitStatus" not in service and "RestartForceExitStatus" not in service
+    assert int(service["RestartSec"]) >= 15
+    assert int(unit["Unit"]["StartLimitBurst"]) <= 3
+    assert unit["Unit"]["ConditionPathExists"] == "/etc/tradeos/rc7-public-authorized"
+    assert service["User"] == service["Group"] == "tradeos"
+    command = shlex.split(service["ExecStart"])
+    assert command[1:3] == ["-m", "scripts.rc7.run_public"]
+    assert not {"--sandbox", "--sandbox-probe", "--strategy-manifest"} & set(command)
+
+
+def test_native_systemd_255_verifies_unit_and_rejects_oneshot_restart(tmp_path: Path) -> None:
+    import getpass
+    import platform
+    import shutil
+    import subprocess
+    import sys
+
+    if platform.system() != "Linux":
+        pytest.skip("native systemd validation runs on isolated Ubuntu CI")
+    binary = shutil.which("systemd-analyze")
+    assert binary is not None, "Linux CI requires native systemd-analyze"
+    version = subprocess.check_output([binary, "--version"], text=True)
+    assert version.splitlines()[0].startswith("systemd 255 "), version.splitlines()[0]
+    source = Path("deploy/systemd/tradeos-rc7-public.service").read_text()
+    # Substitute only unavailable target-host paths/account for parse-only CI.
+    # No unit is installed, started or sent to a service manager.
+    for key, value in {
+        "ExecStart": f"{sys.executable} -c pass",
+        "WorkingDirectory": str(tmp_path),
+        "ReadWritePaths": str(tmp_path),
+        "User": getpass.getuser(),
+        "Group": getpass.getuser(),
+    }.items():
+        source = (
+            "\n".join(
+                f"{key}={value}" if line.startswith(key + "=") else line
+                for line in source.splitlines()
+            )
+            + "\n"
+        )
+    path = tmp_path / "tradeos-rc7-public.service"
+    path.write_text(source)
+    result = subprocess.run(
+        [binary, "verify", "--man=no", str(path)], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    path.write_text(source.replace("Type=simple", "Type=oneshot"))
+    invalid = subprocess.run(
+        [binary, "verify", "--man=no", str(path)], capture_output=True, text=True
+    )
+    assert invalid.returncode != 0
+    assert "on-success" in invalid.stderr and "oneshot" in invalid.stderr
+
+
 def test_archive_admission_retains_evidence_and_never_certifies_staging(tmp_path: Path) -> None:
     from scripts.rc7.qualify_health import validate_report
     from trader_assist_v0.nautilus_e4.native_archive import (

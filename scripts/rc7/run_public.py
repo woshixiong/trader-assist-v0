@@ -34,6 +34,39 @@ from trader_assist_v0.nautilus_e4.native_health import NativeHealth
 from trader_assist_v0.nautilus_e4.native_runtime import build_native_node
 
 
+def require_verified_cycle(proof: dict[str, Any], instance_id: str) -> None:
+    """Only this invocation's complete proof may admit a zero process exit.
+
+    systemd owns subsequent cycles; this function never restarts anything and
+    never treats an earlier close-proof file as current success.
+    """
+    if (
+        proof.get("status") != "PASS"
+        or proof.get("instance_id") != instance_id
+        or proof.get("bounded_duration_complete") is not True
+        or proof.get("public_coverage") != "PASS"
+        or proof.get("missing_streams") != []
+        or proof.get("event_failures") != []
+        or proof.get("freshness_reasons") != []
+        or not proof.get("types")
+        or not proof.get("stream_counts")
+    ):
+        raise RuntimeError("CYCLE_NOT_VERIFIED_FAIL_CLOSED")
+
+
+def capture_gap(previous_last_ns: int | None, first_ns: int | None) -> dict[str, Any]:
+    """Callback interval across runs, not an estimate of lost exchange events."""
+    if previous_last_ns is not None and first_ns is not None and first_ns < previous_last_ns:
+        raise ValueError("CAPTURE_GAP_CLOCK_INVALID")
+    return {
+        "state": "CAPTURE_GAP",
+        "measurement": "CALLBACK_INTERVAL" if previous_last_ns and first_ns else "UNKNOWN",
+        "previous_last_observed_ns": previous_last_ns,
+        "first_observed_ns": first_ns,
+        "interval_ns": first_ns - previous_last_ns if previous_last_ns and first_ns else None,
+    }
+
+
 def capture_observer(
     universe: NativeUniverse,
     health: NativeHealth,
@@ -210,6 +243,12 @@ async def run(args: argparse.Namespace) -> None:
     )
     universe = NativeUniverse(coins, snapshot)
     args.root.mkdir(parents=True, exist_ok=True)
+    prior_proof_path = args.root / "close-proof.json"
+    previous_last_ns = (
+        json.loads(prior_proof_path.read_text()).get("last_observed_ns")
+        if prior_proof_path.exists()
+        else None
+    )
     health = NativeHealth({})
     require_archive_capacity(
         observe_archive(args.root),
@@ -284,6 +323,7 @@ async def run(args: argparse.Namespace) -> None:
             free_bytes = shutil.disk_usage(args.root).free
             output = health.report(now=now, generated=now, free_bytes=free_bytes)
             output["archive"] = archive.evidence(now_ns=now)
+            output["capture_gap"] = capture_gap(previous_last_ns, health.first_observed_ns)
             output["missing_provider_coins"] = universe.missing
             output["instance_id"] = instance_id
             output["capture_state"] = "CAPTURING_CATALOG_PENDING_CLOSE"
@@ -415,10 +455,14 @@ async def run(args: argparse.Namespace) -> None:
         max_archive_bytes=args.max_archive_bytes,
         retention="RETAIN_ALL_STOP_AT_BUDGET_NO_AUTOMATIC_DELETION",
         sandbox=sandbox_proof,
+        first_observed_ns=health.first_observed_ns,
+        last_observed_ns=health.last_observed_ns,
+        capture_gap=capture_gap(previous_last_ns, health.first_observed_ns),
     )
     (args.root / "close-proof.json").write_text(json.dumps(proof, indent=2) + "\n")
     stopped.update(
         capture_state="STOPPED_CATALOG_VERIFIED",
+        capture_gap=proof["capture_gap"],
         archive={
             **archive.evidence(now_ns=time.time_ns()),
             "writer": "CLOSED",
@@ -430,6 +474,8 @@ async def run(args: argparse.Namespace) -> None:
     (args.root / "health.json").write_text(json.dumps(stopped, indent=2) + "\n")
     if not duration_complete:
         raise RuntimeError("NATIVE_RUN_STOPPED_BEFORE_REQUESTED_DURATION")
+    require_verified_cycle(proof, instance_id)
+    print(json.dumps({"cycle_exit": "VERIFIED_SUCCESS", "instance_id": instance_id}))
 
 
 def main() -> None:

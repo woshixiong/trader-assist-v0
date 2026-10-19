@@ -15,7 +15,10 @@ WorkingDirectory=/opt/tradeos-rc7/repository
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH=/opt/tradeos-rc7/repository/src
 ExecStart=/opt/tradeos-rc7/venv/bin/python -m scripts.rc7.run_public --snapshot /etc/tradeos/approved-pit-universe.json --root /var/lib/tradeos/rc7
-Restart=on-failure
+# Exit 0 is admitted only after native close, typed integrity, capacity and coverage.
+Restart=on-success
+# systemd otherwise treats these signals as clean success for Type=simple.
+RestartPreventExitStatus=SIGHUP SIGINT SIGTERM SIGPIPE
 RestartSec=15
 KillSignal=SIGINT
 TimeoutStopSec=90
