@@ -4,7 +4,8 @@ Issue #352 control 6289012825 authorizes public-only engineering, not installati
 service activation or deployment. Keep Draft PR #353 and the existing service disabled.
 
 The original HL Final20 registry, adapter, writer and nine requested families are
-unchanged. `--reference-venues` opts the existing single LiveNode into first-party
+unchanged. `--reference-venues OKX` selects the qualified OKX-only reference subset;
+a bare `--reference-venues` selects both providers. This opts the existing single LiveNode into first-party
 Binance Spot **JSON** and OKX **SWAP** data factories. The default service remains
 HL-only. Candidate symbols live once in `native_reference.CANDIDATES`; they are
 requirements, not asserted live listings. The actor admits only actual native
@@ -15,7 +16,13 @@ fallback instrument is introduced. A missing candidate remains explicitly missin
 an unresolved provider is distinguished from observed provider inventory.
 
 Binance's default SBE path needs Ed25519 credentials: this composition explicitly
-uses `BinanceSpotMarketDataMode.Json`, no keys and no commission query. Its native
+uses `BinanceSpotMarketDataMode.Json`, no keys and no commission query.
+It explicitly selects Binance's official public-market-data-only REST
+`https://data-api.binance.vision` and WebSocket
+`wss://data-stream.binance.vision:443/ws` through the pinned native URL overrides.
+These hosts do not provide user-data/order APIs; they are not another provider,
+proxy or custom transport. The earlier default-host native connection failed in
+isolated CI without inventory/events; no specific geographic/TLS cause is inferred. Its native
 parser emits a generic Bar plus Arrow-supported BinanceBar only when `is_closed`.
 Generic Bar `ts_event` is the inclusive close millisecond. OKX's public/business
 clients need no credentials; native candles emit only `confirm=Closed`, with
@@ -107,3 +114,7 @@ Pinned capability sources: [Binance public client](https://github.com/nautechsys
 
 Native lifecycle source: [one-node/thread ownership and dispose](https://github.com/nautechsystems/nautilus_trader/blob/v2.0.0rc7/crates/live/src/node/mod.rs),
 [Python awaitable ownership/drop](https://github.com/nautechsystems/nautilus_trader/blob/v2.0.0rc7/crates/live/src/python/node.rs).
+
+First-party endpoint contract: [Binance Market Data Only](https://github.com/binance/binance-spot-api-docs/blob/master/faqs/market_data_only.md).
+The pinned rc7 [data configuration](https://github.com/nautechsystems/nautilus_trader/blob/v2.0.0rc7/docs/integrations/binance.md)
+supports both native URL overrides. Availability still requires actual per-symbol proof.

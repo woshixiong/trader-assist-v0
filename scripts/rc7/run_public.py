@@ -396,7 +396,10 @@ def capture_observer(
 
 
 async def run(args: argparse.Namespace) -> None:
-    references = getattr(args, "reference_venues", False)
+    from trader_assist_v0.nautilus_e4.native_reference import selected_reference_venues
+
+    selected_references = selected_reference_venues(getattr(args, "reference_venues", None))
+    references = bool(selected_references)
     if references and (args.sandbox or args.sandbox_probe or args.strategy_manifest is not None):
         raise ValueError("reference runtime is public nontrading only")
     if (
@@ -502,7 +505,7 @@ async def run(args: argparse.Namespace) -> None:
         args.root,
         sandbox=args.sandbox,
         sandbox_fee_model=fee_model,
-        venues=("HYPERLIQUID", "BINANCE", "OKX") if references else ("HYPERLIQUID",),
+        venues=("HYPERLIQUID", *selected_references),
     )
     reference_reader = None
     if references:
@@ -510,10 +513,14 @@ async def run(args: argparse.Namespace) -> None:
 
         reference_reader = ReferenceReader()
         reference_reader.health.restore_boundaries(
-            previous_reference_boundaries,
+            {
+                k: v
+                for k, v in previous_reference_boundaries.items()
+                if any(k.rsplit(":", 1)[0].endswith(f".{venue}") for venue in selected_references)
+            },
             now=time.time_ns(),
         )
-        node.add_actor(reference_actor(reference_reader))
+        node.add_actor(reference_actor(reference_reader, venues=selected_references))
     probe_ledger = None
     sandbox_proof: dict[str, Any] = {}
     if args.sandbox_probe:
@@ -556,6 +563,7 @@ async def run(args: argparse.Namespace) -> None:
             output["missing_provider_coins"] = universe.missing
             if reference_reader is not None:
                 reference_report = reference_reader.coverage()
+                reference_report["requested_venues"] = selected_references
                 reference_report["freshness"] = reference_reader.health.report(
                     now=now,
                     generated=now,
@@ -646,6 +654,7 @@ async def run(args: argparse.Namespace) -> None:
         if reference_reader is not None:
             reference_reader.health.connected = False
             stopped_reference = reference_reader.coverage()
+            stopped_reference["requested_venues"] = selected_references
             stopped_reference["freshness"] = reference_reader.health.report(
                 now=closed_report_ns,
                 generated=closed_report_ns,
@@ -751,8 +760,10 @@ def main() -> None:
     universe_args.add_argument("--first-launch-20", action="store_true")
     parser.add_argument(
         "--reference-venues",
-        action="store_true",
-        help="opt-in native Binance JSON Spot + OKX SWAP; no orders",
+        nargs="*",
+        choices=("BINANCE", "OKX"),
+        default=None,
+        help="opt-in native references (bare flag selects both); no orders",
     )
     parser.add_argument("--context-probe", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(

@@ -54,6 +54,20 @@ CONTRACT_FIELDS = (
 )
 
 
+def selected_reference_venues(value: Any) -> tuple[str, ...]:
+    """CLI subset; a bare legacy flag selects both, while default keeps HL isolated."""
+    if value is None or value is False:
+        return ()
+    if value is True or value == []:
+        return tuple(CANDIDATES)
+    if not isinstance(value, tuple | list):
+        raise ValueError("REFERENCE_VENUE_SELECTION_INVALID")
+    venues = tuple(value)
+    if not venues or len(set(venues)) != len(venues) or not set(venues) <= CANDIDATES.keys():
+        raise ValueError("REFERENCE_VENUE_SELECTION_INVALID")
+    return venues
+
+
 def reference_bar_end(event: Any) -> int:
     """Official Binance close-ms versus OKX open-ms; preserve both native clocks."""
     from nautilus_trader.model import AggregationSource, BarAggregation
@@ -298,7 +312,11 @@ def reference_proof(
     source = catalog.read_live_run(instance_id)
     # Existing native converter verifies counts/digests and retains Feather; no replacement store.
     archive = recover_and_promote(root, instance_id)
-    restored = [*catalog.query_quote_ticks(), *catalog.query_trade_ticks(), *catalog.query_bars()]
+    restored: list[Any] = [
+        *catalog.query_quote_ticks(),
+        *catalog.query_trade_ticks(),
+        *catalog.query_bars(),
+    ]
     identities = set(live.instruments)
 
     def relevant(event: Any) -> bool:

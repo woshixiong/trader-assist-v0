@@ -570,3 +570,15 @@ def test_reference_qualification_isolates_native_owner_and_preserves_both_outcom
     results = json.loads((root / "reference-proof.json").read_text())
     assert results["BINANCE"]["status"] == "INCOMPLETE"
     assert results["OKX"]["status"] == "AVAILABLE_NATIVE_SUBSET_PROVEN"
+
+
+def test_reference_venue_subset_keeps_unqualified_provider_out_of_capture() -> None:
+    from trader_assist_v0.nautilus_e4.native_reference import selected_reference_venues
+
+    assert selected_reference_venues(None) == ()
+    assert selected_reference_venues(False) == ()
+    assert selected_reference_venues(["OKX"]) == ("OKX",)
+    assert selected_reference_venues([]) == ("BINANCE", "OKX")
+    for invalid in (["OKX", "OKX"], ["FAKE"], "OKX"):
+        with pytest.raises(ValueError, match="SELECTION_INVALID"):
+            selected_reference_venues(invalid)

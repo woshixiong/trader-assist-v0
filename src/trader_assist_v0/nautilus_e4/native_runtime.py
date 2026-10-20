@@ -74,6 +74,9 @@ def build_native_node(
             product_type=BinanceProductType.SPOT,
             environment=BinanceEnvironment.LIVE,
             spot_market_data_mode=BinanceSpotMarketDataMode.Json,
+            # Official read-only market-data hosts; neither supports account/order APIs.
+            base_url_http="https://data-api.binance.vision",
+            base_url_ws="wss://data-stream.binance.vision:443/ws",
             instrument_provider=BinanceInstrumentProviderConfig(
                 load_all=True,
                 query_commission_rates=False,
