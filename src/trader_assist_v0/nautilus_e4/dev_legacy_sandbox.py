@@ -95,7 +95,7 @@ def create_dev_fixture(
                 event_id="dev-profile",
                 kind="DEV_PROFILE",
                 ts_ns=self.clock.timestamp_ns(),
-                payload={"version": VERSION, **PROFILE},
+                payload={"version": VERSION, **PROFILE, "passive_entry_negative": passive},
             )
             client = ClientId("DEV-FIXTURE")
             self.subscribe_quotes(self.instrument_id, client_id=client)
@@ -219,7 +219,13 @@ def create_dev_fixture(
                     if bid <= max(Decimal("1990"), self.high - Decimal("15")):
                         # Native quantity/position state, never inferred from a touched price.
                         self.exiting = True
-                        self.cancel_order(self.entry) if self.entry.is_open else None
+                        entry_state = self.cache.order(self.entry.client_order_id)
+                        if entry_state is None:
+                            self.failed = True
+                            self.reject(identity, quote, ["UNKNOWN_NATIVE_ORDER_STATE"])
+                            return
+                        if entry_state.is_open:
+                            self.cancel_order(entry_state)
                         order = self.order_factory.market(
                             self.instrument_id,
                             OrderSide.SELL,
@@ -255,22 +261,40 @@ def create_dev_fixture(
         def on_order_canceled(self, event: Any) -> None:
             if self.entry is not None and event.client_order_id == self.entry.client_order_id:
                 assert self.source is not None
+                entry_state = self.cache.order(event.client_order_id)
+                if entry_state is None:
+                    self.failed = True
+                    return
                 self.ledger.decision(
                     decision_id=f"cancel:{event.event_id}",
                     ts_ns=event.ts_init,
                     source_identity=self.source["source_hash"],
                     source_ts_ns=self.source["source"]["ts_event"],
-                    outcome="UNFILLED" if Decimal(str(self.entry.filled_qty)) == 0 else "PASS",
+                    outcome="UNFILLED" if Decimal(str(entry_state.filled_qty)) == 0 else "PASS",
                     details={
                         "native_cancel_event_id": str(event.event_id),
-                        "filled_qty": str(self.entry.filled_qty),
+                        "filled_qty": str(entry_state.filled_qty),
                         "status": "NATIVE_CANCEL_OBSERVED_REMAINDER_NOT_FILLED",
                         "client_order_id": str(event.client_order_id),
                     },
                 )
 
         def on_position_event(self, event: Any) -> None:
-            self.ledger.native_event(event)
+            # rc7 position events expose native fields but no to_dict(). Native
+            # order events still use ShadowLedger.native_event unchanged.
+            self.ledger.append(
+                event_id=str(event.event_id),
+                kind=type(event).__name__,
+                ts_ns=event.ts_init,
+                payload={
+                    "position_id": str(event.position_id),
+                    "opening_order_id": str(event.opening_order_id),
+                    "quantity": str(event.quantity),
+                    "realized_pnl": str(event.realized_pnl),
+                    "ts_event": event.ts_event,
+                    "source_hash": self.source["source_hash"] if self.source else None,
+                },
+            )
             self.notify(type(event).__name__, event)
 
         def snapshot(self) -> dict[str, Any]:

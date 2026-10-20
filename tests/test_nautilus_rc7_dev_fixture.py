@@ -162,7 +162,7 @@ async def _native_scenario(root: Path, scenario: str) -> None:
     )
     fixture.observations = asyncio.Queue()
     node.add_strategy(fixture)
-    handle, instance_id = node.handle(), str(node.instance_id)
+    handle, instance_id, cache = node.handle(), str(node.instance_id), node.cache
     pending: dict[str, list[Any]] = {}
 
     async def observed(kind: str | tuple[str, ...]) -> Any:
@@ -227,26 +227,28 @@ async def _native_scenario(root: Path, scenario: str) -> None:
         if scenario == "deny":
             # Native margin insufficiency is a harness fault, not strategy economics.
             await observed(("OrderDenied", "OrderRejected"))
-            assert fixture.failed and not node.cache.positions_open()
+            assert fixture.failed and not cache.positions_open()
         else:
             await observed("OrderAccepted")
             if scenario == "unfilled_cancel":
-                assert Decimal(str(fixture.entry.filled_qty)) == 0
-                fixture.cancel_order(fixture.entry)
+                entry_state = cache.order(fixture.entry.client_order_id)
+                assert Decimal(str(entry_state.filled_qty)) == 0
+                fixture.cancel_order(entry_state)
                 await observed("OrderCanceled")
-                assert not node.cache.positions_open()
+                assert not cache.positions_open()
             else:
                 await observed("OrderFilled")
+                entry_state = cache.order(fixture.entry.client_order_id)
                 if scenario == "partial_cancel_exit":
-                    assert Decimal("0") < Decimal(str(fixture.entry.filled_qty)) < Decimal("0.050")
-                    fixture.cancel_order(fixture.entry)
+                    assert Decimal("0") < Decimal(str(entry_state.filled_qty)) < Decimal("0.050")
+                    fixture.cancel_order(entry_state)
                     await observed("OrderCanceled")
                 else:
-                    assert Decimal(str(fixture.entry.filled_qty)) == Decimal("0.050")
+                    assert Decimal(str(entry_state.filled_qty)) == Decimal("0.050")
                 # Native quote occurs strictly after entry; never fill at a past bar price.
                 client._handle_data(quote("1989.0", "1990.0"))
                 await observed("PositionClosed")
-                assert not node.cache.positions_open()
+                assert not cache.positions_open()
         state = fixture.snapshot()
         rows = list(fixture.ledger.db.execute("SELECT kind,payload FROM events"))
         assert all(json.loads(raw)["strategy_id"] == VERSION for _, raw in rows)
@@ -261,6 +263,14 @@ async def _native_scenario(root: Path, scenario: str) -> None:
         if scenario in {"filled_exit", "partial_cancel_exit"}:
             assert len(fills) >= 2 and all(fill["commission"] for fill in fills)
             assert state["realized_pnl"] and state["positions"]
+            native_fills = [
+                event
+                for order in cache.orders()
+                for event in order.events()
+                if type(event).__name__ == "OrderFilled"
+            ]
+            assert all(fill.commission.as_decimal() > 0 for fill in native_fills)
+            assert cache.positions()[0].realized_pnl.as_decimal() < 0
         else:
             assert not fills
         assert fixture.ledger.verify() == len(rows)
@@ -268,6 +278,7 @@ async def _native_scenario(root: Path, scenario: str) -> None:
         handle.stop()
         await asyncio.wait_for(run, timeout=8)
         node.dispose()
+        del node  # Release native thread ownership even when pytest retains a failed frame.
         fixture.ledger.close()
     proof = read_staged_run(root, instance_id, require_closed=True)
     assert proof["types"]["QuoteTick"]["count"] >= 2
