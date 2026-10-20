@@ -442,9 +442,15 @@ async def run(args: argparse.Namespace) -> None:
         else None
     )
     health = NativeHealth({})
+    previous_reference_boundaries = {}
     previous_health_path = args.root / "health.json"
     if previous_health_path.exists():
         previous_health = json.loads(previous_health_path.read_text())
+        previous_reference_boundaries = (
+            previous_health.get("native_reference_coverage", {})
+            .get("freshness", {})
+            .get("last_native", {})
+        )
         boundaries = previous_health.get("last_native", {})
         for gap in previous_health.get("gaps", []):
             if gap.get("next_ts_init") is None and gap["stream"] not in boundaries:
@@ -503,6 +509,10 @@ async def run(args: argparse.Namespace) -> None:
         from trader_assist_v0.nautilus_e4.native_reference import ReferenceReader, reference_actor
 
         reference_reader = ReferenceReader()
+        reference_reader.health.restore_boundaries(
+            previous_reference_boundaries,
+            now=time.time_ns(),
+        )
         node.add_actor(reference_actor(reference_reader))
     probe_ledger = None
     sandbox_proof: dict[str, Any] = {}

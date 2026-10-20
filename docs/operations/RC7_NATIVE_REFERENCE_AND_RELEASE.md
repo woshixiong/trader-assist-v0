@@ -26,7 +26,10 @@ The research consumer keeps one latest typed input/hash per instrument/family.
 It uses existing NativeHealth gap evidence, rejects unknown/stale/noncausal/
 duplicate/out-of-order inputs, wrong tick/size and first input across a detected
 gap. It never generates orders or research opportunities. Socket state alone
-cannot qualify a feed. Reference coverage and freshness are included in the
+cannot qualify a feed. Restart boundaries restore through existing NativeHealth;
+the first valid event closes the explicit unknown-coverage gap and is rejected
+by the research consumer, rather than silently bridging it. Reference coverage
+and freshness are included in the
 existing runtime health report; `NATIVE_INPUTS_OBSERVED` is not live HEALTHY.
 Reference mode rejects Sandbox and strategy manifests before loading either.
 
@@ -58,7 +61,10 @@ and approved paths. Do not alter a Python3.12 environment or use the old rc5 bun
 Use the **exact reviewed PR commit from the canonical checkpoint**, not a branch tip:
 
 ```sh
-RELEASE_SHA=<exact-reviewed-40-character-commit-from-Issue-352>
+set -eu
+RELEASE_SHA='REPLACE_WITH_EXACT_REVIEWED_SHA_FROM_ISSUE_352'
+test "${#RELEASE_SHA}" -eq 40
+case "$RELEASE_SHA" in *[!0-9a-f]*) exit 78 ;; esac
 cd /opt/tradeos-rc7/repository
 git fetch origin "$RELEASE_SHA"
 git checkout --detach "$RELEASE_SHA"

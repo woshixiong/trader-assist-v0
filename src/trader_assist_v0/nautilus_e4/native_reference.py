@@ -183,6 +183,7 @@ class ReferenceReader:
             key, ts_event=event.ts_event, ts_init=event.ts_init, now=now_ns, event_end_ns=end
         ):
             return self.reject("INVALID_NATIVE_HEALTH_EVENT")
+        self.health.socket(True)  # A valid native event, never a socket ACK, re-arms receive state.
         if pending_gap or len(self.health.gaps) > gaps:
             return self.reject("GAP")
         self.latest[key], self.hashes[key] = event, digest
@@ -225,6 +226,7 @@ class ReferenceReader:
             "source_callback_hashes": dict(self.hashes),
             "rejects": dict(self.rejects),
             "gaps": self.health.gaps,
+            "pending_gap_streams": sorted(self.health.pending_gaps),
             "equity_or_HL_price_equivalence": "NOT_ASSERTED",
         }
 
@@ -262,6 +264,7 @@ def reference_actor(reader: ReferenceReader, *, venues: tuple[str, ...] = tuple(
             venue = str(event.venue)
             state = str(event.state).split(".")[-1].upper()
             if venue in CANDIDATES and state not in {"CONNECTED", "ACTIVE"}:
+                reader.health.connected = False
                 for identity, instrument in reader.instruments.items():
                     if str(instrument.id.venue) == venue:
                         for family in AGES:

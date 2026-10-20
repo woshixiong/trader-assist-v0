@@ -190,6 +190,7 @@ def test_reference_research_rejects_identity_stale_duplicate_gap_and_units() -> 
     assert not reader.consume(quote, now_ns=quote.ts_init - 1)
     assert not reader.consume(quote, now_ns=quote.ts_init + 31_000_000_000)
     assert reader.consume(quote, now_ns=quote.ts_init)
+    assert reader.health.connected
     assert not reader.consume(quote, now_ns=quote.ts_init)
     off_tick = QuoteTick(
         native.id,
@@ -243,3 +244,23 @@ def test_reference_research_rejects_identity_stale_duplicate_gap_and_units() -> 
     assert reader.rejects["REFERENCE_BAR_NOT_CLOSED"] == 1
     assert reader.coverage()["venues"]["BINANCE"][0]["missing_families"]
     assert tuple(CANDIDATES) == ("BINANCE", "OKX")
+
+
+def test_reference_restart_boundary_requires_fresh_native_event_and_keeps_gap() -> None:
+    native = instrument("OKX")
+    quote = events(native)[0]
+    reader = ReferenceReader()
+    reader.admit(native)
+    key = f"{native.id}:quote"
+    reader.health.restore_boundaries(
+        {key: {"ts_event": quote.ts_event - 1_000_000, "ts_init": quote.ts_init - 1_000_000}},
+        now=quote.ts_init,
+    )
+    assert not reader.health.connected
+    assert key in reader.coverage()["pending_gap_streams"]
+    assert not reader.consume(quote, now_ns=quote.ts_init)
+    assert reader.rejects["GAP"] == 1
+    assert reader.health.connected
+    assert reader.health.gaps[0]["reason"] == "PROCESS_RESTART"
+    assert reader.health.gaps[0]["next_ts_init"] == quote.ts_init
+    assert reader.health.gaps[0]["lost_events"] == "UNKNOWN"
