@@ -1,3 +1,8 @@
+> Historical rc5 release procedure. Current Issue #352 uses the pinned rc7 /
+> Python3.13 [native foundation](NAUTILUS_RC7_NATIVE_FOUNDATION.md) and
+> [context pilot](RC7_PUBLIC_CONTEXT_PILOT.md). Do not use the rc5 install
+> commands below for this package. No deployment is authorized.
+
 # FIRST_LAUNCH_20 Shadow exact-release handoff
 
 This procedure prepares the L0 public-data-only release. The profile is
@@ -66,8 +71,8 @@ no target operation.
 The existing canonical resolver must resolve every market without substitution:
 
 ```text
-BTC ETH HYPE SOL SKHX MU SNDK XYZ100 SP500 WTIOIL
-DRAM SPCX SILVER NVDA SMSN EWY GOLD XRP TSLA GOOGL
+Selection is derived from multi_asset_shadow.resolution.FIRST_LAUNCH_20;
+no independent symbol list is maintained in this procedure.
 ```
 
 Official metadata and actual rc5 provider instrument objects bind Registry/PIT

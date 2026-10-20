@@ -78,10 +78,14 @@ def capture_observer(
     ledger_root: Path | None = None,
     metadata_root: Path | None = None,
     qualification_reconnect: bool = False,
+    contexts_only: bool = False,
 ) -> Any:
     from nautilus_trader.common import DataActor
     from nautilus_trader.model import BarType, BookType, CryptoPerpetual, InstrumentId, Venue
 
+    from trader_assist_v0.nautilus_e4.native_context import CONTEXT_AGES, ContextResearchReader
+
+    context_reader = ContextResearchReader(set())
     evaluators: dict[str, Any] = {}
     coverage_ledger = None
     if metadata_root is not None:
@@ -94,6 +98,7 @@ def capture_observer(
         )
 
     class NativeObserver(DataActor):
+        context_reader: Any = None
         gap_written = 0
         reconnect_requested = False
         coverage_closed = False
@@ -217,10 +222,21 @@ def capture_observer(
             if expression is None:
                 return
             identity = native.id
-            if f"{identity}:quote" in health.required:
+            if f"{identity}:mark" in health.required:
                 return  # Refresh must not resubscribe or replace strategy state.
+            ages = CONTEXT_AGES if contexts_only else {**STREAM_AGES, **CONTEXT_AGES}
             health.required.update(
-                {f"{identity}:{kind}": age * 1_000_000_000 for kind, age in STREAM_AGES.items()}
+                {f"{identity}:{kind}": age * 1_000_000_000 for kind, age in ages.items()}
+            )
+            context_reader.instrument_ids.add(str(identity))
+            self.context_reader = context_reader
+            from nautilus_trader.model import DataType
+
+            self.subscribe_mark_prices(identity)
+            self.subscribe_index_prices(identity)
+            self.subscribe_funding_rates(identity)
+            self.subscribe_data(
+                DataType("HyperliquidOpenInterest", {"instrument_id": str(identity)})
             )
             if metadata_root is not None and not universe.missing:
                 (metadata_root / "resolved-pit-universe.json").write_text(
@@ -247,6 +263,8 @@ def capture_observer(
                     minimum_tick=native.price_increment.as_decimal(),
                     ledger=ledger,
                 )
+            if contexts_only:
+                return
             self.subscribe_quotes(identity)
             self.subscribe_trades(identity)
             self.subscribe_book_depth(identity, BookType.L2_MBP)
@@ -289,6 +307,24 @@ def capture_observer(
 
                 self.reconnect_requested = True
                 self.reconnect_socket(ClientId("HYPERLIQUID"), "hyperliquid-data-streams")
+
+        def on_mark_price(self, event: Any) -> None:
+            self.record_context(event, "mark")
+
+        def on_index_price(self, event: Any) -> None:
+            self.record_context(event, "index")
+
+        def on_funding_rate(self, event: Any) -> None:
+            self.record_context(event, "funding")
+
+        def on_data(self, value: Any) -> None:
+            event = getattr(value, "data", value)
+            if type(event).__name__ == "HyperliquidOpenInterest":
+                self.record_context(event, "oi")
+
+        def record_context(self, event: Any, kind: str) -> None:
+            self.record(event, kind, str(event.instrument_id))
+            context_reader.consume(event, now_ns=self.clock.timestamp_ns())
 
         def on_trade(self, event: Any) -> None:
             self.record(event, "trade", str(event.instrument_id))
@@ -365,6 +401,8 @@ async def run(args: argparse.Namespace) -> None:
         raise ValueError("reconnect probe requires bounded isolated GitHub CI")
     if args.sandbox_probe and (not args.sandbox or args.strategy_manifest is not None):
         raise ValueError("Sandbox protocol probe must be isolated from strategy and real execution")
+    from trader_assist_v0.multi_asset_shadow.resolution import FIRST_LAUNCH_20
+
     snapshot = (
         PitUniverseSnapshot.model_validate_json(args.snapshot.read_text())
         if args.snapshot is not None
@@ -373,8 +411,19 @@ async def run(args: argparse.Namespace) -> None:
     coins = (
         tuple(e.provider_coin for e in snapshot.expressions)
         if snapshot is not None
-        else tuple(args.provider_coins)
+        else (
+            tuple(item.coin for item in FIRST_LAUNCH_20)
+            if getattr(args, "first_launch_20", False)
+            else tuple(args.provider_coins)
+        )
     )
+    context_probe = getattr(args, "context_probe", False)
+    if context_probe and (
+        os.environ.get("GITHUB_ACTIONS") != "true"
+        or args.duration_seconds is None
+        or args.duration_seconds > 90
+    ):
+        raise ValueError("context probe requires bounded <=90s isolated GitHub CI")
     universe = NativeUniverse(coins, snapshot)
     args.root.mkdir(parents=True, exist_ok=True)
     prior_proof_path = args.root / "close-proof.json"
@@ -454,6 +503,7 @@ async def run(args: argparse.Namespace) -> None:
         ledger_root=args.root / "shadow-ledger",
         metadata_root=args.root,
         qualification_reconnect=args.qualification_reconnect,
+        contexts_only=context_probe,
     )
     node.add_actor(observer)
     instance_id = str(node.instance_id)
@@ -625,7 +675,23 @@ async def run(args: argparse.Namespace) -> None:
         raise RuntimeError("UNEXPECTED_NATIVE_NODE_STOP")
     if not duration_complete:
         raise RuntimeError("NATIVE_RUN_STOPPED_BEFORE_REQUESTED_DURATION")
-    require_qualified_stop(proof, instance_id)
+    if context_probe:
+        from trader_assist_v0.nautilus_e4.native_context import context_proof
+
+        if universe.missing or observer.context_reader is None:
+            raise ValueError("CONTEXT_PROVIDER_METADATA_UNRESOLVED")
+        result = context_proof(
+            args.root,
+            instance_id,
+            {e.instrument_id for e in universe.resolved.values()},
+            observer.context_reader.hashes,
+        )
+        result["provider_snapshot"] = proof["provider_snapshot"]
+        result["live_freshness_reasons"] = proof["freshness_reasons"]
+        result["stream_gaps"] = proof["stream_gaps"]
+        (args.root / "context-proof.json").write_text(json.dumps(result, indent=2) + "\n")
+    else:
+        require_qualified_stop(proof, instance_id)
     print(json.dumps({"qualification_exit": "VERIFIED_STAGED_STOP", "instance_id": instance_id}))
 
 
@@ -634,6 +700,8 @@ def main() -> None:
     universe_args = parser.add_mutually_exclusive_group(required=True)
     universe_args.add_argument("--snapshot", type=Path)
     universe_args.add_argument("--provider-coins", nargs="+")
+    universe_args.add_argument("--first-launch-20", action="store_true")
+    parser.add_argument("--context-probe", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
         "--duration-seconds", type=int, help="isolated qualification only; default is continuous"
     )

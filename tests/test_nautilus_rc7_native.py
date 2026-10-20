@@ -472,3 +472,63 @@ def test_frozen_replay_fee_adapter_nested_failure_restores_context() -> None:
     with pytest.raises(RuntimeError, match="outer replay failed"):
         outer(run, instrument)
     assert native_modules.import_module("nautilus_trader.model") is model
+
+
+def test_native_contexts_seal_readback_and_causal_research_consumer(tmp_path: Path) -> None:
+    from nautilus_trader.adapters.hyperliquid import HyperliquidOpenInterest
+    from nautilus_trader.common import Cache, Clock
+    from nautilus_trader.model import (
+        CustomData,
+        DataType,
+        FundingRateUpdate,
+        IndexPriceUpdate,
+        MarkPriceUpdate,
+    )
+    from nautilus_trader.persistence import StreamingFeatherWriter
+    from test_nautilus_vnext_g4_runner import native_hyperliquid_instrument
+
+    from trader_assist_v0.nautilus_e4.native_context import ContextResearchReader, context_proof
+
+    instrument = native_hyperliquid_instrument()
+    run_id = "60fe38f4-5cce-4403-a38f-e1b3a003a198"
+    stage = tmp_path / "live" / run_id
+    reader = ContextResearchReader({str(instrument.id)})
+    now = 60_000_000_000
+    events = [
+        MarkPriceUpdate(instrument.id, Price.from_str("2000.0"), now - 1, now),
+        IndexPriceUpdate(instrument.id, Price.from_str("2001.0"), now - 1, now),
+        FundingRateUpdate(instrument.id, Decimal("0.00001"), now - 1, now),
+        HyperliquidOpenInterest(instrument.id, Decimal("100.50"), now - 1, now),
+    ]
+    writer = StreamingFeatherWriter(str(stage), Cache(), Clock.new_test())
+    try:
+        writer.write(instrument)
+        for event in events:
+            assert reader.consume(event, now_ns=now)
+            writer.write(
+                CustomData(
+                    DataType("HyperliquidOpenInterest", {"instrument_id": str(instrument.id)}),
+                    event,
+                )
+                if isinstance(event, HyperliquidOpenInterest)
+                else event
+            )
+        writer.flush()
+        with pytest.raises(ValueError, match="SEALED"):
+            context_proof(tmp_path, run_id, reader.instrument_ids, reader.hashes)
+        assert not reader.consume(events[0], now_ns=now)
+        assert not reader.consume(events[0], now_ns=now + 61_000_000_000)
+        unresolved = ContextResearchReader(set())
+        assert not unresolved.consume(events[0], now_ns=now)
+        assert reader.rejects == {"DUPLICATE": 1, "STALE": 1}
+        assert unresolved.rejects == {"UNRESOLVED_IDENTITY": 1}
+    finally:
+        writer.close()
+    proof = context_proof(tmp_path, run_id, reader.instrument_ids, reader.hashes)
+    assert proof["status"] == "USABLE_BOUNDED_SEALED_NATIVE_CONTEXT"
+    assert len(proof["streams"]) == 4
+    assert list(stage.rglob("*.feather"))
+    with pytest.raises(ValueError, match="CONTEXT_NOT_USABLE"):
+        context_proof(
+            tmp_path, run_id, reader.instrument_ids, {**reader.hashes, "unknown": "missing"}
+        )

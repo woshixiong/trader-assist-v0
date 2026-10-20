@@ -12,7 +12,7 @@ import json
 from typing import Any
 
 from trader_assist_v0.contracts.common import sha256_hex
-from trader_assist_v0.multi_asset_shadow.resolution import INITIAL_40
+from trader_assist_v0.multi_asset_shadow.resolution import FIRST_LAUNCH_20
 
 from .contracts import MarketExpression, PitUniverseSnapshot
 
@@ -20,7 +20,7 @@ STREAM_AGES = {"quote": 30, "trade": 60, "book": 30, "1m": 120, "5m": 360}
 
 
 def validate_coins(coins: tuple[str, ...]) -> None:
-    allowed = {item.coin for item in INITIAL_40}
+    allowed = {item.coin for item in FIRST_LAUNCH_20}
     if len(set(coins)) != len(coins) or not set(coins) <= allowed:
         raise ValueError("provider coins must be unique members of the approved registry")
     if "ETH" not in coins or not any(":" in coin for coin in coins):

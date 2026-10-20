@@ -7,6 +7,10 @@ on:
         description: 'One bounded public ETH + xyz:SKHX native reconnect and active-stage proof'
         type: boolean
         default: false
+      context_probe:
+        description: 'Bounded 60s native FirstLaunch20 mark/index/funding/OI usable-record proof'
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -48,6 +52,14 @@ jobs:
           PYTHONPATH: src:.
         run: |
           python -m scripts.rc7.qualify_public --root /tmp/rc7-public-catalog --output /tmp/rc7-proof/public
+      - name: Bounded public native FirstLaunch20 context usability
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.context_probe }}
+        env:
+          PYTHONPATH: src:.
+        run: |
+          mkdir -p /tmp/rc7-proof/context
+          python -m scripts.rc7.run_public --first-launch-20 --context-probe --duration-seconds 60 --root /tmp/rc7-context > /tmp/rc7-proof/context/run.log 2>&1
+          cp /tmp/rc7-context/context-proof.json /tmp/rc7-context/close-proof.json /tmp/rc7-context/health.json /tmp/rc7-proof/context/
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
@@ -64,4 +76,16 @@ jobs:
         with:
           name: rc7-public-retained-source
           path: /tmp/rc7-public-retained-source.tar.gz
+          retention-days: 7
+      - name: Retain native context source after close, including failed evidence
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.context_probe }}
+        run: |
+          if [ -d /tmp/rc7-context ]; then
+            tar -czf /tmp/rc7-context-source.tar.gz -C /tmp rc7-context
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.context_probe }}
+        with:
+          name: rc7-context-retained-source
+          path: /tmp/rc7-context-source.tar.gz
           retention-days: 7
