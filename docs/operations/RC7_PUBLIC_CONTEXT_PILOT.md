@@ -53,3 +53,12 @@ not replace or override the native encoder.
 Pinned source: [CustomData constructor](https://github.com/nautechsystems/nautilus_trader/blob/v2.0.0rc7/crates/model/src/python/data/custom.rs),
 [class registration](https://github.com/nautechsystems/nautilus_trader/blob/v2.0.0rc7/crates/model/src/python/data/mod.rs),
 [Hyperliquid module registration](https://github.com/nautechsystems/nautilus_trader/blob/v2.0.0rc7/crates/adapters/hyperliquid/src/python/mod.rs).
+
+Issue #358 foundation boundary: the synthetic 24-bar regression exercises saved
+native closed 5m `Bar` identity/clocks -> native typed Parquet readback -> native
+BacktestEngine/DataActor `register_indicator_for_bars` -> `on_bar`, using
+DonchianChannel(20), EfficiencyRatio(14), AverageTrueRange(14). Premature knowledge
+time and unsupported period are rejected by existing admission. This is an
+indicator wiring fixture, not a range-identification definition, RangeSnapshot,
+strategy, forward signal, PnL result, or real-history qualification. Native
+indicator availability does not imply that a range classifier is approved.

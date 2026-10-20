@@ -543,3 +543,88 @@ def test_native_contexts_seal_readback_and_causal_research_consumer(tmp_path: Pa
         context_proof(
             tmp_path, run_id, reader.instrument_ids, {**reader.hashes, "unknown": "missing"}
         )
+
+
+def test_native_saved_closed_5m_indicator_registration(tmp_path: Path) -> None:
+    """Synthetic foundation seam only: no range classifier, strategy or order."""
+    from nautilus_trader.common import Cache, Clock, DataActor, Environment
+    from nautilus_trader.indicators import AverageTrueRange, DonchianChannel, EfficiencyRatio
+    from nautilus_trader.model import Bar, BarType, NautilusDataType
+    from nautilus_trader.persistence import StreamingFeatherWriter
+    from test_nautilus_vnext_g4_runner import native_hyperliquid_instrument
+
+    from trader_assist_v0.nautilus_e4.native_capture import closed_bar_window, native_event_hash
+
+    instrument = native_hyperliquid_instrument()
+    bar_type = BarType.from_str(f"{instrument.id}-5-MINUTE-LAST-EXTERNAL")
+    duration = 300_000_000_000
+    bars = [
+        Bar(
+            bar_type,
+            Price.from_str(f"{2000 + i}.0"),
+            Price.from_str(f"{2002 + i}.0"),
+            Price.from_str(f"{1999 + i}.0"),
+            Price.from_str(f"{2001 + i}.0"),
+            Quantity.from_str("1.000"),
+            (i + 1) * duration,
+            (i + 2) * duration,
+        )
+        for i in range(24)
+    ]
+    run_id = "5438042c-d124-4854-8bbf-ef99f3f8d09c"
+    stage = tmp_path / "live" / run_id
+    writer = StreamingFeatherWriter(str(stage), Cache(), Clock.new_test())
+    try:
+        writer.write(instrument)
+        for bar in bars:
+            writer.write(bar)
+    finally:
+        writer.close()
+    catalog = ParquetDataCatalog(str(tmp_path))
+    catalog.convert_stream_to_data(run_id, NautilusDataType.Bar, environment=Environment.LIVE)
+    restored = catalog.query_bars(identifiers=[str(bar_type)])
+    assert [native_event_hash(b) for b in restored] == [native_event_hash(b) for b in bars]
+    assert not list(stage.rglob("*.feather.partial"))
+    with pytest.raises(ValueError, match="NOT_CLOSED_OR_FUTURE"):
+        closed_bar_window(restored[0], now_ns=restored[0].ts_init - 1)
+    with pytest.raises(ValueError, match="INVALID_NATIVE_BAR_PERIOD"):
+        closed_bar_window(
+            SimpleNamespace(bar_type=SimpleNamespace(spec=SimpleNamespace(step=2)), ts_event=1),
+            now_ns=duration,
+        )
+
+    class IndicatorProbe(DataActor):
+        def __init__(self) -> None:
+            super().__init__()
+            self.dc = DonchianChannel(20)
+            self.er = EfficiencyRatio(14)
+            self.atr = AverageTrueRange(14)
+            self.seen: list[str] = []
+
+        def on_start(self) -> None:
+            for indicator in (self.dc, self.er, self.atr):
+                self.register_indicator_for_bars(bar_type, indicator)
+            self.subscribe_bars(bar_type)
+
+        def on_bar(self, bar: Bar) -> None:
+            closed_bar_window(bar, now_ns=self.clock.timestamp_ns())
+            self.seen.append(native_event_hash(bar))
+            assert self.dc.has_inputs and self.er.has_inputs and self.atr.has_inputs
+
+    engine = BacktestEngine(BacktestEngineConfig(bypass_logging=True, run_analysis=False))
+    probe = IndicatorProbe()
+    engine.add_venue(
+        Venue("HYPERLIQUID"), OmsType.NETTING, AccountType.MARGIN, [Money.from_str("100000 USDC")]
+    )
+    engine.add_instrument(instrument)
+    engine.add_actor(probe)
+    engine.add_data(restored)
+    try:
+        engine.run()
+        assert probe.seen == [native_event_hash(b) for b in bars]
+        assert probe.dc.initialized and probe.er.initialized and probe.atr.initialized
+        assert probe.dc.upper == 2025.0 and probe.dc.lower == 2003.0
+        assert probe.er.value == pytest.approx(1.0)
+        assert probe.atr.value > 0
+    finally:
+        engine.dispose()
