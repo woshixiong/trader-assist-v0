@@ -40,3 +40,16 @@ then each native source -> retained typed storage -> reader must be qualified.
 Existing rc7 SHA-pinned Linux wheel/Python3.13 CI and disabled systemd/venv paths
 remain authoritative. No rc5 installation tooling is used. No host install,
 service control, AWS/Muse interaction, Ready/Merge or exchange write is performed.
+
+The Python binding must call official `register_custom_data_class(HyperliquidOpenInterest)`
+before constructing Python `CustomData`: the rc7 adapter module registers a Rust
+extractor factory, while this public API activates the extractor used by
+`CustomData`. Without activation, Python construction falls back to
+`PythonCustomDataWrapper`, which the native OI Arrow encoder correctly rejects.
+The regression asserts `custom_data_backend_kind(...) == "native"`, then writes,
+seals, converts and reads through the original native persistence APIs. It does
+not replace or override the native encoder.
+
+Pinned source: [CustomData constructor](https://github.com/nautechsystems/nautilus_trader/blob/v2.0.0rc7/crates/model/src/python/data/custom.rs),
+[class registration](https://github.com/nautechsystems/nautilus_trader/blob/v2.0.0rc7/crates/model/src/python/data/mod.rs),
+[Hyperliquid module registration](https://github.com/nautechsystems/nautilus_trader/blob/v2.0.0rc7/crates/adapters/hyperliquid/src/python/mod.rs).

@@ -83,7 +83,13 @@ def capture_observer(
     from nautilus_trader.common import DataActor
     from nautilus_trader.model import BarType, BookType, CryptoPerpetual, InstrumentId, Venue
 
-    from trader_assist_v0.nautilus_e4.native_context import CONTEXT_AGES, ContextResearchReader
+    from trader_assist_v0.nautilus_e4.native_context import (
+        CONTEXT_AGES,
+        ContextResearchReader,
+        register_native_context_types,
+    )
+
+    register_native_context_types()
 
     context_reader = ContextResearchReader(set())
     evaluators: dict[str, Any] = {}

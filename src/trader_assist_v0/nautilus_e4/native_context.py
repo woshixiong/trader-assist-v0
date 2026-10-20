@@ -17,6 +17,14 @@ CONTEXT_TYPES = {
 }
 
 
+def register_native_context_types() -> None:
+    """Activate rc7's registered Rust extractor, preserving its native Arrow codec."""
+    from nautilus_trader.adapters.hyperliquid import HyperliquidOpenInterest
+    from nautilus_trader.model import register_custom_data_class
+
+    register_custom_data_class(HyperliquidOpenInterest)
+
+
 def context_identity(value: Any) -> tuple[Any, str, str]:
     event = getattr(value, "data", value)
     kind = CONTEXT_TYPES.get(type(event).__name__)
@@ -65,11 +73,11 @@ class ContextResearchReader:
 
 def read_context_run(root: Path, instance_id: str) -> list[Any]:
     """Bounded closed-run proof using native custom conversion; never rolling promotion."""
-    from nautilus_trader.adapters.hyperliquid import HyperliquidOpenInterest  # noqa: F401
     from nautilus_trader.common import Environment
     from nautilus_trader.model import NautilusDataType
     from nautilus_trader.persistence import ParquetDataCatalog
 
+    register_native_context_types()
     stage = root / "live" / instance_id
     if list(stage.rglob("*.feather.partial")):
         raise ValueError("CONTEXT_REQUIRES_SEALED_NATIVE_RUN")

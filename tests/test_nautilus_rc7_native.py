@@ -483,11 +483,18 @@ def test_native_contexts_seal_readback_and_causal_research_consumer(tmp_path: Pa
         FundingRateUpdate,
         IndexPriceUpdate,
         MarkPriceUpdate,
+        custom_data_backend_kind,
     )
     from nautilus_trader.persistence import StreamingFeatherWriter
     from test_nautilus_vnext_g4_runner import native_hyperliquid_instrument
 
-    from trader_assist_v0.nautilus_e4.native_context import ContextResearchReader, context_proof
+    from trader_assist_v0.nautilus_e4.native_context import (
+        ContextResearchReader,
+        context_proof,
+        register_native_context_types,
+    )
+
+    register_native_context_types()
 
     instrument = native_hyperliquid_instrument()
     run_id = "60fe38f4-5cce-4403-a38f-e1b3a003a198"
@@ -505,7 +512,7 @@ def test_native_contexts_seal_readback_and_causal_research_consumer(tmp_path: Pa
         writer.write(instrument)
         for event in events:
             assert reader.consume(event, now_ns=now)
-            writer.write(
+            stored = (
                 CustomData(
                     DataType("HyperliquidOpenInterest", {"instrument_id": str(instrument.id)}),
                     event,
@@ -513,6 +520,10 @@ def test_native_contexts_seal_readback_and_causal_research_consumer(tmp_path: Pa
                 if isinstance(event, HyperliquidOpenInterest)
                 else event
             )
+            if isinstance(event, HyperliquidOpenInterest):
+                assert custom_data_backend_kind(stored) == "native"
+                assert stored.data.to_json() == event.to_json()
+            writer.write(stored)
         writer.flush()
         with pytest.raises(ValueError, match="SEALED"):
             context_proof(tmp_path, run_id, reader.instrument_ids, reader.hashes)
