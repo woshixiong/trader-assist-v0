@@ -46,8 +46,11 @@ No source files are deleted or copied into a second archive engine.
 
 Deterministic native tests use synthetic records and say nothing about listing
 availability. One opt-in `reference_probe` GitHub workflow attempt captures 75s
-per venue with the official client/provider; venues are isolated sequentially
-so a blocked Binance endpoint cannot erase OKX evidence. This is a qualification
+per venue with the official client/provider; two sequential bounded OS workers
+each own one native node, so a blocked Binance endpoint cannot erase OKX evidence.
+Pinned rc7's per-thread LiveNode ownership persists until Drop, not merely dispose;
+this qualification isolation follows that contract without a GC/core workaround.
+Production reference composition remains one LiveNode. This is a qualification
 script, not a daemon, production restart cycle or another collector. Its separate
 `reference-public-qualification` check is distinct from the five required code
 checks. Inspect its per-symbol/family report; subscription ACKs or green code CI
@@ -101,3 +104,6 @@ Pinned capability sources: [Binance public client](https://github.com/nautechsys
 [Binance closed-kline parser](https://github.com/nautechsystems/nautilus_trader/blob/v2.0.0rc7/crates/adapters/binance/src/spot/websocket/public_json/parse.rs),
 [OKX public client](https://github.com/nautechsystems/nautilus_trader/blob/v2.0.0rc7/crates/adapters/okx/src/data.rs),
 [OKX confirmed-candle parser](https://github.com/nautechsystems/nautilus_trader/blob/v2.0.0rc7/crates/adapters/okx/src/websocket/parse.rs).
+
+Native lifecycle source: [one-node/thread ownership and dispose](https://github.com/nautechsystems/nautilus_trader/blob/v2.0.0rc7/crates/live/src/node/mod.rs),
+[Python awaitable ownership/drop](https://github.com/nautechsystems/nautilus_trader/blob/v2.0.0rc7/crates/live/src/python/node.rs).

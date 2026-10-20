@@ -533,3 +533,40 @@ def test_native_reference_credential_environment_fails_closed(key: str) -> None:
 
     with pytest.raises(RuntimeError, match="forbidden exchange credential"):
         assert_public_only(env={key: "synthetic-test-value"})
+
+
+def test_reference_qualification_isolates_native_owner_and_preserves_both_outcomes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Worker-control fixture only, not evidence of any listing or market event."""
+    import json
+    import sys
+    from types import SimpleNamespace
+
+    from scripts.rc7 import qualify_references
+
+    seen = []
+    root = tmp_path / "bounded-attempt"
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setattr(sys, "argv", ["qualify_references", "--root", str(root)])
+
+    def worker(command: list[str], **_kwargs: object) -> SimpleNamespace:
+        venue = command[command.index("--venue") + 1]
+        seen.append(venue)
+        directory = Path(command[command.index("--root") + 1])
+        directory.mkdir()
+        result = {
+            "status": "INCOMPLETE" if venue == "BINANCE" else "AVAILABLE_NATIVE_SUBSET_PROVEN",
+            "fixture": "CONTROL_ONLY_NO_MARKET_DATA",
+        }
+        (directory / "reference-proof.json").write_text(json.dumps(result))
+        return SimpleNamespace(returncode=1 if venue == "BINANCE" else 0)
+
+    monkeypatch.setattr(qualify_references.subprocess, "run", worker)
+    with pytest.raises(SystemExit, match="QUALIFICATION_INCOMPLETE"):
+        qualify_references.main()
+    assert seen == ["BINANCE", "OKX"]
+    results = json.loads((root / "reference-proof.json").read_text())
+    assert results["BINANCE"]["status"] == "INCOMPLETE"
+    assert results["OKX"]["status"] == "AVAILABLE_NATIVE_SUBSET_PROVEN"

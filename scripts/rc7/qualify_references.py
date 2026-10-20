@@ -8,6 +8,8 @@ import asyncio
 import json
 import os
 import shutil
+import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -92,13 +94,53 @@ async def qualify(root: Path, venue: str, duration: int) -> dict[str, Any]:
     return result
 
 
-async def run(args: argparse.Namespace) -> None:
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--root", type=Path, required=True)
+    parser.add_argument("--duration-seconds", type=int, default=75)
+    parser.add_argument("--venue", choices=tuple(CANDIDATES), help=argparse.SUPPRESS)
+    args = parser.parse_args()
     if os.environ.get("GITHUB_ACTIONS") != "true" or not 65 <= args.duration_seconds <= 90:
         raise ValueError("public reference qualification requires isolated CI and 65..90 seconds")
+    if args.venue is not None:
+        result = asyncio.run(qualify(args.root, args.venue, args.duration_seconds))
+        raise SystemExit(0 if result["status"] == "AVAILABLE_NATIVE_SUBSET_PROVEN" else 1)
+
+    # rc7 owns one LiveNode per thread. A completed awaitable may still own it;
+    # dispose() is not Drop. Use one bounded OS worker per venue, no GC/core patch.
+    args.root.mkdir(parents=True, exist_ok=False)
     results = {}
     for venue in CANDIDATES:
-        results[venue] = await qualify(args.root / venue, venue, args.duration_seconds)
-    args.root.mkdir(parents=True, exist_ok=True)
+        root = args.root / venue
+        command = [
+            sys.executable,
+            "-m",
+            "scripts.rc7.qualify_references",
+            "--venue",
+            venue,
+            "--root",
+            str(root),
+            "--duration-seconds",
+            str(args.duration_seconds),
+        ]
+        with (args.root / f"{venue}.log").open("w") as output:
+            try:
+                process = subprocess.run(
+                    command,
+                    stdout=output,
+                    stderr=subprocess.STDOUT,
+                    timeout=args.duration_seconds + 60,
+                    check=False,
+                )
+                code = process.returncode
+            except subprocess.TimeoutExpired:
+                code = 124
+        proof = root / "reference-proof.json"
+        result = json.loads(proof.read_text()) if proof.exists() else ReferenceReader().coverage()
+        if code != 0 or not proof.exists():
+            result["status"] = "INCOMPLETE"
+            result.setdefault("failure", f"NATIVE_WORKER_EXIT_{code}_OR_MISSING_PROOF")
+        results[venue] = result
     (args.root / "reference-proof.json").write_text(json.dumps(results, indent=2) + "\n")
     print(
         json.dumps(
@@ -114,13 +156,6 @@ async def run(args: argparse.Namespace) -> None:
     )
     if any(r["status"] != "AVAILABLE_NATIVE_SUBSET_PROVEN" for r in results.values()):
         raise SystemExit("NATIVE_REFERENCE_PUBLIC_QUALIFICATION_INCOMPLETE")
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--root", type=Path, required=True)
-    parser.add_argument("--duration-seconds", type=int, default=75)
-    asyncio.run(run(parser.parse_args()))
 
 
 if __name__ == "__main__":
