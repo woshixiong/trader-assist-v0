@@ -645,12 +645,13 @@ async def run(args: argparse.Namespace) -> None:
         )
         if reference_reader is not None:
             reference_reader.health.connected = False
-            stopped["native_reference_coverage"] = reference_reader.coverage()
-            stopped["native_reference_coverage"]["freshness"] = reference_reader.health.report(
+            stopped_reference = reference_reader.coverage()
+            stopped_reference["freshness"] = reference_reader.health.report(
                 now=closed_report_ns,
                 generated=closed_report_ns,
                 free_bytes=shutil.disk_usage(args.root).free,
             )
+            stopped["native_reference_coverage"] = stopped_reference
         stopped["capture_state"] = "STOPPED"
         (args.root / "health.json").write_text(json.dumps(stopped, indent=2) + "\n")
     if failure is not None:
