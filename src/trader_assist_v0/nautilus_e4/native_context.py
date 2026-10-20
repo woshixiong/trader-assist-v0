@@ -30,7 +30,17 @@ def context_identity(value: Any) -> tuple[Any, str, str]:
     kind = CONTEXT_TYPES.get(type(event).__name__)
     if kind is None:
         raise ValueError("UNSUPPORTED_CONTEXT_TYPE")
-    raw = event.to_json() if kind == "oi" else json.dumps(event.to_dict(), sort_keys=True)
+    if kind == "oi":
+        # Official rc7 Arrow Decimal128(38,16) preserves value, not source scale.
+        # Hash exact typed content; neither float conversion nor Decimal context rounding.
+        payload = json.loads(event.to_json())
+        decimal_text = format(event.open_interest, "f")
+        payload["open_interest"] = (
+            decimal_text.rstrip("0").rstrip(".") if "." in decimal_text else decimal_text
+        )
+    else:
+        payload = event.to_dict()
+    raw = json.dumps(payload, sort_keys=True)
     return event, kind, hashlib.sha256(raw.encode()).hexdigest()
 
 
@@ -102,6 +112,9 @@ def context_proof(
     root: Path, instance_id: str, resolved_ids: set[str], expected: dict[str, str]
 ) -> dict[str, Any]:
     """Source callback hash must actually occur in sealed native readback; no subscription PASS."""
+    required = {f"{identity}:{kind}" for identity in resolved_ids for kind in CONTEXT_AGES}
+    if not expected or set(expected) != required:
+        raise ValueError("CONTEXT_NOT_USABLE:invalid_expected_streams")
     data = read_context_run(root, instance_id)
     reader = ContextResearchReader(resolved_ids)
     seen = set()
@@ -110,7 +123,6 @@ def context_proof(
         seen.add(digest)
         # Replay admission at native knowledge time, never wall-clock re-date records.
         reader.consume(value, now_ns=event.ts_init)
-    required = {f"{identity}:{kind}" for identity in resolved_ids for kind in CONTEXT_AGES}
     missing = sorted(required - reader.latest.keys())
     absent = sorted(set(expected.values()) - seen)
     if missing or absent or not expected or set(expected) != required:

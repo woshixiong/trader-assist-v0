@@ -483,6 +483,7 @@ def test_native_contexts_seal_readback_and_causal_research_consumer(tmp_path: Pa
         FundingRateUpdate,
         IndexPriceUpdate,
         MarkPriceUpdate,
+        NautilusDataType,
         custom_data_backend_kind,
     )
     from nautilus_trader.persistence import StreamingFeatherWriter
@@ -490,6 +491,7 @@ def test_native_contexts_seal_readback_and_causal_research_consumer(tmp_path: Pa
 
     from trader_assist_v0.nautilus_e4.native_context import (
         ContextResearchReader,
+        context_identity,
         context_proof,
         register_native_context_types,
     )
@@ -538,6 +540,24 @@ def test_native_contexts_seal_readback_and_causal_research_consumer(tmp_path: Pa
     proof = context_proof(tmp_path, run_id, reader.instrument_ids, reader.hashes)
     assert proof["status"] == "USABLE_BOUNDED_SEALED_NATIVE_CONTEXT"
     assert len(proof["streams"]) == 4
+    restored_oi = next(
+        getattr(item, "data", item)
+        for item in ParquetDataCatalog(str(tmp_path)).query_custom_data(
+            NautilusDataType.Custom("HyperliquidOpenInterest")
+        )
+    )
+    assert restored_oi.open_interest == events[-1].open_interest
+    assert (restored_oi.instrument_id, restored_oi.ts_event, restored_oi.ts_init) == (
+        instrument.id,
+        now - 1,
+        now,
+    )
+    assert context_identity(restored_oi)[2] == context_identity(events[-1])[2]
+    for changed in (
+        HyperliquidOpenInterest(instrument.id, Decimal("100.5000000000000001"), now - 1, now),
+        HyperliquidOpenInterest(instrument.id, Decimal("100.50"), now, now),
+    ):
+        assert context_identity(changed)[2] != context_identity(events[-1])[2]
     assert list(stage.rglob("*.feather"))
     with pytest.raises(ValueError, match="CONTEXT_NOT_USABLE"):
         context_proof(
@@ -613,8 +633,14 @@ def test_native_saved_closed_5m_indicator_registration(tmp_path: Path) -> None:
 
     engine = BacktestEngine(BacktestEngineConfig(bypass_logging=True, run_analysis=False))
     probe = IndicatorProbe()
+    from nautilus_trader.execution import MakerTakerFeeModel
+
     engine.add_venue(
-        Venue("HYPERLIQUID"), OmsType.NETTING, AccountType.MARGIN, [Money.from_str("100000 USDC")]
+        Venue("HYPERLIQUID"),
+        OmsType.NETTING,
+        AccountType.MARGIN,
+        [Money.from_str("100000 USDC")],
+        fee_model=MakerTakerFeeModel(Decimal("0"), Decimal("0")),
     )
     engine.add_instrument(instrument)
     engine.add_actor(probe)

@@ -62,3 +62,11 @@ time and unsupported period are rejected by existing admission. This is an
 indicator wiring fixture, not a range-identification definition, RangeSnapshot,
 strategy, forward signal, PnL result, or real-history qualification. Native
 indicator availability does not imply that a range classifier is approved.
+
+Native OI Arrow uses Decimal128(38,16): numeric value is exact, source decimal
+scale is not retained. The causal hash therefore uses sorted typed JSON with
+only redundant fractional zeros removed from the OI decimal text; it never
+rounds, converts to float or alters stored native values/timestamps. Readback
+must also equal the original Decimal, instrument and both clocks. A changed
+16th fractional digit or timestamp must change identity.
+Source: [native decimal encoding/decoding](https://github.com/nautechsystems/nautilus_trader/blob/v2.0.0rc7/crates/serialization/src/arrow/mod.rs).
