@@ -637,17 +637,18 @@ async def run(args: argparse.Namespace) -> None:
             except Exception as exc:
                 failure = failure or exc
         health.connected = False
+        closed_report_ns = time.time_ns()
         stopped = health.report(
-            now=time.time_ns(),
-            generated=time.time_ns(),
+            now=closed_report_ns,
+            generated=closed_report_ns,
             free_bytes=shutil.disk_usage(args.root).free,
         )
         if reference_reader is not None:
             reference_reader.health.connected = False
             stopped["native_reference_coverage"] = reference_reader.coverage()
             stopped["native_reference_coverage"]["freshness"] = reference_reader.health.report(
-                now=time.time_ns(),
-                generated=time.time_ns(),
+                now=closed_report_ns,
+                generated=closed_report_ns,
                 free_bytes=shutil.disk_usage(args.root).free,
             )
         stopped["capture_state"] = "STOPPED"
