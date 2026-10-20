@@ -32,6 +32,8 @@ matching, accepted/rejected/partial/canceled/fill events, account and PnL.
 Source hashes, native clocks, opportunity/attempt IDs, order/parent IDs and
 native event/commission links use the existing immutable ledger. Native Feather
 source is retained/read back on fixture close; production writer is untouched.
+The unknown-final/cancel-rejection guard uses an explicitly marked synthetic
+callback fault, not a claim that Sandbox emitted that rejection or any fill.
 
 Run only in the pinned Linux CPython 3.13 rc7 environment:
 

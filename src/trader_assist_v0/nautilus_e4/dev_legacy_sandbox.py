@@ -225,7 +225,7 @@ def create_dev_fixture(
                             self.reject(identity, quote, ["UNKNOWN_NATIVE_ORDER_STATE"])
                             return
                         if entry_state.is_open:
-                            self.cancel_order(entry_state)
+                            self.cancel_order(entry_state.client_order_id)
                         order = self.order_factory.market(
                             self.instrument_id,
                             OrderSide.SELL,

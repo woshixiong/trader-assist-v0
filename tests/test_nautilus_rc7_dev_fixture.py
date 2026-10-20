@@ -233,7 +233,7 @@ async def _native_scenario(root: Path, scenario: str) -> None:
             if scenario == "unfilled_cancel":
                 entry_state = cache.order(fixture.entry.client_order_id)
                 assert Decimal(str(entry_state.filled_qty)) == 0
-                fixture.cancel_order(entry_state)
+                fixture.cancel_order(entry_state.client_order_id)
                 await observed("OrderCanceled")
                 assert not cache.positions_open()
             else:
@@ -241,7 +241,7 @@ async def _native_scenario(root: Path, scenario: str) -> None:
                 entry_state = cache.order(fixture.entry.client_order_id)
                 if scenario == "partial_cancel_exit":
                     assert Decimal("0") < Decimal(str(entry_state.filled_qty)) < Decimal("0.050")
-                    fixture.cancel_order(entry_state)
+                    fixture.cancel_order(entry_state.client_order_id)
                     await observed("OrderCanceled")
                 else:
                     assert Decimal(str(entry_state.filled_qty)) == Decimal("0.050")
@@ -274,6 +274,44 @@ async def _native_scenario(root: Path, scenario: str) -> None:
         else:
             assert not fills
         assert fixture.ledger.verify() == len(rows)
+        if scenario == "unfilled_cancel":
+            assert any(
+                kind == "DECISION" and json.loads(raw)["payload"]["outcome"] == "UNFILLED"
+                for kind, raw in rows
+            )
+            # Explicit synthetic fault of the callback guard, NOT a Sandbox fill
+            # or claim that the native venue generated this rejection.
+            from nautilus_trader.core import UUID4
+            from nautilus_trader.model import ClientOrderId, OrderCancelRejected
+
+            now = fixture.clock.timestamp_ns()
+            fixture.ledger.append(
+                event_id="synthetic-cancel-fault",
+                kind="DEV_TEST_FAULT",
+                ts_ns=now,
+                payload={"classification": LABEL, "origin": "SYNTHETIC_CALLBACK_FAULT_ONLY"},
+            )
+            fault = OrderCancelRejected(
+                TraderId("DEV-001"),
+                fixture.strategy_id,
+                instrument.id,
+                ClientOrderId("DEV-UNKNOWN"),
+                "SYNTHETIC_UNKNOWN_FINAL_CANCEL_FAULT",
+                UUID4(),
+                now,
+                now,
+                False,
+            )
+            fixture.on_order_event(fault)
+            assert fixture.failed
+            before = len(cache.orders())
+            fixture.on_quote(quote())
+            assert len(cache.orders()) == before  # Unknown final state cannot create new risk.
+            last = fixture.ledger.db.execute(
+                "SELECT payload FROM events ORDER BY sequence DESC LIMIT 1"
+            ).fetchone()
+            assert json.loads(last[0])["payload"]["unknown_final_state"] is True
+            fixture.ledger.verify()
     finally:
         handle.stop()
         await asyncio.wait_for(run, timeout=8)
