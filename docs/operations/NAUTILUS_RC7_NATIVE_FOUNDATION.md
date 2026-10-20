@@ -26,6 +26,13 @@ changes; its parser uses candle open time for `ts_event`. Admission checks the
 corresponding close against `ts_init` and the current clock. Actual public
 provider and 5m coverage still require bounded evidence.
 
+Optional first-party Binance JSON Spot / OKX SWAP reference composition and the
+minimal exact-release source/venv route are described in
+[RC7_NATIVE_REFERENCE_AND_RELEASE.md](RC7_NATIVE_REFERENCE_AND_RELEASE.md).
+HL-only remains the disabled unit's default; reference mode cannot attach
+strategies or Sandbox. Per-symbol native proof, not the candidate count, controls
+reference qualification.
+
 ## Continuous public capture candidate
 
 One native LiveNode runs until an operator stop, genuine failure or fatal archive

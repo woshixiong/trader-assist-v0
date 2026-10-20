@@ -505,3 +505,31 @@ def test_native_closed_bar_admission_has_no_partial_or_future_bar(minutes: int) 
     event.ts_init = 2 * duration + 1
     with pytest.raises(ValueError, match="FUTURE"):
         closed_bar_window(event, now_ns=2 * duration)
+
+
+@pytest.mark.parametrize("field", ["sandbox", "sandbox_probe", "strategy_manifest"])
+def test_reference_public_runtime_rejects_order_or_strategy_mode_before_native_load(
+    field: str,
+) -> None:
+    import argparse
+    import asyncio
+
+    from scripts.rc7.run_public import run
+
+    modes: dict[str, object] = {
+        "reference_venues": True,
+        "sandbox": False,
+        "sandbox_probe": False,
+        "strategy_manifest": None,
+    }
+    modes[field] = "forbidden-manifest" if field == "strategy_manifest" else True
+    with pytest.raises(ValueError, match="public nontrading only"):
+        asyncio.run(run(argparse.Namespace(**modes)))
+
+
+@pytest.mark.parametrize("key", ["BINANCE_API_KEY", "OKX_API_SECRET", "OKX_API_PASSPHRASE"])
+def test_native_reference_credential_environment_fails_closed(key: str) -> None:
+    from trader_assist_v0.nautilus_e4.safety import assert_public_only
+
+    with pytest.raises(RuntimeError, match="forbidden exchange credential"):
+        assert_public_only(env={key: "synthetic-test-value"})

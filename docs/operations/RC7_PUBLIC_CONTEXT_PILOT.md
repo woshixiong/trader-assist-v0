@@ -29,13 +29,13 @@ query latency, 24h uptime, strategy/Shadow deployment or a normal restart cycle.
 Native `HyperliquidAllDexsAssetCtxs` is explicitly JSON-backed with no Arrow
 persistence registration: DEFERRED, no custom JSON archiver is introduced.
 
-Binance Spot / OKX SWAP remain NOT_USABLE / DEFERRED in this pilot. Official rc7
-first-party factories exist, but no canonical approved 12-Spot / 8-SWAP mapping
-set was found in the current repo/scope. Existing four-symbol Binance Vision
-USD-M research archives and generic PIT mapping schemas are not those mappings.
-No inferred cross-venue ticker or Muse transport is substituted. Required next
-input: exact native product/symbol/association set and official metadata binding;
-then each native source -> retained typed storage -> reader must be qualified.
+Binance Spot / OKX SWAP now have opt-in first-party native composition and
+candidate requirements under control 6289012825. See
+[reference qualification and exact release](RC7_NATIVE_REFERENCE_AND_RELEASE.md).
+Only actual native provider resolution and per-family sealed readback can qualify
+any subset. Candidate token/swap names never establish HL equity equivalence;
+12+8 availability is not asserted. Prior missing-map evidence is superseded by
+this scoped candidate-validation path, not by fabricated canonical associations.
 
 Existing rc7 SHA-pinned Linux wheel/Python3.13 CI and disabled systemd/venv paths
 remain authoritative. No rc5 installation tooling is used. No host install,

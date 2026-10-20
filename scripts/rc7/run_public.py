@@ -396,6 +396,9 @@ def capture_observer(
 
 
 async def run(args: argparse.Namespace) -> None:
+    references = getattr(args, "reference_venues", False)
+    if references and (args.sandbox or args.sandbox_probe or args.strategy_manifest is not None):
+        raise ValueError("reference runtime is public nontrading only")
     if (
         args.duration_seconds is not None
         and not 30 <= args.duration_seconds <= MAX_QUALIFICATION_SECONDS
@@ -489,7 +492,18 @@ async def run(args: argparse.Namespace) -> None:
         strategy_manifest = StrategyPackageManifest.model_validate_json(
             args.strategy_manifest.read_text()
         )
-    node = build_native_node(args.root, sandbox=args.sandbox, sandbox_fee_model=fee_model)
+    node = build_native_node(
+        args.root,
+        sandbox=args.sandbox,
+        sandbox_fee_model=fee_model,
+        venues=("HYPERLIQUID", "BINANCE", "OKX") if references else ("HYPERLIQUID",),
+    )
+    reference_reader = None
+    if references:
+        from trader_assist_v0.nautilus_e4.native_reference import ReferenceReader, reference_actor
+
+        reference_reader = ReferenceReader()
+        node.add_actor(reference_actor(reference_reader))
     probe_ledger = None
     sandbox_proof: dict[str, Any] = {}
     if args.sandbox_probe:
@@ -530,6 +544,14 @@ async def run(args: argparse.Namespace) -> None:
             output["capture_gap"] = capture_gap(previous_last_ns, health.first_observed_ns)
             observer.persist_gaps()
             output["missing_provider_coins"] = universe.missing
+            if reference_reader is not None:
+                reference_report = reference_reader.coverage()
+                reference_report["freshness"] = reference_reader.health.report(
+                    now=now,
+                    generated=now,
+                    free_bytes=free_bytes,
+                )
+                output["native_reference_coverage"] = reference_report
             output["instance_id"] = instance_id
             output["capture_state"] = "CONTINUOUS_NATIVE_STAGE_CAPTURE"
             if universe.missing:
@@ -707,6 +729,11 @@ def main() -> None:
     universe_args.add_argument("--snapshot", type=Path)
     universe_args.add_argument("--provider-coins", nargs="+")
     universe_args.add_argument("--first-launch-20", action="store_true")
+    parser.add_argument(
+        "--reference-venues",
+        action="store_true",
+        help="opt-in native Binance JSON Spot + OKX SWAP; no orders",
+    )
     parser.add_argument("--context-probe", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
         "--duration-seconds", type=int, help="isolated qualification only; default is continuous"

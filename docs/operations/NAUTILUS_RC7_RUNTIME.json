@@ -44,5 +44,14 @@
     "https://github.com/nautechsystems/nautilus_trader/blob/v2.0.0rc7/examples/live/hyperliquid/exec_tester.py"
   ],
   "execution_architecture": "PAUSED_ENGINEERING_CONTROL_NATIVE_EXTENSION_DECISION",
-  "service_restart": "ON_FAILURE_FATAL_78_ARGUMENT_2_INTERRUPT_130_PREVENTED"
+  "service_restart": "ON_FAILURE_FATAL_78_ARGUMENT_2_INTERRUPT_130_PREVENTED",
+  "official_source_commit": "55c0e82053142bce3a5cba4de4221d3929c2d3bc",
+  "optional_native_reference_clients": {
+    "BINANCE": "SPOT_JSON_PUBLIC_NO_COMMISSION_REQUESTS",
+    "OKX": "SWAP_PUBLIC_BUSINESS_NO_CREDENTIALS",
+    "activation": "OPT_IN_REFERENCE_VENUES_NO_STRATEGY_OR_EXECUTION",
+    "candidate_source": "nautilus_e4.native_reference.CANDIDATES",
+    "cross_product_price_equivalence": "NOT_ASSERTED",
+    "public_qualification": "REQUIRES_EXACT_HEAD_EVIDENCE"
+  }
 }
