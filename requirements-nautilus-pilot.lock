@@ -1,3 +1,3 @@
-# Platform lock: CPython 3.12 / Linux x86_64
-# Exact E3/E4 development-shadow wheel only; qualified upstream rc5 artifact.
-nautilus-trader==2.0.0rc5 --hash=sha256:eab45fafd2312deda1236554c49a9798bfc76bc8465af864878e2f70189ebebe
+# Platform lock: CPython 3.13 / Linux x86_64 / glibc >= 2.34
+# Official rc7 wheel bytes verified in the exact-head native smoke.
+nautilus-trader==2.0.0rc7 --hash=sha256:b3928f37d75d57508030a421dc762186ad1f9ffc5d5420d7daf1d2c6badb8044

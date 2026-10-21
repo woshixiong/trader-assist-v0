@@ -10,8 +10,8 @@ from importlib.metadata import distributions
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PILOT_REQUIREMENT = "nautilus-trader==2.0.0rc5"
-PILOT_WHEEL_SHA256 = "eab45fafd2312deda1236554c49a9798bfc76bc8465af864878e2f70189ebebe"
+PILOT_REQUIREMENT = "nautilus-trader==2.0.0rc7"
+PILOT_WHEEL_SHA256 = "b3928f37d75d57508030a421dc762186ad1f9ffc5d5420d7daf1d2c6badb8044"
 OPERATOR_REQUIREMENTS = (
     "fastapi==0.141.1",
     "starlette==1.7.0",
@@ -118,10 +118,10 @@ def _verify_direct_pins(
     if any(dev.get(name) != entry for name, entry in operator.items()):
         raise SystemExit("operator lock is not an exact hashed subset of dev lock")
     if optional_pilot != (PILOT_REQUIREMENT,):
-        raise SystemExit("nautilus-pilot optional dependency must contain only the exact rc5 pin")
+        raise SystemExit("nautilus-pilot optional dependency must contain only the exact rc7 pin")
     expected_pilot = {_pin(PILOT_REQUIREMENT)[0]: (_pin(PILOT_REQUIREMENT)[1], PILOT_WHEEL_SHA256)}
     if pilot != expected_pilot:
-        raise SystemExit("pilot lock must contain only the exact authorized rc5 Linux wheel")
+        raise SystemExit("pilot lock must contain only the exact authorized rc7 Linux wheel")
     if optional_typesafe != (DECISION_MODEL_TYPESAFE_REQUIREMENT,):
         raise SystemExit(
             "decision-model-typesafe optional dependency must contain only the exact "
@@ -225,7 +225,7 @@ def main() -> int:
     pilot = _read_lock("requirements-nautilus-pilot.lock")
     expected_pilot = {_pin(PILOT_REQUIREMENT)[0]: (_pin(PILOT_REQUIREMENT)[1], PILOT_WHEEL_SHA256)}
     if pilot != expected_pilot:
-        raise SystemExit("pilot lock must contain only the exact authorized rc5 Linux wheel")
+        raise SystemExit("pilot lock must contain only the exact authorized rc7 Linux wheel")
     if args.verify_target_runtime_installed:
         if args.staged_source is None or args.pip_check_with is None:
             parser.error("target mode requires --staged-source and --pip-check-with")
@@ -244,7 +244,14 @@ def main() -> int:
     if args.verify_operator_installed:
         _verify_installed(operator, project_distribution_expected=False)
     if args.verify_pilot_installed:
-        _verify_installed(dev, pilot)
+        native_dev = _read_lock("requirements-dev-py313.lock")
+        if sys.version_info[:2] != (3, 13):
+            raise SystemExit("native rc7 requires CPython 3.13")
+        if {name: entry[0] for name, entry in native_dev.items()} != {
+            name: entry[0] for name, entry in dev.items()
+        }:
+            raise SystemExit("native dev lock must preserve the exact dev version closure")
+        _verify_installed(native_dev, pilot)
     if args.verify_decision_model_typesafe_installed:
         _verify_installed(dev, typesafe)
     print(

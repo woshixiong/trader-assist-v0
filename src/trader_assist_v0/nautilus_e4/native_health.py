@@ -1,0 +1,195 @@
+"""Thin native-event freshness certificate; never reconnects or reconstructs a book."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+
+@dataclass
+class NativeHealth:
+    required: dict[str, int]  # stream -> maximum age ns (bars include their cadence)
+    max_future_skew_ns: int = 1_000_000_000
+    report_max_age_ns: int = 10_000_000_000
+    minimum_free_bytes: int = 1_073_741_824
+    epoch: int = 0
+    connected: bool = False
+    writer_ok: bool = False
+    catalog_verified: bool = False
+    writer_activity_observed: bool = False
+    change_driven: set[str] = field(default_factory=set)
+    quarantine: set[str] = field(default_factory=set)
+    rejected_stale: int = 0
+    last: dict[str, tuple[int, int, int]] = field(default_factory=dict)
+    event_ends: dict[str, int] = field(default_factory=dict)
+    counts: dict[str, int] = field(default_factory=dict)
+    duplicates: int = 0
+    out_of_order: int = 0
+    failures: set[str] = field(default_factory=set)
+    first_observed_ns: int | None = None
+    last_observed_ns: int | None = None
+    gaps: list[dict[str, object]] = field(default_factory=list)
+    gap_events: list[dict[str, object]] = field(default_factory=list)
+    pending_gaps: dict[str, int] = field(default_factory=dict)
+
+    def restore_boundaries(self, previous: dict[str, dict[str, int]], *, now: int) -> None:
+        """Last observed checkpoint boundaries, not exact lost-event counts."""
+        for stream, clocks in previous.items():
+            if min(clocks["ts_event"], clocks["ts_init"]) <= 0:
+                raise ValueError("INVALID_PREVIOUS_NATIVE_BOUNDARY")
+            self.last[stream] = (clocks["ts_event"], clocks["ts_init"], self.epoch)
+            self.mark_gap(stream, "PROCESS_RESTART", now)
+        self.last.clear()
+
+    def mark_gap(self, stream: str, reason: str, now: int) -> None:
+        if stream in self.pending_gaps or stream not in self.last:
+            return
+        previous = self.last[stream]
+        gap: dict[str, object] = {
+            "stream": stream,
+            "instrument_id": stream.rsplit(":", 1)[0],
+            "reason": reason,
+            "prior_ts_event": previous[0],
+            "prior_ts_init": previous[1],
+            "detected_ns": now,
+            "epoch": self.epoch,
+            "next_ts_event": None,
+            "next_ts_init": None,
+            "coverage": "UNKNOWN_NO_SYNTHETIC_BACKFILL",
+            "lost_events": "UNKNOWN",
+        }
+        self.quarantine.add(stream)
+        self.pending_gaps[stream] = len(self.gaps)
+        self.gaps.append(gap)
+        self.gap_events.append({**gap, "state": "OPEN"})
+
+    def socket(self, connected: bool, *, now: int | None = None) -> None:
+        if not connected and self.connected:
+            for stream in self.last:
+                self.mark_gap(stream, "NATIVE_DISCONNECT", now or self.last_observed_ns or 0)
+            self.epoch += 1
+            self.last.clear()
+            self.event_ends.clear()
+        self.connected = connected
+
+    def observe(
+        self,
+        stream: str,
+        *,
+        ts_event: int,
+        ts_init: int,
+        now: int,
+        event_end_ns: int | None = None,
+    ) -> bool:
+        if stream not in self.required:
+            self.failures.add("UNKNOWN_INSTRUMENT_OR_STREAM")
+            return False
+        if (
+            min(ts_event, ts_init, now) <= 0
+            or ts_event > ts_init
+            or max(ts_event, ts_init) > now + self.max_future_skew_ns
+        ):
+            self.failures.add("INVALID_EVENT_CLOCK")
+            return False
+        if event_end_ns is not None and not ts_event <= event_end_ns <= min(ts_init, now):
+            self.failures.add("INVALID_EVENT_END_CLOCK")
+            return False
+        prior = self.last.get(stream)
+        if prior and ts_event < prior[0]:
+            self.out_of_order += 1
+            self.failures.add("OUT_OF_ORDER_OR_GAP")
+            return False
+        if prior and (ts_event, ts_init) == prior[:2]:
+            self.duplicates += 1
+            return False
+        end = ts_event if event_end_ns is None else event_end_ns
+        fresh = (
+            0 <= now - ts_init <= self.required[stream] and 0 <= now - end <= self.required[stream]
+        )
+        if not fresh:
+            self.rejected_stale += 1
+            return False  # Stale deliveries cannot re-arm transport or overwrite last valid clocks.
+        if prior:
+            cadence = {"1m": 60_000_000_000, "5m": 300_000_000_000}.get(stream.rsplit(":", 1)[-1])
+            if cadence and ts_event > prior[0] + cadence:
+                self.mark_gap(stream, "CLOSED_BAR_INTERVAL_MISSING", now)
+            elif stream not in self.change_driven and now - prior[1] > self.required[stream]:
+                self.mark_gap(stream, "RECEIVE_FRESHNESS_GAP", now)
+        if stream in self.pending_gaps:
+            index = self.pending_gaps.pop(stream)
+            self.gaps[index].update(
+                next_ts_event=ts_event, next_ts_init=ts_init, next_observed_ns=now
+            )
+            self.gap_events.append({**self.gaps[index], "state": "FRESH_EVENTS_RESUMED"})
+        else:
+            # A second distinct fresh event (next contiguous closed bar for bars)
+            # establishes current continuity; historical gap coverage stays UNKNOWN.
+            self.quarantine.discard(stream)
+        self.last[stream] = (ts_event, ts_init, self.epoch)
+        self.event_ends[stream] = ts_event if event_end_ns is None else event_end_ns
+        self.counts[stream] = self.counts.get(stream, 0) + 1
+        if self.first_observed_ns is None:
+            self.first_observed_ns = now
+        self.last_observed_ns = now
+        return True
+
+    def admission_reasons(self, *, now: int) -> set[str]:
+        """Current native input eligibility only; never an order/risk authorization."""
+        reasons = set(self.failures)
+        if not self.connected:
+            reasons.add("NATIVE_DISCONNECTED")
+        for stream, max_age in self.required.items():
+            event = self.last.get(stream)
+            if event is None or event[2] != self.epoch:
+                reasons.add(f"MISSING:{stream}")
+            elif (
+                not 0 <= now - self.event_ends[stream] <= max_age
+                or not 0 <= now - event[1] <= max_age
+            ):
+                if stream in self.change_driven:
+                    # No heartbeat is exposed for unchanged asset contexts. Do not
+                    # fabricate a missing tick, refresh clocks from a sibling, or
+                    # equate settlement minutes with a delivery deadline.
+                    reasons.add(f"CHANGE_ONLY_CURRENT_VALUE_UNVERIFIED:{stream}")
+                else:
+                    reasons.add(f"STALE:{stream}")
+                    self.mark_gap(stream, "RECEIVE_FRESHNESS_GAP", now)
+        reasons.update(f"QUARANTINE:{stream}" for stream in self.quarantine)
+        return reasons
+
+    def report(self, *, now: int, generated: int, free_bytes: int) -> dict[str, object]:
+        admission = self.admission_reasons(now=now)
+        reasons = set(admission)
+        if not self.writer_ok:
+            reasons.add(
+                "WRITER_INTEGRITY_UNVERIFIED"
+                if self.writer_activity_observed
+                else "WRITER_UNKNOWN_OR_FAILED"
+            )
+        if not self.catalog_verified:
+            reasons.add("CATALOG_UNVERIFIED")
+        if not 0 <= now - generated <= self.report_max_age_ns:
+            reasons.add("HEALTH_REPORT_STALE_OR_CLOCK_INVALID")
+        if free_bytes < self.minimum_free_bytes:
+            reasons.add("DISK_LOW")
+        return {
+            "status": "HEALTHY" if not reasons else "DEGRADED",
+            "native_input_eligible": not admission and bool(self.required),
+            "admission_reasons": sorted(admission),
+            "writer_activity": "OBSERVED" if self.writer_activity_observed else "UNOBSERVED",
+            "writer_integrity": "VERIFIED" if self.writer_ok else "UNVERIFIED",
+            "catalog_integrity": "VERIFIED" if self.catalog_verified else "UNVERIFIED",
+            "change_driven_streams": sorted(self.change_driven),
+            "rejected_stale": self.rejected_stale,
+            "reasons": sorted(reasons),
+            "generated_ns": generated,
+            "epoch": self.epoch,
+            "counts": dict(self.counts),
+            "duplicates": self.duplicates,
+            "out_of_order": self.out_of_order,
+            "gaps": [dict(gap) for gap in self.gaps],
+            "pending_gap_streams": sorted(self.pending_gaps),
+            "last_native": {
+                stream: {"ts_event": value[0], "ts_init": value[1]}
+                for stream, value in self.last.items()
+            },
+        }

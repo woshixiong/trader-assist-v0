@@ -1,0 +1,57 @@
+{
+  "schema_version": "TRADEOS_NATIVE_RUNTIME_V1",
+  "package_id": "NAUTILUS_RC7_UNIFIED_NATIVE_FOUNDATION_20261019",
+  "python": "3.13",
+  "nautilus": "2.0.0rc7",
+  "platform": "Linux x86_64 glibc>=2.34",
+  "wheel": "nautilus_trader-2.0.0rc7-cp313-cp313-manylinux_2_34_x86_64.whl",
+  "wheel_sha256": "b3928f37d75d57508030a421dc762186ad1f9ffc5d5420d7daf1d2c6badb8044",
+  "dependency_locks": [
+    "requirements-runtime-py313.lock",
+    "requirements-dev-py313.lock",
+    "requirements-nautilus-pilot.lock"
+  ],
+  "official_source_tag": "v2.0.0rc7",
+  "book_type": "OrderBookDepth",
+  "backtest_batch_deltas": true,
+  "startup_history_required": false,
+  "native_risk_bypass": false,
+  "execution_mode_default": "PUBLIC_ONLY",
+  "external_execution_activation": "NOT_IMPLEMENTED_NOT_AUTHORIZED",
+  "service_default": "DISABLED_NO_AUTHORIZATION_MARKER",
+  "streaming": {
+    "rotation": "INTERVAL_300_SECONDS_WRITE_TRIGGERED",
+    "promotion_interval_ms": null,
+    "promote_on_close": false,
+    "delete_feather_after_promotion": false,
+    "use_ts_event_for_ts_init": false,
+    "live_catalog_health": "UNQUALIFIED_NO_AUTOMATIC_PROMOTION",
+    "capture_mode": "CONTINUOUS_NO_PLANNED_RESTART",
+    "staged_query": "NATIVE_READ_LIVE_RUN_SEALED_ONLY_NO_FIXED_LAG_SLA"
+  },
+  "qualification": {
+    "official_wheel_api": "PASS_AT_faa4d1c0d00c205d41d9177f5adfe957aa840f42",
+    "target_host_24h": "NOT_RUN",
+    "sandbox_lifecycle": "PENDING",
+    "final_submit_no_bypass": "BLOCKED_NATIVE_PYTHON_DISPATCH_BINDING_NOT_VERIFIED",
+    "real_orders": "PROHIBITED",
+    "native_construction_equal_timestamp_catalog": "PASS_AT_84d6d402ef090ebff80890c3ffe9871cffb42d3c"
+  },
+  "references": [
+    "https://github.com/nautechsystems/nautilus_trader/blob/v2.0.0rc7/docs/how_to/stream_parquet_catalog.md",
+    "https://github.com/nautechsystems/nautilus_trader/blob/v2.0.0rc7/examples/live/hyperliquid/data_tester.py",
+    "https://github.com/nautechsystems/nautilus_trader/blob/v2.0.0rc7/examples/live/sandbox/exec_tester.py",
+    "https://github.com/nautechsystems/nautilus_trader/blob/v2.0.0rc7/examples/live/hyperliquid/exec_tester.py"
+  ],
+  "execution_architecture": "PAUSED_ENGINEERING_CONTROL_NATIVE_EXTENSION_DECISION",
+  "service_restart": "ON_FAILURE_FATAL_78_ARGUMENT_2_INTERRUPT_130_PREVENTED",
+  "official_source_commit": "55c0e82053142bce3a5cba4de4221d3929c2d3bc",
+  "optional_native_reference_clients": {
+    "BINANCE": "SPOT_JSON_PUBLIC_NO_COMMISSION_REQUESTS",
+    "OKX": "SWAP_PUBLIC_BUSINESS_NO_CREDENTIALS",
+    "activation": "OPT_IN_REFERENCE_VENUES_NO_STRATEGY_OR_EXECUTION",
+    "candidate_source": "nautilus_e4.native_reference.CANDIDATES",
+    "cross_product_price_equivalence": "NOT_ASSERTED",
+    "public_qualification": "REQUIRES_EXACT_HEAD_EVIDENCE"
+  }
+}

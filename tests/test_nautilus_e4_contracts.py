@@ -108,7 +108,7 @@ def test_pit_and_manifest_bind_exact_versions_current_state_and_zero_write() -> 
     assert pit.expressions[0].listing_state is None
     assert historical_pit_claim_state(pit) is EvidenceState.NOT_EVALUABLE
     assert run.pit_snapshot_hash == pit.snapshot_hash
-    assert run.nautilus_version == NAUTILUS_VERSION == "2.0.0rc5"
+    assert run.nautilus_version == NAUTILUS_VERSION == "2.0.0rc7"
     assert run.data_version == DATA_VERSION
     assert run.execution_model_version == EXECUTION_MODEL_VERSION
     assert run.execution_model_limited is True

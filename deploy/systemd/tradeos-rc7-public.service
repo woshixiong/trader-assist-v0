@@ -1,0 +1,35 @@
+[Unit]
+Description=Trade OS rc7 native public capture (no exchange writes)
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=3
+# Installation does not authorize activation. No enable marker is shipped.
+ConditionPathExists=/etc/tradeos/rc7-public-authorized
+
+[Service]
+Type=simple
+User=tradeos
+Group=tradeos
+WorkingDirectory=/opt/tradeos-rc7/repository
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/tradeos-rc7/repository/src
+ExecStart=/opt/tradeos-rc7/venv/bin/python -m scripts.rc7.run_public --snapshot /etc/tradeos/approved-pit-universe.json --root /var/lib/tradeos/rc7
+# One continuous native node. No normal bounded cycle or writer restart.
+Restart=on-failure
+# Fatal archive/config failures and manual interruption need operator action.
+RestartPreventExitStatus=2 78 130 SIGHUP SIGINT SIGTERM SIGPIPE
+RestartSec=15
+KillSignal=SIGINT
+TimeoutStopSec=90
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/tradeos/rc7
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -32,7 +32,7 @@ from trader_assist_v0.nautilus_pilot.strategy_package import (
     StrategyPackageManifest,
 )
 
-EXPECTED_NAUTILUS_VERSION = "2.0.0rc5"
+EXPECTED_NAUTILUS_VERSION = "2.0.0rc7"
 BASE_SHA = "3bf7f4e1c1a852b780da599147e39b109392385c"
 MARKET = "2" * 64
 FIVE_MINUTES_MS = 300_000

@@ -36,9 +36,10 @@ DATA_VERSION: Final[
     Literal["TA_VNEXT_RESEARCH_DATA_CONTRACT_V1_2026-09-11_REPAIR1"]
 ] = "TA_VNEXT_RESEARCH_DATA_CONTRACT_V1_2026-09-11_REPAIR1"
 LEGACY_NAUTILUS_VERSION: Final[Literal["2.0.0rc4"]] = "2.0.0rc4"
-NAUTILUS_VERSION: Final[Literal["2.0.0rc5"]] = "2.0.0rc5"
+NAUTILUS_VERSION: Final[Literal["2.0.0rc7"]] = "2.0.0rc7"
 SUPPORTED_EVIDENCE_NAUTILUS_VERSIONS: Final[tuple[str, ...]] = (
     LEGACY_NAUTILUS_VERSION,
+    "2.0.0rc5",  # historical evidence remains readable, never an active runtime
     NAUTILUS_VERSION,
 )
 EXECUTION_MODEL_VERSION: Final[Literal["E4_PHASE_A_MARKETABLE_L1_V1"]] = (
@@ -64,7 +65,8 @@ class CaptureTier(StrEnum):
 
 class DataKind(StrEnum):
     BBO = "BBO"
-    DEPTH10 = "DEPTH10"
+    DEPTH10 = "DEPTH10"  # historical rc5 evidence only
+    BOOK_DEPTH = "BOOK_DEPTH"
     TRADE = "TRADE"
     BAR = "BAR"
     CONTEXT = "CONTEXT"
@@ -234,7 +236,7 @@ class RunManifest(BaseModel):
     data_version: Literal[
         "TA_VNEXT_RESEARCH_DATA_CONTRACT_V1_2026-09-11_REPAIR1"
     ] = DATA_VERSION
-    nautilus_version: Literal["2.0.0rc4", "2.0.0rc5"] = NAUTILUS_VERSION
+    nautilus_version: Literal["2.0.0rc4", "2.0.0rc5", "2.0.0rc7"] = NAUTILUS_VERSION
     runtime_python: str
     runtime_platform: str
     pit_snapshot_id: Sha256Hex

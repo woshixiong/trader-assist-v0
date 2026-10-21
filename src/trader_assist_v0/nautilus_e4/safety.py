@@ -23,6 +23,20 @@ FORBIDDEN_CONFIG_KEYS = frozenset(
 )
 FORBIDDEN_ENV_KEYS = frozenset(
     {
+        "BINANCE_API_KEY",
+        "BINANCE_API_SECRET",
+        "BINANCE_SECRET",
+        "BINANCE_US_API_KEY",
+        "BINANCE_US_API_SECRET",
+        "BINANCE_TESTNET_API_KEY",
+        "BINANCE_TESTNET_API_SECRET",
+        "OKX_API_KEY",
+        "OKX_API_SECRET",
+        "OKX_SECRET_KEY",
+        "OKX_API_PASSPHRASE",
+        "OKX_PASSPHRASE",
+        "OKX_DEMO_API_KEY",
+        "OKX_DEMO_API_SECRET",
         "HYPERLIQUID_API_KEY",
         "HYPERLIQUID_API_SECRET",
         "HYPERLIQUID_PRIVATE_KEY",

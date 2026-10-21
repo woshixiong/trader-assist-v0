@@ -190,8 +190,6 @@ def _native_instrument() -> object:
         ts_init=0,
         margin_init=Decimal("0.05"),
         margin_maint=Decimal("0.025"),
-        maker_fee=Decimal("0.0002"),
-        taker_fee=Decimal("0.0005"),
     )
 
 

@@ -234,8 +234,8 @@ def run_single_attempt(*, evidence_root: Path, result_path: Path, expected_head:
             "e4_run_manifest_hash": manifest.manifest_hash,
             "e4_pit_snapshot_hash": snapshot.snapshot_hash,
             "raw_provider_response_sha256": response.raw_sha256,
-            "bar_route": "NAUTILUS_2.0.0rc5_HYPERLIQUID_5M_LAST_EXTERNAL",
-            "restart_route": "NAUTILUS_2.0.0rc5_HYPERLIQUID_1M_LAST_EXTERNAL",
+            "bar_route": "NAUTILUS_2.0.0rc7_HYPERLIQUID_5M_LAST_EXTERNAL",
+            "restart_route": "NAUTILUS_2.0.0rc7_HYPERLIQUID_1M_LAST_EXTERNAL",
         })
 
         policy = SubscriptionPolicy(

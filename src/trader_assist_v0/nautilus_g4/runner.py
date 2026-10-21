@@ -1261,6 +1261,7 @@ def execute_provider_native_state(
         BookType,
         CryptoPerpetual,
         Currency,
+        NautilusDataType,
         OmsType,
         TraderId,
     )
@@ -1294,7 +1295,8 @@ def execute_provider_native_state(
     if identity.quote_tick_count:
         data.append(
             BacktestDataConfig(
-                data_type="QuoteTick",
+                batch_deltas=True,
+                data_type=NautilusDataType.QuoteTick,
                 catalog_path=catalog_path_text,
                 instrument_id=provider_instrument_id,
                 start_time=start_time,
@@ -1304,7 +1306,8 @@ def execute_provider_native_state(
     if identity.trade_tick_count:
         data.append(
             BacktestDataConfig(
-                data_type="TradeTick",
+                batch_deltas=True,
+                data_type=NautilusDataType.TradeTick,
                 catalog_path=catalog_path_text,
                 instrument_id=provider_instrument_id,
                 start_time=start_time,
@@ -1314,7 +1317,8 @@ def execute_provider_native_state(
     if identity.bar_count:
         data.append(
             BacktestDataConfig(
-                data_type="Bar",
+                batch_deltas=True,
+                data_type=NautilusDataType.Bar,
                 catalog_path=catalog_path_text,
                 instrument_id=provider_instrument_id,
                 start_time=start_time,
@@ -1327,7 +1331,11 @@ def execute_provider_native_state(
     venue = _optional_attr(provider_instrument_id, "venue")
     if venue is None:
         raise ValueError("provider InstrumentId lacks public venue")
+    from nautilus_trader.execution import MakerTakerFeeModel
+
     venue_config = BacktestVenueConfig(
+        # Mechanical order evidence only; approved external T2 cost projection is separate.
+        fee_model=MakerTakerFeeModel(Decimal("0"), Decimal("0")),
         name=str(venue),
         oms_type=OmsType.NETTING,
         account_type=AccountType.MARGIN,
@@ -1503,6 +1511,7 @@ def execute_provider_native_round_trip_state(
         BookType,
         CryptoPerpetual,
         Currency,
+        NautilusDataType,
         OmsType,
         TraderId,
     )
@@ -1545,13 +1554,14 @@ def execute_provider_native_round_trip_state(
     catalog_path_text = str(catalog_root)
     data: list[BacktestDataConfig] = []
     for data_type, count in (
-        ("QuoteTick", identity.quote_tick_count),
-        ("TradeTick", identity.trade_tick_count),
-        ("Bar", identity.bar_count),
+        (NautilusDataType.QuoteTick, identity.quote_tick_count),
+        (NautilusDataType.TradeTick, identity.trade_tick_count),
+        (NautilusDataType.Bar, identity.bar_count),
     ):
         if count:
             data.append(
                 BacktestDataConfig(
+                    batch_deltas=True,
                     data_type=data_type,
                     catalog_path=catalog_path_text,
                     instrument_id=provider_instrument_id,
@@ -1563,7 +1573,11 @@ def execute_provider_native_round_trip_state(
     venue = _optional_attr(provider_instrument_id, "venue")
     if quote_currency is None or venue is None:
         raise ValueError("provider CryptoPerpetual lacks public venue/currency identity")
+    from nautilus_trader.execution import MakerTakerFeeModel
+
     venue_config = BacktestVenueConfig(
+        # Mechanical order evidence only; approved external T2 cost projection is separate.
+        fee_model=MakerTakerFeeModel(Decimal("0"), Decimal("0")),
         name=str(venue),
         oms_type=OmsType.NETTING,
         account_type=AccountType.MARGIN,

@@ -120,7 +120,7 @@ def verify_candidate(
     e4 = RunManifest.model_validate_json(config.e4_manifest_path.read_bytes())
     if e4.git_sha != expected_sha or e4.git_tree != expected_tree:
         raise PreflightError("E4 run release SHA/TREE differs")
-    if e4.nautilus_version != "2.0.0rc5" or any(
+    if e4.nautilus_version != "2.0.0rc7" or any(
         (e4.private_api, e4.exchange_write, e4.real_exec_client_registered)
     ):
         raise PreflightError("E4 rc5 or zero-write identity differs")
@@ -128,11 +128,11 @@ def verify_candidate(
         installed = version("nautilus-trader")
     except PackageNotFoundError as exc:
         raise PreflightError("installed Nautilus rc5 is missing") from exc
-    if installed != "2.0.0rc5":
+    if installed != "2.0.0rc7":
         raise PreflightError("installed Nautilus is not exact rc5")
     runtime = locks._read_lock("requirements-runtime.lock")
     pilot = locks._read_lock("requirements-nautilus-pilot.lock")
-    if pilot != {"nautilus-trader": ("2.0.0rc5", PILOT_WHEEL_SHA256)}:
+    if pilot != {"nautilus-trader": ("2.0.0rc7", PILOT_WHEEL_SHA256)}:
         raise PreflightError("pilot lock pin or wheel hash differs")
     locks._verify_installed(runtime, pilot, project_distribution_expected=False)
     locks._verify_target_import(root / "src")

@@ -35,7 +35,7 @@ VNEXT_DERIVATION_VERSION: Literal[
 VNEXT_DATA_VERSION: Literal["TA_VNEXT_RESEARCH_DATA_CONTRACT_V1_2026-09-11_REPAIR1"] = (
     "TA_VNEXT_RESEARCH_DATA_CONTRACT_V1_2026-09-11_REPAIR1"
 )
-NAUTILUS_VERSION: Literal["2.0.0rc5"] = "2.0.0rc5"
+NAUTILUS_VERSION: Literal["2.0.0rc7"] = "2.0.0rc7"
 G4_SCHEMA_VERSION: Literal["VNEXT_G4_V1"] = "VNEXT_G4_V1"
 G4_EXECUTION_MODEL_VERSION: Literal["VNEXT_G4_EXPLICIT_NAUTILUS_RC5_V1"] = (
     "VNEXT_G4_EXPLICIT_NAUTILUS_RC5_V1"
@@ -739,7 +739,7 @@ class G4RunManifest(StrictFrozenModel):
     data_version: Literal["TA_VNEXT_RESEARCH_DATA_CONTRACT_V1_2026-09-11_REPAIR1"] = (
         VNEXT_DATA_VERSION
     )
-    nautilus_version: Literal["2.0.0rc5"] = NAUTILUS_VERSION
+    nautilus_version: Literal["2.0.0rc5", "2.0.0rc7"] = NAUTILUS_VERSION
     execution_model: ExecutionModelConfig
     candidate_hashes: tuple[Sha256Hex, ...] = Field(min_length=1)
     trial_adaptivity_id: VersionId

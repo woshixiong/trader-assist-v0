@@ -1,0 +1,149 @@
+name: Nautilus RC7 unified native
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      public_probe:
+        description: 'One bounded public ETH + xyz:SKHX native reconnect and active-stage proof'
+        type: boolean
+        default: false
+      reference_probe:
+        description: 'One bounded official native Binance JSON Spot / OKX SWAP source-to-readback proof'
+        type: boolean
+        default: false
+      context_probe:
+        description: 'Bounded 60s native FirstLaunch20 mark/index/funding/OI usable-record proof'
+        type: boolean
+        default: false
+      sandbox_probe:
+        description: 'Opt-in DEV_ONLY official public quotes to existing native Sandbox protocol fixture'
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  rc7-native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - name: Verify official wheel and isolated native API
+        run: |
+          python scripts/rc7/official_smoke.py --output /tmp/rc7-proof
+      - name: Native-compatible exact dependency lock
+        run: |
+          if [ ! -f requirements-dev-py313.lock ]; then
+            python scripts/rc7/lock_py313.py > /tmp/rc7-proof/lock-resolution.log 2>&1
+          fi
+          cp requirements-dev-py313.lock /tmp/rc7-proof/
+          python -m pip install --require-hashes -r requirements-dev-py313.lock > /tmp/rc7-install.log 2>&1
+          python -m pip check
+      - name: Native catalog, Sandbox, guard and ledger proof
+        env:
+          PYTHONPATH: src:.
+          RC7_STORAGE_PROOF_OUTPUT: /tmp/rc7-proof/storage-profile.json
+        run: |
+          python -m pytest -q tests/test_nautilus_rc7_contracts.py tests/test_nautilus_rc7_native.py tests/test_nautilus_rc7_dev_fixture.py tests/test_nautilus_rc7_references.py > /tmp/rc7-proof/native-tests.txt 2>&1
+      - name: Compact native test result
+        if: always()
+        run: |
+          if [ -f /tmp/rc7-proof/native-tests.txt ]; then
+            grep -E '^E   |^FAILED |passed|failed' /tmp/rc7-proof/native-tests.txt | tail -30
+          fi
+      - name: Bounded public native reconnect and active-stage qualification (isolated runner only)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.public_probe }}
+        env:
+          PYTHONPATH: src:.
+        run: |
+          python -m scripts.rc7.qualify_public --root /tmp/rc7-public-catalog --output /tmp/rc7-proof/public
+      - name: Bounded public native FirstLaunch20 context usability
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.context_probe }}
+        env:
+          PYTHONPATH: src:.
+        run: |
+          mkdir -p /tmp/rc7-proof/context
+          python -m scripts.rc7.run_public --first-launch-20 --context-probe --archive-profile LEAN --duration-seconds 60 --root /tmp/rc7-context > /tmp/rc7-proof/context/run.log 2>&1
+          cp /tmp/rc7-context/context-proof.json /tmp/rc7-context/close-proof.json /tmp/rc7-context/health.json /tmp/rc7-proof/context/
+      - name: Existing official Sandbox fixture on actual public quotes (DEV_ONLY)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.sandbox_probe }}
+        env:
+          PYTHONPATH: src:.
+          RC7_PUBLIC_SANDBOX_PROBE: 'true'
+          RC7_SANDBOX_PROOF_OUTPUT: /tmp/rc7-proof/public-sandbox/proof.json
+        run: |
+          python -m pytest -q tests/test_nautilus_rc7_public_sandbox.py > /tmp/rc7-proof/public-sandbox-tests.txt 2>&1
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: rc7-native-proof
+          path: /tmp/rc7-proof
+      - name: Package native source paths without changing their names
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.public_probe }}
+        run: |
+          if [ -d /tmp/rc7-public-catalog ]; then
+            tar -czf /tmp/rc7-public-retained-source.tar.gz -C /tmp rc7-public-catalog
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.public_probe }}
+        with:
+          name: rc7-public-retained-source
+          path: /tmp/rc7-public-retained-source.tar.gz
+          retention-days: 7
+      - name: Retain native context source after close, including failed evidence
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.context_probe }}
+        run: |
+          if [ -d /tmp/rc7-context ]; then
+            tar -czf /tmp/rc7-context-source.tar.gz -C /tmp rc7-context
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.context_probe }}
+        with:
+          name: rc7-context-retained-source
+          path: /tmp/rc7-context-source.tar.gz
+          retention-days: 7
+
+  reference-public-qualification:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.reference_probe }}
+    needs: rc7-native
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - name: Exact public-only Python3.13 native runtime
+        run: |
+          python -m pip install --require-hashes --only-binary=:all: -r requirements-runtime-py313.lock
+          python scripts/rc7/official_smoke.py --output /tmp/rc7-proof
+      - name: Actual native reference source to sealed readback
+        env:
+          PYTHONPATH: src:.
+        run: |
+          python -m scripts.rc7.qualify_references --root /tmp/rc7-reference --duration-seconds 75 > /tmp/rc7-reference-run.log 2>&1
+      - name: Retain source and precise coverage on success or failure
+        if: always()
+        run: |
+          mkdir -p /tmp/rc7-proof/reference
+          if [ -f /tmp/rc7-reference/reference-proof.json ]; then
+            cp /tmp/rc7-reference/reference-proof.json /tmp/rc7-proof/reference/
+          fi
+          if [ -d /tmp/rc7-reference ]; then
+            tar -czf /tmp/rc7-proof/reference/retained-native-source.tar.gz -C /tmp rc7-reference
+          fi
+          if [ -f /tmp/rc7-reference-run.log ]; then
+            cp /tmp/rc7-reference-run.log /tmp/rc7-proof/reference/
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: rc7-reference-public-proof
+          path: /tmp/rc7-proof
+          retention-days: 7

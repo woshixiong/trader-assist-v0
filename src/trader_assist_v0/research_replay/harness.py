@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 from decimal import Decimal
 from typing import Any, Literal, Self
 
@@ -42,6 +41,8 @@ from .contracts import (
 from .dev_contracts import DevRunSpec
 from .evidence import require_pipeline
 from .lifecycle import BlockPlan, TrialLedger, VisibilityPolicy
+from .native_fee_compat import native_fee_compatibility
+from .native_fee_compat import native_modules as importlib
 from .paths import funding_settlement, measure_path, net_cash
 from .policies import PolicyAction, PolicyContext, PolicySpec, evaluate
 from .reporting import (
@@ -341,6 +342,7 @@ def _snapshot(
     )
 
 
+@native_fee_compatibility
 @decimal80
 def _native_candidate(
     run: ResearchRunSpec | DevRunSpec,

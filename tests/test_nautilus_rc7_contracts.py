@@ -1,0 +1,642 @@
+import sqlite3
+from dataclasses import replace
+from pathlib import Path
+
+import pytest
+
+from trader_assist_v0.nautilus_e4.contracts import GuardInputs
+from trader_assist_v0.nautilus_e4.native_execution import SubmitCertificate, final_submit_reasons
+from trader_assist_v0.nautilus_e4.native_health import NativeHealth
+from trader_assist_v0.nautilus_e4.shadow_ledger import ShadowLedger
+
+
+def verified_cycle() -> dict[str, object]:
+    return {
+        "status": "SEALED_STAGE_READABLE",
+        "instance_id": "current",
+        "bounded_duration_complete": True,
+        "public_coverage": "PASS",
+        "missing_streams": [],
+        "event_failures": [],
+        "freshness_reasons": [],
+        "types": {"QuoteTick": {"count": 3}},
+        "stream_counts": {"ETH:quote": 3},
+    }
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"status": "FAIL"},
+        {"instance_id": "previous"},
+        {"bounded_duration_complete": False},
+        {"public_coverage": "INCOMPLETE"},
+        {"missing_streams": ["ETH:5m"]},
+        {"event_failures": ["OUT_OF_ORDER_OR_GAP"]},
+        {"freshness_reasons": ["STALE:ETH:quote"]},
+        {"types": {}},
+        {"stream_counts": {}},
+    ],
+)
+def test_bounded_qualification_cannot_admit_failed_or_old_proof(change: dict[str, object]) -> None:
+    from scripts.rc7.run_public import require_qualified_stop
+
+    require_qualified_stop(verified_cycle(), "current")
+    with pytest.raises(RuntimeError, match="FAIL_CLOSED"):
+        require_qualified_stop({**verified_cycle(), **change}, "current")
+    with pytest.raises(RuntimeError, match="FAIL_CLOSED"):
+        require_qualified_stop({}, "current")
+
+
+def test_capture_gap_is_measured_without_claiming_exchange_loss() -> None:
+    from scripts.rc7.run_public import capture_gap
+
+    assert capture_gap(100, 350) == {
+        "state": "CAPTURE_GAP",
+        "measurement": "CALLBACK_INTERVAL",
+        "previous_last_observed_ns": 100,
+        "first_observed_ns": 350,
+        "interval_ns": 250,
+    }
+    assert capture_gap(None, 350)["measurement"] == "UNKNOWN"
+    assert capture_gap(100, None)["interval_ns"] is None
+    with pytest.raises(ValueError, match="CLOCK_INVALID"):
+        capture_gap(350, 100)
+
+
+def test_public_process_exits_nonzero_on_capacity_despite_prior_success(tmp_path: Path) -> None:
+    import json
+    import os
+    import subprocess
+    import sys
+
+    prior = tmp_path / "close-proof.json"
+    prior.write_text(json.dumps(verified_cycle()))
+    original = prior.read_bytes()
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.rc7.run_public",
+            "--provider-coins",
+            "ETH",
+            "xyz:SKHX",
+            "--root",
+            str(tmp_path),
+            "--max-archive-bytes",
+            "1",
+        ],
+        env={**os.environ, "PYTHONPATH": "src:."},
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 78
+    assert "ARCHIVE_BUDGET_EXHAUSTED_SOURCES_RETAINED" in result.stderr
+    assert "VERIFIED_SUCCESS" not in result.stdout
+    assert prior.read_bytes() == original
+
+
+def test_public_unit_is_continuous_and_fatal_exits_never_restart() -> None:
+    import configparser
+    import shlex
+
+    unit = configparser.ConfigParser(interpolation=None, strict=False)
+    unit.read("deploy/systemd/tradeos-rc7-public.service")
+    service = unit["Service"]
+    assert service["Type"] == "simple"
+    assert service["Restart"] == "on-failure"
+    assert set(service["RestartPreventExitStatus"].split()) == {
+        "SIGHUP",
+        "SIGINT",
+        "SIGTERM",
+        "SIGPIPE",
+        "2",
+        "78",
+        "130",
+    }
+    assert "SuccessExitStatus" not in service and "RestartForceExitStatus" not in service
+    assert int(service["RestartSec"]) >= 15
+    assert int(unit["Unit"]["StartLimitBurst"]) <= 3
+    assert unit["Unit"]["ConditionPathExists"] == "/etc/tradeos/rc7-public-authorized"
+    assert service["User"] == service["Group"] == "tradeos"
+    command = shlex.split(service["ExecStart"])
+    assert command[1:3] == ["-m", "scripts.rc7.run_public"]
+    assert "--duration-seconds" not in command
+    assert not {"--sandbox", "--sandbox-probe", "--strategy-manifest"} & set(command)
+
+
+def test_native_systemd_255_verifies_unit_and_rejects_oneshot_restart(tmp_path: Path) -> None:
+    import getpass
+    import platform
+    import shutil
+    import subprocess
+    import sys
+
+    if platform.system() != "Linux":
+        pytest.skip("native systemd validation runs on isolated Ubuntu CI")
+    binary = shutil.which("systemd-analyze")
+    assert binary is not None, "Linux CI requires native systemd-analyze"
+    version = subprocess.check_output([binary, "--version"], text=True)
+    assert version.splitlines()[0].startswith("systemd 255 "), version.splitlines()[0]
+    source = Path("deploy/systemd/tradeos-rc7-public.service").read_text()
+    # Substitute only unavailable target-host paths/account for parse-only CI.
+    # No unit is installed, started or sent to a service manager.
+    for key, value in {
+        "ExecStart": f"{sys.executable} -c pass",
+        "WorkingDirectory": str(tmp_path),
+        "ReadWritePaths": str(tmp_path),
+        "User": getpass.getuser(),
+        "Group": getpass.getuser(),
+    }.items():
+        source = (
+            "\n".join(
+                f"{key}={value}" if line.startswith(key + "=") else line
+                for line in source.splitlines()
+            )
+            + "\n"
+        )
+    path = tmp_path / "tradeos-rc7-public.service"
+    path.write_text(source)
+    result = subprocess.run(
+        [binary, "verify", "--man=no", str(path)], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    path.write_text(
+        source.replace("Type=simple", "Type=oneshot").replace(
+            "Restart=on-failure", "Restart=on-success"
+        )
+    )
+    invalid = subprocess.run(
+        [binary, "verify", "--man=no", str(path)], capture_output=True, text=True
+    )
+    assert invalid.returncode != 0
+    assert "on-success" in invalid.stderr and "oneshot" in invalid.stderr
+
+
+def test_archive_admission_retains_evidence_and_never_certifies_staging(tmp_path: Path) -> None:
+    from scripts.rc7.qualify_health import validate_report
+    from trader_assist_v0.nautilus_e4.native_archive import (
+        observe_archive,
+        require_archive_capacity,
+    )
+
+    stage = tmp_path / "live" / "run"
+    stage.mkdir(parents=True)
+    source = stage / "quote.feather.partial"
+    source.write_bytes(b"native-source-placeholder")
+    observed = observe_archive(tmp_path, stage)
+    assert observed.total_bytes == observed.stage_bytes == source.stat().st_size
+    assert observed.evidence(now_ns=source.stat().st_mtime_ns)["writer"] == (
+        "STAGING_ACTIVITY_OBSERVED"
+    )
+    assert observed.evidence(now_ns=source.stat().st_mtime_ns + 16_000_000_000)["writer"] == (
+        "UNKNOWN_OR_QUIET"
+    )
+    require_archive_capacity(observed, max_bytes=100, free_bytes=100, minimum_free_bytes=10)
+    for budget, free, error in ((observed.total_bytes, 100, "BUDGET"), (100, 1, "DISK_LOW")):
+        with pytest.raises(RuntimeError, match=error):
+            require_archive_capacity(
+                observed, max_bytes=budget, free_bytes=free, minimum_free_bytes=10
+            )
+    assert source.read_bytes() == b"native-source-placeholder"
+    health = NativeHealth({"ETH:quote": 100})
+    health.socket(True)
+    health.observe("ETH:quote", ts_event=100, ts_init=100, now=100)
+    report = health.report(now=100, generated=100, free_bytes=10**12)
+    report["archive"] = observed.evidence(now_ns=source.stat().st_mtime_ns)
+    with pytest.raises(ValueError, match="DEGRADED"):
+        validate_report(report, 100)
+    (tmp_path / "external-link").symlink_to(stage, target_is_directory=True)
+    with pytest.raises(RuntimeError, match="SYMLINK"):
+        observe_archive(tmp_path, stage)
+
+
+def inputs() -> GuardInputs:
+    return GuardInputs(
+        data_evaluable=True,
+        bbo_state_valid=True,
+        intended_notional="10",
+        top_level_notional="100",
+        remaining_room_bps="100",
+        all_in_friction_bps="10",
+        minimum_room_to_cost="2",
+        spread_bps="1",
+        guard_config_version="v1",
+    )
+
+
+def test_health_requires_native_events_fresh_report_writer_catalog_and_disk() -> None:
+    health = NativeHealth({"ETH:quote": 100, "ETH:1m": 1000}, minimum_free_bytes=100)
+    assert health.report(now=1000, generated=1000, free_bytes=1000)["status"] == "DEGRADED"
+    health.socket(True)
+    health.writer_ok = health.catalog_verified = True
+    for stream in health.required:
+        assert health.observe(stream, ts_event=990, ts_init=995, now=1000)
+    assert health.report(now=1000, generated=1000, free_bytes=1000)["status"] == "HEALTHY"
+    assert health.report(now=1200, generated=1200, free_bytes=1000)["status"] == "DEGRADED"
+    assert health.report(now=1000, generated=1000, free_bytes=1)["status"] == "DEGRADED"
+    assert (
+        health.report(now=20_000_000_000, generated=1000, free_bytes=1000)["status"] == "DEGRADED"
+    )
+    health.socket(False)
+    health.socket(True)  # ACK alone never restores fresh events in a new continuity epoch.
+    assert health.report(now=1000, generated=1000, free_bytes=1000)["status"] == "DEGRADED"
+
+
+def test_unknown_future_out_of_order_events_cannot_make_healthy() -> None:
+    health = NativeHealth({"ETH:quote": 100}, max_future_skew_ns=1)
+    assert not health.observe("OTHER:quote", ts_event=10, ts_init=10, now=10)
+    assert not health.observe("ETH:quote", ts_event=20, ts_init=20, now=10)
+    assert health.observe("ETH:quote", ts_event=10, ts_init=10, now=10)
+    assert not health.observe("ETH:quote", ts_event=9, ts_init=11, now=11)
+    assert health.out_of_order == 1
+    assert "OUT_OF_ORDER_OR_GAP" in health.failures
+
+
+def test_closed_bar_freshness_uses_close_without_changing_source_open_time() -> None:
+    second = 1_000_000_000
+    health = NativeHealth({"ETH:5m": 360 * second})
+    health.socket(True)
+    health.writer_ok = health.catalog_verified = True
+    assert health.observe(
+        "ETH:5m",
+        ts_event=300 * second,
+        event_end_ns=600 * second,
+        ts_init=600 * second,
+        now=900 * second,
+    )
+    assert health.last["ETH:5m"][0] == 300 * second
+    assert (
+        health.report(now=900 * second, generated=900 * second, free_bytes=10**12)["status"]
+        == "HEALTHY"
+    )
+    assert (
+        health.report(now=1000 * second, generated=1000 * second, free_bytes=10**12)["status"]
+        == "DEGRADED"
+    )
+    assert not health.observe(
+        "ETH:5m",
+        ts_event=600 * second,
+        event_end_ns=900 * second,
+        ts_init=899 * second,
+        now=900 * second,
+    )
+
+
+def test_disconnect_ack_does_not_rearm_and_gap_keeps_native_endpoints() -> None:
+    health = NativeHealth({"ETH:quote": 100, "xyz:SKHX:trade": 100}, minimum_free_bytes=1)
+    health.writer_ok = health.catalog_verified = True
+    health.socket(True)
+    for stream in health.required:
+        assert health.observe(stream, ts_event=1000, ts_init=1001, now=1002)
+    health.socket(False, now=1050)
+    health.socket(True, now=1060)
+    assert health.report(now=1060, generated=1060, free_bytes=100)["status"] == "DEGRADED"
+    assert len(health.gaps) == 2
+    for stream in health.required:
+        assert health.observe(stream, ts_event=1060, ts_init=1061, now=1062)
+    assert not health.report(now=1062, generated=1062, free_bytes=100)["native_input_eligible"]
+    for stream in health.required:
+        assert health.observe(stream, ts_event=1063, ts_init=1064, now=1065)
+    assert health.report(now=1065, generated=1065, free_bytes=100)["status"] == "HEALTHY"
+    assert all(
+        gap["prior_ts_event"] == 1000 and gap["next_ts_event"] == 1060 for gap in health.gaps
+    )
+    assert all(gap["lost_events"] == "UNKNOWN" for gap in health.gaps)
+    restarted = NativeHealth(dict(health.required))
+    restarted.restore_boundaries(
+        health.report(now=1065, generated=1065, free_bytes=100)["last_native"], now=1100
+    )
+    assert len(restarted.pending_gaps) == 2
+    assert all(gap["reason"] == "PROCESS_RESTART" for gap in restarted.gaps)
+    assert not restarted.last  # Checkpoint clocks never re-arm current freshness.
+    assert [event["state"] for event in health.gap_events] == [
+        "OPEN",
+        "OPEN",
+        "FRESH_EVENTS_RESUMED",
+        "FRESH_EVENTS_RESUMED",
+    ]
+
+
+def test_bar_gap_never_reindexes_later_native_open_time() -> None:
+    second = 1_000_000_000
+    health = NativeHealth({"ETH:1m": 180 * second})
+    health.socket(True)
+    assert health.observe(
+        "ETH:1m",
+        ts_event=60 * second,
+        ts_init=120 * second,
+        now=120 * second,
+        event_end_ns=120 * second,
+    )
+    assert health.observe(
+        "ETH:1m",
+        ts_event=180 * second,
+        ts_init=240 * second,
+        now=240 * second,
+        event_end_ns=240 * second,
+    )
+    assert health.last["ETH:1m"][0] == 180 * second
+    assert health.gaps[0]["reason"] == "CLOSED_BAR_INTERVAL_MISSING"
+    assert health.gaps[0]["prior_ts_event"] == 60 * second
+    assert health.gaps[0]["next_ts_event"] == 180 * second
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"instrument_id": "OTHER"},
+        {"epoch": 2},
+        {"valid_until_ns": 99},
+        {"signal_valid_until_ns": 99},
+        {"generated_ns": 101},
+        {"account_reconciled": False},
+        {"price_known": False},
+        {"native_connected": False},
+        {"feed_health": "GAPPED"},
+        {"feed_health": "UNKNOWN"},
+        {"feed_health": "STALE"},
+    ],
+)
+def test_final_submit_rechecks_each_safety_failure(change: dict[str, object]) -> None:
+    good = SubmitCertificate("ETH", 1, 200, 200, True, True, True, "HEALTHY", 90)
+    assert not final_submit_reasons(
+        certificate=good, instrument_id="ETH", epoch=1, now_ns=100, inputs=inputs()
+    )
+    assert final_submit_reasons(
+        certificate=replace(good, **change),
+        instrument_id="ETH",
+        epoch=1,
+        now_ns=100,
+        inputs=inputs(),
+    )
+
+
+def test_unknown_certificate_and_existing_economic_guard_fail_closed() -> None:
+    assert final_submit_reasons(
+        certificate=None, instrument_id="ETH", epoch=1, now_ns=100, inputs=inputs()
+    )
+    bad = inputs().model_copy(update={"data_evaluable": False})
+    good = SubmitCertificate("ETH", 1, 200, 200, True, True, True, "HEALTHY", 90)
+    assert "DATA_NOT_EVALUABLE" in final_submit_reasons(
+        certificate=good, instrument_id="ETH", epoch=1, now_ns=100, inputs=bad
+    )
+
+
+def test_decisions_no_fill_reject_and_partial_fill_survive_restart(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.sqlite"
+    ledger = ShadowLedger(path, strategy_id="approved-strategy", strategy_version="v1")
+    for i, outcome in enumerate(("REJECT", "WAIT", "PASS", "UNFILLED", "LOST", "SUBMIT")):
+        ledger.decision(
+            decision_id=str(i),
+            ts_ns=100,
+            source_identity=f"quote:{i}",
+            source_ts_ns=90,
+            outcome=outcome,
+            details={},
+        )
+    for i, qty in enumerate(("0.1", "0.2")):
+        ledger.append(
+            event_id=f"fill:{i}",
+            kind="OrderFilled",
+            ts_ns=110 + i,
+            payload={
+                "native_order_id": "order-1",
+                "last_qty": qty,
+                "commission": "0.01 USDC",
+                "liquidity_side": "TAKER",
+            },
+        )
+    assert ledger.verify() == 8
+    with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+        ledger.db.execute("DELETE FROM events")
+    ledger.close()
+    reopened = ShadowLedger(path, strategy_id="approved-strategy", strategy_version="v1")
+    assert reopened.verify() == 8
+    assert reopened.db.execute("SELECT count(*) FROM events WHERE kind='DECISION'").fetchone() == (
+        6,
+    )
+    with pytest.raises(ValueError, match="conflicting"):
+        reopened.append(event_id="fill:0", kind="OrderFilled", ts_ns=120, payload={})
+    reopened.close()
+
+
+def test_approved_strategy_retains_cold_start_no_signal_denominator(tmp_path: Path) -> None:
+    from decimal import Decimal
+
+    from test_nautilus_pilot_contracts import _closed_bar, _manifest
+
+    from trader_assist_v0.nautilus_e4.registered_shadow import RegisteredShadowEvaluator
+
+    manifest = _manifest()
+    ledger = ShadowLedger(
+        tmp_path / "strategy.sqlite",
+        strategy_id=manifest.package_version,
+        strategy_version=manifest.strategy_version,
+    )
+    evaluator = RegisteredShadowEvaluator(
+        manifest=manifest,
+        market_id=_closed_bar(0).market_id,
+        minimum_tick=Decimal("0.1"),
+        ledger=ledger,
+    )
+    for i in range(3):
+        bar = _closed_bar(i)
+        assert evaluator.evaluate(bar, now_ns=bar.close_time_ms * 1_000_000) is None
+    assert ledger.verify() == 3
+    evaluator.evaluate(_closed_bar(2), now_ns=_closed_bar(2).close_time_ms * 1_000_000)
+    assert ledger.verify() == 3  # replay does not inflate the strategy decision denominator
+    with pytest.raises(ValueError, match="lookahead"):
+        evaluator.evaluate(_closed_bar(3), now_ns=1)
+    ledger.close()
+
+
+def test_native_universe_uses_provider_identity_without_inventing_symbols() -> None:
+    from types import SimpleNamespace
+
+    from trader_assist_v0.nautilus_e4.native_capture import NativeUniverse
+
+    universe = NativeUniverse(("ETH", "xyz:SKHX"), None)
+    with pytest.raises(ValueError, match="MISSING"):
+        universe.current_snapshot(now_ns=1)
+
+    class Identity:
+        venue = "HYPERLIQUID"
+
+        def __init__(self, symbol: str) -> None:
+            self.symbol = symbol
+
+        def __str__(self) -> str:
+            return self.symbol + ".HYPERLIQUID"
+
+    for coin, symbol in (("ETH", "provider-eth"), ("xyz:SKHX", "provider-rwa")):
+        native = SimpleNamespace(
+            raw_symbol=coin, id=Identity(symbol), to_dict=lambda value=coin: {"coin": value}
+        )
+        expression = universe.admit(native)
+        assert expression is not None
+        assert expression.instrument_id == str(native.id)
+    snapshot = universe.current_snapshot(now_ns=1)
+    pinned = NativeUniverse(("ETH", "xyz:SKHX"), snapshot)
+    with pytest.raises(ValueError, match="identity mismatch"):
+        pinned.admit(SimpleNamespace(raw_symbol="ETH", id=native.id))
+    assert not universe.missing
+    with pytest.raises(ValueError, match="approved registry"):
+        NativeUniverse(("ETH", "fake:NEW"), None)
+
+
+@pytest.mark.parametrize("minutes", [1, 5])
+def test_native_closed_bar_admission_has_no_partial_or_future_bar(minutes: int) -> None:
+    from types import SimpleNamespace
+
+    from trader_assist_v0.nautilus_e4.native_capture import closed_bar_window
+
+    duration = minutes * 60_000_000_000
+    event = SimpleNamespace(
+        bar_type=SimpleNamespace(spec=SimpleNamespace(step=minutes)),
+        ts_event=duration,
+        ts_init=2 * duration,
+    )
+    assert closed_bar_window(event, now_ns=2 * duration) == (
+        duration // 1_000_000,
+        2 * duration // 1_000_000 - 1,
+    )
+    event.ts_init -= 1
+    with pytest.raises(ValueError, match="NOT_CLOSED"):
+        closed_bar_window(event, now_ns=2 * duration)
+    event.ts_init = 2 * duration + 1
+    with pytest.raises(ValueError, match="FUTURE"):
+        closed_bar_window(event, now_ns=2 * duration)
+
+
+@pytest.mark.parametrize("field", ["sandbox", "sandbox_probe", "strategy_manifest"])
+def test_reference_public_runtime_rejects_order_or_strategy_mode_before_native_load(
+    field: str,
+) -> None:
+    import argparse
+    import asyncio
+
+    from scripts.rc7.run_public import run
+
+    modes: dict[str, object] = {
+        "reference_venues": True,
+        "sandbox": False,
+        "sandbox_probe": False,
+        "strategy_manifest": None,
+    }
+    modes[field] = "forbidden-manifest" if field == "strategy_manifest" else True
+    with pytest.raises(ValueError, match="public nontrading only"):
+        asyncio.run(run(argparse.Namespace(**modes)))
+
+
+@pytest.mark.parametrize("key", ["BINANCE_API_KEY", "OKX_API_SECRET", "OKX_API_PASSPHRASE"])
+def test_native_reference_credential_environment_fails_closed(key: str) -> None:
+    from trader_assist_v0.nautilus_e4.safety import assert_public_only
+
+    with pytest.raises(RuntimeError, match="forbidden exchange credential"):
+        assert_public_only(env={key: "synthetic-test-value"})
+
+
+def test_reference_qualification_isolates_native_owner_and_preserves_both_outcomes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Worker-control fixture only, not evidence of any listing or market event."""
+    import json
+    import sys
+    from types import SimpleNamespace
+
+    from scripts.rc7 import qualify_references
+
+    seen = []
+    root = tmp_path / "bounded-attempt"
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setattr(sys, "argv", ["qualify_references", "--root", str(root)])
+
+    def worker(command: list[str], **_kwargs: object) -> SimpleNamespace:
+        venue = command[command.index("--venue") + 1]
+        seen.append(venue)
+        directory = Path(command[command.index("--root") + 1])
+        directory.mkdir()
+        result = {
+            "status": "INCOMPLETE" if venue == "BINANCE" else "AVAILABLE_NATIVE_SUBSET_PROVEN",
+            "fixture": "CONTROL_ONLY_NO_MARKET_DATA",
+        }
+        (directory / "reference-proof.json").write_text(json.dumps(result))
+        return SimpleNamespace(returncode=1 if venue == "BINANCE" else 0)
+
+    monkeypatch.setattr(qualify_references.subprocess, "run", worker)
+    with pytest.raises(SystemExit, match="QUALIFICATION_INCOMPLETE"):
+        qualify_references.main()
+    assert seen == ["BINANCE", "OKX"]
+    results = json.loads((root / "reference-proof.json").read_text())
+    assert results["BINANCE"]["status"] == "INCOMPLETE"
+    assert results["OKX"]["status"] == "AVAILABLE_NATIVE_SUBSET_PROVEN"
+
+
+def test_reference_venue_subset_keeps_unqualified_provider_out_of_capture() -> None:
+    from trader_assist_v0.nautilus_e4.native_reference import selected_reference_venues
+
+    assert selected_reference_venues(None) == ()
+    assert selected_reference_venues(False) == ()
+    assert selected_reference_venues(["OKX"]) == ("OKX",)
+    assert selected_reference_venues([]) == ("BINANCE", "OKX")
+    for invalid in (["OKX", "OKX"], ["FAKE"], "OKX"):
+        with pytest.raises(ValueError, match="SELECTION_INVALID"):
+            selected_reference_venues(invalid)
+
+
+def test_native_admission_stale_duplicate_and_reconnect_quarantine() -> None:
+    health = NativeHealth({"ETH:quote": 100}, minimum_free_bytes=1)
+    health.socket(True)
+    assert not health.observe("ETH:quote", ts_event=1, ts_init=1, now=1000)
+    assert not health.last and health.rejected_stale == 1
+    assert health.observe("ETH:quote", ts_event=1000, ts_init=1001, now=1002)
+    assert not health.admission_reasons(now=1002)
+    assert not health.observe("ETH:quote", ts_event=1000, ts_init=1001, now=1003)
+    assert health.last["ETH:quote"][:2] == (1000, 1001)
+    health.socket(False, now=1010)
+    health.socket(True, now=1020)
+    assert health.admission_reasons(now=1020)
+    assert not health.observe("ETH:quote", ts_event=1, ts_init=1, now=1020)
+    assert health.pending_gaps and not health.last
+    assert health.observe("ETH:quote", ts_event=1021, ts_init=1022, now=1023)
+    assert "QUARANTINE:ETH:quote" in health.admission_reasons(now=1023)
+    assert health.observe("ETH:quote", ts_event=1024, ts_init=1025, now=1026)
+    assert not health.admission_reasons(now=1026)
+    assert health.gaps[0]["coverage"] == "UNKNOWN_NO_SYNTHETIC_BACKFILL"
+    assert health.gaps[0]["lost_events"] == "UNKNOWN"
+
+
+def test_change_only_context_silence_is_not_a_proven_gap_or_healthy_value() -> None:
+    second = 1_000_000_000
+    health = NativeHealth({"ETH:funding": 60 * second, "ETH:mark": 30 * second})
+    health.change_driven.update(health.required)
+    health.socket(True)
+    for stream in health.required:
+        assert health.observe(stream, ts_event=second, ts_init=second, now=second)
+    # A new mark does not refresh funding clocks or prove an unchanged funding value.
+    assert health.observe("ETH:mark", ts_event=120 * second, ts_init=120 * second, now=120 * second)
+    result = health.report(now=120 * second, generated=120 * second, free_bytes=10**12)
+    assert "CHANGE_ONLY_CURRENT_VALUE_UNVERIFIED:ETH:funding" in result["reasons"]
+    assert "STALE:ETH:funding" not in result["reasons"]
+    assert not result["native_input_eligible"] and not health.gaps
+    assert health.last["ETH:funding"][:2] == (second, second)
+    assert health.observe(
+        "ETH:funding", ts_event=121 * second, ts_init=121 * second, now=121 * second
+    )
+    assert not health.admission_reasons(now=121 * second)
+    assert not health.gaps  # Change-only interval is not evidence of missing public events.
+
+
+def test_writer_progress_does_not_certify_integrity_or_catalog() -> None:
+    health = NativeHealth({})
+    health.writer_activity_observed = True
+    result = health.report(now=100, generated=100, free_bytes=10**12)
+    assert result["writer_activity"] == "OBSERVED"
+    assert result["writer_integrity"] == result["catalog_integrity"] == "UNVERIFIED"
+    assert "WRITER_INTEGRITY_UNVERIFIED" in result["reasons"]
+    assert "WRITER_UNKNOWN_OR_FAILED" not in result["reasons"]
+    assert "CATALOG_UNVERIFIED" in result["reasons"]
+    assert not result["native_input_eligible"]

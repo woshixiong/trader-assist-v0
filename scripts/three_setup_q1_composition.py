@@ -341,9 +341,9 @@ def _verify_runtime() -> None:
         or sys.version_info[:2] != (3, 12)
     ):
         raise Gap("TARGET_RUNTIME_MISMATCH", "TARGET_ENVIRONMENT")
-    if assert_exact_nautilus_version() != "2.0.0rc5" or not assert_public_only(env=os.environ):
+    if assert_exact_nautilus_version() != "2.0.0rc7" or not assert_public_only(env=os.environ):
         raise Gap("TARGET_RUNTIME_MISMATCH", "TARGET_ENVIRONMENT")
-    if importlib.metadata.version("nautilus-trader") != "2.0.0rc5":
+    if importlib.metadata.version("nautilus-trader") != "2.0.0rc7":
         raise Gap("TARGET_RUNTIME_MISMATCH", "TARGET_ENVIRONMENT")
     if not Path(trader_assist_v0.__file__).resolve().is_file():
         raise Gap("RELEASE_OR_IMPORT_MISMATCH", "TARGET_ENVIRONMENT")
@@ -360,7 +360,7 @@ def _verify_release(candidate: Path) -> str:
 
     runtime = locks._read_lock(str(candidate / "requirements-runtime.lock"))
     pilot = locks._read_lock(str(candidate / "requirements-nautilus-pilot.lock"))
-    if pilot != {"nautilus-trader": ("2.0.0rc5", locks.PILOT_WHEEL_SHA256)}:
+    if pilot != {"nautilus-trader": ("2.0.0rc7", locks.PILOT_WHEEL_SHA256)}:
         raise Gap("TARGET_RUNTIME_MISMATCH", "RELEASE_AND_IMPORT")
     locks._verify_installed(runtime, pilot, project_distribution_expected=False)
     host_python = (

@@ -44,7 +44,7 @@ from .storage import EvidenceStore
 from .warmup import HistoricalWarmup, WarmupReadiness, WarmupStream
 
 if TYPE_CHECKING:
-    from nautilus_trader.model import Bar, OrderBookDepth10, QuoteTick, TradeTick
+    from nautilus_trader.model import Bar, OrderBookDepth, QuoteTick, TradeTick
 
     class StrategyConfig:
         def __new__(cls, *args: object, **kwargs: object) -> Self: ...
@@ -66,7 +66,7 @@ if TYPE_CHECKING:
 
         def subscribe_trades(self, instrument_id: object) -> None: ...
 
-        def subscribe_book_depth10(self, instrument_id: object, book_type: object) -> None: ...
+        def subscribe_book_depth(self, instrument_id: object, book_type: object) -> None: ...
 
         def request_bars(
             self,
@@ -96,7 +96,7 @@ if TYPE_CHECKING:
         ) -> None: ...
 
 else:
-    from nautilus_trader.model import Bar, OrderBookDepth10, QuoteTick, TradeTick
+    from nautilus_trader.model import Bar, OrderBookDepth, QuoteTick, TradeTick
     from nautilus_trader.trading import Strategy, StrategyConfig
 
 
@@ -259,7 +259,7 @@ class NautilusE4CaptureStrategy(Strategy):
         self._continuity_streams: set[tuple[str, DataKind]] = {
             (market_id, data_kind)
             for market_id in self._policy.watch | self._policy.actionable
-            for data_kind in (DataKind.BBO, DataKind.TRADE, DataKind.DEPTH10)
+            for data_kind in (DataKind.BBO, DataKind.TRADE, DataKind.BOOK_DEPTH)
         }
         self._session.await_continuity(required_streams=self._continuity_streams)
         self._admitted_event_observer: AdmittedEventObserver | None = None
@@ -288,7 +288,7 @@ class NautilusE4CaptureStrategy(Strategy):
     @property
     def warmup_health(self) -> dict[str, object]:
         if self._warmup is None:
-            return {"readiness": WarmupReadiness.NOT_READY.value, "reason": "NOT_STARTED"}
+            return {"readiness": "NOT_REQUIRED", "reason": "OPTIONAL_HISTORY_SEPARATE_CONSUMER"}
         return self._warmup.health(self.clock.timestamp_ns())
 
     def open_structural_package(
@@ -421,7 +421,7 @@ class NautilusE4CaptureStrategy(Strategy):
         rich_markets = self._policy.watch | self._policy.actionable
         expected_quotes = {(market_id, DataKind.BBO) for market_id in rich_markets}
         expected_trades = {(market_id, DataKind.TRADE) for market_id in rich_markets}
-        expected_depth10 = {(market_id, DataKind.DEPTH10) for market_id in rich_markets}
+        expected_depth10 = {(market_id, DataKind.BOOK_DEPTH) for market_id in rich_markets}
         persisted_finalized_bars = {
             (item.source.market_id, item.source.data_kind)
             for item in self._store.load_admissions()
@@ -500,15 +500,15 @@ class NautilusE4CaptureStrategy(Strategy):
             instrument_id = InstrumentId.from_str(by_market[market_id].instrument_id)
             self.subscribe_quotes(instrument_id)
             self.subscribe_trades(instrument_id)
-            self.subscribe_book_depth10(instrument_id, BookType.L2_MBP)
-            self._registered_depth10_streams.add((market_id, DataKind.DEPTH10))
+            self.subscribe_book_depth(instrument_id, BookType.L2_MBP)
+            self._registered_depth10_streams.add((market_id, DataKind.BOOK_DEPTH))
             if self._l0:
                 self._l0_native_registered.extend(
                     {"kind": kind, "identity": str(instrument_id)}
                     for kind in ("bbo", "trade", "depth10")
                 )
         self._session.await_continuity(required_streams=self._continuity_streams)
-        self._start_historical_warmup()
+        # Public subscriptions start immediately; optional history is a separate consumer.
 
     def _start_historical_warmup(self) -> None:
         """Freeze one cutoff and ask Nautilus for explicit completed windows."""
@@ -615,8 +615,8 @@ class NautilusE4CaptureStrategy(Strategy):
     def request_l0_reconnect(self) -> None:
         from nautilus_trader.adapters.hyperliquid import HYPERLIQUID_CLIENT_ID
 
-        if self._l0_observation is None or self.warmup_health.get("readiness") != "READY":
-            raise ValueError("qualification reconnect requires current warmup readiness")
+        if self._l0_observation is None:
+            raise ValueError("qualification reconnect requires an active observation")
         if self._l0_observation.requests:
             raise ValueError("exactly one qualification reconnect is permitted")
         self._l0_observation.request(self.clock.timestamp_ns())
@@ -782,8 +782,8 @@ class NautilusE4CaptureStrategy(Strategy):
         )
         self._observe_admission(outcome)
 
-    def on_book_depth(self, depth: OrderBookDepth10) -> None:
-        """Admit native rc5 Depth10 and publish an immutable top-of-book fact."""
+    def on_book_depth(self, depth: OrderBookDepth) -> None:
+        """Admit rc7 OrderBookDepth, without claiming legacy fixed Depth10 semantics."""
         expression = self._expression_for(depth)
         if not depth.bids or not depth.asks:
             self._markettruth_fanout.record_subscriber_failure(ValueError("INCOMPLETE_DEPTH10"))
@@ -794,7 +794,8 @@ class NautilusE4CaptureStrategy(Strategy):
             "bid_size": str(bid.size),
             "ask_price": str(ask.price),
             "ask_size": str(ask.size),
-            "native_depth": 10,
+            "native_depth": max(len(depth.bids), len(depth.asks)),
+            "native_type": "OrderBookDepth",
             "bids": [[str(level.price), str(level.size)] for level in depth.bids],
             "asks": [[str(level.price), str(level.size)] for level in depth.asks],
         }
@@ -803,11 +804,11 @@ class NautilusE4CaptureStrategy(Strategy):
             expression_id=expression.expression_id,
             provider_id="NAUTILUS_HYPERLIQUID",
             instrument_id=expression.instrument_id,
-            data_kind=DataKind.DEPTH10,
-            source_event_id="depth10:" + sha256_hex(canonical_json_bytes(payload)),
+            data_kind=DataKind.BOOK_DEPTH,
+            source_event_id="book-depth:" + sha256_hex(canonical_json_bytes(payload)),
             native_trade_id=None,
             provider_aggressor_side=None,
-            event_context=f"native-depth10:{depth.ts_event}",
+            event_context=f"native-book-depth:{depth.ts_event}",
             ts_event=depth.ts_event,
             ts_init=depth.ts_init,
             true_network_receive_ts=None,
@@ -930,7 +931,7 @@ class NautilusE4CaptureStrategy(Strategy):
             self._session.write_operational_artifacts(health_overrides=self.capture_health)
 
     def _expression_for(
-        self, event: QuoteTick | TradeTick | Bar | OrderBookDepth10
+        self, event: QuoteTick | TradeTick | Bar | OrderBookDepth
     ) -> MarketExpression:
         if isinstance(event, QuoteTick):
             instrument_id = str(event.instrument_id)
@@ -938,7 +939,7 @@ class NautilusE4CaptureStrategy(Strategy):
             instrument_id = str(event.instrument_id)
         elif isinstance(event, Bar):
             instrument_id = str(event.bar_type.instrument_id)
-        elif isinstance(event, OrderBookDepth10):
+        elif isinstance(event, OrderBookDepth):
             instrument_id = str(event.instrument_id)
         else:
             raise TypeError(f"unsupported provider event type: {type(event).__name__}")

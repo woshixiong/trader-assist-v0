@@ -888,9 +888,9 @@ def test_native_l0_on_start_registers_all_100_using_installed_rc5(tmp_path):
     if importlib.util.find_spec("nautilus_trader") is None:
         assert os.environ.get("NAUTILUS_E4_REQUIRED") != "1", "exact rc5 CI cannot skip L0"
         pytest.skip("optional native rc5 absent; authoritative Linux CI required")
-    assert version("nautilus-trader") == "2.0.0rc5"
+    assert version("nautilus-trader") == "2.0.0rc7"
     if os.environ.get("NAUTILUS_E4_REQUIRED") == "1":
-        assert sys.version_info[:2] == (3, 12)
+        assert sys.version_info[:2] == (3, 13)
         assert sys.platform == "linux" and platform.machine() == "x86_64"
     from trader_assist_v0.nautilus_e4.host import NautilusE4CaptureStrategy
 
@@ -907,7 +907,7 @@ def test_native_l0_on_start_registers_all_100_using_installed_rc5(tmp_path):
         subscribe_queue_state=lambda: None,
     )
     for method, kind in (("subscribe_bars", "bar"), ("subscribe_quotes", "bbo"),
-                         ("subscribe_trades", "trade"), ("subscribe_book_depth10", "depth10")):
+                         ("subscribe_trades", "trade"), ("subscribe_book_depth", "depth10")):
         setattr(harness, method, lambda value, *_args, kind=kind: calls.append((kind, str(value))))
     NautilusE4CaptureStrategy.on_start(harness)
     assert len(calls) == len(set(calls)) == 100
