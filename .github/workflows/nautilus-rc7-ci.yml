@@ -15,6 +15,10 @@ on:
         description: 'Bounded 60s native FirstLaunch20 mark/index/funding/OI usable-record proof'
         type: boolean
         default: false
+      sandbox_probe:
+        description: 'Opt-in DEV_ONLY official public quotes to existing native Sandbox protocol fixture'
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -65,6 +69,14 @@ jobs:
           mkdir -p /tmp/rc7-proof/context
           python -m scripts.rc7.run_public --first-launch-20 --context-probe --archive-profile LEAN --duration-seconds 60 --root /tmp/rc7-context > /tmp/rc7-proof/context/run.log 2>&1
           cp /tmp/rc7-context/context-proof.json /tmp/rc7-context/close-proof.json /tmp/rc7-context/health.json /tmp/rc7-proof/context/
+      - name: Existing official Sandbox fixture on actual public quotes (DEV_ONLY)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.sandbox_probe }}
+        env:
+          PYTHONPATH: src:.
+          RC7_PUBLIC_SANDBOX_PROBE: 'true'
+          RC7_SANDBOX_PROOF_OUTPUT: /tmp/rc7-proof/public-sandbox/proof.json
+        run: |
+          python -m pytest -q tests/test_nautilus_rc7_public_sandbox.py > /tmp/rc7-proof/public-sandbox-tests.txt 2>&1
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:

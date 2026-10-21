@@ -95,11 +95,22 @@ def test_native_stream_promotes_equal_timestamp_rows_and_roundtrips(tmp_path: Pa
         for i in (0, 1, 2)
     ]
     engine.add_data(ticks)
+    safe = streaming_config(tmp_path)
+    assert safe.promotion_interval_ms is None and safe.promote_on_close
+    assert not safe.delete_feather_after_promotion
+    catalog = ParquetDataCatalog(str(tmp_path))
     try:
-        engine.run()
+        # Official streaming mode keeps the sink open until explicit end.
+        # No rotation avoids overlap but cannot expose this locked tail.
+        engine.run(streaming=True)
+        open_runs = catalog.list_backtest_runs()
+        assert len(open_runs) == 1
+        assert list((tmp_path / "backtest" / open_runs[0]).rglob("*.feather.partial"))
+        assert catalog.read_backtest(open_runs[0]) == []
+        assert catalog.query_quote_ticks(identifiers=[str(instrument.id)]) == []
+        engine.end()  # Native explicit seal/close/promotion, not a restart cycle.
     finally:
         engine.dispose()
-    catalog = ParquetDataCatalog(str(tmp_path))
     runs = catalog.list_backtest_runs()
     assert len(runs) == 1
     proof = verify_promoted_run(tmp_path, runs[0], live=False)

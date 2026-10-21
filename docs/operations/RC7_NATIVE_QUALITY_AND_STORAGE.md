@@ -100,3 +100,36 @@ hash extension was removed. Official `CustomData.data` is an inner typed record,
 not a general `to_dict` contract. Existing bounded context tests use native
 `convert_stream_to_data` and `query_custom_data`; they do not qualify rolling
 publication or an atomic live-stage snapshot. No further reader/codec is added.
+
+## Control6307939213: supported close lifecycle versus continuous visibility
+
+Root: rotation/periodic promotion can split equal `ts_init` rows; later overlapping
+promotion is rejected by the native catalog. The official safe finite alternative
+is already `streaming_config(root)` (no rotation, no interval promotion, promote
+on close, retain source). Native Backtest streaming/end tests now explicitly prove
+the open locked source is unavailable and Parquet queries are empty until close,
+then exact typed readback and idempotent native recovery. Existing native tests
+retain crash/truncated-batch recovery, equal-time CLEAR order and overlap negatives.
+
+Do not replace `streaming_config(root, continuous=True)` silently: no rotation
+removes the sealed prefix available to readers, and catalog visibility can wait
+indefinitely for shutdown. The continuous runtime therefore remains unchanged.
+Engineering Control must choose native staged-prefix access with provisional
+Parquet, or close-only publication with unavailable open-tail reads. Neither is
+qualified as always-queryable continuous Parquet or bounded indefinite retention.
+
+An opt-in `sandbox_probe` CI input runs the EXISTING built-in ExecTester protocol
+fixture on actual public HL ETH quotes with the existing Sandbox factory, native
+RiskEngine (bypass false), simulated fees/balances and immutable ledger. This is
+DEV_ONLY, not a new strategy or an approved forward-research profile. It uses no
+synthetic quotes/opportunities and tests native close/cancel, fees/PnL and finite
+source-to-typed-Parquet quote readback after dispose. Legacy Muse development
+fixture economics remain unchanged and separately covered by deterministic native
+positive/negative tests; no approved real strategy-to-order profile is inferred.
+
+Pinned official examples:
+- https://github.com/nautechsystems/nautilus_trader/blob/v2.0.0rc7/examples/live/hyperliquid/data_tester.py
+- https://github.com/nautechsystems/nautilus_trader/blob/v2.0.0rc7/examples/live/sandbox/exec_tester.py
+
+The official Sandbox example bypasses risk; this repository retains bypass=false.
+No real execution factory is registered. No production service or restart policy changes.
