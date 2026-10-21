@@ -15,6 +15,10 @@ class NativeHealth:
     connected: bool = False
     writer_ok: bool = False
     catalog_verified: bool = False
+    writer_activity_observed: bool = False
+    change_driven: set[str] = field(default_factory=set)
+    quarantine: set[str] = field(default_factory=set)
+    rejected_stale: int = 0
     last: dict[str, tuple[int, int, int]] = field(default_factory=dict)
     event_ends: dict[str, int] = field(default_factory=dict)
     counts: dict[str, int] = field(default_factory=dict)
@@ -53,6 +57,7 @@ class NativeHealth:
             "coverage": "UNKNOWN_NO_SYNTHETIC_BACKFILL",
             "lost_events": "UNKNOWN",
         }
+        self.quarantine.add(stream)
         self.pending_gaps[stream] = len(self.gaps)
         self.gaps.append(gap)
         self.gap_events.append({**gap, "state": "OPEN"})
@@ -80,6 +85,7 @@ class NativeHealth:
             return False
         if (
             min(ts_event, ts_init, now) <= 0
+            or ts_event > ts_init
             or max(ts_event, ts_init) > now + self.max_future_skew_ns
         ):
             self.failures.add("INVALID_EVENT_CLOCK")
@@ -94,22 +100,30 @@ class NativeHealth:
             return False
         if prior and (ts_event, ts_init) == prior[:2]:
             self.duplicates += 1
+            return False
         end = ts_event if event_end_ns is None else event_end_ns
+        fresh = (
+            0 <= now - ts_init <= self.required[stream] and 0 <= now - end <= self.required[stream]
+        )
+        if not fresh:
+            self.rejected_stale += 1
+            return False  # Stale deliveries cannot re-arm transport or overwrite last valid clocks.
         if prior:
             cadence = {"1m": 60_000_000_000, "5m": 300_000_000_000}.get(stream.rsplit(":", 1)[-1])
             if cadence and ts_event > prior[0] + cadence:
                 self.mark_gap(stream, "CLOSED_BAR_INTERVAL_MISSING", now)
-            elif now - prior[1] > self.required[stream]:
+            elif stream not in self.change_driven and now - prior[1] > self.required[stream]:
                 self.mark_gap(stream, "RECEIVE_FRESHNESS_GAP", now)
-        fresh = (
-            0 <= now - ts_init <= self.required[stream] and 0 <= now - end <= self.required[stream]
-        )
-        if fresh and stream in self.pending_gaps:
+        if stream in self.pending_gaps:
             index = self.pending_gaps.pop(stream)
             self.gaps[index].update(
                 next_ts_event=ts_event, next_ts_init=ts_init, next_observed_ns=now
             )
             self.gap_events.append({**self.gaps[index], "state": "FRESH_EVENTS_RESUMED"})
+        else:
+            # A second distinct fresh event (next contiguous closed bar for bars)
+            # establishes current continuity; historical gap coverage stays UNKNOWN.
+            self.quarantine.discard(stream)
         self.last[stream] = (ts_event, ts_init, self.epoch)
         self.event_ends[stream] = ts_event if event_end_ns is None else event_end_ns
         self.counts[stream] = self.counts.get(stream, 0) + 1
@@ -118,18 +132,11 @@ class NativeHealth:
         self.last_observed_ns = now
         return True
 
-    def report(self, *, now: int, generated: int, free_bytes: int) -> dict[str, object]:
+    def admission_reasons(self, *, now: int) -> set[str]:
+        """Current native input eligibility only; never an order/risk authorization."""
         reasons = set(self.failures)
         if not self.connected:
             reasons.add("NATIVE_DISCONNECTED")
-        if not self.writer_ok:
-            reasons.add("WRITER_UNKNOWN_OR_FAILED")
-        if not self.catalog_verified:
-            reasons.add("CATALOG_UNVERIFIED")
-        if not 0 <= now - generated <= self.report_max_age_ns:
-            reasons.add("HEALTH_REPORT_STALE_OR_CLOCK_INVALID")
-        if free_bytes < self.minimum_free_bytes:
-            reasons.add("DISK_LOW")
         for stream, max_age in self.required.items():
             event = self.last.get(stream)
             if event is None or event[2] != self.epoch:
@@ -138,10 +145,41 @@ class NativeHealth:
                 not 0 <= now - self.event_ends[stream] <= max_age
                 or not 0 <= now - event[1] <= max_age
             ):
-                reasons.add(f"STALE:{stream}")
-                self.mark_gap(stream, "RECEIVE_FRESHNESS_GAP", now)
+                if stream in self.change_driven:
+                    # No heartbeat is exposed for unchanged asset contexts. Do not
+                    # fabricate a missing tick, refresh clocks from a sibling, or
+                    # equate settlement minutes with a delivery deadline.
+                    reasons.add(f"CHANGE_ONLY_CURRENT_VALUE_UNVERIFIED:{stream}")
+                else:
+                    reasons.add(f"STALE:{stream}")
+                    self.mark_gap(stream, "RECEIVE_FRESHNESS_GAP", now)
+        reasons.update(f"QUARANTINE:{stream}" for stream in self.quarantine)
+        return reasons
+
+    def report(self, *, now: int, generated: int, free_bytes: int) -> dict[str, object]:
+        admission = self.admission_reasons(now=now)
+        reasons = set(admission)
+        if not self.writer_ok:
+            reasons.add(
+                "WRITER_INTEGRITY_UNVERIFIED"
+                if self.writer_activity_observed
+                else "WRITER_UNKNOWN_OR_FAILED"
+            )
+        if not self.catalog_verified:
+            reasons.add("CATALOG_UNVERIFIED")
+        if not 0 <= now - generated <= self.report_max_age_ns:
+            reasons.add("HEALTH_REPORT_STALE_OR_CLOCK_INVALID")
+        if free_bytes < self.minimum_free_bytes:
+            reasons.add("DISK_LOW")
         return {
             "status": "HEALTHY" if not reasons else "DEGRADED",
+            "native_input_eligible": not admission and bool(self.required),
+            "admission_reasons": sorted(admission),
+            "writer_activity": "OBSERVED" if self.writer_activity_observed else "UNOBSERVED",
+            "writer_integrity": "VERIFIED" if self.writer_ok else "UNVERIFIED",
+            "catalog_integrity": "VERIFIED" if self.catalog_verified else "UNVERIFIED",
+            "change_driven_streams": sorted(self.change_driven),
+            "rejected_stale": self.rejected_stale,
             "reasons": sorted(reasons),
             "generated_ns": generated,
             "epoch": self.epoch,

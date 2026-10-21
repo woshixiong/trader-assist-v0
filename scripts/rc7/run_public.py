@@ -80,11 +80,13 @@ def capture_observer(
     qualification_reconnect: bool = False,
     contexts_only: bool = False,
 ) -> Any:
+    from nautilus_trader.adapters.hyperliquid import HYPERLIQUID_CLIENT_ID
     from nautilus_trader.common import DataActor
     from nautilus_trader.model import BarType, BookType, CryptoPerpetual, InstrumentId, Venue
 
     from trader_assist_v0.nautilus_e4.native_context import (
         CONTEXT_AGES,
+        CONTEXT_CHANGE_DRIVEN,
         ContextResearchReader,
         register_native_context_types,
     )
@@ -234,6 +236,7 @@ def capture_observer(
             health.required.update(
                 {f"{identity}:{kind}": age * 1_000_000_000 for kind, age in ages.items()}
             )
+            health.change_driven.update(f"{identity}:{kind}" for kind in CONTEXT_CHANGE_DRIVEN)
             context_reader.instrument_ids.add(str(identity))
             self.context_reader = context_reader
             from nautilus_trader.model import DataType
@@ -242,7 +245,8 @@ def capture_observer(
             self.subscribe_index_prices(identity)
             self.subscribe_funding_rates(identity)
             self.subscribe_data(
-                DataType("HyperliquidOpenInterest", {"instrument_id": str(identity)})
+                DataType("HyperliquidOpenInterest", {"instrument_id": str(identity)}),
+                client_id=HYPERLIQUID_CLIENT_ID,
             )
             if metadata_root is not None and not universe.missing:
                 (metadata_root / "resolved-pit-universe.json").write_text(
@@ -505,6 +509,7 @@ async def run(args: argparse.Namespace) -> None:
         args.root,
         sandbox=args.sandbox,
         sandbox_fee_model=fee_model,
+        archive_profile=getattr(args, "archive_profile", "FULL_NATIVE"),
         venues=("HYPERLIQUID", *selected_references),
     )
     reference_reader = None
@@ -556,7 +561,13 @@ async def run(args: argparse.Namespace) -> None:
             now = time.time_ns()
             archive = observe_archive(args.root, args.root / "live" / instance_id)
             free_bytes = shutil.disk_usage(args.root).free
+            health.writer_activity_observed = (
+                archive.evidence(now_ns=now)["writer"] == "STAGING_ACTIVITY_OBSERVED"
+            )
+            if reference_reader is not None:
+                reference_reader.health.writer_activity_observed = health.writer_activity_observed
             output = health.report(now=now, generated=now, free_bytes=free_bytes)
+            output["archive_profile"] = getattr(args, "archive_profile", "FULL_NATIVE")
             output["archive"] = archive.evidence(now_ns=now)
             output["capture_gap"] = capture_gap(previous_last_ns, health.first_observed_ns)
             observer.persist_gaps()
@@ -765,6 +776,7 @@ def main() -> None:
         default=None,
         help="opt-in native references (bare flag selects both); no orders",
     )
+    parser.add_argument("--archive-profile", choices=("FULL_NATIVE", "LEAN"), default="FULL_NATIVE")
     parser.add_argument("--context-probe", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
         "--duration-seconds", type=int, help="isolated qualification only; default is continuous"

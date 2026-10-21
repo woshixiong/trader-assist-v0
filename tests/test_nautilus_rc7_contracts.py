@@ -296,14 +296,17 @@ def test_disconnect_ack_does_not_rearm_and_gap_keeps_native_endpoints() -> None:
     assert len(health.gaps) == 2
     for stream in health.required:
         assert health.observe(stream, ts_event=1060, ts_init=1061, now=1062)
-    assert health.report(now=1062, generated=1062, free_bytes=100)["status"] == "HEALTHY"
+    assert not health.report(now=1062, generated=1062, free_bytes=100)["native_input_eligible"]
+    for stream in health.required:
+        assert health.observe(stream, ts_event=1063, ts_init=1064, now=1065)
+    assert health.report(now=1065, generated=1065, free_bytes=100)["status"] == "HEALTHY"
     assert all(
         gap["prior_ts_event"] == 1000 and gap["next_ts_event"] == 1060 for gap in health.gaps
     )
     assert all(gap["lost_events"] == "UNKNOWN" for gap in health.gaps)
     restarted = NativeHealth(dict(health.required))
     restarted.restore_boundaries(
-        health.report(now=1062, generated=1062, free_bytes=100)["last_native"], now=1100
+        health.report(now=1065, generated=1065, free_bytes=100)["last_native"], now=1100
     )
     assert len(restarted.pending_gaps) == 2
     assert all(gap["reason"] == "PROCESS_RESTART" for gap in restarted.gaps)
@@ -582,3 +585,58 @@ def test_reference_venue_subset_keeps_unqualified_provider_out_of_capture() -> N
     for invalid in (["OKX", "OKX"], ["FAKE"], "OKX"):
         with pytest.raises(ValueError, match="SELECTION_INVALID"):
             selected_reference_venues(invalid)
+
+
+def test_native_admission_stale_duplicate_and_reconnect_quarantine() -> None:
+    health = NativeHealth({"ETH:quote": 100}, minimum_free_bytes=1)
+    health.socket(True)
+    assert not health.observe("ETH:quote", ts_event=1, ts_init=1, now=1000)
+    assert not health.last and health.rejected_stale == 1
+    assert health.observe("ETH:quote", ts_event=1000, ts_init=1001, now=1002)
+    assert not health.admission_reasons(now=1002)
+    assert not health.observe("ETH:quote", ts_event=1000, ts_init=1001, now=1003)
+    assert health.last["ETH:quote"][:2] == (1000, 1001)
+    health.socket(False, now=1010)
+    health.socket(True, now=1020)
+    assert health.admission_reasons(now=1020)
+    assert not health.observe("ETH:quote", ts_event=1, ts_init=1, now=1020)
+    assert health.pending_gaps and not health.last
+    assert health.observe("ETH:quote", ts_event=1021, ts_init=1022, now=1023)
+    assert "QUARANTINE:ETH:quote" in health.admission_reasons(now=1023)
+    assert health.observe("ETH:quote", ts_event=1024, ts_init=1025, now=1026)
+    assert not health.admission_reasons(now=1026)
+    assert health.gaps[0]["coverage"] == "UNKNOWN_NO_SYNTHETIC_BACKFILL"
+    assert health.gaps[0]["lost_events"] == "UNKNOWN"
+
+
+def test_change_only_context_silence_is_not_a_proven_gap_or_healthy_value() -> None:
+    second = 1_000_000_000
+    health = NativeHealth({"ETH:funding": 60 * second, "ETH:mark": 30 * second})
+    health.change_driven.update(health.required)
+    health.socket(True)
+    for stream in health.required:
+        assert health.observe(stream, ts_event=second, ts_init=second, now=second)
+    # A new mark does not refresh funding clocks or prove an unchanged funding value.
+    assert health.observe("ETH:mark", ts_event=120 * second, ts_init=120 * second, now=120 * second)
+    result = health.report(now=120 * second, generated=120 * second, free_bytes=10**12)
+    assert "CHANGE_ONLY_CURRENT_VALUE_UNVERIFIED:ETH:funding" in result["reasons"]
+    assert "STALE:ETH:funding" not in result["reasons"]
+    assert not result["native_input_eligible"] and not health.gaps
+    assert health.last["ETH:funding"][:2] == (second, second)
+    assert health.observe(
+        "ETH:funding", ts_event=121 * second, ts_init=121 * second, now=121 * second
+    )
+    assert not health.admission_reasons(now=121 * second)
+    assert not health.gaps  # Change-only interval is not evidence of missing public events.
+
+
+def test_writer_progress_does_not_certify_integrity_or_catalog() -> None:
+    health = NativeHealth({})
+    health.writer_activity_observed = True
+    result = health.report(now=100, generated=100, free_bytes=10**12)
+    assert result["writer_activity"] == "OBSERVED"
+    assert result["writer_integrity"] == result["catalog_integrity"] == "UNVERIFIED"
+    assert "WRITER_INTEGRITY_UNVERIFIED" in result["reasons"]
+    assert "WRITER_UNKNOWN_OR_FAILED" not in result["reasons"]
+    assert "CATALOG_UNVERIFIED" in result["reasons"]
+    assert not result["native_input_eligible"]

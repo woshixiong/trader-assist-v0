@@ -20,6 +20,7 @@ def build_native_node(
     *,
     sandbox: bool = False,
     sandbox_fee_model: Any = None,
+    archive_profile: str = "FULL_NATIVE",
     venues: tuple[str, ...] = ("HYPERLIQUID",),
 ) -> Any:
     from importlib.metadata import version
@@ -105,7 +106,7 @@ def build_native_node(
     config = LiveNodeConfig(
         environment=Environment.LIVE,
         trader_id=TraderId("TRADEOS-RC7-001"),
-        streaming=streaming_config(root, continuous=True),
+        streaming=streaming_config(root, continuous=True, archive_profile=archive_profile),
         shutdown_on_error=True,
         risk_engine=LiveRiskEngineConfig(bypass=False),
         exec_engine=LiveExecutionEngineConfig(reconciliation=True),

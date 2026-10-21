@@ -25,15 +25,36 @@ class ArchiveIntegrityError(RuntimeError):
     """Fatal native archive read/recovery failure; never automatically restart."""
 
 
-def streaming_config(root: Path, *, continuous: bool = False) -> Any:
+def archive_data_types(profile: str) -> list[Any] | None:
+    """Native family-global archival selection; does not change live subscriptions."""
+    from nautilus_trader.model import NautilusDataType
+
+    if profile == "FULL_NATIVE":
+        return None
+    if profile != "LEAN":
+        raise ValueError("UNSUPPORTED_NATIVE_ARCHIVE_PROFILE")
+    return [
+        NautilusDataType.Bar,
+        NautilusDataType.MarkPriceUpdate,
+        NautilusDataType.IndexPriceUpdate,
+        NautilusDataType.FundingRateUpdate,
+        NautilusDataType.Custom("HyperliquidOpenInterest"),
+    ]
+
+
+def streaming_config(
+    root: Path, *, continuous: bool = False, archive_profile: str = "FULL_NATIVE"
+) -> Any:
     from nautilus_trader.persistence import DataCatalogConfig, RotationConfig, StreamingConfig
 
+    selected = archive_data_types(archive_profile)
     root.mkdir(parents=True, exist_ok=True)
     # Tagged guide: never split equal ts_init rows across rotating/promoted files.
     # One shared root also makes native crash-recovery/manual promotion target the same catalog.
     return StreamingConfig(
         writer_path=str(root),
-        catalog=DataCatalogConfig(path=str(root)),
+        catalog=DataCatalogConfig(path=str(root), compression="zstd"),
+        data_types=selected,
         rotation_config=(
             RotationConfig.interval(STAGE_ROTATION_NS)
             if continuous

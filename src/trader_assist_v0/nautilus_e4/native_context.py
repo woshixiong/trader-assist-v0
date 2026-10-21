@@ -8,6 +8,10 @@ import json
 from pathlib import Path
 from typing import Any
 
+# Maximum admission/delivery age, NOT an expected event heartbeat or settlement interval.
+# Tagged handler suppresses unchanged values for all four families. No emission
+# means currentness is unobservable, not proof of a 60-second receive gap.
+CONTEXT_CHANGE_DRIVEN = frozenset({"mark", "index", "funding", "oi"})
 CONTEXT_AGES = {"mark": 30, "index": 30, "funding": 60, "oi": 60}
 CONTEXT_TYPES = {
     "MarkPriceUpdate": "mark",

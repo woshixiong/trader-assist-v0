@@ -42,6 +42,7 @@ jobs:
       - name: Native catalog, Sandbox, guard and ledger proof
         env:
           PYTHONPATH: src:.
+          RC7_STORAGE_PROOF_OUTPUT: /tmp/rc7-proof/storage-profile.json
         run: |
           python -m pytest -q tests/test_nautilus_rc7_contracts.py tests/test_nautilus_rc7_native.py tests/test_nautilus_rc7_dev_fixture.py tests/test_nautilus_rc7_references.py > /tmp/rc7-proof/native-tests.txt 2>&1
       - name: Compact native test result
@@ -62,7 +63,7 @@ jobs:
           PYTHONPATH: src:.
         run: |
           mkdir -p /tmp/rc7-proof/context
-          python -m scripts.rc7.run_public --first-launch-20 --context-probe --duration-seconds 60 --root /tmp/rc7-context > /tmp/rc7-proof/context/run.log 2>&1
+          python -m scripts.rc7.run_public --first-launch-20 --context-probe --archive-profile LEAN --duration-seconds 60 --root /tmp/rc7-context > /tmp/rc7-proof/context/run.log 2>&1
           cp /tmp/rc7-context/context-proof.json /tmp/rc7-context/close-proof.json /tmp/rc7-context/health.json /tmp/rc7-proof/context/
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()

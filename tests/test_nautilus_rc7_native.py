@@ -654,3 +654,207 @@ def test_native_saved_closed_5m_indicator_registration(tmp_path: Path) -> None:
         assert probe.atr.value > 0
     finally:
         engine.dispose()
+
+
+def test_native_profiles_keep_live_callbacks_and_sealed_zstd_parity(tmp_path: Path) -> None:
+    """Synthetic storage/transport fixture only; no signal, order or weekly-size forecast."""
+    import json
+    import os
+
+    from nautilus_trader.adapters.hyperliquid import HYPERLIQUID_CLIENT_ID, HyperliquidOpenInterest
+    from nautilus_trader.execution import MakerTakerFeeModel
+    from nautilus_trader.model import (
+        AggressorSide,
+        Bar,
+        BarType,
+        CustomData,
+        DataType,
+        FundingRateUpdate,
+        IndexPriceUpdate,
+        MarkPriceUpdate,
+        NautilusDataType,
+        TradeId,
+        TradeTick,
+    )
+    from test_nautilus_vnext_g4_runner import native_hyperliquid_instrument
+
+    from scripts.rc7.run_public import capture_observer
+    from trader_assist_v0.nautilus_e4.native_capture import NativeUniverse
+    from trader_assist_v0.nautilus_e4.native_catalog import archive_data_types, event_multiset
+    from trader_assist_v0.nautilus_e4.native_context import (
+        context_identity,
+        register_native_context_types,
+    )
+    from trader_assist_v0.nautilus_e4.native_health import NativeHealth
+
+    register_native_context_types()
+    instrument = native_hyperliquid_instrument()
+    oi_type = DataType("HyperliquidOpenInterest", {"instrument_id": str(instrument.id)})
+    inputs = []
+    for i in range(128):
+        now = (60 + i) * 1_000_000_000
+        inputs.extend(
+            [
+                MarkPriceUpdate(instrument.id, Price.from_str(f"{2000 + i}.0"), now, now),
+                IndexPriceUpdate(instrument.id, Price.from_str(f"{2001 + i}.0"), now, now),
+                FundingRateUpdate(
+                    instrument.id, Decimal("0.0000000000000001") * (i + 1), now, now, interval=60
+                ),
+                CustomData(
+                    oi_type,
+                    HyperliquidOpenInterest(
+                        instrument.id, Decimal("100.5000000000000001") + i, now, now
+                    ),
+                ),
+            ]
+        )
+        for j in range(16):
+            inputs.append(
+                QuoteTick(
+                    instrument.id,
+                    Price.from_str("2000.0"),
+                    Price.from_str("2001.0"),
+                    Quantity.from_str("1.000"),
+                    Quantity.from_str("2.000"),
+                    now + j,
+                    now + j,
+                )
+            )
+        for j in range(4):
+            inputs.append(
+                TradeTick(
+                    instrument.id,
+                    Price.from_str("2000.0"),
+                    Quantity.from_str("1.000"),
+                    AggressorSide.BUY,
+                    TradeId(f"fixture-{i}-{j}"),
+                    now + j,
+                    now + j,
+                )
+            )
+    bar_type = BarType.from_str(f"{instrument.id}-1-MINUTE-LAST-EXTERNAL")
+    for minute in (1, 2):
+        inputs.append(
+            Bar(
+                bar_type,
+                Price.from_str("2000.0"),
+                Price.from_str("2001.0"),
+                Price.from_str("1999.0"),
+                Price.from_str("2000.5"),
+                Quantity.from_str("3.000"),
+                minute * 60_000_000_000,
+                (minute + 1) * 60_000_000_000,
+            )
+        )
+    inputs.sort(key=lambda e: e.ts_init)
+    metrics = {}
+    families = {
+        "QuoteTick": NautilusDataType.QuoteTick,
+        "TradeTick": NautilusDataType.TradeTick,
+        "Bar": NautilusDataType.Bar,
+        "MarkPriceUpdate": NautilusDataType.MarkPriceUpdate,
+        "IndexPriceUpdate": NautilusDataType.IndexPriceUpdate,
+        "FundingRateUpdate": NautilusDataType.FundingRateUpdate,
+        "HyperliquidOpenInterest": NautilusDataType.Custom("HyperliquidOpenInterest"),
+    }
+    for profile in ("FULL_NATIVE", "LEAN"):
+        root = tmp_path / profile
+        config = streaming_config(root, archive_profile=profile)
+        assert config.catalog.compression == "zstd"
+        assert not config.delete_feather_after_promotion and not config.use_ts_event_for_ts_init
+        assert config.data_types == archive_data_types(profile)
+        universe = NativeUniverse(("ETH", "xyz:SKHX"), None)
+        health = NativeHealth({})
+        observer = capture_observer(universe, health)
+        commands = []
+
+        class SubscriptionProbe(type(observer)):
+            def subscribe_data(self, data_type, client_id=None, params=None):
+                self.commands.append((data_type, client_id))
+                return super().subscribe_data(data_type, client_id=client_id, params=params)
+
+        probe = SubscriptionProbe()
+        probe.commands = commands
+        engine = BacktestEngine(
+            BacktestEngineConfig(streaming=config, bypass_logging=True, run_analysis=False)
+        )
+        engine.add_venue(
+            Venue("HYPERLIQUID"),
+            OmsType.NETTING,
+            AccountType.MARGIN,
+            [Money.from_str("100000 USDC")],
+            fee_model=MakerTakerFeeModel(Decimal("0"), Decimal("0")),
+        )
+        engine.add_instrument(instrument)
+        engine.add_actor(probe)
+        engine.add_data(inputs)
+        try:
+            engine.run()
+            assert commands == [(oi_type, HYPERLIQUID_CLIENT_ID)]
+            # Native typed on_data callback, funding, quote/trade fanout remain live under LEAN.
+            assert probe.context_reader.latest[f"{instrument.id}:oi"].open_interest == Decimal(
+                "227.5000000000000001"
+            )
+            assert probe.context_reader.latest[f"{instrument.id}:funding"].interval == 60
+            assert health.counts[f"{instrument.id}:quote"] == 2048
+            assert health.counts[f"{instrument.id}:trade"] == 512
+        finally:
+            engine.dispose()
+        catalog = ParquetDataCatalog(str(root), compression=6)
+        run_id = catalog.list_backtest_runs()[0]
+        stage = root / "backtest" / run_id
+        assert not list(stage.rglob("*.partial"))
+        assert list(stage.rglob("*.feather"))
+        assert catalog.instruments(instrument_ids=[str(instrument.id)])
+        counts = {}
+        for name, family in families.items():
+            expected = [
+                getattr(e, "data", e)
+                for e in inputs
+                if type(getattr(e, "data", e)).__name__ == name
+            ]
+            if profile == "LEAN" and name in {"QuoteTick", "TradeTick"}:
+                expected = []
+            restored = (
+                catalog.query_custom_data(family)
+                if name == "HyperliquidOpenInterest"
+                else catalog.query(family)
+            )
+            restored = [getattr(e, "data", e) for e in restored]
+            if name == "HyperliquidOpenInterest":
+                assert [context_identity(e)[2] for e in expected] == [
+                    context_identity(e)[2] for e in restored
+                ]
+            else:
+                assert event_multiset(expected) == event_multiset(restored)
+            counts[name] = len(restored)
+        # Existing native recovery verifies complete automatic promotion before returning;
+        # no duplicate import, disjoint bypass or source deletion is introduced.
+        before = {p: p.read_bytes() for p in (root / "data").rglob("*.parquet")}
+        recover_and_promote(root, run_id, live=False)
+        assert before == {p: p.read_bytes() for p in (root / "data").rglob("*.parquet")}
+        feather_bytes = sum(p.stat().st_size for p in stage.rglob("*.feather"))
+        parquet_bytes = sum(p.stat().st_size for p in (root / "data").rglob("*.parquet"))
+        assert feather_bytes > 0 and parquet_bytes > 0
+        metrics[profile] = {
+            "counts": counts,
+            "feather_bytes": feather_bytes,
+            "parquet_bytes": parquet_bytes,
+            "parquet_to_feather_ratio": parquet_bytes / feather_bytes,
+        }
+    assert metrics["LEAN"]["feather_bytes"] < metrics["FULL_NATIVE"]["feather_bytes"]
+    # Native filter negatives, with FULL_NATIVE preserving the old default.
+    assert streaming_config(tmp_path / "default").data_types is None
+    with pytest.raises(ValueError, match="UNSUPPORTED_NATIVE_ARCHIVE_PROFILE"):
+        streaming_config(tmp_path / "invalid", archive_profile="unknown")
+    proof = {
+        "fixture": "SYNTHETIC_NATIVE_SOURCE_NOT_WEEKLY_FORECAST",
+        "profiles": metrics,
+        "same_live_callbacks": True,
+        "precision_clocks_and_counts_equal": True,
+        "source_retained": True,
+        "compression": "NATIVE_ZSTD",
+        "rolling_publication": "UNQUALIFIED",
+    }
+    if destination := os.environ.get("RC7_STORAGE_PROOF_OUTPUT"):
+        Path(destination).write_text(json.dumps(proof, indent=2) + "\n")
