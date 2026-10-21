@@ -740,7 +740,8 @@ async def run(args: argparse.Namespace) -> None:
             "writer": "CLOSED",
             "catalog": "NOT_VERIFIED_OR_PROMOTED",
             "instance_id": instance_id,
-            "typed_integrity": proof["types"],
+            "staged_record_counts": proof["types"],
+            "integrity": proof["integrity"],
         },
     )
     (args.root / "health.json").write_text(json.dumps(stopped, indent=2) + "\n")

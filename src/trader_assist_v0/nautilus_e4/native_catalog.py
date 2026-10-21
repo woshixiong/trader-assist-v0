@@ -99,12 +99,12 @@ def read_staged_run(
         )
         if require_closed and (partials or not data):
             raise RuntimeError("CLOSED_NATIVE_STAGE_INCOMPLETE")
-        types = {}
-        for name in sorted({type(event).__name__ for event in data}):
-            count, digest = event_multiset(
-                [event for event in data if type(event).__name__ == name]
-            )
-            types[name] = {"count": count, "sha256": digest}
+        # Native readback is the contract here. Do not require an application
+        # serializer/hash for every native type (CustomData has no to_dict).
+        types = {
+            name: {"count": count}
+            for name, count in sorted(Counter(type(event).__name__ for event in data).items())
+        }
         return {
             "status": "SEALED_STAGE_READABLE",
             "instance_id": instance_id,
@@ -112,6 +112,7 @@ def read_staged_run(
             "open_partials": partials,
             "complete_stopped_run": require_closed,
             "catalog": "NOT_VERIFIED_OR_PROMOTED",
+            "integrity": "NATIVE_READ_ONLY_NO_CONTENT_PARITY_CERTIFICATE",
             "source_retained": True,
         }
     except Exception as exc:
@@ -119,13 +120,6 @@ def read_staged_run(
 
 
 def _identity(event: Any) -> str:
-    # Native read_live_run wraps registered custom records in CustomData, which
-    # has no to_dict. Use the official inner type, not a new codec/store.
-    event = getattr(event, "data", event)
-    if type(event).__name__ == "HyperliquidOpenInterest":
-        from .native_context import context_identity
-
-        return "HyperliquidOpenInterest:" + context_identity(event)[2]
     # Official typed serialization preserves economic precision and ts_event/ts_init.
     payload = type(event).to_dict(event)
     # The tagged native promotion contract adopts neighbouring precision for

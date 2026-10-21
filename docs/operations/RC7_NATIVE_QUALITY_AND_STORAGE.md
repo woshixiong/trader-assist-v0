@@ -70,9 +70,8 @@ BacktestEngine/streaming infrastructure (no orders or signal economics), verifie
 actual observer's explicit OI subscription and on_data, quote/trade callbacks,
 exact selected family counts/decimal precision/ts_event/ts_init after native close,
 retained sealed Feather, native ZSTD Parquet and nonduplicating native recovery.
-The same pre-promotion sealed-run diagnostic unwraps native CustomData before
-using its official typed serialization; OI uses the existing exact native identity.
-No CustomData.to_dict API is assumed, and changed precision/clocks fail parity.
+The pre-promotion stage summary reports native returned type counts only.
+Bounded typed-context tests separately check native values and clocks.
 `storage-profile.json` records actual file bytes and empirical ratios for this
 fixture only; it is not a market-rate or weekly forecast. No generic data store is
 implemented in the test. A bounded public context probe is separate evidence and
@@ -91,3 +90,13 @@ pruning need separate current user authorization. Real execution remains OFF.
 - [Native family configuration](https://github.com/nautechsystems/nautilus_trader/blob/v2.0.0rc7/crates/persistence/src/config.rs)
 - [Promotion and equal-time limitations](https://github.com/nautechsystems/nautilus_trader/blob/v2.0.0rc7/docs/how_to/stream_parquet_catalog.md)
 - [Native ZSTD catalog](https://github.com/nautechsystems/nautilus_trader/blob/v2.0.0rc7/docs/concepts/data/catalog.md)
+
+## Control correction: native readback only
+
+The public stopped-stage check now directly uses `ParquetDataCatalog.read_live_run`
+and reports returned native type counts. It does not invoke the generic event hash
+helper or claim content parity from counts. The attempted CustomData-specific
+hash extension was removed. Official `CustomData.data` is an inner typed record,
+not a general `to_dict` contract. Existing bounded context tests use native
+`convert_stream_to_data` and `query_custom_data`; they do not qualify rolling
+publication or an atomic live-stage snapshot. No further reader/codec is added.
