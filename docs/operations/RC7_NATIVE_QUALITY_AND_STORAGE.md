@@ -70,6 +70,9 @@ BacktestEngine/streaming infrastructure (no orders or signal economics), verifie
 actual observer's explicit OI subscription and on_data, quote/trade callbacks,
 exact selected family counts/decimal precision/ts_event/ts_init after native close,
 retained sealed Feather, native ZSTD Parquet and nonduplicating native recovery.
+The same pre-promotion sealed-run diagnostic unwraps native CustomData before
+using its official typed serialization; OI uses the existing exact native identity.
+No CustomData.to_dict API is assumed, and changed precision/clocks fail parity.
 `storage-profile.json` records actual file bytes and empirical ratios for this
 fixture only; it is not a market-rate or weekly forecast. No generic data store is
 implemented in the test. A bounded public context probe is separate evidence and

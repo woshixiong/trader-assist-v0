@@ -537,6 +537,16 @@ def test_native_contexts_seal_readback_and_causal_research_consumer(tmp_path: Pa
         assert unresolved.rejects == {"UNRESOLVED_IDENTITY": 1}
     finally:
         writer.close()
+    from trader_assist_v0.nautilus_e4.native_catalog import event_multiset, read_staged_run
+
+    # Same pre-promotion diagnostic path as the public continuous-run close.
+    staged_proof = read_staged_run(tmp_path, run_id, require_closed=True)
+    assert staged_proof["complete_stopped_run"]
+    assert staged_proof["types"]["CustomData"]["count"] == 1
+    wrapped = CustomData(
+        DataType("HyperliquidOpenInterest", {"instrument_id": str(instrument.id)}), events[-1]
+    )
+    assert event_multiset([wrapped]) == event_multiset([events[-1]])
     proof = context_proof(tmp_path, run_id, reader.instrument_ids, reader.hashes)
     assert proof["status"] == "USABLE_BOUNDED_SEALED_NATIVE_CONTEXT"
     assert len(proof["streams"]) == 4
@@ -558,6 +568,7 @@ def test_native_contexts_seal_readback_and_causal_research_consumer(tmp_path: Pa
         HyperliquidOpenInterest(instrument.id, Decimal("100.50"), now, now),
     ):
         assert context_identity(changed)[2] != context_identity(events[-1])[2]
+        assert event_multiset([changed]) != event_multiset([wrapped])
     assert list(stage.rglob("*.feather"))
     with pytest.raises(ValueError, match="CONTEXT_NOT_USABLE"):
         context_proof(

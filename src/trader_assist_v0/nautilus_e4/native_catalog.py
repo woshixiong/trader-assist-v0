@@ -119,6 +119,13 @@ def read_staged_run(
 
 
 def _identity(event: Any) -> str:
+    # Native read_live_run wraps registered custom records in CustomData, which
+    # has no to_dict. Use the official inner type, not a new codec/store.
+    event = getattr(event, "data", event)
+    if type(event).__name__ == "HyperliquidOpenInterest":
+        from .native_context import context_identity
+
+        return "HyperliquidOpenInterest:" + context_identity(event)[2]
     # Official typed serialization preserves economic precision and ts_event/ts_init.
     payload = type(event).to_dict(event)
     # The tagged native promotion contract adopts neighbouring precision for
