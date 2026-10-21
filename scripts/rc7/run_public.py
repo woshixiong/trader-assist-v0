@@ -340,8 +340,13 @@ def capture_observer(
             self.record(event, "trade", str(event.instrument_id))
 
         def on_book_depth(self, event: Any) -> None:
-            if not event.bids or not event.asks:
-                health.failures.add("INCOMPLETE_BOOK")
+            if (
+                not event.bids
+                or not event.asks
+                or event.bids[0].price.as_decimal() <= 0
+                or event.asks[0].price < event.bids[0].price
+            ):
+                health.failures.add("INCOMPLETE_OR_INVALID_BOOK")
                 return
             self.record(event, "book", str(event.instrument_id))
 

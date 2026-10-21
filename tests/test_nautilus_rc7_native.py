@@ -798,6 +798,15 @@ def test_native_profiles_keep_live_callbacks_and_sealed_zstd_parity(tmp_path: Pa
             assert probe.context_reader.latest[f"{instrument.id}:funding"].interval == 60
             assert health.counts[f"{instrument.id}:quote"] == 2048
             assert health.counts[f"{instrument.id}:trade"] == 512
+            # A crossed native-price book cannot become a valid freshness observation.
+            probe.on_book_depth(
+                SimpleNamespace(
+                    bids=[SimpleNamespace(price=Price.from_str("2001.0"))],
+                    asks=[SimpleNamespace(price=Price.from_str("2000.0"))],
+                )
+            )
+            assert "INCOMPLETE_OR_INVALID_BOOK" in health.failures
+            assert f"{instrument.id}:book" not in health.last
         finally:
             engine.dispose()
         catalog = ParquetDataCatalog(str(root), compression=6)

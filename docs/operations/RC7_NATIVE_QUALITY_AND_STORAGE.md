@@ -41,7 +41,10 @@ closed 1m/5m), MarkPriceUpdate, IndexPriceUpdate, FundingRateUpdate, and native
 Custom("HyperliquidOpenInterest"). It does not persist generic quotes/trades/depth
 or other custom families, but does not unsubscribe or filter incoming callbacks.
 The native filter is family-global across instruments/providers, not per-symbol.
-Native instrument metadata remains required for causal replay.
+Native instrument metadata remains required for causal replay: LEAN explicitly
+includes NautilusInstrumentType("CryptoPerpetual") and ("CurrencyPair") through
+instrument_types. A data_types-only whitelist excluded metadata in the first native
+fixture; the assertion was retained and the native selectors added.
 
 Both profiles explicitly select native DataCatalogConfig compression="zstd".
 Continuous mode retains five-minute native Feather rotation, no automatic promotion,

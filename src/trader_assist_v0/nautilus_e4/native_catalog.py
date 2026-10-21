@@ -45,6 +45,7 @@ def archive_data_types(profile: str) -> list[Any] | None:
 def streaming_config(
     root: Path, *, continuous: bool = False, archive_profile: str = "FULL_NATIVE"
 ) -> Any:
+    from nautilus_trader.model import NautilusInstrumentType
     from nautilus_trader.persistence import DataCatalogConfig, RotationConfig, StreamingConfig
 
     selected = archive_data_types(archive_profile)
@@ -55,6 +56,13 @@ def streaming_config(
         writer_path=str(root),
         catalog=DataCatalogConfig(path=str(root), compression="zstd"),
         data_types=selected,
+        # With a native family whitelist, metadata must be explicitly included too.
+        # These are the actual admitted native types of the three public clients.
+        instrument_types=(
+            [NautilusInstrumentType("CryptoPerpetual"), NautilusInstrumentType("CurrencyPair")]
+            if archive_profile == "LEAN"
+            else None
+        ),
         rotation_config=(
             RotationConfig.interval(STAGE_ROTATION_NS)
             if continuous
