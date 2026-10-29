@@ -258,3 +258,38 @@ Primary references:
 - `https://docs.aws.amazon.com/lightsail/latest/userguide/lightsail-how-to-connect-to-your-instance-virtual-private-server.html`
 
 The evidence confirms the project's selected route: use standard SSH/SFTP transport through the user's existing FinalShell client, with project-specific exact-release validation and safety logic remaining in thin scripts/runbooks.
+
+
+## 14. Mac RDC + FinalShell: user-keyboard focus isolation (2026-10-29 field addendum)
+
+**Authority and precedence.** This section records an operational usability requirement, not permission to operate a server. The **current** \`AGENTS.md\` -> \`ACTIVE_GOVERNANCE_MANIFEST.json\` -> manifest-selected constitution and the exact task's human authorization always supersede this historical workflow's V4 references. For AWS operations, prefer the user-selected ChatGPT Chrome extension controlling **AWS official browser SSH** where that interaction capability is actually available. The already-connected **Mac RDC -> FinalShell SSH** path is the user-approved fallback only; do not silently substitute another host, browser, remote shell or access route.
+
+### 14.1 Required non-interference contract
+
+\`\`\`text
+USER_CONTINUES_WORK_IN_OTHER_WINDOWS=SUPPORTED
+STEAL_USER_KEYBOARD_FOCUS_WHILE_USER_TYPES_OR_DICTATES=PROHIBITED
+INTERACT_WITH_UNRELATED_WINDOWS_OR_READ_THEIR_CONTENTS=PROHIBITED
+FULLY_BACKGROUND_FINALSHELL_EXECUTION=NOT_YET_VERIFIED
+CLAIM_ZERO_FOCUS_WHEN_ACTIVATE_OR_GLOBAL_KEYSTROKES_USED=PROHIBITED
+WRONG_WINDOW_OR_UNVERIFIED_SHELL_INPUT=FAIL_CLOSED
+ONE_BOUNDED_REMOTE_BLOCK_WITH_IDENTITY_AND_OUTPUT_EVIDENCE=PREFERRED
+\`\`\`
+
+When the user is working in other Mac windows, a purported "background" mechanism must be tested **end to end**, not inferred from successful remote connectivity or the ability to populate an input field. A valid zero-focus path must demonstrably (a) leave the user's active app and keyboard focus unchanged, (b) deliver a harmless sentinel command to the **existing** intended FinalShell session and receive its exact server output, (c) not consume the user's live keyboard, speech input or clipboard, and (d) be scoped to the exact host and operator permissions. **Do not send production edits or service restarts unless that path passes the sentinel test.**
+
+### 14.2 What was actually verified on 2026-10-29
+
+- The Mac RDC agent could address the existing FinalShell application and read FinalShell-only GUI evidence. The safe capture was by its own macOS window ID: \`screencapture -x -l <FinalShell-window-id>\`, rather than a full-desktop capture that might include unrelated work.
+- FinalShell's accessibility command input accepted text through its \`AXSelectedText\` attribute **without requiring the app to become frontmost**. But the subsequent attempts to submit the command entirely in the background were **not reliable** (including an attempted accessibility-button press and per-process keyboard events). **Typing into that field is not proof of an executable, zero-focus terminal route.**
+- The **successfully verified execution path** was a bounded Mac-side AppleScript operation: save the existing clipboard; set the clipboard to one already-reviewed shell command; activate the existing FinalShell app; click its terminal area; clear any pending line with Ctrl+C; paste with Cmd+V; press Return; restore the original clipboard, including on errors; and read **only the FinalShell window** for a returned sentinel and final result. In the Tokyo Freqtrade canary this path successfully ran preflight, SQLite online backup, an exact one-key configuration modification, one Dry-run restart, and native 14-pair freshness checks. Canonical evidence: \`https://github.com/woshixiong/fraqtrade/issues/3#issuecomment-6490288976\`.
+- **Important limitation:** \`activate\` and the terminal click **briefly take the foreground focus**. This method is low-interaction but **not** genuinely "non-focus-stealing." The canary also showed that concurrent voice dictation or typing can leak text into the FinalShell terminal. Therefore it must **not** be called automatically while the user is actively using other Mac windows, even if the focus switch lasts only a moment.
+
+### 14.3 Future default and safe fallback
+
+1. **First choose a genuinely focus-independent FinalShell mechanism** only after an observed positive sentinel and negative focus-interference test, using the same mature FinalShell/macOS facilities and the existing SSH connection. Treat unverified UI automation or guessed background key submission as a blocker, not a successful execution.
+2. If the exact FinalShell version cannot execute commands without stealing foreground focus, record \`FOCUS_FREE_BLOCKED\`; do not repeatedly activate the app, hijack the user's input or inspect unrelated windows. A short foreground paste remains a separately visible **user-coordinated exception**, allowed only when the user explicitly permits a brief exclusive focus window and a sentinel test passes.
+3. For any authorized remote change, bind the exact host and Dry-run/runtime status before mutation, take safe non-secret backups, check an official native config parser, apply only the scoped difference, preserve a bounded rollback and verify the entire requested data/order/health path. Never assume a running container or one five-minute canary proves 24–72-hour reliability.
+4. Keep prompts, remote commands, screenshot evidence and failure reporting minimal; never display access tokens, SSH keys, API passwords or contents of unrelated applications. Never use RDC for routine GitHub reads or repetitive CI/status polling.
+
+**Status as of 2026-10-29:** Desired *fully zero-focus FinalShell execution* = **UNQUALIFIED / NOT YET DEMONSTRATED**. *Bounded foreground FinalShell paste with clipboard restoration* = **VERIFIED, CONDITIONAL, NOT ZERO-FOCUS**. Future windows must not collapse these two statuses into one.
